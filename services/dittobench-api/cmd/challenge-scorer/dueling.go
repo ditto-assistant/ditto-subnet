@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/genrun"
@@ -138,11 +139,17 @@ type sliceResult struct {
 	SliceBase64   string              `json:"slice_base64,omitempty"`
 }
 
+// boundError cuts s to maxDuelingError bytes without splitting a UTF-8
+// character.
 func boundError(s string) string {
-	if len(s) > maxDuelingError {
-		return s[:maxDuelingError]
+	if len(s) <= maxDuelingError {
+		return s
 	}
-	return s
+	end := maxDuelingError
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
 }
 
 // unsupported marks a lease this build cannot serve (reported as
@@ -152,14 +159,15 @@ func unsupported(format string, args ...any) error {
 }
 
 // decodeSource returns a source's archive bytes. Bytes that do not hash to the
-// pin are a Platform inconsistency: never run, and the whole lease fails.
+// pin are a Platform inconsistency: never run, and the whole lease is
+// reported as an unsupported request so Platform stops re-leasing it.
 func decodeSource(label string, src duelingSource) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(src.SourceBase64)
 	if err != nil {
-		return nil, fmt.Errorf("%s: source_base64 is not base64", label)
+		return nil, unsupported("%s: source_base64 is not base64", label)
 	}
 	if got := challenge.Digest(raw); got != src.SourceSHA256 {
-		return nil, fmt.Errorf("%s: served source hashes to %s, lease pins %s", label, got, src.SourceSHA256)
+		return nil, unsupported("%s: served source hashes to %s, lease pins %s", label, got, src.SourceSHA256)
 	}
 	return raw, nil
 }
@@ -177,7 +185,7 @@ func buildSource(ctx context.Context, cache *buildCache, label string, src dueli
 		return nil, fmt.Errorf("%s: %w", label, err)
 	}
 	if src.TreeSHA256 != "" && b.TreeSHA256 != "" && b.TreeSHA256 != src.TreeSHA256 {
-		return nil, fmt.Errorf("%s: archive tree is %s, lease pins %s", label, b.TreeSHA256, src.TreeSHA256)
+		return nil, unsupported("%s: archive tree is %s, lease pins %s", label, b.TreeSHA256, src.TreeSHA256)
 	}
 	return b, nil
 }

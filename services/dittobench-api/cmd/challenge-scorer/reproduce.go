@@ -80,7 +80,19 @@ func readSource(ctx context.Context, path string) ([]byte, error) {
 		raw, _, err := genrun.PackDir(ctx, path)
 		return raw, err
 	}
-	return os.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, int64(challenge.MaxArchiveBytes)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > challenge.MaxArchiveBytes {
+		return nil, fmt.Errorf("source archive exceeds %d bytes", challenge.MaxArchiveBytes)
+	}
+	return raw, nil
 }
 
 func reproduceSlice(ctx context.Context, args []string, stdout io.Writer) error {
@@ -181,16 +193,15 @@ func reproduceSlice(ctx context.Context, args []string, stdout io.Writer) error 
 			return fmt.Errorf("reproduce-slice: column %s did not reproduce: %s", r.ColumnID, r.Error)
 		}
 	}
+	// A mismatch must not overwrite a previously verified -out.
+	if *expect != "" && !strings.EqualFold(strings.TrimSpace(*expect), sum) {
+		return fmt.Errorf("reproduce-slice: slice hashes to %s, expected %s", sum, *expect)
+	}
 	if *out != "" {
 		if err := os.WriteFile(*out, raw, 0o644); err != nil {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintln(stdout, sum); err != nil {
-		return err
-	}
-	if *expect != "" && !strings.EqualFold(strings.TrimSpace(*expect), sum) {
-		return fmt.Errorf("reproduce-slice: slice hashes to %s, expected %s", sum, *expect)
-	}
-	return nil
+	_, err = fmt.Fprintln(stdout, sum)
+	return err
 }

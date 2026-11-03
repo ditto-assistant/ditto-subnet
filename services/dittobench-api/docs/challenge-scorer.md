@@ -236,7 +236,7 @@ cached too; a build timeout is not.
 A sandbox failure or a request this build refuses is posted to
 `POST /api/v1/generator-scorer/fault` with `work: "dueling"`, the `lease_id`,
 `season_id` and, for a slice, `preparation_id`. A source that does not hash to
-its pin is never run: the lease is left to expire, as for rounds.
+its pin (or a pinned `tree_sha256` the archive does not match) is never run and is reported as an `unsupported_request` fault.
 
 **Qualification** (`GET /api/v1/generator-scorer/work`):
 

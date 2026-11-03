@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/genrun"
@@ -486,9 +487,24 @@ func TestSliceRefusesMismatchedPins(t *testing.T) {
 		mutate(w)
 		fp := newFakeDuelingPlatform(t, w)
 		cache, _ := testCache(t)
-		if _, err := processDueling(context.Background(), fp.client(), cache); err == nil || len(fp.slices) != 0 || len(fp.faults) != 0 {
-			t.Fatalf("%s: err=%v posted=%d faults=%d", name, err, len(fp.slices), len(fp.faults))
+		_, err := processDueling(context.Background(), fp.client(), cache)
+		if !errors.Is(err, genrun.ErrInvalidRequest) || len(fp.slices) != 0 {
+			t.Fatalf("%s: err=%v posted=%d", name, err, len(fp.slices))
 		}
+		if f := fp.faults; len(f) != 1 || f[0].ErrorKind != "unsupported_request" || f[0].PreparationID != "prep-1" {
+			t.Fatalf("%s: fault %+v", name, f)
+		}
+	}
+}
+
+func TestBoundErrorKeepsUTF8(t *testing.T) {
+	s := strings.Repeat("a", maxDuelingError-1) + "é tail"
+	got := boundError(s)
+	if !utf8.ValidString(got) || len(got) != maxDuelingError-1 {
+		t.Fatalf("len=%d valid=%v", len(got), utf8.ValidString(got))
+	}
+	if boundError("short") != "short" {
+		t.Fatal("short error changed")
 	}
 }
 
