@@ -55,7 +55,7 @@ columns declaring 15 or 16 only.
 |---|---|
 | Run size | 350 cases total, unchanged: 175 datagen (50 tool + 125 memory) + 175 generator (5 columns x 35). |
 | Weight | `composite = gate_d x (0.5 x datagen + 0.5 x generator)`. Pinned in the v16 contract. |
-| Which generators | The top 5 **eligible** generators by ledger score, one per owner, frozen per **season** (one 4-epoch round by default, about 4.8 h). A newly qualified generator can enter canonical runs about 2.4-7 h after qualifying. The public default generator fills empty slots. |
+| Which generators | The top 5 **eligible** generators by ledger score, one per owner, frozen per **season** (one 4-epoch round by default, about 4.8 h). A newly qualified generator can enter canonical runs about 4.8-9.6 h after qualifying. The public default generator fills empty slots. |
 | Who generates | Platform's trusted `challenge-scorer serve`, through a new `slice` work kind. Validators never get generator source. |
 | Seeds | `slice_seed = H(season secret, season anchor block, run seed, column)`. The season secret is committed before its anchor block exists, like round seeds. |
 | Delivery | A new `dueling-slice-v1` mode on `/v2/score` carries the slice bytes and their SHA-256. The validator regenerates the datagen half from the public seed, as it does today. |
@@ -140,7 +140,7 @@ upload during a season replaces the old one in the next season only.
 
 ### New generator path
 
-Rounds are one epoch (360 blocks, about 72 min) and seasons are 4 rounds, so a
+Rounds are 4 epochs (about 4.8 h) and a season is one round by default, so a
 strong new generator does not wait a day:
 
 1. **Qualify.** The upload passes probe qualification (generator-competition.md
@@ -155,8 +155,10 @@ strong new generator does not wait a day:
    the next season open. The season qualification battery runs during the
    round, so it adds no wait.
 
-Best case is one round's wait plus one round's run (about 2.4 h). Worst case
-adds most of a season (about 7.2 h). A new upload from an already pinned owner
+Best case is one round's run (about 4.8 h, qualifying just before a round
+opens). Worst case adds most of a round's wait (about 9.6 h). With
+`rounds_per_season = 1` every round boundary is a season boundary, so the
+season adds no further wait. A new upload from an already pinned owner
 follows the same path, and its old pin keeps serving until the new one is
 eligible. The Backroom early-rotation control (section 3) can bring a strong
 newcomer in sooner, with the same audited confirmation as any early rotation.
@@ -367,8 +369,8 @@ cases trivial), so it never becomes eligible.
 Agents scored against different generator sets are not comparable, so the
 **season** is part of the score's identity:
 
-- A season is pinned for `rounds_per_season` rounds (default 4; rounds are
-  `epochs_per_round = 1`, so about 4.8 h), aligned with `SubnetEpochIndex` round
+- A season is pinned for `rounds_per_season` rounds (default 1; rounds are
+  `epochs_per_round = 4`, so about 4.8 h), aligned with `SubnetEpochIndex` round
   boundaries. Every validator folds the same season id. Uploads, supersessions
   and new round scores during a season affect the **next** season only.
 - Score rows record `season_id`. Crown, dethrone and rank comparisons only use
@@ -416,7 +418,7 @@ least one fold on complete same-season data. **4 epochs is the default**: one
 epoch to rebuild, then three folds (75% of the season) on complete data. A
 cohort above 10 needs at least 4 epochs. At 25 it needs a longer season or
 `retest_eligibility_mode = statistical` to shrink the cohort. Backroom refuses
-a `rounds_per_season` below 2.
+`rounds_per_season x epochs_per_round < 2`.
 
 ## 4. Scoring
 
@@ -481,8 +483,8 @@ not move.
 
 1. **Weight and size. Decided:** 50/50 at 350 cases (175 datagen + 175
    generator, 5 x 35). Rounds keep about 70 per column.
-2. **Datagen base. Decided:** inherit v16 (active since 2026-11). The datagen
-   half is v16 at the dueling profile, plus the section 8 lessons.
+2. **Datagen base. Decided:** inherit v15 (active since 2026-11). The datagen
+   half is v15 at the dueling profile, plus the section 8 lessons.
 3. **Season length. Decided:** about 4.8 h: one 4-epoch round by default (`rounds_per_season = 1`), with the
    Backroom early-rotation control and the new generator path (section 1).
    The minimum safe season is 2 epochs (section 3).
@@ -698,22 +700,33 @@ stayed at 0.94-0.97. v16 changes two things:
    those cases; one that calls connectors the request does not ask for pays
    the existing over-call price. Tool selection becomes a scored axis.
 
-**Screening.** W4 ("availability ... may restrict capability classes") is
-unchanged: restricting a tool on availability metadata the request actually
-publishes, or after the tool itself answered "not connected", stays a safe
-harbor. v16 publishes no availability metadata, so a marker filter is inert. A
-static denylist of the public connector pool is not availability evidence; it
-fails the linked-connector cases on its own, so scoring prices it. Whether such
-a denylist is additionally an I7 capability removal at screening is a screener
-policy question left to the operator; v16 does not change screener policy.
+3. **Wording is not enough either.** A seeded share of tool cases name an app
+   whose connector is **not** linked for the seed (the gold path tells the user
+   it is not connected and offers the product-tool alternative when one
+   exists), and some name an app while the right action is a product tool
+   ("add the Slack standup to my calendar"). Link state is learned only at
+   runtime: an unlinked connector answers "not connected", which is a correct,
+   unpenalised probe when the request asked for that app. A filter keyed on
+   request wording therefore loses some cases whichever way it guesses.
 
-### 8.2 Bounded previous-era backfill
+**Screening (operator ruling, 2026-11-03).** Harnesses **may** filter connector
+or app-specific tools, by an availability marker or by guessing from the request
+wording. That is an I7 W4 allowance, not an I7 capability removal, so v16 does
+not ban filters and screening does not change. The difficulty comes from the
+cases above: v16 publishes no marker, some connectors are linked and needed,
+and wording decoys price a guess. A static denylist of the public connector
+pool is permitted and simply fails the linked-connector cases on its own.
+
+### 8.2 Bounded previous-era backfill (follow-up)
 
 Activation admits only the frozen rescore cohort, so an agent scored before
 activation outside the cohort never gets the new bench
-(`list_stranded_previous_era_submissions`, #3327). v16 ships a bounded
-backfill behind the queue-policy setting `previous_era_backfill`
-(`enabled: false`, `max_agents`, `min_previous_composite`). When enabled it
-admits, for the active version, the best stranded agent per owner (one per
-coldkey, by previous-era composite), capped at `max_agents`, queued behind
-every current-era item. It ships **off**; enabling it is an operator decision.
+(`list_stranded_previous_era_submissions`, #3327). The operator path today is
+the per-submission stranded admission tool (backfill option B, built in
+`db/queries/benchmark_admission.py`). The automatic form is a follow-up built
+**on top of that admission tool once it has merged**, not part of v16 phase 1:
+the queue-policy setting `previous_era_backfill` (`enabled: false`,
+`max_agents`, `min_previous_composite`) admits, for the active version, the
+best stranded agent per owner (one per coldkey, by previous-era composite),
+capped at `max_agents`, queued behind every current-era item. It ships **off**;
+enabling it is an operator decision.
