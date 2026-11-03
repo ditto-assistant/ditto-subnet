@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -35,7 +36,7 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _render(port: int, api_port: int, relays: list[int]) -> str:
+def _render(port: int, api_port: int, relays: list[int], standby_port: int = 0) -> str:
     env = Environment()
     env.filters["bool"] = bool
     rendered = env.from_string(TEMPLATE).render(
@@ -48,6 +49,7 @@ def _render(port: int, api_port: int, relays: list[int]) -> str:
         platform_api_port=api_port,
         platform_request_body_max_size="1MiB",
         platform_api_restart_try_duration="20s",
+        platform_api_standby_port=standby_port,
     )
     return rendered.replace(
         "email ops@example.com", "admin off\n    persist_config off"
@@ -74,16 +76,14 @@ class _Echo(BaseHTTPRequestHandler):
         pass
 
 
-@pytest.fixture(params=["direct", "relay"])
-def caddy(request, tmp_path) -> Iterator[tuple[int, int]]:
+@contextmanager
+def _run_caddy(tmp_path: Path, port: int, rendered: str) -> Iterator[None]:
     binary = shutil.which("caddy")
     if not binary:
         pytest.fail("Caddy is required for the restart-handover integration tests")
-    port, api_port, relay_port = _free_port(), _free_port(), _free_port()
-    relays = [relay_port] if request.param == "relay" else []
     config = tmp_path / "Caddyfile"
     config.write_text(
-        _render(port, api_port, relays).replace(
+        rendered.replace(
             "/opt/ditto/logs/caddy/platform.log", str(tmp_path / "access.log")
         )
     )
@@ -111,10 +111,28 @@ def caddy(request, tmp_path) -> Iterator[tuple[int, int]]:
                     time.sleep(0.05)
             else:
                 pytest.fail("Caddy did not start on loopback")
-            yield port, api_port
+            yield
         finally:
             process.terminate()
             process.wait(timeout=5)
+
+
+@pytest.fixture(params=["direct", "relay"])
+def caddy(request, tmp_path) -> Iterator[tuple[int, int]]:
+    port, api_port, relay_port = _free_port(), _free_port(), _free_port()
+    relays = [relay_port] if request.param == "relay" else []
+    with _run_caddy(tmp_path, port, _render(port, api_port, relays)):
+        yield port, api_port
+
+
+@pytest.fixture(params=["direct", "relay"])
+def standby_caddy(request, tmp_path) -> Iterator[tuple[int, int, int]]:
+    """Primary-first proxying to ``ditto-api`` and its warm standby."""
+    port, api_port, standby_port = _free_port(), _free_port(), _free_port()
+    relays = [_free_port()] if request.param == "relay" else []
+    rendered = _render(port, api_port, relays, standby_port=standby_port)
+    with _run_caddy(tmp_path, port, rendered):
+        yield port, api_port, standby_port
 
 
 @pytest.mark.parametrize(
@@ -181,3 +199,92 @@ def test_request_the_old_process_accepted_is_not_replayed(caddy):
         server.server_close()
     assert response.status == 502
     assert received == ["/api/v1/validator/agent/x/score"]
+
+
+def _answering(name: str, served: list[str]) -> type[BaseHTTPRequestHandler]:
+    class _Named(_Echo):
+        def _reply(self) -> None:
+            served.append(name)
+            super()._reply()
+
+        do_GET = _reply
+        do_POST = _reply
+
+    return _Named
+
+
+def test_standby_answers_while_the_primary_restarts(standby_caddy):
+    port, _api_port, standby_port = standby_caddy
+    served: list[str] = []
+    standby = _serve(standby_port, _answering("standby", served))
+    started = time.monotonic()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=25)
+        connection.request("POST", "/api/v1/validator/tickets/hand-back", b"{}")
+        response = connection.getresponse()
+        result = response.read()
+        connection.close()
+    finally:
+        standby.shutdown()
+        standby.server_close()
+    assert response.status == 200, result
+    assert served == ["standby"]
+    # Failover, not the restart handover's wait for the primary to return.
+    assert time.monotonic() - started < RESTART_GAP_SECONDS
+
+
+def test_request_waits_when_primary_and_standby_are_both_down(standby_caddy):
+    port, api_port, _standby_port = standby_caddy
+    served: list[str] = []
+    servers: list[ThreadingHTTPServer] = []
+    starter = threading.Timer(
+        RESTART_GAP_SECONDS,
+        lambda: servers.append(_serve(api_port, _answering("primary", served))),
+    )
+    started = time.monotonic()
+    starter.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=25)
+        connection.request("GET", "/api/v1/health")
+        response = connection.getresponse()
+        result = response.read()
+        connection.close()
+    finally:
+        starter.join()
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+    assert response.status == 200, result
+    assert served == ["primary"]
+    assert time.monotonic() - started >= RESTART_GAP_SECONDS - 0.2
+
+
+def test_request_the_primary_accepted_is_not_replayed_on_the_standby(standby_caddy):
+    port, api_port, standby_port = standby_caddy
+    received: list[str] = []
+    served: list[str] = []
+
+    class _DiesMidRequest(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            received.append(self.path)
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.connection.shutdown(socket.SHUT_RDWR)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    primary = _serve(api_port, _DiesMidRequest)
+    standby = _serve(standby_port, _answering("standby", served))
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=25)
+        connection.request("POST", "/api/v1/validator/agent/x/score", b"{}")
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+    finally:
+        for server in (primary, standby):
+            server.shutdown()
+            server.server_close()
+    assert response.status == 502
+    assert received == ["/api/v1/validator/agent/x/score"]
+    assert served == []

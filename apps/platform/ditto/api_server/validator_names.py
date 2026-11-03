@@ -188,16 +188,22 @@ class TaostatsValidatorNames:
         self, session_maker: async_sessionmaker[AsyncSession] | None = None
     ) -> None:
         """Hydrate the durable cache, then start background refreshes."""
+        await self.hydrate(session_maker)
+        if self._config.enabled and self._task is None:
+            self._task = asyncio.create_task(
+                self._refresh_loop(), name="taostats-validator-names"
+            )
+
+    async def hydrate(
+        self, session_maker: async_sessionmaker[AsyncSession] | None = None
+    ) -> None:
+        """Load the persisted snapshot without starting a Taostats refresh loop."""
         self._session_maker = session_maker
         if session_maker is not None:
             async with session_maker() as session:
                 cached = await load_validator_name_cache(session)
             if cached is not None:
                 self._names, self._stake_weights, self._refreshed_at = cached
-        if self._config.enabled and self._task is None:
-            self._task = asyncio.create_task(
-                self._refresh_loop(), name="taostats-validator-names"
-            )
 
     async def aclose(self) -> None:
         self._stop.set()

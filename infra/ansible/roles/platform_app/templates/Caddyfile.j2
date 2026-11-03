@@ -100,17 +100,38 @@
         request_body {
             max_size {{ platform_request_body_max_size }}
         }
+{% if platform_api_standby_port | default(0) | int > 0 %}
+        # Primary owns singleton loops. Passive failure detection sends new
+        # requests to the standby while a PM2 fork-mode reload stops primary;
+        # the restart handover keeps re-dialing if both are down at once.
+        reverse_proxy localhost:{{ platform_api_port }} localhost:{{ platform_api_standby_port }} {
+            lb_policy first
+            fail_duration 10s
+            max_fails 1
+            import ditto_api_restart_handover
+        }
+{% else %}
         reverse_proxy localhost:{{ platform_api_port }} {
             import ditto_api_restart_handover
         }
+{% endif %}
     }
 {% else %}
     request_body {
         max_size {{ platform_request_body_max_size }}
     }
+{% if platform_api_standby_port | default(0) | int > 0 %}
+    reverse_proxy localhost:{{ platform_api_port }} localhost:{{ platform_api_standby_port }} {
+        lb_policy first
+        fail_duration 10s
+        max_fails 1
+        import ditto_api_restart_handover
+    }
+{% else %}
     reverse_proxy localhost:{{ platform_api_port }} {
         import ditto_api_restart_handover
     }
+{% endif %}
 {% endif %}
 
     # request_body bounds streamed reads while proxying. Format these edge
