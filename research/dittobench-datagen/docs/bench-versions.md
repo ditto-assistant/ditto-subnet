@@ -1440,8 +1440,10 @@ allowance), so v16 does not ban filters; the difficulty is in the cases.
   branch changes: `grade/` has none for v16, and every case grades through
   the v13+ tool grader, the v7 result-usage composition and the existing
   over-call rule. If the quota ever exceeds a seed's free slots, the pass
-  trims named-product cases first and linked reads last instead of failing
-  (no swept seed trims: `TestV16ConnectorQuotaHoldsAcrossSeeds`).
+  trims one case at a time in rotation from named-product to linked read, so
+  every family survives as long as it can and the last case kept is a linked
+  read, instead of failing (no swept seed trims:
+  `TestV16ConnectorQuotaHoldsAcrossSeeds`).
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV16KnownVector` pins:

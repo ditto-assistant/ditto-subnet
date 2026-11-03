@@ -65,7 +65,7 @@ func TestV16ConnectorQuotaHoldsAcrossSeeds(t *testing.T) {
 	}
 }
 
-func TestV16ConnectorQuotaFitTrimsDecoysFirst(t *testing.T) {
+func TestV16ConnectorQuotaFitRotatesFamilies(t *testing.T) {
 	q := V16ConnectorQuotaFor(50)
 	if q.Total() != 11 || V16ConnectorQuotaFor(24).Total() != 5 || V16ConnectorQuotaFor(6).Total() != 1 || V16ConnectorQuotaFor(5).Total() != 0 {
 		t.Fatalf("published quotas moved: %+v", q)
@@ -75,6 +75,9 @@ func TestV16ConnectorQuotaFitTrimsDecoysFirst(t *testing.T) {
 	}
 	if got := q.fit(10); got.NamedProduct != 2 || got.Total() != 10 {
 		t.Fatalf("first trim must take a named-product case: %+v", got)
+	}
+	if got := q.fit(7); got != (V16ConnectorQuota{LinkedRead: 2, LinkedAction: 2, Unlinked: 1, NamedProduct: 2}) {
+		t.Fatalf("fit(7) must keep every family: %+v", got)
 	}
 	if got := q.fit(1); got != (V16ConnectorQuota{LinkedRead: 1}) {
 		t.Fatalf("the last case kept must be a linked read: %+v", got)

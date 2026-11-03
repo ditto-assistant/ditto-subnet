@@ -70,8 +70,11 @@ func (q V16ConnectorQuota) Total() int {
 	return q.LinkedRead + q.LinkedAction + q.Unlinked + q.NamedProduct
 }
 
-// fit trims the quota to n convertible slots, one case at a time from the
-// named-product family back to the linked reads.
+// fit trims the quota to n convertible slots one case at a time, rotating
+// through the families from named-product to linked read. The rotation is
+// deliberate: a short seed keeps every family (decoys included) for as long as
+// it can, rather than losing all wording decoys first; the last case kept is a
+// linked read.
 func (q V16ConnectorQuota) fit(n int) V16ConnectorQuota {
 	fields := []*int{&q.NamedProduct, &q.Unlinked, &q.LinkedAction, &q.LinkedRead}
 	for k := 0; q.Total() > n; k = (k + 1) % len(fields) {
@@ -199,8 +202,8 @@ func applyV16ConnectorBench(seed int64, cases []protocol.ToolCase) {
 	slots := v16ConnectorSlots(seed, cases)
 	// The published quota fits every full and medium seed swept by
 	// TestV16ConnectorQuotaHoldsAcrossSeeds (at least 13 and 8 free slots for
-	// 11 and 5). Generation never fails on a short seed: the quota is trimmed,
-	// product decoys first and linked reads last.
+	// 11 and 5). Generation never fails on a short seed: the quota is trimmed
+	// in rotation (fit), and the last case kept is a linked read.
 	quota = quota.fit(len(slots))
 	next := 0
 	take := func() int {
