@@ -342,12 +342,13 @@ def _top_provisional_contenders(
         .correlate(contender)
         .scalar_subquery()
     )
+    # Unscoped on purpose: it is compared with the accepted-ticket count, which
+    # spans every season. Only the ranking values below are season-scoped.
     contender_recorded_score_count = (
         select(func.count(Score.validator_hotkey))
         .where(
             Score.agent_id == contender.agent_id,
             Score.bench_version == bench_version,
-            season_scope,
         )
         .correlate(contender)
         .scalar_subquery()

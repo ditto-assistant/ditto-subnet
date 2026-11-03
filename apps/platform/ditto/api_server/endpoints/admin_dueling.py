@@ -167,12 +167,18 @@ async def _rotation(
     latest: dict[tuple[UUID, str | None], ScoreAuditEntry] = {}
     if cohort:
         for entry in await session.scalars(
+            # Only the newest lifecycle entry per (agent, validator).
             select(ScoreAuditEntry)
             .where(
                 ScoreAuditEntry.agent_id.in_(cohort),
                 ScoreAuditEntry.event.in_(SCORE_RETEST_EVENTS),
             )
-            .order_by(ScoreAuditEntry.seq)
+            .distinct(ScoreAuditEntry.agent_id, ScoreAuditEntry.validator_hotkey)
+            .order_by(
+                ScoreAuditEntry.agent_id,
+                ScoreAuditEntry.validator_hotkey,
+                ScoreAuditEntry.seq.desc(),
+            )
         ):
             latest[(entry.agent_id, entry.validator_hotkey)] = entry
     pending = running = closed = 0
