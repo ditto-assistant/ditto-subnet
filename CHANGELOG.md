@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.440.0 (2026-11-03)
+
+### Features
+
+- **platform**: Retest the champion and cohort at each dueling season rotation
+  ([#3362](https://github.com/ditto-assistant/ditto-subnet/pull/3362),
+  [`a8e6d52`](https://github.com/ditto-assistant/ditto-subnet/commit/a8e6d52cc7f70a4a08aece7e7df5377d7c2b90b6))
+
+
 ## v0.439.0 (2026-11-03)
 
 ### Features
