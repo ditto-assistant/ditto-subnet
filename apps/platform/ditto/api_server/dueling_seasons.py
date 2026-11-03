@@ -757,6 +757,7 @@ async def lease_slice_work(
                     owner_key=column["owner_key"],
                     source_sha256=sub.source_sha256,
                     source_base64=_b64(sub.source_bytes),
+                    tree_sha256=sub.tree_sha256,
                     grading_bench_version=int(column["grading_bench_version"]),
                     slice_seed=slice_seed(
                         season.season_seed, int(row.run_seed), column["column_id"]
@@ -790,6 +791,7 @@ async def lease_slice_work(
             miner_hotkey=fallback_sub.miner_hotkey,
             source_sha256=fallback_sub.source_sha256,
             source_base64=_b64(fallback_sub.source_bytes),
+            tree_sha256=fallback_sub.tree_sha256,
         ),
     )
 
@@ -1036,8 +1038,8 @@ async def record_slice(
     """Pin a posted slice for the current lease (caller commits).
 
     Existing pinned bytes win: a preparation that is already ready is never
-    overwritten. A post without bytes releases the row for another attempt
-    (or fails it after :data:`MAX_SLICE_ATTEMPTS`).
+    overwritten. A post without bytes (a column ended with no pack, or the
+    slice would not encode) fails the preparation for operator review.
     """
     row = await session.scalar(
         select(DuelingSlicePreparation)
@@ -1067,14 +1069,11 @@ async def record_slice(
             "; ".join(f"{c.column_id}: {c.error}" for c in payload.columns if c.error)
             or "scorer posted no slice"
         )
+        # A column with no pack (its generator and the fallback both
+        # failed) or a slice that would not encode: terminal, for operator
+        # review, like a failed private dataset preparation.
         row.columns = column_errors
-        if row.attempts >= MAX_SLICE_ATTEMPTS:
-            _fail_slice(row, errors, now=now)
-        else:
-            row.status = "pending"
-            row.error = errors[:2000]
-            row.lease_id = None
-            row.lease_expires_at = None
+        _fail_slice(row, errors, now=now)
         await session.flush()
         return row
     try:

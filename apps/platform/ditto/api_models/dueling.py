@@ -54,6 +54,8 @@ class DuelingSliceColumnWork(DuelingModel):
     owner_key: str
     source_sha256: str
     source_base64: str
+    tree_sha256: str | None = None
+    """The archive's tree digest; the scorer refuses to build on a mismatch."""
     grading_bench_version: int
     slice_seed: str
     public_default: bool
@@ -66,6 +68,7 @@ class DuelingSliceFallback(DuelingModel):
     miner_hotkey: str
     source_sha256: str
     source_base64: str
+    tree_sha256: str | None = None
 
 
 class DuelingWork(DuelingModel):

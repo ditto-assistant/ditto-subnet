@@ -619,6 +619,10 @@ class GeneratorScorerFault(GeneratorModel):
     run_id: UUID | None = None
     submission_id: UUID | None = None
     round_index: int | None = None
+    season_id: UUID | None = None
+    """``work: "dueling"``: the season of the faulted lease, if any."""
+    preparation_id: UUID | None = None
+    """``work: "dueling"``: the slice preparation of the faulted lease."""
     error_kind: ScorerFaultKind
     detail: Annotated[str, Field(max_length=4000)] = ""
     scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
