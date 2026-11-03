@@ -14,9 +14,15 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError
 
+from ditto.api_models.continual_retest_settings import (
+    MAX_MIN_DETHRONE_CONFIRMATIONS,
+    ContinualRetestSettings,
+)
 from ditto.api_models.validator import ConfirmationScoreRecord, LedgerEntry
 from ditto.api_server.koth import (
+    TOP5_MAX_CONFIRMATION_SEEDS,
     CrownGate,
     KothEntry,
     crown_standings,
@@ -224,3 +230,20 @@ def test_pins_replay_only_a_well_formed_gate() -> None:
     assert served_crown_gate({}) is None
     bad = {"crown_gate": {"min_dethrone_confirmations": 1, "champion_standing_rank": 3}}
     assert served_crown_gate(bad) is None
+    # Replay parses against the validator's 15-seed fold ceiling, exactly as
+    # ``ditto.validator.worker._ledger_crown_gate`` does, not the work cap.
+    deep = {
+        "crown_gate": {"min_dethrone_confirmations": 12, "champion_standing_rank": 3}
+    }
+    assert served_crown_gate(deep) == CrownGate(12, 3)
+    past = {
+        "crown_gate": {"min_dethrone_confirmations": 16, "champion_standing_rank": 3}
+    }
+    assert served_crown_gate(past) is None
+
+
+def test_operators_cannot_require_more_confirmations_than_the_work_cap() -> None:
+    assert MAX_MIN_DETHRONE_CONFIRMATIONS == TOP5_MAX_CONFIRMATION_SEEDS == 10
+    ContinualRetestSettings(min_dethrone_confirmations=10)
+    with pytest.raises(ValidationError):
+        ContinualRetestSettings(min_dethrone_confirmations=11)

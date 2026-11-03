@@ -28,6 +28,7 @@ from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.public import PublicLeaderboardResponse
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.confirmation_seed_anchor import read_reign_seed_anchor
+from ditto.api_server.crn import elastic_confirmation_seed_ceiling
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.public import (
     _LEADERBOARD_DETAIL_FIELDS,
@@ -49,6 +50,8 @@ from ditto.api_server.endpoints.validator import (
     _void_rerun_debts,
 )
 from ditto.api_server.koth import (
+    TOP5_MAX_CONFIRMATION_SEEDS,
+    TOP5_MIN_CONFIRMATION_SEEDS,
     KothEntry,
     effective_composite,
     project_koth,
@@ -626,6 +629,25 @@ async def continual_retest_diagnostic(
     raw = await confirmation_composites_by_seed(
         session, agent_ids=[agent_id], bench_version=version
     )
+    # The same variance-sized target the lane plans growth toward: the raw
+    # emission set's planning history (``_top5_confirmation_seed_plan``).
+    wave_history = (
+        await confirmation_composites_by_seed(
+            session,
+            agent_ids=[member.agent_id for member in wave],
+            bench_version=version,
+            planning=True,
+        )
+        if wave
+        else {}
+    )
+    seed_target = (
+        elastic_confirmation_seed_ceiling(
+            {member.agent_id: wave_history.get(member.agent_id, {}) for member in wave}
+        )
+        if wave
+        else None
+    )
     ticket_rows = await session.execute(
         select(
             ValidatorTicket.status,
@@ -773,6 +795,9 @@ async def continual_retest_diagnostic(
             else 0
         ),
         raw_confirmation_depth=len(raw.get(agent_id, {})),
+        confirmation_seed_floor=TOP5_MIN_CONFIRMATION_SEEDS,
+        confirmation_seed_cap=TOP5_MAX_CONFIRMATION_SEEDS,
+        confirmation_seed_target=seed_target,
         composite_stderr=entry.composite_stderr if entry is not None else None,
         aggregate_mode=settings.aggregate_mode,
         wave_membership=settings.wave_membership,

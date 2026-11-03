@@ -57,10 +57,23 @@ BLOCKS_PER_TEMPO = 360
 
 # Continual retests gather enough shared-seed evidence to make the one-sided
 # 95% uncertainty half-width no wider than the fixed KOTH margin. Eight is the
-# minimum credible variance sample; 15 is the fleet-work hard stop when current
+# minimum credible variance sample; 10 is the fleet-work hard stop when current
 # variance would otherwise ask for an impractical number of runs.
+#
+# The work cap is Platform policy, not a fold constant. It sizes the elastic
+# retest target and the active seed window ``completed_wave_data`` keeps, and
+# the ledger serves only that window, so every validator folds at most this
+# many seeds per entry whatever its own compiled ceiling says.
 TOP5_MIN_CONFIRMATION_SEEDS = 8
-TOP5_MAX_CONFIRMATION_SEEDS = 15
+TOP5_MAX_CONFIRMATION_SEEDS = 10
+# Mirror ditto.validator.config.TOP5_MAX_CONFIRMATION_SEEDS: the validator's
+# frozen defensive fold ceiling and the deepest champion-anchored family any
+# binding reign has drawn. The pin projection truncates with it (exactly as the
+# validator does), served crown gates are parsed against it, and recorded
+# seeds bind to their reign anchor within it. Lowering it without the fleet
+# would split the fold on any pin still carrying a deeper window, so the work
+# cap above moves alone and must never exceed this.
+CONFIRMATION_SEED_CEILING = 15
 
 
 @dataclass(frozen=True)
@@ -232,7 +245,7 @@ def _confirmation_history(entry: LedgerEntry) -> dict[int, float] | None:
     collapsed = {seed: _median(values) for seed, values in grouped.items() if values}
     if not collapsed:
         return None
-    return dict(sorted(collapsed.items())[:TOP5_MAX_CONFIRMATION_SEEDS])
+    return dict(sorted(collapsed.items())[:CONFIRMATION_SEED_CEILING])
 
 
 def _median(values: Sequence[float]) -> float:
@@ -1347,7 +1360,7 @@ def _dueling_seed_composites(
     if not records:
         return None
     window = set(
-        sorted({record.seed for record in records})[:TOP5_MAX_CONFIRMATION_SEEDS]
+        sorted({record.seed for record in records})[:CONFIRMATION_SEED_CEILING]
     )
     grouped: dict[int, list[float]] = {}
     for record in records:

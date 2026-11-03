@@ -69,3 +69,30 @@ def test_platform_eligibility_floor_matches_the_validator() -> None:
         _literal_constants(PLATFORM_SCORES)["MIN_ELIGIBLE_CASES"]
         == _literal_constants(VALIDATOR_WEIGHTS)["MIN_ELIGIBLE_CASES"]
     )
+
+
+def test_platform_seed_work_cap_stays_inside_the_validator_fold_ceiling() -> None:
+    """The retest work cap is Platform policy; the fold ceiling is consensus.
+
+    Platform serves only its active window of ``TOP5_MAX_CONFIRMATION_SEEDS``
+    seeds, so a cap at or below the validator's compiled ceiling never splits
+    the fold. Platform's own pin projection must truncate with the validator's
+    exact ceiling (``CONFIRMATION_SEED_CEILING``), or a pin that still carries a
+    deeper window crowns a different King than the fleet pays.
+    """
+    validator = _literal_constants(VALIDATOR_CONFIG)
+    platform = _literal_constants(PLATFORM_KOTH)
+
+    assert (
+        platform["CONFIRMATION_SEED_CEILING"]
+        == validator["TOP5_MAX_CONFIRMATION_SEEDS"]
+    )
+    assert (
+        platform["TOP5_MIN_CONFIRMATION_SEEDS"]
+        == validator["TOP5_MIN_CONFIRMATION_SEEDS"]
+    )
+    assert (
+        platform["TOP5_MIN_CONFIRMATION_SEEDS"]
+        <= platform["TOP5_MAX_CONFIRMATION_SEEDS"]
+        <= platform["CONFIRMATION_SEED_CEILING"]
+    )

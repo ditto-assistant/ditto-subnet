@@ -67,8 +67,10 @@ PROVISIONAL_INCUMBENT_PROTOCOL = 28
 CROWN_GATE_PROTOCOL = 34
 DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
 DEFAULT_CHAMPION_STANDING_RANK = 3
-# A challenger cannot hold more shared seeds than the continual lane retains.
-MAX_MIN_DETHRONE_CONFIRMATIONS = 15
+# A challenger cannot hold more shared seeds than the continual lane retains:
+# mirror ``ditto.api_server.koth.TOP5_MAX_CONFIRMATION_SEEDS`` (the work cap and
+# active fold window). Every stored revision so far uses 3.
+MAX_MIN_DETHRONE_CONFIRMATIONS = 10
 
 
 class LedgerPinStatus(BaseModel):

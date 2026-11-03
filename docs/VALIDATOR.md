@@ -824,6 +824,25 @@ the King, each challenger's shared seeds vs `min_dethrone_confirmations`, the
 paired lead or deficit, and what it still needs, under `emissions.king` and
 `emissions.challengers`.
 
+### Continual retest seed budget
+
+Platform owns how many shared seeds the continual retest lane buys. Each round
+targets the variance-sized count between `TOP5_MIN_CONFIRMATION_SEEDS` (8) and
+the work cap `TOP5_MAX_CONFIRMATION_SEEDS` (10) in
+`apps/platform/ditto/api_server/koth.py`, and the ledger serves each entry only
+the active window of at most that many most-shared seeds. Accepted rows stay
+append-only; a deeper window recorded under an older cap simply stops folding.
+
+The validator's own `TOP5_MAX_CONFIRMATION_SEEDS` (15, `ditto/validator/config.py`)
+is a separate, frozen fold ceiling: it truncates whatever a malformed Platform
+might serve and bounds a served `min_dethrone_confirmations`. Platform mirrors
+it as `CONFIRMATION_SEED_CEILING` for its pin projection, served-gate parsing
+and seed binding, and the shared `crown_gate_cases.json` ceiling case fails if
+either fold moves it. Lowering the work cap therefore needs no validator
+release or fleet gate: every validator folds the bounded window it is served.
+Lowering the ceiling itself would; a validator that truncated below a pin's
+served window would crown a different King and fail `ledger_pin_mismatch`.
+
 ### Provisional incumbent (protocol 28)
 
 Holding the crown and being paid are separate facts. When the operator's

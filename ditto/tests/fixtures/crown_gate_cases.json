@@ -1,5 +1,5 @@
 {
-  "_comment": "Protocol-34 crown gate cases folded by BOTH the validator (ditto/tests/validator/test_crown_gate.py) and the Platform projection (apps/platform/ditto/tests/api_server/test_crown_gate.py). One fixture, two folds: a drift between them crowns a different King on the board than the fleet pays. Seeds map to per-seed confirmation composites; minutes offset first_seen. Cases with bench_version 16 build dueling rows: each entry's report (and each seed's) has n=35 cases per slice column, sum = mean x 35, sum_sq = mean^2 x 35, datagen_gate 1, the case's slice_owners per column c0..c4, and the entry's owner_key; composites are the self-masked report composites. A null season_id/dueling is a v16 row without its season or aggregates. 'tail', when present, is the ungated fold's paid tail in order.",
+  "_comment": "Protocol-34 crown gate cases folded by BOTH the validator (ditto/tests/validator/test_crown_gate.py) and the Platform projection (apps/platform/ditto/tests/api_server/test_crown_gate.py). One fixture, two folds: a drift between them crowns a different King on the board than the fleet pays. Seeds map to per-seed confirmation composites; minutes offset first_seen. Cases with bench_version 16 build dueling rows: each entry's report (and each seed's) has n=35 cases per slice column, sum = mean x 35, sum_sq = mean^2 x 35, datagen_gate 1, the case's slice_owners per column c0..c4, and the entry's owner_key; composites are the self-masked report composites. A null season_id/dueling is a v16 row without its season or aggregates. 'tail', when present, is the ungated fold's paid tail in order. The fold-ceiling case pins both folds to the validator's 15-seed confirmation ceiling: the challenger's lead lives on seeds 11-15 and seeds 16-17 erase it, so a fold that truncates at 10 or at 16 or more crowns the king. Platform's 10-seed retest work cap bounds the window it serves, never this ceiling.",
   "cases": [
     {
       "name": "unretested newcomer cannot take the crown",
@@ -222,6 +222,59 @@
       "ungated_champion": "king",
       "gated_champion": "king",
       "tail": ["y", "x"]
+    },
+    {
+      "name": "v16: a challenger's lead past the fifteenth shared seed never counts",
+      "bench_version": 16,
+      "slice_owners": ["coldkey:x", "coldkey:y", "coldkey:z", "coldkey:w", ""],
+      "entries": [
+        {"name": "king", "stderr": 0.01, "minutes": 0, "owner_key": "coldkey:king", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.8, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.804, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.796, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.804, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.796, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "5": {"datagen_raw": 0.804, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "6": {"datagen_raw": 0.796, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "7": {"datagen_raw": 0.804, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "8": {"datagen_raw": 0.796, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "9": {"datagen_raw": 0.804, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "10": {"datagen_raw": 0.796, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "11": {"datagen_raw": 0.804, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "12": {"datagen_raw": 0.796, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "13": {"datagen_raw": 0.804, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "14": {"datagen_raw": 0.796, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "15": {"datagen_raw": 0.804, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "16": {"datagen_raw": 0.796, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "17": {"datagen_raw": 0.804, "means": [0.7, 0.7, 0.7, 0.7, 0.7]}
+         }},
+        {"name": "challenger", "stderr": 0.01, "minutes": 600, "owner_key": "coldkey:challenger", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.8, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.802, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.794, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.802, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.794, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "5": {"datagen_raw": 0.802, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "6": {"datagen_raw": 0.794, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "7": {"datagen_raw": 0.802, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "8": {"datagen_raw": 0.794, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "9": {"datagen_raw": 0.802, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "10": {"datagen_raw": 0.794, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "11": {"datagen_raw": 0.884, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "12": {"datagen_raw": 0.876, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "13": {"datagen_raw": 0.884, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "14": {"datagen_raw": 0.876, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "15": {"datagen_raw": 0.884, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "16": {"datagen_raw": 0.316, "means": [0.7, 0.7, 0.7, 0.7, 0.7]},
+           "17": {"datagen_raw": 0.324, "means": [0.7, 0.7, 0.7, 0.7, 0.7]}
+         }}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "challenger",
+      "gated_champion": "challenger"
     }
   ]
 }

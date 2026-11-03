@@ -133,9 +133,12 @@ class TestComparator:
             confirmation_depth={legacy.agent_id: 32, current.agent_id: 15},
         )
 
-        assert active[legacy.agent_id] == dict.fromkeys(shared, 0.8)
-        assert active[current.agent_id] == shared
-        assert depths == {legacy.agent_id: 15, current.agent_id: 15}
+        # The 15 seeds recorded under the former cap fold only the current
+        # 10-seed work cap's window, most shared first, then by seed.
+        window = range(17, 27)
+        assert active[legacy.agent_id] == dict.fromkeys(window, 0.8)
+        assert active[current.agent_id] == dict.fromkeys(window, 0.75)
+        assert depths == {legacy.agent_id: 10, current.agent_id: 10}
 
     def test_ranks_by_score_descending(self) -> None:
         low = _Row(_uuid("1"), _BASE, 0.10)
