@@ -43,6 +43,15 @@ var AdmissionAtCapacity = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Inference admissions declined with the retryable AT_CAPACITY decline, by lane and first-bound scope.",
 }, []string{"lane", "scope"})
 
+// CostCeilingWouldDecline is ditto_inference_cost_ceiling_would_decline_total{lane}:
+// shadow-mode admissions the enforce mode would have declined with 4110
+// because settled ledger cost already met the grant's stamped ceiling (#3271).
+// The grant row keeps the per-run count (cost_ceiling_would_decline).
+var CostCeilingWouldDecline = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "ditto_inference_cost_ceiling_would_decline_total",
+	Help: "Hosted-inference admissions a shadow cost ceiling would have declined, by lane.",
+}, []string{"lane"})
+
 // DecisionRequests is ditto_inference_decision_requests_total{outcome}: one
 // increment per decision-lane call (completed, declined_<reason>,
 // provider_rejected, provider_unavailable, model_mismatch).
