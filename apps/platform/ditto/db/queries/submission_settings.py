@@ -23,6 +23,7 @@ from ditto.db.queries.agents import (
     SubmissionCooldownError,
     submission_cooldown_decision,
 )
+from ditto.db.queries.owner_submission_cooldown import lock_owner_cooldown_hotkey
 from ditto.db.queries.submission_deposit_address import (
     effective_submission_deposit_address,
 )
@@ -258,6 +259,7 @@ async def reserve_upload_admission(
     """Reserve one eligible coldkey slot so payment cannot lose a later race."""
     current = _utc(now or datetime.now(UTC))
     await lock_upload_admission_coldkey(session, miner_coldkey)
+    await lock_owner_cooldown_hotkey(session, miner_hotkey)
     existing = await session.get(
         UploadAdmissionReservation, miner_coldkey, with_for_update=True
     )
@@ -387,6 +389,7 @@ async def consume_or_enforce_upload_admission(
     """Consume a matching reservation, or enforce cooldown for a legacy client."""
     current = _utc(now or datetime.now(UTC))
     await lock_upload_admission_coldkey(session, miner_coldkey)
+    await lock_owner_cooldown_hotkey(session, miner_hotkey)
     existing = await session.get(
         UploadAdmissionReservation, miner_coldkey, with_for_update=True
     )

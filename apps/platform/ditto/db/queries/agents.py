@@ -33,6 +33,7 @@ from ditto.db.queries.benchmark_admission import (
 )
 from ditto.db.queries.owner_submission_cooldown import (
     OwnerCooldownNotice,
+    lock_owner_cooldown_hotkey,
     owner_override_retry_at,
 )
 from ditto.db.queries.screening_retry import failed_screening_retry_authorized
@@ -158,6 +159,8 @@ async def enforce_submission_cooldown(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:coldkey, 0))"),
             {"coldkey": miner_coldkey},
         )
+    if miner_hotkey is not None:
+        await lock_owner_cooldown_hotkey(session, miner_hotkey)
     decision = await submission_cooldown_decision(
         session,
         miner_coldkey=miner_coldkey,

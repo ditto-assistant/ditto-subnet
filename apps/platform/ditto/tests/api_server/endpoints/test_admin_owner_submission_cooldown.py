@@ -4,6 +4,7 @@ Every key here is a made-up base58 string; no real miner identity belongs in
 tests.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -396,3 +397,96 @@ async def test_expired_override_is_inert_and_revisions_are_append_only(
         )
     rows = list(await session.scalars(select(OwnerSubmissionCooldownRevision)))
     assert len(rows) == 1
+
+
+async def test_hotkey_override_serializes_parallel_reservations_across_coldkeys(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    await _seed_submission(
+        session, hotkey=_HOTKEY, coldkey=_COLDKEY, created_at=now - timedelta(days=2)
+    )
+    await _add_override(
+        session, scope="hotkey", key=_HOTKEY, expires_at=now + timedelta(days=14)
+    )
+    settings = EffectiveSubmissionSettings(
+        revision=1, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
+    first_holds = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def first() -> None:
+        async with session_maker() as one, one.begin():
+            await reserve_upload_admission(
+                one,
+                miner_coldkey=_COLDKEY,
+                miner_hotkey=_HOTKEY,
+                sha256="a" * 64,
+                settings=settings,
+                now=now,
+            )
+            first_holds.set()
+            await release_first.wait()
+
+    async def second() -> None:
+        await first_holds.wait()
+        async with session_maker() as two, two.begin():
+            await reserve_upload_admission(
+                two,
+                miner_coldkey=_FRESH_COLDKEY,
+                miner_hotkey=_HOTKEY,
+                sha256="b" * 64,
+                settings=settings,
+                now=now,
+            )
+
+    first_task = asyncio.create_task(first())
+    second_task = asyncio.create_task(second())
+    await first_holds.wait()
+    await asyncio.sleep(0.3)
+    # The second reservation waits on the hotkey lock the first still holds.
+    assert not second_task.done()
+    release_first.set()
+    await first_task
+    with pytest.raises(SubmissionCooldownError) as blocked:
+        await second_task
+    assert blocked.value.owner_override is not None
+    assert blocked.value.retry_at > now + timedelta(hours=23)
+
+
+async def test_lookup_measures_from_linked_identities(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    await _seed_submission(
+        session, hotkey=_HOTKEY, coldkey=_COLDKEY, created_at=now - timedelta(hours=5)
+    )
+    # A newer submission from another hotkey, paid by the same coldkey.
+    await _seed_submission(
+        session,
+        hotkey=_OTHER_HOTKEY,
+        coldkey=_COLDKEY,
+        created_at=now - timedelta(hours=1),
+    )
+    created = await client.post(_URL, headers=_HEADERS, json=_set())
+    assert created.status_code == 200, created.text
+    lookup = created.json()
+    latest = datetime.fromisoformat(lookup["latest_submission_at"])
+    assert abs(latest - (now - timedelta(hours=1))) < timedelta(seconds=1)
+    async with session.begin():
+        decision = await submission_cooldown_decision(
+            session,
+            miner_coldkey=_COLDKEY,
+            miner_hotkey=_HOTKEY,
+            cooldown=timedelta(hours=1),
+            now=now,
+        )
+    assert decision is not None
+    assert abs(
+        datetime.fromisoformat(lookup["next_allowed_at"]) - decision.retry_at
+    ) < timedelta(seconds=1)

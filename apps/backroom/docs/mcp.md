@@ -699,8 +699,10 @@ trail (reason, actor, created_at, expiry).
 `get_owner_submission_cooldowns(scope?, ownerKey?, includeInactive?)` lists
 the current revision of every overridden identity (active only unless
 `includeInactive`). With `scope` and `ownerKey` it adds `lookup`: the
-identity's history, the global cooldown, its newest submission (by the hotkey,
-or paid by the coldkey) and `next_allowed_at` under the override.
+identity's history, the global cooldown, its newest submission (under this
+identity or any identity a payment record links to it: the coldkeys that paid
+for the hotkey, or the hotkeys the coldkey paid for) and `next_allowed_at`
+under the override.
 `lookup.current=null` means never overridden.
 
 `set_owner_submission_cooldown` installs or replaces one identity's override.
@@ -729,7 +731,10 @@ global cooldown and every active override naming the uploading hotkey or the
 payment coldkey. The interval is measured from the owner's newest submission
 under either identity, so a hotkey override still holds an owner who pays from
 a fresh coldkey, and a coldkey override holds an owner who rotates hotkeys.
-An override never shortens the global cooldown and never holds past its own
+While a hotkey override is active, a live admission another coldkey reserved
+for that hotkey counts as a submission, and admissions under one hotkey are
+serialized, so two coldkeys reserving in parallel cannot both pass it. An
+override never shortens the global cooldown and never holds past its own
 expiry. An admission already reserved before the write is honored. The miner
 gets the existing cooldown error (1105, HTTP 429 on upload) with the interval
 and expiry; the operator's reason is never shown. To cover an owner who pays

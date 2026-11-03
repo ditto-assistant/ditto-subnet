@@ -24,9 +24,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
-from sqlalchemy import func, or_, select, tuple_
+from sqlalchemy import func, or_, select, text, tuple_
 
-from ditto.db.models import Agent, EvaluationPayment, OwnerSubmissionCooldownRevision
+from ditto.db.models import (
+    Agent,
+    EvaluationPayment,
+    OwnerSubmissionCooldownRevision,
+    UploadAdmissionReservation,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -182,6 +187,66 @@ async def owner_latest_submission_at(
     return None if latest is None else _utc(latest)
 
 
+async def identity_latest_submission_at(
+    session: AsyncSession, *, scope: OwnerScope, owner_key: str
+) -> datetime | None:
+    """The newest submission an override on this one identity can be measured from.
+
+    Enforcement measures from the uploading pair (hotkey and payment coldkey),
+    which is only known at upload time. For an operator lookup, take every
+    identity this one is linked to by a payment record -- the coldkeys that
+    paid for this hotkey, or the hotkeys this coldkey paid for -- so the
+    reported ``next_allowed_at`` is never earlier than the one enforcement
+    would apply to a pair the owner has already used.
+    """
+    if scope == "hotkey":
+        linked = select(EvaluationPayment.miner_coldkey).where(
+            EvaluationPayment.miner_hotkey == owner_key
+        )
+        paid_by_linked = (
+            select(EvaluationPayment.agent_id)
+            .where(
+                EvaluationPayment.agent_id == Agent.agent_id,
+                EvaluationPayment.miner_coldkey.in_(linked),
+            )
+            .correlate(Agent)
+            .exists()
+        )
+        predicate = or_(Agent.miner_hotkey == owner_key, paid_by_linked)
+    else:
+        linked_hotkeys = select(EvaluationPayment.miner_hotkey).where(
+            EvaluationPayment.miner_coldkey == owner_key
+        )
+        paid_by_key = (
+            select(EvaluationPayment.agent_id)
+            .where(
+                EvaluationPayment.agent_id == Agent.agent_id,
+                EvaluationPayment.miner_coldkey == owner_key,
+            )
+            .correlate(Agent)
+            .exists()
+        )
+        predicate = or_(paid_by_key, Agent.miner_hotkey.in_(linked_hotkeys))
+    latest = await session.scalar(select(func.max(Agent.created_at)).where(predicate))
+    return None if latest is None else _utc(latest)
+
+
+async def lock_owner_cooldown_hotkey(session: AsyncSession, miner_hotkey: str) -> None:
+    """Serialize admissions sharing one hotkey until the transaction ends.
+
+    The admission paths already hold the payment-coldkey lock; a hotkey
+    override must also hold across coldkeys, so two uploads under one hotkey
+    paid from different coldkeys cannot both pass it. Always taken after the
+    coldkey lock and under its own namespace, so lock order stays coldkey ->
+    hotkey everywhere.
+    """
+    if session.get_bind().dialect.name == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"owner-cooldown-hotkey:{miner_hotkey}"},
+        )
+
+
 async def owner_override_retry_at(
     session: AsyncSession,
     *,
@@ -198,6 +263,22 @@ async def owner_override_retry_at(
     latest = await owner_latest_submission_at(
         session, miner_coldkey=miner_coldkey, miner_hotkey=miner_hotkey
     )
+    if miner_hotkey:
+        # A live admission another coldkey reserved for this hotkey is a
+        # submission in flight: its payment can still land after this check.
+        # Counting it is what makes a hotkey override hold across two
+        # coldkeys reserving in parallel (the hotkey lock orders them). The
+        # uploader's own coldkey reservation is the existing per-coldkey
+        # path's to resolve, so it is excluded here.
+        reserved = await session.scalar(
+            select(func.max(UploadAdmissionReservation.created_at)).where(
+                UploadAdmissionReservation.miner_hotkey == miner_hotkey,
+                UploadAdmissionReservation.miner_coldkey != (miner_coldkey or ""),
+                UploadAdmissionReservation.expires_at > now,
+            )
+        )
+        if reserved is not None and (latest is None or _utc(reserved) > latest):
+            latest = _utc(reserved)
     if latest is None:
         return None
     best: tuple[datetime, OwnerCooldownNotice] | None = None
@@ -226,6 +307,8 @@ __all__ = [
     "OwnerScope",
     "active_overrides_for",
     "current_override",
+    "identity_latest_submission_at",
+    "lock_owner_cooldown_hotkey",
     "latest_overrides",
     "override_history",
     "override_state",

@@ -45,10 +45,10 @@ from ditto.db.models import (
 )
 from ditto.db.queries.owner_submission_cooldown import (
     current_override,
+    identity_latest_submission_at,
     latest_overrides,
     override_history,
     override_state,
-    owner_latest_submission_at,
 )
 from ditto.db.queries.submission_settings import (
     DEFAULT_SUBMISSION_COOLDOWN_SECONDS,
@@ -238,10 +238,8 @@ async def _owner_lookup(
 ) -> OwnerCooldownLookup:
     history = await override_history(session, scope=scope, owner_key=owner_key)
     current = history[0] if history else None
-    latest_submission = await owner_latest_submission_at(
-        session,
-        miner_coldkey=owner_key if scope == "coldkey" else None,
-        miner_hotkey=owner_key if scope == "hotkey" else None,
+    latest_submission = await identity_latest_submission_at(
+        session, scope=scope, owner_key=owner_key
     )
     next_allowed_at = None
     if (
