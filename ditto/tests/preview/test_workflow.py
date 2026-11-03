@@ -250,7 +250,7 @@ def test_preview_base_bake_is_scheduled_credential_empty_and_prunes() -> None:
     assert "sn118-preview: bake complete" in guest
     assert "sn118-preview: startup failed" in guest
     # Warm the pulled images and the built layers, and start nothing.
-    assert "compose pull --quiet postgres minio minio-init gateway" in guest
+    assert "compose pull --quiet postgres gateway" in guest
     assert "compose build" in guest
     assert "compose up" not in guest
     # startup.sh reaches this only through the bake metadata key.
