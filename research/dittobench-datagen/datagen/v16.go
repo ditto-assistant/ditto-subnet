@@ -169,8 +169,10 @@ func v16ConnectorSlots(seed int64, cases []protocol.ToolCase) []int {
 		}
 	}
 	// Second tier: ordinary (non-world) product result-usage cases, which the
-	// v13 order never offers. Duplicates first, then singletons, so a family
-	// keeps a case while any duplicate remains.
+	// v13 order never offers. Duplicates first, then singletons. A duplicate is
+	// counted over the whole family, eligible or not: the point is that the
+	// family keeps at least one case in the run, and an ineligible sibling
+	// stays in the run.
 	counts := map[string]int{}
 	for _, tc := range cases {
 		counts[tc.Category]++
