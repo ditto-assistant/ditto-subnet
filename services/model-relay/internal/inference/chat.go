@@ -378,7 +378,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// and this agent's miner linked a consenting Ditto account. Everyone else
 	// keeps the centralized OpenRouter path below, byte for byte.
 	daniSelected := !d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) &&
-		selectDaniLabs(admissionCfg, model, result.ticketPurpose, len(body), maxTokens, d.now())
+		selectDaniLabsForPayload(admissionCfg, model, result.ticketPurpose, upstreamPayload, maxTokens, d.now())
 	if daniSelected {
 		// Do not attribute a direct gateway's health to the OpenRouter route.
 		outcome.recordObservation = false

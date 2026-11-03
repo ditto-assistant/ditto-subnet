@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,31 @@ func TestDaniLabsSelectionFailsClosed(t *testing.T) {
 	fleet.DaniLabsTrialScope = "fleet"
 	if !selectDaniLabs(fleet, daniLabsModel, "scored", 10, 10, now) {
 		t.Fatal("fleet setting did not select eligible request")
+	}
+}
+
+func TestDaniLabsSelectionMeasuresFinalizedPayload(t *testing.T) {
+	now := time.Now()
+	cfg := config.InferenceProxyConfig{RoutingMode: config.RoutingModeAggregateThroughput,
+		DaniLabsAPIKey: "test", DaniLabsTrialUntil: now.Add(time.Hour).Format(time.RFC3339),
+		DaniLabsTrialScope: "canary", DaniLabsPercent: 100, TimeoutSeconds: 90}
+	incoming := map[string]any{"model": daniLabsModel, "messages": []any{map[string]any{"role": "user", "content": ""}}}
+	base, _ := json.Marshal(incoming)
+	incoming["messages"].([]any)[0].(map[string]any)["content"] = strings.Repeat("x", daniLabsMaxRequestBytes-len(base)-1)
+	inbound, _ := json.Marshal(incoming)
+	locked, herr := lockedUpstreamPayload(incoming, daniLabsModel, 64, 9)
+	if herr != nil {
+		t.Fatal(herr)
+	}
+	final, _ := json.Marshal(locked)
+	if len(inbound) > daniLabsMaxRequestBytes || len(final) <= daniLabsMaxRequestBytes {
+		t.Fatalf("fixture sizes inbound=%d final=%d", len(inbound), len(final))
+	}
+	if !selectDaniLabs(cfg, daniLabsModel, "benchmark_canary", len(inbound), 64, now) {
+		t.Fatal("negative control did not reproduce the old selection")
+	}
+	if selectDaniLabsForPayload(cfg, daniLabsModel, "benchmark_canary", locked, 64, now) {
+		t.Fatal("selected a finalized payload above the trial cap")
 	}
 }
 
@@ -119,6 +145,21 @@ func TestDaniLabsBodyLevelErrorIsProviderUnavailable(t *testing.T) {
 		map[string]any{"model": daniLabsModel}, daniLabsModel, defaultSleep, srv.URL)
 	if exhausted == nil || exhausted.terminalErrorCode != "provider_unavailable" {
 		t.Fatalf("exhausted: %+v", exhausted)
+	}
+}
+
+func TestDaniLabsMalformedResponseIsInvalid(t *testing.T) {
+	for _, body := range []string{`not json`, `[]`} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+			defer srv.Close()
+			cfg := config.InferenceProxyConfig{DaniLabsAPIKey: "test", ResponseBodyBytes: 1024, TimeoutSeconds: 5}
+			_, exhausted := completeChatViaDaniLabsURL(context.Background(), srv.Client(), cfg,
+				map[string]any{"model": daniLabsModel}, daniLabsModel, defaultSleep, srv.URL)
+			if exhausted == nil || exhausted.terminalErrorCode != "invalid_provider_response" {
+				t.Fatalf("exhausted: %+v", exhausted)
+			}
+		})
 	}
 }
 

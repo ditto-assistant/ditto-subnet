@@ -21,6 +21,19 @@ const (
 	daniLabsMaxOutputTokens = 8192
 )
 
+// Size the finalized payload exactly as postProviderWithRetry serializes it.
+// Keep the historical path allocation-free when the live share is zero.
+func selectDaniLabsForPayload(cfg config.InferenceProxyConfig, model, purpose string, payload map[string]any, maxTokens int, now time.Time) bool {
+	if cfg.DaniLabsPercent <= 0 {
+		return false
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	return selectDaniLabs(cfg, model, purpose, len(encoded), maxTokens, now)
+}
+
 // selectDaniLabs is a per-request sample of the eligible aggregate route. The
 // secret, explicit trial scope, and deadline are independent of the live board.
 // An invalid, expired, or more-than-seven-hours-away deadline fails closed.
@@ -79,7 +92,7 @@ func completeChatViaDaniLabsURL(ctx context.Context, client *http.Client, cfg co
 	decoded, _ := decodeJSONNumbers(res.body)
 	response, ok := decoded.(map[string]any)
 	if !ok {
-		return fail("provider_identity_mismatch", res.attempts, false)
+		return fail("invalid_provider_response", res.attempts, false)
 	}
 	if _, _, isError := providerErrorEnvelope(response); isError {
 		return fail("provider_unavailable", res.attempts, false)
