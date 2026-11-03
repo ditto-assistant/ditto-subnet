@@ -3834,6 +3834,11 @@ class ValidatorWorker:
                 inference_ticket_deadline=job.deadline if broker else None,
                 ticket_deadline=job.deadline,
                 benchmark_runtime=lease.benchmark_runtime,
+                # Without this the slot sat at ``preparing`` for the whole panel
+                # run, and Platform flagged every round run longer than its
+                # 15-minute early-stage grace as a stalled benchmark. The scorer
+                # reports ``running`` with per-column case counts like any run.
+                progress_callback=self._on_dittobench_progress,
             )
         finally:
             if broker is not None:

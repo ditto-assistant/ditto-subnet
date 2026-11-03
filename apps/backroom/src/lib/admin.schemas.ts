@@ -10365,6 +10365,13 @@ const validatorCapacityAssignmentSchema = z.object({
   stalled: z.boolean(),
   checks_per_minute: z.number().nonnegative().nullable(),
   estimated_remaining_slot_minutes: z.number().nonnegative().nullable(),
+  // The lease's own hosted-inference grant: the evidence that a run whose
+  // heartbeat still says `preparing` is executing cases rather than wedged.
+  // Defaulted so a Backroom deployed ahead of Platform still reads capacity.
+  inference_chat_requests: z.number().int().nonnegative().nullable().default(null),
+  inference_embedding_requests: z.number().int().nonnegative().nullable().default(null),
+  inference_last_activity_at: z.string().nullable().default(null),
+  inference_idle_seconds: z.number().int().nonnegative().nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityAssignment>)
 
 export const validatorCapacityEntrySchema = z.object({

@@ -43216,6 +43216,26 @@ export interface components {
              * @description Estimate: remaining checks of the current run at `checks_per_minute`, as of the latest heartbeat. Null whenever the rate is unknown; never a guess.
              */
             estimated_remaining_slot_minutes: number | null;
+            /**
+             * Inference Chat Requests
+             * @description Chat requests this lease's live hosted-inference grant has served so far. Null when the lease has no live grant.
+             */
+            inference_chat_requests?: number | null;
+            /**
+             * Inference Embedding Requests
+             * @description Embedding requests this lease's live grant has served so far. Null when the lease has no live grant.
+             */
+            inference_embedding_requests?: number | null;
+            /**
+             * Inference Idle Seconds
+             * @description Seconds since `inference_last_activity_at`, as of this read.
+             */
+            inference_idle_seconds?: number | null;
+            /**
+             * Inference Last Activity At
+             * @description When this lease's grant last began or finished a request. A recent time means the harness is executing whatever `stage` says; `stalled` is false while it is inside the 15-minute grace. Null before the first request or without a live grant.
+             */
+            inference_last_activity_at?: string | null;
             purpose: components["schemas"]["TicketPurpose"];
             /** Slot Id */
             slot_id: string;
