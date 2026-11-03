@@ -227,6 +227,11 @@ func TestCheckDuelingColumns(t *testing.T) {
 	if CheckDuelingColumns(bad) == nil {
 		t.Fatal("non-finite statistics must be refused")
 	}
+	owned := duelingSlice()
+	owned[0].Substituted = true
+	if CheckDuelingColumns(owned) == nil {
+		t.Fatal("a substituted column that names an owner must be refused")
+	}
 	neg := duelingSlice()
 	neg[2].N = -1
 	if CheckDuelingColumns(neg) == nil {
