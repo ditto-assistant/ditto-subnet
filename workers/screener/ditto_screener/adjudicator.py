@@ -2529,7 +2529,7 @@ def _record_reads(output: str, seen: set[tuple[str, int]]) -> None:
 
 def _verdict_from(arguments: Mapping[str, object]) -> _Verdict:
     decision = arguments.get("decision")
-    if not _is_allowed(decision, {"clear", "reject"}):
+    if not isinstance(decision, str) or not _is_allowed(decision, {"clear", "reject"}):
         raise ValueError("adjudicator decision is invalid")
     reason = arguments.get("reason")
     if not isinstance(reason, str) or not reason.strip():
