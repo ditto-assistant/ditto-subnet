@@ -253,7 +253,7 @@ async def prune_released_slice_bytes(
                 )
             )
         )
-        budget -= len(ids)
+        budget -= pruned
         if pruned:
             notes.append(
                 f"season {season.season_index} v{season.bench_version}: pruned "
