@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.439.0 (2026-11-03)
+
+### Features
+
+- **validator,platform**: Pair-mask and season-isolate the v16 KOTH projection on both folds
+  ([#3351](https://github.com/ditto-assistant/ditto-subnet/pull/3351),
+  [`0f98cf9`](https://github.com/ditto-assistant/ditto-subnet/commit/0f98cf936e691f57eda5b7b78313157b2cd60540))
+
+- **validator,platform,dittobench-api,backroom**: Ready the dueling lane for bench 16 before the
+  flip ([#3361](https://github.com/ditto-assistant/ditto-subnet/pull/3361),
+  [`459f9f8`](https://github.com/ditto-assistant/ditto-subnet/commit/459f9f81e03ed208b949b039f8a614278b5c702f))
+
+
 ## v0.438.1 (2026-11-03)
 
 ### Bug Fixes
