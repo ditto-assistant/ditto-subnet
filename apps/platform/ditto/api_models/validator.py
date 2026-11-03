@@ -112,11 +112,15 @@ from ditto_screening_protocol.confirmation import (
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationEvidenceRoot,
 )
+from ditto_screening_protocol.dueling import DuelingReport
 from ditto_screening_protocol.treasury_enforcement import TreasuryPin
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_DUELING_IDENT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+# Base64 of at most ``challenge.MaxRoundDatasetBytes`` (32 MiB) slice bytes.
+DUELING_SLICE_MAX_BASE64_CHARS = 4 * (((32 << 20) + 2) // 3)
 ValidatorRuntimeState = Literal[
     "polling",
     "running_benchmark",
@@ -425,6 +429,50 @@ class JobResponse(BaseModel):
             "agent_id, validator_hotkey)`` "
             "and refuse a ticket whose seed the platform could have chosen "
             "(anti-grind, prod hardening P2). Null for pre-derivation agents.",
+        ),
+    ] = None
+    # Bench >= 16 (dueling) generator slice, served in the lease body. All five
+    # fields arrive together on a dueling ticket and are absent otherwise, so a
+    # pre-16 lease serializes exactly as before. The validator forwards the
+    # slice to ``/v2/score`` and refuses a >= 16 lease that lacks them or whose
+    # bytes do not hash to ``expected_slice_sha256``.
+    dueling_slice_mode: Literal["dueling-slice-v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    dueling_slice_bytes: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=DUELING_SLICE_MAX_BASE64_CHARS,
+            exclude_if=lambda value: value is None,
+            description="Base64 of the season's frozen slice for this run seed.",
+        ),
+    ] = None
+    expected_slice_sha256: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_SHA256_PATTERN,
+            exclude_if=lambda value: value is None,
+            description="SHA-256 of the decoded slice bytes (tamper pin).",
+        ),
+    ] = None
+    dueling_owner_key: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=256,
+            exclude_if=lambda value: value is None,
+            description="Scored agent's owner key; the scorer self-masks it.",
+        ),
+    ] = None
+    dueling_season_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_DUELING_IDENT_PATTERN,
+            exclude_if=lambda value: value is None,
+            description="Dueling season the slice belongs to.",
         ),
     ] = None
     bench_version: Annotated[
@@ -1655,6 +1703,16 @@ class ConfirmationScoreRecord(BaseModel):
             default=None, description="Validator's hex sr25519 signature, if stored."
         ),
     ] = None
+    dueling: DuelingReport | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench >= 16 only: this seed's signed ``details.dueling`` "
+            "aggregates. The KOTH fold recomputes the seed's composite with "
+            "both compared agents' owners masked; a v16 record without them "
+            "carries no paired evidence."
+        ),
+    )
 
 
 class LedgerScoreProof(BaseModel):
@@ -1993,6 +2051,29 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    dueling_season_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_DUELING_IDENT_PATTERN,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Bench >= 16 only: the dueling season this row was scored in. "
+                "The fold compares v16 rows only within one "
+                "``(bench_version, dueling_season_id)``; a v16 row without it "
+                "never ranks or pays."
+            ),
+        ),
+    ] = None
+    dueling: DuelingReport | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench >= 16 only: the authoritative score's signed "
+            "``details.dueling`` aggregates (owner key, datagen half, slice "
+            "columns). A v16 row without them never ranks or pays."
+        ),
+    )
     status: Annotated[
         AgentStatus, Field(description="Agent lifecycle state (always ``scored``).")
     ]

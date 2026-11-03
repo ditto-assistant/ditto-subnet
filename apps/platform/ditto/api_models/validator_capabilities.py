@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from ditto_screening_protocol.dueling import DUELING_MIN_BENCH_VERSION
 from ditto_screening_protocol.treasury_enforcement import TreasuryWeightCapability
 
 _DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
@@ -258,6 +259,14 @@ class ScorerBenchmarkCapability(BaseModel):
     generator_round_bench_versions: SupportedBenchVersions | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    # The bench versions the scorer runs with a ``dueling-slice-v1`` generator
+    # slice, read from its ``dueling-slice-bench-<n>`` features and capped at
+    # the versions this validator runs. Absent unless advertised, so validators
+    # without it sign exactly the bytes they always did; Platform leases a
+    # bench >= 16 ticket only to a validator that forwards its version here.
+    dueling_slice_bench_versions: SupportedBenchVersions | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     # The scorer runs a screened image without the source tarball (its
     # ``screened-image-source-free-v1`` feature). Platform then withholds the
     # source URL from this validator. Absent unless true, so validators without
@@ -280,6 +289,18 @@ class ScorerBenchmarkCapability(BaseModel):
             raise ValueError(
                 "generator round bench versions require the round mode and "
                 "verified support for each version"
+            )
+        if self.dueling_slice_bench_versions is not None and (
+            self.status != "fresh_verified"
+            or not set(self.dueling_slice_bench_versions) <= set(versions)
+            or any(
+                version < DUELING_MIN_BENCH_VERSION
+                for version in self.dueling_slice_bench_versions
+            )
+        ):
+            raise ValueError(
+                "dueling slice bench versions require a verified scorer that "
+                "runs each version, all at or above the dueling floor"
             )
         if self.scored_runtime_env is not None and (
             self.status != "fresh_verified"
