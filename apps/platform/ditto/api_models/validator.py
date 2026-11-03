@@ -112,7 +112,11 @@ from ditto_screening_protocol.confirmation import (
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationEvidenceRoot,
 )
-from ditto_screening_protocol.dueling import DuelingReport
+from ditto_screening_protocol.dueling import (
+    DUELING_MIN_BENCH_VERSION,
+    DuelingReport,
+    is_dueling_bench_version,
+)
 from ditto_screening_protocol.treasury_enforcement import TreasuryPin
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
@@ -475,6 +479,42 @@ class JobResponse(BaseModel):
             description="Dueling season the slice belongs to.",
         ),
     ] = None
+
+    @model_validator(mode="after")
+    def _dueling_slice_all_or_none(self) -> JobResponse:
+        """A dueling slice is served whole, and only on a bench >= 16 lease.
+
+        Platform-side only: Platform must never serve a partial or pre-16
+        slice. The validator's mirror stays permissive on purpose, because a
+        lease that fails to parse there can neither be named nor handed back;
+        it refuses a bad slice itself (``dueling_slice_from_lease``) and hands
+        the ticket back as infrastructure with a specific code.
+        """
+        fields = {
+            "dueling_slice_mode": self.dueling_slice_mode,
+            "dueling_slice_bytes": self.dueling_slice_bytes,
+            "expected_slice_sha256": self.expected_slice_sha256,
+            "dueling_owner_key": self.dueling_owner_key,
+            "dueling_season_id": self.dueling_season_id,
+        }
+        present = sorted(name for name, value in fields.items() if value is not None)
+        if not present:
+            return self
+        if len(present) != len(fields):
+            missing = sorted(set(fields) - set(present))
+            raise ValueError(
+                "dueling slice fields must be served together; missing "
+                + ", ".join(missing)
+            )
+        if self.bench_version is None or not is_dueling_bench_version(
+            self.bench_version
+        ):
+            raise ValueError(
+                "dueling slice fields are only valid on a bench_version >= "
+                f"{DUELING_MIN_BENCH_VERSION} lease, not {self.bench_version!r}"
+            )
+        return self
+
     bench_version: Annotated[
         int | None,
         Field(
