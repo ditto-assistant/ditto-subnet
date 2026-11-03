@@ -254,6 +254,7 @@ class PricedCostReport(BaseModel):
         return (
             self.contract_id == want["contract_id"]
             and self.window == want["window"]
+            and self.result == want["result"]
             and self.prices == want["prices"]
             and self.curve == want["curve"]
             and self.normalization_cases == want["normalization_cases"]

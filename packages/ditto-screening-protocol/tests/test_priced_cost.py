@@ -97,3 +97,9 @@ def test_tampered_terms_are_detected(change: dict[str, Any]) -> None:
     vector = next(v for v in _vectors()["vectors"] if v["name"] == "v15_full_catalog")
     tampered = dict(vector["summary"], **change)
     assert not PricedCostReport.model_validate(tampered).matches_published_rule(16)
+
+
+def test_priced_result_on_zero_cases_is_detected() -> None:
+    vector = next(v for v in _vectors()["vectors"] if v["name"] == "zero_cases")
+    tampered = dict(vector["summary"], result="priced")
+    assert not PricedCostReport.model_validate(tampered).matches_published_rule(16)
