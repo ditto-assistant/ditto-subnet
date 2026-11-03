@@ -545,6 +545,17 @@ async def advance_seasons(
         .order_by(DuelingSeason.season_index)
         .with_for_update()
     ):
+        if (
+            season.rotation_requested_at is not None
+            and not season.rotation_immediate
+            and (season.closes_at_round is None or season.closes_at_round > current + 1)
+        ):
+            # An audited rotation closes the season at the next round boundary.
+            season.closes_at_round = current + 1
+            notes.append(
+                f"season {season.season_index} v{season.bench_version}: rotation "
+                f"closes it at round {current + 1}"
+            )
         reason: str | None = None
         if season.bench_version not in target.live_versions:
             reason = f"bench v{season.bench_version} is no longer active or rolling out"

@@ -1830,6 +1830,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/dueling/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Rotate Dueling Season
+         * @description Rotate the open season: it closes at the next round boundary (or now,
+         *     with ``immediate``) and the next season opens at the following boundary
+         *     on a fresh battery. Never swaps columns in place.
+         */
+        post: operations["admin_rotate_dueling_season_api_v1_admin_generator_competition_dueling_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/seasons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Dueling Seasons
+         * @description The dueling target, the open and committed seasons, and recent ones.
+         */
+        get: operations["admin_dueling_seasons_api_v1_admin_generator_competition_dueling_seasons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/seasons/{season_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Dueling Season */
+        get: operations["admin_dueling_season_api_v1_admin_generator_competition_dueling_seasons__season_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/slices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Dueling Slices
+         * @description Slice preparations, newest first, with latency and digests.
+         */
+        get: operations["admin_dueling_slices_api_v1_admin_generator_competition_dueling_slices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/probe": {
         parameters: {
             query?: never;
@@ -11989,6 +12068,51 @@ export interface components {
             } | null;
             /** Triggers */
             triggers: ("top_five" | "composite_anomaly" | "tool_anomaly" | "memory_anomaly")[];
+        };
+        /**
+         * AdminDuelingRotateRequest
+         * @description Close an open dueling season early (an audited mini-rollout).
+         */
+        AdminDuelingRotateRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Immediate
+             * @default false
+             */
+            immediate: boolean;
+            /** Reason */
+            reason: string;
+            /** Season Id */
+            season_id?: string | null;
+        };
+        /** AdminDuelingSeasonsResponse */
+        AdminDuelingSeasonsResponse: {
+            /** Current */
+            current: components["schemas"]["DuelingSeasonView"][];
+            /** Next */
+            next: components["schemas"]["DuelingSeasonView"][];
+            /** Recent */
+            recent: components["schemas"]["DuelingSeasonView"][];
+            target: components["schemas"]["DuelingTargetView"];
+        };
+        /** AdminDuelingSlicesResponse */
+        AdminDuelingSlicesResponse: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Latency P50 Seconds */
+            latency_p50_seconds: number | null;
+            /** Latency P95 Seconds */
+            latency_p95_seconds: number | null;
+            /** Slices */
+            slices: components["schemas"]["DuelingSliceView"][];
         };
         /**
          * AdminDuplicateSummary
@@ -22354,6 +22478,41 @@ export interface components {
              */
             season_id: string;
         };
+        /** DuelingBatteryView */
+        DuelingBatteryView: {
+            /** Attempts */
+            attempts: number;
+            /** Error */
+            error: string | null;
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            } | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Grading Bench Version */
+            grading_bench_version: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Rank */
+            rank: number;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "leased" | "passed" | "failed";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
         /**
          * DuelingColumnAggregate
          * @description One slice column's per-run case statistics (``details.dueling``).
@@ -22384,6 +22543,27 @@ export interface components {
             /** Sum Sq */
             sum_sq: number;
         };
+        /** DuelingColumnMean */
+        DuelingColumnMean: {
+            /** Below Floor */
+            below_floor: boolean;
+            /** Cases */
+            cases: number;
+            /** Column Id */
+            column_id: string;
+            /** Default Gap */
+            default_gap: number | null;
+            /** Mean */
+            mean: number | null;
+            /** Owner Key */
+            owner_key: string;
+            /** Public Default */
+            public_default: boolean;
+            /** Scores */
+            scores: number;
+            /** Submission Id */
+            submission_id: string;
+        };
         /**
          * DuelingReport
          * @description The ``details.dueling`` block of a bench >= 16 score report.
@@ -22410,6 +22590,84 @@ export interface components {
             season_index: number;
             /** Slice Sha256 */
             slice_sha256: string;
+        };
+        /** DuelingSeasonView */
+        DuelingSeasonView: {
+            /** Anchor Block */
+            anchor_block: number | null;
+            /** Anchor Block Hash */
+            anchor_block_hash: string | null;
+            /** Batteries */
+            batteries?: components["schemas"]["DuelingBatteryView"][];
+            /** Bench Version */
+            bench_version: number;
+            /** Closed At */
+            closed_at: string | null;
+            /** Closes At Round */
+            closes_at_round: number | null;
+            /** Column Means */
+            column_means?: components["schemas"]["DuelingColumnMean"][];
+            /** Columns */
+            columns: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Commitment */
+            commitment: string;
+            /**
+             * Committed At
+             * Format: date-time
+             */
+            committed_at: string;
+            /** Detail */
+            detail: {
+                [key: string]: unknown;
+            } | null;
+            /** Fallback */
+            fallback: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Opened At */
+            opened_at: string | null;
+            /** Reveal At Epoch */
+            reveal_at_epoch: number | null;
+            /** Revealed At */
+            revealed_at: string | null;
+            /** Rotation Actor */
+            rotation_actor: string | null;
+            /** Rotation Immediate */
+            rotation_immediate: boolean | null;
+            /** Rotation Reason */
+            rotation_reason: string | null;
+            /** Rotation Requested At */
+            rotation_requested_at: string | null;
+            /** Rounds Per Season */
+            rounds_per_season: number;
+            /** Season Index */
+            season_index: number;
+            /** Season Seed */
+            season_seed?: string | null;
+            /** Secret Hex */
+            secret_hex?: string | null;
+            /** Settings Revision */
+            settings_revision: number | null;
+            /** Shadow */
+            shadow: boolean;
+            /** Slices */
+            slices?: {
+                [key: string]: number;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "committed" | "open" | "closed" | "revealed" | "void";
+            /** Void Reason */
+            void_reason: string | null;
         };
         /** DuelingSliceAck */
         DuelingSliceAck: {
@@ -22505,6 +22763,70 @@ export interface components {
             slice_base64?: string | null;
             /** Slice Sha256 */
             slice_sha256?: string | null;
+        };
+        /** DuelingSliceView */
+        DuelingSliceView: {
+            /** Attempts */
+            attempts: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Bytes Pruned */
+            bytes_pruned: boolean;
+            /** Columns */
+            columns: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /** Failed At */
+            failed_at: string | null;
+            /** First Leased At */
+            first_leased_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Latency Seconds */
+            latency_seconds: number | null;
+            /** Ready At */
+            ready_at: string | null;
+            /** Run Seed */
+            run_seed: number;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /** Size Bytes */
+            size_bytes: number | null;
+            /** Slice Sha256 */
+            slice_sha256: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "leased" | "ready" | "failed";
+        };
+        /** DuelingTargetView */
+        DuelingTargetView: {
+            /** Bench Version */
+            bench_version: number | null;
+            /** Blocked */
+            blocked: string | null;
+            /** Live Versions */
+            live_versions: number[];
+            /** Shadow */
+            shadow: boolean;
         };
         /**
          * DuelingWork
@@ -49367,6 +49689,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminDefaultGeneratorUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_rotate_dueling_season_api_v1_admin_generator_competition_dueling_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDuelingRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_dueling_seasons_api_v1_admin_generator_competition_dueling_seasons_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDuelingSeasonsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_dueling_season_api_v1_admin_generator_competition_dueling_seasons__season_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                season_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_dueling_slices_api_v1_admin_generator_competition_dueling_slices_get: {
+        parameters: {
+            query?: {
+                season_id?: string | null;
+                status?: ("pending" | "leased" | "ready" | "failed") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDuelingSlicesResponse"];
                 };
             };
             /** @description Validation Error */

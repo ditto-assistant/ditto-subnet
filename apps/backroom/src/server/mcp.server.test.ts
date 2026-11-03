@@ -559,6 +559,9 @@ describe('Backroom MCP tools', () => {
         'get_generator_round',
         'preview_generator_round',
         'get_generator_scorer',
+        'get_dueling_season',
+        'list_dueling_slices',
+        'rotate_dueling_season',
         'get_generator_round_loop',
         'tick_generator_rounds',
         'get_generator_round_dataset',
@@ -984,7 +987,9 @@ describe('Backroom MCP tools', () => {
     // The per-owner submission cooldown trio (one filtered read, guarded set
     // and revoke with SS58 key patterns; one-line summaries, detail in tool
     // help) brings it to 228,914 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(229_450)
+    // The dueling-season trio (two bounded reads, one guarded rotation; one-line
+    // summaries, detail in tool help) measures 231,218 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(231_700)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1041,7 +1046,9 @@ describe('Backroom MCP tools', () => {
       // keep about 200 chars.
       // The per-owner submission cooldown trio's three short summaries bring
       // it to 29,006; keep about 200 chars.
-      29_200,
+      // The three one-line dueling-season summaries measure 29,233; keep
+      // about 200 chars.
+      29_450,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

@@ -54,6 +54,11 @@ import {
   setBountyPayoutPolicy,
 } from './bounty.service'
 import {
+  fetchDuelingSeason,
+  listDuelingSlices,
+  rotateDuelingSeason,
+} from './dueling.service'
+import {
   fetchGeneratorBoard,
   fetchGeneratorProbe,
   fetchGeneratorPromotionCandidates,
@@ -80,6 +85,11 @@ import {
   tickGeneratorRounds,
   voidGeneratorRound,
 } from './generator-competition.service'
+import {
+  getDuelingSeasonInputSchema,
+  listDuelingSlicesInputSchema,
+  rotateDuelingSeasonInputSchema,
+} from '../lib/dueling.schemas'
 import {
   closeGeneratorRoundInputSchema,
   tickGeneratorRoundsInputSchema,
@@ -830,6 +840,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   preview_generator_round: 'What a round opened now would freeze, and every blocker.',
   get_generator_round_loop: 'Read the round driver\'s last tick, actions, errors and chain position.',
   get_generator_scorer: 'Read generator scorers\' version, case bounds, grading versions and last poll.',
+  get_dueling_season: 'Read dueling seasons: target, current, next, by id; columns, batteries, column means.',
+  list_dueling_slices: 'List dueling slice preparations: status, attempts, latency, digests.',
+  rotate_dueling_season: 'Rotate the open dueling season with ROTATE DUELING SEASON; audited. Write.',
   tick_generator_rounds: 'Run one idempotent round-driver tick now.',
   get_generator_round_dataset: 'Download a closed round\'s exact dataset to reproduce it. Artifact scope.',
   void_generator_round: 'Void a round with VOID GENERATOR ROUND {n}; expires its live leases.',
@@ -1868,6 +1881,24 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Download a closed (scoring, scored or void) round\'s exact dataset bytes as base64 with its SHA-256 and seed, to reproduce the round: decode it with challenge.DecodeRoundDataset or rerun each column generator on challenge.RoundColumnSeed(seed, column). Refused while the round runs. Requires the dedicated backroom:artifact:read scope because the cases are private benchmark content.',
     inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => artifact(() => fetchGeneratorRoundDataset(input)))
+
+  registerTool('get_dueling_season', {
+    title: 'Get dueling season',
+    description: 'Dueling bench (bench v16+) seasons: the frozen generator set every v16+ agent run is scored on. Without seasonId: target (bench_version seasons run at, shadow=true while it is only the desired version of an open rollout, blocked naming why no season can open: generator competition off, dueling_enabled false, no v16+ contract active or rolling out, or source release disclosure never), current (the open season), next (the committed season waiting for its opening round) and recent (closed, revealed, void). With seasonId: that season. Each season shows its commitment (published before its anchor block existed), anchor block and hash (the opening round\'s open block), columns (c0..c4: submission, hotkey, owner_key, tree and source SHA-256, grading_bench_version, public_default; the public default has an empty owner_key and is never masked), fallback, close and reveal schedule (closes_at_round, reveal_at_epoch), rotation (who, why, immediate), detail (close reason, skipped candidates with why, substituted generators that sit out the next season), batteries (each candidate\'s 32-seed season battery: rank by ledger score with evidence, status, declared grading policy, error), column_means (each column\'s mean case score across in-season scores, default_gap to the public default columns, below_floor under 0.15: consider rotate_dueling_season) and slice counts by status. secret_hex and season_seed stay null until the season is revealed. Requires backroom:read.',
+    inputSchema: getDuelingSeasonInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchDuelingSeason(input)))
+
+  registerTool('list_dueling_slices', {
+    title: 'List dueling slices',
+    description: 'Dueling slice preparations, newest first: one per (season, run_seed), reserved when a bench v16+ lease finds no ready slice (the lease answers 503 with Retry-After meanwhile) and built by the trusted generator scorer. Each row has status (pending, leased, ready, failed), attempts, error, scorer version, slice_sha256 and size (never the bytes; bytes_pruned once retention dropped them), per-column results (substituted when a pinned generator failed on that seed and the public default filled it), and latency from reservation to ready or failed; latency_p50/p95 summarize the page and counts covers the whole filter. Filter by seasonId and status. Requires backroom:read.',
+    inputSchema: listDuelingSlicesInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listDuelingSlices(input)))
+
+  registerTool('rotate_dueling_season', {
+    title: 'Rotate dueling season',
+    description: 'Rotate the open dueling season early, for example when a column\'s in-season mean falls below the 0.15 floor, its default-relative gap is an outlier, or a pinned generator was banned or ruled a copy. Columns are never swapped in place: the season closes at the next round boundary (or on the next round-driver tick with immediate=true; no season serves slices until the next one opens at the following round boundary, so v16+ leases wait) and the next season opens on a fresh battery. seasonId defaults to the open season of the dueling target version. Refused when no season is open or it was already rotated (a pending boundary rotation may still be escalated to immediate). Confirmation: ROTATE DUELING SEASON. The reason is audited. Requires backroom:write.',
+    inputSchema: rotateDuelingSeasonInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rotateDuelingSeason(input, props.session.email)))
 
   registerTool('void_generator_round', {
     title: 'Void generator round',

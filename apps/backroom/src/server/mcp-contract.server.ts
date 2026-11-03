@@ -64,6 +64,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'reinstate_generator_submission',
   'tick_generator_rounds',
   'void_generator_round',
+  'rotate_dueling_season',
   'close_generator_round',
   'republish_generator_round_commitment',
   'release_generator_round_lease',

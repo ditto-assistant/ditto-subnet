@@ -73,6 +73,7 @@ from ditto.api_server.endpoints import (
     admin_copy_court_router,
     admin_copy_review_router,
     admin_database_backup_router,
+    admin_dueling_router,
     admin_efficiency_bonus_settings_router,
     admin_emission_allocation_router,
     admin_emission_eligibility_router,
@@ -805,6 +806,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_scoring_lease_settings_router, prefix="/api/v1")
     app.include_router(admin_generator_competition_router, prefix="/api/v1")
     app.include_router(admin_generator_rounds_router, prefix="/api/v1")
+    app.include_router(admin_dueling_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")
