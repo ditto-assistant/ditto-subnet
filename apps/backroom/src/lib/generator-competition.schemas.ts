@@ -73,7 +73,19 @@ export const generatorCompetitionSettingsSchema = z.object({
   // A competitionFees generator fee_required override decides instead when
   // set. Ships off.
   upload_fee_required: z.boolean(),
+  // Dueling bench (v16+): open seasons that pin up to five eligible
+  // generators into every bench v16+ agent run. Ships off; seasons open only
+  // while a v16+ contract is active or rolling out (shadow seasons) and the
+  // source release policy discloses.
+  dueling_enabled: z.boolean(),
+  // Generator rounds per dueling season (default 1). Platform refuses to
+  // enable dueling with rounds_per_season x epochs_per_round < 2.
+  rounds_per_season: z.number().int().min(1).max(48),
 })
+
+// The shortest safe dueling season in subnet epochs (dueling-bench.md
+// section 3), mirrored from Platform MIN_DUELING_SEASON_EPOCHS.
+export const MIN_DUELING_SEASON_EPOCHS = 2
 
 // Reads tolerate a Platform that predates a field: an older Platform never
 // charged generator uploads, so a missing upload_fee_required reads as off.
@@ -84,6 +96,10 @@ const generatorSettingsReadSchema = generatorCompetitionSettingsSchema.extend({
   // A revision written before the field reads as the shipped 3, as Platform
   // reads it.
   min_round_validators: z.number().int().min(1).max(32).default(3),
+  // A Platform or revision that predates dueling reads as off, one round
+  // per season.
+  dueling_enabled: z.boolean().default(false),
+  rounds_per_season: z.number().int().min(1).max(48).default(1),
 })
 
 export const generatorSettingsRevisionSchema = z.object({
@@ -126,6 +142,15 @@ export const setGeneratorSettingsInputSchema = z
         code: 'custom',
         message: `confirmation must be exactly ${expected}, naming the mode this revision applies`,
         path: ['confirmation'],
+      })
+    }
+    const seasonEpochs = input.settings.rounds_per_season * input.settings.epochs_per_round
+    if (input.settings.dueling_enabled && seasonEpochs < MIN_DUELING_SEASON_EPOCHS) {
+      context.addIssue({
+        code: 'custom',
+        message: `a dueling season must span at least ${MIN_DUELING_SEASON_EPOCHS} epochs: `
+          + `rounds_per_season x epochs_per_round = ${seasonEpochs}`,
+        path: ['settings', 'rounds_per_season'],
       })
     }
   })
