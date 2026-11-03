@@ -18,6 +18,8 @@ out.
   qualification battery.
 - ``dueling_slice_preparations``: one generator slice per ``(season,
   run_seed)``, with its bytes in Platform-private storage and their SHA-256.
+- ``generator_scorer_heartbeats`` gains ``dueling_work_kinds`` and accepts a
+  ``dueling`` poll.
 - ``validator_tickets`` gains ``dueling_season_id`` and ``slice_sha256``;
   ``scores`` gains ``dueling_season_id`` and the ``dueling`` aggregates;
   ``confirmation_scores`` gains ``dueling_season_id``.
@@ -65,6 +67,29 @@ def upgrade() -> None:
         "ALTER TABLE scores ADD CONSTRAINT ck_scores_scores_dueling_bench_floor "
         "CHECK ((dueling_season_id IS NULL AND dueling IS NULL) "
         "OR bench_version >= 16) NOT VALID"
+    )
+
+    # The generator scorer advertises its dueling work kinds on a new poll.
+    op.add_column(
+        "generator_scorer_heartbeats",
+        sa.Column("dueling_work_kinds", postgresql.JSONB(none_as_null=True)),
+    )
+    op.create_check_constraint(
+        "generator_scorer_heartbeats_dueling_kinds_check",
+        "generator_scorer_heartbeats",
+        "dueling_work_kinds IS NULL "
+        "OR (jsonb_typeof(dueling_work_kinds) = 'array' "
+        "AND jsonb_array_length(dueling_work_kinds) BETWEEN 1 AND 8)",
+    )
+    op.drop_constraint(
+        "generator_scorer_heartbeats_poll_check",
+        "generator_scorer_heartbeats",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "generator_scorer_heartbeats_poll_check",
+        "generator_scorer_heartbeats",
+        "last_poll IN ('qualification', 'round', 'dueling')",
     )
 
     op.create_table(
@@ -269,6 +294,26 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        "UPDATE generator_scorer_heartbeats SET last_poll = 'round' "
+        "WHERE last_poll = 'dueling'"
+    )
+    op.drop_constraint(
+        "generator_scorer_heartbeats_poll_check",
+        "generator_scorer_heartbeats",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "generator_scorer_heartbeats_poll_check",
+        "generator_scorer_heartbeats",
+        "last_poll IN ('qualification', 'round')",
+    )
+    op.drop_constraint(
+        "generator_scorer_heartbeats_dueling_kinds_check",
+        "generator_scorer_heartbeats",
+        type_="check",
+    )
+    op.drop_column("generator_scorer_heartbeats", "dueling_work_kinds")
     op.drop_table("dueling_slice_preparations")
     op.drop_table("dueling_season_batteries")
     op.drop_table("dueling_seasons")

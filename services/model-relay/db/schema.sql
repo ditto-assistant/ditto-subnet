@@ -4573,8 +4573,10 @@ CREATE TABLE public.generator_scorer_heartbeats (
     first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
     last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
     grading_bench_versions jsonb,
+    dueling_work_kinds jsonb,
     CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_4487 CHECK (((grading_bench_versions IS NULL) OR ((jsonb_typeof(grading_bench_versions) = 'array'::text) AND ((jsonb_array_length(grading_bench_versions) >= 1) AND (jsonb_array_length(grading_bench_versions) <= 16))))),
-    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_8669 CHECK ((last_poll = ANY (ARRAY['qualification'::text, 'round'::text]))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_46e0 CHECK (((dueling_work_kinds IS NULL) OR ((jsonb_typeof(dueling_work_kinds) = 'array'::text) AND ((jsonb_array_length(dueling_work_kinds) >= 1) AND (jsonb_array_length(dueling_work_kinds) <= 8))))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_8669 CHECK ((last_poll = ANY (ARRAY['qualification'::text, 'round'::text, 'dueling'::text]))),
     CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_c3f0 CHECK ((((min_cases IS NULL) = (max_cases IS NULL)) AND ((min_cases IS NULL) OR ((min_cases >= 1) AND (max_cases >= min_cases)))))
 );
 

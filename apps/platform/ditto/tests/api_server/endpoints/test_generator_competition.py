@@ -380,8 +380,9 @@ class TestSettings:
         assert "at least 2 epochs" in short.text
         # One-epoch rounds are still fine without dueling, and two of them
         # make a safe season.
-        body["settings"] = _settings(epochs_per_round=1, rounds_per_season=2)
-        body["settings"]["dueling_enabled"] = True
+        body["settings"] = _settings(
+            epochs_per_round=1, rounds_per_season=2, dueling_enabled=True
+        )
         ok = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
         assert ok.status_code == 200, ok.text
         stored = ok.json()["settings"]

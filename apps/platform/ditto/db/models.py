@@ -14063,6 +14063,11 @@ class GeneratorScorerHeartbeat(Base):
     grading_bench_versions: Mapped[list[int] | None] = mapped_column(
         JSONB(none_as_null=True)
     )
+    dueling_work_kinds: Mapped[list[str] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
+    """Dueling-bench work kinds (``slice``, ``battery``) the scorer advertised
+    on its ``dueling-work`` poll; NULL for a scorer that never polled it."""
     last_poll: Mapped[str] = mapped_column(Text, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
@@ -14072,6 +14077,12 @@ class GeneratorScorerHeartbeat(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "dueling_work_kinds IS NULL "
+            "OR (jsonb_typeof(dueling_work_kinds) = 'array' "
+            "AND jsonb_array_length(dueling_work_kinds) BETWEEN 1 AND 8)",
+            name="generator_scorer_heartbeats_dueling_kinds_check",
+        ),
         CheckConstraint(
             "grading_bench_versions IS NULL "
             "OR (jsonb_typeof(grading_bench_versions) = 'array' "
@@ -14084,7 +14095,7 @@ class GeneratorScorerHeartbeat(Base):
             name="generator_scorer_heartbeats_cases_check",
         ),
         CheckConstraint(
-            "last_poll IN ('qualification', 'round')",
+            "last_poll IN ('qualification', 'round', 'dueling')",
             name="generator_scorer_heartbeats_poll_check",
         ),
     )
