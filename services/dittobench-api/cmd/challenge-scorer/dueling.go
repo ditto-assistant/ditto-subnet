@@ -207,7 +207,7 @@ func processDueling(ctx context.Context, client *platformClient, cache *buildCac
 	if w == nil {
 		return false, nil
 	}
-	fault := faultReport{Work: "dueling", LeaseID: w.LeaseID, SeasonID: w.SeasonID, PreparationID: w.PreparationID}
+	fault := faultReport{Work: "dueling", LeaseID: w.LeaseID, SeasonID: uuidOrEmpty(w.SeasonID), PreparationID: uuidOrEmpty(w.PreparationID)}
 	switch w.Kind {
 	case "battery":
 		result, err := runBattery(ctx, cache, w)
@@ -223,6 +223,18 @@ func processDueling(ctx context.Context, client *platformClient, cache *buildCac
 		return true, client.do(ctx, http.MethodPost, "/api/v1/generator-scorer/dueling-slice", result, nil)
 	}
 	return true, reportFault(ctx, client, fault, unsupported("unknown dueling work kind %q", w.Kind))
+}
+
+// uuidPattern is Platform's UUID form. GeneratorScorerFault types season_id
+// and preparation_id as optional UUIDs, so a malformed id (the reason a lease
+// is refused) is omitted rather than turning the fault itself into a 422.
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+func uuidOrEmpty(s string) string {
+	if uuidPattern.MatchString(s) {
+		return s
+	}
+	return ""
 }
 
 // seasonIDPattern mirrors the season_id rule challenge.EncodeSliceDataset

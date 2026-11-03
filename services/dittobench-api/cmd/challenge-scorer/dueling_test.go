@@ -237,7 +237,7 @@ func batterySeeds(n int) []string {
 func TestBatteryQualifiesOnlyValidDeterministicGenerators(t *testing.T) {
 	ok, crash, flaky := duelingArchive(t, "ok"), duelingArchive(t, "crash"), duelingArchive(t, "flaky")
 	fp := newFakeDuelingPlatform(t, &duelingWork{
-		Kind: "battery", LeaseID: "lease-b", SeasonID: "season-1", BenchVersion: testDuelingBench,
+		Kind: "battery", LeaseID: "lease-b", SeasonID: testSeasonID, BenchVersion: testDuelingBench,
 		Cases: protocol.DuelingSliceCasesPerColumn, Seeds: batterySeeds(3),
 		Candidates: []duelingCandidate{
 			{duelingSource: source("sub-ok", ok), OwnerKey: "coldkey:a"},
@@ -254,7 +254,7 @@ func TestBatteryQualifiesOnlyValidDeterministicGenerators(t *testing.T) {
 		t.Fatalf("batteries=%d faults=%+v", len(fp.batteries), fp.faults)
 	}
 	got := fp.batteries[0]
-	if got.LeaseID != "lease-b" || got.SeasonID != "season-1" || got.ScorerVersion != ScorerVersion || len(got.Candidates) != 4 {
+	if got.LeaseID != "lease-b" || got.SeasonID != testSeasonID || got.ScorerVersion != ScorerVersion || len(got.Candidates) != 4 {
 		t.Fatalf("identity: %+v", got)
 	}
 	policy := testSeasonPolicy(t)
@@ -286,7 +286,7 @@ func TestBatteryRefusesUnsupportedLeasesAsFaults(t *testing.T) {
 		"no seeds":          {BenchVersion: testDuelingBench, Cases: 35},
 		"too many cases":    {BenchVersion: testDuelingBench, Cases: challenge.MaxCases + 1, Seeds: batterySeeds(1)},
 	} {
-		w.Kind, w.LeaseID, w.SeasonID = "battery", "lease-u", "season-u"
+		w.Kind, w.LeaseID, w.SeasonID = "battery", "lease-u", testSeasonID
 		w.Candidates = []duelingCandidate{{duelingSource: source("sub-ok", ok), OwnerKey: "coldkey:a"}}
 		fp := newFakeDuelingPlatform(t, w)
 		cache, sb := testCache(t)
@@ -295,7 +295,7 @@ func TestBatteryRefusesUnsupportedLeasesAsFaults(t *testing.T) {
 			t.Fatalf("%s: err=%v posted=%d builds=%d", name, err, len(fp.batteries), sb.count())
 		}
 		if f := fp.faults; len(f) != 1 || f[0].Work != "dueling" || f[0].ErrorKind != "unsupported_request" ||
-			f[0].LeaseID != "lease-u" || f[0].SeasonID != "season-u" || f[0].ScorerVersion != ScorerVersion {
+			f[0].LeaseID != "lease-u" || f[0].SeasonID != testSeasonID || f[0].ScorerVersion != ScorerVersion {
 			t.Fatalf("%s: fault %+v", name, f)
 		}
 	}
@@ -305,6 +305,7 @@ const (
 	testSeasonIndex = 26119
 	testRunSeed     = 4242
 	testSeasonID    = "0b6f1c1e-6a52-4d8e-9a57-3f0c2d1e4b5a"
+	testPrepID      = "7c1d2e3f-4a5b-4c6d-8e7f-901a2b3c4d5e"
 )
 
 var testAnchor = "0x" + strings.Repeat("5a", 32)
@@ -329,7 +330,7 @@ func sliceWork(t *testing.T, withFallback bool) *duelingWork {
 	seasonSeed := testSeasonSeed(t)
 	policy := testSeasonPolicy(t)
 	w := &duelingWork{
-		Kind: "slice", LeaseID: "lease-s", PreparationID: "prep-1", SeasonID: testSeasonID,
+		Kind: "slice", LeaseID: "lease-s", PreparationID: testPrepID, SeasonID: testSeasonID,
 		SeasonIndex: testSeasonIndex, BenchVersion: testDuelingBench, RunSeed: testRunSeed,
 		CasesPerColumn: protocol.DuelingSliceCasesPerColumn,
 	}
@@ -376,7 +377,7 @@ func TestSliceGeneratesSubstitutesEncodesAndReproduces(t *testing.T) {
 		t.Fatalf("slices=%d faults=%+v", len(fp.slices), fp.faults)
 	}
 	got := fp.slices[0]
-	if got.LeaseID != "lease-s" || got.PreparationID != "prep-1" || got.ScorerVersion != ScorerVersion || len(got.Columns) != 5 {
+	if got.LeaseID != "lease-s" || got.PreparationID != testPrepID || got.ScorerVersion != ScorerVersion || len(got.Columns) != 5 {
 		t.Fatalf("identity: %+v", got)
 	}
 	for i, c := range got.Columns {
@@ -473,7 +474,7 @@ func TestSliceRefusesUnsupportedLeasesAsFaults(t *testing.T) {
 			t.Fatalf("%s: err=%v posted=%d builds=%d", name, err, len(fp.slices), sb.count())
 		}
 		if f := fp.faults; len(f) != 1 || f[0].Work != "dueling" || f[0].ErrorKind != "unsupported_request" ||
-			f[0].PreparationID != "prep-1" || f[0].SeasonID != w.SeasonID {
+			f[0].PreparationID != testPrepID || f[0].SeasonID != uuidOrEmpty(w.SeasonID) {
 			t.Fatalf("%s: fault %+v", name, f)
 		}
 	}
@@ -493,7 +494,7 @@ func TestSliceRefusesMismatchedPins(t *testing.T) {
 		if !errors.Is(err, genrun.ErrInvalidRequest) || len(fp.slices) != 0 {
 			t.Fatalf("%s: err=%v posted=%d", name, err, len(fp.slices))
 		}
-		if f := fp.faults; len(f) != 1 || f[0].ErrorKind != "unsupported_request" || f[0].PreparationID != "prep-1" {
+		if f := fp.faults; len(f) != 1 || f[0].ErrorKind != "unsupported_request" || f[0].PreparationID != testPrepID {
 			t.Fatalf("%s: fault %+v", name, f)
 		}
 	}
@@ -568,7 +569,7 @@ func (timeoutSandbox) Build(context.Context, string) (genrun.Program, error) {
 func TestBuildTimeoutsAreSandboxFaults(t *testing.T) {
 	ok := duelingArchive(t, "ok")
 	battery := &duelingWork{
-		Kind: "battery", LeaseID: "lease-t", SeasonID: "season-t", BenchVersion: testDuelingBench,
+		Kind: "battery", LeaseID: "lease-t", SeasonID: testSeasonID, BenchVersion: testDuelingBench,
 		Cases: protocol.DuelingSliceCasesPerColumn, Seeds: batterySeeds(1),
 		Candidates: []duelingCandidate{{duelingSource: source("sub-ok", ok), OwnerKey: "coldkey:a"}},
 	}
