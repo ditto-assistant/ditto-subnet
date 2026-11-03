@@ -21260,6 +21260,8 @@ export interface components {
              * @description Composite scored on this seed.
              */
             composite: number;
+            /** @description Bench >= 16 only: this seed's signed ``details.dueling`` aggregates. The KOTH fold recomputes the seed's composite with both compared agents' owners masked; a v16 record without them carries no paired evidence. */
+            dueling?: components["schemas"]["DuelingReport"] | null;
             /**
              * Seed
              * @description Champion-anchored CRN seed.
@@ -22351,6 +22353,63 @@ export interface components {
              * Format: uuid
              */
             season_id: string;
+        };
+        /**
+         * DuelingColumnAggregate
+         * @description One slice column's per-run case statistics (``details.dueling``).
+         *
+         *     ``n`` counts the column's executed cases after the slice dedupe; ``sum``
+         *     and ``sum_sq`` are the sums of their scores and squared scores, a failed
+         *     ``/run`` counting as 0. ``owner_key`` is ``""`` for the public default
+         *     generator, including a substituted column, and is never masked.
+         */
+        DuelingColumnAggregate: {
+            /** Column Id */
+            column_id: string;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
+            /** N */
+            n: number;
+            /** Owner Key */
+            owner_key: string;
+            /** Submission Id */
+            submission_id?: string | null;
+            /**
+             * Substituted
+             * @default false
+             */
+            substituted: boolean;
+            /** Sum */
+            sum: number;
+            /** Sum Sq */
+            sum_sq: number;
+        };
+        /**
+         * DuelingReport
+         * @description The ``details.dueling`` block of a bench >= 16 score report.
+         *
+         *     ``owner_key`` is the scored agent's owner; the reported composite is
+         *     :meth:`self_composite` (the agent's own columns masked).
+         */
+        DuelingReport: {
+            /** Column Weight */
+            column_weight: number;
+            /** Columns */
+            columns: components["schemas"]["DuelingColumnAggregate"][];
+            /** Composite Stderr */
+            composite_stderr: number;
+            /** Datagen Gate */
+            datagen_gate: number;
+            /** Datagen Raw */
+            datagen_raw: number;
+            /** Owner Key */
+            owner_key: string;
+            /** Season Id */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /** Slice Sha256 */
+            slice_sha256: string;
         };
         /** DuelingSliceAck */
         DuelingSliceAck: {
@@ -26887,6 +26946,28 @@ export interface components {
              * @description Score before this (UTC) or the ticket lapses.
              */
             deadline: string;
+            /**
+             * Dueling Owner Key
+             * @description Scored agent's owner key; the scorer self-masks it.
+             */
+            dueling_owner_key?: string | null;
+            /**
+             * Dueling Season Id
+             * @description Dueling season the slice belongs to.
+             */
+            dueling_season_id?: string | null;
+            /**
+             * Dueling Slice Bytes
+             * @description Base64 of the season's frozen slice for this run seed.
+             */
+            dueling_slice_bytes?: string | null;
+            /** Dueling Slice Mode */
+            dueling_slice_mode?: "dueling-slice-v1" | null;
+            /**
+             * Expected Slice Sha256
+             * @description SHA-256 of the decoded slice bytes (tamper pin).
+             */
+            expected_slice_sha256?: string | null;
             inference?: components["schemas"]["InferenceGrantOffer"] | null;
             /**
              * Miner Hotkey
@@ -27330,6 +27411,13 @@ export interface components {
              * @description Activation marker for validator protocol v14+. When present, the weight fold uses the arithmetic mean of the three signed quorum scores plus one aggregate per completed continual cohort wave. Older validators ignore this additive field.
              */
             continual_aggregate_method?: "mean_after_quorum" | null;
+            /** @description Bench >= 16 only: the authoritative score's signed ``details.dueling`` aggregates (owner key, datagen half, slice columns). A v16 row without them never ranks or pays. */
+            dueling?: components["schemas"]["DuelingReport"] | null;
+            /**
+             * Dueling Season Id
+             * @description Bench >= 16 only: the dueling season this row was scored in. The fold compares v16 rows only within one ``(bench_version, dueling_season_id)``; a v16 row without it never ranks or pays.
+             */
+            dueling_season_id?: string | null;
             /**
              * Effective Composite
              * @description Platform-projected efficiency tiebreak with the frozen adjustment applied; curve-v3 upside scales remaining headroom. It is considered only after exact authoritative-quality equality. Validators independently derive it from the authoritative quality evidence and efficiency_factor (or legacy efficiency_bonus); signed evidence is never modified.
@@ -37232,6 +37320,8 @@ export interface components {
              * @default false
              */
             deterministic_v13_datasets: boolean;
+            /** Dueling Slice Bench Versions */
+            dueling_slice_bench_versions?: number[] | null;
             /** Generator Round Bench Versions */
             generator_round_bench_versions?: number[] | null;
             /** Generator Round Max Cases */
