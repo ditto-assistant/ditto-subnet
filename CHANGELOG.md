@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.437.0 (2026-11-03)
+
+### Bug Fixes
+
+- **datagen**: Give the v16 datagen half the v15 world scale
+  ([#3349](https://github.com/ditto-assistant/ditto-subnet/pull/3349),
+  [`f529194`](https://github.com/ditto-assistant/ditto-subnet/commit/f529194f341efb6eb8f02b1eb9738abdb89b3282))
+
+- **datagen**: Report slice pack compaction errors separately from digest mismatches
+  ([#3352](https://github.com/ditto-assistant/ditto-subnet/pull/3352),
+  [`e637efd`](https://github.com/ditto-assistant/ditto-subnet/commit/e637efd5b5646b55da3eb5fd446ea236d303e87e))
+
+- **platform**: Keep API reachable during rolling deploys
+  ([#2750](https://github.com/ditto-assistant/ditto-subnet/pull/2750),
+  [`5f1792b`](https://github.com/ditto-assistant/ditto-subnet/commit/5f1792b12fdcb0b9e81440aa9e856c2e7251456f))
+
+### Features
+
+- **dittobench-api**: Deliver and score dueling slices on /v2/score for bench 16
+  ([#3345](https://github.com/ditto-assistant/ditto-subnet/pull/3345),
+  [`78af612`](https://github.com/ditto-assistant/ditto-subnet/commit/78af612944c92b8f1508fd3268dfb9a6c6e80a12))
+
+
 ## v0.436.0 (2026-11-03)
 
 ### Bug Fixes
