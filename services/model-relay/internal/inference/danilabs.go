@@ -78,11 +78,14 @@ func completeChatViaDaniLabsURL(ctx context.Context, client *http.Client, cfg co
 	}
 	decoded, _ := decodeJSONNumbers(res.body)
 	response, ok := decoded.(map[string]any)
-	if !ok || response["model"] != model {
+	if !ok {
 		return fail("provider_identity_mismatch", res.attempts, false)
 	}
 	if _, _, isError := providerErrorEnvelope(response); isError {
 		return fail("provider_unavailable", res.attempts, false)
+	}
+	if response["model"] != model {
+		return fail("provider_identity_mismatch", res.attempts, false)
 	}
 	prompt, completion, ok := boundedUsage(response)
 	if !ok {

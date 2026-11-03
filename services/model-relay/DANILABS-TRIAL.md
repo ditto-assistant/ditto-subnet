@@ -22,6 +22,10 @@ circuit or route observation. A direct failure does not trip or close that
 circuit. Existing route profile and score attribution are not a qualification
 of this provider.
 
+Confirmation inference uses its own handler and grant path; it does not enter
+this route. Avoid running the bf16 price-order canary and the DaniLabs canary
+at the same time, because a split canary population would confound comparisons.
+
 Before enabling any live traffic, validate the actual endpoint with synthetic
 requests including tools, reasoning and output formats, response and usage
 shapes, cancellation, input limits, latency under concurrency, privacy and

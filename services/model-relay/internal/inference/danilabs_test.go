@@ -109,6 +109,19 @@ func TestDaniLabsFailureIsNotReplayed(t *testing.T) {
 	}
 }
 
+func TestDaniLabsBodyLevelErrorIsProviderUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"error":{"code":503,"message":"temporarily unavailable"}}`))
+	}))
+	defer srv.Close()
+	cfg := config.InferenceProxyConfig{DaniLabsAPIKey: "test", ResponseBodyBytes: 1024, TimeoutSeconds: 5}
+	_, exhausted := completeChatViaDaniLabsURL(context.Background(), srv.Client(), cfg,
+		map[string]any{"model": daniLabsModel}, daniLabsModel, defaultSleep, srv.URL)
+	if exhausted == nil || exhausted.terminalErrorCode != "provider_unavailable" {
+		t.Fatalf("exhausted: %+v", exhausted)
+	}
+}
+
 func TestDaniLabsDoesNotFollowRedirects(t *testing.T) {
 	forwarded := 0
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { forwarded++ }))
