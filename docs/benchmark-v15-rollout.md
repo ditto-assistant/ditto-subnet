@@ -1,8 +1,30 @@
 # Bench v15 qualification and rollout
 
-Status: **contract shipped, not activated.** Supporting v15 does not change
-Platform's active version (14). Activation is a separate, guarded operator
-rollout (`start_benchmark_rollout` desired 15) after the steps below.
+Status: **activated 2026-11-03** (see *Activation record*). Before that:
+contract shipped, with activation a separate, guarded operator rollout
+(`start_benchmark_rollout` desired 15) after the steps below.
+
+## Activation record
+
+V15 is the active scoring contract. At 2026-11-03 14:11 UTC Backroom
+`get_benchmark_rollout_control` and `get_leaderboard` read `active_version`
+15, `desired_version` 15, `status` `activated`, and the public rollout
+endpoint agreed.
+
+- **Quorum.** 16 ranked quorum agents (minimum 5). The priority cohort was
+  complete (5 of 5), all 15 cohort members were ready at 3 scores each, and 5
+  validators were v15-capable. `qualification_converged` read false.
+- **Board.** The leaderboard, scoring and emission versions all read 15, with
+  16 ranked agents and the crown rules active (3 shared-seed confirmations to
+  dethrone).
+- **Miner rehearsal.** The offline fallback `LIVE_SCORING_BENCH_VERSION` and
+  the `mine` skill's live bench moved to 15 in the post-activation PR. The
+  starter kit change ships the next staged provenance manifest (v19).
+
+Not captured in this record: the exact activation timestamp and block, the
+rollout start time, and whether steps 2 and 3 below (decision-lane pin and
+canary) were recorded separately. `gcloud` was unauthenticated for the
+production read that would have supplied the timestamps.
 
 ## What v15 is
 
@@ -54,7 +76,8 @@ packs declaring 14 or 15; v13 packs keep working in v14 rounds.
    rollout PR), then `start_benchmark_rollout` desired 15. The top cohort
    retests into v15 and activation follows the ordinary quorum rule.
 5. After activation: move `LIVE_SCORING_BENCH_VERSION` and the `mine` skill's
-   live bench to 15, and record the activation here.
+   live bench to 15, and record the activation here. Done in the
+   post-activation PR (see *Activation record*).
 
 Rollback before activation is cancelling the rollout; v14 stays active
 throughout.
