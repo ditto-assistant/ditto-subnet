@@ -210,8 +210,10 @@ from ditto.api_server.koth import (
     KothEntry,
     KothProjection,
     continual_composite,
+    dueling_seed_records,
     effective_composite,
     emission_set,
+    ledger_row_dueling_fields,
     project_koth,
     retest_cohort,
     top5_round_is_due,
@@ -337,6 +339,7 @@ from ditto.db.queries.confirmation_scores import (
     completed_confirmation_wave_seeds,
     confirmation_catchup_seeds,
     confirmation_composites_by_seed,
+    confirmation_history_by_agent,
     fold_eligible_seeds_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import desired_era_work_outstanding
@@ -4857,6 +4860,18 @@ async def _current_koth_entries(
         agent_ids=[row.agent_id for row in rows],
         bench_version=canonical_version,
     )
+    # Bench v16+: the raw per-validator records with their signed
+    # ``details.dueling``, so this projection pair-masks exactly as the pinned
+    # fold does. Not read below v16, where it would be unused.
+    dueling_history = (
+        await confirmation_history_by_agent(
+            session,
+            agent_ids=[row.agent_id for row in rows],
+            bench_version=canonical_version,
+        )
+        if is_dueling_bench_version(canonical_version)
+        else {}
+    )
     (
         efficiency_bonuses,
         efficiency_factors,
@@ -4902,6 +4917,7 @@ async def _current_koth_entries(
             efficiency_bonus=efficiency_bonuses.get(row.agent_id),
             efficiency_factor=efficiency_factors.get(row.agent_id),
             efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
+            **ledger_row_dueling_fields(row),
         )
         for rank, row in enumerate(raw_rows, start=1)
     ]
@@ -5004,6 +5020,14 @@ async def _current_koth_entries(
                 efficiency_bonus=efficiency_bonuses.get(row.agent_id),
                 efficiency_factor=efficiency_factors.get(row.agent_id),
                 efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
+                **ledger_row_dueling_fields(row),
+                dueling_records=(
+                    None
+                    if v9_confirmed
+                    else dueling_seed_records(
+                        dueling_history.get(row.agent_id, ()), seeds=merged.keys()
+                    )
+                ),
             )
         )
     quality_primary = any(entry.efficiency_factor is not None for entry in entries)

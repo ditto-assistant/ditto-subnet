@@ -295,8 +295,10 @@ from ditto.api_server.koth import (
     bounded_efficiency_adjusted_quality,
     champion_defense,
     crown_standings,
+    dueling_seed_records,
     emission_allocation,
     koth_entries_from_ledger,
+    ledger_row_dueling_fields,
     project_koth,
 )
 from ditto.api_server.ledger_pin import (
@@ -390,6 +392,7 @@ from ditto.db.queries.confirmation_scores import (
     WaveMembership,
     confirmation_composites_by_seed,
     confirmation_depths,
+    confirmation_history_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import prev_generation_agent_ids
 from ditto.db.queries.emission_eligibility import (
@@ -494,6 +497,7 @@ from ditto.score_order import score_order_key
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol import reason_codes
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 logger = logging.getLogger(__name__)
 
@@ -2956,6 +2960,7 @@ def _public_koth_emissions(
     quorum_by_agent: dict[UUID, list[float]] | None = None,
     confirmation_by_seed: dict[UUID, dict[int, float]] | None = None,
     confirmation_depth: dict[UUID, int] | None = None,
+    dueling_history: Mapping[UUID, Sequence[Any]] | None = None,
     include_continual_scores: bool = True,
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
     anchor_version: int | None = None,
@@ -2986,6 +2991,10 @@ def _public_koth_emissions(
     the next pin will. ``provisional_incumbent`` is that incumbent when only a
     withheld generation is left (protocol 28): it folds like any row and every
     slot it takes is published unpaid, as validators burn it.
+
+    ``dueling_history`` (bench v16+) is each agent's raw confirmation records
+    with their signed ``details.dueling``; the seeds this projection admits
+    pair-mask exactly as the pinned fold does.
     """
     quorum_values = quorum_by_agent or {}
     bonus_values = efficiency_bonuses or {}
@@ -3063,6 +3072,15 @@ def _public_koth_emissions(
                 efficiency_bonus=bonus_values.get(row.agent_id),
                 efficiency_factor=factor_values.get(row.agent_id),
                 efficiency_curve_version=curve_values.get(row.agent_id),
+                **ledger_row_dueling_fields(row),
+                dueling_records=(
+                    None
+                    if v9_confirmed
+                    else dueling_seed_records(
+                        (dueling_history or {}).get(row.agent_id, ()),
+                        seeds=merged_confirmations.keys(),
+                    )
+                ),
             )
         )
 
@@ -3790,9 +3808,19 @@ async def build_public_leaderboard(
             agent_ids=finalized_ids,
             bench_version=active_version,
         )
+        dueling_history = (
+            await confirmation_history_by_agent(
+                session,
+                agent_ids=finalized_ids,
+                bench_version=active_version,
+            )
+            if is_dueling_bench_version(active_version)
+            else {}
+        )
     else:
         confirmation_by_seed = {}
         confirmation_depth = {}
+        dueling_history = {}
     _, completed_by_seed, completed_depth = completed_wave_data(
         finalized_rows,
         stderrs=fold_stderrs,
@@ -4522,6 +4550,7 @@ async def build_public_leaderboard(
                 confirmation_depth=(
                     confirmation_depth if continual_mean_active else {}
                 ),
+                dueling_history=dueling_history if continual_mean_active else {},
                 include_continual_scores=continual_mean_active,
                 wave_membership=continual_settings.wave_membership,
                 anchor_version=active_version,
