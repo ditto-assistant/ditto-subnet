@@ -27,12 +27,13 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import defer
 
 from ditto.db.models import (
     DuelingSeason,
     DuelingSeasonBattery,
+    DuelingSlicePreparation,
     GeneratorSourceRelease,
     GeneratorSubmission,
 )
@@ -42,12 +43,17 @@ from ditto_screening_protocol.dueling import DUELING_MIN_BENCH_VERSION, slice_se
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from ditto.db.models import DuelingSlicePreparation
-
 logger = logging.getLogger(__name__)
 
 PINNING_STATUSES = ("open", "closed", "revealed")
 """Season statuses whose frozen columns were served to agent runs."""
+
+SLICE_SCORE_DISPUTE_WINDOW = timedelta(days=7)
+"""How long a revealed season keeps its slice bytes after the last of its
+generators' sources is released, so an operator can still reproduce a
+disputed score from Platform's own copy before relying on public sources."""
+MAX_PRUNED_SLICES_PER_TICK = 500
+"""Bounded work per season tick; a backlog drains over later ticks."""
 
 
 def release_time(
@@ -158,6 +164,89 @@ async def sync_generator_source_releases(
     await session.flush()
     for note in notes:
         logger.info("generator source releases: %s", note)
+    return notes
+
+
+async def prune_released_slice_bytes(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    limit: int = MAX_PRUNED_SLICES_PER_TICK,
+) -> list[str]:
+    """Drop slice bytes once anyone can regenerate them; keep every digest.
+
+    A revealed season's slices become reproducible from public inputs when
+    every miner generator it pinned has its source released (the public
+    default generator is always public). Bytes are kept for
+    :data:`SLICE_SCORE_DISPUTE_WINDOW` after the later of the reveal and the
+    last of those releases, then pruned: ``slice_bytes`` cleared,
+    ``bytes_pruned_at`` set, ``slice_sha256`` kept. Bounded per tick; the
+    caller commits.
+    """
+    cutoff = now - SLICE_SCORE_DISPUTE_WINDOW
+    seasons = list(
+        await session.scalars(
+            select(DuelingSeason)
+            .options(defer(DuelingSeason.secret))
+            .where(
+                DuelingSeason.status == "revealed",
+                DuelingSeason.revealed_at <= cutoff,
+                DuelingSeason.id.in_(
+                    select(DuelingSlicePreparation.season_id).where(
+                        DuelingSlicePreparation.slice_bytes.is_not(None)
+                    )
+                ),
+            )
+            .order_by(DuelingSeason.season_index)
+        )
+    )
+    notes: list[str] = []
+    budget = limit
+    for season in seasons:
+        if budget <= 0:
+            break
+        miners = {
+            UUID(str(column["submission_id"]))
+            for column in season.columns or ()
+            if not column.get("public_default")
+        }
+        if miners:
+            released = {
+                row.submission_id: row.released_at
+                for row in await session.scalars(
+                    select(GeneratorSourceRelease).where(
+                        GeneratorSourceRelease.submission_id.in_(miners)
+                    )
+                )
+            }
+            stamps = [released.get(sid) for sid in miners]
+            if any(stamp is None or stamp > cutoff for stamp in stamps):
+                continue
+        ids = list(
+            await session.scalars(
+                select(DuelingSlicePreparation.id)
+                .where(
+                    DuelingSlicePreparation.season_id == season.id,
+                    DuelingSlicePreparation.slice_bytes.is_not(None),
+                )
+                .order_by(DuelingSlicePreparation.id)
+                .limit(budget)
+            )
+        )
+        if not ids:
+            continue
+        await session.execute(
+            update(DuelingSlicePreparation)
+            .where(DuelingSlicePreparation.id.in_(ids))
+            .values(slice_bytes=None, bytes_pruned_at=now)
+        )
+        budget -= len(ids)
+        notes.append(
+            f"season {season.season_index} v{season.bench_version}: pruned "
+            f"{len(ids)} slice(s); digests kept"
+        )
+    for note in notes:
+        logger.info("dueling slice retention: %s", note)
     return notes
 
 

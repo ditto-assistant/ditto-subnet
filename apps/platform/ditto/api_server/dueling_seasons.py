@@ -40,6 +40,8 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
 6. **Release.** Each pinned generator's exact source is published at
    ``max(last pinning season's reveal, first pinning season's close +
    embargo_hours)`` (:mod:`ditto.api_server.generator_source_releases`).
+   Once every source a revealed season pinned is released and the score
+   dispute window has passed, its slice bytes are pruned (digests kept).
 
 Seasons only open while ``dueling_enabled``, a contract ``>= 16`` is active
 (an authoritative season) or is the desired version of an open rollout (a
@@ -78,6 +80,7 @@ from ditto.api_models.dueling import (
 from ditto.api_models.generator_round_validator import accepted_grading_versions
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.generator_source_releases import (
+    prune_released_slice_bytes,
     sync_generator_source_releases,
 )
 from ditto.db.models import (
@@ -855,6 +858,7 @@ async def advance_seasons(
     try:
         async with session.begin_nested():
             notes.extend(await sync_generator_source_releases(session, now=now))
+            notes.extend(await prune_released_slice_bytes(session, now=now))
     except Exception:  # noqa: BLE001 - a release sync never blocks seasons
         logger.exception("dueling seasons: generator source release sync failed")
     for note in notes:
