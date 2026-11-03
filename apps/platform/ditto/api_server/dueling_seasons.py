@@ -359,12 +359,14 @@ async def _queue_batteries(
         else [secrets.token_hex(32) for _ in range(DUELING_BATTERY_SEEDS)]
     )
     candidates, skipped = await season_candidates(session, resolved=resolved, now=now)
-    excluded = set((season.detail or {}).get("excluded_submissions", ()))
+    excluded = await _excluded_submissions(session, season)
     queued = 0
+    eligible = [
+        c for c in candidates if str(c.submission.submission_id) not in excluded
+    ]
     wanted: list[tuple[GeneratorSubmission, int, dict[str, Any] | None]] = [
         (c.submission, c.rank, c.evidence)
-        for c in candidates[:DUELING_BATTERY_MINER_CANDIDATES]
-        if str(c.submission.submission_id) not in excluded
+        for c in eligible[:DUELING_BATTERY_MINER_CANDIDATES]
     ]
     default = await public_default_generator(session)
     if default is not None and default.qualified_at is not None:
@@ -397,6 +399,28 @@ async def _queue_batteries(
     return queued
 
 
+async def _excluded_submissions(
+    session: AsyncSession, season: DuelingSeason
+) -> set[str]:
+    """Generators this season may not pin: those recorded at commit, plus
+    every pinned generator the season before it substituted on any seed so
+    far (it sits out one season and must pass a fresh battery after)."""
+    excluded = set((season.detail or {}).get("excluded_submissions", ()))
+    previous = await session.scalar(
+        select(DuelingSeason)
+        .where(
+            DuelingSeason.bench_version == season.bench_version,
+            DuelingSeason.season_index < season.season_index,
+            DuelingSeason.opened_at.is_not(None),
+        )
+        .order_by(DuelingSeason.season_index.desc())
+        .limit(1)
+    )
+    if previous is not None:
+        excluded |= set((previous.detail or {}).get("substituted_submissions", ()))
+    return excluded
+
+
 async def freeze_columns(
     session: AsyncSession, season: DuelingSeason
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | str]:
@@ -415,6 +439,7 @@ async def freeze_columns(
         )
     )
     accepted = accepted_grading_versions(season.bench_version)
+    excluded = await _excluded_submissions(session, season)
     default: tuple[GeneratorSubmission, DuelingSeasonBattery] | None = None
     miners: list[tuple[GeneratorSubmission, DuelingSeasonBattery]] = []
     for battery in batteries:
@@ -429,7 +454,7 @@ async def freeze_columns(
             continue
         if sub.public_default:
             default = (sub, battery)
-        else:
+        elif str(sub.submission_id) not in excluded:
             miners.append((sub, battery))
     if default is None:
         return [], (
@@ -1046,9 +1071,9 @@ def _check_slice_bytes(
     pinned = {column["column_id"]: column for column in season.columns or ()}
     fallback = (season.detail or {}).get("fallback") or {}
     columns = doc.get("columns")
-    if not isinstance(columns, list) or [c.get("column_id") for c in columns] != sorted(
-        pinned
-    ):
+    if not isinstance(columns, list) or not all(isinstance(c, dict) for c in columns):
+        raise DuelingResultRejected("slice columns are malformed")
+    if [c.get("column_id") for c in columns] != sorted(pinned):
         raise DuelingResultRejected("slice columns do not match the season pin")
     out: dict[str, dict[str, Any]] = {}
     assert season.season_seed is not None
@@ -1266,17 +1291,29 @@ async def resolve_dueling_slice(
     """
     async with sessions() as session, session.begin():
         if pinned_season_id is not None and pinned_slice_sha256 is not None:
+            # The ticket already ran this seed in a season: it keeps those
+            # bytes or is refused, never served another season's slice. A
+            # new seed on a reused ticket row (a later retest) takes the
+            # open season below.
             pinned = await session.scalar(
                 select(DuelingSlicePreparation).where(
                     DuelingSlicePreparation.season_id == pinned_season_id,
                     DuelingSlicePreparation.run_seed == run_seed,
-                    DuelingSlicePreparation.status == "ready",
-                    DuelingSlicePreparation.slice_sha256 == pinned_slice_sha256,
                 )
             )
-            if pinned is not None and pinned.slice_bytes is not None:
-                return DuelingLeaseSlice(
-                    pinned_season_id, pinned.slice_bytes, pinned_slice_sha256
+            if pinned is not None:
+                if (
+                    pinned.status == "ready"
+                    and pinned.slice_sha256 == pinned_slice_sha256
+                    and pinned.slice_bytes is not None
+                ):
+                    return DuelingLeaseSlice(
+                        pinned_season_id, pinned.slice_bytes, pinned_slice_sha256
+                    )
+                raise DuelingSliceUnavailable(
+                    "the ticket's pinned dueling slice is no longer servable; "
+                    "operator review required (list_dueling_slices)",
+                    retry_after=300,
                 )
         season = await open_season(session, bench_version)
         if season is None or season.season_seed is None:
@@ -1291,7 +1328,13 @@ async def resolve_dueling_slice(
                 DuelingSlicePreparation.run_seed == run_seed,
             )
         )
-        if row is not None and row.status == "ready" and row.slice_bytes is not None:
+        if row is not None and row.status == "ready":
+            if row.slice_bytes is None:
+                raise DuelingSliceUnavailable(
+                    "dueling slice bytes were pruned; operator review required "
+                    "(list_dueling_slices)",
+                    retry_after=300,
+                )
             assert row.slice_sha256 is not None
             return DuelingLeaseSlice(season.id, row.slice_bytes, row.slice_sha256)
         if row is None:
@@ -1355,6 +1398,7 @@ def dueling_score_evidence(
     bench_version: int,
     season_id: UUID | None,
     slice_sha256: str | None,
+    owner_key: str | None,
 ) -> tuple[UUID | None, dict[str, Any] | None]:
     """The season and aggregates to store with a score, or a refusal.
 
@@ -1381,5 +1425,9 @@ def dueling_score_evidence(
     if slice_sha256 is None or report.slice_sha256 != slice_sha256:
         raise DuelingEvidenceRejected(
             "details.dueling slice digest does not match the leased slice"
+        )
+    if owner_key is None or report.owner_key != owner_key:
+        raise DuelingEvidenceRejected(
+            "details.dueling owner_key is not the scored agent's owner"
         )
     return season_id, report.model_dump(mode="json")

@@ -335,7 +335,7 @@ async def admin_dueling_slices(
                 season_id=row.season_id,
                 season_index=row.season_index,
                 bench_version=row.bench_version,
-                run_seed=row.run_seed,
+                run_seed=str(row.run_seed),
                 status=row.status,
                 attempts=row.attempts,
                 slice_sha256=row.slice_sha256,

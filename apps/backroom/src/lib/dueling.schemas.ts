@@ -34,7 +34,7 @@ const batterySchema = z.object({
 
 const columnMeanSchema = z.object({
   column_id: z.string(),
-  submission_id: z.string(),
+  submission_id: uuid,
   owner_key: z.string(),
   public_default: z.boolean(),
   scores: z.number().int(),

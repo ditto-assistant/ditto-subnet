@@ -22807,7 +22807,7 @@ export interface components {
             /** Ready At */
             ready_at: string | null;
             /** Run Seed */
-            run_seed: number;
+            run_seed: string;
             /** Scorer Version */
             scorer_version: string | null;
             /**

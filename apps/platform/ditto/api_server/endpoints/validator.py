@@ -2537,7 +2537,11 @@ async def _dueling_lease_fields(
         return {}
     sessions = getattr(request.app.state, "session_maker", None)
     if sessions is None or run_seed is None:
-        raise HTTPException(503, "dueling slice preparation is unavailable")
+        raise HTTPException(
+            503,
+            "dueling slice preparation is unavailable",
+            headers={"Retry-After": "60", "Cache-Control": "no-store"},
+        )
     try:
         lease = await resolve_dueling_slice(
             sessions,
@@ -2564,16 +2568,23 @@ async def _dueling_lease_fields(
     }
 
 
-def _dueling_evidence(
-    report: ScoreReport, ticket: ValidatorTicket
+async def _dueling_evidence(
+    session: AsyncSession, report: ScoreReport, ticket: ValidatorTicket, agent: Agent
 ) -> tuple[UUID | None, dict[str, Any] | None]:
-    """Season and aggregates to store with a v16+ score; 409 on a mismatch."""
+    """Season and aggregates to store with a v16+ score; 409 on a mismatch,
+    including a report self-masking another owner than the scored agent's."""
+    owner = (
+        await agent_owner_key(session, agent)
+        if is_dueling_bench_version(ticket.bench_version)
+        else None
+    )
     try:
         return dueling_score_evidence(
             report.details,
             bench_version=ticket.bench_version,
             season_id=ticket.dueling_season_id,
             slice_sha256=ticket.slice_sha256,
+            owner_key=owner,
         )
     except DuelingEvidenceRejected as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
@@ -7030,7 +7041,9 @@ async def submit_top5_confirmation_score(
                 base_evidence_sha256=report.base_evidence_sha256,
             )
             v9_efficiency_cost_eligible = v9_efficiency_token_total is not None
-        confirmation_season_id, confirmation_dueling = _dueling_evidence(report, ticket)
+        confirmation_season_id, confirmation_dueling = await _dueling_evidence(
+            session, report, ticket, agent
+        )
         if confirmation_dueling is not None and len(seeds) != 1:
             raise HTTPException(
                 status_code=409,
@@ -7994,7 +8007,9 @@ async def submit_score(
         # the v13 floor and for a v13+ scorer that emitted none, so v<=12 rows
         # are byte-identical.
         gate_evidence = build_gate_evidence(report, bench_version=ticket.bench_version)
-        dueling_season_id, dueling = _dueling_evidence(report, ticket)
+        dueling_season_id, dueling = await _dueling_evidence(
+            session, report, ticket, agent
+        )
         await upsert_score(
             session,
             agent_id=agent_id,

@@ -29,7 +29,7 @@ DuelingSliceStatus = Literal["pending", "leased", "ready", "failed"]
 
 _SHA256 = r"^[0-9a-f]{64}$"
 # A slice is at most challenge.MaxRoundDatasetBytes (32 MiB) before base64.
-_MAX_SLICE_BASE64 = 45_000_000
+_MAX_SLICE_BASE64 = 4 * (((32 << 20) + 2) // 3)
 
 
 class DuelingModel(BaseModel):
@@ -242,7 +242,8 @@ class DuelingSliceView(DuelingModel):
     season_id: UUID
     season_index: int
     bench_version: int
-    run_seed: int
+    run_seed: str
+    """The int64 run seed as decimal text, exact in every JSON client."""
     status: DuelingSliceStatus
     attempts: int
     slice_sha256: str | None

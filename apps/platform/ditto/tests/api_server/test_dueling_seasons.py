@@ -762,21 +762,46 @@ class TestDuelingLease:
             now=now,
         )
         assert again == served
+        # Pinned bytes that are no longer servable refuse the lease rather
+        # than serving another season's slice for the same seed.
+        async with session_maker() as session, session.begin():
+            [row] = list(await session.scalars(select(DuelingSlicePreparation)))
+            row.slice_bytes = None
+            row.bytes_pruned_at = now
+        with pytest.raises(DuelingSliceUnavailable) as pruned:
+            await resolve_dueling_slice(
+                session_maker,
+                bench_version=16,
+                run_seed=7,
+                pinned_season_id=season_id,
+                pinned_slice_sha256=served.slice_sha256,
+                now=now,
+            )
+        assert "no longer servable" in pruned.value.detail
 
     def test_score_evidence_is_bound_to_the_lease(self) -> None:
         season_id = uuid4()
         sha = "ab" * 32
         assert dueling_score_evidence(
-            None, bench_version=15, season_id=None, slice_sha256=None
+            None, bench_version=15, season_id=None, slice_sha256=None, owner_key=None
         ) == (None, None)
         stored_season, stored = dueling_score_evidence(
             _report(season_id, sha),
             bench_version=16,
             season_id=season_id,
             slice_sha256=sha,
+            owner_key="coldkey:a",
         )
         assert stored_season == season_id and stored is not None
         assert stored["slice_sha256"] == sha
+        with pytest.raises(DuelingEvidenceRejected, match="owner_key"):
+            dueling_score_evidence(
+                _report(season_id, sha),
+                bench_version=16,
+                season_id=season_id,
+                slice_sha256=sha,
+                owner_key="coldkey:other",
+            )
         for details, season, digest in (
             ({}, season_id, sha),
             (_report(uuid4(), sha), season_id, sha),
@@ -785,5 +810,9 @@ class TestDuelingLease:
         ):
             with pytest.raises(DuelingEvidenceRejected):
                 dueling_score_evidence(
-                    details, bench_version=16, season_id=season, slice_sha256=digest
+                    details,
+                    bench_version=16,
+                    season_id=season,
+                    slice_sha256=digest,
+                    owner_key="coldkey:a",
                 )
