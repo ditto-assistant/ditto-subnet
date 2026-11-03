@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.admin_quarantine import AdminBenchmarkQualificationRequest
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_contract import benchmark_contracts
 from ditto.api_models.public import PublicBenchRolloutResponse
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
@@ -66,7 +67,9 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import (
-    CANARY_BENCH_VERSION,
+    CANARY_BENCH_VERSION as _NEWEST_SHIPPED_BENCH_VERSION,
+)
+from ditto.db.queries.benchmark_rollout import (
     DEFAULT_BENCH_VERSION,
     DEFAULT_RESCORE_COHORT_SIZE,
     DESIRED_AUTHORITY_EARNED_EVENT,
@@ -113,8 +116,20 @@ from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
 )
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 pytestmark = pytest.mark.asyncio
+
+# The generic rollout lifecycle is exercised at the newest NON-dueling
+# contract. From bench 16 a score counts on the ledger only with its dueling
+# season and aggregates (season-isolated KOTH, #3351), which these fixtures do
+# not build; dueling rollouts are covered by the dueling season tests.
+CANARY_BENCH_VERSION = max(
+    contract.version
+    for contract in benchmark_contracts()
+    if not is_dueling_bench_version(contract.version)
+)
+assert CANARY_BENCH_VERSION < _NEWEST_SHIPPED_BENCH_VERSION
 
 _Seeded = TypeVar("_Seeded")
 
