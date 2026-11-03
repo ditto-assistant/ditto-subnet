@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.441.0 (2026-11-03)
+
+### Features
+
+- **inference**: Prepare DaniLabs trial routing
+  ([#3363](https://github.com/ditto-assistant/ditto-subnet/pull/3363),
+  [`7bf02ed`](https://github.com/ditto-assistant/ditto-subnet/commit/7bf02edc71bc9289654ba77ea7a13c1941163a59))
+
+- **platform,backroom**: Release pinned generator sources and publish revealed dueling seasons
+  ([#3364](https://github.com/ditto-assistant/ditto-subnet/pull/3364),
+  [`d0302c7`](https://github.com/ditto-assistant/ditto-subnet/commit/d0302c7f058cd2a80966e275af735dfb0f2378b8))
+
+
 ## v0.440.0 (2026-11-03)
 
 ### Features
