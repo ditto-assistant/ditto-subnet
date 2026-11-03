@@ -94,6 +94,13 @@ func TestV16ProfileIsTheDatagenHalf(t *testing.T) {
 	if V16FullEnvelope.Total() != 125 || V13FullEnvelope.Total() != 250 {
 		t.Fatal("published slot tables moved")
 	}
+	// The generator half (Platform's slice) is the same size as this half.
+	if protocol.DuelingSliceColumns*protocol.DuelingSliceCasesPerColumn != V16DatagenHalfCases {
+		t.Fatalf("slice %d x %d != datagen half %d", protocol.DuelingSliceColumns, protocol.DuelingSliceCasesPerColumn, V16DatagenHalfCases)
+	}
+	if _, ok := memoryEnvelopeForVersion(profilesV16["full"].Mem, protocol.NewestGeneratableBenchVersion()+1); ok {
+		t.Fatal("an ungeneratable version inherited the v16 slot table")
+	}
 }
 
 // The full v16 memory mix passes MixGateV16 (MixGateV13 with the scale-2

@@ -82,6 +82,11 @@ func v16EnvelopeFor(mem int) (V13MemoryEnvelope, bool) {
 // Profile.Mem key: the v16 dueling tables from v16, the v13 tables for v13
 // through v15.
 func memoryEnvelopeForVersion(mem, benchVersion int) (V13MemoryEnvelope, bool) {
+	if !protocol.GeneratableBenchVersion(benchVersion) {
+		// A version this module cannot generate publishes no slot table; it
+		// never inherits the newest one through the floor below.
+		return V13MemoryEnvelope{}, false
+	}
 	if benchVersion >= protocol.BenchVersionV16 {
 		return v16EnvelopeFor(mem)
 	}
