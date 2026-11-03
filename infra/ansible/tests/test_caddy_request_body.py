@@ -31,6 +31,7 @@ def _render(**overrides: object) -> str:
         "platform_public_rate_limit_per_minute": 0,
         "platform_api_port": 8000,
         "platform_request_body_max_size": "32MiB",
+        "platform_api_restart_try_duration": "20s",
     }
     context.update(overrides)
     env = Environment()
