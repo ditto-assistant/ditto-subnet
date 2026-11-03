@@ -576,6 +576,7 @@ func TestBuildTimeoutsAreSandboxFaults(t *testing.T) {
 	for _, w := range []*duelingWork{battery, sliceWork(t, true)} {
 		fp := newFakeDuelingPlatform(t, w)
 		cache := newBuildCache(timeoutSandbox{}, buildCacheSize)
+		t.Cleanup(cache.Close)
 		_, err := processDueling(context.Background(), fp.client(), cache)
 		if !errors.Is(err, genrun.ErrSandbox) || len(fp.batteries)+len(fp.slices) != 0 {
 			t.Fatalf("%s: err=%v posted=%d", w.Kind, err, len(fp.batteries)+len(fp.slices))
