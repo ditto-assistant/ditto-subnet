@@ -134,6 +134,9 @@ from ditto.api_server.endpoints.admin_screening_review_cost import (
 from ditto.api_server.endpoints.admin_source_review_queue_slo import (
     router as admin_source_review_queue_slo_router,
 )
+from ditto.api_server.endpoints.admin_submission_attempts import (
+    router as admin_submission_attempts_router,
+)
 from ditto.api_server.endpoints.admin_submission_deposit_address import (
     router as admin_submission_deposit_address_router,
 )
@@ -275,6 +278,7 @@ __all__ = [
     "admin_screener_policy_activation_router",
     "admin_source_review_queue_slo_router",
     "admin_v13_private_generation_router",
+    "admin_submission_attempts_router",
     "admin_submission_settings_router",
     "admin_submission_deposit_address_router",
     "admin_confirmation_score_voids_router",
