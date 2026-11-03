@@ -41,7 +41,9 @@ OverrideState = Literal["active", "expired", "revoked"]
 
 MIN_OWNER_COOLDOWN_SECONDS = 60
 MAX_OWNER_COOLDOWN_SECONDS = 30 * 86400
-MAX_OWNER_COOLDOWN_DAYS = 90
+MAX_OWNER_COOLDOWN_EXPIRY_DAYS = 90
+"""How far ahead an override may expire; the interval itself is bounded by
+``MAX_OWNER_COOLDOWN_SECONDS``."""
 
 
 def _utc(value: datetime) -> datetime:
@@ -311,7 +313,7 @@ async def owner_override_retry_at(
 
 
 __all__ = [
-    "MAX_OWNER_COOLDOWN_DAYS",
+    "MAX_OWNER_COOLDOWN_EXPIRY_DAYS",
     "MAX_OWNER_COOLDOWN_SECONDS",
     "MIN_OWNER_COOLDOWN_SECONDS",
     "OverrideState",

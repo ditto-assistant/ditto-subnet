@@ -636,7 +636,9 @@ import {
   ownerCooldownLookupSchema,
   ownerCooldownsInputSchema,
   ownerCooldownsSchema,
+  revokeOwnerCooldownConfirmation,
   revokeOwnerCooldownInputSchema,
+  setOwnerCooldownConfirmation,
   setOwnerCooldownInputSchema,
 } from '../lib/owner-submission-cooldown.schemas'
 import {
@@ -1452,6 +1454,10 @@ export async function fetchOwnerCooldowns(rawInput: unknown) {
 
 export async function setOwnerCooldown(actor: string, rawInput: unknown) {
   const input = setOwnerCooldownInputSchema.parse(rawInput)
+  const expected = setOwnerCooldownConfirmation(input)
+  if (input.confirmation !== expected) {
+    throw new Error(`confirmation must be exactly ${expected}`)
+  }
   const payload = await platformAdminRequest(OWNER_COOLDOWNS_PATH, {
     method: 'POST',
     actor,
@@ -1471,6 +1477,10 @@ export async function setOwnerCooldown(actor: string, rawInput: unknown) {
 
 export async function revokeOwnerCooldown(actor: string, rawInput: unknown) {
   const input = revokeOwnerCooldownInputSchema.parse(rawInput)
+  const expected = revokeOwnerCooldownConfirmation(input)
+  if (input.confirmation !== expected) {
+    throw new Error(`confirmation must be exactly ${expected}`)
+  }
   const payload = await platformAdminRequest(`${OWNER_COOLDOWNS_PATH}/revoke`, {
     method: 'POST',
     actor,

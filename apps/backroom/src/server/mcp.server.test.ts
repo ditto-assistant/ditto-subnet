@@ -2872,6 +2872,20 @@ describe('Backroom MCP tools', () => {
     expect(response.isError).toBe(true)
     expect(fetchMock).not.toHaveBeenCalled()
 
+    const mistyped = await client.callTool({
+      name: 'revoke_owner_submission_cooldown',
+      arguments: {
+        scope: 'coldkey',
+        ownerKey: '5FakeCoLdkeyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+        expectedRevision: 1,
+        reason: 'operator lifted the cooldown early',
+        confirmation: 'REVOKE OWNER SUBMISSION COOLDOWN HOTKEY 5FakeCoLdkeyBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+      },
+    })
+    expect(mistyped.isError).toBe(true)
+    expect(JSON.stringify(mistyped.content)).toContain('confirmation must be exactly')
+    expect(fetchMock).not.toHaveBeenCalled()
+
     await client.close()
     await server.close()
   })
