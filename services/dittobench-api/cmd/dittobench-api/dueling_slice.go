@@ -273,6 +273,13 @@ func duelingSelfMask(ownerKey string) map[string]bool {
 // with the composite gate alone, quantized to micros like every ordinary
 // composite. Every gate input is a datagen case: the generator slice lowers a
 // score through its column means, never through a gate.
+//
+// The stderr is deliberately at the composite gate only, like the composite:
+// applyV9BaseEvidence then scales both by the applied v9 factor
+// (scoregates.ApplyForVersion), which keeps composite_stderr equal to the
+// signed effective_stderr_micros. DuelingCompositeStderr is linear in the
+// gate, so the result matches details.dueling.composite_stderr (computed with
+// the post-v9 gate) to within micro rounding.
 func duelingOrdinaryScore(half scorer.DatagenHalf, columns []protocol.DuelingColumnDetails, ownerKey string) (composite, stderr float64, err error) {
 	aggs := duelingAggregates(columns)
 	if err := challenge.CheckDuelingColumns(aggs); err != nil {
