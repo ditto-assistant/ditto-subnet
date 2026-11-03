@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, expectTypeOf, it } from 'vitest'
+import { z } from 'zod'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
@@ -53,6 +54,9 @@ import {
   validatorAssignmentListSchema,
   screenerReviewControlSchema,
   screenerReviewSettingsSchema,
+  screenerReviewSettingsWriteSchema,
+  screenerProviderSettingsWriteSchema,
+  withoutDefaults,
   l2ReportCanaryViewSchema,
   screenReviewAuditSchema,
   screeningFailureDiagnosticSchema,
@@ -117,6 +121,7 @@ import {
   setScreenerNodeChannelSettingsInputSchema,
   screenerProviderSettingsConfirmation,
   screenerProviderSettingsSchema,
+  setScreenerProviderSettingsInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
   confirmationBundleListInputSchema,
   confirmationBundleListSchema,
@@ -2450,7 +2455,7 @@ describe('screener review settings schemas', () => {
     expect(parsed.source_review_max_read_bytes).toBe(8_000_000)
     expect(parsed.source_review_reasoning_effort).toBe('high')
     expect(parsed.source_review_model).toBe('openai/gpt-5.6-luna')
-    expect(parsed.source_review_timeout_seconds).toBe(1_800)
+    expect(parsed.source_review_timeout_seconds).toBe(3_600)
     expect(parsed.adjudicator_max_steps).toBe(128)
     expect(parsed.adjudicator_max_completion_tokens).toBeNull()
   })
@@ -2515,6 +2520,121 @@ describe('screener review settings schemas', () => {
       settings: { ...settings, l2_fallback_models: ['openai/gpt-5.6-terra'] },
       reason: 'short', confirmation: 'APPLY SCREENER REVIEW * SHADOW',
     })).toThrow()
+  })
+})
+
+// #2979: a settings revision stores the whole policy and Platform appends it
+// verbatim, so a write that omits a field writes its read-compat default over
+// whatever is live: enforce adjudication back to off, the L1+L2 manifest back
+// to L1, GCE overflow off and its primary node cleared.
+describe('screener settings write contracts', () => {
+  function refusesEveryOmission(
+    complete: Record<string, unknown>,
+    parse: (settings: Record<string, unknown>) => boolean,
+  ) {
+    expect(parse(complete)).toBe(true)
+    for (const field of Object.keys(complete)) {
+      const { [field]: _omitted, ...partial } = complete
+      expect(parse(partial), field).toBe(false)
+    }
+  }
+
+  it('refuses a screener review write missing any field', () => {
+    const complete = screenerReviewSettingsSchema.parse({
+      mode: 'shadow',
+      l2_model: 'openai/gpt-5.6-terra',
+      l2_fallback_models: ['z-ai/glm-5.2'],
+      l3_model: 'openai/gpt-5.6-sol',
+      timeout_seconds: 900,
+      max_steps: 18,
+      max_input_tokens: 425_000,
+      max_output_tokens: 20_000,
+      max_completion_tokens: 2_400,
+      max_cost_usd: 2,
+      critic_reasoning_effort: 'medium',
+      cache_ttl_seconds: 604_800,
+      audit_retention_days: 30,
+      adjudicator_mode: 'enforce',
+      policy_manifest_profile: 'l1_l2',
+    })
+
+    refusesEveryOmission(complete, (settings) =>
+      applyScreenerReviewSettingsInputSchema.safeParse({
+        scope: '*',
+        expectedRevision: 3,
+        settings,
+        reason: 'raise the source review budget',
+        confirmation: 'APPLY SCREENER REVIEW * SHADOW',
+      }).success,
+    )
+  })
+
+  it('applies the read-side cross-field rules to a screener review write', () => {
+    const complete = screenerReviewSettingsSchema.parse({
+      mode: 'shadow',
+      l2_model: 'openai/gpt-5.6-terra',
+      l2_fallback_models: [],
+      l3_model: 'openai/gpt-5.6-sol',
+      timeout_seconds: 900,
+      max_steps: 18,
+      max_input_tokens: 425_000,
+      max_output_tokens: 20_000,
+      max_completion_tokens: 2_400,
+      max_cost_usd: 2,
+      critic_reasoning_effort: 'medium',
+      cache_ttl_seconds: 604_800,
+      audit_retention_days: 30,
+    })
+    const write = (settings: Record<string, unknown>) =>
+      applyScreenerReviewSettingsInputSchema.safeParse({
+        scope: '*',
+        expectedRevision: 3,
+        settings,
+        reason: 'enable the probe reviewer',
+        confirmation: 'APPLY SCREENER REVIEW * SHADOW',
+      })
+
+    const reviewerAlone = write({ ...complete, probe_review_mode: 'shadow', probe_battery_mode: 'off' })
+    expect(reviewerAlone.success).toBe(false)
+    expect(reviewerAlone.error?.issues.map((issue) => issue.path.join('.'))).toContain('settings.probe_review_mode')
+    expect(write({ ...complete, probe_review_mode: 'shadow', probe_battery_mode: 'shadow' }).success).toBe(true)
+  })
+
+  it('strips stacked defaults, so an omitted write field never falls back to one', () => {
+    const write = z.object(withoutDefaults({ budget: z.number().default(1).default(2) }))
+    expect(write.safeParse({}).success).toBe(false)
+    expect(write.parse({ budget: 5 })).toEqual({ budget: 5 })
+  })
+
+  it('leaves no default anywhere in a whole-policy write schema', () => {
+    for (const [name, schema] of Object.entries({
+      screenerReviewSettingsWriteSchema,
+      screenerProviderSettingsWriteSchema,
+      continualRetestSettingsWriteSchema,
+    })) {
+      expect(JSON.stringify(z.toJSONSchema(schema, { io: 'input' })), name).not.toContain(
+        '"default"',
+      )
+    }
+  })
+
+  it('refuses a provider write missing any field', () => {
+    const complete = screenerProviderSettingsSchema.parse({
+      build_provider_priority: ['targon', 'gcp'],
+      runtime_provider_priority: ['targon', 'gcp'],
+      source_review_provider_priority: ['targon', 'gcp'],
+      gce_overflow_enabled: true,
+      primary_node_id: 'subnet-screener-2',
+    })
+
+    refusesEveryOmission(complete, (settings) =>
+      setScreenerProviderSettingsInputSchema.safeParse({
+        expectedRevision: 3,
+        settings,
+        reason: 'route overflow through the primary node',
+        confirmation: 'APPLY SCREENER PROVIDERS',
+      }).success,
+    )
   })
 })
 
@@ -4144,25 +4264,11 @@ describe('continual retest write contract', () => {
 
     // A revision stores the whole policy, so each omission is a silent write of
     // the platform default over whatever is live — a reverted rollback, a
-    // collapsed cohort, a discarded tie band.
-    for (const field of [
-      'tie_weighting_mode',
-      'statistical_band_mode',
-      'ledger_pin_mode',
-      'crown_incumbent_mode',
-      'crown_gate_mode',
-      'min_dethrone_confirmations',
-      'champion_standing_rank',
-      'wave_membership',
-      'retest_cohort_size',
-      'retest_eligibility_mode',
-      'retest_eligibility_z',
-      'retest_cohort_max_size',
-      'wave_cadence_tempos',
-      'wave_seeds_per_window',
-    ] as const) {
+    // collapsed cohort, a discarded tie band, a rollout stand-down widened back
+    // to capable validators (#2979).
+    for (const field of Object.keys(complete) as (keyof typeof complete)[]) {
       const { [field]: _omitted, ...partial } = complete
-      expect(continualRetestSettingsWriteSchema.safeParse(partial).success).toBe(false)
+      expect(continualRetestSettingsWriteSchema.safeParse(partial).success, field).toBe(false)
     }
   })
 
