@@ -374,7 +374,14 @@ async def admin_rotate_dueling_season(
             else None
         )
     if season is None:
-        raise HTTPException(status_code=404, detail="no open dueling season to rotate")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "unknown dueling season"
+                if payload.season_id is not None
+                else "no open dueling season to rotate"
+            ),
+        )
     if season.status != "open":
         raise HTTPException(
             status_code=409,
@@ -394,7 +401,7 @@ async def admin_rotate_dueling_season(
     season.rotation_requested_at = now
     season.rotation_immediate = payload.immediate
     season.rotation_actor = actor[:120]
-    season.rotation_reason = reason[:2000]
+    season.rotation_reason = reason
     record_operator_action(
         session,
         action="rotate_dueling_season",

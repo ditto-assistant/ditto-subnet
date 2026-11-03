@@ -94,7 +94,10 @@ export const duelingSlicesSchema = z.object({
     season_id: uuid,
     season_index: z.number().int(),
     bench_version: z.number().int(),
-    run_seed: z.number().int(),
+    // A run seed is an int64: the admin JSON parser hands values above the
+    // safe-integer limit over as decimal strings, so normalize both to text.
+    run_seed: z.union([z.string().regex(/^(0|[1-9][0-9]*)$/), z.number().int().nonnegative()])
+      .transform(String),
     status: duelingSliceStatus,
     attempts: z.number().int(),
     slice_sha256: nullableString,
@@ -115,11 +118,11 @@ export const duelingSlicesSchema = z.object({
 })
 
 export const getDuelingSeasonInputSchema = z.object({
-  seasonId: uuid.optional(),
+  seasonId: uuid.nullish(),
 })
 
 export const listDuelingSlicesInputSchema = z.object({
-  seasonId: uuid.optional(),
+  seasonId: uuid.nullish(),
   status: duelingSliceStatus.optional(),
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).max(100_000).default(0),
