@@ -4260,7 +4260,9 @@ async def amend_quarantine_reject_reason(
                     resolution="reject",
                     reason=current,
                     actor=quarantine.resolved_by or "unknown",
-                    created_at=quarantine.resolved_at or now,
+                    # Strictly before the amendment row, so history order never
+                    # rests on random resolution ids.
+                    created_at=quarantine.resolved_at or (now - timedelta(seconds=1)),
                 )
             )
         session.add(
