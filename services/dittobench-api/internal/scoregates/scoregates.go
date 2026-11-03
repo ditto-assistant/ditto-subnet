@@ -24,6 +24,7 @@ const (
 	BenchVersionV13 = 13
 	BenchVersionV14 = 14
 	BenchVersionV15 = 15
+	BenchVersionV16 = 16
 	BasisPointScale = 10_000
 	MaxCaseCount    = 10_000_000
 	MaxUsageCount   = uint64(9_007_199_254_740_991)
@@ -40,8 +41,10 @@ const (
 // bench_version>=13 switches and ship in shadow. The upper bound is the newest
 // contract this scorer has reviewed: a stale bound here silently rejects a new
 // version's evidence, which is the failure mode every bump so far has hit.
+// v16 (the dueling bench) gates its datagen half with the inherited stack
+// unchanged; generator slice cases never enter gate evidence.
 func SupportedBenchVersion(benchVersion int) bool {
-	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV15
+	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV16
 }
 
 var (

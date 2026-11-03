@@ -258,3 +258,37 @@ def test_column_pin_ownership() -> None:
         }
     )
     assert pin.source_sha256 == "ef" * 32
+
+
+_SCORER_REPORT_GOLDEN = (
+    _MONOREPO_ROOT
+    / "services/dittobench-api/cmd/dittobench-api/testdata/dueling_report_golden.json"
+)
+
+
+def test_scorer_report_golden_round_trips() -> None:
+    """The ``details.dueling`` block dittobench-api emits parses as a
+    :class:`DuelingReport` with exactly its fields, and refolds bit for bit.
+
+    The golden is written by ``go test ./cmd/dittobench-api -run
+    TestDuelingReportGolden -update-dueling-golden``.
+    """
+    golden = json.loads(_SCORER_REPORT_GOLDEN.read_text())
+    details = golden["details"]
+    assert set(details) == set(DuelingReport.model_fields)
+    for column in details["columns"]:
+        assert set(column) == set(DuelingColumnAggregate.model_fields)
+    report = DuelingReport.model_validate(details)
+    assert report.model_dump(mode="json") == details
+    assert _bits(report.self_composite()) == _bits(golden["self_composite"])
+    assert _bits(report.composite(frozenset(golden["pair_mask"]))) == _bits(
+        golden["pair_composite"]
+    )
+    stderr = dueling_composite_stderr(
+        golden["datagen_stderr"],
+        report.datagen_gate,
+        report.columns,
+        frozenset({report.owner_key}),
+    )
+    assert _bits(stderr) == _bits(report.composite_stderr)
+    assert _bits(stderr) == _bits(golden["composite_stderr"])

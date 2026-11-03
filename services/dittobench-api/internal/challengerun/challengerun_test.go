@@ -339,3 +339,30 @@ func TestExecuteGradesAtThePackPolicy(t *testing.T) {
 		t.Fatal("the probe reply no longer separates the v13 and v14 policies; pick another")
 	}
 }
+
+// Include runs only the selected cases (a dueling slice's dedupe), in pack
+// order, while still seeding every wave.
+func TestExecuteIncludeRunsOnlySelectedCases(t *testing.T) {
+	p := challenge.ReferencePack(9, testHotkey)
+	keep := map[string]bool{p.Cases[1].ID: true, p.Cases[4].ID: true, p.Cases[7].ID: true}
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	out, err := Execute(context.Background(), srv.URL, p, Options{
+		Nonce: []byte("pinned"), Include: func(id string) bool { return keep[id] },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 3 || out[0].CaseID != p.Cases[1].ID || out[1].CaseID != p.Cases[4].ID || out[2].CaseID != p.Cases[7].ID {
+		t.Fatalf("outcomes = %+v", out)
+	}
+	for _, o := range out {
+		if o.Score != 1 || o.Fault {
+			t.Fatalf("included case misgraded: %+v", o)
+		}
+	}
+	if len(h.runs) != 3 || len(h.seeded) != len(p.MemoryWaves) {
+		t.Fatalf("harness saw %d runs and %d seeds, want 3 and %d", len(h.runs), len(h.seeded), len(p.MemoryWaves))
+	}
+}
