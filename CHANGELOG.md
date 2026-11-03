@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.438.1 (2026-11-03)
+
+### Bug Fixes
+
+- **screener**: Keep a wrong-type L2 lead disposition a stable contract miss
+  ([#3028](https://github.com/ditto-assistant/ditto-subnet/pull/3028),
+  [`ac04582`](https://github.com/ditto-assistant/ditto-subnet/commit/ac04582bd907b825fd408c69e42185cc91dbd19f))
+
+
 ## v0.438.0 (2026-11-03)
 
 ### Features
