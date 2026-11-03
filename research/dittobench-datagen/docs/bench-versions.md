@@ -1380,27 +1380,47 @@ into `epoch.go` and the supported list; generation bytes do not change.
 
 **Dueling profile** (`gen/v16_envelope.go`, `gen.ProfileForVersion(_, 16)`).
 
-| Run size | Tool cases | Memory cases | World scale |
+| Run size | Tool cases | Memory cases | World scale (= v15, same run size) |
 | --- | ---: | ---: | ---: |
-| full | 50 | 125 | 2 |
-| medium | 24 | 43 | 1 |
+| full | 50 | 125 | 3 (28 people, 18 projects, 12 trips, 13 story arcs) |
+| medium | 24 | 63 | 2 |
 | small | 6 | 27 | 1 |
 
 The tool phase seeds the shared world through the v9 world carrier and the
 memory phase stages corrections against the same world, so both phases draw
-one scale. 50 tool cases select the scale-2 world (the tool passes key their
-world on the case count), so the full memory table is built on the scale-2
-world: story 36 (six arcs x six oracles), ordinary world 14, business
-programs 16, personal programs 16, abstention 8, record quantity 4,
-divergence 8, point-in-time 4, integrity 14, isolation 5. The memory world
-is the same scale-2 world v13 to v15 build; it is smaller than the full v15
-world (14 people, 8 projects, 5 trips, 6 story arcs against 28, 18, 12 and
-13), so the v16 datagen memory half is easier to hold in context than v15's,
-and the generator slice carries the other half of the run's memory weight.
-`gen.MixGateV16` is `MixGateV13` with the abstention target at the scale-2
-share (8/125 = 6.4%); every other cap holds (`go run ./cmd/mixaudit
--bench-version 16 -seeds 40 -gate`, worst money share of computed answers
-0.227 against the 0.25 cap).
+one world, and v16 pins it per profile to the v15 world of the same run size.
+The tool passes take the scale from `datagen.ToolWorldScale`, which maps the
+v16 tool counts (50, 24) to the v15 full and medium scales instead of keying
+on the case count (through v15 the thresholds are 80 and 30), so the tool
+cases read the larger world too. The v13 conversion floors follow the same split:
+the world-family floor follows the world (three per family on the scale-3
+world), while the ordinary-singleton rule follows the sample size (the 50-case
+half is a partial sample, so singletons may be replaced; keeping them would
+leave 4 convertible slots on every seed). The world itself, every probe record
+included, is the v15 world byte for byte.
+
+The 125-case table asks about part of that world:
+
+- story 36: six of the 13 arcs x six oracles (`WorldPlanSelection.StoryArcLimit`;
+  the asked arcs keep the world's business/personal proportion and spread over
+  its themes, and the other seven arcs stay seeded as haystack);
+- abstention 12 of the world's 25 twins (`v16AbstentionQuotas`: pure absence 2,
+  near miss 2, stale-removed 1, cross-user 1, false premise 3, insufficient
+  composition 3; an even split would push the contacts sub-domain over its
+  20% cap), so abstention is 9.6%, the v15 share;
+- point-in-time 6 (3 of 6 as-of twin pairs);
+- ordinary world 20 (the 12 answerable abstention twins plus 8 plain
+  questions, six of them the staged corrections);
+- business programs 16, personal programs 4, record quantity 4,
+  divergence 4, integrity 14, isolation 9 (the scale-3 quota).
+
+Medium uses the same rule on the v15 medium world: story 18 (three arcs),
+ordinary 8, business 4, personal 4, abstention 4, divergence 4,
+point-in-time 2, integrity 14, isolation 5. `gen.MixGateV16` is `MixGateV13`
+unchanged, and `go run ./cmd/mixaudit -bench-version 16 -seeds 40 -gate`
+passes 0/40 (means: money 0.067, money of computed answers 0.193, business
+0.416, abstention 0.096, twin coverage 0.400). The gate is defined for the
+full run size only (`-gate` refuses medium and small from v16).
 
 **Connectors stop self-identifying** (dueling-bench.md section 8.1,
 `catalog/v16.go`). Operator ruling (2026-11-03): harnesses may filter
@@ -1429,7 +1449,7 @@ allowance), so v16 does not ban filters; the difficulty is in the cases.
 | --- | ---: | ---: | --- | --- |
 | `connector_linked_result_usage` | 3 | 2 | call the linked app's read tool once, report the figure | result-usage (trajectory x needle gate), as the v13 decoy-correct cases |
 | `connector_linked_action` | 3 | 1 | call the linked app's write tool once with the quoted payload | strict trajectory, payload as the required argument |
-| `connector_unlinked_probe` | 2 | 1 | try the named app's tool once, get "not connected", tell the user | strict trajectory (one probe is the expected call); the reply text is not graded in v16.0 |
+| `connector_unlinked_probe` | 2 | 1 | try the named app's tool once, get "not connected", tell the user | strict trajectory (one probe is the expected call); the reply text is not graded in v16.0 (known gap, below) |
 | `connector_named_product` | 3 | 1 | use the product tool (calendar, Gmail, web search); the app is context | strict trajectory; any call to the named app's tools is an extra call |
 
   Unlinked probes reuse the linked surfaces word for word, and named-product
@@ -1445,9 +1465,15 @@ allowance), so v16 does not ban filters; the difficulty is in the cases.
   read, instead of failing (no swept seed trims:
   `TestV16ConnectorQuotaHoldsAcrossSeeds`).
 
+**Known gap (v16.0).** The reply text of an unlinked probe is not graded:
+a harness that probes once and then claims the action succeeded scores the
+same as one that tells the user the app is not connected. Grading it needs a
+`>= 16` branch in the scorer's tool grader (a decline claim on the reply), so
+it is left for a later contract. Accepted by the operator for v16.0.
+
 For seed `123456789`, full profile, public surface salt 0,
 `TestV16KnownVector` pins:
-`56929051f03ce2eded91d27771eef1b84230d94deb88acaeff7e0a497cf439ab`, with
+`30ab40c287fe7457859b4040e1334bcc5a0f8b50cc49f97e5bd98650753de34d`, with
 epoch `2027-08-01T00:00:00Z`. Every v2 to v15 vector is unchanged (v15 stays
 `33232bf35e829cbd08efc56777988d1e8784760487837aaa2f185c6f2077783d`).
 Contract tests: `gen/v16_contract_test.go`, `catalog/v16_test.go`,

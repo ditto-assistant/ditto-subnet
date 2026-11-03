@@ -19,7 +19,7 @@ import (
 // v16KnownVectorWant is the dueling contract's datagen-half vector (seed
 // 123456789, full profile, public surface salt 0). docs/bench-versions.md and
 // the README publish the same string.
-const v16KnownVectorWant = "56929051f03ce2eded91d27771eef1b84230d94deb88acaeff7e0a497cf439ab"
+const v16KnownVectorWant = "30ab40c287fe7457859b4040e1334bcc5a0f8b50cc49f97e5bd98650753de34d"
 
 // V16 is the dueling contract, STAGED: generatable with its own epoch and seed
 // domain, not yet in the supported set. This module generates only the
@@ -60,7 +60,7 @@ func TestV16KnownVector(t *testing.T) {
 // tool + 125 memory = 175 cases, and the tool and memory phases draw one
 // world scale (the tool passes key their world on the case count).
 func TestV16ProfileIsTheDatagenHalf(t *testing.T) {
-	want := map[string][2]int{"small": {6, 27}, "medium": {24, 43}, "full": {50, 125}}
+	want := map[string][2]int{"small": {6, 27}, "medium": {24, 63}, "full": {50, 125}}
 	for runSize, counts := range want {
 		prof, ok := ProfileForVersion(runSize, protocol.BenchVersionV16)
 		if !ok || prof.Tools != counts[0] {
@@ -70,14 +70,16 @@ func TestV16ProfileIsTheDatagenHalf(t *testing.T) {
 		if !ok || env.Total() != counts[1] {
 			t.Fatalf("%s: memory table %+v (ok %v), want %d", runSize, env, ok, counts[1])
 		}
-		toolScale := 1
-		if prof.Tools >= 80 {
-			toolScale = 3
-		} else if prof.Tools >= 30 {
-			toolScale = 2
+		// One world per run, at the v15 scale of the same run size.
+		toolScale := datagen.ToolWorldScale(prof.Tools, protocol.BenchVersionV16)
+		memScale, _ := v8WorldProfile(prof.Mem)
+		v15, _ := ProfileForVersion(runSize, protocol.BenchVersionV15)
+		v15Scale, _ := v8WorldProfile(v15.Mem)
+		if memScale != toolScale || memScale != v15Scale || datagen.ToolWorldScale(v15.Tools, protocol.BenchVersionV15) != v15Scale {
+			t.Fatalf("%s: tool world scale %d, memory %d, v15 %d", runSize, toolScale, memScale, v15Scale)
 		}
-		if memScale, _ := v8WorldProfile(prof.Mem); memScale != toolScale {
-			t.Fatalf("%s: tool world scale %d != memory world scale %d", runSize, toolScale, memScale)
+		if prof.IsoCases != v15.IsoCases || prof.Waves != v15.Waves {
+			t.Fatalf("%s: isolation/waves %d/%d differ from v15 %d/%d", runSize, prof.IsoCases, prof.Waves, v15.IsoCases, v15.Waves)
 		}
 		for _, seed := range []int64{1, 7, 123456789} {
 			a, err := GenerateDataset(seed, prof, protocol.BenchVersionV16)
@@ -104,8 +106,8 @@ func TestV16ProfileIsTheDatagenHalf(t *testing.T) {
 	}
 }
 
-// The full v16 memory mix passes MixGateV16 (MixGateV13 with the scale-2
-// abstention target) on every swept seed.
+// The full v16 memory mix passes MixGateV16 (MixGateV13 unchanged, abstention
+// target included) on every swept seed.
 func TestV16MixAuditGate(t *testing.T) {
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV16)
 	for seed := int64(1); seed <= 12; seed++ {
@@ -121,7 +123,7 @@ func TestV16MixAuditGate(t *testing.T) {
 			t.Fatalf("seed %d: v16 mix gate violations %v", seed, v)
 		}
 	}
-	if MixGateV16.AbstentionTarget != 0.064 || MixGateForVersion(protocol.BenchVersionV15).AbstentionTarget != 0.10 {
+	if MixGateV16 != MixGateV13 || MixGateForVersion(protocol.BenchVersionV15).AbstentionTarget != 0.10 {
 		t.Fatalf("abstention targets: v16 %.3f, v15 %.3f", MixGateV16.AbstentionTarget, MixGateForVersion(15).AbstentionTarget)
 	}
 }
