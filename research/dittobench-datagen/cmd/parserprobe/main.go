@@ -72,7 +72,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "parserprobe: parse %s: %v\n", path, err)
 				os.Exit(2)
 			}
-			if !protocol.SupportedBenchVersion(a.BenchVersion) {
+			if !protocol.GeneratableBenchVersion(a.BenchVersion) {
 				fmt.Fprintf(os.Stderr, "parserprobe: %s carries unsupported bench_version %d\n", path, a.BenchVersion)
 				os.Exit(2)
 			}
@@ -90,7 +90,7 @@ func main() {
 			opts.Artifacts = append(opts.Artifacts, a)
 			opts.BenchVersion = a.BenchVersion
 		}
-	} else if !protocol.SupportedBenchVersion(*version) {
+	} else if !protocol.GeneratableBenchVersion(*version) {
 		fmt.Fprintf(os.Stderr, "parserprobe: unsupported bench_version %d\n", *version)
 		os.Exit(2)
 	}

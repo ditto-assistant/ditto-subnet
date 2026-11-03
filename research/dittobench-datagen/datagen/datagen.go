@@ -2385,6 +2385,11 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 	if benchVersion >= protocol.BenchVersionV13 && !v13SkipToolSemantics {
 		applyV13ToolSemantics(seed, benchVersion, cases)
 	}
+	if benchVersion >= protocol.BenchVersionV16 {
+		// v16: linked-connector, unlinked-probe and named-product cases
+		// (datagen/v16.go), after every v13 pass so none of their slots move.
+		applyV16ConnectorBench(seed, cases)
+	}
 	if benchVersion >= protocol.BenchVersionV8 && benchVersion < protocol.BenchVersionV13 {
 		// v13 moves writing noise to the artifact surface pass (gen/v13_surface.go),
 		// where the typo v2 projector runs once over every surface with the

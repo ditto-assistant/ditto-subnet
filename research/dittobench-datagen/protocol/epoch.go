@@ -148,6 +148,10 @@ import (
 // audit bank, and the multilingual lexicons can be pinned independently of the
 // v13 generation contract; SupportedBenchVersion and DatasetEpochForVersion
 // admit v13 only once that contract lands.
+//
+// v16 (the dueling contract) is STAGED in staged.go: generatable, with its own
+// epoch and rotate seed, but outside supportedBenchVersions until the
+// cross-layer PR raises the shared ceiling.
 const (
 	BenchVersionV2      = 2
 	BenchVersionV3      = 3
@@ -272,15 +276,18 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 	case BenchVersionV15:
 		return datasetEpochV15, nil
 	default:
-		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, SupportedBenchVersionList())
+		if epoch, staged := stagedDatasetEpoch(version); staged {
+			return epoch, nil
+		}
+		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, versionListForErrors())
 	}
 }
 
 // RotateSeedForVersion folds an explicit benchmark version into a run seed.
 // It is deterministic and retains the exact historical v2 mixing function.
 func RotateSeedForVersion(seed int64, version int) (int64, error) {
-	if !SupportedBenchVersion(version) {
-		return 0, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, SupportedBenchVersionList())
+	if !GeneratableBenchVersion(version) {
+		return 0, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, versionListForErrors())
 	}
 	v := uint64(version)
 	x := uint64(seed) ^ (v * 0x9E3779B97F4A7C15)

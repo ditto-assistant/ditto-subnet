@@ -3,6 +3,7 @@ package protocol
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // RotateSeed must be a deterministic pure function so any auditor recomputes the
@@ -104,11 +105,13 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 	if SupportedBenchVersion(newest + 1) {
 		t.Fatalf("v%d accepted before it has a contract", newest+1)
 	}
+	// The first version past every staged contract has no contract at all.
+	beyond := NewestGeneratableBenchVersion() + 1
 	want := "supported: " + SupportedBenchVersionList()
-	if _, err := DatasetEpochForVersion(newest + 1); err == nil || !strings.Contains(err.Error(), want) {
+	if _, err := DatasetEpochForVersion(beyond); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("epoch error must render the derived list %q: %v", want, err)
 	}
-	if _, err := RotateSeedForVersion(1, newest+1); err == nil || !strings.Contains(err.Error(), want) {
+	if _, err := RotateSeedForVersion(1, beyond); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("rotation error must render the derived list %q: %v", want, err)
 	}
 	if got := SupportedBenchVersionList(); got != "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15" {
@@ -122,5 +125,50 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 		if !cur.After(prev) {
 			t.Fatalf("v%d epoch %s does not follow v%d epoch %s", versions[i], cur, versions[i-1], prev)
 		}
+	}
+}
+
+// TestStagedBenchVersionsAreGeneratableNotSupported pins the staging rule: a
+// staged contract continues the supported list contiguously, generates with
+// its own epoch and rotate seed, and is invisible to every supported-set
+// helper until the cross-layer PR promotes it into supportedBenchVersions.
+func TestStagedBenchVersionsAreGeneratableNotSupported(t *testing.T) {
+	staged := StagedBenchVersions()
+	if len(staged) != 1 || staged[0] != BenchVersionV16 {
+		t.Fatalf("staged versions = %v, want [16]", staged)
+	}
+	prev := NewestSupportedBenchVersion()
+	prevEpoch, _ := DatasetEpochForVersion(prev)
+	for _, v := range staged {
+		if v != prev+1 {
+			t.Fatalf("staged v%d does not continue v%d", v, prev)
+		}
+		if SupportedBenchVersion(v) || !StagedBenchVersion(v) || !GeneratableBenchVersion(v) {
+			t.Fatalf("v%d must be staged and generatable but not supported", v)
+		}
+		epoch, err := DatasetEpochForVersion(v)
+		if err != nil || !epoch.After(prevEpoch) {
+			t.Fatalf("staged v%d epoch %s (err %v) must follow %s", v, epoch, err, prevEpoch)
+		}
+		rotated, err := RotateSeedForVersion(123456789, v)
+		if err != nil {
+			t.Fatalf("staged v%d cannot rotate: %v", v, err)
+		}
+		for _, s := range SupportedBenchVersions() {
+			other, _ := RotateSeedForVersion(123456789, s)
+			if other == rotated {
+				t.Fatalf("staged v%d shares a rotate seed with v%d", v, s)
+			}
+		}
+		prev, prevEpoch = v, epoch
+	}
+	if NewestGeneratableBenchVersion() != BenchVersionV16 || NewestSupportedBenchVersion() != BenchVersionV15 {
+		t.Fatalf("newest generatable %d / supported %d", NewestGeneratableBenchVersion(), NewestSupportedBenchVersion())
+	}
+	if got, _ := DatasetEpochForVersion(BenchVersionV16); got.Format(time.RFC3339) != "2027-08-01T00:00:00Z" {
+		t.Fatalf("v16 epoch = %s", got)
+	}
+	if _, err := RotateSeedForVersion(1, BenchVersionV16+1); err == nil || !strings.Contains(err.Error(), "staged: 16") {
+		t.Fatalf("error must name the staged list: %v", err)
 	}
 }
