@@ -88,6 +88,50 @@ func TestDaniLabsSelectionMeasuresFinalizedPayload(t *testing.T) {
 	}
 }
 
+type countingJSON struct{ calls *int }
+
+func (v countingJSON) MarshalJSON() ([]byte, error) {
+	*v.calls++
+	return []byte(`"value"`), nil
+}
+
+func TestDaniLabsSelectionSkipsMarshalingIneligibleRequests(t *testing.T) {
+	now := time.Now()
+	base := config.InferenceProxyConfig{RoutingMode: config.RoutingModeAggregateThroughput,
+		DaniLabsAPIKey: "test", DaniLabsTrialUntil: now.Add(time.Hour).Format(time.RFC3339),
+		DaniLabsTrialScope: "canary", DaniLabsPercent: 100, TimeoutSeconds: 90}
+	expired := base
+	expired.DaniLabsTrialUntil = now.Add(-time.Second).Format(time.RFC3339)
+	noKey := base
+	noKey.DaniLabsAPIKey = ""
+	for _, tc := range []struct {
+		name           string
+		cfg            config.InferenceProxyConfig
+		model, purpose string
+		tokens         int
+	}{
+		{"other model", base, "other", "benchmark_canary", 64},
+		{"other purpose", base, daniLabsModel, "scored", 64},
+		{"expired", expired, daniLabsModel, "benchmark_canary", 64},
+		{"no key", noKey, daniLabsModel, "benchmark_canary", 64},
+		{"too many tokens", base, daniLabsModel, "benchmark_canary", 8193},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			if selectDaniLabsForPayload(tc.cfg, tc.model, tc.purpose, map[string]any{"probe": countingJSON{&calls}}, tc.tokens, now) {
+				t.Fatal("selected an ineligible request")
+			}
+			if calls != 0 {
+				t.Fatalf("marshaled an ineligible request %d times", calls)
+			}
+		})
+	}
+	calls := 0
+	if !selectDaniLabsForPayload(base, daniLabsModel, "benchmark_canary", map[string]any{"probe": countingJSON{&calls}}, 64, now) || calls != 1 {
+		t.Fatalf("eligible request: expected selection and one marshal, got %d marshals", calls)
+	}
+}
+
 func TestDaniLabsCompletionSingleShotAndSanitized(t *testing.T) {
 	requests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -24,7 +24,7 @@ const (
 // Size the finalized payload exactly as postProviderWithRetry serializes it.
 // Keep the historical path allocation-free when the live share is zero.
 func selectDaniLabsForPayload(cfg config.InferenceProxyConfig, model, purpose string, payload map[string]any, maxTokens int, now time.Time) bool {
-	if cfg.DaniLabsPercent <= 0 {
+	if !daniLabsEligible(cfg, model, purpose, maxTokens, now) {
 		return false
 	}
 	encoded, err := json.Marshal(payload)
@@ -38,9 +38,13 @@ func selectDaniLabsForPayload(cfg config.InferenceProxyConfig, model, purpose st
 // secret, explicit trial scope, and deadline are independent of the live board.
 // An invalid, expired, or more-than-seven-hours-away deadline fails closed.
 func selectDaniLabs(cfg config.InferenceProxyConfig, model, purpose string, bodyBytes, maxTokens int, now time.Time) bool {
+	return daniLabsEligible(cfg, model, purpose, maxTokens, now) && bodyBytes <= daniLabsMaxRequestBytes && rand.IntN(100) < cfg.DaniLabsPercent
+}
+
+func daniLabsEligible(cfg config.InferenceProxyConfig, model, purpose string, maxTokens int, now time.Time) bool {
 	if cfg.DaniLabsPercent <= 0 || cfg.DaniLabsPercent > 100 || cfg.DaniLabsAPIKey == "" ||
 		cfg.RoutingMode != config.RoutingModeAggregateThroughput || model != daniLabsModel ||
-		bodyBytes > daniLabsMaxRequestBytes || maxTokens > daniLabsMaxOutputTokens || maxTokens < 1 {
+		maxTokens > daniLabsMaxOutputTokens || maxTokens < 1 {
 		return false
 	}
 	if cfg.DaniLabsTrialScope != "fleet" && !(cfg.DaniLabsTrialScope == "canary" && purpose == "benchmark_canary") {
@@ -50,7 +54,7 @@ func selectDaniLabs(cfg config.InferenceProxyConfig, model, purpose string, body
 	if err != nil || !until.After(now.Add(time.Duration(cfg.TimeoutSeconds)*time.Second)) || until.After(now.Add(7*time.Hour)) {
 		return false
 	}
-	return rand.IntN(100) < cfg.DaniLabsPercent
+	return true
 }
 
 // completeChatViaDaniLabs dispatches once. Unknown outcomes are never replayed
