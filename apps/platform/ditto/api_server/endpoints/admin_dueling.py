@@ -33,6 +33,7 @@ from ditto.api_models.dueling import (
     ROTATE_DUELING_SEASON_CONFIRMATION,
     AdminDuelingRotateRequest,
     AdminDuelingSeasonsResponse,
+    AdminDuelingSliceRetryRequest,
     AdminDuelingSlicesResponse,
     DuelingBatteryView,
     DuelingColumnMean,
@@ -40,9 +41,15 @@ from ditto.api_models.dueling import (
     DuelingSliceStatus,
     DuelingSliceView,
     DuelingTargetView,
+    retry_dueling_slice_confirmation,
 )
 from ditto.api_server.dependencies import get_session
-from ditto.api_server.dueling_seasons import dueling_target, open_season
+from ditto.api_server.dueling_seasons import (
+    dueling_target,
+    open_season,
+    retry_slice,
+    slice_retry_refusal,
+)
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.generator_competition import load_settings
 from ditto.db.models import (
@@ -273,9 +280,13 @@ async def admin_dueling_slices(
     status: DuelingSliceStatus | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    preparation_id: UUID | None = None,
 ) -> AdminDuelingSlicesResponse:
-    """Slice preparations, newest first, with latency and digests."""
+    """Slice preparations, newest first, with latency, digests and whether a
+    failed one can be retried (``retry_dueling_slice_preparation``)."""
     filters = []
+    if preparation_id is not None:
+        filters.append(DuelingSlicePreparation.id == preparation_id)
     if season_id is not None:
         filters.append(DuelingSlicePreparation.season_id == season_id)
     if status is not None:
@@ -298,8 +309,13 @@ async def admin_dueling_slices(
                 DuelingSlicePreparation.first_leased_at,
                 DuelingSlicePreparation.ready_at,
                 DuelingSlicePreparation.failed_at,
+                DuelingSlicePreparation.retries,
+                DuelingSlicePreparation.last_retry_at,
+                DuelingSlicePreparation.last_retry_actor,
+                DuelingSlicePreparation.last_retry_reason,
                 DuelingSeason.season_index,
                 DuelingSeason.bench_version,
+                DuelingSeason.status.label("season_status"),
             )
             .join(DuelingSeason, DuelingSeason.id == DuelingSlicePreparation.season_id)
             .where(*filters)
@@ -329,6 +345,7 @@ async def admin_dueling_slices(
         )
         if row.ready_at is not None and latency is not None:
             latencies.append(latency)
+        refusal = _retry_refusal(row.status, row.error, row.season_status, force=False)
         views.append(
             DuelingSliceView(
                 id=row.id,
@@ -349,6 +366,12 @@ async def admin_dueling_slices(
                 ready_at=row.ready_at,
                 failed_at=row.failed_at,
                 latency_seconds=latency,
+                retries=row.retries,
+                last_retry_at=row.last_retry_at,
+                last_retry_actor=row.last_retry_actor,
+                last_retry_reason=row.last_retry_reason,
+                retryable=row.status == "failed" and refusal is None,
+                retry_refusal=refusal if row.status == "failed" else None,
             )
         )
     p95 = None
@@ -439,3 +462,88 @@ async def admin_rotate_dueling_season(
     await session.commit()
     await session.refresh(season)
     return await _view(session, season, full=True)
+
+
+def _retry_refusal(
+    status: str, error: str | None, season_status: str | None, *, force: bool
+) -> str | None:
+    """:func:`slice_retry_refusal` on already-read columns."""
+    row = DuelingSlicePreparation(status=status, error=error)
+    season = None if season_status is None else DuelingSeason(status=season_status)
+    return slice_retry_refusal(row, season, force=force)
+
+
+@router.post("/slices/{preparation_id}/retry", response_model=DuelingSliceView)
+async def admin_retry_dueling_slice(
+    preparation_id: UUID,
+    payload: AdminDuelingSliceRetryRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> DuelingSliceView:
+    """Re-queue exactly one failed slice preparation: status pending, attempts
+    kept, error cleared, so the next lease of its seed reserves it again."""
+    expected = retry_dueling_slice_confirmation(preparation_id)
+    if payload.confirmation != expected:
+        raise HTTPException(
+            status_code=409, detail=f"confirmation must be exactly {expected}"
+        )
+    reason = payload.reason.strip()
+    actor = payload.actor.strip()
+    if len(reason) < 8 or not actor:
+        raise HTTPException(
+            status_code=422, detail="a retry needs a reason (8+ chars) and an actor"
+        )
+    row = await session.scalar(
+        select(DuelingSlicePreparation)
+        .where(DuelingSlicePreparation.id == preparation_id)
+        .with_for_update()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown slice preparation")
+    if row.status != payload.expected_status or row.error != payload.expected_error:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"preparation is {row.status} with error {row.error!r}; re-read "
+                "list_dueling_slices and retry against what it shows"
+            ),
+        )
+    # Locked so a season closing concurrently cannot race the open check.
+    season = await session.scalar(
+        select(DuelingSeason).where(DuelingSeason.id == row.season_id).with_for_update()
+    )
+    refused = slice_retry_refusal(row, season, force=payload.force)
+    if refused is not None:
+        raise HTTPException(status_code=409, detail=refused)
+    previous_error = row.error
+    previous_columns = row.columns
+    previous_scorer_version = row.scorer_version
+    retry_slice(row, actor=actor[:120], reason=reason, now=datetime.now(UTC))
+    record_operator_action(
+        session,
+        action="retry_dueling_slice_preparation",
+        subject=f"dueling_slice:{row.id}",
+        actor=actor,
+        reason=reason,
+        detail={
+            "season_id": str(row.season_id),
+            "run_seed": str(row.run_seed),
+            "previous_error": previous_error,
+            "previous_columns": previous_columns,
+            "previous_scorer_version": previous_scorer_version,
+            "attempts": row.attempts,
+            "retries": row.retries,
+            "force": payload.force,
+        },
+    )
+    await session.commit()
+    listing = await admin_dueling_slices(
+        _admin,
+        session,
+        season_id=None,
+        status=None,
+        limit=1,
+        offset=0,
+        preparation_id=preparation_id,
+    )
+    return listing.slices[0]

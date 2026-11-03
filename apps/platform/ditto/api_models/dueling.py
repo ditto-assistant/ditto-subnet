@@ -258,6 +258,16 @@ class DuelingSliceView(DuelingModel):
     failed_at: datetime | None
     latency_seconds: float | None
     """Reservation to ready (or failed)."""
+    retries: int = 0
+    """Operator re-queues (``retry_dueling_slice_preparation``)."""
+    last_retry_at: datetime | None = None
+    last_retry_actor: str | None = None
+    last_retry_reason: str | None = None
+    retryable: bool = False
+    """Whether ``retry_dueling_slice_preparation`` would accept it now
+    (without ``force``)."""
+    retry_refusal: str | None = None
+    """Why it is not retryable, for a failed preparation."""
 
 
 class AdminDuelingSlicesResponse(DuelingModel):
@@ -283,3 +293,25 @@ class AdminDuelingRotateRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
+
+
+def retry_dueling_slice_confirmation(preparation_id: UUID) -> str:
+    return f"RETRY DUELING SLICE {preparation_id}"
+
+
+class AdminDuelingSliceRetryRequest(BaseModel):
+    """Re-queue exactly one failed slice preparation (audited)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    expected_status: Literal["failed"]
+    expected_error: str | None
+    """The preparation's current ``error``, exactly as read: an optimistic
+    guard so a retry never lands on a different failure than the one read."""
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+    force: bool = False
+    """Retry a failure the scorer refused as an unsupported request (a digest
+    mismatch on the pinned source), which normally needs a rotation. The
+    reason is recorded with the force."""
