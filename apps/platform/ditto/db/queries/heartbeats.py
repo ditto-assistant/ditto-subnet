@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -31,6 +31,8 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.inference_observability import (
+    LeaseInferenceActivity,
+    LeaseSlotKey,
     load_live_lease_inference_activity,
 )
 from ditto.metrics import VALIDATOR_HEARTBEAT_PAYLOAD_DEGRADED
@@ -529,6 +531,8 @@ async def list_active_validator_work(
     agent_id: UUID | None = None,
     heartbeat_rows: Sequence[ValidatorHeartbeat] | None = None,
     assignments: Sequence[ActiveValidatorAssignment] | None = None,
+    lease_inference_activity: Mapping[LeaseSlotKey, LeaseInferenceActivity]
+    | None = None,
 ) -> list[ActiveValidatorWork]:
     """Return every fresh heartbeat slot still bound to a live ticket.
 
@@ -670,7 +674,12 @@ async def list_active_validator_work(
         )
     if not active:
         return active
-    activity = await load_live_lease_inference_activity(session, now=now)
+    # A caller that already read the live grants shares that read.
+    activity = (
+        lease_inference_activity
+        if lease_inference_activity is not None
+        else await load_live_lease_inference_activity(session, now=now)
+    )
     return [
         replace(
             work,

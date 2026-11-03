@@ -5505,7 +5505,10 @@ async def load_validator_fleet(
         rows=await list_validator_heartbeats(session),
         assignments=assignments,
         active_work=await list_active_validator_work(
-            session, now=now, cutoff=now - _VALIDATOR_ONLINE_WINDOW
+            session,
+            now=now,
+            cutoff=now - _VALIDATOR_ONLINE_WINDOW,
+            lease_inference_activity=lease_inference_activity,
         ),
         confirmation_work=await list_active_confirmation_work(session, now=now),
         orphaned_leases=await list_orphaned_leases(
