@@ -1,0 +1,1 @@
+{"max_tokens":32768,"messages":[{"content":"hello","role":"user"}],"model":"openai/gpt-oss-20b","n":1,"reasoning":{"effort":"medium","exclude":true},"stream":false}

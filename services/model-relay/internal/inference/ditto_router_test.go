@@ -28,6 +28,20 @@ func TestDittoRouterHeadersCarryOnlyTheKeyAndTheLinkedUser(t *testing.T) {
 	}
 }
 
+func TestDittoRouterRequiresUserBillingOnlyInRequiredAccountMode(t *testing.T) {
+	_, router := dittoRouterTestConfig("https://inference.heyditto.ai/v1/chat/completions")
+	if _, present := dittoRouterHeaders(router, "ditto-user-1")["X-Ditto-Require-User-Billing"]; present {
+		t.Fatal("optional attribution must not opt in to user billing")
+	}
+	router.RequireCompetitionAccount = true
+	for _, identityHeader := range []string{"X-Ditto-On-Behalf-Of", "X-Ditto-Require-User-Billing"} {
+		router.OnBehalfOfHeader = identityHeader
+		if got := dittoRouterHeaders(router, "untrusted-replacement")["X-Ditto-Require-User-Billing"]; got != "true" {
+			t.Fatalf("billing requirement must be the server literal, got %q", got)
+		}
+	}
+}
+
 func TestCompleteChatViaDittoRouterShapesASuccess(t *testing.T) {
 	var seen *http.Request
 	var body map[string]any
@@ -41,7 +55,7 @@ func TestCompleteChatViaDittoRouterShapesASuccess(t *testing.T) {
 	cfg, router := dittoRouterTestConfig(srv.URL)
 	payload := map[string]any{"model": "dittobench-competition", "messages": []any{map[string]any{"role": "user", "content": "hello"}}}
 	result, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router, payload,
-		"dittobench-competition", "ditto-user-1", func(context.Context, time.Duration) {})
+		"dittobench-competition", "ditto-user-1", nil, func(context.Context, time.Duration) {})
 	if exhausted != nil {
 		t.Fatalf("exhausted: %+v", exhausted)
 	}
@@ -72,7 +86,7 @@ func TestCompleteChatViaDittoRouterReportsPaymentRequiredDistinctly(t *testing.T
 	defer srv.Close()
 	cfg, router := dittoRouterTestConfig(srv.URL)
 	result, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
-		map[string]any{"model": "m"}, "m", "ditto-user-2", func(context.Context, time.Duration) {})
+		map[string]any{"model": "m"}, "m", "ditto-user-2", nil, func(context.Context, time.Duration) {})
 	if result != nil || exhausted == nil {
 		t.Fatalf("expected an exhausted outcome, got %+v / %+v", result, exhausted)
 	}
@@ -94,8 +108,21 @@ func TestCompleteChatViaDittoRouterRejectsAResponseWithoutUsage(t *testing.T) {
 	defer srv.Close()
 	cfg, router := dittoRouterTestConfig(srv.URL)
 	_, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
-		map[string]any{"model": "m"}, "m", "u", func(context.Context, time.Duration) {})
+		map[string]any{"model": "m"}, "m", "u", nil, func(context.Context, time.Duration) {})
 	if exhausted == nil || exhausted.terminalErrorCode != "invalid_provider_response" {
 		t.Fatalf("exhausted: %+v", exhausted)
+	}
+}
+
+func TestCompleteChatViaDittoRouterRejectsDifferentFrozenModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"different-model","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"cost":0.0004}}`))
+	}))
+	defer srv.Close()
+	cfg, router := dittoRouterTestConfig(srv.URL)
+	result, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
+		map[string]any{"model": "frozen-model"}, "frozen-model", "u", nil, func(context.Context, time.Duration) {})
+	if result != nil || exhausted == nil || exhausted.terminalErrorCode != "provider_identity_mismatch" {
+		t.Fatalf("a different endpoint model must not be accepted: %+v / %+v", result, exhausted)
 	}
 }

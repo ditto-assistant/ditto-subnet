@@ -116,6 +116,7 @@ class _State:
     def __init__(self, *, config: Any, session_maker: Any, client: httpx.AsyncClient):
         class _Config:
             inference_proxy = config
+            ditto_router_require_competition_account = False
 
         self.config = _Config()
         self.session_maker = session_maker

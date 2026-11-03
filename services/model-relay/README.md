@@ -246,6 +246,7 @@ lookup errors — takes the centralized OpenRouter path byte for byte.
 | Env | Default | Meaning |
 | --- | --- | --- |
 | `DITTO_ROUTER_UPSTREAM_ENABLED` | `false` | Master switch. |
+| `DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT` | `false` | Competition chat requires an active linked Ditto account before reservation; no sponsor fallback on missing/revoked links or link lookup failures. Requires enabled competition routing. Platform requests spend consent on new sign-ins when this is enabled. This does not cover confirmation or embedding costs. |
 | `DITTO_ROUTER_UPSTREAM_URL` | `https://inference.heyditto.ai/v1/chat/completions` | Pinned to Ditto inference hosts (`router.heyditto.ai`, its `inference.heyditto.ai` compatibility host, staging, `pr-N`/`be-N` previews) and to the exact `/v1/chat/completions` path; anything else fails boot. |
 | `DITTO_ROUTER_API_KEY` | — | Owner-minted key on the DittoBench app endpoint. Required when enabled. |
 | `DITTO_ROUTER_LANES` | *(empty)* | csv of `screener`, `competition`. Empty routes nothing. |
@@ -264,3 +265,7 @@ Two Router endpoints back the two lanes, and the difference is the point:
 
 Live parity (same model, same usage accounting, receipts on the Ditto side)
 must be shown on a canary before `competition` is enabled in production.
+
+For credit purchases, trusted run/stage attribution, opt-in user billing and
+the remaining evaluation stages, see
+[`Pay with TAO evaluation billing`](../../docs/pay-with-tao-evaluation-billing.md).
