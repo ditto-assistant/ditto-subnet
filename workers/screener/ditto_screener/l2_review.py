@@ -8799,7 +8799,10 @@ def _validate_lead_dispositions(
         )
         if not isinstance(lead_id, str) or lead_id not in expected or lead_id in seen:
             raise ValueError("L2 lead disposition ID is invalid")
-        if disposition not in {"resolved", "unresolved"}:
+        # _is_allowed, not a bare ``in``: a list or dict disposition must be
+        # the stable "L2 lead disposition is invalid" contract miss, not an
+        # unhashable-type TypeError with no failure code (ditto-subnet#2987).
+        if not _is_allowed(disposition, {"resolved", "unresolved"}):
             raise ValueError("L2 lead disposition is invalid")
         if not isinstance(reason, str) or not 1 <= len(reason) <= 240:
             raise ValueError("L2 lead disposition reason is invalid")

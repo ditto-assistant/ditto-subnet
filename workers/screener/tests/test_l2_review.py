@@ -1883,6 +1883,32 @@ def test_l2_lead_disposition_requires_exact_source_citation(tmp_path: Path) -> N
         )
 
 
+@pytest.mark.parametrize("disposition", [["resolved"], {"value": "resolved"}])
+def test_l2_lead_disposition_of_the_wrong_json_type_is_a_contract_miss(
+    tmp_path: Path, disposition: object
+) -> None:
+    # ditto-subnet#2987: a list or dict disposition raised an unhashable-type
+    # TypeError, which carries no stable failure code. It is the same
+    # contract miss as any other invalid disposition.
+    archive, _ = _tar(tmp_path, "fn main() {}\n")
+    repository = TarSourceRepository(str(archive))
+    leads = _l1_lead_packet(_l1("medium"))
+    digest = hashlib.sha256(b"fn main() {}\n").hexdigest()
+    item = {
+        "lead_id": leads[0]["lead_id"],
+        "disposition": disposition,
+        "reason": "The cited branch still delegates the answer to the model.",
+        "citation": {"path": "src/main.rs", "line": 1, "file_sha256": digest},
+    }
+    with pytest.raises(ValueError, match="L2 lead disposition is invalid"):
+        _validate_lead_dispositions(
+            [item],
+            leads=leads,
+            analyzed=({"path": "src/main.rs", "sha256": digest},),
+            repository=repository,
+        )
+
+
 def test_v13_medium_l1_requires_resolved_leads() -> None:
     l1 = _l1("medium")
     lead = _l1_lead_packet(l1)[0]
