@@ -13429,6 +13429,101 @@ class TestQuarantineReviewContext:
             "batch decisions changed after preview; preview again"
         )
 
+    async def test_amend_reason_corrects_a_confirmed_violation_reject(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # SN-439: an automated confirmed-violation reject cited the wrong lines
+        # and no tool could correct the miner-visible reason.
+        agent_id, ctx = await self._quarantine(app, client, session_maker)
+        assert ctx["response"].status_code == 200
+        original = "I4: app/agent.py:142 and :172 route benchmark answers"
+        corrected = "I4: app/short.py:83-90 and :251 route benchmark answers"
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.agent_id == agent_id
+                )
+            )
+            assert agent is not None and quarantine is not None
+            attempt = await session.get(ScreeningAttempt, quarantine.attempt_id)
+            assert attempt is not None
+            quarantine.status, quarantine.resolution = "resolved", "reject"
+            quarantine.resolution_reason = original
+            quarantine.resolved_by = "platform:v13-confirmed-violation"
+            quarantine.resolved_at = datetime.now(UTC)
+            attempt.status, attempt.public_reason = "rejected", original
+            agent.status, agent.screening_reason = AgentStatus.REJECTED, original
+            quarantine_id = quarantine.quarantine_id
+            body = {
+                "expected_agent_id": str(agent_id),
+                "expected_artifact_sha256": agent.sha256,
+                "expected_attempt_id": str(attempt.attempt_id),
+                "expected_reason": original,
+                "reason": corrected,
+                "confirmation": "AMEND PUBLIC REJECT REASON",
+            }
+        url = f"/api/v1/admin/screening-quarantines/{quarantine_id}/amend-reason"
+
+        for stale in (
+            {"expected_reason": "a different public reason"},
+            {"expected_attempt_id": str(uuid4())},
+            {"expected_artifact_sha256": "ef" * 32},
+        ):
+            refused = await client.post(
+                url, headers=_ADMIN_HEADERS, json={**body, **stale}
+            )
+            assert refused.status_code == 409, refused.text
+
+        amended = await client.post(url, headers=_ADMIN_HEADERS, json=body)
+        assert amended.status_code == 200, amended.text
+        assert amended.json()["previous_reason"] == original
+        assert amended.json()["resolved_by"] == "platform:v13-confirmed-violation"
+        assert amended.json()["idempotent"] is False
+        replay = await client.post(url, headers=_ADMIN_HEADERS, json=body)
+        assert replay.status_code == 200
+        assert replay.json()["idempotent"] is True
+        assert replay.json()["previous_reason"] == original
+
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            quarantine = await session.get(ScreeningQuarantine, quarantine_id)
+            assert agent is not None and quarantine is not None
+            attempt = await session.get(ScreeningAttempt, quarantine.attempt_id)
+            assert attempt is not None
+            assert agent.status == AgentStatus.REJECTED
+            assert agent.screening_reason == corrected
+            assert attempt.public_reason == corrected
+            assert (quarantine.resolution, quarantine.resolution_reason) == (
+                "reject",
+                corrected,
+            )
+            assert quarantine.resolved_by == "platform:v13-confirmed-violation"
+            history = (
+                await session.scalars(
+                    select(ScreeningQuarantineResolution)
+                    .where(ScreeningQuarantineResolution.quarantine_id == quarantine_id)
+                    .order_by(ScreeningQuarantineResolution.created_at)
+                )
+            ).all()
+            assert [(row.actor, row.reason) for row in history] == [
+                ("platform:v13-confirmed-violation", original),
+                ("backroom:test-user", corrected),
+            ]
+
+        # Only a resolved reject is amendable.
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.status = AgentStatus.EVALUATING
+        blocked = await client.post(
+            url, headers=_ADMIN_HEADERS, json={**body, "reason": original + " x"}
+        )
+        assert blocked.status_code == 409
+
     async def test_batch_execute_is_idempotent_and_reports_partial_failures(
         self,
         app: FastAPI,

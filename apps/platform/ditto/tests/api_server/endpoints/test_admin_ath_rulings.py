@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import event, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.admin_ath_rulings import (
@@ -2080,6 +2080,90 @@ async def test_a_ban_without_a_rejected_review_is_not_reconsidered(
     assert stale["disposition"] == "stale_guard"
     assert await _status(maker, agent_id) == "banned"
     assert await _status(maker, rejected_id) == "banned"
+
+
+@pytest.mark.parametrize("terminal", [AgentStatus.REJECTED, AgentStatus.BANNED])
+async def test_reject_closes_a_review_stranded_behind_a_terminal_agent(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    terminal: AgentStatus,
+) -> None:
+    """SN-434: a pending hold behind a rejected or banned agent can be closed.
+
+    Clear stays a conflict that names the way out, the close needs no source
+    citation, the agent and its scores are untouched, the replay is
+    idempotent, and the close never becomes a reject a later open can withdraw.
+    """
+    await _activate(maker)
+    agent_id, sha256 = await _seed_held(
+        maker, hotkey="5Stranded", composite=0.9, created_at=_T0
+    )
+    async with maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = terminal
+    _install(app, maker)
+
+    clear = await client.post(
+        _PREVIEW,
+        json={"rulings": [_ruling("clear", agent_id, sha256, refs=())]},
+        headers=_HEADERS,
+    )
+    assert clear.json()["items"][0]["disposition"] == "conflict"
+    conflict_reason = clear.json()["items"][0]["conflict_reason"]
+    assert "a reject ruling closes this stranded review" in conflict_reason
+
+    close = _ruling(
+        "reject",
+        agent_id,
+        sha256,
+        reason="Closing a stranded hold: the agent was already rejected",
+        refs=(),
+    )
+    preview, execute = await _preview_and_execute(client, [close])
+    item = preview["items"][0]
+    assert item["disposition"] == "ready", item
+    assert item["steps"] == ["close_terminal"]
+    assert item["would_change_crown"] is False
+    assert execute["items"][0]["status"] == "applied", execute
+    assert execute["items"][0]["steps_applied"] == ["close_terminal"]
+    assert await _status(maker, agent_id) == terminal.value
+
+    review, actions = await _review(maker, agent_id)
+    assert review is not None
+    assert (review.status, review.resolution, review.resolved_by) == (
+        "resolved",
+        "reject",
+        _ACTOR,
+    )
+    assert review.resolution_reason == close["reason"]
+    assert review.original_reason == "Manual benchmark-overfit review"
+    assert review.algorithm_provenance["terminal_close"]["agent_status"] == (
+        terminal.value
+    )
+    assert [action.action for action in actions] == ["reject"]
+    assert actions[0].evidence["terminal_close"] is True
+    assert actions[0].evidence["batch_ruling"]["action"] == "reject"
+    async with maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(Score)
+                .where(Score.agent_id == agent_id)
+            )
+            == 3
+        )
+
+    replay = await client.post(_PREVIEW, json={"rulings": [close]}, headers=_HEADERS)
+    replayed = replay.json()["items"][0]
+    assert replayed["disposition"] == "already_applied", replayed
+    reopen = await client.post(
+        _PREVIEW,
+        json={"rulings": [_ruling("open", agent_id, sha256, refs=())]},
+        headers=_HEADERS,
+    )
+    assert reopen.json()["items"][0]["disposition"] == "conflict"
 
 
 @pytest.mark.parametrize("fail_on", ["post_commit", "final_read"])

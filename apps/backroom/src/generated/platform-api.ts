@@ -3907,6 +3907,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-quarantines/{quarantine_id}/amend-reason": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Amend Quarantine Reject Reason
+         * @description Correct the miner-visible reason on a resolved reject (SN-439).
+         *
+         *     The reject stands: status, decision-maker, moderation record and evidence
+         *     are untouched. The quarantine's resolution reason, the attempt's public
+         *     reason and the agent's screening reason -- wherever they still carry the
+         *     replaced text -- take the corrected text. The replaced text stays in the
+         *     append-only resolution history, seeded with the original decision when
+         *     the reject (an automated confirmed violation, say) wrote no history row.
+         */
+        post: operations["amend_quarantine_reject_reason_api_v1_admin_screening_quarantines__quarantine_id__amend_reason_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-quarantines/{quarantine_id}/context": {
         parameters: {
             query?: never;
@@ -10590,7 +10617,7 @@ export interface components {
              */
             status: "applied" | "already_applied" | "failed";
             /** Steps Applied */
-            steps_applied?: ("open" | "clear" | "attest" | "reject")[];
+            steps_applied?: ("open" | "clear" | "attest" | "reject" | "close_terminal")[];
             /** Would Change Crown */
             would_change_crown: boolean | null;
             /**
@@ -10643,7 +10670,7 @@ export interface components {
             /** Stale Guard */
             stale_guard: boolean;
             /** Steps */
-            steps?: ("open" | "clear" | "attest" | "reject")[];
+            steps?: ("open" | "clear" | "attest" | "reject" | "close_terminal")[];
             /** Would Change Crown */
             would_change_crown: boolean;
         };
@@ -14012,6 +14039,65 @@ export interface components {
              * @default 0
              */
             terminal_ghost_count: number;
+        };
+        /**
+         * AdminQuarantineReasonAmendRequest
+         * @description Guarded correction of the public reason on a resolved reject (SN-439).
+         *
+         *     The rejection itself stands; only the miner-visible reason changes, and
+         *     the text it replaces is kept in the quarantine's resolution history.
+         */
+        AdminQuarantineReasonAmendRequest: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "AMEND PUBLIC REJECT REASON";
+            /**
+             * Expected Agent Id
+             * Format: uuid
+             */
+            expected_agent_id: string;
+            /** Expected Artifact Sha256 */
+            expected_artifact_sha256: string;
+            /**
+             * Expected Attempt Id
+             * Format: uuid
+             */
+            expected_attempt_id: string;
+            /** Expected Reason */
+            expected_reason: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminQuarantineReasonAmendResponse */
+        AdminQuarantineReasonAmendResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Idempotent
+             * @default false
+             */
+            idempotent: boolean;
+            /** Previous Reason */
+            previous_reason: string;
+            /**
+             * Quarantine Id
+             * Format: uuid
+             */
+            quarantine_id: string;
+            /** Reason */
+            reason: string;
+            /** Resolved By */
+            resolved_by?: string | null;
         };
         /** AdminQuarantineResolutionEvent */
         AdminQuarantineResolutionEvent: {
@@ -53912,6 +53998,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminQuarantineItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    amend_quarantine_reject_reason_api_v1_admin_screening_quarantines__quarantine_id__amend_reason_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                quarantine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminQuarantineReasonAmendRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminQuarantineReasonAmendResponse"];
                 };
             };
             /** @description Validation Error */

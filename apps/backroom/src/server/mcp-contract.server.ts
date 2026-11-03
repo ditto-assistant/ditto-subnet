@@ -99,6 +99,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'retry_trusted_image_build',
   'expire_running_screening',
   'reject_screening_submission',
+  'amend_screening_reject_reason',
   'open_ath_review',
   'resolve_ath_review',
   'create_ath_rulings_upload',

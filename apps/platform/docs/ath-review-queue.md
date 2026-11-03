@@ -325,6 +325,17 @@ JOIN agents a USING (agent_id)
 WHERE r.status = 'pending' AND a.status <> 'ath_pending_review';
 ```
 
+A stranded hold behind an agent that is already `rejected` or `banned` is
+terminal history, and an operator closes it with a `reject` ruling in the
+batched rulings court (SN-434). It previews `steps: ["close_terminal"]`, needs
+no `evidence_references` (a terminal agent has no source finding to cite),
+and under the agent and review row locks resolves the review as `reject` with
+one `reject` action whose evidence carries `terminal_close: true`. The agent,
+its scores and the board are untouched, so `would_change_crown` is always
+false. The close did not ban anyone, so it is never a reject that `open` can
+reconsider. A `clear` on such a row stays a conflict and names the reject as
+the way out.
+
 Reconciling them is deliberately not automated. Winner-take-all makes a
 false-positive hold expensive for an honest miner and a false clear expensive
 for the subnet, so the exit from a hold stays an operator decision. The

@@ -6621,6 +6621,28 @@ export const rejectScreeningSubmissionResponseSchema = z.object({
   idempotent: z.boolean(),
 })
 
+export const AMEND_REJECT_REASON_CONFIRMATION = 'AMEND PUBLIC REJECT REASON'
+
+export const amendQuarantineRejectReasonInputSchema = z.object({
+  quarantineId: z.string().uuid(),
+  expectedAgentId: z.string().uuid(),
+  expectedArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedAttemptId: z.string().uuid(),
+  expectedReason: z.string().min(1),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(AMEND_REJECT_REASON_CONFIRMATION),
+})
+
+export const amendQuarantineRejectReasonResponseSchema = z.object({
+  quarantine_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  previous_reason: z.string(),
+  reason: z.string(),
+  resolved_by: z.string().nullish(),
+  idempotent: z.boolean(),
+})
+
 export const quarantineAgentContextSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
@@ -8473,7 +8495,7 @@ export const athRulingActionSchema = z.enum(['open', 'clear', 'reject'])
 
 // What execute performs for one ruling. `attest` is a clear on an unheld
 // scored or live agent: the terminal clear is recorded without holding the row.
-export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject'])
+export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject', 'close_terminal'])
 
 export const athRulingDispositionSchema = z.enum([
   'ready',

@@ -346,6 +346,8 @@ import {
   expireRunningScreeningResponseSchema,
   rejectScreeningSubmissionInputSchema,
   rejectScreeningSubmissionResponseSchema,
+  amendQuarantineRejectReasonInputSchema,
+  amendQuarantineRejectReasonResponseSchema,
   screeningSubmissionFiltersSchema,
   releaseVerifiedV13CourtClearInputSchema,
   releaseVerifiedV13CourtClearResponseSchema,
@@ -3310,6 +3312,26 @@ export async function rejectScreeningSubmission(rawInput: unknown, actor: string
     },
   )
   return rejectScreeningSubmissionResponseSchema.parse(payload)
+}
+
+export async function amendQuarantineRejectReason(rawInput: unknown, actor: string) {
+  const input = amendQuarantineRejectReasonInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-quarantines/${encodeURIComponent(input.quarantineId)}/amend-reason`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        expected_agent_id: input.expectedAgentId,
+        expected_artifact_sha256: input.expectedArtifactSha256,
+        expected_attempt_id: input.expectedAttemptId,
+        expected_reason: input.expectedReason,
+        reason: input.reason,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return amendQuarantineRejectReasonResponseSchema.parse(payload)
 }
 
 export async function fetchScreeningArtifact(rawInput: unknown, actor: string) {

@@ -104,6 +104,9 @@ from ditto.api_server.storage.errors import (
 )
 from ditto.db.models import Agent, AgentStatus, AthReview, AthReviewAction, Score
 from ditto.db.queries.ledger_epochs import latest_pin
+from ditto.db.queries.terminal_quarantine_reconciliation import (
+    TERMINAL_QUARANTINE_AGENT_STATUSES,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -464,6 +467,10 @@ async def _project_board(
 def _ready_message(steps: list[AthRulingStep], *, reconsidering: bool) -> str:
     if steps == ["attest"]:
         return "will clear without holding (the agent stays on the board)"
+    if steps == ["close_terminal"]:
+        return (
+            "will close the stranded review as reject; the terminal agent is unchanged"
+        )
     if reconsidering and steps == ["open", "clear"]:
         return "will reopen the rejected review then clear it to its pre-reject status"
     if reconsidering:
@@ -479,7 +486,7 @@ async def _crown_effect(
     action: str,
 ) -> tuple[bool, BoardSnapshot]:
     """Rebuild hypothetical membership before owner collapse and wave folding."""
-    if action == "attest":
+    if action in {"attest", "close_terminal"}:
         return False, board
     removing = action in {"open", "reject"}
     after = await _project_board(
@@ -627,7 +634,26 @@ async def _preview_ruling(
             conflict_reason="score count changed",
             message="score count changed since the ruling was prepared",
         )
-    if ruling.action == "reject" and not ruling.evidence_references:
+    # A pending review behind an agent that is already rejected or banned is
+    # terminal history, not queue work (SN-434). Only a reject agrees with
+    # that state; it closes the review and leaves the agent as it is.
+    stranded_terminal = (
+        review is not None
+        and review.status == "pending"
+        and agent.status in TERMINAL_QUARANTINE_AGENT_STATUSES
+    )
+    terminal_closed = (
+        review is not None
+        and review.status == "resolved"
+        and "terminal_close" in review.algorithm_provenance
+        and agent.status in TERMINAL_QUARANTINE_AGENT_STATUSES
+    )
+    if (
+        ruling.action == "reject"
+        and not ruling.evidence_references
+        and not stranded_terminal
+        and not terminal_closed
+    ):
         return _blocked(
             **base,
             ok=False,
@@ -667,7 +693,12 @@ async def _preview_ruling(
     # open_review reopens exactly that review (``reconsidering_rejection``),
     # retaining the status recorded before the reject so a clear restores it.
     # Any other path into BANNED has no review to reconsider and stays refused.
-    reconsidering = resolved_as == "reject" and agent.status == AgentStatus.BANNED
+    reconsidering = (
+        resolved_as == "reject"
+        and agent.status == AgentStatus.BANNED
+        and review is not None
+        and "terminal_close" not in review.algorithm_provenance
+    )
     steps: list[AthRulingStep]
     if ruling.action == "open":
         if held:
@@ -711,6 +742,11 @@ async def _preview_ruling(
             reason = (
                 "agent is held but its review is not pending"
                 if agent.status == AgentStatus.ATH_PENDING_REVIEW
+                else (
+                    f"agent is {agent.status.value}, not held; a reject ruling"
+                    " closes this stranded review"
+                )
+                if stranded_terminal
                 else f"agent is {agent.status.value}, not held"
             )
             return _blocked(
@@ -723,6 +759,17 @@ async def _preview_ruling(
     else:  # reject
         if held:
             steps = ["reject"]
+        elif stranded_terminal:
+            steps = ["close_terminal"]
+        elif terminal_closed:
+            return _blocked(
+                **base,
+                ok=True,
+                disposition="already_applied",
+                message=(
+                    f"stranded review already closed; agent is {agent.status.value}"
+                ),
+            )
         elif scored_or_live or agent.status == AgentStatus.EVALUATING:
             # Below quorum is accepted too: rejecting a proven violation then
             # expires its live validator tickets instead of paying for the
@@ -746,7 +793,9 @@ async def _preview_ruling(
                 ),
                 message="neither open nor resolve would be accepted",
             )
-    projected_action = "attest" if steps == ["attest"] else ruling.action
+    projected_action = (
+        steps[0] if steps in (["attest"], ["close_terminal"]) else ruling.action
+    )
     if ruling.action == "clear" and review is not None and steps != ["attest"]:
         latest_reopen = await session.scalar(
             select(AthReviewAction)
@@ -980,6 +1029,89 @@ async def _annotate_batch_audit(
             action.evidence = {**action.evidence, "batch_ruling": annotation}
 
 
+async def close_terminal_review(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    expected_sha256: str,
+    expected_score_count: int,
+    reason: str,
+    actor: str,
+) -> None:
+    """Close a pending ATH review stranded behind a terminal agent (SN-434).
+
+    ``resolve_copy_review`` answers 409 once ``agents.status`` has left
+    ``ath_pending_review``, so a review whose agent was rejected or banned by
+    another path stayed pending forever and could not be closed. Under the
+    agent and review row locks this re-checks the previewed state and resolves
+    the review as ``reject`` -- the only resolution that agrees with a terminal
+    agent -- appending one ``reject`` action. The agent row, its scores and
+    the board are untouched; the original hold evidence is retained.
+    """
+    async with session.begin():
+        agent = await session.scalar(
+            select(Agent)
+            .where(Agent.agent_id == agent_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        review = await session.scalar(
+            select(AthReview)
+            .where(AthReview.agent_id == agent_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if review is None or review.status != "pending":
+            raise HTTPException(status_code=409, detail="review is not pending")
+        if agent.status not in TERMINAL_QUARANTINE_AGENT_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"agent is {agent.status.value}, not terminal",
+            )
+        if agent.sha256 != expected_sha256:
+            raise HTTPException(status_code=409, detail="artifact sha256 changed")
+        score_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(Score)
+                .where(Score.agent_id == agent_id)
+            )
+            or 0
+        )
+        if score_count != expected_score_count:
+            raise HTTPException(status_code=409, detail="score count changed")
+        now = datetime.now(UTC)
+        evidence = {
+            "terminal_close": True,
+            "agent_status": agent.status.value,
+            "artifact_sha256": agent.sha256,
+            "score_count": score_count,
+            "review_kind": review.algorithm_provenance.get("review_kind"),
+        }
+        review.status = "resolved"
+        review.resolution = "reject"
+        review.resolution_reason = reason
+        review.resolved_by = actor
+        review.resolved_at = now
+        review.algorithm_provenance = {
+            **review.algorithm_provenance,
+            "terminal_close": evidence,
+        }
+        session.add(
+            AthReviewAction(
+                action_id=uuid4(),
+                review_id=review.review_id,
+                action="reject",
+                reason=reason,
+                actor=actor,
+                evidence=evidence,
+                created_at=now,
+            )
+        )
+
+
 async def _apply_step(
     session: AsyncSession,
     *,
@@ -988,7 +1120,16 @@ async def _apply_step(
     actor: str,
 ) -> None:
     """Apply one step through the review writers, then end their autobegin."""
-    if step == "attest":
+    if step == "close_terminal":
+        await close_terminal_review(
+            session,
+            agent_id=ruling.agent_id,
+            expected_sha256=ruling.expected_sha256,
+            expected_score_count=ruling.expected_score_count,
+            reason=ruling.reason,
+            actor=actor,
+        )
+    elif step == "attest":
         await attest_review(
             ruling.agent_id,
             AdminCopyReviewOpenRequest(
