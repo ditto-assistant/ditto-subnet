@@ -1,0 +1,387 @@
+{
+  "max_value_token_len": 64,
+  "min_string_token_len": 4,
+  "vectors": [
+    {
+      "in": "$4,110.67",
+      "normalized": "$4,110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "**Answer:** $4,110.67",
+      "normalized": "$4,110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "ANSWER: 4110.67 dollars",
+      "normalized": "4110.67 dollars",
+      "tokens": [
+        "4110.67",
+        "dollars"
+      ]
+    },
+    {
+      "in": "Final answer — 4110.67",
+      "normalized": "4110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "- $4,110.67\n- based on the ledger",
+      "normalized": "$4,110.67 based on the ledger",
+      "tokens": [
+        "4110.67",
+        "based",
+        "ledger"
+      ]
+    },
+    {
+      "in": "1. Lisbon\n2. Porto",
+      "normalized": "lisbon porto",
+      "tokens": [
+        "lisbon",
+        "porto"
+      ]
+    },
+    {
+      "in": "`4110.67`",
+      "normalized": "4110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "４１１０.６７",
+      "normalized": "4110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "Lisbon,  since\t2019.",
+      "normalized": "lisbon, since 2019.",
+      "tokens": [
+        "2019",
+        "lisbon",
+        "since"
+      ]
+    },
+    {
+      "in": "José",
+      "normalized": "jose",
+      "tokens": [
+        "jose"
+      ]
+    },
+    {
+      "in": "Ōsaka",
+      "normalized": "osaka",
+      "tokens": [
+        "osaka"
+      ]
+    },
+    {
+      "in": "Zürich",
+      "normalized": "zurich",
+      "tokens": [
+        "zurich"
+      ]
+    },
+    {
+      "in": "Москва",
+      "normalized": "москва",
+      "tokens": [
+        "москва"
+      ]
+    },
+    {
+      "in": "",
+      "normalized": "",
+      "tokens": []
+    },
+    {
+      "in": "4110.67",
+      "normalized": "4110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "4,110.67",
+      "normalized": "4,110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "4110.67 dollars",
+      "normalized": "4110.67 dollars",
+      "tokens": [
+        "4110.67",
+        "dollars"
+      ]
+    },
+    {
+      "in": "**Answer:** $4110.67",
+      "normalized": "$4110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "{\"answer\": \"4110.67\"}",
+      "normalized": "answer 4110.67",
+      "tokens": [
+        "4110.67",
+        "answer"
+      ]
+    },
+    {
+      "in": "final_answer {\"answer\":\"4110.67\",\"unit\":\"USD\"}",
+      "normalized": "final answer answer 4110.67 , unit usd",
+      "tokens": [
+        "4110.67",
+        "answer",
+        "final",
+        "unit"
+      ]
+    },
+    {
+      "in": "USD 4110.670",
+      "normalized": "usd 4110.670",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "411067",
+      "normalized": "411067",
+      "tokens": [
+        "411067"
+      ]
+    },
+    {
+      "in": "411067 cents",
+      "normalized": "411067 cents",
+      "tokens": [
+        "411067",
+        "cents"
+      ]
+    },
+    {
+      "in": "4110",
+      "normalized": "4110",
+      "tokens": [
+        "4110"
+      ]
+    },
+    {
+      "in": "$41,106.70",
+      "normalized": "$41,106.70",
+      "tokens": [
+        "41106.7"
+      ]
+    },
+    {
+      "in": "Jose",
+      "normalized": "jose",
+      "tokens": [
+        "jose"
+      ]
+    },
+    {
+      "in": "Osaka",
+      "normalized": "osaka",
+      "tokens": [
+        "osaka"
+      ]
+    },
+    {
+      "in": "Zurich",
+      "normalized": "zurich",
+      "tokens": [
+        "zurich"
+      ]
+    },
+    {
+      "in": "Ｔｏｋｙｏ",
+      "normalized": "tokyo",
+      "tokens": [
+        "tokyo"
+      ]
+    },
+    {
+      "in": "tokyo",
+      "normalized": "tokyo",
+      "tokens": [
+        "tokyo"
+      ]
+    },
+    {
+      "in": "東京都新宿区",
+      "normalized": "東京都新宿区",
+      "tokens": [
+        "東京都新宿区"
+      ]
+    },
+    {
+      "in": "Ōsa",
+      "normalized": "osa",
+      "tokens": []
+    },
+    {
+      "in": "Result: 411067",
+      "normalized": "411067",
+      "tokens": [
+        "411067"
+      ]
+    },
+    {
+      "in": "**Answer:** the total was $4,110.67 — Lisbon’s share.",
+      "normalized": "the total was $4,110.67 lisbon s share.",
+      "tokens": [
+        "4110.67",
+        "lisbon",
+        "share",
+        "total"
+      ]
+    },
+    {
+      "in": "Ánswer: 1234",
+      "normalized": "1234",
+      "tokens": [
+        "1234"
+      ]
+    },
+    {
+      "in": "fınal answer: 4110.67",
+      "normalized": "fınal answer 4110.67",
+      "tokens": [
+        "4110.67",
+        "answer",
+        "fınal"
+      ]
+    },
+    {
+      "in": "ﬁnal answer: 4110.67",
+      "normalized": "4110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "Ａｎｓｗｅｒ：４１１０.６７",
+      "normalized": "4110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "\u000bAnswer: 4110.67",
+      "normalized": "answer 4110.67",
+      "tokens": [
+        "4110.67",
+        "answer"
+      ]
+    },
+    {
+      "in": "Answer: $4,110.67",
+      "normalized": "$4,110.67",
+      "tokens": [
+        "4110.67"
+      ]
+    },
+    {
+      "in": "İstanbul",
+      "normalized": "istanbul",
+      "tokens": [
+        "istanbul"
+      ]
+    },
+    {
+      "in": "Straße",
+      "normalized": "straße",
+      "tokens": [
+        "straße"
+      ]
+    },
+    {
+      "in": "ΣΟΦΙΑ Ελλάδα",
+      "normalized": "σοφια ελλαδα",
+      "tokens": [
+        "ελλαδα",
+        "σοφια"
+      ]
+    },
+    {
+      "in": "Kelvin",
+      "normalized": "kelvin",
+      "tokens": [
+        "kelvin"
+      ]
+    },
+    {
+      "in": "Café au lait",
+      "normalized": "cafe au lait",
+      "tokens": [
+        "cafe",
+        "lait"
+      ]
+    },
+    {
+      "in": "٣٤٥٦",
+      "normalized": "٣٤٥٦",
+      "tokens": [
+        "٣٤٥٦"
+      ]
+    },
+    {
+      "in": "x² + ½ and Ⅻ chapters",
+      "normalized": "x2 1 2 and xii chapters",
+      "tokens": [
+        "1",
+        "2",
+        "chapters"
+      ]
+    },
+    {
+      "in": "नमस्ते",
+      "normalized": "नमसत",
+      "tokens": [
+        "नमसत"
+      ]
+    },
+    {
+      "in": "กรุงเทพมหานคร",
+      "normalized": "กรงเทพมหานคร",
+      "tokens": [
+        "กรงเทพมหานคร"
+      ]
+    },
+    {
+      "in": "서울특별시",
+      "normalized": "서울특별시",
+      "tokens": [
+        "서울특별시"
+      ]
+    },
+    {
+      "in": "Достопримечательностьдостопримечательность",
+      "normalized": "достопримечательностьдостопримечательность",
+      "tokens": []
+    },
+    {
+      "in": "-0.50 and -$1,000.00",
+      "normalized": "-0.50 and -$1,000.00",
+      "tokens": [
+        "-0.5",
+        "-1000"
+      ]
+    }
+  ]
+}
