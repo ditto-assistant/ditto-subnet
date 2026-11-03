@@ -858,9 +858,14 @@ async def advance_seasons(
     try:
         async with session.begin_nested():
             notes.extend(await sync_generator_source_releases(session, now=now))
-            notes.extend(await prune_released_slice_bytes(session, now=now))
     except Exception:  # noqa: BLE001 - a release sync never blocks seasons
         logger.exception("dueling seasons: generator source release sync failed")
+    # 6. Prune slice bytes anyone can now regenerate, in its own savepoint.
+    try:
+        async with session.begin_nested():
+            notes.extend(await prune_released_slice_bytes(session, now=now))
+    except Exception:  # noqa: BLE001 - pruning never blocks seasons
+        logger.exception("dueling seasons: slice byte prune failed")
     for note in notes:
         logger.info("dueling seasons: %s", note)
     return notes
