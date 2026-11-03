@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import tarfile
+import zlib
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -159,7 +160,8 @@ def artifact_profile(tar_bytes: bytes) -> dict[str, Any]:
             # Include trailing padding/metadata in the budget and verify gzip CRC.
             while reader.read(64 * 1024):
                 pass
-    except (tarfile.TarError, OSError, EOFError) as error:
+    # zlib.error is not an OSError; tarfile wraps it only while reading a header.
+    except (tarfile.TarError, OSError, EOFError, zlib.error) as error:
         raise ProfileUnavailable("Observation archive is unreadable.") from error
     runtime = sorted(
         value for path, value in members.items() if path not in _PACKAGING_FILES

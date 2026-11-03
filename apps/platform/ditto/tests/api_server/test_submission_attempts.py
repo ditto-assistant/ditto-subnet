@@ -3,6 +3,7 @@
 import gzip
 import io
 import tarfile
+import zlib
 
 import pytest
 from pydantic import ValidationError
@@ -117,6 +118,29 @@ def test_duplicate_normalized_paths_and_symlinks_are_unavailable():
 def test_unreadable_or_empty_runtime_is_inconclusive(data):
     with pytest.raises(attempts.ProfileUnavailable):
         attempts.artifact_profile(data)
+
+
+def test_corrupt_deflate_stream_is_inconclusive():
+    # zlib.error is not an OSError, and tarfile only wraps it while reading a
+    # header. A bad deflate block inside a member must still read as an
+    # unavailable profile rather than escape the comparison.
+    tar = io.BytesIO()
+    with tarfile.open(fileobj=tar, mode="w") as archive_out:
+        body = source("memory") * 64
+        member = tarfile.TarInfo("main.py")
+        member.size = len(body)
+        archive_out.addfile(member, io.BytesIO(body))
+    # The header and well past tarfile's first buffered read stay intact, so
+    # the bad block is only met while the member's data is read.
+    head = tar.getvalue()[: 4 * tarfile.RECORDSIZE]
+    stored = b"\x00" + len(head).to_bytes(2, "little")
+    stored += (len(head) ^ 0xFFFF).to_bytes(2, "little") + head
+    gzip_header = b"\x1f\x8b\x08\x00" + b"\x00" * 4 + b"\x00\xff"
+    corrupt = gzip_header + stored + b"\x07" + b"\x00" * 16  # reserved block type
+    with pytest.raises(zlib.error):
+        gzip.decompress(corrupt)
+    with pytest.raises(attempts.ProfileUnavailable, match="archive is unreadable"):
+        attempts.artifact_profile(corrupt)
 
 
 def test_policy_records_provenance_and_cannot_grant_clearance(monkeypatch):
