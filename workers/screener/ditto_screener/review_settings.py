@@ -26,6 +26,14 @@ ReviewModel = Literal[
     "openai/gpt-5.6-sol",
 ]
 SourceReviewModel = Literal["openai/gpt-5.6-luna", "openai/gpt-6-luna"]
+# Platform-managed L3 failover chain and raw-input cap. Both defaults match
+# Platform's, which omits each from the checksum while it holds its default.
+DEFAULT_L3_FALLBACK_MODELS: tuple[ReviewModel, ...] = (
+    "openai/gpt-6.1-terra",
+    "z-ai/glm-5.2",
+)
+DEFAULT_L3_MAX_RAW_INPUT_TOKENS = 12_000_000
+_L3_BUDGET_FIELDS: tuple[str, ...] = ("l3_fallback_models", "l3_max_raw_input_tokens")
 FanoutShadowModel = Literal["z-ai/glm-5.3-flash"]
 
 MAX_SHADOW_PROVIDER_STAGES = 50
@@ -176,6 +184,12 @@ class ReviewSettings(BaseModel):
         "openai/gpt-6.1-terra",
         "openai/gpt-6.1-sol",
     ]
+    l3_fallback_models: Annotated[tuple[ReviewModel, ...], Field(max_length=2)] = (
+        DEFAULT_L3_FALLBACK_MODELS
+    )
+    l3_max_raw_input_tokens: Annotated[int, Field(ge=100_000, le=50_000_000)] = (
+        DEFAULT_L3_MAX_RAW_INPUT_TOKENS
+    )
     timeout_seconds: Annotated[int, Field(ge=30, le=3_600)]
     max_steps: Annotated[int, Field(ge=1, le=256)]
     source_review_max_steps: Annotated[int, Field(ge=1, le=240)] = 200
@@ -256,7 +270,7 @@ class ReviewSettings(BaseModel):
             )
         return value
 
-    @field_validator("l2_fallback_models", mode="before")
+    @field_validator("l2_fallback_models", "l3_fallback_models", mode="before")
     @classmethod
     def accept_json_model_chain(cls, value: object) -> object:
         if isinstance(value, list):
@@ -271,6 +285,8 @@ class ReviewSettings(BaseModel):
         chain = (self.l2_model, *self.l2_fallback_models)
         if len(chain) != len(set(chain)):
             raise ValueError("L2 model chain must not contain duplicates")
+        if len(self.l3_fallback_models) != len(set(self.l3_fallback_models)):
+            raise ValueError("L3 fallback chain must not contain duplicates")
         if self.max_completion_tokens > self.max_output_tokens:
             raise ValueError("completion budget must not exceed output budget")
         if (
@@ -286,6 +302,22 @@ class ReviewSettings(BaseModel):
         ):
             raise ValueError("shadow mode requires an exact trusted image source SHA")
         return self
+
+
+def _drop_default_l3_budget(
+    settings: ReviewSettings, payload: dict[str, object]
+) -> dict[str, object]:
+    """Omit default L3 controls, exactly as Platform hashes them.
+
+    Every revision minted before the controls existed lacks both keys, and a
+    revision that leaves them at the default is hashed without them so workers
+    that predate them still verify it. Every legacy shape below starts from
+    this payload, so the replay is unchanged for those revisions.
+    """
+    for name in _L3_BUDGET_FIELDS:
+        if getattr(settings, name) == ReviewSettings.model_fields[name].default:
+            payload.pop(name, None)
+    return payload
 
 
 # Ordered oldest-first by the revision in which each control was introduced.
@@ -359,10 +391,21 @@ class EffectiveReviewSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_checksum(self) -> EffectiveReviewSettings:
-        current = self.settings.model_dump(mode="json")
+        full = self.settings.model_dump(mode="json")
+        if self._checksum_matches(dict(full)):
+            return self
+        # Platform omits default L3 controls from the checksum (see
+        # ``_drop_default_l3_budget``); replay every shape without them too.
+        without_l3 = _drop_default_l3_budget(self.settings, dict(full))
+        if without_l3 != full and self._checksum_matches(without_l3):
+            return self
+        raise ValueError("review settings checksum mismatch")
+
+    def _checksum_matches(self, current: dict[str, object]) -> bool:
+        """Whether ``current`` (or a legacy shape derived from it) is hashed."""
         payload = json.dumps(current, sort_keys=True, separators=(",", ":")).encode()
         if hashlib.sha256(payload).hexdigest() == self.checksum:
-            return self
+            return True
         inactive_probe = _inactive_probe_fields(self.settings)
         if inactive_probe:
             # Platform hashes an inactive battery or reviewer in the shape that
@@ -374,7 +417,7 @@ class EffectiveReviewSettings(BaseModel):
                 current, sort_keys=True, separators=(",", ":")
             ).encode()
             if hashlib.sha256(payload).hexdigest() == self.checksum:
-                return self
+                return True
         if self.settings.adjudicator_max_completion_tokens is None:
             # Platform omits an inherited cap from the checksum so existing
             # immutable revisions keep verifying across a rolling deploy.
@@ -383,7 +426,7 @@ class EffectiveReviewSettings(BaseModel):
                 current, sort_keys=True, separators=(",", ":")
             ).encode()
             if hashlib.sha256(payload).hexdigest() == self.checksum:
-                return self
+                return True
 
         # Platform deliberately hashes an inactive fan-out block in the legacy
         # shape. Old native workers ignore these new response fields, so this
@@ -411,7 +454,7 @@ class EffectiveReviewSettings(BaseModel):
                     shape, sort_keys=True, separators=(",", ":")
                 ).encode()
                 if hashlib.sha256(candidate).hexdigest() == self.checksum:
-                    return self
+                    return True
 
         # A revision minted before a control existed cannot carry that key in
         # the canonical JSON its immutable checksum was taken over, so replay
@@ -430,7 +473,7 @@ class EffectiveReviewSettings(BaseModel):
             return False
 
         if matches_legacy(dict(current)):
-            return self
+            return True
         # Manifest selectors postdate every legacy revision. Their inferred
         # values intentionally depend on mode, so they cannot use the static
         # default-only replay below.
@@ -439,10 +482,8 @@ class EffectiveReviewSettings(BaseModel):
         legacy.pop("policy_manifest_rotation_id", None)
         candidate = json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
         if hashlib.sha256(candidate).hexdigest() == self.checksum:
-            return self
-        if matches_legacy(legacy):
-            return self
-        raise ValueError("review settings checksum mismatch")
+            return True
+        return matches_legacy(legacy)
 
     def apply_to(self, config: ScreenerConfig) -> ScreenerConfig:
         value = self.settings
@@ -453,6 +494,8 @@ class EffectiveReviewSettings(BaseModel):
             l2_fallback_models=value.l2_fallback_models,
             l3_review_enabled=value.l3_enabled,
             l3_review_model=value.l3_model,
+            l3_fallback_models=value.l3_fallback_models,
+            l3_max_raw_input_tokens=value.l3_max_raw_input_tokens,
             l2_timeout_seconds=float(value.timeout_seconds),
             l2_max_steps=value.max_steps,
             source_review_max_steps=value.source_review_max_steps,
@@ -531,6 +574,8 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "l2_fallback_models": config.l2_fallback_models,
             "l3_enabled": config.l3_review_enabled,
             "l3_model": config.l3_review_model,
+            "l3_fallback_models": config.l3_fallback_models,
+            "l3_max_raw_input_tokens": config.l3_max_raw_input_tokens,
             "timeout_seconds": int(config.l2_timeout_seconds),
             "max_steps": config.l2_max_steps,
             "source_review_max_steps": config.source_review_max_steps,
@@ -563,7 +608,7 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "policy_manifest_rotation_id": "policy-v10-bootstrap",
         }
     )
-    canonical = settings.model_dump(mode="json")
+    canonical = _drop_default_l3_budget(settings, settings.model_dump(mode="json"))
     if settings.adjudicator_max_completion_tokens is None:
         canonical.pop("adjudicator_max_completion_tokens")
     # Same shape Platform hashes for an inactive battery or reviewer.

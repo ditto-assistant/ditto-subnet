@@ -20,6 +20,8 @@ const defaults: ScreenerReviewSettings = {
   l2_fallback_models: ['z-ai/glm-5.2', 'openai/gpt-5.6-sol'],
   l3_enabled: true,
   l3_model: 'openai/gpt-5.6-sol',
+  l3_fallback_models: ['openai/gpt-6.1-terra', 'z-ai/glm-5.2'],
+  l3_max_raw_input_tokens: 12_000_000,
   timeout_seconds: 900,
   max_steps: 18,
   source_review_max_steps: 200,
@@ -761,6 +763,7 @@ export function ScreenerReviewControlPanel({
                 </select>
               </label>
               <NumericField label="Max effective input tokens (cached counts 10%)" value={settings.max_input_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_input_tokens: value }))} />
+              <NumericField label="L3 max raw input tokens (all L3 turns)" value={settings.l3_max_raw_input_tokens} onChange={(value) => setSettings((current) => ({ ...current, l3_max_raw_input_tokens: value }))} />
               <NumericField label="Max output tokens" value={settings.max_output_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_output_tokens: value }))} />
               <NumericField label="Completion cap" value={settings.max_completion_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_completion_tokens: value }))} />
               <NumericField label="Max cost (USD)" value={settings.max_cost_usd} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, max_cost_usd: value }))} />
@@ -806,6 +809,29 @@ export function ScreenerReviewControlPanel({
                   <option value="openai/gpt-6.1-sol">GPT-6.1 Sol</option>
                 </select>
               </label>
+              {[0, 1].map((index) => (
+                <label key={index} className="block text-xs text-[var(--muted)]">
+                  L3 fallback {index + 1}
+                  <select
+                    value={settings.l3_fallback_models[index] ?? ''}
+                    onChange={(event) => {
+                      const next = [...settings.l3_fallback_models]
+                      next[index] = event.target.value as ScreenerReviewSettings['l2_model']
+                      setSettings((current) => ({ ...current, l3_fallback_models: next }))
+                    }}
+                    disabled={readOnly || loading || settings.mode === 'inherit'}
+                    className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white disabled:opacity-40"
+                  >
+                    <option value="openai/gpt-6.1-terra">GPT-6.1 Terra</option>
+                    <option value="z-ai/glm-5.2">GLM 5.2</option>
+                    <option value="openai/gpt-6.1-sol">GPT-6.1 Sol</option>
+                    <option value="openai/gpt-6-sol">GPT-6 Sol</option>
+                    <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
+                    <option value="moonshotai/kimi-k3">Kimi K3</option>
+                    <option value="openai/gpt-5.6-sol">GPT-5.6 SOL</option>
+                  </select>
+                </label>
+              ))}
               <button
                 type="button"
                 role="switch"

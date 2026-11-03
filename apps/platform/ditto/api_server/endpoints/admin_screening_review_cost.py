@@ -245,6 +245,9 @@ async def get_screening_review_budget(
             l2_timeout_seconds=settings.timeout_seconds,
             adjudicator_max_steps=settings.adjudicator_max_steps,
             adjudicator_timeout_seconds=settings.adjudicator_timeout_seconds,
+            l3_model=settings.l3_model,
+            l3_fallback_models=list(settings.l3_fallback_models),
+            l3_max_raw_input_tokens=settings.l3_max_raw_input_tokens,
         )
         if settings is not None and revision is not None
         else None

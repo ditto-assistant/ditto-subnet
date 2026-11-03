@@ -15274,6 +15274,13 @@ class TestReviewUsage:
         # L1 is outside the L2 aggregate budget: 0.5M uncached + 10% of 1M.
         assert body["l2_aggregate"]["effective_input_tokens"] == 600_000
         assert body["limits"]["max_input_tokens"] == 500_000
+        # The pinned L3 chain and its L3-only raw cap are visible per attempt.
+        assert body["limits"]["l3_model"] == "openai/gpt-5.6-sol"
+        assert body["limits"]["l3_fallback_models"] == [
+            "openai/gpt-6.1-terra",
+            "z-ai/glm-5.2",
+        ]
+        assert body["limits"]["l3_max_raw_input_tokens"] == 12_000_000
         assert body["exceeded_limits"] == ["input"]
         assert body["budget_stop"]["tripped"] == ["input"]
         lineage = body["lineage"]

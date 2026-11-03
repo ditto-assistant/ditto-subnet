@@ -2402,6 +2402,28 @@ describe('screener review settings schemas', () => {
     })).toThrow()
   })
 
+  it('defaults the L3 fallback chain to modern models and bounds the L3 raw cap', () => {
+    const parsed = screenerReviewSettingsSchema.parse(settings)
+    expect(parsed.l3_fallback_models).toEqual(['openai/gpt-6.1-terra', 'z-ai/glm-5.2'])
+    expect(parsed.l3_fallback_models).not.toContain('openai/gpt-5.6-sol')
+    expect(parsed.l3_max_raw_input_tokens).toBe(12_000_000)
+    const custom = screenerReviewSettingsSchema.parse({
+      ...settings,
+      l3_fallback_models: ['z-ai/glm-5.2'],
+      l3_max_raw_input_tokens: 8_000_000,
+    })
+    expect(custom.l3_fallback_models).toEqual(['z-ai/glm-5.2'])
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, l3_fallback_models: ['z-ai/glm-5.2', 'z-ai/glm-5.2'],
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, l3_fallback_models: ['z-ai/glm-5.2', 'openai/gpt-6.1-terra', 'openai/gpt-6-sol'],
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, l3_max_raw_input_tokens: 50_000_001,
+    })).toThrow()
+  })
+
   it('parses current, history, and signed worker application status', () => {
     const parsed = screenerReviewControlSchema.parse({
       current: [],

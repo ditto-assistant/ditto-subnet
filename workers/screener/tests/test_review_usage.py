@@ -204,6 +204,93 @@ async def test_l3_budget_trip_records_the_tripped_limit_and_stage_wall_time(
     assert entry.stage == "l3_adjudicator" and entry.wall_ms is not None
 
 
+async def test_l3_raw_input_cap_stops_a_runaway_l3_as_a_budget_stop(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    monkeypatch.setattr(agent, "_l3_max_raw_input_tokens", 500_000)
+
+    async def post(*_args: object, **_kwargs: object) -> httpx.Response:
+        # Nearly all cached: 1k uncached + 39.9k (10% of 399k) = 40.9k billable,
+        # inside the 80k effective budget, but 400k raw on the wire.
+        return _response([], input_tokens=400_000, cached_tokens=399_000, cost=0.0)
+
+    monkeypatch.setattr(agent, "_post", post)
+    with collect_review_usage() as usage:
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(l2_review.L2TrajectoryError, match="total-budget"):
+                await agent._run_trajectory(
+                    client,
+                    "test-key",
+                    tmp_path,
+                    None,  # type: ignore[arg-type]
+                    artifact_sha256="d" * 64,
+                    dossier={"source": "x"},
+                    role="adjudicator",
+                    reasoning_effort="model_default",
+                    model="openai/gpt-6.1-sol",
+                    fallback_models=(),
+                    provider="azure",
+                    usage_before=l2_review.L2Usage(input_tokens=20_000),
+                    deadline=None,
+                    dossier_complete=True,
+                    # The critic already sent 200k raw input in this review.
+                    l3_raw_input_before=200_000,
+                )
+    stop = usage.budget_stop
+    assert stop is not None
+    assert (stop.stage, stop.code, stop.tripped) == (
+        "l3_adjudicator",
+        "model-total-budget",
+        ["raw_input"],
+    )
+    # The raw fields name the L3-only count and cap; the rest stay aggregate.
+    assert (stop.raw_input_tokens, stop.max_raw_input_tokens) == (600_000, 500_000)
+    assert stop.effective_input_tokens == 20_000 + 1_000 + 39_900
+
+
+async def test_l3_raw_input_cap_does_not_bound_the_l2_analyst(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    monkeypatch.setattr(agent, "_l3_max_raw_input_tokens", 100_000)
+    calls = 0
+
+    async def post(*_args: object, **_kwargs: object) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _response([], input_tokens=400_000, cached_tokens=399_000, cost=0.0)
+        # Second turn: trip the ordinary effective-input budget instead.
+        return _response([], input_tokens=100_000, cached_tokens=0, cost=0.0)
+
+    monkeypatch.setattr(agent, "_post", post)
+    with collect_review_usage() as usage:
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(l2_review.L2TrajectoryError, match="total-budget"):
+                await agent._run_trajectory(
+                    client,
+                    "test-key",
+                    tmp_path,
+                    None,  # type: ignore[arg-type]
+                    artifact_sha256="d" * 64,
+                    dossier={"source": "x"},
+                    role="analyst",
+                    reasoning_effort="model_default",
+                    model="openai/gpt-6.1-sol",
+                    fallback_models=(),
+                    provider="azure",
+                    usage_before=l2_review.L2Usage(),
+                    deadline=None,
+                    dossier_complete=True,
+                )
+    # The 400k-raw first turn passed; only the effective budget stopped it.
+    assert calls == 2
+    stop = usage.budget_stop
+    assert stop is not None and stop.tripped == ["input"]
+    assert stop.max_raw_input_tokens == l2_review._MAX_AGGREGATE_RAW_INPUT_TOKENS
+
+
 class _UsageGate(_FakeGate):
     async def screen(self, **kwargs: Any) -> Any:  # type: ignore[override]
         record_usage(

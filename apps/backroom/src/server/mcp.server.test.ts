@@ -1002,7 +1002,10 @@ describe('Backroom MCP tools', () => {
     // The guarded dueling season commitment republish (uuid, reason,
     // confirmation; one-line summary, detail in tool help) measures 234,365
     // bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(234_900)
+    // The L3 fallback chain and L3 raw-input cap on the screener review
+    // settings write (one enum array, one bounded int) add 33 bytes; keep
+    // about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(234_950)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

@@ -89,6 +89,12 @@ class ScreeningReviewBudgetLimits(BaseModel):
     l2_timeout_seconds: int
     adjudicator_max_steps: int
     adjudicator_timeout_seconds: int
+    # The pinned revision's L3 model chain and raw-input cap across its L3
+    # trajectories. Workers released before these controls existed ran the
+    # older fixed chain and no L3-only cap.
+    l3_model: str | None = None
+    l3_fallback_models: list[str] = []
+    l3_max_raw_input_tokens: int | None = None
 
 
 class ScreeningReviewL2Aggregate(BaseModel):

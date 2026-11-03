@@ -13,7 +13,11 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
-from ditto.api_models.screener_review_settings import policy_manifest_digest
+from ditto.api_models.screener_review_settings import (
+    ScreenerReviewSettings,
+    policy_manifest_digest,
+    review_settings_checksum,
+)
 from ditto.api_server.dependencies import get_session
 from ditto.db.models import ScreenerHeartbeat, ScreenerNode
 
@@ -273,6 +277,69 @@ async def test_gpt61_sol_review_chain_is_accepted(
         json=payload,
     )
     assert rejected.status_code == 422
+
+
+async def test_l3_fallback_chain_and_raw_cap_are_operator_settings(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, settings_maker)
+    payload = _payload("*", "enforce")
+    response = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=payload,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Omitted controls take the modern defaults, never GPT-5.6 SOL.
+    assert body["settings"]["l3_fallback_models"] == [
+        "openai/gpt-6.1-terra",
+        "z-ai/glm-5.2",
+    ]
+    assert body["settings"]["l3_max_raw_input_tokens"] == 12_000_000
+    # Default L3 controls are hashed in the shape that predates them, so
+    # workers released before them keep verifying the revision.
+    legacy = dict(body["settings"])
+    legacy.pop("l3_fallback_models")
+    legacy.pop("l3_max_raw_input_tokens")
+    assert body["checksum"] == review_settings_checksum(
+        ScreenerReviewSettings.model_validate(
+            {**legacy, "l2_fallback_models": tuple(legacy["l2_fallback_models"])}
+        )
+    )
+
+    settings = payload["settings"]
+    assert isinstance(settings, dict)
+    settings.update(
+        l3_fallback_models=["z-ai/glm-5.2"], l3_max_raw_input_tokens=8_000_000
+    )
+    payload["expected_revision"] = body["revision"]
+    changed = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=payload,
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["settings"]["l3_fallback_models"] == ["z-ai/glm-5.2"]
+    assert changed.json()["checksum"] != body["checksum"]
+
+    payload["expected_revision"] = changed.json()["revision"]
+    for invalid in (
+        {"l3_fallback_models": ["z-ai/glm-5.2", "z-ai/glm-5.2"]},
+        {"l3_fallback_models": ["openai/gpt-6.1-luna"]},
+        {"l3_max_raw_input_tokens": 50_000_001},
+    ):
+        settings.update(l3_fallback_models=["z-ai/glm-5.2"])
+        settings.update(l3_max_raw_input_tokens=8_000_000)
+        settings.update(invalid)
+        rejected = await client.post(
+            "/api/v1/admin/screener-review-settings",
+            headers=_ADMIN_HEADERS,
+            json=payload,
+        )
+        assert rejected.status_code == 422, invalid
 
 
 async def test_admin_read_is_authenticated_and_history_is_append_only(

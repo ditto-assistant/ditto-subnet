@@ -101,6 +101,43 @@ def test_gpt61_sol_is_valid_for_l2_and_l3(monkeypatch: pytest.MonkeyPatch) -> No
     assert config.l3_review_model == "openai/gpt-6.1-sol"
 
 
+def test_l3_fallback_chain_and_raw_cap_default_and_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _base_env(monkeypatch)
+    config = parse_screener_config_from_env()
+    assert config.l3_fallback_models == ("openai/gpt-6.1-terra", "z-ai/glm-5.2")
+    assert "openai/gpt-5.6-sol" not in config.l3_fallback_models
+    assert config.l3_max_raw_input_tokens == 12_000_000
+    monkeypatch.setenv("SCREENER_L3_FALLBACK_MODELS", "z-ai/glm-5.2")
+    monkeypatch.setenv("SCREENER_L3_MAX_RAW_INPUT_TOKENS", "8000000")
+    config = parse_screener_config_from_env()
+    assert config.l3_fallback_models == ("z-ai/glm-5.2",)
+    assert config.l3_max_raw_input_tokens == 8_000_000
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("SCREENER_L3_FALLBACK_MODELS", "openai/gpt-5.6-luna"),
+        ("SCREENER_L3_FALLBACK_MODELS", "z-ai/glm-5.2,z-ai/glm-5.2"),
+        (
+            "SCREENER_L3_FALLBACK_MODELS",
+            "z-ai/glm-5.2,openai/gpt-6.1-terra,moonshotai/kimi-k3",
+        ),
+        ("SCREENER_L3_MAX_RAW_INPUT_TOKENS", "99999"),
+        ("SCREENER_L3_MAX_RAW_INPUT_TOKENS", "50000001"),
+    ],
+)
+def test_l3_fallback_chain_and_raw_cap_are_bounded(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ScreenerConfigError, match=name):
+        parse_screener_config_from_env()
+
+
 def test_signed_runtime_lease_requires_explicit_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

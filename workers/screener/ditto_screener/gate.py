@@ -1196,6 +1196,8 @@ class BuildGate:
             l3_enabled=config.l3_review_enabled,
             critic_model=config.l3_review_model,
             critic_provider=config.l3_review_provider,
+            critic_fallback_models=config.l3_fallback_models,
+            l3_max_raw_input_tokens=config.l3_max_raw_input_tokens,
             # A relayed transport-class fault (rate limit, overloaded, 5xx in a
             # 200 body) on one turn used to discard every completed analyst,
             # critic and adjudicator turn of a ~20 minute review and park the

@@ -4420,9 +4420,21 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
         "data_collection": "deny",
     }
     assert "reasoning" not in requests[0]
-    assert requests[1]["models"] == ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
-    assert requests[2]["models"] == ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
-    assert requests[3]["models"] == ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
+    assert requests[1]["models"] == [
+        "openai/gpt-5.6-sol",
+        "openai/gpt-6.1-terra",
+        "z-ai/glm-5.2",
+    ]
+    assert requests[2]["models"] == [
+        "openai/gpt-5.6-sol",
+        "openai/gpt-6.1-terra",
+        "z-ai/glm-5.2",
+    ]
+    assert requests[3]["models"] == [
+        "openai/gpt-5.6-sol",
+        "openai/gpt-6.1-terra",
+        "z-ai/glm-5.2",
+    ]
     assert "only" not in requests[1]["provider"]  # type: ignore[operator]
     assert requests[1]["provider"]["allow_fallbacks"] is True  # type: ignore[index]
     assert requests[1]["provider"]["sort"] == "throughput"  # type: ignore[index]
@@ -4594,7 +4606,11 @@ fn run() -> Answer {
     assert len(requests) == 4
     assert "model" not in requests[0]
     assert requests[0]["models"] == [L2_MODEL, *L2_FALLBACK_MODELS]
-    assert requests[1]["models"] == ["openai/gpt-5.6-sol", "moonshotai/kimi-k3"]
+    assert requests[1]["models"] == [
+        "openai/gpt-5.6-sol",
+        "openai/gpt-6.1-terra",
+        "z-ai/glm-5.2",
+    ]
     assert result.observation.risk_level == "low"
     assert result.observation.clearance_certified is True
     assert result.clearance_path == "l3_adjudicated_safe"
@@ -7644,9 +7660,17 @@ def test_l3_fallback_chain_excludes_the_primary_and_pinned_providers(
     assert agent(critic_model="openai/gpt-6-sol")._critic_fallback_models == (
         l2_review.L3_FALLBACK_MODELS
     )
-    assert agent(critic_model="openai/gpt-5.6-sol")._critic_fallback_models == (
-        "moonshotai/kimi-k3",
-    )
+    assert l2_review.L3_FALLBACK_MODELS == ("openai/gpt-6.1-terra", "z-ai/glm-5.2")
+    assert "openai/gpt-5.6-sol" not in l2_review.L3_FALLBACK_MODELS
+    # A Platform chain naming the L3 model itself skips that copy.
+    assert agent(
+        critic_model="openai/gpt-6.1-terra",
+        critic_fallback_models=("openai/gpt-6.1-terra", "z-ai/glm-5.2"),
+    )._critic_fallback_models == ("z-ai/glm-5.2",)
+    assert agent(
+        critic_model="openai/gpt-6.1-sol",
+        critic_fallback_models=("openai/gpt-6.1-terra", "z-ai/glm-5.2"),
+    )._critic_fallback_models == ("openai/gpt-6.1-terra", "z-ai/glm-5.2")
     assert agent(critic_provider="azure")._critic_fallback_models == ()
 
 
