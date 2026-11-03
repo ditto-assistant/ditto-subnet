@@ -5,10 +5,15 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from ditto.db.models import InferenceGrant
 
 WINDOWS_SECONDS = (60, 300, 900, 3600)
 
@@ -215,3 +220,79 @@ async def load_inference_runtime_rows(
     windows = (await session.execute(text(WINDOWS_SQL))).mappings().all()
     peaks = (await session.execute(text(PEAKS_SQL))).mappings().all()
     return current, windows, peaks
+
+
+LeaseSlotKey = tuple[str, str, UUID]
+"""``(validator_hotkey, slot_id, agent_id)`` of one live lease."""
+
+
+@dataclass(frozen=True)
+class LeaseInferenceActivity:
+    """Hosted-inference traffic one live lease's grant has served so far."""
+
+    chat_requests: int
+    embedding_requests: int
+    last_activity_at: datetime | None
+    """When the grant last began or finished a request; ``None`` before any."""
+
+
+async def load_live_lease_inference_activity(
+    session: AsyncSession, *, now: datetime
+) -> dict[LeaseSlotKey, LeaseInferenceActivity]:
+    """Per-slot inference activity of every live grant.
+
+    A harness that is calling the relay is past artifact preparation, whatever
+    stage its validator last signed. That is the only evidence the platform
+    holds that a lease whose heartbeat carries no counts (a generator-round run
+    from a validator before it forwarded scorer progress) is executing rather
+    than wedged. The grant row's ``updated_at`` moves on every request begin
+    and finish, so this is one scan of the live grants (a few dozen rows, the
+    same predicate as ``CURRENT_SQL``) and never touches the request ledger.
+
+    When one slot somehow carries two live grants, the most recently active
+    one wins: it is the lease the validator is running.
+    """
+    rows = (
+        await session.execute(
+            select(
+                InferenceGrant.validator_hotkey,
+                InferenceGrant.slot_id,
+                InferenceGrant.agent_id,
+                InferenceGrant.request_count,
+                InferenceGrant.embedding_request_count,
+                InferenceGrant.decision_request_count,
+                InferenceGrant.updated_at,
+            ).where(
+                InferenceGrant.status == "active",
+                InferenceGrant.expires_at > now,
+            )
+        )
+    ).all()
+    activity: dict[LeaseSlotKey, LeaseInferenceActivity] = {}
+    selected_updated_at: dict[LeaseSlotKey, datetime | None] = {}
+    for hotkey, slot_id, agent_id, chat, embedding, decision, updated_at in rows:
+        touched = (
+            updated_at.replace(tzinfo=UTC)
+            if updated_at is not None and updated_at.tzinfo is None
+            else updated_at
+        )
+        # Activation also bumps ``updated_at``; only a grant that has served
+        # a request (chat, embedding or decision lane) is evidence of a
+        # running harness.
+        served = int(chat or 0) + int(embedding or 0) + int(decision or 0)
+        entry = LeaseInferenceActivity(
+            chat_requests=int(chat or 0),
+            embedding_requests=int(embedding or 0),
+            last_activity_at=touched if served > 0 else None,
+        )
+        key = (str(hotkey), str(slot_id), agent_id)
+        previous = selected_updated_at.get(key)
+        # The most recently touched grant is the lease the validator runs,
+        # even when it has not served a request yet: an older grant's traffic
+        # must never vouch for a re-issued lease.
+        if key not in activity or (
+            touched is not None and (previous is None or touched >= previous)
+        ):
+            activity[key] = entry
+            selected_updated_at[key] = touched
+    return activity

@@ -50,7 +50,15 @@ check progress, the oldest active-era submission that passes the fleet-wide
 queue filter and holds no lease, and live chat and embedding load against the
 global concurrency limit. `checks_per_minute` and
 `estimated_remaining_slot_minutes` are estimates measured from ticket issue to
-the latest heartbeat, and they are null, never zero, until a check completes. The
+the latest heartbeat, and they are null, never zero, until a check completes.
+Each lease also carries its live hosted-inference grant's
+`inference_chat_requests`, `inference_embedding_requests`,
+`inference_last_activity_at` and `inference_idle_seconds`. A lease whose grant
+served a request inside the 15-minute stall grace is executing cases, whatever
+`stage` says, and is never flagged `stalled`; a grant idle past the grace lets
+the clock rules decide again. This is how to tell a prepare-stage wedge (no
+requests, or idle) from a generator-round run on a validator that does not yet
+forward scorer progress (a steady request count with `stage: preparing`). The
 tool is read-only and schedules nothing.
 
 `list_validator_assignments` reads live leases from

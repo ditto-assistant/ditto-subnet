@@ -20,7 +20,13 @@ from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints import admin_validator_capacity
 from ditto.api_server.endpoints import public as public_endpoint
-from ditto.db.models import Agent, BenchmarkDataset, ValidatorHeartbeat, ValidatorTicket
+from ditto.db.models import (
+    Agent,
+    BenchmarkDataset,
+    InferenceGrant,
+    ValidatorHeartbeat,
+    ValidatorTicket,
+)
 
 pytestmark = pytest.mark.asyncio
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
@@ -119,6 +125,49 @@ def _lease(
         deadline=issued_at + timedelta(hours=3),
         bench_version=_BENCH,
         attempt_count=1,
+    )
+
+
+def _live_grant(
+    ticket: ValidatorTicket,
+    *,
+    requests: int,
+    embeddings: int,
+    last_activity_at: datetime,
+) -> InferenceGrant:
+    """The lease's own hosted-inference grant, with its served request count."""
+    return InferenceGrant(
+        grant_id=uuid4(),
+        agent_id=ticket.agent_id,
+        bench_version=ticket.bench_version,
+        validator_hotkey=ticket.validator_hotkey,
+        slot_id=ticket.slot_id,
+        ticket_deadline=ticket.deadline,
+        status="active",
+        generation=1,
+        allowed_models=["openai/gpt-oss-20b"],
+        route_provider="openrouter",
+        route_profile="openrouter-route-test-v1",
+        request_budget=16384,
+        token_budget=75_000_000,
+        embedding_model="e",
+        embedding_profile="openrouter-embedding-test-v1",
+        embedding_provider="p",
+        embedding_dimensions=768,
+        embedding_request_budget=1000,
+        embedding_token_budget=1_000_000,
+        embedding_request_count=embeddings,
+        embedding_tokens=0,
+        embedding_cost_microusd=0,
+        embedding_active_requests=0,
+        request_count=requests,
+        prompt_tokens=0,
+        completion_tokens=0,
+        cost_microusd=0,
+        active_requests=0,
+        expires_at=ticket.deadline,
+        created_at=ticket.issued_at,
+        updated_at=last_activity_at,
     )
 
 
@@ -312,3 +361,99 @@ class TestCapacitySummary:
         assert body["validators_truncated"] is True
         assert body["live_validator_count"] == 3
         assert body["serviceable_slots"] == 12
+
+
+class TestPrepareStageStalls:
+    async def test_a_preparing_lease_calling_the_relay_is_not_stalled(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A run whose heartbeat never left ``preparing`` (a generator-round
+        panel run from a validator before it forwarded scorer progress) reads
+        as stalled after 15 minutes. Its grant serving requests says otherwise,
+        and the capacity row shows the evidence."""
+        _install(app, session_maker, monkeypatch)
+        now = datetime.now(UTC)
+        seen_at = now - timedelta(seconds=10)
+        issued_at = now - timedelta(minutes=40)
+        async with session_maker() as session, session.begin():
+            busy = await _seed_agent(
+                session, name="busy", created_at=now - timedelta(hours=3)
+            )
+            wedged = await _seed_agent(
+                session, name="wedged", created_at=now - timedelta(hours=3)
+            )
+            busy_lease = _lease(
+                busy, hotkey=_SERVING, slot_id="slot-0", issued_at=issued_at
+            )
+            wedged_lease = _lease(
+                wedged, hotkey=_SERVING, slot_id="slot-1", issued_at=issued_at
+            )
+            session.add_all([busy_lease, wedged_lease])
+            await session.flush()
+            session.add(
+                _live_grant(
+                    busy_lease,
+                    requests=1713,
+                    embeddings=7,
+                    last_activity_at=now - timedelta(seconds=20),
+                )
+            )
+            # Activated, then silent: activation alone is not activity.
+            session.add(
+                _live_grant(
+                    wedged_lease,
+                    requests=0,
+                    embeddings=0,
+                    last_activity_at=now - timedelta(minutes=1),
+                )
+            )
+            preparing = [
+                {
+                    "slot_id": slot_id,
+                    "agent_id": str(agent_id),
+                    "bench_version": _BENCH,
+                    "progress": {
+                        "stage": "preparing",
+                        "ticket_deadline": (issued_at + timedelta(hours=3)).isoformat(),
+                    },
+                }
+                for slot_id, agent_id in (("slot-0", busy), ("slot-1", wedged))
+            ]
+            session.add(_heartbeat(_SERVING, seen_at=seen_at, active=preparing))
+
+        body = (await client.get(_URL, headers=_HEADERS)).json()
+
+        by_slot = {
+            item["slot_id"]: item for item in body["validators"][0]["assignments"]
+        }
+        assert by_slot["slot-0"]["stage"] == "preparing"
+        assert by_slot["slot-0"]["stalled"] is False
+        assert by_slot["slot-0"]["inference_chat_requests"] == 1713
+        assert by_slot["slot-0"]["inference_embedding_requests"] == 7
+        assert 0 <= by_slot["slot-0"]["inference_idle_seconds"] < 120
+        assert by_slot["slot-1"]["stalled"] is True
+        assert by_slot["slot-1"]["inference_chat_requests"] == 0
+        assert by_slot["slot-1"]["inference_last_activity_at"] is None
+        assert by_slot["slot-1"]["inference_idle_seconds"] is None
+
+        # The public fleet view judges the same leases the same way.
+        fleet = (await client.get("/api/v1/public/validators")).json()
+        entry = next(
+            row for row in fleet["validators"] if row["validator_hotkey"] == _SERVING
+        )
+        stalled = {
+            item["slot_id"]: item["stalled"] for item in entry["active_benchmarks"]
+        }
+        assert stalled == {"slot-0": False, "slot-1": True}
+
+        # So does every per-agent projection built from the same active work.
+        for agent_id, expected in ((busy, False), (wedged, True)):
+            summary = await client.get(f"/api/v1/public/agent/{agent_id}/summary")
+            assert summary.status_code == 200, summary.text
+            assert [
+                item["stalled"] for item in summary.json()["active_benchmarks"]
+            ] == [expected]
