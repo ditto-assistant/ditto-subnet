@@ -13,6 +13,8 @@ import (
 	"math"
 	"regexp"
 	"strings"
+
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 const (
@@ -40,8 +42,15 @@ const (
 // bench_version>=13 switches and ship in shadow. The upper bound is the newest
 // contract this scorer has reviewed: a stale bound here silently rejects a new
 // version's evidence, which is the failure mode every bump so far has hit.
+//
+// A STAGED contract (protocol.StagedBenchVersion: generatable, not yet
+// supported) is admitted too, so its scorer path can be built and tested
+// before the cross-layer PR raises the shared ceiling and moves the bound.
+// v16 (the dueling bench) gates its datagen half with the inherited stack
+// unchanged; generator slice cases never enter gate evidence.
 func SupportedBenchVersion(benchVersion int) bool {
-	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV15
+	return benchVersion >= BenchVersionV9 &&
+		(benchVersion <= BenchVersionV15 || protocol.StagedBenchVersion(benchVersion))
 }
 
 var (
