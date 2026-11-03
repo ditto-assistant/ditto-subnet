@@ -26154,6 +26154,10 @@ export interface components {
         InfraRetryPolicy: {
             /** Auto Retry Max Age Seconds */
             auto_retry_max_age_seconds: number;
+            /** Auto Retry Max Retries By Code */
+            auto_retry_max_retries_by_code?: {
+                [key: string]: number;
+            };
             /** Auto Retry Max Streak */
             auto_retry_max_streak: number;
             /** Auto Retry Reason Codes */
@@ -29780,8 +29784,9 @@ export interface components {
          *     failure that never judged the artifact: a Docker build infrastructure
          *     failure, a claim the worker released before starting it, missing scorer
          *     runtime evidence, a screening node whose source-review court could not
-         *     start, or Platform briefly unavailable while the screened image was being
-         *     stored. ``parked`` names a source-review/provider failure (including OpenRouter
+         *     start, Platform briefly unavailable while the screened image was being
+         *     stored, or (once) a private deep review that ran out of time. ``parked``
+         *     names a source-review/provider failure (including OpenRouter
          *     throttling), while ``stuck`` names another Ditto-owned infrastructure
          *     failure. Both require a guarded Backroom retry.
          *     ``retry_queued`` means a retry is waiting for a screener slot: either that

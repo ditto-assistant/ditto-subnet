@@ -280,6 +280,7 @@ from ditto_screening_protocol.private_failure import (
 from ditto_screening_protocol.reason_codes import (
     DOCKER_BUILD_INFRASTRUCTURE,
     IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
+    L2_LATE_RESULT,
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
     SOURCE_REVIEW_CONFIRMED_VIOLATION,
@@ -5146,6 +5147,12 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
             "screening completed. This is operator-owned and is retried "
             "automatically with backoff for a limited time, then held for an "
             "operator retry."
+        )
+    if reason_code == L2_LATE_RESULT:
+        return (
+            "Ditto's private source review ran out of time before it finished. "
+            "This is operator-owned and is retried automatically once; if it "
+            "runs out of time again it is held for an operator retry."
         )
     if reason_code == IMAGE_UPLOAD_PLATFORM_UNAVAILABLE:
         return (

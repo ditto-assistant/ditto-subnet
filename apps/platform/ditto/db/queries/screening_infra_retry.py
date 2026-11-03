@@ -5,9 +5,10 @@ or the build host failed; the miner's archive was never judged), a retryable
 ``l2-runtime-evidence-unavailable`` (no signed scorer-cohort lease was available
 at claim), ``worker-claim-not-started`` (the worker settled a durable claim
 before fetching the artifact), ``source-review-adjudicator-key-unavailable``
-(the node's source-review court key was unusable), or
+(the node's source-review court key was unusable),
 ``image-upload-platform-unavailable`` (Platform or object storage was down for
-a screened-image upload step) parks the agent as
+a screened-image upload step), or ``l2-late-result`` (the deep review ran past
+its stage budget or lease; retried once only) parks the agent as
 ``screening_failed``. Unlike the provider codes in
 ``PROVIDER_BACKOFF_REASON_CODES`` it is retried without an operator, so this
 module owns three things and nothing else:
@@ -48,9 +49,10 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, NamedTuple
 from uuid import UUID
 
@@ -126,6 +128,13 @@ if TYPE_CHECKING:
 # mismatched image, an expired lease) and any failure of the completion step,
 # whose cost scales with the image, report ``image-upload-failed`` instead,
 # which stays on the operator retry.
+# ``l2-late-result`` is the deliberate, bounded exception to "the artifact cannot
+# reach it" (operator ruling 2026-11-03): the L2/L3 deep review ran past its
+# ``timeout_seconds`` stage budget or the attempt lease, which on 2026-11-02/03
+# was the review provider failing (gpt-6-sol ``server_error``), not the miner.
+# A large or adversarial archive can also make review slow, so it is retried at
+# most ``INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE`` times: a second consecutive late
+# result is ``capped`` and waits for an operator, and the loop is bounded.
 INFRA_AUTO_RETRY_REASON_CODES: tuple[str, ...] = (
     reason_codes.INFRA_AUTO_RETRY_REASON_CODES
 )
@@ -144,6 +153,14 @@ INFRA_RETRY_JITTER_FRACTION = 0.2
 #   seven hours of retries at the 60 minute cap).
 INFRA_AUTO_RETRY_MAX_AGE = timedelta(hours=24)
 INFRA_AUTO_RETRY_MAX_STREAK = 8
+# Per-code bound on automatic retries, tighter than MAX_STREAK, for a code an
+# artifact can provoke. Counts that code's failures in the current run of
+# consecutive infrastructure failures (since the latest operator clear or
+# retry); more than ``N`` of them decides the agent ``capped``. ``1`` means one
+# automatic retry: the first late result retries, the second parks.
+INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE: Mapping[str, int] = MappingProxyType(
+    {reason_codes.L2_LATE_RESULT: 1}
+)
 # Safety bound on the SQL id list a claim receives. It is deliberately unrelated
 # to the claim limit: it is applied before the claim's own admission, duplicate
 # and ownership filters, so a small bound could be filled by blocked agents and
@@ -175,6 +192,15 @@ _RECOVERY_REJECT_REASON = "docker-build"
 _IMAGE_UPLOAD_RECOVERY_CODES = frozenset(
     {reason_codes.IMAGE_UPLOAD_PLATFORM_UNAVAILABLE}
 )
+# Signatures whose fault was the deep review not finishing in time. A build
+# proof alone says nothing about the review provider, so they close on a probe
+# on the signature's provider whose screen provably ran source review to its
+# end: a ``passed`` verdict with a verified screened image (the full screen,
+# review included, finished), or a reject the L2/L3 review itself confirmed.
+# A quarantine is never proof: the static preflight can quarantine before any
+# build or review starts.
+_REVIEW_RECOVERY_CODES = frozenset({reason_codes.L2_LATE_RESULT})
+_REVIEW_RECOVERY_REJECT_REASON = reason_codes.SOURCE_REVIEW_CONFIRMED_VIOLATION
 
 # Beyond this the doubling is already clamped; it only keeps the shift small.
 _MAX_DOUBLINGS = 16
@@ -375,6 +401,19 @@ class _Row:
                 and self.has_verified_image
                 and (signature.provider is None or provider == signature.provider)
             )
+        if signature.reason_code in _REVIEW_RECOVERY_CODES:
+            provider = self.provider or self.placement_provider
+            completed_review = (
+                self.status == "passed" and self.has_verified_image
+            ) or (
+                self.status == "rejected"
+                and self.reason_code == _REVIEW_RECOVERY_REJECT_REASON
+            )
+            return (
+                self.finished_at is not None
+                and completed_review
+                and (signature.provider is None or provider == signature.provider)
+            )
         return self.is_recovery and self.exercises(signature)
 
     @property
@@ -482,15 +521,22 @@ def _derive_breakers(
     return breakers
 
 
-def _streak(rows: list[_Row], *, since: datetime | None) -> int:
-    """Consecutive trailing infrastructure failures after the latest clear."""
+def _streak(
+    rows: list[_Row], *, since: datetime | None, reason_code: str | None = None
+) -> int:
+    """Consecutive trailing infrastructure failures after the latest clear.
+
+    With ``reason_code``, count only that code's failures within the same
+    trailing run (the per-code retry cap).
+    """
     count = 0
     for row in reversed(rows):
         if since is not None and _aware(row.started_at) <= since:
             break
         if not row.is_infra_failure:
             break
-        count += 1
+        if reason_code is None or row.reason_code == reason_code:
+            count += 1
     return count
 
 
@@ -528,8 +574,9 @@ async def plan_infra_retries(
     of it, see ``_derive_breakers``), so it is decided by backoff alone.
 
     A candidate must also have failed within ``INFRA_AUTO_RETRY_MAX_AGE``, and
-    one whose streak reached ``INFRA_AUTO_RETRY_MAX_STREAK`` is decided
-    ``capped``: it stays parked for the operator.
+    one whose streak reached ``INFRA_AUTO_RETRY_MAX_STREAK``, or whose latest
+    code failed more than its ``INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE`` bound in
+    that streak, is decided ``capped``: it stays parked for the operator.
     """
     now = _aware(now)
     cutoff = now - BREAKER_HISTORY_LOOKBACK
@@ -649,12 +696,20 @@ async def plan_infra_retries(
             for value in (clears.get(agent_id), retries.get(agent_id))
             if value is not None
         ]
-        streak = _streak(rows, since=max(bounds) if bounds else None)
+        since = max(bounds) if bounds else None
+        streak = _streak(rows, since=since)
+        code_retry_cap = INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE.get(
+            latest.signature.reason_code
+        )
         backoff_until = latest.failed_at + infra_retry_delay(streak, latest.attempt_id)
         breaker = breakers.get(latest.signature)
         next_retry_at = backoff_until
         state: DecisionState = "backoff" if now < backoff_until else "due"
-        if streak >= INFRA_AUTO_RETRY_MAX_STREAK:
+        if streak >= INFRA_AUTO_RETRY_MAX_STREAK or (
+            code_retry_cap is not None
+            and _streak(rows, since=since, reason_code=latest.signature.reason_code)
+            > code_retry_cap
+        ):
             state = "capped"
         elif (
             breaker is not None
