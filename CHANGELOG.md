@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.432.1 (2026-11-03)
+
+### Bug Fixes
+
+- **validator,platform,backroom**: Report generator-round progress and stop flagging live round runs
+  as stalled ([#3328](https://github.com/ditto-assistant/ditto-subnet/pull/3328),
+  [`795254b`](https://github.com/ditto-assistant/ditto-subnet/commit/795254b3356ce7f50ba3c6d04c78ae0f4bb11db7))
+
+
 ## v0.432.0 (2026-11-03)
 
 ### Features
