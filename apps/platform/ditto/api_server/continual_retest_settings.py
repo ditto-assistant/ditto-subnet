@@ -29,7 +29,7 @@ def settings_from_row(
     if row is None:
         return DEFAULT_SETTINGS
     try:
-        return ContinualRetestSettings.model_validate(row.settings)
+        return ContinualRetestSettings.from_stored(row.settings)
     except ValidationError:
         logger.warning(
             "continual retest settings revision %s is invalid; using defaults",

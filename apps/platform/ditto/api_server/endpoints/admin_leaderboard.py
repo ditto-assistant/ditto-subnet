@@ -629,23 +629,32 @@ async def continual_retest_diagnostic(
     raw = await confirmation_composites_by_seed(
         session, agent_ids=[agent_id], bench_version=version
     )
-    # The same variance-sized target the lane plans growth toward: the raw
-    # emission set's planning history (``_top5_confirmation_seed_plan``).
-    wave_history = (
+    # The same variance-sized target the lane plans growth toward: planning
+    # history over the raw wave plus the folded emission set, deduplicated, as
+    # ``_top5_confirmation_seed_plan`` receives ``wave_member_ids``.
+    planning_ids = tuple(
+        dict.fromkeys(
+            (
+                *(member.agent_id for member in wave),
+                *(member.agent_id for member in emission),
+            )
+        )
+    )
+    planning_history = (
         await confirmation_composites_by_seed(
             session,
-            agent_ids=[member.agent_id for member in wave],
+            agent_ids=list(planning_ids),
             bench_version=version,
             planning=True,
         )
-        if wave
+        if planning_ids
         else {}
     )
     seed_target = (
         elastic_confirmation_seed_ceiling(
-            {member.agent_id: wave_history.get(member.agent_id, {}) for member in wave}
+            {agent_id: planning_history.get(agent_id, {}) for agent_id in planning_ids}
         )
-        if wave
+        if planning_ids
         else None
     )
     ticket_rows = await session.execute(

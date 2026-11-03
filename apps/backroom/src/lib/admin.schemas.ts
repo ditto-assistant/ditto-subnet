@@ -2360,6 +2360,10 @@ export const DEFAULT_WAVE_MEMBERSHIP = 'participants'
 // platform's 10-seed continual-retest work cap, TOP5_MAX_CONFIRMATION_SEEDS).
 export const DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
 export const MAX_MIN_DETHRONE_CONFIRMATIONS = 10
+// Reads stay lenient up to the validator's 15-seed fold ceiling so a Platform
+// still serving a revision written under the former 15-seed cap stays
+// displayable; writes are bounded by MAX_MIN_DETHRONE_CONFIRMATIONS.
+export const MAX_SERVED_MIN_DETHRONE_CONFIRMATIONS = 15
 export const DEFAULT_CHAMPION_STANDING_RANK = 3
 
 // The ceiling can never cut into the cohort the rank cutoff already admitted.
@@ -2403,7 +2407,7 @@ const continualRetestSettingsBaseSchema = z.object({
     .number()
     .int()
     .min(2)
-    .max(MAX_MIN_DETHRONE_CONFIRMATIONS)
+    .max(MAX_SERVED_MIN_DETHRONE_CONFIRMATIONS)
     .default(DEFAULT_MIN_DETHRONE_CONFIRMATIONS),
   champion_standing_rank: z
     .number()

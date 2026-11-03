@@ -4010,6 +4010,15 @@ describe('continual retest cohort sizing against an older platform', () => {
     wave_seeds_per_window: 3,
   }
 
+  it('reads a dethrone minimum up to the 15-seed ceiling but writes at most 10', () => {
+    // A Platform still serving a revision written under the former 15-seed cap
+    // stays displayable; a new write cannot exceed the 10-seed work cap.
+    expect(continualRetestSettingsSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 15 }).success).toBe(true)
+    expect(continualRetestSettingsSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 16 }).success).toBe(false)
+    expect(continualRetestSettingsWriteSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 10 }).success).toBe(true)
+    expect(continualRetestSettingsWriteSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 11 }).success).toBe(false)
+  })
+
   it('tells a defaulted cohort size apart from a reported one', () => {
     // Reading defaults the field so the page still renders, which makes the
     // parsed policy useless for deciding what the platform will accept.

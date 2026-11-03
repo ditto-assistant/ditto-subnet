@@ -247,3 +247,32 @@ def test_operators_cannot_require_more_confirmations_than_the_work_cap() -> None
     ContinualRetestSettings(min_dethrone_confirmations=10)
     with pytest.raises(ValidationError):
         ContinualRetestSettings(min_dethrone_confirmations=11)
+
+
+def test_a_revision_stored_under_the_former_cap_keeps_its_policy() -> None:
+    """A stored 11-15 dethrone minimum clamps to the cap; nothing else resets."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from ditto.api_server.continual_retest_settings import settings_from_row
+    from ditto.db.models import ContinualRetestSettingsRevision
+
+    stored = {
+        "crown_gate_mode": "fleet_ready",
+        "crown_incumbent_mode": "fleet_ready",
+        "min_dethrone_confirmations": 12,
+        "champion_standing_rank": 2,
+        "retest_cohort_size": 5,
+        "retest_cohort_max_size": 5,
+    }
+    row = cast(
+        ContinualRetestSettingsRevision, SimpleNamespace(revision=7, settings=stored)
+    )
+
+    loaded = settings_from_row(row)
+
+    assert loaded.min_dethrone_confirmations == MAX_MIN_DETHRONE_CONFIRMATIONS
+    assert loaded.crown_gate_mode == "fleet_ready"
+    assert loaded.crown_incumbent_mode == "fleet_ready"
+    assert loaded.champion_standing_rank == 2
+    assert ContinualRetestSettings.from_stored(stored) == loaded

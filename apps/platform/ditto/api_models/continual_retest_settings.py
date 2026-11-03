@@ -329,6 +329,29 @@ class ContinualRetestSettings(BaseModel):
             )
         return self
 
+    @classmethod
+    def from_stored(cls, raw: object) -> ContinualRetestSettings:
+        """Validate a persisted revision, clamping bounds that later narrowed.
+
+        A revision written while ``min_dethrone_confirmations`` allowed up to
+        15 (the former seed cap) stays loadable: the value is clamped to
+        :data:`MAX_MIN_DETHRONE_CONFIRMATIONS`, since a challenger can no
+        longer hold more shared seeds than that, instead of one out-of-range
+        field discarding the whole policy. New writes still validate strictly.
+        """
+        if isinstance(raw, dict):
+            value = raw.get("min_dethrone_confirmations")
+            if (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and value > MAX_MIN_DETHRONE_CONFIRMATIONS
+            ):
+                raw = {
+                    **raw,
+                    "min_dethrone_confirmations": MAX_MIN_DETHRONE_CONFIRMATIONS,
+                }
+        return cls.model_validate(raw)
+
 
 class ContinualRetestSettingsRevision(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
