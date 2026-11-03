@@ -73,6 +73,7 @@ from ditto.api_server.endpoints import (
     admin_copy_court_router,
     admin_copy_review_router,
     admin_database_backup_router,
+    admin_dueling_router,
     admin_efficiency_bonus_settings_router,
     admin_emission_allocation_router,
     admin_emission_eligibility_router,
@@ -260,6 +261,16 @@ def _process_role() -> str:
     return role
 
 
+def _platform_background_tasks_enabled() -> bool:
+    """Keep singleton loops on the primary while a standby serves the same API."""
+    value = os.environ.get("DITTO_PLATFORM_BACKGROUND_TASKS", "true").strip().lower()
+    if value not in {"true", "false"}:
+        raise ApiServerConfigError(
+            "DITTO_PLATFORM_BACKGROUND_TASKS must be 'true' or 'false'"
+        )
+    return value == "true"
+
+
 # Multipart framing around a file part: boundaries, part headers, and the small
 # signed form fields that travel beside the tarball or avatar.
 _UPLOAD_FORM_OVERHEAD_BYTES = 1 << 20
@@ -338,6 +349,9 @@ def _render_dashboard(wandb_url: str) -> str | None:
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     config: ApiServerConfig = app.state.config
+    run_background_tasks = (
+        _process_role() == PLATFORM_ROLE and _platform_background_tasks_enabled()
+    )
     async with AsyncExitStack() as stack:
         try:
             engine = create_db_engine(config.postgres)
@@ -455,13 +469,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             # request under `FOR UPDATE`, so there is no in-memory route cache
             # to keep warm. This makes the platform role the designated primary
             # for the one piece of background work that requires a singleton.
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await provider_routes.start()
             app.state.inference_provider_routes = provider_routes
 
             nonce_janitor = ValidatorNonceJanitor(session_maker=app.state.session_maker)
             stack.push_async_callback(nonce_janitor.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await nonce_janitor.start()
             app.state.validator_nonce_janitor = nonce_janitor
 
@@ -471,7 +485,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 session_maker=app.state.session_maker
             )
             stack.push_async_callback(bounty_deadlines.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await bounty_deadlines.start()
             app.state.bounty_deadline_sweeper = bounty_deadlines
 
@@ -483,7 +497,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 session_maker=app.state.session_maker
             )
             stack.push_async_callback(outage_void_sweeper.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await outage_void_sweeper.start()
             app.state.outage_void_sweeper = outage_void_sweeper
 
@@ -492,7 +506,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 retention_days=config.screener_auth.capacity_event_retention_days,
             )
             stack.push_async_callback(capacity_event_janitor.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await capacity_event_janitor.start()
             app.state.screener_capacity_event_janitor = capacity_event_janitor
 
@@ -505,7 +519,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app_state=app.state,
             )
             stack.push_async_callback(copy_court.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await copy_court.start()
             app.state.copy_hold_court = copy_court
             # Unreleased-copy signal, shadow mode: indexes artifacts and records
@@ -515,7 +529,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 storage=getattr(app.state, "storage", None),
             )
             stack.push_async_callback(unreleased_copy.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await unreleased_copy.start()
             app.state.unreleased_copy_sentinel = unreleased_copy
             # Competition improvement metrics: measurement only. Reads every
@@ -524,7 +538,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 session_maker=app.state.session_maker
             )
             stack.push_async_callback(improvement.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await improvement.start()
             app.state.competition_improvement_job = improvement
             # The epoch pin must land at the chain boundary even when no
@@ -537,7 +551,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 materializer=app.state.ledger_pin_materializer,
             )
             stack.push_async_callback(ledger_pin_loop.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await ledger_pin_loop.start()
             app.state.ledger_pin_loop = ledger_pin_loop
             # Generator-competition rounds follow the chain's epoch counter.
@@ -547,7 +561,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app_state=app.state, session_maker=app.state.session_maker
             )
             stack.push_async_callback(generator_round_loop.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await generator_round_loop.start()
                 app.state.generator_round_loop = generator_round_loop
             emission_collector = SourceEmissionCollector(
@@ -556,7 +570,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 confirmation_enabled=app.state.config.source_emission_confirmation_enabled,
             )
             stack.push_async_callback(emission_collector.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await emission_collector.start()
             app.state.source_emission_collector = emission_collector
 
@@ -568,7 +582,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 enabled=app.state.config.treasury_ledger_sampler_enabled,
             )
             stack.push_async_callback(treasury_ledger_sampler.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await treasury_ledger_sampler.start()
             app.state.treasury_ledger_sampler = treasury_ledger_sampler
 
@@ -576,7 +590,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             app.state.treasury_manual_loop = TreasuryManualLoop(app.state)
             stack.push_async_callback(app.state.treasury_manual_loop.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await app.state.treasury_manual_loop.start()
 
             validator_names = app.state.validator_names
@@ -584,8 +598,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             # Built with the app (tests swap it); its pooled public lookup
             # client closes with the process.
             stack.push_async_callback(app.state.github_link.aclose)
-            if _process_role() == PLATFORM_ROLE:
+            if run_background_tasks:
                 await validator_names.start(app.state.session_maker)
+            elif _process_role() == PLATFORM_ROLE:
+                await validator_names.hydrate(app.state.session_maker)
 
         except Exception as e:
             raise ApiServerLifespanError(
@@ -805,6 +821,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_scoring_lease_settings_router, prefix="/api/v1")
     app.include_router(admin_generator_competition_router, prefix="/api/v1")
     app.include_router(admin_generator_rounds_router, prefix="/api/v1")
+    app.include_router(admin_dueling_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")

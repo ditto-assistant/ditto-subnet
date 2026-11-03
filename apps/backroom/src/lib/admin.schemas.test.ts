@@ -2367,6 +2367,20 @@ describe('screener review settings schemas', () => {
     expect(parsed.l3_model).toBe('openai/gpt-6-sol')
   })
 
+  it('accepts GPT-6.1 Terra deep review with a deep-review budget up to an hour', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings,
+      l2_model: 'openai/gpt-6.1-terra',
+      l2_fallback_models: ['openai/gpt-6-sol', 'z-ai/glm-5.2'],
+      l3_model: 'openai/gpt-6.1-terra',
+      timeout_seconds: 2_700,
+    })
+    expect(parsed.l2_model).toBe('openai/gpt-6.1-terra')
+    expect(parsed.l3_model).toBe('openai/gpt-6.1-terra')
+    expect(parsed.timeout_seconds).toBe(2_700)
+    expect(() => screenerReviewSettingsSchema.parse({ ...settings, timeout_seconds: 3_601 })).toThrow()
+  })
+
   it('parses current, history, and signed worker application status', () => {
     const parsed = screenerReviewControlSchema.parse({
       current: [],
@@ -2436,7 +2450,7 @@ describe('screener review settings schemas', () => {
   })
 
   it('accepts Platform L2 budgets and preserves the upper bounds', () => {
-    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [1800, 256]]) {
+    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [3600, 256]]) {
       const parsed = screenerReviewSettingsSchema.parse({
         ...settings, timeout_seconds, max_steps, max_input_tokens: 5_000_000,
         max_output_tokens: 1_000_000,
@@ -2450,7 +2464,7 @@ describe('screener review settings schemas', () => {
       expect(parsed.max_cost_usd).toBe(25)
     }
     expect(() => screenerReviewSettingsSchema.parse({
-      ...settings, timeout_seconds: 1801,
+      ...settings, timeout_seconds: 3601,
     })).toThrow()
     expect(() => screenerReviewSettingsSchema.parse({
       ...settings, max_steps: 257,
@@ -5130,6 +5144,107 @@ describe('public leaderboard rows that do not rank', () => {
       PlatformComponents['schemas']['PublicLeaderboardEntry']['rank']
     >().toMatchTypeOf<
       ZodInput<typeof publicLeaderboardSchema>['entries'][number]['rank']
+    >()
+  })
+})
+
+describe('public leaderboard emissions', () => {
+  const champion = '3f1d6b8a-1c2e-4a5b-8d90-1f2e3a4b5c6d'
+  const rival = '3f1d6b8a-1c2e-4a5b-8d90-1f2e3a4b5c6e'
+  const recipient = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    role: 'champion',
+    agent_id: champion,
+    miner_hotkey: '5Champion',
+    raw_rank: 1,
+    share_of_miner_pool: 0.65,
+    shared_seed_confirmations: 0,
+    ...overrides,
+  })
+  const board = (
+    recipients: Record<string, unknown>[],
+    emissions: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    generated_at: '2026-10-16T00:00:00Z',
+    count: 0,
+    current_bench_version: 13,
+    active_bench_version: 13,
+    desired_bench_version: 13,
+    available_bench_versions: [13],
+    selection_mode: 'authoritative',
+    entries: [],
+    emissions: {
+      margin: 0.01,
+      dethrone_z: 1.645,
+      band_decay_min_bench_version: 9,
+      band_decay_start_composite: 0.8,
+      band_decay_rate: 4,
+      champion_share: 0.65,
+      rank_shares: [0.65, 0.2, 0.1, 0.05],
+      tail_size: 3,
+      champion_agent_id: champion,
+      champion_miner_hotkey: '5Champion',
+      raw_leader_agent_id: champion,
+      raw_leader_miner_hotkey: '5Champion',
+      recipients,
+      ...emissions,
+    },
+  })
+
+  it('reads a score-ceiling joint crown', () => {
+    // #2981: a deadlocked crown pools the champion's share across the tied
+    // cohort, and each member is published as a joint champion. Rejecting the
+    // role failed every leaderboard tool exactly when operators had to explain
+    // the split.
+    const parsed = publicLeaderboardSchema.parse(
+      board(
+        [
+          recipient({ role: 'joint_champion', share_of_miner_pool: 0.5 }),
+          recipient({
+            role: 'joint_champion',
+            agent_id: rival,
+            miner_hotkey: '5Rival',
+            raw_rank: 2,
+            share_of_miner_pool: 0.5,
+          }),
+        ],
+        { allocation_mode: 'score_ceiling_pool', score_ceiling_pool_size: 2 },
+      ),
+    )
+
+    expect(parsed.emissions?.allocation_mode).toBe('score_ceiling_pool')
+    expect(parsed.emissions?.score_ceiling_pool_size).toBe(2)
+    expect(parsed.emissions?.recipients.map((each) => each.role)).toEqual([
+      'joint_champion',
+      'joint_champion',
+    ])
+  })
+
+  it('keeps an unpaid recipient unpaid', () => {
+    // A provisional incumbent holds its slot unpaid and validators burn its
+    // share; Platform omits `paid` only when it is true.
+    const parsed = publicLeaderboardSchema.parse(
+      board([
+        recipient({ paid: false }),
+        recipient({ role: 'tail', agent_id: rival, miner_hotkey: '5Rival', raw_rank: 2, share_of_miner_pool: 0.2 }),
+      ]),
+    )
+
+    expect(parsed.emissions?.recipients.map((each) => each.paid)).toEqual([false, true])
+    expect(parsed.emissions?.allocation_mode).toBe('ranked')
+    expect(parsed.emissions?.score_ceiling_pool_size).toBe(0)
+  })
+
+  it('accepts every role and allocation mode the generated Platform type can send', () => {
+    // The next enum Platform adds fails this type check, not production tools.
+    expectTypeOf<
+      PlatformComponents['schemas']['PublicEmissionRecipient']['role']
+    >().toMatchTypeOf<
+      NonNullable<ZodInput<typeof publicLeaderboardSchema>['emissions']>['recipients'][number]['role']
+    >()
+    expectTypeOf<
+      PlatformComponents['schemas']['PublicKothEmissions']['allocation_mode']
+    >().toMatchTypeOf<
+      NonNullable<NonNullable<ZodInput<typeof publicLeaderboardSchema>['emissions']>['allocation_mode']>
     >()
   })
 })

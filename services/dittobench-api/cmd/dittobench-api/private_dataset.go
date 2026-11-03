@@ -24,6 +24,11 @@ func (s *server) datasetFeatures() []string {
 		features = append(features, generatorRoundMode, generatorRoundMaxCasesFeature())
 		features = append(features, generatorRoundBenchFeatures()...)
 	}
+	if s.allowDuelingSlices {
+		// Derived from the advertised set, so dueling-slice-bench-<n> appears
+		// exactly when this build runs bench n (>= 16).
+		features = append(features, duelingSliceFeatures(supportedBenchVersions())...)
+	}
 	return features
 }
 
@@ -33,7 +38,7 @@ func (s *server) privateBodyBytes() int {
 	if s.allowPrivateDatasets {
 		limit = gen.MaxPrivateArtifactBytes
 	}
-	if s.allowGeneratorRounds {
+	if s.allowGeneratorRounds || s.allowDuelingSlices {
 		limit = max(limit, challenge.MaxRoundDatasetBytes)
 	}
 	return limit

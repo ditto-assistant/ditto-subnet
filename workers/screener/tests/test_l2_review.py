@@ -51,7 +51,10 @@ from ditto_screener.l2_review import (
     L2Usage,
     LayeredSourceReviewAgent,
     SolL2SourceReviewAgent,
+    _add_usage,
+    _billable_cost_usd,
     _cost,
+    _effective_input_tokens,
     _enforce_causal_authority,
     _extract_readonly_workspace,
     _failure,
@@ -102,6 +105,8 @@ from scripts.generate_starter_provenance import (
     newest_manifest,
     starter_files,
 )
+
+from .markers import non_root_only as _non_root_only
 
 SYSTEM_PROMPT = _l2_review_system_prompt(SCREENING_POLICY_VERSION)
 
@@ -460,9 +465,9 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "blocks the call before endpoint dispatch" in v13
     assert "external tool's actual name and argument schema" in v13
     assert "hypothetically use the same field name" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v62-policy-v13"
-    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v34-policy-v13"
-    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v37-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v63-policy-v13"
+    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v35-policy-v13"
+    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v38-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
     assert "Use at most four targeted analyzer" not in (
         l2_review._V13_SAFETY_ADJUDICATOR_TASK
@@ -547,7 +552,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v62-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v63-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -1878,6 +1883,32 @@ def test_l2_lead_disposition_requires_exact_source_citation(tmp_path: Path) -> N
         )
 
 
+@pytest.mark.parametrize("disposition", [["resolved"], {"value": "resolved"}])
+def test_l2_lead_disposition_of_the_wrong_json_type_is_a_contract_miss(
+    tmp_path: Path, disposition: object
+) -> None:
+    # ditto-subnet#2987: a list or dict disposition raised an unhashable-type
+    # TypeError, which carries no stable failure code. It is the same
+    # contract miss as any other invalid disposition.
+    archive, _ = _tar(tmp_path, "fn main() {}\n")
+    repository = TarSourceRepository(str(archive))
+    leads = _l1_lead_packet(_l1("medium"))
+    digest = hashlib.sha256(b"fn main() {}\n").hexdigest()
+    item = {
+        "lead_id": leads[0]["lead_id"],
+        "disposition": disposition,
+        "reason": "The cited branch still delegates the answer to the model.",
+        "citation": {"path": "src/main.rs", "line": 1, "file_sha256": digest},
+    }
+    with pytest.raises(ValueError, match="L2 lead disposition is invalid"):
+        _validate_lead_dispositions(
+            [item],
+            leads=leads,
+            analyzed=({"path": "src/main.rs", "sha256": digest},),
+            repository=repository,
+        )
+
+
 def test_v13_medium_l1_requires_resolved_leads() -> None:
     l1 = _l1("medium")
     lead = _l1_lead_packet(l1)[0]
@@ -3137,16 +3168,6 @@ async def test_inprocess_starter_diff_reads_only_runtime_manifests(
 async def test_inprocess_harness_rejects_unknown_command(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="non-allowlisted"):
         await InProcessAnalyzerHarness().run(tmp_path, "rm_rf", {})
-
-
-# IsolatedCodingHarness refuses uid 0 on its first line, so every test that
-# reaches its run() has to have a non-root worker. Containerised development
-# usually runs as root; skipping there reports the precondition instead of
-# failing on it, and CI runners are non-root so the coverage is unchanged.
-_non_root_only = pytest.mark.skipif(
-    os.getuid() == 0,
-    reason="the L2 analyzer harness refuses to run from a root worker",
-)
 
 
 @_non_root_only
@@ -7877,6 +7898,16 @@ def test_gpt6_sol_cost_fallback_uses_its_own_conservative_rates() -> None:
     ) == pytest.approx(0.528)
 
 
+def test_gpt61_terra_cost_fallback_uses_its_own_conservative_rates() -> None:
+    assert _cost(80_000, 8_000, model="openai/gpt-6.1-terra") == pytest.approx(0.24)
+    assert _cost(
+        272_000,
+        8_000,
+        cached_input_tokens=200_000,
+        model="openai/gpt-6.1-terra-20261028",
+    ) == pytest.approx(0.244)
+
+
 def test_exact_reported_cost_precedes_conservative_fallback(
     tmp_path: Path,
 ) -> None:
@@ -9781,3 +9812,65 @@ def test_policy_v13_prompt_revisions_carry_one_policy_suffix(revision) -> None:
     value = revision(13)
     assert value.endswith("-policy-v13")
     assert value.count("-policy-v") == 1
+
+
+def _zero_cost_turn() -> dict[str, object]:
+    # One realistic L2 turn on Sol6 as the screener gateway returns it: 180k
+    # prompt tokens with a 150k cached prefix, 6k output, and ``cost: 0.0``.
+    return {
+        "model": "openai/gpt-6-sol",
+        "output": [],
+        "usage": {
+            "input_tokens": 180_000,
+            "output_tokens": 6_000,
+            "input_tokens_details": {"cached_tokens": 150_000},
+            "output_tokens_details": {"reasoning_tokens": 2_000},
+            "cost": 0.0,
+        },
+    }
+
+
+def test_gateway_zero_cost_is_unreported_and_the_cost_cap_trips(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """SN-424: a gateway ``cost: 0`` must not disable ``max_cost_usd``.
+
+    Sol6 estimate ceiling (``_cost``): $4/M uncached input, $0.40/M cached
+    input, $20/M output. Each turn is 30k*4 + 150k*0.4 + 6k*20 per million =
+    $0.30 and 45k billable-equivalent input, so the $25 cap trips on turn 84
+    (3.78M effective input) well before the 5M input budget would.
+    """
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    agent._max_input_tokens = 5_000_000
+    agent._max_output_tokens = 1_000_000
+    agent._max_cost_usd = 25
+    caplog.set_level(logging.WARNING, logger="ditto_screener.l2_review")
+    usage = L2Usage()
+    tripped_at = None
+    for turn in range(1, 112):
+        _, turn_usage, _, _ = _response_output_and_usage(_zero_cost_turn())
+        assert turn_usage.reported_cost_usd is None
+        assert turn_usage.estimated_cost_usd == pytest.approx(0.30)
+        usage = _add_usage(usage, turn_usage)
+        if agent._exceeded_budget(usage):
+            tripped_at = turn
+            break
+    assert tripped_at == 84
+    assert agent._exceeded_budget(usage) == ["cost"]
+    assert _effective_input_tokens(usage) == 84 * 45_000
+    with pytest.raises(ValueError, match="token or cost budget"):
+        agent._require_budget(usage)
+    assert "screener_cost_unreported" in caplog.text
+    assert "reported=zero" in caplog.text
+
+
+def test_one_unreported_turn_makes_the_aggregate_cost_an_estimate() -> None:
+    reported = L2Usage(
+        input_tokens=10, output_tokens=1, estimated_cost_usd=2.0, reported_cost_usd=1.0
+    )
+    unreported = L2Usage(input_tokens=10, output_tokens=1, estimated_cost_usd=2.0)
+    assert _add_usage(L2Usage(), reported).reported_cost_usd == 1.0
+    assert _add_usage(reported, reported).reported_cost_usd == 2.0
+    mixed = _add_usage(reported, unreported)
+    assert mixed.reported_cost_usd is None
+    assert _billable_cost_usd(mixed) == pytest.approx(4.0)

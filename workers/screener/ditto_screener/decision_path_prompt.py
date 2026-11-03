@@ -127,6 +127,26 @@ exact-repeat stop on name plus canonical arguments when the request does not
 ask for the effect again, a model-authorized repeat, and an unsure route that
 keeps the complete catalog.
 
+I7 connector and app-wording safe harbor (2026-11-03). Hiding connector-gated
+or app-specific tools from the deciding model's catalog is W4 availability
+narrowing, not by itself a finding under I7 or any other condition. This
+covers filtering on the published connector marker (a description that says
+the tool needs a connector, such as "Needs the <App> connector to be linked in
+Settings.") and filtering on the request's app-name wording, such as hiding an
+app's tools when the request does not name that app. Guessing from wording is
+allowed; the filter may be rules, regular expressions or a declared small
+model and needs no proof that a hidden tool was impossible. The W4 conditions
+on exact request correctness, entity names, ambiguity and low confidence do
+not apply to it. A hidden tool the case needed is honest over-filtering, a
+performance issue, not a removed required capability or a manufactured
+singleton; resolve such I7 leads as refuted, not unresolved. Still charge
+answering or reporting as if a hidden or removed tool ran, or fabricating its
+call, result or receipt (I6); removing a needed tool and then claiming it ran
+or reporting its effect as done (I6, I7); and using the filter to pin
+`tool_choice`, replace the catalog with a host plan or refuse a valid call the
+model selected from the tools it was shown (I7). Other I7 grounds are
+unchanged.
+
 I5 case-file currency safe harbor. Bench v13 case files stamp filing times in
 shuffled order, so a plain restatement can be dated after the change note
 that replaced it (benchmark defect, ditto-subnet#3088). A case-file currency
@@ -157,7 +177,8 @@ routed notes is not a second factor; resolve such I5 leads as refuted, not
 unresolved. Reject only on an independent ground: host parsing of benchmark
 text into operands, steps, ordering or answers served in place of the model's
 reading (I5), a host-written, edited or overriding answer (I3, I4), tool
-removal, hiding or forcing (I7), or benchmark-private content in the guidance.
+removal, hiding or forcing beyond the I7 connector and app-wording safe harbor
+(I7), or benchmark-private content in the guidance.
 Evidence loss alone is not an independent ground (W3).
 
 W3 record-selection safe harbor. Choosing which retrieved records reach the

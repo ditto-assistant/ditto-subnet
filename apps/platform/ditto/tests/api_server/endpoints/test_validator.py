@@ -9366,7 +9366,7 @@ class TestTop5ConfirmationLane:
         )
         async with session_maker() as session:
             anchor = await session.get(
-                ConfirmationSeedAnchor, (champion, _BENCH_VERSION)
+                ConfirmationSeedAnchor, (champion, _BENCH_VERSION, UUID(int=0))
             )
             assert anchor is not None
             # The anchor did not move with the newer head observed at claim time.

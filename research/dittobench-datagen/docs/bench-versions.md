@@ -27,6 +27,7 @@ applied to an existing version. It ships as a new one.
 | 13 (pre-activation) | `2027-05-01` | Deterministic typed worlds and compositional enterprise records; model-authored private wording deferred to V14. A published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Same seed and generator revision reproduce the dataset. Activation follows exact-candidate qualification and canary evidence. |
 | 14 | `2027-06-01` | Action-scoped declarative over-call scoring, rendered-reply grading, supersession chains, point-in-time, relative-sequence, process-step and role families. Activated 2026-10-28. |
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
+| 16 (staged) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. Generatable and vector-pinned, not yet in the supported set. |
 
 ## Answer-pool collision audit
 
@@ -1356,12 +1357,135 @@ epoch `2027-07-01T00:00:00Z`. Every v2–v14 generation and grading vector
 remains unchanged. Supporting v15 does not change Platform's active version;
 see [the rollout plan](../../../docs/benchmark-v15-rollout.md).
 
+## Bench v16 dueling contract, datagen half (staged)
+
+V16 is the dueling contract ([dueling-bench.md](dueling-bench.md)): a
+canonical run is a 175-case datagen half generated here plus five generator
+columns of 35 cases that Platform delivers (`dueling-slice-v1`), scored as one
+composite. This module ships only the datagen half. It inherits v15 exactly
+(catalog, decision lane, grader policy floor, gates, answer pools;
+`answerPoolFixBenchVersion` moves to 17) except for the profile and the
+connector changes below. Every lever is gated on `bench_version >= 16`.
+
+**Staged, not supported.** `protocol.BenchVersionV16` lives in
+`protocol/staged.go`: it has its own epoch (`2027-08-01`) and rotate seed and
+generates through `GenerateDataset`, but it is outside
+`supportedBenchVersions`, so `SupportedBenchVersion`,
+`NewestSupportedBenchVersion`, the scorer's advertised window and efficiency
+readiness all stay at 15, matching the shared ceiling in
+`ditto/tests/contract/bench_versions.json`. Offline tools (`cmd/generate`,
+`cmd/mixaudit`, `cmd/parserprobe`, `cmd/toolprobe`) accept staged versions.
+The cross-layer PR that raises the shared ceiling moves the constant and epoch
+into `epoch.go` and the supported list; generation bytes do not change.
+
+**Dueling profile** (`gen/v16_envelope.go`, `gen.ProfileForVersion(_, 16)`).
+
+| Run size | Tool cases | Memory cases | World scale (= v15, same run size) |
+| --- | ---: | ---: | ---: |
+| full | 50 | 125 | 3 (28 people, 18 projects, 12 trips, 13 story arcs) |
+| medium | 24 | 63 | 2 |
+| small | 6 | 27 | 1 |
+
+The tool phase seeds the shared world through the v9 world carrier and the
+memory phase stages corrections against the same world, so both phases draw
+one world, and v16 pins it per profile to the v15 world of the same run size.
+The tool passes take the scale from `datagen.ToolWorldScale`, which maps the
+v16 tool counts (50, 24) to the v15 full and medium scales instead of keying
+on the case count (through v15 the thresholds are 80 and 30), so the tool
+cases read the larger world too. The v13 conversion floors follow the same split:
+the world-family floor follows the world (three per family on the scale-3
+world), while the ordinary-singleton rule follows the sample size (the 50-case
+half is a partial sample, so singletons may be replaced; keeping them would
+leave 4 convertible slots on every seed). The world itself, every probe record
+included, is the v15 world byte for byte.
+
+The 125-case table asks about part of that world:
+
+- story 36: six of the 13 arcs x six oracles (`WorldPlanSelection.StoryArcLimit`;
+  the asked arcs keep the world's business/personal proportion and spread over
+  its themes, and the other seven arcs stay seeded as haystack);
+- abstention 12 of the world's 25 twins (`v16AbstentionQuotas`: pure absence 2,
+  near miss 2, stale-removed 1, cross-user 1, false premise 3, insufficient
+  composition 3; an even split would push the contacts sub-domain over its
+  20% cap), so abstention is 9.6%, the v15 share;
+- point-in-time 6 (3 of 6 as-of twin pairs);
+- ordinary world 20 (the 12 answerable abstention twins plus 8 plain
+  questions, six of them the staged corrections);
+- business programs 16, personal programs 4, record quantity 4,
+  divergence 4, integrity 14, isolation 9 (the scale-3 quota).
+
+Medium uses the same rule on the v15 medium world: story 18 (three arcs),
+ordinary 8, business 4, personal 4, abstention 4, divergence 4,
+point-in-time 2, integrity 14, isolation 5. `gen.MixGateV16` is `MixGateV13`
+unchanged, and `go run ./cmd/mixaudit -bench-version 16 -seeds 40 -gate`
+passes 0/40 (means: money 0.067, money of computed answers 0.193, business
+0.416, abstention 0.096, twin coverage 0.400). The gate is defined for the
+full run size only (`-gate` refuses medium and small from v16).
+
+**Connectors stop self-identifying** (dueling-bench.md section 8.1,
+`catalog/v16.go`). Operator ruling (2026-11-03): harnesses may filter
+connector or app tools by a marker or by request wording (an I7 W4
+allowance), so v16 does not ban filters; the difficulty is in the cases.
+
+- *No marker.* The v15 suffix ("Needs the <App> connector to be linked in
+  Settings.") is gone and the variants that named a link state ("the
+  connected workspace", "the linked database") are rewritten in the product
+  grammar ("the user's Slack workspace"). `catalog.HasLinkStatePhrase` and
+  `TestV16ConnectorDescriptionsCarryNoLinkState` keep every rendered variant
+  free of link-state wording. The catalog still carries 200 connector tools.
+- *Linked connectors.* `catalog.V16ConnectorPlanForSeed` draws, from 24
+  scripted apps, two to four apps the seed links and two more it names
+  without linking. Every tool of those apps is in the seed's catalog, so
+  menu presence reveals nothing. In the mock endpoint (`toolexec/v16.go`) a
+  linked app's tools execute: its read tool serves the case needle as the
+  bearer of a linked read case and the scored decoy figure otherwise, its
+  write tool confirms the payload. Every other connector still answers "not
+  connected" and performs nothing.
+- *Cases* (`datagen/v16.go`, after every v13 pass). Full runs convert 11 of
+  50 tool cases (22%), medium 5 of 24 (21%), small one linked read when a
+  slot is free:
+
+| Category | Full | Medium | Gold | Graded by |
+| --- | ---: | ---: | --- | --- |
+| `connector_linked_result_usage` | 3 | 2 | call the linked app's read tool once, report the figure | result-usage (trajectory x needle gate), as the v13 decoy-correct cases |
+| `connector_linked_action` | 3 | 1 | call the linked app's write tool once with the quoted payload | strict trajectory, payload as the required argument |
+| `connector_unlinked_probe` | 2 | 1 | try the named app's tool once, get "not connected", tell the user | strict trajectory (one probe is the expected call); the reply text is not graded in v16.0 (known gap, below) |
+| `connector_named_product` | 3 | 1 | use the product tool (calendar, Gmail, web search); the app is context | strict trajectory; any call to the named app's tools is an extra call |
+
+  Unlinked probes reuse the linked surfaces word for word, and named-product
+  cases name a linked app on even ordinals (its tools would really execute),
+  so the request alone never says what is linked. Dropping every connector
+  loses the linked cases; routing on the app named in the request loses the
+  named-product cases and still has to handle a refused probe. No grader
+  branch changes: `grade/` has none for v16, and every case grades through
+  the v13+ tool grader, the v7 result-usage composition and the existing
+  over-call rule. If the quota ever exceeds a seed's free slots, the pass
+  trims one case at a time in rotation from named-product to linked read, so
+  every family survives as long as it can and the last case kept is a linked
+  read, instead of failing (no swept seed trims:
+  `TestV16ConnectorQuotaHoldsAcrossSeeds`).
+
+**Known gap (v16.0).** The reply text of an unlinked probe is not graded:
+a harness that probes once and then claims the action succeeded scores the
+same as one that tells the user the app is not connected. Grading it needs a
+`>= 16` branch in the scorer's tool grader (a decline claim on the reply), so
+it is left for a later contract. Accepted by the operator for v16.0.
+
+For seed `123456789`, full profile, public surface salt 0,
+`TestV16KnownVector` pins:
+`30ab40c287fe7457859b4040e1334bcc5a0f8b50cc49f97e5bd98650753de34d`, with
+epoch `2027-08-01T00:00:00Z`. Every v2 to v15 vector is unchanged (v15 stays
+`33232bf35e829cbd08efc56777988d1e8784760487837aaa2f185c6f2077783d`).
+Contract tests: `gen/v16_contract_test.go`, `catalog/v16_test.go`,
+`datagen/v16_test.go`, `toolexec/v16_test.go`, `protocol/epoch_test.go`.
+
 ## Bench v15 grading policy (shipped ahead of the generation contract)
 
 `grade.PolicyFloorV15` exists only as a grading-policy floor, as v13's grader floor once did; `protocol` gains `BenchVersionV15` only with the generation contract. It
 is not generatable, advertised or active, and it does not change any v2–v14
-generation or grading vector. The v15 generation contract (see
-[dueling-bench.md](dueling-bench.md)) inherits this policy when it lands.
+generation or grading vector. The v15 generation contract (the
+production-scale catalog and decision lane) inherits this policy, and so does
+the v16 dueling contract ([dueling-bench.md](dueling-bench.md)).
 
 - **Case values are atomic** (`caseValuesAreAtomic`). Clause segmentation
   reads every multi-word hidden value of a value or list case (expected,

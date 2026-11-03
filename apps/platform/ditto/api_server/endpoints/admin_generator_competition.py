@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.generator import (
     PROBE_ROTATION_CONFIRMATION,
     REINSTATE_SUBMISSION_CONFIRMATION,
@@ -213,6 +214,18 @@ async def create_settings_revision(
             status_code=409,
             detail=f"confirmation must be exactly {expected_confirmation}",
         )
+    season_refused = payload.settings.dueling_season_refusal()
+    shadow_version = payload.settings.dueling_shadow_bench_version
+    if season_refused is None and shadow_version is not None:
+        try:
+            benchmark_contract(shadow_version)
+        except ValueError:
+            season_refused = (
+                f"dueling_shadow_bench_version {shadow_version} is not a shipped "
+                "bench contract"
+            )
+    if season_refused is not None:
+        raise HTTPException(status_code=422, detail=season_refused)
     latest = await latest_generator_settings_revision(session)
     actual = latest.revision if latest is not None else 0
     if payload.expected_revision != actual:
@@ -299,6 +312,7 @@ async def get_scorer_status(
                 live=is_live(row, now=now),
                 grading_bench_versions=row.grading_bench_versions,
                 effective_grading_bench_versions=list(grading_versions(row)),
+                dueling_work_kinds=row.dueling_work_kinds,
             )
             for row in rows
         ],

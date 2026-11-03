@@ -12696,6 +12696,7 @@ class TestPublicProgressResolution:
             agent=SimpleNamespace(agent_id=uuid4(), name="lihai"),
             ticket=SimpleNamespace(slot_id="slot-0", bench_version=7, issued_at=now),
             progress=SimpleNamespace(stage=stage, completed=completed, total=total),
+            inference_activity_at=None,
         )
         return public_endpoint._public_benchmark_progress(work, now)  # type: ignore[arg-type]
 

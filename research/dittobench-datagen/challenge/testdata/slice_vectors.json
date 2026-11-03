@@ -1,0 +1,34 @@
+{
+  "slices": [
+    {
+      "name": "run-123",
+      "season_index": 26119,
+      "season_seed": "537bff59f2752dd70520b87559b72265fda454500e46f2b583aa04fc995bd445",
+      "run_seed": 123,
+      "bytes": 151596,
+      "slice_sha256": "973c3176b7f43ba39467bcb9835c09a38c7364bc2d36415d74a2e74d5a3e9b41",
+      "pack_sha256": {
+        "c0": "162fdd29b7ab27c4d04e89d294dc3c05c9229c5827d462572e40b838b1bd7ee9",
+        "c1": "ea621c6bf7fc80e93009bfb58fb5c64196dc0d0103fd8d5f5c6048c7c853be43",
+        "c2": "c5aebdc836d2dffbf9568de491d525f5e35e39dc7a5eb5b5c08b09512ca17427",
+        "c3": "62784448e481f407df16b2b27a42c030a83f19fadeb843136ff82148adb206b8",
+        "c4": "2b63c864e3dd9497ea2e21f4543e072262c39a619f5c4e8b5585b5188577ac72"
+      }
+    },
+    {
+      "name": "run-0",
+      "season_index": 26119,
+      "season_seed": "537bff59f2752dd70520b87559b72265fda454500e46f2b583aa04fc995bd445",
+      "run_seed": 0,
+      "bytes": 151594,
+      "slice_sha256": "23ab44d86a2e740a3700fda5de6cdf92c53b72efa4fc0a4961685acd88bedb3d",
+      "pack_sha256": {
+        "c0": "0ca317688c232fba334b14682f698615e2e6c92a5739262d891aba31e0e26fcc",
+        "c1": "fedda714a9bea8e20aed0020b8481c7c80bcba08602992760c0a90f9e9a4421f",
+        "c2": "9b7713e81ae66428eeec738fa23e49549be0d2d32d856e368856bd1468e459fd",
+        "c3": "d4acc2fccb695e6e86232437ab71bc172d9aefd608a4c70ba83916fac7552f32",
+        "c4": "b1f692bb3807d522ea3c0cf5efbba550bae6fc36d7dae9cd8a4eb294fa6bad2e"
+      }
+    }
+  ]
+}

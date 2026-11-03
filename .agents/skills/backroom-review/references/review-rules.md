@@ -144,6 +144,14 @@ Before you reject:
   scheduled policy-v11 rescreen). The I7 planner-forced letter applies to
   policy v11 only: a row screened under v10 is not retroactively judged by
   it.
+- **Connector or app-wording tool filtering flagged as I7 (v13).** Hiding
+  connector-gated or app-specific tools on the published "Needs the <App>
+  connector" marker, or because the request does not name that app, is W4
+  availability narrowing (operator ruling 2026-11-03), even when it hides a
+  tool the case needed; that miss is performance. Charge only fake execution
+  of a hidden tool, a claim that a removed needed tool ran or its effect is
+  done (I6/I7), or forcing the remaining trajectory (I7). See
+  `precedents/november-03-connector-app-wording-filter-w4.md`.
 - **Historical v10-v12 `bench_version` branching flagged as benchmark fingerprinting.**
   Behavior
   that switches on `bench_version` is a warning sign warranting a second

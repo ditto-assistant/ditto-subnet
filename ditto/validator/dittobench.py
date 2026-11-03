@@ -15,6 +15,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import json
 import logging
 import re
 import time
@@ -39,6 +40,7 @@ from ditto.api_models.generator_round_validator import (
 from ditto.api_models.validator import (
     ArtifactResponse,
     BenchmarkRuntimeSettings,
+    JobResponse,
     ScoreReport,
 )
 from ditto.api_models.validator_capabilities import (
@@ -49,6 +51,7 @@ from ditto.api_models.validator_capabilities import (
     ScorerProbeReason,
     V14ScoredRuntimeEnvEvidence,
     V15ScoredRuntimeEnvEvidence,
+    V16ScoredRuntimeEnvEvidence,
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
@@ -78,6 +81,12 @@ from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
     CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
     CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+)
+from ditto_screening_protocol.dueling import (
+    DUELING_MIN_BENCH_VERSION,
+    DUELING_SLICE_MODE,
+    DuelingReport,
+    is_dueling_bench_version,
 )
 
 if TYPE_CHECKING:
@@ -149,6 +158,174 @@ def scorer_generator_round_bench_versions(
             advertised & set(GENERATOR_ROUND_BENCH_VERSIONS) & set(observed_versions)
         )
     )
+
+
+# A scorer advertises ``dueling-slice-v1`` plus one ``dueling-slice-bench-<n>``
+# per bench version >= 16 it runs with a generator slice (spec 7.5).
+DUELING_SLICE_FEATURE = DUELING_SLICE_MODE
+_DUELING_SLICE_BENCH_FEATURE = re.compile(r"dueling-slice-bench-([1-9][0-9]{0,3})")
+# ``challenge.MaxRoundDatasetBytes``: the largest slice /v2/score accepts.
+MAX_DUELING_SLICE_BYTES = 32 << 20
+
+
+def scorer_dueling_slice_bench_versions(
+    features: object, observed_versions: tuple[int, ...]
+) -> tuple[int, ...] | None:
+    """The dueling bench versions both the scorer and this validator can run.
+
+    Requires the ``dueling-slice-v1`` mode feature, then keeps every advertised
+    ``dueling-slice-bench-<n>`` that is a dueling version (``>= 16``) and that
+    this validator is verified to run (``observed_versions`` is already capped
+    at its ``SUPPORTED_BENCH_VERSIONS``). ``None`` when nothing survives, so a
+    validator that cannot score a dueling lease signs the exact bytes it
+    always did and Platform leases it no ``>= 16`` ticket.
+    """
+    if not isinstance(features, list) or DUELING_SLICE_FEATURE not in features:
+        return None
+    advertised = {
+        int(match.group(1))
+        for feature in features
+        if isinstance(feature, str)
+        and (match := _DUELING_SLICE_BENCH_FEATURE.fullmatch(feature))
+    }
+    versions = tuple(
+        sorted(
+            version
+            for version in advertised & set(observed_versions)
+            if is_dueling_bench_version(version)
+        )
+    )
+    return versions or None
+
+
+@dataclass(frozen=True)
+class DuelingSlice:
+    """A verified bench >= 16 generator slice to forward on ``/v2/score``."""
+
+    slice_bytes: bytes
+    expected_slice_sha256: str
+    owner_key: str
+    season_id: str
+    mode: str = DUELING_SLICE_MODE
+
+
+class DuelingSliceError(ValueError):
+    """A dueling lease the validator refuses to score; ``code`` is the reason."""
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def dueling_slice_from_lease(job: JobResponse) -> DuelingSlice | None:
+    """Decode and verify a lease's dueling slice, or ``None`` below v16.
+
+    A ``bench_version >= 16`` lease must carry all five dueling fields and
+    bytes that hash to ``expected_slice_sha256``; anything else raises
+    :class:`DuelingSliceError` so the caller hands the ticket back as
+    infrastructure instead of scoring a run the scorer would refuse. Below v16
+    the fields are never forwarded: a stray one is logged and dropped.
+    """
+    fields = (
+        job.dueling_slice_mode,
+        job.dueling_slice_bytes,
+        job.expected_slice_sha256,
+        job.dueling_owner_key,
+        job.dueling_season_id,
+    )
+    if job.bench_version is None or not is_dueling_bench_version(job.bench_version):
+        if any(value is not None for value in fields):
+            logger.warning(
+                "lease for agent %s at bench_version %r carries dueling slice "
+                "fields; a pre-v%d lease never forwards them",
+                job.agent_id,
+                job.bench_version,
+                DUELING_MIN_BENCH_VERSION,
+            )
+        return None
+    if (
+        job.dueling_slice_mode != DUELING_SLICE_MODE
+        or not job.dueling_slice_bytes
+        or job.expected_slice_sha256 is None
+        or job.dueling_owner_key is None
+        or job.dueling_season_id is None
+    ):
+        raise DuelingSliceError(
+            f"bench v{job.bench_version} lease for agent {job.agent_id} is "
+            "missing its dueling slice",
+            code="dueling_slice_missing",
+        )
+    try:
+        slice_bytes = base64.b64decode(job.dueling_slice_bytes, validate=True)
+    except ValueError as exc:
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is not valid base64",
+            code="dueling_slice_undecodable",
+        ) from exc
+    if not slice_bytes or len(slice_bytes) > MAX_DUELING_SLICE_BYTES:
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is empty or oversized",
+            code="dueling_slice_size",
+        )
+    if hashlib.sha256(slice_bytes).hexdigest() != job.expected_slice_sha256:
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} does not hash to "
+            f"{job.expected_slice_sha256}",
+            code="dueling_slice_digest_mismatch",
+        )
+    # The slice names its own season; a lease that pins another one would only
+    # be caught after a full scoring run (verify_dueling_report), so refuse it
+    # before anything runs.
+    try:
+        header = json.loads(slice_bytes)
+    except ValueError as exc:  # includes UnicodeDecodeError
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is not valid JSON",
+            code="dueling_slice_undecodable",
+        ) from exc
+    if not isinstance(header, dict):
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is not a JSON object",
+            code="dueling_slice_undecodable",
+        )
+    if header.get("season_id") != job.dueling_season_id:
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} does not match its lease "
+            f"season {job.dueling_season_id}",
+            code="dueling_slice_season_mismatch",
+        )
+    return DuelingSlice(
+        slice_bytes=slice_bytes,
+        expected_slice_sha256=job.expected_slice_sha256,
+        owner_key=job.dueling_owner_key,
+        season_id=job.dueling_season_id,
+    )
+
+
+def verify_dueling_report(report: ScoreReport, dueling_slice: DuelingSlice) -> None:
+    """Refuse a dueling report that does not describe the forwarded slice.
+
+    The scorer echoes the slice digest, owner and season in ``details.dueling``
+    (spec 7.5). A missing or contradicting block means the run did not score the
+    leased slice, so it must not be signed.
+    """
+    details = report.details if isinstance(report.details, dict) else {}
+    try:
+        dueling = DuelingReport.model_validate(details.get("dueling"))
+    except ValueError as exc:
+        raise ValidatorInfrastructureError(
+            "scorer report carries no valid details.dueling block",
+            code="dueling_report_invalid",
+        ) from exc
+    if (
+        dueling.slice_sha256 != dueling_slice.expected_slice_sha256
+        or dueling.owner_key != dueling_slice.owner_key
+        or dueling.season_id != dueling_slice.season_id
+    ):
+        raise ValidatorInfrastructureError(
+            "scorer details.dueling does not match the leased slice",
+            code="dueling_report_mismatch",
+        )
 
 
 # Terminal job states reported by dittobench-api's store.
@@ -1324,6 +1501,19 @@ class DittobenchClient:
                     v15_scored_runtime_env = v15_candidate
             except ValueError:
                 pass
+        v16_scored_runtime_env = None
+        if (
+            16 in observed_versions
+            and payload.get("v16_scored_runtime_env") is not None
+        ):
+            try:
+                v16_candidate = V16ScoredRuntimeEnvEvidence.model_validate(
+                    payload["v16_scored_runtime_env"]
+                )
+                if v16_candidate.source_revision == source_revision:
+                    v16_scored_runtime_env = v16_candidate
+            except ValueError:
+                pass
         try:
             generator_rounds = (
                 13 in observed_versions
@@ -1360,6 +1550,9 @@ class DittobenchClient:
                     if generator_rounds
                     else None
                 ),
+                dueling_slice_bench_versions=scorer_dueling_slice_bench_versions(
+                    payload.get("features"), observed_versions
+                ),
                 supported_bench_versions=observed_versions,
                 observed_at=observed_at,
                 software_version=software_version,
@@ -1367,6 +1560,7 @@ class DittobenchClient:
                 scored_runtime_env=scored_runtime_env,
                 v14_scored_runtime_env=v14_scored_runtime_env,
                 v15_scored_runtime_env=v15_scored_runtime_env,
+                v16_scored_runtime_env=v16_scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,
@@ -1492,6 +1686,7 @@ class DittobenchClient:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
@@ -1514,6 +1709,10 @@ class DittobenchClient:
         (tamper-evidence — every k=3 validator provably scored the platform's
         dataset). The deprecated unversioned scoring and implicit practice
         routes are not used.
+
+        ``dueling_slice`` is the verified bench >= 16 generator slice
+        (:func:`dueling_slice_from_lease`). It is forwarded only at a dueling
+        version and the report's ``details.dueling`` must echo it.
         """
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
@@ -1544,13 +1743,17 @@ class DittobenchClient:
             inference_ticket_deadline=inference_ticket_deadline,
             ticket_deadline=ticket_deadline,
             benchmark_runtime=benchmark_runtime,
+            dueling_slice=dueling_slice,
         )
-        return await self._poll(
+        report = await self._poll(
             run_id,
             progress_callback=progress_callback,
             expected_bench_version=bench_version,
             ticket_deadline=ticket_deadline,
         )
+        if dueling_slice is not None:
+            verify_dueling_report(report, dueling_slice)
+        return report
 
     async def run_generator_round(
         self,
@@ -1660,6 +1863,7 @@ class DittobenchClient:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> str:
         del ticket_deadline  # Manual retry policy forbids admission replay.
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
@@ -1762,6 +1966,36 @@ class DittobenchClient:
             body["private_dataset_bytes"] = base64.b64encode(
                 private_dataset_bytes
             ).decode("ascii")
+        # A canonical bench >= 16 run carries its season slice (spec 7.5); a
+        # generator round at a dueling version is a private pack dataset and
+        # never does. Below v16 the fields are never sent.
+        if is_dueling_bench_version(bench_version) and private_dataset_mode is None:
+            if dueling_slice is None:
+                raise DittobenchError(
+                    f"benchmark v{bench_version} requires a dueling slice"
+                )
+            if dueling_slice.mode != DUELING_SLICE_MODE:
+                raise DittobenchError("dueling slice mode mismatch")
+            if (
+                not dueling_slice.slice_bytes
+                or len(dueling_slice.slice_bytes) > MAX_DUELING_SLICE_BYTES
+            ):
+                raise DittobenchError("dueling slice is empty or oversized")
+            if (
+                hashlib.sha256(dueling_slice.slice_bytes).hexdigest()
+                != dueling_slice.expected_slice_sha256
+            ):
+                raise DittobenchError("dueling slice digest mismatch")
+            body["dueling_slice_mode"] = dueling_slice.mode
+            body["dueling_slice_bytes"] = base64.b64encode(
+                dueling_slice.slice_bytes
+            ).decode("ascii")
+            body["expected_slice_sha256"] = dueling_slice.expected_slice_sha256
+            body["dueling_owner_key"] = dueling_slice.owner_key
+        elif dueling_slice is not None:
+            raise DittobenchError(
+                f"benchmark v{bench_version} does not take a dueling slice"
+            )
         body["bench_version"] = bench_version
         if benchmark_runtime is not None:
             body["benchmark_runtime"] = benchmark_runtime.model_dump(mode="json")

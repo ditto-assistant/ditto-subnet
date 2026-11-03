@@ -37,10 +37,10 @@
   },
   "pnpm": {
     "overrides": {
-      "seroval": "1.6.10"
+      "seroval": "1.6.11"
     }
   },
   "overrides": {
-    "seroval": "1.6.10"
+    "seroval": "1.6.11"
   }
 }

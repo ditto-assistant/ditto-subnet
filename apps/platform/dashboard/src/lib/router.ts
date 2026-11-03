@@ -167,6 +167,8 @@ export const PAGE_SCOPED_PARAMS: string[] = [
   "bounty",
   // The generator submission a generators-page reader opened.
   "generator",
+  // The generator round whose results a generators-page reader opened.
+  "round",
 ];
 
 // The config knobs allowed to appear in the real query string.

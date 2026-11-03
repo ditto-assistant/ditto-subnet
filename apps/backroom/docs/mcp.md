@@ -50,7 +50,15 @@ check progress, the oldest active-era submission that passes the fleet-wide
 queue filter and holds no lease, and live chat and embedding load against the
 global concurrency limit. `checks_per_minute` and
 `estimated_remaining_slot_minutes` are estimates measured from ticket issue to
-the latest heartbeat, and they are null, never zero, until a check completes. The
+the latest heartbeat, and they are null, never zero, until a check completes.
+Each lease also carries its live hosted-inference grant's
+`inference_chat_requests`, `inference_embedding_requests`,
+`inference_last_activity_at` and `inference_idle_seconds`. A lease whose grant
+served a request inside the 15-minute stall grace is executing cases, whatever
+`stage` says, and is never flagged `stalled`; a grant idle past the grace lets
+the clock rules decide again. This is how to tell a prepare-stage wedge (no
+requests, or idle) from a generator-round run on a validator that does not yet
+forward scorer progress (a steady request count with `stage: preparing`). The
 tool is read-only and schedules nothing.
 
 `list_validator_assignments` reads live leases from
@@ -249,6 +257,14 @@ opens, once it is scored or void.
     - the round driver's last tick.
   - `get_generator_round_dataset` (`backroom:artifact:read`) downloads a
     closed round's exact dataset to reproduce it.
+  - `get_dueling_season` reads the dueling bench (bench v16+) seasons: the
+    target version (shadow while only rolling out) and why no season can
+    open; the open, committed and recent seasons; or one season by id with
+    its commitment, anchor, frozen columns, battery results, per-column means
+    across in-season scores (below the 0.15 floor is flagged) and slice
+    counts. The secret and season seed appear only once a season is revealed.
+  - `list_dueling_slices` lists slice preparations (one per season and run
+    seed) with status, attempts, latency and digests, never the bytes.
   - `list_generator_promotion_candidates` returns discriminating round cases.
   - `get_generator_board` returns the ledger validators fold.
 - **Writes (`backroom:write`, actor recorded):**
@@ -270,6 +286,20 @@ opens, once it is scored or void.
     publish the on-chain commitment of a round that has not opened.
   - `release_generator_round_lease` (`RELEASE GENERATOR ROUND LEASE`) frees a
     quiet validator's round lease.
+  - `rotate_dueling_season` (`ROTATE DUELING SEASON`, audited reason) closes
+    the open dueling season at the next round boundary, or on the next
+    round-driver tick with `immediate: true`; the next season opens at the
+    following boundary on a fresh battery. Columns are never swapped in place.
+  - `retry_dueling_slice_preparation` (`RETRY DUELING SLICE {id}`, audited
+    reason, `expectedStatus: failed` plus the exact `expectedError`) re-queues
+    one failed slice preparation of an open season (attempts kept, error
+    cleared). A scorer-refused request (`infra: unsupported_request`, such as
+    a digest mismatch on the pinned source) needs a rotation instead unless
+    `force: true`. `list_dueling_slices` shows `retryable`, `retry_refusal`
+    and the last retry.
+  - `set_generator_competition_settings` also carries `dueling_enabled`
+    (ships `false`) and `rounds_per_season` (default 1); Platform refuses to
+    enable dueling with `rounds_per_season x epochs_per_round < 2`.
   - `rotate_generator_probe_seed` needs the confirmation
     `ROTATE GENERATOR PROBE SEED`. Every active generator re-qualifies.
   - `rescore_generator_submission` re-qualifies an active generator now.
@@ -679,6 +709,59 @@ false makes uploads free, null leaves it to the generator
 (the Backroom panel does this). An upload must pay its competition's fee
 exactly, and one transfer funds one upload across both lanes.
 
+## Per-owner submission cooldown overrides
+
+The global cooldown (`get_submission_cooldown`) is one interval per payment
+coldkey for every miner. An operator override requires a longer minimum
+interval for one owner identity until it expires or is revoked:
+`scope` `coldkey` names a payment coldkey and `hotkey` names an uploading
+hotkey. Revisions are append-only per identity, so the history is the audit
+trail (reason, actor, created_at, expiry).
+
+`get_owner_submission_cooldowns(scope?, ownerKey?, includeInactive?)` lists
+the current revision of every overridden identity (active only unless
+`includeInactive`). With `scope` and `ownerKey` it adds `lookup`: the
+identity's history, the global cooldown, its newest submission (under this
+identity or any identity a payment record links to it: the coldkeys that paid
+for the hotkey, or the hotkeys the coldkey paid for) and `next_allowed_at`
+under the override.
+`lookup.current=null` means never overridden.
+
+`set_owner_submission_cooldown` installs or replaces one identity's override.
+`expectedRevision` is `lookup.current.revision`, or 0 when `current` is null.
+A 24-hour interval for 14 days on one hotkey:
+
+```json
+{
+  "scope": "hotkey",
+  "ownerKey": "<SS58 hotkey>",
+  "cooldownSeconds": 86400,
+  "expiresInDays": 14,
+  "expectedRevision": 0,
+  "reason": "repeated copy rejects",
+  "confirmation": "SET OWNER SUBMISSION COOLDOWN HOTKEY <SS58 hotkey> 86400 SECONDS FOR 14 DAYS"
+}
+```
+
+`cooldownSeconds` is 60..2592000 and `expiresInDays` 1..90 from the write.
+`revoke_owner_submission_cooldown(scope, ownerKey, expectedRevision, reason,
+confirmation)` ends an active override early with the phrase
+`REVOKE OWNER SUBMISSION COOLDOWN <SCOPE> <ownerKey>`.
+
+Upload check, slot reservation and legacy uploads enforce the longer of the
+global cooldown and every active override naming the uploading hotkey or the
+payment coldkey. The interval is measured from the owner's newest submission
+under either identity, so a hotkey override still holds an owner who pays from
+a fresh coldkey, and a coldkey override holds an owner who rotates hotkeys.
+While a hotkey override is active, a live admission another coldkey reserved
+for that hotkey counts as a submission, and admissions under one hotkey are
+serialized, so two coldkeys reserving in parallel cannot both pass it. An
+override never shortens the global cooldown and never holds past its own
+expiry. An admission already reserved before the write is honored. The miner
+gets the existing cooldown error (1105, HTTP 429 on upload) with the interval
+and expiry; the operator's reason is never shown. To cover an owner who pays
+from several coldkeys, set the hotkey and each coldkey separately.
+
 ## Reading miner source
 
 Three tools, used in this order. Skipping the middle one is the expensive
@@ -736,6 +819,77 @@ facts grouped by release-policy window; and a live noise floor for each
 bench's top 10. Closed days are frozen as recorded. It changes nothing and
 needs `backroom:read`. Definitions and thresholds come back in the payload;
 the design lives in `apps/platform/docs/competition-improvement-metrics.md`.
+
+## Stranded previous-era submissions
+
+`list_stranded_previous_era_submissions(limit?, offset?, ownerBestOnly?)`
+lists every `scored` or `live` submission that has accepted scores on the
+previous benchmark (the admission rollout's `from_version`), no active-version
+score, and no admission path into the active era: it is not a frozen cohort
+member, not adopted carryover, not first queued after the rollout opened, and
+has no audited contract refresh. This is the designed era boundary. The
+active era pins no dataset and issues no ticket for these rows, so they are
+missing from the active leaderboard. For one agent,
+`get_benchmark_contract_refresh` reports `benchmark dataset is missing` and
+`agent_scoring_readiness` reports `historical submission is not admitted`.
+
+Each row carries the previous-era score count and median, `previous_finalized`,
+`has_active_dataset`, `queue_withdrawn`, `cohort_sibling_agent_id`, and
+`owner_best_stranded`, the owner's highest-median stranded row. The `reason`
+field is `owner_in_cohort` when a frozen sibling already represents the owner
+on the active board, and `owner_outside_cohort` otherwise. `ownerBestOnly`
+keeps one row per owner. The payload also names the admission rollout and
+whether `prev_gen_carryover` is enabled. The tool changes nothing and needs
+`backroom:read`.
+
+### Admitting one stranded submission
+
+`admit_stranded_submission(agentId, expectedActiveVersion, expectedSha256,
+expectedPreviousScoreCount, reason, confirmation)` is the guarded operator
+backfill for one row of that list, after activation. It renders and pins the
+agent's active-version dataset, appends the agent to the activated rollout
+after the frozen cohort, and writes a `stranded_admitted` rollout audit event
+with the actor, reason, artifact SHA and previous-era evidence, all in one
+transaction under the rollout row lock. The cohort size and activation gates
+do not move. The agent stays `scored` or `live`, and its previous-era scores
+and status history are not changed. Membership is an existing admission
+disjunct, and the post-activation top-up lane (`issue_rollout_topup_ticket`)
+leases activated-rollout members below the active-version quorum straight out
+of `scored`. That lane keeps its rails: distinct validators, retry budget,
+queue withdrawal and retirement.
+
+Each guard is checked before the dataset is rendered and again before
+commit:
+
+- `expectedActiveVersion` is the active bench, and no rollout is open;
+- `expectedSha256` is the agent's exact artifact SHA;
+- the agent is in the stranded list. That means `scored` or `live`, with
+  previous-era scores, no active-version score and no admission path. Banned
+  and rejected agents are never in it;
+- `expectedPreviousScoreCount` equals its previous-era score count;
+- it is not withdrawn from the active queue;
+- its screened image and screening policy satisfy the active contract.
+
+The confirmation is `ADMIT STRANDED {agentId} TO BENCHMARK
+V{expectedActiveVersion}`, with the lowercase UUID. Each call admits one
+agent. A second call for the same agent returns 409 because the agent is no
+longer stranded. The tool needs `backroom:write`.
+
+`get_stranded_admissions(agentId?)` reads each audited admission and its live
+effect:
+
+- `admitted` is the live admission predicate. It turns false if the agent is
+  later withdrawn;
+- `is_member`, actor, reason, the previous-era score count and median, and the
+  pinned dataset SHA;
+- active-version score count and median;
+- `first_lease_at`, the earliest active-version lease, and `live_lease_count`;
+- `ticket_state`: `awaiting_first_lease`, `leased`, `awaiting_next_lease` or
+  `quorum_complete`;
+- every active-version ticket.
+
+It changes nothing and needs `backroom:read`. `agent_scoring_readiness` also
+reports an admitted agent as a cohort-lane member.
 
 ## Diffing two submissions
 

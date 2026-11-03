@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from ditto_screening_protocol.dueling import DUELING_MIN_BENCH_VERSION
 from ditto_screening_protocol.treasury_enforcement import TreasuryWeightCapability
 
 _DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
@@ -215,6 +216,17 @@ class V15ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
     bench_version: Literal[15]
 
 
+class V16ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
+    """Keys reported by a descriptor-verified scorer for its v16 sandbox.
+
+    v16 (the dueling bench) injects the v15 key set, but the packet is bound to
+    its version like every earlier one, so a v15 packet can never qualify a
+    v16 rollout.
+    """
+
+    bench_version: Literal[16]
+
+
 class ScorerBenchmarkCapability(BaseModel):
     """Identity-bound benchmark support observed from the scorer sidecar."""
 
@@ -232,6 +244,9 @@ class ScorerBenchmarkCapability(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     v15_scored_runtime_env: V15ScoredRuntimeEnvEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    v16_scored_runtime_env: V16ScoredRuntimeEnvEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     v7_calibration: V7InferenceCalibration | None = None
@@ -258,6 +273,14 @@ class ScorerBenchmarkCapability(BaseModel):
     generator_round_bench_versions: SupportedBenchVersions | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    # The bench versions the scorer runs with a ``dueling-slice-v1`` generator
+    # slice, read from its ``dueling-slice-bench-<n>`` features and capped at
+    # the versions this validator runs. Absent unless advertised, so validators
+    # without it sign exactly the bytes they always did; Platform leases a
+    # bench >= 16 ticket only to a validator that forwards its version here.
+    dueling_slice_bench_versions: SupportedBenchVersions | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     # The scorer runs a screened image without the source tarball (its
     # ``screened-image-source-free-v1`` feature). Platform then withholds the
     # source URL from this validator. Absent unless true, so validators without
@@ -281,6 +304,18 @@ class ScorerBenchmarkCapability(BaseModel):
                 "generator round bench versions require the round mode and "
                 "verified support for each version"
             )
+        if self.dueling_slice_bench_versions is not None and (
+            self.status != "fresh_verified"
+            or not set(self.dueling_slice_bench_versions) <= set(versions)
+            or any(
+                version < DUELING_MIN_BENCH_VERSION
+                for version in self.dueling_slice_bench_versions
+            )
+        ):
+            raise ValueError(
+                "dueling slice bench versions require a verified scorer that "
+                "runs each version, all at or above the dueling floor"
+            )
         if self.scored_runtime_env is not None and (
             self.status != "fresh_verified"
             or 13 not in versions
@@ -301,6 +336,12 @@ class ScorerBenchmarkCapability(BaseModel):
             or self.source_revision != self.v15_scored_runtime_env.source_revision
         ):
             raise ValueError("v15 runtime environment requires verified v15 identity")
+        if self.v16_scored_runtime_env is not None and (
+            self.status != "fresh_verified"
+            or 16 not in versions
+            or self.source_revision != self.v16_scored_runtime_env.source_revision
+        ):
+            raise ValueError("v16 runtime environment requires verified v16 identity")
         if self.deterministic_v13_datasets and (
             self.status != "fresh_verified" or 13 not in versions
         ):

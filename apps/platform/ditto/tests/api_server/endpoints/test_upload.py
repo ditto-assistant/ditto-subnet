@@ -42,7 +42,11 @@ from ditto.api_server.pricing import (
     OracleUnreachableError,
 )
 from ditto.chain.errors import ChainConnectionError
-from ditto.db.queries.agents import SubmissionCooldownError
+from ditto.db.queries.agents import (
+    SubmissionCooldownDecision,
+    SubmissionCooldownError,
+)
+from ditto.db.queries.owner_submission_cooldown import OwnerCooldownNotice
 from ditto.tests.api_server.conftest import (
     override_get_chain_client,
     override_get_embedder,
@@ -77,7 +81,7 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value=False),
     )
     monkeypatch.setattr(
-        "ditto.api_server.endpoints.upload.get_submission_retry_at",
+        "ditto.api_server.endpoints.upload.submission_cooldown_decision",
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
@@ -556,13 +560,17 @@ class TestUploadCheck:
                 miner_hotkey=_make_keypair().ss58_address,
             )
         )
-        cooldown = AsyncMock(return_value=datetime.now(UTC) + timedelta(hours=1))
+        cooldown = AsyncMock(
+            return_value=SubmissionCooldownDecision(
+                retry_at=datetime.now(UTC) + timedelta(hours=1)
+            )
+        )
         reserve = AsyncMock()
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha", lookup
         )
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_submission_retry_at", cooldown
+            "ditto.api_server.endpoints.upload.submission_cooldown_decision", cooldown
         )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.reserve_upload_admission", reserve
@@ -621,8 +629,8 @@ class TestUploadCheck:
             hours=2, minutes=30
         )
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_submission_retry_at",
-            AsyncMock(return_value=retry_at),
+            "ditto.api_server.endpoints.upload.submission_cooldown_decision",
+            AsyncMock(return_value=SubmissionCooldownDecision(retry_at=retry_at)),
         )
 
         response = await client.post(
@@ -638,6 +646,42 @@ class TestUploadCheck:
             f"owner coldkey may submit again at {retry_at.isoformat()}. "
             "Please try again in 2 hours and 30 minutes."
         ]
+
+    async def test_owner_override_names_its_interval_without_the_reason(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        retry_at = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=20)
+        expires_at = datetime.now(UTC).replace(microsecond=0) + timedelta(days=14)
+        decision = AsyncMock(
+            return_value=SubmissionCooldownDecision(
+                retry_at=retry_at,
+                owner_override=OwnerCooldownNotice(
+                    cooldown_seconds=86400, expires_at=expires_at
+                ),
+            )
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.submission_cooldown_decision",
+            decision,
+        )
+
+        body = _signed_request_body()
+        response = await client.post("/api/v1/upload/check", json=body)
+
+        result = response.json()
+        assert result["ok"] is False
+        assert ERROR_CODE_SUBMISSION_COOLDOWN in result["error_codes"]
+        assert result["messages"][0].startswith(
+            "an operator submission cooldown applies to this owner: one "
+            f"submission per 1 day until {expires_at.isoformat()}. "
+            f"owner coldkey may submit again at {retry_at.isoformat()}."
+        )
+        assert decision.await_args is not None
+        assert decision.await_args.kwargs["miner_hotkey"] == body["hotkey"]
 
     async def test_reservation_race_includes_the_cooldown_countdown(
         self,
