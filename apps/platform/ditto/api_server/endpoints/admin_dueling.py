@@ -8,6 +8,8 @@
   across in-season scores and slice counts.
 - ``GET /admin/generator-competition/dueling/slices``: slice preparations with
   status, attempts, latency and digests (never the bytes).
+- ``GET /admin/generator-competition/dueling/source-releases``: each pinned
+  generator's source release (due time, status, policy snapshot).
 - ``POST /admin/generator-competition/dueling/rotate``: close the open season
   at the next round boundary, or now with ``immediate``, under the
   confirmation ``ROTATE DUELING SEASON`` and an audited reason.
@@ -35,6 +37,7 @@ from ditto.api_models.dueling import (
     AdminDuelingSeasonsResponse,
     AdminDuelingSliceRetryRequest,
     AdminDuelingSlicesResponse,
+    AdminGeneratorSourceReleasesResponse,
     DuelingBatteryView,
     DuelingColumnMean,
     DuelingRotationView,
@@ -42,8 +45,11 @@ from ditto.api_models.dueling import (
     DuelingSliceStatus,
     DuelingSliceView,
     DuelingTargetView,
+    GeneratorSourceReleaseStatus,
+    GeneratorSourceReleaseView,
     retry_dueling_slice_confirmation,
 )
+from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.dueling_seasons import (
     dueling_target,
@@ -58,6 +64,7 @@ from ditto.db.models import (
     DuelingSeason,
     DuelingSeasonBattery,
     DuelingSlicePreparation,
+    GeneratorSourceRelease,
     Score,
     ScoreAuditEntry,
 )
@@ -377,6 +384,81 @@ async def admin_dueling_season(
     if season is None:
         raise HTTPException(status_code=404, detail="unknown dueling season")
     return await _view(session, season, full=True)
+
+
+def release_status(row: GeneratorSourceRelease, *, now: datetime) -> str:
+    """Where a pinned generator's source release stands."""
+    if row.released_at is not None:
+        return "released"
+    if row.first_closed_at is None:
+        return "waiting_close"
+    if row.last_revealed_at is None:
+        return "waiting_reveal"
+    if row.release_at is not None and row.release_at <= now:
+        # Due: released on the next season tick while the policy publishes.
+        if row.disclosure == SourceDisclosure.PUBLIC.value:
+            return "due"
+        return "withheld"
+    return "embargoed"
+
+
+@router.get("/source-releases", response_model=AdminGeneratorSourceReleasesResponse)
+async def admin_generator_source_releases(
+    _admin: AdminDep,
+    session: SessionDep,
+    status: Annotated[GeneratorSourceReleaseStatus | None, Query()] = None,
+    submission_id: Annotated[UUID | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminGeneratorSourceReleasesResponse:
+    """Every pinned generator's source release: due time and status."""
+    now = datetime.now(UTC)
+    rows = list(
+        await session.scalars(
+            select(GeneratorSourceRelease).order_by(
+                GeneratorSourceRelease.release_at.asc().nulls_last(),
+                GeneratorSourceRelease.submission_id,
+            )
+        )
+    )
+    counts: dict[str, int] = {}
+    items: list[GeneratorSourceReleaseView] = []
+    skipped = 0
+    for row in rows:
+        row_status = release_status(row, now=now)
+        counts[row_status] = counts.get(row_status, 0) + 1
+        if status is not None and row_status != status:
+            continue
+        if submission_id is not None and row.submission_id != submission_id:
+            continue
+        if skipped < offset:
+            skipped += 1
+            continue
+        if len(items) >= limit:
+            continue
+        items.append(
+            GeneratorSourceReleaseView(
+                submission_id=row.submission_id,
+                miner_hotkey=row.miner_hotkey,
+                owner_key=row.owner_key,
+                tree_sha256=row.tree_sha256,
+                source_sha256=row.source_sha256,
+                bench_version=row.bench_version,
+                first_season_id=row.first_season_id,
+                last_season_id=row.last_season_id,
+                seasons=row.seasons,
+                first_closed_at=row.first_closed_at,
+                last_revealed_at=row.last_revealed_at,
+                embargo_hours=row.embargo_hours,
+                disclosure=row.disclosure,
+                release_at=row.release_at,
+                released_at=row.released_at,
+                scorer_version=row.scorer_version,
+                status=row_status,  # type: ignore[arg-type]
+                updated_at=row.updated_at,
+            )
+        )
+    return AdminGeneratorSourceReleasesResponse(items=items, counts=counts)
 
 
 @router.get("/slices", response_model=AdminDuelingSlicesResponse)

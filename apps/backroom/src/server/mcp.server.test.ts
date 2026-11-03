@@ -561,6 +561,7 @@ describe('Backroom MCP tools', () => {
         'get_generator_scorer',
         'get_dueling_season',
         'list_dueling_slices',
+        'list_generator_source_releases',
         'rotate_dueling_season',
         'retry_dueling_slice_preparation',
         'get_generator_round_loop',
@@ -995,7 +996,9 @@ describe('Backroom MCP tools', () => {
     // summaries, detail in tool help) measures 231,218 bytes; keep about 0.5 KB.
     // The guarded dueling slice retry (uuid, status, error, force; one-line
     // summary, detail in tool help) measures 232,562 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(233_100)
+    // The generator source release read (status, uuid, limit, offset; one-line
+    // summary, detail in tool help) measures 233,483 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(234_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

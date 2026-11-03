@@ -138,6 +138,7 @@ from ditto.api_server.endpoints import (
     miner_mcp_router,
     miner_me_router,
     name_claims_router,
+    public_dueling_router,
     public_router,
     retrieval_router,
     scoring_router,
@@ -822,6 +823,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_generator_competition_router, prefix="/api/v1")
     app.include_router(admin_generator_rounds_router, prefix="/api/v1")
     app.include_router(admin_dueling_router, prefix="/api/v1")
+    app.include_router(public_dueling_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")

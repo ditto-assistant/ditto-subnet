@@ -74,6 +74,9 @@ describe('dueling season tools', () => {
           current: [season], next: [], recent: [],
         } : season)
       }
+      if (url.includes('/dueling/source-releases')) {
+        return Response.json({ items: [], counts: { released: 1, embargoed: 2 } })
+      }
       if (url.includes('/dueling/slices')) {
         return Response.json({ slices: [], counts: { ready: 2 }, latency_p50_seconds: 12, latency_p95_seconds: 40 })
       }
@@ -94,6 +97,10 @@ describe('dueling season tools', () => {
         .toMatchObject({ id: SEASON, slices: { ready: 2 } })
       expect(json(await client.callTool({ name: 'list_dueling_slices', arguments: { seasonId: SEASON, status: 'ready' } })))
         .toMatchObject({ counts: { ready: 2 } })
+      expect(json(await client.callTool({ name: 'list_generator_source_releases', arguments: { status: 'embargoed' } })))
+        .toMatchObject({ counts: { released: 1, embargoed: 2 } })
+      const [releasesUrl] = fetchMock.mock.calls.find(([url]) => String(url).includes('/source-releases')) as [string]
+      expect(releasesUrl).toContain('status=embargoed')
       const [slicesUrl] = fetchMock.mock.calls.find(([url]) => String(url).includes('/slices')) as [string]
       expect(slicesUrl).toContain(`season_id=${SEASON}`)
       expect(slicesUrl).toContain('status=ready')

@@ -14862,6 +14862,74 @@ class DuelingSlicePreparation(Base):
     )
 
 
+class GeneratorSourceRelease(Base):
+    """When one pinned generator's exact source becomes public (bench v16+).
+
+    Every generator that held a column in a dueling season must have its
+    pinned archive published, so anyone can reproduce a revealed slice
+    (``dueling-bench.md`` section 2, "Delayed reproducibility"). One row per
+    pinned submission, recomputed on every season tick:
+
+    ``release_at = max(revealed_at of the last season that pinned it,
+    closed_at of the first season that pinned it + embargo_hours)``
+
+    Null while either input is unknown (a pinning season still open or not
+    yet revealed). ``released_at`` is set once, the first tick at or after
+    ``release_at`` while the source release policy discloses; a released row
+    never un-releases. The public default generator is already public and
+    never gets a row.
+    """
+
+    __tablename__ = "generator_source_releases"
+
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    tree_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """Bench version of the first season that pinned it."""
+    first_season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    last_season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    seasons: Mapped[int] = mapped_column(Integer, nullable=False)
+    """How many opened seasons pinned it."""
+    first_closed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    last_revealed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    embargo_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    disclosure: Mapped[str] = mapped_column(Text, nullable=False)
+    """The source release policy's disclosure when last computed."""
+    release_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    released_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    """The challenge-scorer revision that batteried (built) the pinned tree."""
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "bench_version >= 16", name="generator_source_releases_bench_floor"
+        ),
+        CheckConstraint(
+            "seasons >= 1 AND embargo_hours >= 0",
+            name="generator_source_releases_counts_check",
+        ),
+        CheckConstraint(
+            "released_at IS NULL OR release_at IS NOT NULL",
+            name="generator_source_releases_released_check",
+        ),
+        Index("generator_source_releases_release_idx", "released_at", "release_at"),
+    )
+
+
 class AgentDistinctiveItems(Base):
     """Distinctive-item index of one artifact for the unreleased-copy signal.
 

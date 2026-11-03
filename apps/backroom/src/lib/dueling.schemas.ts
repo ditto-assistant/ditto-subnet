@@ -148,6 +148,44 @@ export const duelingSlicesSchema = z.object({
   latency_p95_seconds: z.number().nullable(),
 })
 
+// Each pinned generator's source release (bench v16+): release_at =
+// max(reveal of the last season that pinned it, close of the first season that
+// pinned it + embargo_hours); released once due while the policy publishes.
+export const generatorSourceReleaseStatus = z.enum([
+  'waiting_close', 'waiting_reveal', 'embargoed', 'due', 'withheld', 'released',
+])
+
+export const generatorSourceReleasesSchema = z.object({
+  items: z.array(z.object({
+    submission_id: uuid,
+    miner_hotkey: z.string(),
+    owner_key: z.string(),
+    tree_sha256: z.string(),
+    source_sha256: z.string(),
+    bench_version: z.number().int(),
+    first_season_id: uuid,
+    last_season_id: uuid,
+    seasons: z.number().int(),
+    first_closed_at: nullableString,
+    last_revealed_at: nullableString,
+    embargo_hours: z.number().int(),
+    disclosure: z.string(),
+    release_at: nullableString,
+    released_at: nullableString,
+    scorer_version: nullableString,
+    status: generatorSourceReleaseStatus,
+    updated_at: z.string(),
+  })),
+  counts: z.record(z.string(), z.number().int()).default({}),
+})
+
+export const listGeneratorSourceReleasesInputSchema = z.object({
+  status: generatorSourceReleaseStatus.optional(),
+  submissionId: uuid.nullish(),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).max(100_000).default(0),
+})
+
 export const getDuelingSeasonInputSchema = z.object({
   seasonId: uuid.nullish(),
 })
