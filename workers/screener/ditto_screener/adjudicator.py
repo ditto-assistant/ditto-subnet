@@ -52,6 +52,7 @@ from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.source_review import (
     TarSourceRepository,
     _execute_tool,
+    _is_allowed,
     _retryable_model_error_type,
     review_gateway_headers,
 )
@@ -1542,6 +1543,7 @@ class SourceReviewAdjudicator:
             except (
                 OSError,
                 TimeoutError,
+                TypeError,
                 ValueError,
                 httpx.HTTPError,
                 json.JSONDecodeError,
@@ -2005,7 +2007,7 @@ class SourceReviewAdjudicator:
                 if len(tool_calls) != 1 and any(
                     isinstance(call, dict)
                     and isinstance(call.get("function"), dict)
-                    and call["function"].get("name") in _VERDICT_TOOL_NAMES
+                    and _is_allowed(call["function"].get("name"), _VERDICT_TOOL_NAMES)
                     for call in tool_calls
                 ):
                     raise ValueError(
@@ -2519,7 +2521,7 @@ def _record_reads(output: str, seen: set[tuple[str, int]]) -> None:
 
 def _verdict_from(arguments: Mapping[str, object]) -> _Verdict:
     decision = arguments.get("decision")
-    if decision not in {"clear", "reject"}:
+    if not _is_allowed(decision, {"clear", "reject"}):
         raise ValueError("adjudicator decision is invalid")
     reason = arguments.get("reason")
     if not isinstance(reason, str) or not reason.strip():
