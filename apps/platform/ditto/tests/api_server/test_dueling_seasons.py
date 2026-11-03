@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.dueling_seasons as dueling_mod
+import ditto.api_server.generator_source_releases as releases_mod
 from ditto.api_models.generator import generator_settings_confirmation
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -1440,7 +1441,9 @@ class TestDuelingReveal:
         assert board["counts"] == {"released": 1, "waiting_close": 1}
 
     async def test_slice_bytes_are_pruned_once_every_source_is_public(
-        self, session_maker: async_sessionmaker[AsyncSession]
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         default = await _generator(
             session_maker,
@@ -1493,6 +1496,16 @@ class TestDuelingReveal:
             await sync_generator_source_releases(session, now=now)
         # Released just now: still inside the score dispute window.
         assert await _prune(now) == []
+
+        # A withholding policy keeps every byte: nobody else can regenerate.
+        async def _withheld(*_args: Any, **_kwargs: Any) -> ArtifactReleasePolicy:
+            return ArtifactReleasePolicy(
+                disclosure=SourceDisclosure.NEVER, embargo_hours=48
+            )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(releases_mod, "artifact_release_policy", _withheld)
+            assert await _prune(now + timedelta(days=8)) == []
         notes = await _prune(now + timedelta(days=8))
         assert notes == ["season 60 v16: pruned 1 slice(s); digests kept"]
         async with session_maker() as session:

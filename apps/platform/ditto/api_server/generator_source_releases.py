@@ -183,6 +183,10 @@ async def prune_released_slice_bytes(
     ``bytes_pruned_at`` set, ``slice_sha256`` kept. Bounded per tick; the
     caller commits.
     """
+    if not (await artifact_release_policy(session)).releases_publicly:
+        # Released sources are not downloadable under a withholding policy, so
+        # nobody else can regenerate the slices: keep every byte.
+        return []
     cutoff = now - SLICE_SCORE_DISPUTE_WINDOW
     seasons = list(
         await session.scalars(
@@ -235,16 +239,26 @@ async def prune_released_slice_bytes(
         )
         if not ids:
             continue
-        await session.execute(
-            update(DuelingSlicePreparation)
-            .where(DuelingSlicePreparation.id.in_(ids))
-            .values(slice_bytes=None, bytes_pruned_at=now)
+        # Re-checked in the UPDATE: a concurrent prune never re-stamps a row.
+        pruned = len(
+            list(
+                await session.scalars(
+                    update(DuelingSlicePreparation)
+                    .where(
+                        DuelingSlicePreparation.id.in_(ids),
+                        DuelingSlicePreparation.slice_bytes.is_not(None),
+                    )
+                    .values(slice_bytes=None, bytes_pruned_at=now)
+                    .returning(DuelingSlicePreparation.id)
+                )
+            )
         )
         budget -= len(ids)
-        notes.append(
-            f"season {season.season_index} v{season.bench_version}: pruned "
-            f"{len(ids)} slice(s); digests kept"
-        )
+        if pruned:
+            notes.append(
+                f"season {season.season_index} v{season.bench_version}: pruned "
+                f"{pruned} slice(s); digests kept"
+            )
     for note in notes:
         logger.info("dueling slice retention: %s", note)
     return notes
