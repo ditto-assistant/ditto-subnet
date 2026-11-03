@@ -51,7 +51,10 @@ from ditto_screener.l2_review import (
     L2Usage,
     LayeredSourceReviewAgent,
     SolL2SourceReviewAgent,
+    _add_usage,
+    _billable_cost_usd,
     _cost,
+    _effective_input_tokens,
     _enforce_causal_authority,
     _extract_readonly_workspace,
     _failure,
@@ -9791,3 +9794,65 @@ def test_policy_v13_prompt_revisions_carry_one_policy_suffix(revision) -> None:
     value = revision(13)
     assert value.endswith("-policy-v13")
     assert value.count("-policy-v") == 1
+
+
+def _zero_cost_turn() -> dict[str, object]:
+    # One realistic L2 turn on Sol6 as the screener gateway returns it: 180k
+    # prompt tokens with a 150k cached prefix, 6k output, and ``cost: 0.0``.
+    return {
+        "model": "openai/gpt-6-sol",
+        "output": [],
+        "usage": {
+            "input_tokens": 180_000,
+            "output_tokens": 6_000,
+            "input_tokens_details": {"cached_tokens": 150_000},
+            "output_tokens_details": {"reasoning_tokens": 2_000},
+            "cost": 0.0,
+        },
+    }
+
+
+def test_gateway_zero_cost_is_unreported_and_the_cost_cap_trips(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """SN-424: a gateway ``cost: 0`` must not disable ``max_cost_usd``.
+
+    Sol6 estimate ceiling (``_cost``): $4/M uncached input, $0.40/M cached
+    input, $20/M output. Each turn is 30k*4 + 150k*0.4 + 6k*20 per million =
+    $0.30 and 45k billable-equivalent input, so the $25 cap trips on turn 84
+    (3.78M effective input) well before the 5M input budget would.
+    """
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    agent._max_input_tokens = 5_000_000
+    agent._max_output_tokens = 1_000_000
+    agent._max_cost_usd = 25
+    caplog.set_level(logging.WARNING, logger="ditto_screener.l2_review")
+    usage = L2Usage()
+    tripped_at = None
+    for turn in range(1, 112):
+        _, turn_usage, _, _ = _response_output_and_usage(_zero_cost_turn())
+        assert turn_usage.reported_cost_usd is None
+        assert turn_usage.estimated_cost_usd == pytest.approx(0.30)
+        usage = _add_usage(usage, turn_usage)
+        if agent._exceeded_budget(usage):
+            tripped_at = turn
+            break
+    assert tripped_at == 84
+    assert agent._exceeded_budget(usage) == ["cost"]
+    assert _effective_input_tokens(usage) == 84 * 45_000
+    with pytest.raises(ValueError, match="token or cost budget"):
+        agent._require_budget(usage)
+    assert "screener_cost_unreported" in caplog.text
+    assert "reported=zero" in caplog.text
+
+
+def test_one_unreported_turn_makes_the_aggregate_cost_an_estimate() -> None:
+    reported = L2Usage(
+        input_tokens=10, output_tokens=1, estimated_cost_usd=2.0, reported_cost_usd=1.0
+    )
+    unreported = L2Usage(input_tokens=10, output_tokens=1, estimated_cost_usd=2.0)
+    assert _add_usage(L2Usage(), reported).reported_cost_usd == 1.0
+    assert _add_usage(reported, reported).reported_cost_usd == 2.0
+    mixed = _add_usage(reported, unreported)
+    assert mixed.reported_cost_usd is None
+    assert _billable_cost_usd(mixed) == pytest.approx(4.0)

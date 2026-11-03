@@ -294,3 +294,30 @@ async def test_no_model_spend_posts_nothing(
 
     assert platform.review_usage == []
     assert len(platform.verdicts) == 1
+
+
+def test_gateway_zero_cost_for_spent_tokens_is_not_a_reported_cost() -> None:
+    """SN-424: a stage the gateway billed at $0 reports its token estimate."""
+    with collect_review_usage() as usage:
+        for _ in range(3):
+            record_usage(
+                "l2_analyst",
+                model="openai/gpt-6-sol",
+                input_tokens=180_000,
+                output_tokens=6_000,
+                cached_input_tokens=150_000,
+                estimated_cost_usd=0.30,
+                reported_cost_usd=0.0,
+            )
+        record_usage(
+            "l3_adjudicator",
+            model="openai/gpt-6-sol",
+            input_tokens=0,
+            output_tokens=0,
+            reported_cost_usd=0.0,
+        )
+    entries = {e.stage: e for e in usage.entries()}
+    assert entries["l2_analyst"].reported_cost_usd is None
+    assert entries["l2_analyst"].cost_usd == pytest.approx(0.90)
+    # A request that spent nothing can honestly cost nothing.
+    assert entries["l3_adjudicator"].reported_cost_usd == 0.0

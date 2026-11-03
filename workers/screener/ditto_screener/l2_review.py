@@ -3471,11 +3471,7 @@ class TerraSolSourceReviewAgent:
         if not _LATE_RESULT_SUBCODE_RE.fullmatch(subcode):
             subcode = bound
         usage = result.usage
-        cost = (
-            usage.reported_cost_usd
-            if usage.reported_cost_usd is not None
-            else usage.estimated_cost_usd
-        )
+        cost = _billable_cost_usd(usage)
         provider = next(
             (
                 value
@@ -3572,11 +3568,7 @@ class TerraSolSourceReviewAgent:
                     max_output_tokens=self._max_output_tokens,
                     output_tokens_used=error.usage.output_tokens,
                     max_cost_usd=self._max_cost_usd,
-                    cost_usd_used=(
-                        error.usage.reported_cost_usd
-                        if error.usage.reported_cost_usd is not None
-                        else error.usage.estimated_cost_usd
-                    ),
+                    cost_usd_used=_billable_cost_usd(error.usage),
                     model_steps_observed=error.steps_used,
                     tool_calls_observed=len(error.tools),
                     budget_stop_reason={
@@ -7844,13 +7836,42 @@ def _response_output_and_usage(
                 cached_input_tokens=cached,
                 model=model,
             ),
-            reported_cost_usd=(
-                float(reported_cost) if reported_cost is not None else None
+            reported_cost_usd=_reported_turn_cost(
+                reported_cost, input_tokens, output_tokens, model
             ),
         ),
         model,
         provider,
     )
+
+
+def _reported_turn_cost(
+    reported_cost: float | None,
+    input_tokens: int,
+    output_tokens: int,
+    model: object,
+) -> float | None:
+    """Gateway cost for one turn, or ``None`` when it is not a real figure.
+
+    The screener gateway answers ``cost: 0`` for turns that spent millions of
+    tokens (SN-424: attempt 16c416c6 estimated $23.54, reported $0.00), and a
+    reported zero used to override the token estimate, so ``max_cost_usd``
+    could never trip. A zero for a turn that spent tokens is unreported: the
+    budget falls back to tokens x price and the gap is logged for alerting.
+    """
+    if reported_cost is None or (
+        reported_cost <= 0 and input_tokens + output_tokens > 0
+    ):
+        logger.warning(
+            "screener_cost_unreported model=%s reported=%s input_tokens=%d "
+            "output_tokens=%d; budget uses the token estimate",
+            model if isinstance(model, str) else "unknown",
+            "missing" if reported_cost is None else "zero",
+            input_tokens,
+            output_tokens,
+        )
+        return None
+    return float(reported_cost)
 
 
 def _selected_provider(value: object) -> str | None:
@@ -7896,11 +7917,24 @@ def _billable_cost_usd(usage: L2Usage) -> float:
 
 
 def _add_usage(left: L2Usage, right: L2Usage) -> L2Usage:
-    reported = (
-        None
-        if left.reported_cost_usd is None and right.reported_cost_usd is None
-        else (left.reported_cost_usd or 0.0) + (right.reported_cost_usd or 0.0)
-    )
+    # A reported total is only exact when every turn reported a cost; one
+    # unreported turn makes the aggregate fall back to the estimate rather
+    # than silently counting that turn as free. An empty side adds nothing.
+    def empty(usage: L2Usage) -> bool:
+        return (
+            usage.input_tokens + usage.output_tokens == 0
+            and not usage.estimated_cost_usd
+            and not usage.reported_cost_usd
+        )
+
+    if empty(left):
+        reported = right.reported_cost_usd
+    elif empty(right):
+        reported = left.reported_cost_usd
+    elif left.reported_cost_usd is None or right.reported_cost_usd is None:
+        reported = None
+    else:
+        reported = left.reported_cost_usd + right.reported_cost_usd
     return L2Usage(
         input_tokens=left.input_tokens + right.input_tokens,
         output_tokens=left.output_tokens + right.output_tokens,
