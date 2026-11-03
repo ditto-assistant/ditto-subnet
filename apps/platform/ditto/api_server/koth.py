@@ -13,7 +13,7 @@ import math
 from collections.abc import Container, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -1244,7 +1244,30 @@ def _dueling_pair_mask(a: KothEntry, b: KothEntry) -> frozenset[str] | None:
     return frozenset({a.dueling.owner_key, b.dueling.owner_key})
 
 
-def ledger_row_dueling_fields(row: object) -> dict[str, Any]:
+class DuelingLedgerRowLike(Protocol):
+    """The dueling columns of a Platform ledger row (``LedgerRow``)."""
+
+    @property
+    def dueling_season_id(self) -> UUID | str | None: ...
+
+    @property
+    def dueling(self) -> dict[str, Any] | None: ...
+
+
+class DuelingConfirmationRowLike(Protocol):
+    """A stored confirmation record (``ConfirmationHistoryRow``)."""
+
+    @property
+    def seed(self) -> int: ...
+
+    @property
+    def bench_version(self) -> int: ...
+
+    @property
+    def dueling(self) -> dict[str, Any] | None: ...
+
+
+def ledger_row_dueling_fields(row: DuelingLedgerRowLike) -> dict[str, Any]:
     """``KothEntry`` dueling keyword arguments from a Platform ledger row.
 
     Database-sourced projections carry the representative score's season and
@@ -1253,19 +1276,17 @@ def ledger_row_dueling_fields(row: object) -> dict[str, Any]:
     which the fold reads as no dueling evidence. Per-seed records come from
     :func:`dueling_seed_records`.
     """
-    season = getattr(row, "dueling_season_id", None)
+    season = row.dueling_season_id
     return {
         "dueling_season_id": None if season is None else str(season),
-        "dueling": _stored_dueling_report(getattr(row, "dueling", None)),
+        "dueling": _stored_dueling_report(row.dueling),
     }
 
 
-def _stored_dueling_report(raw: object) -> DuelingReport | None:
+def _stored_dueling_report(raw: dict[str, Any] | None) -> DuelingReport | None:
     """A stored ``details.dueling`` as its model; ``None`` when it does not
     validate (the fold then reads no dueling evidence for it)."""
-    if isinstance(raw, DuelingReport):
-        return raw
-    if not isinstance(raw, dict):
+    if raw is None:
         return None
     try:
         return DuelingReport.model_validate(raw)
@@ -1274,24 +1295,24 @@ def _stored_dueling_report(raw: object) -> DuelingReport | None:
 
 
 def dueling_seed_records(
-    rows: Iterable[object], *, seeds: Container[int]
+    rows: Iterable[DuelingConfirmationRowLike], *, seeds: Container[int]
 ) -> tuple[DuelingSeedRecord, ...] | None:
     """Per-seed ``DuelingSeedRecord`` from stored confirmation rows.
 
-    ``rows`` are ``ConfirmationHistoryRow``-shaped (``seed``,
-    ``bench_version``, ``dueling``); only seeds the projection admits are kept,
+    ``rows`` are stored confirmation records; only seeds the projection admits
+    are kept,
     the database analogue of the served ledger's active confirmation window.
     A database-sourced v16 projection then pairs exactly as the pinned fold
     does over the same records.
     """
     records = tuple(
         DuelingSeedRecord(
-            seed=seed,
-            bench_version=int(getattr(row, "bench_version", 0)),
-            report=_stored_dueling_report(getattr(row, "dueling", None)),
+            seed=row.seed,
+            bench_version=row.bench_version,
+            report=_stored_dueling_report(row.dueling),
         )
         for row in rows
-        if isinstance(seed := getattr(row, "seed", None), int) and seed in seeds
+        if row.seed in seeds
     )
     return records or None
 

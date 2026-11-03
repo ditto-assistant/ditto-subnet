@@ -10,9 +10,7 @@ the same King and tail.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import timedelta
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -22,18 +20,11 @@ import pytest
 from ditto.api_server.endpoints import public as public_endpoint
 from ditto.api_server.endpoints import validator as validator_endpoint
 from ditto.api_server.koth import CrownGate, project_koth
+from ditto.db.queries.confirmation_scores import ConfirmationHistoryRow
 from ditto.db.queries.scores import LedgerRow
 from ditto.tests.api_server.test_crown_gate import _T0, _V16_CASES, _dueling_report
 
 _BASE58 = "ABCDEFGHJKLMNPQRSTUVWXYZ"
-
-
-@dataclass(frozen=True)
-class _DuelingLedgerRow(LedgerRow):
-    """A ledger row carrying the representative score's dueling columns."""
-
-    dueling_season_id: str | None = None
-    dueling: dict | None = None
 
 
 def _hotkey(index: int) -> str:
@@ -45,14 +36,14 @@ def _case_rows(
 ) -> tuple[
     list[LedgerRow],
     dict[UUID, dict[int, float]],
-    dict[UUID, list[SimpleNamespace]],
+    dict[UUID, list[ConfirmationHistoryRow]],
     dict[UUID, str],
 ]:
     """Ledger rows, per-seed medians and raw dueling records for one case."""
     version = case["bench_version"]
     rows: list[LedgerRow] = []
     by_seed: dict[UUID, dict[int, float]] = {}
-    history: dict[UUID, list[SimpleNamespace]] = {}
+    history: dict[UUID, list[ConfirmationHistoryRow]] = {}
     names: dict[UUID, str] = {}
     for index, spec in enumerate(case["entries"], start=1):
         agent_id = UUID(int=index)
@@ -74,7 +65,7 @@ def _case_rows(
             else next(iter(seeds.values())).self_composite()
         )
         rows.append(
-            _DuelingLedgerRow(
+            LedgerRow(
                 miner_hotkey=_hotkey(index),
                 agent_id=agent_id,
                 composite=composite,
@@ -102,9 +93,13 @@ def _case_rows(
             seed: report.self_composite() for seed, report in sorted(seeds.items())
         }
         history[agent_id] = [
-            SimpleNamespace(
+            ConfirmationHistoryRow(
+                agent_id=agent_id,
                 seed=seed,
+                composite=report.self_composite(),
+                validator_hotkey="hotkey-validator",
                 bench_version=version,
+                signature=None,
                 dueling=None if head is None else report.model_dump(mode="json"),
             )
             for seed, report in sorted(seeds.items())
