@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.444.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: Cap continual retests at 10 shared seeds
+  ([#3367](https://github.com/ditto-assistant/ditto-subnet/pull/3367),
+  [`94f9710`](https://github.com/ditto-assistant/ditto-subnet/commit/94f9710b721fa4191f1aec63ae579590f5d1ad70))
+
+
 ## v0.443.0 (2026-11-03)
 
 ### Bug Fixes
