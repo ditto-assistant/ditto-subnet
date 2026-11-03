@@ -56,6 +56,7 @@ import {
 import {
   fetchDuelingSeason,
   listDuelingSlices,
+  retryDuelingSlicePreparation,
   rotateDuelingSeason,
 } from './dueling.service'
 import {
@@ -88,6 +89,7 @@ import {
 import {
   getDuelingSeasonInputSchema,
   listDuelingSlicesInputSchema,
+  retryDuelingSliceInputSchema,
   rotateDuelingSeasonInputSchema,
 } from '../lib/dueling.schemas'
 import {
@@ -845,6 +847,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_dueling_season: 'Read dueling seasons: target, current, next, by id; columns, batteries, column means.',
   list_dueling_slices: 'List dueling slice preparations: status, attempts, latency, digests.',
   rotate_dueling_season: 'Rotate the open dueling season with ROTATE DUELING SEASON; audited. Write.',
+  retry_dueling_slice_preparation: 'Re-queue one failed dueling slice; RETRY DUELING SLICE {id}. Write.',
   tick_generator_rounds: 'Run one idempotent round-driver tick now.',
   get_generator_round_dataset: 'Download a closed round\'s exact dataset to reproduce it. Artifact scope.',
   void_generator_round: 'Void a round with VOID GENERATOR ROUND {n}; expires its live leases.',
@@ -1892,9 +1895,15 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('list_dueling_slices', {
     title: 'List dueling slices',
-    description: 'Dueling slice preparations, newest first: one per (season, run_seed), reserved when a bench v16+ lease finds no ready slice (the lease answers 503 with Retry-After meanwhile) and built by the trusted generator scorer. Each row has status (pending, leased, ready, failed), attempts, error, scorer version, slice_sha256 and size (never the bytes; bytes_pruned once retention dropped them), per-column results (substituted when a pinned generator failed on that seed and the public default filled it), and latency from reservation to ready or failed; latency_p50/p95 summarize the page and counts covers the whole filter. Filter by seasonId and status. Requires backroom:read.',
+    description: 'Dueling slice preparations, newest first: one per (season, run_seed), reserved when a bench v16+ lease finds no ready slice (the lease answers 503 with Retry-After meanwhile) and built by the trusted generator scorer. Each row has status (pending, leased, ready, failed), attempts, error, scorer version, slice_sha256 and size (never the bytes; bytes_pruned once retention dropped them), per-column results (substituted when a pinned generator failed on that seed and the public default filled it), and latency from reservation to ready or failed; latency_p50/p95 summarize the page and counts covers the whole filter. For a failed preparation it also shows retries, the last retry actor, time and reason, retryable and retry_refusal (see retry_dueling_slice_preparation). Filter by seasonId, status, or one preparationId. Requires backroom:read.',
     inputSchema: listDuelingSlicesInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await listDuelingSlices(input)))
+
+  registerTool('retry_dueling_slice_preparation', {
+    title: 'Retry dueling slice preparation',
+    description: 'Re-queue exactly one failed dueling slice preparation so the next bench v16+ lease of its seed reserves it again: status goes back to pending, attempts are kept (the lease attempt cap restarts), the error is cleared, and the retry is audited (actor, reason, previous error). Read it first with list_dueling_slices (preparationId): send expectedStatus failed and expectedError exactly as shown. Refused unless the preparation is failed, its season is open (a closed, revealed or void season is never retried), and the failure was not the scorer refusing the request itself (infra: unsupported_request, such as a digest mismatch on the pinned source: rotate_dueling_season instead), unless force=true with the reason recorded. Confirmation: RETRY DUELING SLICE {preparationId}. Requires backroom:write.',
+    inputSchema: retryDuelingSliceInputSchema, annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => retryDuelingSlicePreparation(input, props.session.email)))
 
   registerTool('rotate_dueling_season', {
     title: 'Rotate dueling season',

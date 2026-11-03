@@ -250,5 +250,15 @@ func (s *server) summarizeV13InferenceCost(benchVersion int, inferenceSessionID 
 	if inferenceSessionID != "" && s.broker != nil {
 		unattributed = s.broker.sessionUnattributedInferenceCost(inferenceSessionID)
 	}
+	return summarizeV13InferenceCostFrom(benchVersion, perCase, unattributed)
+}
+
+// summarizeV13InferenceCostFrom is summarizeV13InferenceCost over an
+// unattributed-cost record already read from the session (a dueling run reads
+// it at the datagen/slice boundary).
+func summarizeV13InferenceCostFrom(benchVersion int, perCase []protocol.CaseScore, unattributed scoregates.InferenceCostRecord) *protocol.InferenceCostSummary {
+	if benchVersion < protocol.BenchVersionV13 {
+		return nil
+	}
 	return scoregates.SummarizeInferenceCost(benchVersion, perCase, unattributed)
 }

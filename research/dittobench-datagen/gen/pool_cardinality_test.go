@@ -120,6 +120,7 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			// Configuration, report ordering, and match sets.
 			"profilesV13":              poolcanary.Internal,
 			"profilesV16":              poolcanary.Internal,
+			"v16AbstentionQuotas":      poolcanary.Keyed,
 			"V13SlotOrder":             poolcanary.Internal,
 			"v13InterimSlots":          poolcanary.Internal,
 			"v13InterimGenerators":     poolcanary.Internal,

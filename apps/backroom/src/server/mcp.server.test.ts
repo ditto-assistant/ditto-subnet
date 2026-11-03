@@ -590,6 +590,7 @@ describe('Backroom MCP tools', () => {
         'get_dueling_season',
         'list_dueling_slices',
         'rotate_dueling_season',
+        'retry_dueling_slice_preparation',
         'get_generator_round_loop',
         'tick_generator_rounds',
         'get_generator_round_dataset',
@@ -1020,9 +1021,9 @@ describe('Backroom MCP tools', () => {
     // help) brings it to 228,914 bytes; keep about 0.5 KB.
     // The dueling-season trio (two bounded reads, one guarded rotation; one-line
     // summaries, detail in tool help) measures 231,218 bytes; keep about 0.5 KB.
-    // Whole-policy settings writes list every field as required (#2979), which
-    // brings the measured catalog to 231,730 bytes; keep about 0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(232_250)
+    // The guarded dueling slice retry (uuid, status, error, force; one-line
+    // summary, detail in tool help) measures 232,562 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(233_100)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

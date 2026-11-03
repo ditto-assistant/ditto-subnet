@@ -32,3 +32,40 @@ const (
 // DuelingBenchVersion reports whether bench version v carries a generator
 // slice in its canonical run.
 func DuelingBenchVersion(v int) bool { return v >= DuelingMinBenchVersion }
+
+// DuelingDetails is the details.dueling block of a bench >= 16 score report
+// (docs/dueling-bench.md section 7.5), mirrored by
+// ditto_screening_protocol.dueling.DuelingReport.
+//
+// The reported composite is the self-masked composite
+// challenge.DuelingComposite(DatagenRaw, DatagenGate, Columns, {OwnerKey}),
+// quantized to micros like every v9+ composite. DatagenRaw is the datagen half
+// before any gate (0.5 x tool_mean + 0.5 x memory_mean); DatagenGate is the
+// product of every gate factor, all computed from datagen cases only.
+// Generator case text never leaves the scorer: only these aggregates do.
+type DuelingDetails struct {
+	SeasonID        string                 `json:"season_id"`
+	SeasonIndex     int64                  `json:"season_index"`
+	SliceSHA256     string                 `json:"slice_sha256"`
+	OwnerKey        string                 `json:"owner_key"`
+	DatagenRaw      float64                `json:"datagen_raw"`
+	DatagenGate     float64                `json:"datagen_gate"`
+	ColumnWeight    float64                `json:"column_weight"`
+	Columns         []DuelingColumnDetails `json:"columns"`
+	CompositeStderr float64                `json:"composite_stderr"`
+}
+
+// DuelingColumnDetails is one slice column's per-run statistics. N counts the
+// column's executed cases after the slice dedupe; Sum and SumSq are the sums of
+// their scores and squared scores, a failed /run counting as 0. OwnerKey is ""
+// for the public default generator (including a substituted column).
+type DuelingColumnDetails struct {
+	ColumnID            string  `json:"column_id"`
+	OwnerKey            string  `json:"owner_key"`
+	SubmissionID        string  `json:"submission_id"`
+	GradingBenchVersion int     `json:"grading_bench_version"`
+	N                   int     `json:"n"`
+	Sum                 float64 `json:"sum"`
+	SumSq               float64 `json:"sum_sq"`
+	Substituted         bool    `json:"substituted"`
+}

@@ -66,6 +66,7 @@ const RELAY_PORTS = [8010, 8011];
 // POSTGRES_POOL_MAX_SIZE=12 is what makes two relays fit under the CURRENT
 // max_connections=100 on ditto-pg-platform without a Postgres restart:
 //   platform 30 + dev 30 + 2x12 = 84, +3 superuser-reserved = 87 of 100.
+// The optional standby adds at most 8, leaving 5 ordinary slots free.
 // Observed live usage is 16 total, and the DB duty cycle of an inference
 // request is small (~15 short ORM statements inside a ~300 ms p50 request that
 // is mostly awaiting OpenRouter), so 12 is ample. Raise it to 20 only after
@@ -202,67 +203,89 @@ const relayApp = (port, index) => ({
   time: true,
 });
 
+const platformApp = {
+  name: "ditto-api",
+  cwd: root,
+  script: venvPython,
+  args: "-m ditto.api_server",
+  interpreter: "none", // the venv python is the interpreter, not a Node script
+
+  // Single instance: uvicorn manages its own worker; we run one pm2 fork.
+  //
+  // Restarts: because this is `exec_mode: "fork"` with `instances: 1`, pm2
+  // has no second instance to shift traffic onto, so `pm2 reload` degrades
+  // to a hard stop/start -- roughly 6s of refused connections, measured.
+  // It is NOT zero-downtime here despite what pm2's docs say about reload
+  // in general.
+  //
+  // `exec_mode: "cluster"` IS NOT THE FIX, and an earlier version of this
+  // comment was wrong to suggest it. pm2 cluster mode is Node's `cluster`
+  // module -- God.js does cluster.setupMaster({exec: ProcessContainer.js})
+  // and ClusterMode.js `God.nodeApp` calls cluster.fork(), so every worker
+  // is a NODE process that require()s the app as a JS module. It cannot
+  // fork a Python interpreter. Worse, pm2 only INFERS cluster mode from a
+  // node/bun interpreter (Common.js determineExecMode); an explicit
+  // exec_mode is passed through with no interpreter check, so setting it
+  // here would be accepted and then crash-loop the app rather than fall
+  // back to fork. Verified against pm2 7.0.3 on the prod host.
+  //
+  // A separate warm standby serves the same HTTP routes, with every
+  // singleton background loop disabled. update.sh rolls it before this
+  // primary, and Caddy fails over while either process restarts.
+  instances: 1,
+  exec_mode: "fork",
+  env: { DITTO_ROLE: "platform", DITTO_PLATFORM_BACKGROUND_TASKS: "true" },
+
+  // Resilience.
+  autorestart: true,
+  max_restarts: 10,
+  min_uptime: "10s",
+  restart_delay: 2000,
+  // Allow uvicorn's 30s graceful shutdown to complete before SIGKILL.
+  kill_timeout: 35000,
+  // Runaway-memory backstop, operator-approved band 2-4 GB. Steady state in
+  // prod is ~950 MB RSS, so 3 GB is ~3.2x headroom: comfortably clear of the
+  // normal working set and of the transient spikes from fully-exhausted
+  // substrate storage reads, while still catching a genuine leak long before
+  // the 16 GB host starts swapping or the kernel OOM-killer picks a victim.
+  // Now that pm2 owns the server process directly, this threshold is live
+  // rather than decorative -- which is also why it could not stay at 750 MB:
+  // the real process already sits above that and would restart-loop.
+  max_memory_restart: "3072M",
+
+  // Logs.
+  out_file: path.join(root, "logs", "ditto-api.out.log"),
+  error_file: path.join(root, "logs", "ditto-api.err.log"),
+  merge_logs: true,
+  time: true, // prefix every log line with a timestamp
+};
+
+// Enabled only after the Ansible-owned Caddy pool and database budget are
+// provisioned. Keep this process warm, but leave all singleton work on primary.
+const standbyPort = Number(process.env.DITTO_PLATFORM_STANDBY_PORT || 0);
+if (!Number.isInteger(standbyPort) || standbyPort < 0 || standbyPort > 65535 ||
+    standbyPort === Number(process.env.API_PORT || 8000) ||
+    RELAY_PORTS.includes(standbyPort)) {
+  throw new Error("DITTO_PLATFORM_STANDBY_PORT must be 0 or a distinct API port");
+}
+const standbyApp = standbyPort ? {
+  ...platformApp,
+  name: "ditto-api-standby",
+  args: `-m ditto.api_server --host 127.0.0.1 --port ${standbyPort}`,
+  env: {
+    DITTO_ROLE: "platform",
+    DITTO_PLATFORM_BACKGROUND_TASKS: "false",
+    POSTGRES_POOL_MIN_SIZE: "2",
+    POSTGRES_POOL_MAX_SIZE: "8",
+  },
+  out_file: path.join(root, "logs", "ditto-api-standby.out.log"),
+  error_file: path.join(root, "logs", "ditto-api-standby.err.log"),
+} : null;
+
 module.exports = {
   apps: [
-    {
-      name: "ditto-api",
-      cwd: root,
-      script: venvPython,
-      args: "-m ditto.api_server",
-      interpreter: "none", // the venv python is the interpreter, not a Node script
-
-      // Single instance: uvicorn manages its own worker; we run one pm2 fork.
-      //
-      // Restarts: because this is `exec_mode: "fork"` with `instances: 1`, pm2
-      // has no second instance to shift traffic onto, so `pm2 reload` degrades
-      // to a hard stop/start -- roughly 6s of refused connections, measured.
-      // It is NOT zero-downtime here despite what pm2's docs say about reload
-      // in general.
-      //
-      // `exec_mode: "cluster"` IS NOT THE FIX, and an earlier version of this
-      // comment was wrong to suggest it. pm2 cluster mode is Node's `cluster`
-      // module -- God.js does cluster.setupMaster({exec: ProcessContainer.js})
-      // and ClusterMode.js `God.nodeApp` calls cluster.fork(), so every worker
-      // is a NODE process that require()s the app as a JS module. It cannot
-      // fork a Python interpreter. Worse, pm2 only INFERS cluster mode from a
-      // node/bun interpreter (Common.js determineExecMode); an explicit
-      // exec_mode is passed through with no interpreter check, so setting it
-      // here would be accepted and then crash-loop the app rather than fall
-      // back to fork. Verified against pm2 7.0.3 on the prod host.
-      //
-      // The real zero-downtime path is horizontal: N processes behind Caddy,
-      // reloaded one at a time. That works for the relay role (see relayApp
-      // above) because a relay runs no singleton background work. It does NOT
-      // work for this role: two `ditto-api` processes would double-run the
-      // provider-route discovery loop, which upserts routing rows with no
-      // ON CONFLICT and no row lock. Making this role horizontally scalable
-      // needs leader election first.
-      instances: 1,
-      exec_mode: "fork",
-
-      // Resilience.
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: "10s",
-      restart_delay: 2000,
-      // Allow uvicorn's 30s graceful shutdown to complete before SIGKILL.
-      kill_timeout: 35000,
-      // Runaway-memory backstop, operator-approved band 2-4 GB. Steady state in
-      // prod is ~950 MB RSS, so 3 GB is ~3.2x headroom: comfortably clear of the
-      // normal working set and of the transient spikes from fully-exhausted
-      // substrate storage reads, while still catching a genuine leak long before
-      // the 16 GB host starts swapping or the kernel OOM-killer picks a victim.
-      // Now that pm2 owns the server process directly, this threshold is live
-      // rather than decorative -- which is also why it could not stay at 750 MB:
-      // the real process already sits above that and would restart-loop.
-      max_memory_restart: "3072M",
-
-      // Logs.
-      out_file: path.join(root, "logs", "ditto-api.out.log"),
-      error_file: path.join(root, "logs", "ditto-api.err.log"),
-      merge_logs: true,
-      time: true, // prefix every log line with a timestamp
-    },
+    platformApp,
+    ...(standbyApp ? [standbyApp] : []),
     ...RELAY_PORTS.map(relayApp),
     {
       // DB-aware retention: keeps evaluating/current-best images, clears old
