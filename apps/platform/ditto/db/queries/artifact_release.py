@@ -120,7 +120,7 @@ async def list_public_source_releases(
     Missing audit records do not prove publication, and legacy weight-only
     confirmations remain insufficient without an actual public fetch receipt.
     """
-    releases = await _list_eligible_source_releases(
+    releases = await list_eligible_source_releases(
         session, agent_ids=agent_ids, quorum=quorum, policy=policy
     )
     if not agent_ids:
@@ -145,14 +145,18 @@ async def list_public_source_releases(
     return releases
 
 
-async def _list_eligible_source_releases(
+async def list_eligible_source_releases(
     session: AsyncSession,
     *,
     agent_ids: list[UUID] | set[UUID] | tuple[UUID, ...],
     quorum: int,
     policy: ArtifactReleasePolicy,
 ) -> dict[UUID, datetime]:
-    """Return ``agent_id -> when its source became publicly downloadable``.
+    """Return source eligibility times derived from currently recorded facts.
+
+    This is not historical handoff proof: emission confirmation can arrive
+    late with an earlier payout-block time. A derived time before a candidate
+    upload does not establish that the route could serve source at that time.
 
     The current predicate the public routes serve, expressed for consumers that
     need the *fact* of publication rather than a wire projection: source release

@@ -12,6 +12,13 @@ award as simulated. Live funding is a separate, later decision.
 
 The rules behind this guide are in [bounty-claims.md](bounty-claims.md).
 
+## Questions
+
+Ask about a bounty on its public GitHub issue, the `owner/repo#issue` the
+board names. A comment there does not claim a slot or keep one for you: only
+a signed claim (`ditto bounty claim`, below) does, and Platform records it.
+Labels and comments never create, change or approve a claim.
+
 ## What a bounty promises
 
 A bounty's current revision fixes, before anyone starts work:
@@ -41,7 +48,8 @@ Platform changes the terms, and it applies to new claims only.
    `uv run ditto cla sign`. Bounty claims always need it, whatever the upload
    gate's mode. See [the miner guide](MINER.md#github-identity-and-contributor-agreement).
 
-A GitHub account and a payee coldkey can each hold one live slot per bounty.
+A GitHub account and a payee coldkey can each hold one live slot per bounty,
+and the bounty's reviewer cannot claim it.
 
 ## Claim a slot
 
@@ -60,7 +68,10 @@ Your delivery deadline starts when the fee is confirmed.
 If the command stops after the hold, finish with
 `uv run ditto bounty confirm CLAIM_ID` on the same machine: the rehearsal fee
 derives from your claim's signature, which `claim` saved there and nobody else
-has. Check a claim at any time with `uv run ditto bounty status CLAIM_ID`.
+has. Check a claim at any time with `uv run ditto bounty status CLAIM_ID`. It
+lists each submission with its decision, the reviewer's reason and any credit,
+each appeal's outcome (pending, upheld or denied), and your refunds, awards
+and their settlement.
 
 You never lose a fee to timing. A fee that arrives after its hold lapsed,
 after the slot went to someone else, after your link, CLA signature or owner
@@ -118,6 +129,13 @@ is never judged by the reviewer who rejected it. An upheld appeal restores
 your claim with a new delivery deadline. While an appeal is pending, the slot
 cannot be reopened for someone else.
 
+Appeal within 3 days to be sure it is heard. For 3 days after a rejection, or
+after a missed deadline is recorded, the slot cannot be reopened for someone
+else. A missed deadline is recorded by the next request or sweep, which can be
+after the deadline itself; its event id appears in the bounty's history once
+it is. After that you can still appeal until an operator reopens the slot,
+which makes the outcome final.
+
 ## Fees, awards and payments
 
 Every confirmed entry fee ends in exactly one outcome:
@@ -166,5 +184,6 @@ owner of a hotkey that has changed hands cannot act on your claim.
 | `new claims are paused for this bounty` | Wait for operators to resume claims. Existing holds and payments are unaffected |
 | `every slot in round N is taken` | No slot in the current round is open |
 | `this GitHub account or payee coldkey already holds a slot on this bounty` | One live slot per account and payee |
+| `the bounty's reviewer cannot claim it` | The GitHub account named as the bounty's reviewer, in any letter case, cannot claim a slot on it |
 | A CLA or GitHub link message | Run `ditto cla sign` or `ditto link-github`, then claim again |
 | `bounty action nonce already used` | That signature was already used for a different request. An exact retry returns the original result |

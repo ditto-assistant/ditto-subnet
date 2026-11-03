@@ -189,6 +189,34 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
         if isinstance(envelope, ManualBatchEnvelope)
         else ManualTransfer(**request.model_dump())
     )
+    expired = journal.db.execute(
+        "SELECT payload FROM events WHERE event='manual_unsigned_expired' "
+        "AND json_extract(payload,'$.request_id')=?",
+        (request.request_id,),
+    ).fetchone()
+    if expired:
+        import hashlib
+        from dataclasses import asdict
+
+        from ditto.treasury.collector import canonical, manual_transfer_history
+
+        manual_transfer_history(journal, policy)
+        if (
+            json.loads(expired[0])["request_digest"]
+            != hashlib.sha256(canonical(asdict(manual)).encode()).hexdigest()
+        ):
+            raise InvalidManualRequest("Expired mailbox UUID changed", envelope)
+        report = ManualReport(
+            collector_policy_digest=policy.digest,
+            observed_at=int(time.time()),
+            request_id=request.request_id,
+            request_digest=envelope.digest,
+            status="failed",
+            failure_code="expired_unsigned",
+        )
+        mailbox.publish(report.model_dump())
+        mailbox.ack(ack_id)
+        return report
     try:
         arm_manual_transfer(journal, policy, chain, manual)
     except ManualIntentRefused as error:
@@ -341,6 +369,9 @@ def process_manual(mailbox, journal, policy, chain, ack_id, body):
                 else "pending"
             ),
             settlement=settlement,
+            failure_code="signing_window_elapsed"
+            if row is None and result == "manual_expired"
+            else None,
         )
     mailbox.publish(report.model_dump())
     if report.status != "pending":

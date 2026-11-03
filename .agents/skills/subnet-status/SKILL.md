@@ -28,8 +28,14 @@ It prints:
 
 1. **Benchmark:** the scoring `bench_version`, the rollout state, and the
    locked harness model and reasoning effort. Only the scoring version pays.
-2. **Emission split:** the public forecast for the miner pool, split into
-   Gamma (service bucket), burn and miners.
+2. **Emission split:** the public forecast for the miner pool, one row per
+   destination: burn, each competition track (memory agents, the generator
+   competition) and each Gamma service bucket. It is the same split the
+   operator sets as one emission allocation (`emission_split` on
+   `/treasury-allocation`: what the newest epoch pin froze for validators;
+   `forecast_split` is the configured split for coming epochs). Gamma counts only while it is enforced, and a
+   track's share assumes it has a payable miner (an empty generator track
+   hands its share to memory).
    - Subtensor gives miners 41% of each block's emission. The split above is
      applied to that pool.
    - `routing` says whether the Gamma routing shown on this page is activated.
@@ -38,7 +44,7 @@ It prints:
    dethrone margin and z, the champion, and each paid recipient. Each
    recipient's share is shown both as a share of KOTH and as a share of the
    miner pool (the 41% of block emission that Subtensor routes by incentive),
-   after the Gamma and burn split. Only the champion and the next four distinct miners are
+   after the Gamma, burn and track split (KOTH pays the memory track only). Only the champion and the next four distinct miners are
    paid.
 4. **Epoch:** when validators next submit weights. A score change pays from
    the next epoch at the earliest.
@@ -78,7 +84,7 @@ Add `--json` for the raw snapshot to script against.
 |---|---|
 | Scoring version and rollout | `GET /bench/rollout` |
 | Harness and grading | `GET /bench/config` |
-| Gamma, burn and miner split | `GET /treasury-allocation` |
+| Gamma, burn and per-track split (`emission_split`) | `GET /treasury-allocation` |
 | Board, payout curve, champion and recipients | `GET /leaderboard?limit=N` (`emissions` block) |
 | Frozen per-epoch recipients | `GET /ledger-epochs?limit=N` |
 | Next epoch | `GET /weights` (`epoch` block) |
@@ -88,6 +94,15 @@ Add `--json` for the raw snapshot to script against.
 
 Send an explicit `User-Agent` header: the CDN refuses some default client
 agents with HTTP 403.
+
+## Bench version changes and the generator competition
+
+The scoring `bench_version` above also sets the generator competition's round
+version: rounds switch to a newly activated version at their next opening,
+once a validator quorum can run it, and accept packs at the active and
+previous grading policies. What a generator miner should do at a version
+change is in `$mine` ("Generator miners at a bench version change") and
+[`tandem-upgrades.md`](../../../research/dittobench-datagen/docs/tandem-upgrades.md).
 
 ## Out of scope
 

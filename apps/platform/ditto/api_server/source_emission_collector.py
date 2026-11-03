@@ -20,7 +20,8 @@ from ditto.api_server.ledger_pin import (
     classify_vector_against_pins,
     pin_expected_burn,
     pin_expected_shares,
-    pin_expected_treasury_vector,
+    pin_generator_fraction,
+    treasury_vector_matches_pin,
 )
 from ditto.chain.models import (
     ChainMinerEarning,
@@ -51,6 +52,7 @@ from ditto.db.queries.king_reign import KingEmissionProof, record_emission_confi
 from ditto.db.queries.source_emission_collector import (
     advance_source_emission_cursor,
     list_source_emission_vector_bindings,
+    record_catch_up_range,
     record_reveal_plan_shadow,
     record_source_emission_payout,
     skip_quiet_source_emission_blocks,
@@ -403,10 +405,10 @@ class SourceEmissionCollector:
         """
         if end <= current:
             return False
-        planner = (
-            plan_source_emission_range_by_reveals
+        planner, planner_name = (
+            (plan_source_emission_range_by_reveals, "reveal")
             if _REVEAL_PLAN_MODE == "primary"
-            else plan_source_emission_range
+            else (plan_source_emission_range, "event")
         )
         try:
             plan = await planner(
@@ -417,14 +419,27 @@ class SourceEmissionCollector:
             )
         except Exception as error:
             chain = getattr(self.state, "chain", None)
-            logger.warning(
-                "source emission sparse plan unavailable; scanning per block: %s",
+            detail = (
                 chain._safe_rpc_error(error)[:200]
                 if chain is not None
-                else type(error).__name__,
+                else type(error).__name__
+            )
+            logger.warning(
+                "source emission sparse plan unavailable; scanning per block: %s",
+                detail,
+            )
+            await self._record_catch_up(
+                current + 1, end, "error", planner_name, detail=detail
             )
             return False
         if plan.full_scan:
+            await self._record_catch_up(
+                current + 1,
+                end,
+                "full_scan",
+                planner_name,
+                detail=plan.full_scan_reason,
+            )
             return False
         async with self.sessions() as session:
             cursor = await session.get(SourceEmissionCollectorCursor, self.netuid)
@@ -474,7 +489,7 @@ class SourceEmissionCollector:
         }
         try:
             await asyncio.gather(*audits)
-            return await self._replay_planned(
+            replayed = await self._replay_planned(
                 current=current, end=end, plan=plan, ahead=ahead
             )
         finally:
@@ -483,6 +498,44 @@ class SourceEmissionCollector:
             for task in pending:
                 task.cancel()
             await asyncio.gather(*audits, *ahead.values(), return_exceptions=True)
+        await self._record_catch_up(
+            current + 1,
+            end,
+            "sparse",
+            planner_name,
+            read=len(interesting),
+            skipped=len(quiet),
+        )
+        return replayed
+
+    async def _record_catch_up(
+        self,
+        first_block: int,
+        last_block: int,
+        outcome: str,
+        planner: str,
+        *,
+        read: int = 0,
+        skipped: int = 0,
+        detail: str | None = None,
+    ) -> None:
+        """Fold one range into Backroom's catch-up summary. Never raises."""
+        try:
+            async with self.sessions() as session, session.begin():
+                await record_catch_up_range(
+                    session,
+                    netuid=self.netuid,
+                    first_block=first_block,
+                    last_block=last_block,
+                    outcome=outcome,
+                    planner=planner,
+                    read=read,
+                    skipped=skipped,
+                    detail=detail,
+                    now=datetime.now(UTC),
+                )
+        except Exception:
+            logger.exception("source emission catch-up summary write failed")
 
     async def _replay_planned(
         self,
@@ -972,42 +1025,47 @@ class SourceEmissionCollector:
         actual: dict[str, int | float] = {
             item.hotkey: item.value for item in consumed.weights
         }
-        if receipt.schema_version == 2:
-            prescribed = pin_expected_treasury_vector(
-                pin, burn_hotkey=payout.owner_hotkey
+        served = pin.context.get("served", {})
+        burn = served.get("burn_share")
+        # A served generator share pays generators the pin did not freeze; the
+        # memory part still has to match, and the burn is either the
+        # memory-only one (no eligible generator) or the generator-paid one.
+        generator = pin_generator_fraction(served) if isinstance(served, dict) else 0.0
+        if receipt.schema_version == 2 and not all(
+            treasury_vector_matches_pin(
+                weights,
+                pin,
+                burn_hotkey=payout.owner_hotkey,
+                generator_fraction=generator,
             )
-            for weights in (receipt.weights, actual):
-                total = sum(weights.values())
-                if total <= 0 or any(
-                    abs(weights.get(hotkey, 0) / total - prescribed.get(hotkey, 0))
-                    > 0.002
-                    for hotkey in set(weights) | set(prescribed)
-                ):
-                    return None
-        burn = pin.context.get("served", {}).get("burn_share")
+            for weights in (receipt.weights, actual)
+        ):
+            return None
         if receipt.schema_version == 1 and (
             not isinstance(burn, (int, float)) or not 0 <= burn < 1
         ):
             return None
         for weights in () if receipt.schema_version == 2 else (receipt.weights, actual):
-            if (
+            total = sum(weights.values())
+            if total <= 0:
+                return None
+            # Recipients and burn must agree on one interpretation: either the
+            # memory-only fold or the generator-paid one, never one of each.
+            if not any(
                 classify_vector_against_pins(
                     weights,
                     expected_current=expected,
                     expected_previous=None,
                     burn_hotkey=payout.owner_hotkey,
+                    generator_current=fraction,
                 )
-                != "current"
-            ):
-                return None
-            total = sum(weights.values())
-            if (
-                total <= 0
-                or abs(
+                == "current"
+                and abs(
                     weights.get(payout.owner_hotkey, 0) / total
-                    - pin_expected_burn(burn, expected)
+                    - pin_expected_burn(burn, expected, generator_fraction=fraction)
                 )
-                > 0.002
+                <= 0.002
+                for fraction in sorted({0.0, generator})
             ):
                 return None
         entry = next(

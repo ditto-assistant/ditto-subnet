@@ -34,6 +34,14 @@ from ditto.api_models.admin_copy_review import (
     AdminSourceDiffFileDetail,
     AdminSourceDiffManifest,
 )
+from ditto.api_models.artifact_fetch_audit import (
+    ArtifactFetchAudit as ArtifactFetchAuditView,
+)
+from ditto.api_models.artifact_fetch_audit import (
+    ArtifactFetchAuditRow,
+    ArtifactFetchRequesterSummary,
+)
+from ditto.api_models.source_release_evidence import SourceReleaseEvidence
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.anti_copy_comparison import compare_anti_copy_pair
 from ditto.api_server.artifact_audit import client_ip, request_detail
@@ -43,6 +51,10 @@ from ditto.api_server.ath_review_state import (
 )
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.review_lineage import (
+    ReviewLineageUnavailableError,
+    build_review_lineage_packet,
+)
 from ditto.api_server.source_diff import (
     build_source_diff_manifest,
     unified_diff_for_file,
@@ -58,9 +70,12 @@ from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
 from ditto.db.models import (
     Agent,
     AgentStatus,
+    ArtifactFetchAudit,
+    ArtifactReleaseSettingsRevision,
     AthReview,
     AthReviewAction,
     Score,
+    ScreeningAttempt,
     ValidatorTicket,
 )
 from ditto.db.queries.artifact_fetch_audit import (
@@ -68,13 +83,18 @@ from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE,
     ENDPOINT_ADMIN_LINEAGE_DIFF,
     ENDPOINT_ADMIN_LINEAGE_DIFF_FILE,
+    ENDPOINT_ADMIN_REVIEW_LINEAGE,
+    ENDPOINT_PUBLIC_ARTIFACT,
     record_artifact_fetch,
 )
+from ditto.db.queries.artifact_release import list_eligible_source_releases
+from ditto.db.queries.artifact_release_settings import artifact_release_policy_as_of
 from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
     open_rollout,
     preserve_desired_authority,
 )
+from ditto.db.queries.king_reign import get_king_reveal
 from ditto.db.queries.lease_liveness import (
     ACTION_FORCE_EXPIRED,
     expire_issued_tickets,
@@ -85,6 +105,7 @@ from ditto.db.queries.payments import (
 )
 from ditto.db.queries.scores import (
     MIN_ELIGIBLE_CASES,
+    SCORING_QUORUM,
     LedgerRow,
     list_scores_for_agent,
 )
@@ -93,12 +114,194 @@ from ditto.db.queries.terminal_quarantine_reconciliation import (
     close_quarantines_for_terminal_ruling,
     lock_active_quarantines,
 )
+from ditto_screening_protocol import ReviewLineagePacket
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
 AdminDep = Annotated[None, Depends(require_admin)]
+
+
+@router.get(
+    "/agents/{agent_id}/source-release-evidence",
+    response_model=SourceReleaseEvidence,
+)
+async def get_agent_source_release_evidence(
+    agent_id: UUID,
+    _admin: AdminDep,
+    session: SessionDep,
+    candidate_agent_id: UUID | None = None,
+) -> SourceReleaseEvidence:
+    """Read publication proof without source URLs or fetcher information."""
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    reference_time = datetime.now(UTC)
+    if candidate_agent_id is not None:
+        candidate = await session.get(Agent, candidate_agent_id)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="candidate agent not found")
+        reference_time = candidate.created_at
+    policy = await artifact_release_policy_as_of(session, at=reference_time)
+    revision = await session.scalar(
+        select(ArtifactReleaseSettingsRevision.revision)
+        .where(ArtifactReleaseSettingsRevision.created_at <= reference_time)
+        .order_by(ArtifactReleaseSettingsRevision.revision.desc())
+        .limit(1)
+    )
+    eligibility = await list_eligible_source_releases(
+        session, agent_ids=[agent_id], quorum=SCORING_QUORUM, policy=policy
+    )
+    count, earliest = (
+        await session.execute(
+            select(func.count(), func.min(ArtifactFetchAudit.fetched_at)).where(
+                ArtifactFetchAudit.agent_id == agent_id,
+                ArtifactFetchAudit.artifact_sha256 == agent.sha256,
+                ArtifactFetchAudit.endpoint == ENDPOINT_PUBLIC_ARTIFACT,
+                ArtifactFetchAudit.requester_kind == "public",
+                ArtifactFetchAudit.requester_id.is_(None),
+            )
+        )
+    ).one()
+    reveals = await get_king_reveal(session, agent_ids=[agent_id])
+    reveal = reveals.get(agent_id)
+    return SourceReleaseEvidence(
+        agent_id=agent_id,
+        artifact_sha256=agent.sha256,
+        candidate_agent_id=candidate_agent_id,
+        reference_time=reference_time,
+        policy_revision=revision or 0,
+        disclosure=policy.disclosure,
+        embargo_hours=policy.embargo_hours,
+        emission_confirmed_at=(reveal.emission_confirmed_at if reveal else None),
+        derived_eligibility_at=eligibility.get(agent_id),
+        publication_evidence_at=earliest,
+        publication_proven_by_reference_time=(
+            earliest is not None and earliest <= reference_time
+        ),
+        exact_sha_public_handoff_count=count,
+        earliest_exact_sha_public_handoff_at=earliest,
+    )
+
+
+_FETCH_AUDIT_IP_DOMAIN = b"ditto-artifact-fetch-audit-ip:v1:"
+_SHA256_HEX = r"^[0-9a-f]{64}$"
+
+
+def _hashed_ip(address: str | None) -> str | None:
+    if not address:
+        return None
+    return hashlib.sha256(_FETCH_AUDIT_IP_DOMAIN + address.encode()).hexdigest()[:16]
+
+
+@router.get("/artifact-fetch-audit", response_model=ArtifactFetchAuditView)
+async def get_artifact_fetch_audit(
+    _admin: AdminDep,
+    session: SessionDep,
+    agent_id: UUID | None = None,
+    artifact_sha256: Annotated[str | None, Query(pattern=_SHA256_HEX)] = None,
+    before: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> ArtifactFetchAuditView:
+    """List who was served an artifact's source or image before ``before``.
+
+    Exactly one of ``agent_id`` or ``artifact_sha256`` selects the artifact; a
+    SHA covers every agent row that uploaded those exact bytes. Network
+    addresses are returned only as a truncated hash, and the forwarding claim
+    is reduced to a presence flag.
+    """
+    if (agent_id is None) == (artifact_sha256 is None):
+        raise HTTPException(
+            status_code=422, detail="supply exactly one of agent_id or artifact_sha256"
+        )
+    reference = before or datetime.now(UTC)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=UTC)
+    if agent_id is not None:
+        agent = await session.get(Agent, agent_id)
+        agent_ids = [agent_id]
+        sha = agent.sha256 if agent is not None else None
+    else:
+        sha = artifact_sha256
+        agent_ids = list(
+            await session.scalars(
+                select(Agent.agent_id)
+                .where(Agent.sha256 == artifact_sha256)
+                .order_by(Agent.created_at)
+            )
+        )
+    scope = (
+        ArtifactFetchAudit.agent_id.in_(agent_ids),
+        ArtifactFetchAudit.fetched_at < reference,
+    )
+    total = 0
+    records: list[ArtifactFetchAudit] = []
+    if agent_ids:
+        total = int(
+            await session.scalar(
+                select(func.count()).select_from(ArtifactFetchAudit).where(*scope)
+            )
+            or 0
+        )
+        records = list(
+            await session.scalars(
+                select(ArtifactFetchAudit)
+                .where(*scope)
+                .order_by(ArtifactFetchAudit.fetched_at, ArtifactFetchAudit.seq)
+                .limit(limit)
+            )
+        )
+    rows: list[ArtifactFetchAuditRow] = []
+    summaries: dict[tuple[str, str | None], ArtifactFetchRequesterSummary] = {}
+    for record in records:
+        detail = record.detail if isinstance(record.detail, dict) else {}
+        served_source = detail.get("served_source", True) is not False
+        image = detail.get("served_screened_image")
+        fetched_at = record.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=UTC)
+        rows.append(
+            ArtifactFetchAuditRow(
+                fetched_at=fetched_at,
+                agent_id=record.agent_id,
+                artifact_sha256=record.artifact_sha256,
+                endpoint=record.endpoint,
+                requester_kind=record.requester_kind,
+                requester_id=record.requester_id,
+                requester_instance_id=record.requester_instance_id,
+                lease_id=record.lease_id,
+                bench_version=record.bench_version,
+                served_source=served_source,
+                served_screened_image=image if isinstance(image, bool) else None,
+                source_ip_hash=_hashed_ip(record.source_ip),
+                forwarded_claim_present=bool(detail.get("claimed_forwarded_for")),
+            )
+        )
+        key = (record.requester_kind, record.requester_id)
+        summary = summaries.get(key)
+        if summary is None:
+            summaries[key] = ArtifactFetchRequesterSummary(
+                requester_kind=record.requester_kind,
+                requester_id=record.requester_id,
+                fetch_count=1,
+                source_fetch_count=int(served_source),
+                first_fetched_at=fetched_at,
+                last_fetched_at=fetched_at,
+            )
+        else:
+            summary.fetch_count += 1
+            summary.source_fetch_count += int(served_source)
+            summary.last_fetched_at = fetched_at
+    return ArtifactFetchAuditView(
+        agent_ids=agent_ids,
+        artifact_sha256=sha,
+        before=reference,
+        total=total,
+        truncated=total > len(rows),
+        requesters=sorted(summaries.values(), key=lambda s: s.first_fetched_at),
+        rows=rows,
+    )
 
 
 def _fingerprint_versions(evidence: dict) -> dict[str, int | str | None]:
@@ -1763,3 +1966,72 @@ async def get_lineage_source_diff_file(
         path=normalized,
     )
     return response
+
+
+@router.get(
+    "/screening-attempts/{attempt_id}/review-lineage",
+    response_model=ReviewLineagePacket,
+    responses={
+        404: {"description": "No attempt with this id."},
+        409: {
+            "description": (
+                "The attempt has no lineage parent or bound packet, or the "
+                "packet can no longer be rebuilt identically."
+            )
+        },
+    },
+)
+async def get_screening_review_lineage(
+    attempt_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: StorageDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> ReviewLineagePacket:
+    """Rebuild the lineage packet one screening attempt was reviewed with.
+
+    Returns the same packet the worker fetched: parent, history, rulings,
+    prior findings and the bounded source diff. When the attempt bound a
+    digest and the rebuilt packet differs (a ruling landed since), the route
+    answers 409 rather than show a packet the reviewer never saw.
+    """
+    actor = _require_actor(x_admin_actor)
+    attempt = await session.get(ScreeningAttempt, attempt_id)
+    if attempt is None:
+        raise HTTPException(status_code=404, detail="screening attempt not found")
+    if attempt.lineage_parent_agent_id is None:
+        raise HTTPException(status_code=409, detail="attempt has no lineage parent")
+    agent = await session.get(Agent, attempt.agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    try:
+        packet = await build_review_lineage_packet(
+            session, storage, agent=agent, attempt=attempt
+        )
+    except ReviewLineageUnavailableError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if attempt.lineage_packet_sha256 is None:
+        # The worker binds the digest only once it holds a packet; without one
+        # the reviewer saw no lineage context, so a rebuilt packet is not what
+        # was reviewed.
+        raise HTTPException(
+            status_code=409, detail="the attempt never bound a lineage packet"
+        )
+    if attempt.lineage_packet_sha256 != packet.packet_sha256:
+        raise HTTPException(
+            status_code=409,
+            detail="the bound packet changed after review; history has moved",
+        )
+    parent = await session.get(Agent, attempt.lineage_parent_agent_id)
+    logger.info("admin_actor=%s viewed review lineage attempt_id=%s", actor, attempt_id)
+    if parent is not None:
+        await _audit_diff_pair(
+            session,
+            request=request,
+            actor=actor,
+            endpoint=ENDPOINT_ADMIN_REVIEW_LINEAGE,
+            candidate=agent,
+            reference=parent,
+        )
+    return packet

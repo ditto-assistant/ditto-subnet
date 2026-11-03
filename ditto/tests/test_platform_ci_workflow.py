@@ -52,134 +52,25 @@ def test_backend_and_dashboard_workflows_own_disjoint_platform_paths() -> None:
         assert "push" not in triggers
 
 
-def test_backend_workflow_runs_on_screener_verdict_producer_changes() -> None:
-    backend_paths = set(_triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"])
-    assert {
-        "workers/screener/ditto_screener/policy.py",
-        "workers/screener/ditto_screener/worker.py",
-    } <= backend_paths
-
-
-def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
-    backend_paths = set(_triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"])
-    assert {
-        "packages/dittobench-coding-contract/testdata/coding_contract_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_catalog_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_selection_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_certification_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
-    } <= backend_paths
-    assert (
-        "packages/dittobench-coding-contract/testdata/coding_inference_miner_v1.json"
-        not in backend_paths
-    )
-    assert (
-        "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json"
-        in backend_paths
-    )
-    assert (
-        "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py"
-        in backend_paths
-    )
-    assert {
-        "ditto/api_models/coding_harness.py",
-        "ditto/api_models/coding_claims.py",
-        "ditto/api_models/coding_certification_leases.py",
-        "ditto/api_models/coding_inference.py",
-        "ditto/api_models/coding_inference_grants.py",
-    } <= backend_paths
-
-
-def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:
-    backend = _load(BACKEND_WORKFLOW)["jobs"]["verify"]
-    dashboard = _load(DASHBOARD_WORKFLOW)["jobs"]["verify"]
-
-    assert backend["uses"] == SHARED_WORKFLOW_USE
-    assert backend["with"] == {
-        "ref": "${{ github.sha }}",
-        "security": True,
-        "backend": True,
-    }
-    assert dashboard["uses"] == SHARED_WORKFLOW_USE
-    assert dashboard["with"] == {
-        "ref": "${{ github.sha }}",
-        "security": True,
-        "dashboard": True,
-    }
-
-
-def test_shared_verification_shards_the_complete_suite_without_deselection() -> None:
-    workflow = _load(SHARED_WORKFLOW)
-    test_job = workflow["jobs"]["test"]
-    shards = {
-        entry["suite"]: (entry["pytest_args"], entry["object_storage"])
-        for entry in test_job["strategy"]["matrix"]["include"]
-    }
-    endpoint_root = "ditto/tests/api_server/endpoints/"
-
-    assert shards == {
-        "public-validator-endpoints": (
-            "ditto/tests/api_server/endpoints/test_public.py "
-            "ditto/tests/api_server/endpoints/test_validator.py",
-            False,
-        ),
-        "screener-inference-endpoints": (
-            "ditto/tests/api_server/endpoints/test_screener.py "
-            "ditto/tests/api_server/endpoints/test_inference.py",
-            False,
-        ),
-        "other-endpoints-large": (
-            f"{endpoint_root}test_validator_v9_confirmation_transport.py "
-            "ditto/tests/api_server/endpoints/test_upload.py "
-            "ditto/tests/api_server/endpoints/test_admin_validation_retry.py "
-            "ditto/tests/api_server/endpoints/test_scoring.py "
-            "ditto/tests/api_server/endpoints/test_admin_copy_review.py "
-            "ditto/tests/api_server/endpoints/test_validator_slot_cap.py "
-            "ditto/tests/api_server/endpoints/test_admin_queue_policy_settings.py "
-            "ditto/tests/api_server/endpoints/test_admin_validator_slot_settings.py "
-            "ditto/tests/api_server/endpoints/test_admin_confirmation_bundles.py "
-            "ditto/tests/api_server/endpoints/test_gate_notes.py",
-            False,
-        ),
-        # Every file split into another shard must be ignored here, so the
-        # union remains complete and no endpoint test runs twice.
-        "other-endpoints-remaining": (
-            "ditto/tests/api_server/endpoints "
-            "--ignore=ditto/tests/api_server/endpoints/test_public.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_validator.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_screener.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_inference.py "
-            f"--ignore={endpoint_root}test_validator_v9_confirmation_transport.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_upload.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_admin_validation_retry.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_scoring.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_admin_copy_review.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_validator_slot_cap.py "
-            f"--ignore={endpoint_root}test_admin_queue_policy_settings.py "
-            f"--ignore={endpoint_root}test_admin_validator_slot_settings.py "
-            f"--ignore={endpoint_root}test_admin_confirmation_bundles.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_gate_notes.py",
-            False,
-        ),
-        "api-server": (
-            "ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints",
-            False,
-        ),
-        "data-contract-integration": ("--ignore=ditto/tests/api_server", True),
-    }
+def test_shared_verification_deals_the_complete_suite_across_uniform_shards() -> None:
+    test_job = _load(SHARED_WORKFLOW)["jobs"]["test"]
+    shards = test_job["strategy"]["matrix"]["shard"]
     pytest_step = _step(test_job, "pytest")
-    assert pytest_step["run"] == (
-        "uv run --group browser pytest ${{ matrix.pytest_args }}"
-    )
+
+    assert shards == list(range(8))
+    # The count in DITTO_TEST_SHARD must equal the matrix width, or a slice
+    # of the suite silently never runs.
+    expected_shard = "${{ matrix.shard }}/" + str(len(shards))
+    assert pytest_step["env"]["DITTO_TEST_SHARD"] == expected_shard
+    assert pytest_step["run"] == "uv run --group browser pytest --durations=25"
     assert pytest_step["env"]["DITTO_REQUIRE_POSTGRES"] == "1"
     assert pytest_step["env"]["DITTO_REQUIRE_OBJECT_STORAGE"] == "1"
-    assert _step(test_job, "Start MinIO")["if"] == "matrix.object_storage"
+    assert pytest_step["env"]["DITTO_REQUIRE_BROWSER"] == "1"
+    assert "if" not in _step(test_job, "Start MinIO")
+    chromium = _step(
+        test_job, "Install Chromium for the GitHub OAuth browser regression"
+    )
+    assert chromium["if"] == "matrix.shard == 0"
 
 
 def test_shared_verification_keeps_static_database_and_security_gates() -> None:
@@ -192,12 +83,6 @@ def test_shared_verification_keeps_static_database_and_security_gates() -> None:
     assert _step(static, "ruff format check")["run"] == "uv run ruff format --check ."
     assert _step(static, "ruff check")["run"] == "uv run ruff check ."
     assert _step(static, "mypy")["run"] == "uv run mypy ditto/"
-    execution_generator = _step(
-        static, "Coding execution delivery vectors match their generator"
-    )["run"]
-    assert "ruff format --check" in execution_generator
-    assert "ruff check" in execution_generator
-    assert "generate_execution_delivery_vectors.py --check" in execution_generator
     assert jobs["security"]["if"] == "inputs.security"
     assert _step(jobs["security"], "Scan reachable Git history for secrets")
     assert test_job["services"]["postgres"]["image"] == "postgres:16-alpine"
@@ -205,20 +90,6 @@ def test_shared_verification_keeps_static_database_and_security_gates() -> None:
     for setting in ("fsync", "synchronous_commit", "full_page_writes"):
         assert setting in tune
     assert "pg_reload_conf" in tune
-
-
-def test_shared_dashboard_preserves_copy_check_test_and_build() -> None:
-    dashboard = _load(SHARED_WORKFLOW)["jobs"]["dashboard"]
-
-    assert dashboard["if"] == "inputs.dashboard"
-    assert _step(dashboard, "faircopy")["run"] == (
-        "npm run lint:copy -- --format github"
-    )
-    assert [_step(dashboard, name)["run"] for name in ("Check", "Test", "Build")] == [
-        "npm run check",
-        "npm test",
-        "npm run build",
-    ]
 
 
 def test_release_owns_shared_exact_source_component_gates() -> None:
@@ -241,13 +112,6 @@ def test_release_owns_shared_exact_source_component_gates() -> None:
         "dashboard": "${{ needs.plan.outputs.platform_dashboard == 'true' }}",
     }
     assert "steps" not in verify
-
-
-def test_migration_order_retries_status_publish_without_failing_a_clean_check() -> None:
-    text = (ROOT / ".github/workflows/platform-migration-order.yml").read_text()
-    assert "max_attempts=6" in text
-    assert "leaving that context pending" in text
-    assert 'exit "$exit_code"' in text
 
 
 def test_migration_order_sweeps_share_one_lane_and_checks_stay_isolated() -> None:

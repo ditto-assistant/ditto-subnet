@@ -45,7 +45,11 @@ def source_operations(journal, block, *, exclude=-1):
     """Project multi-source consumption without altering historical operations."""
     rows = journal.db.execute(
         "SELECT payload FROM events WHERE event='manual_transfer_armed' "
-        "AND json_type(payload,'$.sources')='array' ORDER BY id"
+        "AND json_type(payload,'$.sources')='array' "
+        "AND NOT EXISTS (SELECT 1 FROM events x "
+        "WHERE x.event='manual_unsigned_expired' "
+        "AND json_extract(x.payload,'$.request_id')="
+        "json_extract(events.payload,'$.request_id')) ORDER BY id"
     ).fetchall()
     claims = {}
     for row in rows:

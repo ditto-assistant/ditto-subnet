@@ -24,6 +24,9 @@ const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   statistical_band_mode: 'disabled',
   ledger_pin_mode: 'epoch',
   crown_incumbent_mode: 'disabled',
+  crown_gate_mode: 'disabled',
+  min_dethrone_confirmations: 3,
+  champion_standing_rank: 3,
   idle_retests_enabled: false,
   rollout_standdown: 'capable_validators',
   wave_membership: 'participants',
@@ -31,6 +34,8 @@ const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   retest_eligibility_mode: 'fixed',
   retest_eligibility_z: 1.64,
   retest_cohort_max_size: 25,
+  wave_cadence_tempos: 0,
+  wave_seeds_per_window: 3,
 }
 
 function control(
@@ -56,6 +61,9 @@ function control(
       crown_incumbent_fleet_ready: false,
       crown_incumbent_active: false,
       crown_incumbent_required_protocol: 27,
+      crown_gate_fleet_ready: false,
+      crown_gate_active: false,
+      crown_gate_required_protocol: 34,
       ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
@@ -72,11 +80,16 @@ function control(
       statistical_band_mode: true,
       ledger_pin_mode: true,
       crown_incumbent_mode: true,
+      crown_gate_mode: true,
+      min_dethrone_confirmations: true,
+      champion_standing_rank: true,
       retest_cohort_size: true,
       wave_membership: true,
       retest_eligibility_mode: true,
       retest_eligibility_z: true,
       retest_cohort_max_size: true,
+      wave_cadence_tempos: true,
+      wave_seeds_per_window: true,
     },
     cohort_sizing_supported: true,
   }
@@ -306,6 +319,9 @@ describe('ContinualRetestControlPanel', () => {
       statistical_band_mode: 'disabled',
       ledger_pin_mode: 'live',
       crown_incumbent_mode: 'disabled',
+      crown_gate_mode: 'disabled',
+      min_dethrone_confirmations: 3,
+      champion_standing_rank: 3,
       idle_retests_enabled: false,
       rollout_standdown: 'all',
       wave_membership: 'strict',
@@ -313,6 +329,8 @@ describe('ContinualRetestControlPanel', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
     })
   })
 

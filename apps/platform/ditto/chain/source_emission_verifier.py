@@ -774,6 +774,8 @@ class SourceEmissionRangePlan:
     interesting: tuple[int, ...]
     full_scan: bool
     runtime_code_hash: str | None
+    # Which check sent the range to the full scan, for operators.
+    full_scan_reason: str | None = None
 
 
 def _valid_uid_mapping(rows: list[tuple[Any, Any]]) -> dict[int, str] | None:
@@ -903,10 +905,11 @@ async def _range_endpoints(
     If the runtime code or the mode controls differ between ``first_block - 1``
     and ``last_block``, or any of them (or the ``Keys`` map) is invalid at
     either end, the caller must run the unchanged per-block scan. A runtime
-    upgrade cannot revert inside a range (spec versions only increase). A UID
-    whose hotkey or ``BlockAtRegistration`` differs at the ends is located by
-    bisection and its blocks are returned as ``identity_changes``; see the
-    comment below for why a UID equal on both at the ends was not touched.
+    upgrade cannot revert inside a range (spec versions only increase). Every
+    hotkey swap inside the range is read from ``LastHotkeySwapOnNetuid``, and
+    a UID whose hotkey or ``BlockAtRegistration`` differs at the ends is
+    located by bisection; those blocks are returned as ``identity_changes``.
+    See the comments below for why that finds every identity change.
     """
     if not 0 < first_block <= last_block:
         raise ValueError("invalid source-emission range")
@@ -922,9 +925,9 @@ async def _range_endpoints(
     hashes = dict(zip(numbers, raw_hashes, strict=True))
     start, end = hashes[first_block - 1], hashes[last_block]
 
-    def full(code_hash: str | None = None) -> SourceEmissionRangePlan:
+    def full(reason: str, code_hash: str | None = None) -> SourceEmissionRangePlan:
         return SourceEmissionRangePlan(
-            first_block, last_block, hashes, (), True, code_hash
+            first_block, last_block, hashes, (), True, code_hash, reason
         )
 
     async def read(name: str, at: str) -> Any:
@@ -957,23 +960,23 @@ async def _range_endpoints(
         )
         code.append(result.get("result") if isinstance(result, dict) else None)
     if code[0] != code[1]:
-        return full()
+        return full("runtime_changed")
     try:
         admission = await admit_runtime(substrate, code_hash=code[0], at=start)
     except (ValueError, ChainConnectionError):
         # The full scan admits the same fingerprint and reports why it stopped.
-        return full()
+        return full("runtime_not_admitted")
     # The end's state was written by the range's runtime; the start's by the
     # code stored before it (see _epoch_consensus_at).
     writers = {end: admission}
     if admission.epoch_consensus_gated:
         if first_block < 2:
-            return full(code[0])
+            return full("epoch_consensus_unreadable", code[0])
         before = await substrate.rpc_request("chain_getBlockHash", [[first_block - 2]])
         rows = before.get("result") if isinstance(before, dict) else None
         before_hash = rows[0] if isinstance(rows, list) and len(rows) == 1 else None
         if not isinstance(before_hash, str):
-            return full(code[0])
+            return full("epoch_consensus_unreadable", code[0])
         try:
             writers[start] = await admit_runtime(
                 substrate,
@@ -981,12 +984,12 @@ async def _range_endpoints(
                 at=before_hash,
             )
         except (ValueError, ChainConnectionError):
-            return full(code[0])
+            return full("epoch_consensus_unreadable", code[0])
     for at in (start, end):
         if await read("MechanismCountCurrent", at) != 1:
-            return full(code[0])
+            return full("mechanism_count", code[0])
         if await read("CommitRevealWeightsEnabled", at) is not True:
-            return full(code[0])
+            return full("commit_reveal_off", code[0])
         if (
             admission.epoch_consensus_gated
             and await _epoch_consensus_at(
@@ -994,54 +997,91 @@ async def _range_endpoints(
             )
             != "Yuma"
         ):
-            return full(code[0])
+            return full("epoch_consensus", code[0])
     start_keys, end_keys = await keys_at(start), await keys_at(end)
     start_map, end_map = _valid_uid_mapping(start_keys), _valid_uid_mapping(end_keys)
     if start_map is None or end_map is None or set(start_map) != set(end_map):
-        return full(code[0])
+        return full("uid_mapping", code[0])
+    # Hotkey swaps, found from the cooldown the runtime records for them. A
+    # swap that moves a hotkey on the subnet, on its own or on all subnets,
+    # sets LastHotkeySwapOnNetuid(netuid, coldkey) to its block, and only a
+    # dissolution or the prune of records older than
+    # HotkeySwapOnSubnetInterval removes one (subtensor v448-v481). The
+    # cooldown is per coldkey and a coldkey swap carries none over, so one
+    # UID's hotkey can go A -> B -> A inside a range under two coldkeys, with
+    # Keys and BlockAtRegistration equal at both ends. While the interval is
+    # longer than the range, no coldkey swaps twice in it and none of its
+    # records is pruned, so the records at the end name every swap inside it.
+    interval = _unwrap(
+        await substrate.get_constant(
+            "SubtensorModule", "HotkeySwapOnSubnetInterval", block_hash=end
+        )
+    )
+    if not isinstance(interval, int) or interval <= last_block - first_block:
+        return full("hotkey_swap_interval", code[0])
+    swaps = {
+        block
+        for _coldkey, swapped in await mapping_at("LastHotkeySwapOnNetuid", end)
+        if first_block <= (block := _uint(swapped)) <= last_block
+    }
     # UIDs re-registered inside the range, found by BlockAtRegistration: every
     # registration sets it to the current block, so per UID it only increases
     # and never repeats. That catches A -> B -> A, which equal Keys at the
     # ends would hide (SN118's 300-block immunity is shorter than a range),
-    # and bisecting it finds every registration exactly. Keys is bisected too
-    # for a hotkey swap, which registers nothing; a UID's hotkey can be
-    # swapped at most once per HotkeySwapOnSubnetInterval (a day), so its
-    # value cannot flip back inside one range either.
+    # and bisecting it finds every registration exactly. Keys is bisected too,
+    # between registrations: a registration can restore the hotkey a swap
+    # moved away, or a swap the hotkey a registration replaced. That finds a
+    # UID's swaps only where Keys differs across a stretch; the swap records
+    # above find the rest.
     registered = await _gather_or_cancel(
         *(mapping_at("BlockAtRegistration", at) for at in (start, end))
     )
     if any(set(dict(rows)) != set(start_map) for rows in registered):
-        return full(code[0])
+        return full("uid_mapping", code[0])
     first_reg, last_reg = (dict(rows) for rows in registered)
     changed = sorted(
         uid
         for uid in start_map
         if start_map[uid] != end_map[uid] or first_reg[uid] != last_reg[uid]
     )
-    if len(changed) > _MAX_IDENTITY_CHANGES:
-        return full(code[0])
+    if max(len(changed), len(swaps)) > _MAX_IDENTITY_CHANGES:
+        return full("identity_changes", code[0])
     gate = asyncio.Semaphore(8)
 
-    async def bisect(uid: int, storage: str) -> list[int]:
-        key = await substrate.create_storage_key(
-            "SubtensorModule", storage, [netuid, uid], block_hash=end
-        )
-        return await _storage_change_blocks(
-            substrate, key.to_hex(), hashes, first_block - 1, last_block, gate
-        )
-
-    found = await _gather_or_cancel(
-        *(
-            bisect(uid, storage)
-            for uid in changed
+    async def identity_change_blocks(uid: int) -> set[int]:
+        registration_key, keys_key = [
+            (
+                await substrate.create_storage_key(
+                    "SubtensorModule", storage, [netuid, uid], block_hash=end
+                )
+            ).to_hex()
             for storage in ("BlockAtRegistration", "Keys")
+        ]
+        registrations = await _storage_change_blocks(
+            substrate, registration_key, hashes, first_block - 1, last_block, gate
         )
-    )
-    identity_changes: set[int] = set()
-    for registrations, swaps in zip(found[::2], found[1::2], strict=True):
-        blocks = {*registrations, *swaps}
+        # Keys is bisected in each stretch that ends before a registration.
+        stretches = zip(
+            [first_block - 1, *registrations],
+            [*(block - 1 for block in registrations), last_block],
+            strict=True,
+        )
+        swaps = await _gather_or_cancel(
+            *(
+                _storage_change_blocks(substrate, keys_key, hashes, low, high, gate)
+                for low, high in stretches
+                if high > low
+            )
+        )
+        return {*registrations, *(block for found in swaps for block in found)}
+
+    identity_changes = set(swaps)
+    for blocks in await _gather_or_cancel(
+        *(identity_change_blocks(uid) for uid in changed)
+    ):
         if not blocks:
-            return full(code[0])  # the endpoints disagree but no change found
+            # The endpoints disagree but no change was found.
+            return full("identity_change_not_found", code[0])
         identity_changes.update(blocks)
     return _RangeEndpoints(
         first_block,
@@ -1167,9 +1207,15 @@ async def plan_source_emission_range_by_reveals(
     end = hashes[last_block]
     gate = asyncio.Semaphore(concurrency)
 
-    def full() -> SourceEmissionRangePlan:
+    def full(reason: str) -> SourceEmissionRangePlan:
         return SourceEmissionRangePlan(
-            first_block, last_block, hashes, (), True, endpoints.runtime_code_hash
+            first_block,
+            last_block,
+            hashes,
+            (),
+            True,
+            endpoints.runtime_code_hash,
+            reason,
         )
 
     async def read(name: str, block: int) -> Any:
@@ -1199,7 +1245,7 @@ async def plan_source_emission_range_by_reveals(
         for block in (first_block - 1, last_block)
     }
     if len(reveal_periods) != 1 or 0 in reveal_periods:
-        return full()
+        return full("reveal_period")
     reveal_period = reveal_periods.pop()
 
     # The controls are read at the ends and at every payout, not every block.
@@ -1223,7 +1269,7 @@ async def plan_source_emission_range_by_reveals(
         await owner_change_interval(block) for block in (first_block - 1, last_block)
     }
     if len(intervals) != 1 or intervals.pop() <= last_block - first_block:
-        return full()
+        return full("owner_rate_limit")
 
     # Payouts, newest first: each payout's parent state names the previous one.
     payouts: list[int] = []
@@ -1243,19 +1289,19 @@ async def plan_source_emission_range_by_reveals(
         last = payouts[index] - 1 if index < len(payouts) else last_block
         epoch = _uint(await read("SubnetEpochIndex", start))
         if _uint(await read("SubnetEpochIndex", last)) != epoch:
-            return full()  # the epoch moved without a payout marker
+            return full("epoch_without_payout")
         if epoch < reveal_period:
-            return full()
+            return full("reveal_period")
         # A payout's own block reveals too, so its segment starts before it.
         before = start if index == 0 else start - 1
         segments.append((before, last, epoch - reveal_period))
     for block in {first_block - 1, last_block, *payouts}:
         if await read("CommitRevealWeightsEnabled", block) is not True:
-            return full()
+            return full("commit_reveal_off")
         if await read("MechanismCountCurrent", block) != 1:
-            return full()
+            return full("mechanism_count")
         if await v2_commits(block):
-            return full()
+            return full("v2_commits")
 
     interesting = set(payouts)
     for before, last, reveal_epoch in segments:

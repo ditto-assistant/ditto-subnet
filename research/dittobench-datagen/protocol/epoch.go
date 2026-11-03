@@ -148,6 +148,10 @@ import (
 // audit bank, and the multilingual lexicons can be pinned independently of the
 // v13 generation contract; SupportedBenchVersion and DatasetEpochForVersion
 // admit v13 only once that contract lands.
+//
+// v16 (the dueling contract) is STAGED in staged.go: generatable, with its own
+// epoch and rotate seed, but outside supportedBenchVersions until the
+// cross-layer PR raises the shared ceiling.
 const (
 	BenchVersionV2      = 2
 	BenchVersionV3      = 3
@@ -162,6 +166,7 @@ const (
 	BenchVersionV12     = 12
 	BenchVersionV13     = 13
 	BenchVersionV14     = 14
+	BenchVersionV15     = 15
 	CurrentBenchVersion = BenchVersionV8
 
 	// BenchVersion is retained as a source-compatible alias for consumers that
@@ -184,6 +189,7 @@ var (
 	datasetEpochV12 = time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV13 = time.Date(2027, 5, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV14 = time.Date(2027, 6, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV15 = time.Date(2027, 7, 1, 0, 0, 0, 0, time.UTC)
 
 	// DatasetEpoch and DatasetEpochRFC3339 retain the v2 values for legacy
 	// package callers. Canonical versioned generation uses DatasetEpochForVersion.
@@ -201,6 +207,7 @@ var supportedBenchVersions = []int{
 	BenchVersionV2, BenchVersionV3, BenchVersionV4, BenchVersionV5,
 	BenchVersionV6, BenchVersionV7, BenchVersionV8, BenchVersionV9,
 	BenchVersionV10, BenchVersionV11, BenchVersionV12, BenchVersionV13, BenchVersionV14,
+	BenchVersionV15,
 }
 
 // SupportedBenchVersions returns a copy of the ordered list of versions this
@@ -266,16 +273,21 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 		return datasetEpochV13, nil
 	case BenchVersionV14:
 		return datasetEpochV14, nil
+	case BenchVersionV15:
+		return datasetEpochV15, nil
 	default:
-		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, SupportedBenchVersionList())
+		if epoch, staged := stagedDatasetEpoch(version); staged {
+			return epoch, nil
+		}
+		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, versionListForErrors())
 	}
 }
 
 // RotateSeedForVersion folds an explicit benchmark version into a run seed.
 // It is deterministic and retains the exact historical v2 mixing function.
 func RotateSeedForVersion(seed int64, version int) (int64, error) {
-	if !SupportedBenchVersion(version) {
-		return 0, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, SupportedBenchVersionList())
+	if !GeneratableBenchVersion(version) {
+		return 0, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, versionListForErrors())
 	}
 	v := uint64(version)
 	x := uint64(seed) ^ (v * 0x9E3779B97F4A7C15)

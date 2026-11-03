@@ -169,6 +169,7 @@ func TestPrivateSurfaceGraphScopeAndValidatorIsolation(t *testing.T) {
 }
 
 func TestPrivateSurfaceRealArtifactPreservesNonSurfaceFields(t *testing.T) {
+	t.Parallel()
 	profile, _ := ProfileForVersion("full", 13)
 	input, err := GenerateDatasetWithSurface(4242, profile, 13, SurfaceOptions{Salt: 91})
 	if err != nil {
@@ -200,6 +201,7 @@ func TestPrivateSurfaceRealArtifactPreservesNonSurfaceFields(t *testing.T) {
 }
 
 func TestPrivateSurfacePlanMatchesExecutionWithoutMutatingInput(t *testing.T) {
+	t.Parallel()
 	profile, _ := ProfileForVersion("full", 13)
 	input, err := GenerateDatasetWithSurface(4242, profile, 13, SurfaceOptions{Salt: 91})
 	if err != nil {

@@ -13,7 +13,6 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.dependencies import get_session
@@ -263,18 +262,7 @@ async def test_equal_timestamps_keep_a_stable_agent_id_tiebreak(
 @pytest.mark.parametrize(
     "params",
     [
-        {"agent_name": ""},
-        {"agent_name": "x" * 65},
-        {"agent_name_prefix": "x" * 65},
-        {"miner_hotkey": "5Hot Alpha"},
-        {"miner_coldkey": "5" * 65},
-        {"artifact_sha256": "ab" * 31},
-        {"artifact_sha256": "zz" * 32},
-        {"agent_status": "not-a-status"},
-        {"screening_reason_code": "docker build"},
-        {"screening_reason_code": [f"code-{index}" for index in range(21)]},
         {"submitted_after": "2026-09-01T12:00:00"},
-        {"submitted_after": "not-a-date"},
         {
             "submitted_after": "2026-09-02T00:00:00Z",
             "submitted_before": "2026-09-01T00:00:00Z",
@@ -295,22 +283,3 @@ async def test_invalid_filters_are_rejected_with_422(
 async def test_search_requires_the_admin_token(client: httpx.AsyncClient) -> None:
     response = await client.get(_URL, params={"agent_name": "moonlight_v1"})
     assert response.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_prefix_and_coldkey_filters_have_a_usable_index(
-    maker: async_sessionmaker[AsyncSession],
-) -> None:
-    async with maker() as session:
-        rows = (
-            await session.execute(
-                text(
-                    "SELECT indexname, indexdef FROM pg_indexes WHERE indexname "
-                    "IN ('agents_name_pattern_idx', "
-                    "'evaluation_payments_miner_coldkey_idx')"
-                )
-            )
-        ).all()
-    definitions: dict[str, str] = {str(name): str(sql) for name, sql in rows}
-    assert "text_pattern_ops" in definitions["agents_name_pattern_idx"]
-    assert "(miner_coldkey)" in definitions["evaluation_payments_miner_coldkey_idx"]

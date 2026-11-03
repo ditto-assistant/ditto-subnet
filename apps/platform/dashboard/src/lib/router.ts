@@ -20,6 +20,7 @@ export type PageName =
   | "reviews"
   | "ath"
   | "bounties"
+  | "generators"
   | "benchmark";
 
 export type OperationsView = "validators" | "screeners" | "builds";
@@ -37,11 +38,11 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   },
   overview: {
     title: "Overview",
-    sub: "Subnet snapshot and the full leaderboard · ranked by composite",
+    sub: "Subnet snapshot and the full leaderboard · ranked by official score",
   },
   leaderboard: {
     title: "Leaderboard",
-    sub: "Every scored miner · canonical ranks · sortable by any metric",
+    sub: "Every scored miner · ranked by official score · sortable by any metric",
   },
   pipeline: {
     title: "Submission pipeline",
@@ -66,6 +67,10 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   bounties: {
     title: "Bounties",
     sub: "Paid build bounties · open slots, claims, reviews, awards, and payments",
+  },
+  generators: {
+    title: "Generator competition",
+    sub: "Case-generator rounds · committed seeds, case outcomes, and projected payouts",
   },
   benchmark: {
     title: "Benchmark",
@@ -160,6 +165,10 @@ export const PAGE_SCOPED_PARAMS: string[] = [
   "attempt",
   // The bounty a bounties-page reader opened.
   "bounty",
+  // The generator submission a generators-page reader opened.
+  "generator",
+  // The generator round whose results a generators-page reader opened.
+  "round",
 ];
 
 // The config knobs allowed to appear in the real query string.

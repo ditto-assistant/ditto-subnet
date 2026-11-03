@@ -14,12 +14,15 @@ import (
 // vectors and the 1..40 sweeps say nothing about the seed a real run draws; a
 // surface that trips the accidental lexical-shortcut exclusion on one wording
 // must fall through to another wording (or a spare entity), never fail the run.
+// The specific seeds that once tripped it are pinned by the regression tests
+// (isolation lexical, cross-anchor, invoice/story collision); this sweep only
+// needs to catch a systematic break, so 48 random seeds per profile suffice.
 func TestV13RandomSeedSweepGeneratesEveryDataset(t *testing.T) {
 	r := rand.New(rand.NewSource(0x5eed13))
 	for _, runSize := range []string{"full", "medium"} {
 		prof, _ := ProfileForVersion(runSize, protocol.BenchVersionV13)
 		for shard := 0; shard < 8; shard++ {
-			seeds := make([]int64, 25)
+			seeds := make([]int64, 6)
 			for i := range seeds {
 				seeds[i] = r.Int63()
 			}

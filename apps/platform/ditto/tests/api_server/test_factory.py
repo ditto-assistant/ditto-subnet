@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -9,14 +10,26 @@ import pytest
 from fastapi import FastAPI
 
 from ditto.api_server import create_api_server
-from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
+from ditto.api_server.factory import (
+    BountyDeadlineSweeper,
+    CompetitionImprovementJob,
+    CopyHoldCourt,
+    GeneratorRoundLoop,
+    LedgerPinLoop,
+    OutageVoidSweeper,
+    SourceEmissionCollector,
+    UnreleasedCopySentinel,
+    ValidatorNonceJanitor,
+)
 from ditto.api_server.middleware import (
     PublicCacheMiddleware,
     PublicRateLimitMiddleware,
     RequestIDMiddleware,
 )
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_RATE_LIMITED
+from ditto.api_server.treasury_ledger import TreasuryLedgerSampler
+from ditto.api_server.treasury_manual_loop import TreasuryManualLoop
 from ditto.tests.api_server.conftest import make_api_server_config
 
 
@@ -32,7 +45,6 @@ class TestCreateApiServer:
         app = create_api_server(config)
         assert app.state.config is config
         assert app.state.commit_hash == "test-commit"
-        assert app.state.coding_hippius_evidence_runtime is None
 
     def test_middleware_order_request_id_outermost(self):
         """Starlette inserts each middleware at position 0, so the LAST
@@ -186,9 +198,8 @@ class TestRouteDiscoveryIsSingleton:
         role: str | None,
         monkeypatch,
         *,
-        coding_private_catalog: CodingPrivateCatalogConfig | None = None,
         capacity_event_janitor: MagicMock | None = None,
-    ) -> tuple[MagicMock, MagicMock, object | None, MagicMock]:
+    ) -> tuple[MagicMock, SimpleNamespace]:
         if role is None:
             monkeypatch.delenv("DITTO_ROLE", raising=False)
         else:
@@ -211,10 +222,6 @@ class TestRouteDiscoveryIsSingleton:
         storage_ctx.__aexit__ = AsyncMock(return_value=False)
         closeable = MagicMock()
         closeable.aclose = AsyncMock()
-        catalog_source = object()
-        catalog_factory = MagicMock(return_value=catalog_source)
-        evidence_runtime = object()
-        evidence_factory = MagicMock(return_value=evidence_runtime)
 
         with (
             patch("ditto.api_server.factory.create_db_engine", return_value=engine),
@@ -233,14 +240,6 @@ class TestRouteDiscoveryIsSingleton:
                 "ditto.api_server.factory.create_storage_client",
                 return_value=storage_ctx,
             ),
-            patch(
-                "ditto.api_server.factory.create_coding_private_catalog_source",
-                catalog_factory,
-            ),
-            patch(
-                "ditto.api_server.factory.create_hippius_evidence_runtime_from_env",
-                evidence_factory,
-            ),
             patch("ditto.api_server.factory.create_embedder", return_value=closeable),
             patch("ditto.api_server.factory.create_generator", return_value=closeable),
             patch(
@@ -252,25 +251,26 @@ class TestRouteDiscoveryIsSingleton:
                 return_value=capacity_event_janitor,
             ),
         ):
-            app = create_api_server(
-                make_api_server_config(
-                    coding_private_catalog=coding_private_catalog,
-                )
-            )
+            app = create_api_server(make_api_server_config())
             app.state.validator_names.start = AsyncMock()
+            app.state.validator_names.hydrate = AsyncMock()
             app.state.validator_names.aclose = AsyncMock()
             async with app.router.lifespan_context(app):
-                observed_source = app.state.coding_private_catalog_source
-                observed_evidence = app.state.coding_hippius_evidence_runtime
                 # Opened by a public GitHub lookup; shutdown must close it.
                 github_pool = app.state.github_link._public_client()
                 sweeper = app.state.bounty_deadline_sweeper
                 sweeping = sweeper._task is not None
-        evidence_factory.observed_runtime = observed_evidence
-        evidence_factory.github_pool = github_pool
-        evidence_factory.bounty_sweeping = sweeping
-        evidence_factory.bounty_sweeper_closed = sweeper._task is None
-        return refresher, catalog_factory, observed_source, evidence_factory
+                outage_sweeper = app.state.outage_void_sweeper
+                outage_sweeping = outage_sweeper._task is not None
+                validator_names = app.state.validator_names
+        return refresher, SimpleNamespace(
+            github_pool=github_pool,
+            bounty_sweeping=sweeping,
+            bounty_sweeper_closed=sweeper._task is None,
+            outage_sweeping=outage_sweeping,
+            outage_sweeper_closed=outage_sweeper._task is None,
+            validator_names=validator_names,
+        )
 
     @pytest.mark.parametrize(
         "role,expected", [("relay", False), ("platform", True), (None, True)]
@@ -299,80 +299,90 @@ class TestRouteDiscoveryIsSingleton:
         assert evidence.bounty_sweeping is sweeps
         assert evidence.bounty_sweeper_closed
 
+    @pytest.mark.parametrize(
+        "role,sweeps", [("relay", False), ("platform", True), (None, True)]
+    )
+    async def test_only_platform_role_starts_the_outage_void_sweep(
+        self, monkeypatch, role, sweeps
+    ):
+        *_, evidence = await self._refresher_for_role(role, monkeypatch)
+        assert evidence.outage_sweeping is sweeps
+        # Registered for cleanup on every role, so shutdown stays symmetric.
+        assert evidence.outage_sweeper_closed
+
     @pytest.mark.parametrize("role", ["relay", "platform"])
     async def test_shutdown_closes_the_github_lookup_pool(self, monkeypatch, role):
         *_, evidence = await self._refresher_for_role(role, monkeypatch)
         assert evidence.github_pool.is_closed
 
     async def test_relay_does_not_start_route_discovery(self, monkeypatch):
-        (
-            refresher,
-            _catalog_factory,
-            _source,
-            _evidence,
-        ) = await self._refresher_for_role("relay", monkeypatch)
+        refresher, _observed = await self._refresher_for_role("relay", monkeypatch)
         refresher.start.assert_not_awaited()
         # Still constructed and still registered for cleanup, so shutdown is
         # symmetric with the platform role.
         refresher.aclose.assert_awaited_once()
 
+    @staticmethod
+    def _singleton_loop_starts(monkeypatch) -> dict[str, AsyncMock]:
+        """Replace each singleton loop's ``start`` so a test can count them."""
+        starts: dict[str, AsyncMock] = {}
+        for loop in (
+            ValidatorNonceJanitor,
+            BountyDeadlineSweeper,
+            OutageVoidSweeper,
+            CopyHoldCourt,
+            UnreleasedCopySentinel,
+            CompetitionImprovementJob,
+            LedgerPinLoop,
+            GeneratorRoundLoop,
+            SourceEmissionCollector,
+            TreasuryLedgerSampler,
+            TreasuryManualLoop,
+        ):
+            starts[loop.__name__] = AsyncMock()
+            monkeypatch.setattr(loop, "start", starts[loop.__name__])
+        return starts
+
+    async def test_primary_starts_every_singleton_loop(self, monkeypatch) -> None:
+        monkeypatch.setenv("DITTO_PLATFORM_BACKGROUND_TASKS", "true")
+        loops = self._singleton_loop_starts(monkeypatch)
+        await self._refresher_for_role("platform", monkeypatch)
+        for name, start in loops.items():
+            assert start.await_count == 1, name
+
+    async def test_standby_keeps_platform_access_without_singleton_loops(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("DITTO_PLATFORM_BACKGROUND_TASKS", "false")
+        janitor = MagicMock()
+        janitor.start = AsyncMock()
+        janitor.aclose = AsyncMock()
+        loops = self._singleton_loop_starts(monkeypatch)
+        refresher, observed = await self._refresher_for_role(
+            "platform", monkeypatch, capacity_event_janitor=janitor
+        )
+        refresher.start.assert_not_awaited()
+        janitor.start.assert_not_awaited()
+        refresher.aclose.assert_awaited_once()
+        janitor.aclose.assert_awaited_once()
+        for name, start in loops.items():
+            assert not start.await_count, name
+        observed.validator_names.hydrate.assert_awaited_once()
+        observed.validator_names.start.assert_not_awaited()
+
+        # The standby is an identical HTTP server, including admin routes.
+        app = create_api_server(make_api_server_config())
+        assert any(
+            getattr(route, "path", None) == "/api/v1/upload/agent"
+            for route in app.routes
+        )
+
     @pytest.mark.parametrize("role", [None, "platform"])
     async def test_platform_role_still_starts_route_discovery(
         self, monkeypatch, role: str | None
     ):
-        (
-            refresher,
-            _catalog_factory,
-            _source,
-            _evidence,
-        ) = await self._refresher_for_role(role, monkeypatch)
+        refresher, _observed = await self._refresher_for_role(role, monkeypatch)
         refresher.start.assert_awaited_once()
-
-    @pytest.mark.parametrize(
-        "role,expected",
-        [("relay", False), ("platform", True)],
-    )
-    async def test_only_platform_role_constructs_private_catalog_source(
-        self,
-        monkeypatch,
-        role: str,
-        expected: bool,
-    ) -> None:
-        config = CodingPrivateCatalogConfig(
-            endpoint_url="https://catalog.example.com",
-            bucket="private-coding",
-            access_key="catalog-access",
-            secret_key="catalog-secret",
-        )
-        _refresher, factory, source, _evidence = await self._refresher_for_role(
-            role,
-            monkeypatch,
-            coding_private_catalog=config,
-        )
-        if expected:
-            factory.assert_called_once_with(config)
-            assert source is factory.return_value
-        else:
-            factory.assert_not_called()
-            assert source is None
-
-    @pytest.mark.parametrize("role,expected", [("relay", False), ("platform", True)])
-    async def test_only_platform_role_constructs_hippius_evidence_runtime(
-        self,
-        monkeypatch,
-        role: str,
-        expected: bool,
-    ) -> None:
-        _refresher, _catalog, _source, factory = await self._refresher_for_role(
-            role,
-            monkeypatch,
-        )
-        if expected:
-            factory.assert_called_once()
-            assert factory.observed_runtime is factory.return_value
-        else:
-            factory.assert_not_called()
-            assert factory.observed_runtime is None
 
 
 class TestProcessRole:

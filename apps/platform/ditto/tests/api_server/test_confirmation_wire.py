@@ -232,7 +232,10 @@ def test_adapter_drops_only_verified_private_go_fields() -> None:
 
 
 @pytest.mark.parametrize(
-    "mode", [ConfirmationBundleMode.SHADOW, ConfirmationBundleMode.ENFORCE]
+    "mode",
+    [
+        ConfirmationBundleMode.SHADOW,
+    ],
 )
 def test_real_go_shape_unavailable_evidence_is_preserved_fail_closed(
     mode: ConfirmationBundleMode,

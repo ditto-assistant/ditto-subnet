@@ -87,6 +87,9 @@ def _mock_session(flush_side_effect: BaseException | None = None) -> MagicMock:
     """
     session = MagicMock(spec=AsyncSession)
     session.add = MagicMock(return_value=None)
+    # The cross-lane proof lock and the generator-lane lookup (no row).
+    session.execute = AsyncMock(return_value=None)
+    session.scalar = AsyncMock(return_value=None)
     if flush_side_effect is not None:
         session.flush = AsyncMock(side_effect=flush_side_effect)
     else:

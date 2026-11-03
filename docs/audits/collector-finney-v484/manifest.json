@@ -1,0 +1,46 @@
+{
+  "checked_at_utc": "2026-10-24",
+  "independent_rebuild_performed": false,
+  "admission": "collector_signer_surface",
+  "signed_runtime": {
+    "version": 483,
+    "policy_revision": 9,
+    "runtime_code_hash": "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2",
+    "reference_block": 9346596,
+    "reference_block_hash": "0x340d9c7e2ddd903873527ae6ff699dad3d58028ae6ef6b566938799c9db02dfa"
+  },
+  "upgrades": [
+    {
+      "spec_version": 483,
+      "first_block": 9342487,
+      "first_block_hash": "0xd8a162475c392355da171400741c7dfec1b3ed1f354cad0565e2024fbce882f6",
+      "parent_runtime_code_hash": "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62",
+      "runtime_code_hash": "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2",
+      "official_release": null
+    },
+    {
+      "spec_version": 484,
+      "first_block": 9348410,
+      "first_block_hash": "0x7b5dbac5658100745005c3b83d07bb96044e87946a3daf6bd73bd9ee0b1aaa4c",
+      "parent_runtime_code_hash": "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2",
+      "runtime_code_hash": "0x23041f50d3529b359e9be3b90f3ca40474678e834e97f49fb401d0c691097760",
+      "official_release": {
+        "source_commit": "5749dbfbe4a78ccd3938d46ffae45e059488feb7",
+        "url": "https://github.com/RaoFoundation/subtensor/releases/download/v484/subtensor.wasm",
+        "published_at": "2026-10-23T19:35:19Z",
+        "size": 2677869,
+        "sha256": "8ba7928018328ba9e08d6089b0d92c841967801733ff4cd3c4965f105881e681",
+        "blake2b": "0x23041f50d3529b359e9be3b90f3ca40474678e834e97f49fb401d0c691097760",
+        "srtool": "0.18.3 rustc 1.89.0",
+        "transaction_version": 1
+      }
+    }
+  ],
+  "surfaces_equal_to_v482": {
+    "collector_signer": true,
+    "treasury_receipt": "9e0d036eb8e9b4ab3d7b28aa28c66bd0ec3770c36769826cda8fd814b5dbaf5d",
+    "source_emission": "1ef98cc80020ae30fd6db2c7ab1cb3d9be974facca18b51e88682ff434d518fe",
+    "changed_calls": [],
+    "note": "v482, v483 and v484 share every measured surface"
+  }
+}

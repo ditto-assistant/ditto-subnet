@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import codecs
 import fnmatch
+import hashlib
 import io
 import re
 import tarfile
@@ -372,6 +373,32 @@ class TarSourceInspector:
         out, instead of diffing it as if the file did not exist.
         """
         return self._read_text(self._text_member(path))
+
+    def member_digests(self) -> dict[str, str]:
+        """``path -> sha256`` for every inventoried member, in one stream pass.
+
+        Lets a lineage diff tell an unchanged opaque blob (model weights) or an
+        unread text file from a changed one without loading either as text.
+        """
+        wanted = {member.index: member for member in self._members.values()}
+        digests: dict[str, str] = {}
+        with tarfile.open(fileobj=io.BytesIO(self._tar_bytes), mode="r|gz") as archive:
+            for index, member in enumerate(archive):
+                inventoried = wanted.get(index)
+                if inventoried is None:
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    continue
+                hasher = hashlib.sha256()
+                while chunk := extracted.read(1024 * 1024):
+                    hasher.update(chunk)
+                digests[inventoried.name] = hasher.hexdigest()
+        return digests
+
+    def opaque_paths(self) -> set[str]:
+        """Members that are not bounded UTF-8 text."""
+        return {member.name for member in self._members.values() if not member.is_text}
 
     def _text_member(self, path: str) -> _Member:
         """The UTF-8 text member at ``path``, or a typed inspect error."""

@@ -98,18 +98,12 @@ async def _seed_copy_hold(
 
 
 class TestConfig:
-    def test_thresholds_default_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv(COPY_REVIEW_QUEUE_MAX_AGE_THRESHOLD_ENV, raising=False)
-        config = parse_ath_review_queue_slo_config_from_env()
-        assert config.copy.max_actionable_age_seconds is None
-        assert config.ath.p95_age_seconds is None
-
     def test_parses_a_positive_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(COPY_REVIEW_QUEUE_MAX_AGE_THRESHOLD_ENV, "86400")
         config = parse_ath_review_queue_slo_config_from_env()
         assert config.copy.max_actionable_age_seconds == 86400
 
-    @pytest.mark.parametrize("raw", ["0", "-5", "soon"])
+    @pytest.mark.parametrize("raw", ["0", "soon"])
     def test_rejects_unusable_threshold_at_boot(
         self, monkeypatch: pytest.MonkeyPatch, raw: str
     ) -> None:

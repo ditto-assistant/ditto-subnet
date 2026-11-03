@@ -18,7 +18,15 @@
         "default": null
       },
       "download_url": {
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "expires_at": {
         "format": "date-time",
@@ -103,7 +111,6 @@
     "required": [
       "agent_id",
       "sha256",
-      "download_url",
       "expires_at"
     ],
     "type": "object"
@@ -771,6 +778,12 @@
               "shadow"
             ],
             "type": "string"
+          },
+          "sandbox_memory_limit_mib": {
+            "default": 6144,
+            "maximum": 32768,
+            "minimum": 512,
+            "type": "integer"
           }
         },
         "type": "object"
@@ -998,6 +1011,66 @@
       "deadline": {
         "format": "date-time",
         "type": "string"
+      },
+      "dueling_owner_key": {
+        "anyOf": [
+          {
+            "maxLength": 256,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dueling_season_id": {
+        "anyOf": [
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dueling_slice_bytes": {
+        "anyOf": [
+          {
+            "maxLength": 44739244,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dueling_slice_mode": {
+        "anyOf": [
+          {
+            "const": "dueling-slice-v1",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "expected_slice_sha256": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "inference": {
         "anyOf": [
@@ -1274,7 +1347,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -1535,6 +1609,17 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "dueling": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DuelingReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "seed": {
             "minimum": 0,
             "type": "integer"
@@ -1596,6 +1681,123 @@
           "output_tokens",
           "provider_cost_microusd",
           "latency_ms"
+        ],
+        "type": "object"
+      },
+      "DuelingColumnAggregate": {
+        "properties": {
+          "column_id": {
+            "pattern": "^c[0-9]{1,2}$",
+            "type": "string"
+          },
+          "grading_bench_version": {
+            "anyOf": [
+              {
+                "minimum": 13,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "n": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "owner_key": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "submission_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "substituted": {
+            "default": false,
+            "type": "boolean"
+          },
+          "sum": {
+            "type": "number"
+          },
+          "sum_sq": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "column_id",
+          "owner_key",
+          "n",
+          "sum",
+          "sum_sq"
+        ],
+        "type": "object"
+      },
+      "DuelingReport": {
+        "properties": {
+          "column_weight": {
+            "type": "number"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/$defs/DuelingColumnAggregate"
+            },
+            "maxItems": 5,
+            "minItems": 5,
+            "type": "array"
+          },
+          "composite_stderr": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "datagen_gate": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "datagen_raw": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "owner_key": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "season_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          "season_index": {
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slice_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "season_id",
+          "season_index",
+          "slice_sha256",
+          "owner_key",
+          "datagen_raw",
+          "datagen_gate",
+          "column_weight",
+          "columns",
+          "composite_stderr"
         ],
         "type": "object"
       },
@@ -1804,7 +2006,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -2426,7 +2629,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -2559,7 +2763,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -2925,7 +3130,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -3088,6 +3294,29 @@
         "anyOf": [
           {
             "const": "mean_after_quorum",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dueling": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DuelingReport"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dueling_season_id": {
+        "anyOf": [
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
             "type": "string"
           },
           {
@@ -3406,7 +3635,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -3667,6 +3897,17 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "dueling": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DuelingReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "seed": {
             "minimum": 0,
             "type": "integer"
@@ -3755,6 +3996,142 @@
           "output_tokens",
           "provider_cost_microusd",
           "latency_ms"
+        ],
+        "type": "object"
+      },
+      "CrownGateMarker": {
+        "properties": {
+          "champion_standing_rank": {
+            "maximum": 5,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_dethrone_confirmations": {
+            "maximum": 15,
+            "minimum": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "min_dethrone_confirmations",
+          "champion_standing_rank"
+        ],
+        "type": "object"
+      },
+      "DuelingColumnAggregate": {
+        "properties": {
+          "column_id": {
+            "pattern": "^c[0-9]{1,2}$",
+            "type": "string"
+          },
+          "grading_bench_version": {
+            "anyOf": [
+              {
+                "minimum": 13,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "n": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "owner_key": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "submission_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "substituted": {
+            "default": false,
+            "type": "boolean"
+          },
+          "sum": {
+            "type": "number"
+          },
+          "sum_sq": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "column_id",
+          "owner_key",
+          "n",
+          "sum",
+          "sum_sq"
+        ],
+        "type": "object"
+      },
+      "DuelingReport": {
+        "properties": {
+          "column_weight": {
+            "type": "number"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/$defs/DuelingColumnAggregate"
+            },
+            "maxItems": 5,
+            "minItems": 5,
+            "type": "array"
+          },
+          "composite_stderr": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "datagen_gate": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "datagen_raw": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "owner_key": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "season_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          "season_index": {
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slice_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "season_id",
+          "season_index",
+          "slice_sha256",
+          "owner_key",
+          "datagen_raw",
+          "datagen_gate",
+          "column_weight",
+          "columns",
+          "composite_stderr"
         ],
         "type": "object"
       },
@@ -3918,6 +4295,29 @@
             "anyOf": [
               {
                 "const": "mean_after_quorum",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "dueling": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DuelingReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "dueling_season_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
                 "type": "string"
               },
               {
@@ -4262,7 +4662,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -5138,7 +5539,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -5271,7 +5673,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -5637,7 +6040,8 @@
               11,
               12,
               13,
-              14
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -5758,6 +6162,17 @@
       "count": {
         "minimum": 0,
         "type": "integer"
+      },
+      "crown_gate": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CrownGateMarker"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "crown_incumbent_agent_id": {
         "anyOf": [
@@ -7853,6 +8268,53 @@
             "default": false,
             "type": "boolean"
           },
+          "dueling_slice_bench_versions": {
+            "anyOf": [
+              {
+                "items": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "generator_round_bench_versions": {
+            "anyOf": [
+              {
+                "items": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "generator_round_max_cases": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "generator_rounds": {
+            "default": false,
+            "type": "boolean"
+          },
           "observed_at": {
             "anyOf": [
               {
@@ -7903,6 +8365,10 @@
             ],
             "default": null
           },
+          "source_free_screened_images": {
+            "default": false,
+            "type": "boolean"
+          },
           "source_revision": {
             "anyOf": [
               {
@@ -7935,6 +8401,17 @@
             "anyOf": [
               {
                 "$ref": "#/$defs/V14ScoredRuntimeEnvEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "v15_scored_runtime_env": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V15ScoredRuntimeEnvEvidence"
               },
               {
                 "type": "null"
@@ -8134,6 +8611,42 @@
         ],
         "type": "object"
       },
+      "V15ScoredRuntimeEnvEvidence": {
+        "properties": {
+          "bench_version": {
+            "const": 15,
+            "type": "integer"
+          },
+          "injected_keys": {
+            "items": {
+              "maxLength": 128,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "const": "scorer-injected-env-only",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_revision": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bench_version",
+          "scope",
+          "source_revision",
+          "injected_keys",
+          "sha256"
+        ],
+        "type": "object"
+      },
       "V7InferenceCalibration": {
         "properties": {
           "manifest_sha256": {
@@ -8171,7 +8684,15 @@
           "require_screened_image": {
             "type": "boolean"
           },
+          "round_commitments": {
+            "default": false,
+            "type": "boolean"
+          },
           "sandbox_egress_restricted": {
+            "type": "boolean"
+          },
+          "sandbox_memory_limit": {
+            "default": false,
             "type": "boolean"
           },
           "scorer_benchmarks": {

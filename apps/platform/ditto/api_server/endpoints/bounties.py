@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.bounty import (
     REPO_PATTERN,
     BountyAppealDecisionRequest,
+    BountyAppealQueue,
     BountyAppealRequest,
     BountyApprovalRequest,
     BountyAwardRequest,
@@ -22,6 +23,10 @@ from ditto.api_models.bounty import (
     BountyConfirmRequest,
     BountyDetail,
     BountyDispatchRequest,
+    BountyEvaluationDecisionRequest,
+    BountyEvaluationDecisionView,
+    BountyEvaluationEntryRequest,
+    BountyEvaluationEntryView,
     BountyFactRequest,
     BountyObligationState,
     BountyObligationView,
@@ -47,6 +52,7 @@ from ditto.api_server import (
     bounty,
     bounty_admin,
     bounty_claims,
+    bounty_evaluation,
     bounty_reviews,
     bounty_settlement,
 )
@@ -482,6 +488,50 @@ async def fact(
     )
 
 
+@admin_router.post(
+    "/{bounty_id}/evaluation/entries",
+    response_model=BountyEvaluationEntryView,
+    responses=_errors(400, 401, 404, 409, 503),
+)
+async def evaluation_entry(
+    bounty_id: UUID,
+    body: BountyEvaluationEntryRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+) -> BountyEvaluationEntryView:
+    """Record an estimate or actual of one evaluation metric (#2944).
+
+    It supersedes the current entry of its kind and metric, which the request
+    names; the history stays.
+    """
+    return await bounty_evaluation.record_entry(
+        request.app.state.session_maker, bounty_id=bounty_id, body=body, actor=actor
+    )
+
+
+@admin_router.post(
+    "/{bounty_id}/evaluation/decisions",
+    response_model=BountyEvaluationDecisionView,
+    responses=_errors(400, 401, 404, 409, 503),
+)
+async def evaluation_decision(
+    bounty_id: UUID,
+    body: BountyEvaluationDecisionRequest,
+    request: Request,
+    _admin: AdminDep,
+    actor: ActorDep,
+) -> BountyEvaluationDecisionView:
+    """Record the decision to expand, revise or stop the pilot (#2944).
+
+    It supersedes the current decision, which the request names; the history
+    stays.
+    """
+    return await bounty_evaluation.record_decision(
+        request.app.state.session_maker, bounty_id=bounty_id, body=body, actor=actor
+    )
+
+
 # Operator reads. Static paths are declared before the bounty-id path.
 @admin_router.get(
     "", response_model=BountyOperatorView, responses=_errors(401, 404, 503)
@@ -524,6 +574,18 @@ async def settlement_queue(
 ) -> BountySettlementQueue:
     """Obligations that still need an operator, with their approvers."""
     return await bounty_admin.settlement_queue(session, state=state)
+
+
+@admin_router.get(
+    "/queue/appeals", response_model=BountyAppealQueue, responses=_errors(401, 503)
+)
+async def appeal_queue(_admin: AdminDep, session: SessionDep) -> BountyAppealQueue:
+    """Appeals awaiting a decision, the longest waiting first.
+
+    Each carries the appellant's private statement and the public event it
+    appeals, which is what deciding it needs.
+    """
+    return await bounty_admin.appeal_queue(session)
 
 
 @admin_router.get(

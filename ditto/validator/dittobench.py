@@ -21,7 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -30,9 +30,16 @@ from ditto.api_models.benchmark_progress import (
     MAX_BENCHMARK_CHECKS,
     BenchmarkProgressStage,
 )
+from ditto.api_models.generator_round_validator import (
+    GENERATOR_ROUND_BENCH_FEATURE_PREFIX,
+    GENERATOR_ROUND_BENCH_VERSIONS,
+    GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX,
+    MAX_ROUND_COLUMN_CASES,
+)
 from ditto.api_models.validator import (
     ArtifactResponse,
     BenchmarkRuntimeSettings,
+    JobResponse,
     ScoreReport,
 )
 from ditto.api_models.validator_capabilities import (
@@ -42,6 +49,7 @@ from ditto.api_models.validator_capabilities import (
     ScorerProbeOutcome,
     ScorerProbeReason,
     V14ScoredRuntimeEnvEvidence,
+    V15ScoredRuntimeEnvEvidence,
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
@@ -57,6 +65,7 @@ from ditto.validator.config import (
     run_budget_seconds,
 )
 from ditto.validator.errors import (
+    ConfirmationScorerError,
     DittobenchError,
     LeaseDeadlineError,
     SandboxOomError,
@@ -66,11 +75,235 @@ from ditto_screening_protocol.bench_v9 import (
     SUPPORTED_BENCH_VERSIONS as _SHARED_SUPPORTED_BENCH_VERSIONS,
 )
 from ditto_screening_protocol.bench_v9 import supports_confirmation
+from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+)
+from ditto_screening_protocol.dueling import (
+    DUELING_MIN_BENCH_VERSION,
+    DUELING_SLICE_MODE,
+    DuelingReport,
+    is_dueling_bench_version,
+)
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
 
 logger = logging.getLogger(__name__)
+
+# Dataset modes /v2/score accepts with private bytes: the Platform-private
+# benchmark artifact and a generator-competition round dataset.
+_PRIVATE_DATASET_MODES = frozenset({"platform-private-v1", "generator-round-v1"})
+# The scorer runs a screened image without the source tarball. Advertised
+# upward so Platform stops handing this validator miner source.
+SOURCE_FREE_SCREENED_IMAGE_FEATURE = "screened-image-source-free-v1"
+
+_ROUND_MAX_CASES_FEATURE = re.compile(
+    re.escape(GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX) + r"([1-9][0-9]{0,3})"
+)
+
+
+def scorer_generator_round_max_cases(features: object) -> int | None:
+    """The round column size both the scorer and this validator can run.
+
+    The scorer advertises ``generator-round-max-cases-<n>`` (its pack
+    contract's ``challenge.MaxCases``); this validator's own job and result
+    models bound a column at ``MAX_ROUND_COLUMN_CASES``. ``None`` when the
+    scorer advertises no size, which Platform reads as the legacy column.
+    """
+    if not isinstance(features, list):
+        return None
+    sizes = [
+        int(match.group(1))
+        for feature in features
+        if isinstance(feature, str)
+        and (match := _ROUND_MAX_CASES_FEATURE.fullmatch(feature))
+    ]
+    if not sizes:
+        return None
+    return min(max(sizes), MAX_ROUND_COLUMN_CASES)
+
+
+_ROUND_BENCH_FEATURE = re.compile(
+    re.escape(GENERATOR_ROUND_BENCH_FEATURE_PREFIX) + r"([1-9][0-9]{0,3})"
+)
+
+
+def scorer_generator_round_bench_versions(
+    features: object, observed_versions: tuple[int, ...]
+) -> tuple[int, ...] | None:
+    """The round bench versions both the scorer and this validator can run.
+
+    The scorer advertises ``generator-round-bench-<n>`` for each version its
+    ``generator-round-v1`` mode runs; this validator runs only its own round
+    contracts (``GENERATOR_ROUND_BENCH_VERSIONS``) that the scorer is also
+    verified for. ``None`` when the scorer advertises no version, which
+    Platform reads as the original v13-only round mode.
+    """
+    if not isinstance(features, list):
+        return None
+    advertised = {
+        int(match.group(1))
+        for feature in features
+        if isinstance(feature, str)
+        and (match := _ROUND_BENCH_FEATURE.fullmatch(feature))
+    }
+    if not advertised:
+        return None
+    return tuple(
+        sorted(
+            advertised & set(GENERATOR_ROUND_BENCH_VERSIONS) & set(observed_versions)
+        )
+    )
+
+
+# A scorer advertises ``dueling-slice-v1`` plus one ``dueling-slice-bench-<n>``
+# per bench version >= 16 it runs with a generator slice (spec 7.5).
+DUELING_SLICE_FEATURE = DUELING_SLICE_MODE
+_DUELING_SLICE_BENCH_FEATURE = re.compile(r"dueling-slice-bench-([1-9][0-9]{0,3})")
+# ``challenge.MaxRoundDatasetBytes``: the largest slice /v2/score accepts.
+MAX_DUELING_SLICE_BYTES = 32 << 20
+
+
+def scorer_dueling_slice_bench_versions(
+    features: object, observed_versions: tuple[int, ...]
+) -> tuple[int, ...] | None:
+    """The dueling bench versions both the scorer and this validator can run.
+
+    Requires the ``dueling-slice-v1`` mode feature, then keeps every advertised
+    ``dueling-slice-bench-<n>`` that is a dueling version (``>= 16``) and that
+    this validator is verified to run (``observed_versions`` is already capped
+    at its ``SUPPORTED_BENCH_VERSIONS``). ``None`` when nothing survives, so a
+    validator that cannot score a dueling lease signs the exact bytes it
+    always did and Platform leases it no ``>= 16`` ticket.
+    """
+    if not isinstance(features, list) or DUELING_SLICE_FEATURE not in features:
+        return None
+    advertised = {
+        int(match.group(1))
+        for feature in features
+        if isinstance(feature, str)
+        and (match := _DUELING_SLICE_BENCH_FEATURE.fullmatch(feature))
+    }
+    versions = tuple(
+        sorted(
+            version
+            for version in advertised & set(observed_versions)
+            if is_dueling_bench_version(version)
+        )
+    )
+    return versions or None
+
+
+@dataclass(frozen=True)
+class DuelingSlice:
+    """A verified bench >= 16 generator slice to forward on ``/v2/score``."""
+
+    slice_bytes: bytes
+    expected_slice_sha256: str
+    owner_key: str
+    season_id: str
+    mode: str = DUELING_SLICE_MODE
+
+
+class DuelingSliceError(ValueError):
+    """A dueling lease the validator refuses to score; ``code`` is the reason."""
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def dueling_slice_from_lease(job: JobResponse) -> DuelingSlice | None:
+    """Decode and verify a lease's dueling slice, or ``None`` below v16.
+
+    A ``bench_version >= 16`` lease must carry all five dueling fields and
+    bytes that hash to ``expected_slice_sha256``; anything else raises
+    :class:`DuelingSliceError` so the caller hands the ticket back as
+    infrastructure instead of scoring a run the scorer would refuse. Below v16
+    the fields are never forwarded: a stray one is logged and dropped.
+    """
+    fields = (
+        job.dueling_slice_mode,
+        job.dueling_slice_bytes,
+        job.expected_slice_sha256,
+        job.dueling_owner_key,
+        job.dueling_season_id,
+    )
+    if job.bench_version is None or not is_dueling_bench_version(job.bench_version):
+        if any(value is not None for value in fields):
+            logger.warning(
+                "lease for agent %s at bench_version %r carries dueling slice "
+                "fields; a pre-v%d lease never forwards them",
+                job.agent_id,
+                job.bench_version,
+                DUELING_MIN_BENCH_VERSION,
+            )
+        return None
+    if (
+        job.dueling_slice_mode != DUELING_SLICE_MODE
+        or not job.dueling_slice_bytes
+        or job.expected_slice_sha256 is None
+        or job.dueling_owner_key is None
+        or job.dueling_season_id is None
+    ):
+        raise DuelingSliceError(
+            f"bench v{job.bench_version} lease for agent {job.agent_id} is "
+            "missing its dueling slice",
+            code="dueling_slice_missing",
+        )
+    try:
+        slice_bytes = base64.b64decode(job.dueling_slice_bytes, validate=True)
+    except ValueError as exc:
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is not valid base64",
+            code="dueling_slice_undecodable",
+        ) from exc
+    if not slice_bytes or len(slice_bytes) > MAX_DUELING_SLICE_BYTES:
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is empty or oversized",
+            code="dueling_slice_size",
+        )
+    if hashlib.sha256(slice_bytes).hexdigest() != job.expected_slice_sha256:
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} does not hash to "
+            f"{job.expected_slice_sha256}",
+            code="dueling_slice_digest_mismatch",
+        )
+    return DuelingSlice(
+        slice_bytes=slice_bytes,
+        expected_slice_sha256=job.expected_slice_sha256,
+        owner_key=job.dueling_owner_key,
+        season_id=job.dueling_season_id,
+    )
+
+
+def verify_dueling_report(report: ScoreReport, dueling_slice: DuelingSlice) -> None:
+    """Refuse a dueling report that does not describe the forwarded slice.
+
+    The scorer echoes the slice digest, owner and season in ``details.dueling``
+    (spec 7.5). A missing or contradicting block means the run did not score the
+    leased slice, so it must not be signed.
+    """
+    details = report.details if isinstance(report.details, dict) else {}
+    try:
+        dueling = DuelingReport.model_validate(details.get("dueling"))
+    except ValueError as exc:
+        raise ValidatorInfrastructureError(
+            "scorer report carries no valid details.dueling block",
+            code="dueling_report_invalid",
+        ) from exc
+    if (
+        dueling.slice_sha256 != dueling_slice.expected_slice_sha256
+        or dueling.owner_key != dueling_slice.owner_key
+        or dueling.season_id != dueling_slice.season_id
+    ):
+        raise ValidatorInfrastructureError(
+            "scorer details.dueling does not match the leased slice",
+            code="dueling_report_mismatch",
+        )
+
 
 # Terminal job states reported by dittobench-api's store.
 _DONE = "done"
@@ -91,6 +324,17 @@ _CONFIRMATION_ZERO_STATUS_FAILURES = frozenset(
         "longmem_run_response_too_large",
         "longmem_run_missing_final_text",
         "longmem_run_tool_endpoint",
+        # Executor-stage classes. These name a stage of the scorer's own
+        # pipeline rather than a harness boundary, so there is no HTTP exchange
+        # behind them and 0 is the only status they may carry. Imported rather
+        # than restated: this set is the admission gate, and a class the shared
+        # contract allows but this gate rejects is silently unreportable --
+        # which is the exact blindness the executor classes exist to remove.
+        *CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+        # Coordinator steps and LongMemEval executor phases: likewise points in
+        # the scorer's own pipeline, never an HTTP exchange, so 0 only.
+        *CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+        *CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
     }
 )
 _CONFIRMATION_HTTP_STATUS_FAILURES = frozenset(
@@ -128,28 +372,50 @@ _PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
 }
 
 
-def _confirmation_failure_diagnostic(response: httpx.Response) -> str:
+class ConfirmationFailureDiagnostic(NamedTuple):
+    """One accepted scorer class/status pair, ready for the signed hand-back."""
+
+    failure_class: str
+    failure_status: int
+
+    def suffix(self) -> str:
+        """The host-log form, kept so an operator on the box reads it unchanged."""
+        return (
+            f" [failure_class={self.failure_class} "
+            f"failure_status={self.failure_status}]"
+        )
+
+
+def _confirmation_failure_diagnostic(
+    response: httpx.Response,
+) -> ConfirmationFailureDiagnostic | None:
     """Return one bounded scorer diagnostic, or nothing for any drift.
 
     The confirmation response body deliberately remains stage-only. These
     purpose-specific headers cross only the protected local scorer boundary,
     and are accepted solely when their class/status pair matches a shape the
     Go scorer can emit from its reviewed allowlist.
+
+    Returned structurally rather than pre-formatted because the caller now owes
+    this pair to Platform as well as to the log line: formatting it into the
+    message first is what made the class unrecoverable from anywhere but the
+    host. The four shape checks below are the only admission gate, so whatever
+    survives them is exactly what may be signed.
     """
     failure_class = response.headers.get(_CONFIRMATION_FAILURE_CLASS_HEADER)
     raw_status = response.headers.get(_CONFIRMATION_FAILURE_STATUS_HEADER)
     if failure_class is None or raw_status is None:
-        return ""
+        return None
     if (
         not raw_status
         or len(raw_status) > 3
         or not raw_status.isascii()
         or not raw_status.isdecimal()
     ):
-        return ""
+        return None
     status = int(raw_status)
     if raw_status != str(status) or status > 599:
-        return ""
+        return None
     if failure_class in _CONFIRMATION_ZERO_STATUS_FAILURES:
         valid = status == 0
     elif failure_class in _CONFIRMATION_HTTP_STATUS_FAILURES:
@@ -161,8 +427,8 @@ def _confirmation_failure_diagnostic(response: httpx.Response) -> str:
     else:
         valid = False
     if not valid:
-        return ""
-    return f" [failure_class={failure_class} failure_status={status}]"
+        return None
+    return ConfirmationFailureDiagnostic(failure_class, status)
 
 
 _SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -208,14 +474,31 @@ _SCORER_IMAGE_STALE = "scorer_image_stale"
 _ORIGIN_BINARY = "binary"
 
 _SANDBOX_INFRASTRUCTURE_CODES = {
+    # Legacy: a scorer before the deterministic OOM rule sent every OOM kill
+    # as this code with no cap or host evidence. It stays no-fault.
     "sandbox_oom",
     "sandbox_tmpfs_exhausted",
+    # An OOM kill the evidence cannot pin on the harness's own cap: the cgroup
+    # stayed below its limit, or host MemAvailable fell under the published
+    # floor before the kill. docs/RUNTIME-ENVELOPE.md publishes the rule.
+    "host_memory_pressure",
+    # A SIGKILL (exit 137) with no OOM flag. Nothing proves who sent it, so the
+    # attempt is no-fault; Platform counts a repeat on a second validator as
+    # the harness's own failure.
+    "harness_killed_137",
     # The scorer could not establish its validator-owned sandbox network path:
     # either the egress network was missing at container start or the observed
     # tool listener could not self-verify. This is validator infrastructure,
     # not the agent's fault, so it must end the sweep and back off rather than
     # blame and re-lease the agent in a tight resubmit loop.
     "sandbox_network_unavailable",
+    # ``docker run`` could not find the scorer's own request-scoped
+    # ``dittobench-sub:`` tag at container start or compatibility restart: a host
+    # image prune, disk-pressure cleanup, or restart race removed it after Build.
+    # The tag is validator-owned, so the miner is not at fault. Current scorers
+    # send ``screened_image_unavailable`` for this so validators that predate
+    # this entry also back off; it is listed for scorers that still send it.
+    "sandbox_image_unavailable",
     # The ticket inference route failed or its upstream provider degraded
     # mid-run. Also validator-side infrastructure, so
     # back off instead of failing the agent and re-leasing it in a loop.
@@ -240,6 +523,11 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # bounded 600-second lock wait. The harness never ran, so consuming the
     # miner's attempt would charge them for shared scorer infrastructure.
     "seed_store_lock_timeout",
+    # The harness died on SIGILL before it ever became healthy: this host's CPU
+    # lacks an instruction the screened image uses, and the same image starts on
+    # other validators. Platform parks the ticket for this validator only, so it
+    # is not re-leased here without bound.
+    "sandbox_cpu_unsupported",
 }
 
 
@@ -356,7 +644,14 @@ _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
     }
 )
 
+# The one sandbox resource verdict that is the agent's: an OOM kill at the
+# harness's own published cap while the host kept headroom. The scorer sends it
+# as terminal ``sandbox_failure`` / ``retryable: false`` so the wire kind matches
+# the charge; it reaches Platform as ``sandbox_oom`` with this detail.
+_HARNESS_OOM = "harness_oom"
+
 assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
+assert _HARNESS_OOM not in _SANDBOX_INFRASTRUCTURE_CODES
 
 
 def _sandbox_infrastructure_failure_code(payload: dict[str, object]) -> str | None:
@@ -444,7 +739,8 @@ def _agent_attributable_failure_code(payload: dict[str, object]) -> str | None:
     code = failure.get("code")
     return (
         code
-        if isinstance(code, str) and code in _AGENT_ATTRIBUTABLE_INFERENCE_CODES
+        if isinstance(code, str)
+        and (code in _AGENT_ATTRIBUTABLE_INFERENCE_CODES or code == _HARNESS_OOM)
         else None
     )
 
@@ -736,9 +1032,16 @@ class DittobenchClient:
                 await asyncio.wait({poll_task})
         if response.status_code != 200:
             diagnostic = _confirmation_failure_diagnostic(response)
-            raise DittobenchError(
+            message = (
                 "v9 confirmation execution rejected "
-                f"({response.status_code}): {response.text[:200]}{diagnostic}"
+                f"({response.status_code}): {response.text[:200]}"
+            )
+            if diagnostic is None:
+                raise DittobenchError(message)
+            raise ConfirmationScorerError(
+                f"{message}{diagnostic.suffix()}",
+                scorer_failure_class=diagnostic.failure_class,
+                scorer_failure_status=diagnostic.failure_status,
             )
         try:
             return V9ConfirmationScorerResult.model_validate(response.json())
@@ -1162,7 +1465,29 @@ class DittobenchClient:
                     v14_scored_runtime_env = v14_candidate
             except ValueError:
                 pass
+        v15_scored_runtime_env = None
+        if (
+            15 in observed_versions
+            and payload.get("v15_scored_runtime_env") is not None
+        ):
+            try:
+                v15_candidate = V15ScoredRuntimeEnvEvidence.model_validate(
+                    payload["v15_scored_runtime_env"]
+                )
+                if v15_candidate.source_revision == source_revision:
+                    v15_scored_runtime_env = v15_candidate
+            except ValueError:
+                pass
         try:
+            generator_rounds = (
+                13 in observed_versions
+                and isinstance(payload.get("features"), list)
+                and "generator-round-v1" in payload["features"]
+            )
+            source_free_screened_images = (
+                isinstance(payload.get("features"), list)
+                and SOURCE_FREE_SCREENED_IMAGE_FEATURE in payload["features"]
+            )
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
                 deterministic_v13_datasets=(
@@ -1175,12 +1500,30 @@ class DittobenchClient:
                     and isinstance(payload.get("features"), list)
                     and "platform-private-v1" in payload["features"]
                 ),
+                generator_rounds=generator_rounds,
+                source_free_screened_images=source_free_screened_images,
+                generator_round_max_cases=(
+                    scorer_generator_round_max_cases(payload.get("features"))
+                    if generator_rounds
+                    else None
+                ),
+                generator_round_bench_versions=(
+                    scorer_generator_round_bench_versions(
+                        payload.get("features"), observed_versions
+                    )
+                    if generator_rounds
+                    else None
+                ),
+                dueling_slice_bench_versions=scorer_dueling_slice_bench_versions(
+                    payload.get("features"), observed_versions
+                ),
                 supported_bench_versions=observed_versions,
                 observed_at=observed_at,
                 software_version=software_version,
                 source_revision=source_revision,
                 scored_runtime_env=scored_runtime_env,
                 v14_scored_runtime_env=v14_scored_runtime_env,
+                v15_scored_runtime_env=v15_scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,
@@ -1285,7 +1628,7 @@ class DittobenchClient:
     async def score_tarball(
         self,
         *,
-        tarball_url: str,
+        tarball_url: str | None,
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
@@ -1306,6 +1649,7 @@ class DittobenchClient:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
@@ -1328,6 +1672,10 @@ class DittobenchClient:
         (tamper-evidence — every k=3 validator provably scored the platform's
         dataset). The deprecated unversioned scoring and implicit practice
         routes are not used.
+
+        ``dueling_slice`` is the verified bench >= 16 generator slice
+        (:func:`dueling_slice_from_lease`). It is forwarded only at a dueling
+        version and the report's ``details.dueling`` must echo it.
         """
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
@@ -1358,13 +1706,85 @@ class DittobenchClient:
             inference_ticket_deadline=inference_ticket_deadline,
             ticket_deadline=ticket_deadline,
             benchmark_runtime=benchmark_runtime,
+            dueling_slice=dueling_slice,
         )
-        return await self._poll(
+        report = await self._poll(
             run_id,
             progress_callback=progress_callback,
             expected_bench_version=bench_version,
             ticket_deadline=ticket_deadline,
         )
+        if dueling_slice is not None:
+            verify_dueling_report(report, dueling_slice)
+        return report
+
+    async def run_generator_round(
+        self,
+        *,
+        tarball_url: str | None,
+        tarball_sha256: str,
+        dataset_bytes: bytes,
+        dataset_sha256: str,
+        seed: int,
+        screened_image_url: str | None,
+        screened_image_sha256: str | None,
+        screened_image_size_bytes: int | None,
+        screened_image_id: str | None,
+        screened_image_ref: str | None,
+        inference_session_id: str | None,
+        inference_grant_id: UUID | None,
+        inference_agent_id: UUID | None,
+        inference_slot_id: str | None,
+        inference_ticket_deadline: datetime | None,
+        ticket_deadline: datetime,
+        bench_version: int = 13,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Run a generator-round dataset against one screened image at the
+        round's frozen ``bench_version`` (Platform's job carries it).
+
+        Returns the scorer run id and the raw per-case results (case ids are
+        ``column/case``; faults carry the ``generator_round_fault`` category).
+        """
+        if self._config.dittobench_mock:
+            raise DittobenchError("generator rounds cannot use mock scoring")
+        run_id = await self._submit(
+            tarball_url=tarball_url,
+            tarball_sha256=tarball_sha256,
+            seed=seed,
+            dataset_sha256=dataset_sha256,
+            private_dataset_mode="generator-round-v1",
+            private_dataset_bytes=dataset_bytes,
+            run_size="full",
+            bench_version=bench_version,
+            screened_image_url=screened_image_url,
+            screened_image_sha256=screened_image_sha256,
+            screened_image_size_bytes=screened_image_size_bytes,
+            screened_image_id=screened_image_id,
+            screened_image_ref=screened_image_ref,
+            inference_session_id=inference_session_id,
+            inference_grant_id=inference_grant_id,
+            inference_agent_id=inference_agent_id,
+            inference_slot_id=inference_slot_id,
+            inference_ticket_deadline=inference_ticket_deadline,
+            ticket_deadline=ticket_deadline,
+            benchmark_runtime=benchmark_runtime,
+        )
+        report = await self._poll_run(
+            run_id,
+            progress_callback=progress_callback,
+            expected_bench_version=bench_version,
+            ticket_deadline=ticket_deadline,
+            raw=True,
+        )
+        assert isinstance(report, dict)
+        per_case = report.get("per_case")
+        if not isinstance(per_case, list) or not all(
+            isinstance(case, dict) for case in per_case
+        ):
+            raise DittobenchError("round report carries no per-case results")
+        return str(report.get("run_id") or run_id), per_case
 
     def _mock_report(self) -> ScoreReport:
         """Canned report for ``VALIDATOR_DITTOBENCH_MOCK`` (local plumbing tests)."""
@@ -1386,7 +1806,7 @@ class DittobenchClient:
     async def _submit(
         self,
         *,
-        tarball_url: str,
+        tarball_url: str | None,
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
@@ -1406,14 +1826,16 @@ class DittobenchClient:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> str:
         del ticket_deadline  # Manual retry policy forbids admission replay.
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
-        body: dict[str, object] = {
-            "tarball_url": tarball_url,
-            "run_size": run_size or self._config.run_size,
-        }
+        body: dict[str, object] = {"run_size": run_size or self._config.run_size}
+        # Platform withholds source from a source-free scorer; the screened
+        # image is then the only artifact the scorer fetches.
+        if tarball_url is not None:
+            body["tarball_url"] = tarball_url
         if tarball_sha256:
             body["tarball_sha256"] = tarball_sha256
         screened_image_fields = (
@@ -1487,9 +1909,16 @@ class DittobenchClient:
             )
         body["dataset_sha256"] = dataset_sha256
         if private_dataset_mode is not None or private_dataset_bytes is not None:
+            # The Platform-private artifact is a v13 contract; a generator round
+            # runs at any round contract (the pack grading policies) it froze.
+            allowed_versions = (
+                GENERATOR_ROUND_BENCH_VERSIONS
+                if private_dataset_mode == "generator-round-v1"
+                else (13,)
+            )
             if (
-                private_dataset_mode != "platform-private-v1"
-                or bench_version != 13
+                private_dataset_mode not in _PRIVATE_DATASET_MODES
+                or bench_version not in allowed_versions
                 or not private_dataset_bytes
                 or len(private_dataset_bytes) > 32 << 20
             ):
@@ -1500,6 +1929,36 @@ class DittobenchClient:
             body["private_dataset_bytes"] = base64.b64encode(
                 private_dataset_bytes
             ).decode("ascii")
+        # A canonical bench >= 16 run carries its season slice (spec 7.5); a
+        # generator round at a dueling version is a private pack dataset and
+        # never does. Below v16 the fields are never sent.
+        if is_dueling_bench_version(bench_version) and private_dataset_mode is None:
+            if dueling_slice is None:
+                raise DittobenchError(
+                    f"benchmark v{bench_version} requires a dueling slice"
+                )
+            if dueling_slice.mode != DUELING_SLICE_MODE:
+                raise DittobenchError("dueling slice mode mismatch")
+            if (
+                not dueling_slice.slice_bytes
+                or len(dueling_slice.slice_bytes) > MAX_DUELING_SLICE_BYTES
+            ):
+                raise DittobenchError("dueling slice is empty or oversized")
+            if (
+                hashlib.sha256(dueling_slice.slice_bytes).hexdigest()
+                != dueling_slice.expected_slice_sha256
+            ):
+                raise DittobenchError("dueling slice digest mismatch")
+            body["dueling_slice_mode"] = dueling_slice.mode
+            body["dueling_slice_bytes"] = base64.b64encode(
+                dueling_slice.slice_bytes
+            ).decode("ascii")
+            body["expected_slice_sha256"] = dueling_slice.expected_slice_sha256
+            body["dueling_owner_key"] = dueling_slice.owner_key
+        elif dueling_slice is not None:
+            raise DittobenchError(
+                f"benchmark v{bench_version} does not take a dueling slice"
+            )
         body["bench_version"] = bench_version
         if benchmark_runtime is not None:
             body["benchmark_runtime"] = benchmark_runtime.model_dump(mode="json")
@@ -1539,6 +1998,25 @@ class DittobenchClient:
         expected_bench_version: int | None = None,
         ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
+        result = await self._poll_run(
+            run_id,
+            progress_callback=progress_callback,
+            expected_bench_version=expected_bench_version,
+            ticket_deadline=ticket_deadline,
+            raw=False,
+        )
+        assert isinstance(result, ScoreReport)
+        return result
+
+    async def _poll_run(
+        self,
+        run_id: str,
+        *,
+        progress_callback: ProgressCallback | None,
+        expected_bench_version: int | None,
+        ticket_deadline: datetime | None,
+        raw: bool,
+    ) -> ScoreReport | dict[str, Any]:
         if (
             expected_bench_version is None
             or expected_bench_version not in SUPPORTED_BENCH_VERSIONS
@@ -1623,6 +2101,13 @@ class DittobenchClient:
                             f"ticket={expected_bench_version!r} "
                             f"job={job_version!r} report={reported_version!r}"
                         )
+                    if raw:
+                        # Generator-round runs carry no transcript or v9 base
+                        # evidence: their per-case results go to the round
+                        # matrix, never into a signed agent score.
+                        if not isinstance(rep, dict):
+                            raise DittobenchError("round report was not an object")
+                        return rep
                     # Offline reproducibility: fetch the run's transcript
                     # artifact and bind its digest into the report details, so
                     # the score signature covers it and the worker can publish
@@ -1677,6 +2162,12 @@ class DittobenchClient:
                     # binding it to one branch would lose it on exactly the
                     # failures that are hardest to read from the outside.
                     log_tail = _container_log_tail(data)
+                    if agent_failure_code == _HARNESS_OOM:
+                        raise SandboxOomError(
+                            f"run {run_id} exceeded its published sandbox memory cap",
+                            code=_HARNESS_OOM,
+                            container_log_tail=log_tail,
+                        )
                     if agent_failure_code is not None:
                         if agent_failure_code == "model_inference_required":
                             message = f"run {run_id} made no authoritative model call"
@@ -1709,12 +2200,6 @@ class DittobenchClient:
                     # why ditto-subnet#279 could not name the ~60-minute
                     # `mnemo*` killer. It now reaches the ticket as
                     # `failure_detail`.
-                    if infrastructure_code == "sandbox_oom":
-                        raise SandboxOomError(
-                            f"run {run_id} exhausted the sandbox memory allowance",
-                            code=infrastructure_code,
-                            container_log_tail=log_tail,
-                        )
                     if infrastructure_code is not None:
                         infrastructure_detail = _sandbox_infrastructure_failure_detail(
                             data, infrastructure_code

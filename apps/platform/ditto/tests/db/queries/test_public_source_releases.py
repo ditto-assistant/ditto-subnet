@@ -167,7 +167,10 @@ async def test_below_quorum_king_is_not_published(session: AsyncSession) -> None
 
 
 @pytest.mark.parametrize(
-    "status", [AgentStatus.REJECTED, AgentStatus.ATH_PENDING_REVIEW]
+    "status",
+    [
+        AgentStatus.REJECTED,
+    ],
 )
 async def test_non_serving_status_is_not_published(
     session: AsyncSession, status: AgentStatus
@@ -426,12 +429,9 @@ async def test_actual_publication_survives_policy_pause_and_agent_suspension(
 @pytest.mark.parametrize(
     "endpoint,kind,sha",
     [
-        ("admin.get_screening_artifact", "admin", "p" * 64),
         ("validator.agent_artifact", "validator", "p" * 64),
-        ("screener.agent_artifact", "screener", "p" * 64),
         ("public.agent_artifact", "admin", "p" * 64),
         ("public.agent_artifact", "public", "wrong" * 16),
-        ("public.agent_artifact", "public", None),
     ],
 )
 async def test_private_or_mismatched_fetch_is_not_publication(

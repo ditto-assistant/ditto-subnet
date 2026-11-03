@@ -49,7 +49,7 @@ func main() {
 	artifactPaths := flag.String("artifact", "", "comma-separated artifact JSON paths to probe instead of generating (surface-passed artifacts)")
 	asJSON := flag.Bool("json", false, "emit the full JSON report on stdout")
 	out := flag.String("out", "", "write the JSON report here")
-	publicControl := flag.Bool("require-public-control", false, "fail unless generated V13 full-profile GIH control covers at least 40 seeds and scores >= 0.90 on every required surface slice; not private qualification")
+	publicControl := flag.Bool("require-public-control", false, "fail unless the selected v13/v14 public full-profile GIH control covers at least 40 seeds and scores >= 0.90 on every required surface slice; not private qualification")
 	flag.Parse()
 
 	opts := parserprobe.Options{
@@ -72,8 +72,13 @@ func main() {
 				fmt.Fprintf(os.Stderr, "parserprobe: parse %s: %v\n", path, err)
 				os.Exit(2)
 			}
-			if !protocol.SupportedBenchVersion(a.BenchVersion) {
+			if !protocol.GeneratableBenchVersion(a.BenchVersion) {
 				fmt.Fprintf(os.Stderr, "parserprobe: %s carries unsupported bench_version %d\n", path, a.BenchVersion)
+				os.Exit(2)
+			}
+			if protocol.StagedBenchVersion(a.BenchVersion) && a.SurfaceSalt != 0 {
+				// The private-artifact decoder serves supported contracts only.
+				fmt.Fprintf(os.Stderr, "parserprobe: %s is a salted artifact of staged bench_version %d; only public (salt 0) staged artifacts are probed\n", path, a.BenchVersion)
 				os.Exit(2)
 			}
 			if a.SurfaceSalt != 0 {
@@ -90,7 +95,7 @@ func main() {
 			opts.Artifacts = append(opts.Artifacts, a)
 			opts.BenchVersion = a.BenchVersion
 		}
-	} else if !protocol.SupportedBenchVersion(*version) {
+	} else if !protocol.GeneratableBenchVersion(*version) {
 		fmt.Fprintf(os.Stderr, "parserprobe: unsupported bench_version %d\n", *version)
 		os.Exit(2)
 	}
@@ -119,7 +124,7 @@ func main() {
 	}
 	printSummary(os.Stderr, report)
 	if *publicControl {
-		failures := parserprobe.PublicControlFailures(report)
+		failures := parserprobe.PublicControlFailuresForVersion(report, *version)
 		for _, failure := range failures {
 			fmt.Fprintf(os.Stderr, "parserprobe: public control failed: %s\n", failure)
 		}

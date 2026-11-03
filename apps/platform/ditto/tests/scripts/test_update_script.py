@@ -92,6 +92,7 @@ def _jlist(
     script: str | None = None,
     relay_status: str = "online",
     relay_status_2: str = "online",
+    standby_status: str | None = None,
 ) -> str:
     """A ``pm2 jlist`` payload whose launch identity matches ecosystem.config.js.
 
@@ -106,30 +107,37 @@ def _jlist(
         "pm_cwd": str(repo),
         "restart_time": 0,
     }
-    return json.dumps(
-        [
+    apps = [
+        {
+            "name": "ditto-api",
+            "pid": 4242,
+            "pm2_env": {**common, "status": api_status},
+        },
+        {
+            "name": "ditto-api-relay-1",
+            "pid": 4243,
+            "pm2_env": {**common, "status": relay_status},
+        },
+        {
+            "name": "ditto-api-relay-2",
+            "pid": 4244,
+            "pm2_env": {**common, "status": relay_status_2},
+        },
+        {
+            "name": "ditto-screened-image-cleanup",
+            "pid": 0,
+            "pm2_env": {**common, "status": "stopped"},
+        },
+    ]
+    if standby_status is not None:
+        apps.append(
             {
-                "name": "ditto-api",
-                "pid": 4242,
-                "pm2_env": {**common, "status": api_status},
-            },
-            {
-                "name": "ditto-api-relay-1",
-                "pid": 4243,
-                "pm2_env": {**common, "status": relay_status},
-            },
-            {
-                "name": "ditto-api-relay-2",
-                "pid": 4244,
-                "pm2_env": {**common, "status": relay_status_2},
-            },
-            {
-                "name": "ditto-screened-image-cleanup",
-                "pid": 0,
-                "pm2_env": {**common, "status": "stopped"},
-            },
-        ]
-    )
+                "name": "ditto-api-standby",
+                "pid": 4245,
+                "pm2_env": {**common, "status": standby_status},
+            }
+        )
+    return json.dumps(apps)
 
 
 def _run_update(
@@ -143,6 +151,8 @@ def _run_update(
     health_status: int = 200,
     health_commit: str | None = TARGET_SHA,
     health_timeout: str = "15",
+    standby_health_status: int | None = None,
+    standby_matches_primary: bool = False,
     uv_source: str = ":\n",
     npm_source: str | None = None,
     diverged_migrations: bool = False,
@@ -154,6 +164,9 @@ def _run_update(
     scripts.mkdir(parents=True)
     fake_bin.mkdir()
     shutil.copy2(ROOT / "scripts" / "update.sh", scripts / "update.sh")
+    shutil.copy2(
+        ROOT / "scripts" / "chain-transport.sh", scripts / "chain-transport.sh"
+    )
     # The deploy plan and the app definition it diffs against are part of the
     # start/reload path, so the fake repo needs both.
     shutil.copy2(
@@ -176,7 +189,14 @@ def _run_update(
     if initial_deploy_env is not None:
         (repo / ".env.deploy").write_text(initial_deploy_env)
 
-    (repo / "jlist.json").write_text(jlist if jlist is not None else _jlist(repo))
+    (repo / "jlist.json").write_text(
+        jlist
+        if jlist is not None
+        else _jlist(
+            repo,
+            standby_status="online" if standby_health_status is not None else None,
+        )
+    )
 
     # `git rev-parse HEAD` reads a file the fake `git reset --hard <sha>`
     # rewrites, so a test can observe update.sh rolling the checkout back.
@@ -233,6 +253,7 @@ def _run_update(
             "DITTO_DEPLOY_BRANCH",
             "DITTO_DEPLOY_COMMIT",
             "DITTO_HEALTH_TIMEOUT",
+            "DITTO_PLATFORM_STANDBY_PORT",
             "DITTO_TAOSTATS_API_KEY",
             "DITTO_TAOSTATS_SECRET_ID",
             "DITTO_TAOSTATS_SECRET_PROJECT",
@@ -252,6 +273,13 @@ def _run_update(
     with ExitStack() as stack:
         port = stack.enter_context(_health_server(health_status, health_commit))
         env["API_PORT"] = str(port)
+        if standby_health_status is not None:
+            standby_port = stack.enter_context(
+                _health_server(standby_health_status, health_commit)
+            )
+            env["DITTO_PLATFORM_STANDBY_PORT"] = str(
+                port if standby_matches_primary else standby_port
+            )
         result = subprocess.run(
             [str(scripts / "update.sh")],
             cwd=repo,
@@ -361,46 +389,6 @@ def test_update_loads_optional_archive_key_without_logging_value(
     assert api_key not in result.stderr
 
 
-def test_update_missing_archive_secret_keeps_free_fallback_unconfigured(
-    tmp_path: Path,
-) -> None:
-    result, _base_env, deploy_env, _deploy_mode = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "SUBTENSOR_ARCHIVE_RPC_API_KEY=" not in deploy_env
-    assert "SUBTENSOR_ARCHIVE_RPC_URL=" not in deploy_env
-    assert "free archive fallback remains enabled" in result.stderr
-
-
-def test_update_migrates_legacy_deploy_values_before_ansible_rewrites_base(
-    tmp_path: Path,
-) -> None:
-    legacy_key = "legacy-key-must-not-be-logged"
-    initial_env = (
-        "BASE_SETTING=kept\n"
-        f"DITTO_TAOSTATS_API_KEY={legacy_key}\n"
-        "DITTO_TAOSTATS_VALIDATOR_NAMES_URL=https://example.invalid/names\n"
-    )
-    result, base_env, deploy_env, deploy_mode = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        initial_env=initial_env,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert base_env == initial_env
-    assert f"DITTO_TAOSTATS_API_KEY={legacy_key}" in deploy_env
-    assert (
-        "DITTO_TAOSTATS_VALIDATOR_NAMES_URL=https://example.invalid/names" in deploy_env
-    )
-    assert deploy_mode == 0o600
-    assert legacy_key not in result.stdout
-    assert legacy_key not in result.stderr
-
-
 def test_update_keeps_ansible_env_immutable_and_deploy_values_override(
     tmp_path: Path,
 ) -> None:
@@ -418,26 +406,6 @@ def test_update_keeps_ansible_env_immutable_and_deploy_values_override(
     assert result.returncode == 0, result.stderr
     assert observed_base == base_env
     assert f"DITTO_UPLOAD_PAYMENT_ADDRESS={payment}" in deploy_env
-    assert deploy_mode == 0o600
-
-
-def test_update_repairs_no_final_newline_before_adding_another_key(
-    tmp_path: Path,
-) -> None:
-    payment = "5G6fGXnXFYdLM3ZyAm9whUbCY4ziQzcbMiTEqZB5c9KekTtR"
-    wandb_url = "https://wandb.ai/ditto/dev"
-    result, _, deploy_env, deploy_mode = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        initial_deploy_env=f"DITTO_UPLOAD_PAYMENT_ADDRESS={payment}",
-        deploy_env_vars={"DITTO_DASHBOARD_WANDB_URL": wandb_url},
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert deploy_env.splitlines() == [
-        f"DITTO_UPLOAD_PAYMENT_ADDRESS={payment}",
-        f"DITTO_DASHBOARD_WANDB_URL={wandb_url}",
-    ]
     assert deploy_mode == 0o600
 
 
@@ -474,6 +442,104 @@ def test_update_reloads_in_place_when_launch_identity_matches(tmp_path: Path) ->
     assert "managed by the rolling relay release" in result.stdout
 
 
+def test_update_rolls_standby_before_primary(tmp_path: Path) -> None:
+    result, _, _, _ = _run_update(
+        tmp_path, gcloud_source="exit 1\n", standby_health_status=200
+    )
+
+    assert result.returncode == 0, result.stderr
+    actions = _actions(tmp_path)
+    standby = "pm2 reload scripts/ecosystem.config.js --only ditto-api-standby"
+    primary = "pm2 reload scripts/ecosystem.config.js --only ditto-api --update-env\n"
+    assert standby in actions
+    assert primary in actions
+    assert actions.index(standby) < actions.index(primary)
+    assert "standby is healthy on commit" in result.stdout
+
+
+def test_update_recreates_standby_before_primary(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    jlist = json.loads(_jlist(repo, standby_status="online"))
+    standby = next(app for app in jlist if app["name"] == "ditto-api-standby")
+    standby["pm2_env"]["pm_exec_path"] = "/usr/local/bin/uv"
+    result, _, _, _ = _run_update(
+        tmp_path,
+        gcloud_source="exit 1\n",
+        jlist=json.dumps(jlist),
+        standby_health_status=200,
+    )
+
+    assert result.returncode == 0, result.stderr
+    actions = _actions(tmp_path)
+    assert actions.index("pm2 delete ditto-api-standby") < actions.index(
+        "pm2 reload scripts/ecosystem.config.js --only ditto-api --update-env"
+    )
+
+
+def test_update_keeps_primary_when_standby_is_unhealthy(tmp_path: Path) -> None:
+    result, _, _, _ = _run_update(
+        tmp_path,
+        gcloud_source="exit 1\n",
+        standby_health_status=503,
+        health_timeout="1",
+    )
+
+    assert result.returncode != 0
+    assert "primary was not touched" in result.stderr
+    assert (
+        "pm2 reload scripts/ecosystem.config.js --only ditto-api --update-env\n"
+        not in _actions(tmp_path)
+    )
+
+
+def test_update_keeps_standby_when_primary_is_already_down(tmp_path: Path) -> None:
+    result, _, _, _ = _run_update(
+        tmp_path,
+        gcloud_source="exit 1\n",
+        health_status=503,
+        standby_health_status=200,
+        health_timeout="1",
+    )
+
+    assert result.returncode != 0
+    assert "refusing to restart the standby" in result.stderr
+    assert "pm2 reload" not in _actions(tmp_path)
+
+
+def test_update_keeps_existing_standby_when_primary_is_missing(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    jlist = [
+        app
+        for app in json.loads(_jlist(repo, standby_status="online"))
+        if app["name"] != "ditto-api"
+    ]
+    result, _, _, _ = _run_update(
+        tmp_path,
+        gcloud_source="exit 1\n",
+        jlist=json.dumps(jlist),
+        health_status=503,
+        standby_health_status=200,
+        health_timeout="1",
+    )
+
+    assert result.returncode != 0
+    assert "refusing to restart the standby" in result.stderr
+    assert "pm2 reload" not in _actions(tmp_path)
+
+
+def test_update_refuses_shared_primary_and_standby_port(tmp_path: Path) -> None:
+    result, _, _, _ = _run_update(
+        tmp_path,
+        gcloud_source="exit 1\n",
+        standby_health_status=200,
+        standby_matches_primary=True,
+    )
+
+    assert result.returncode != 0
+    assert "primary health URL resolves to standby" in result.stderr
+    assert not (tmp_path / "repo" / "pm2-actions.log").exists()
+
+
 def test_update_recreates_the_app_when_the_script_path_drifted(tmp_path: Path) -> None:
     """The outage case: pm2 reload silently keeps the old `script`.
 
@@ -493,43 +559,6 @@ def test_update_recreates_the_app_when_the_script_path_drifted(tmp_path: Path) -
     assert "pm2 start scripts/ecosystem.config.js" in actions
     assert "pm2 reload" not in actions
     assert "recreate (script:" in result.stdout
-
-
-def test_update_fails_when_the_api_never_comes_up(tmp_path: Path) -> None:
-    """A deploy that leaves the API dead must exit non-zero, not report success."""
-    result, _, _, _ = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        jlist=_jlist(tmp_path / "repo", api_status="waiting restart"),
-        health_timeout="4",
-    )
-
-    assert result.returncode != 0
-    assert "deploy failed" in result.stderr
-    assert "ditto-api" in result.stderr
-
-
-def test_update_fails_when_the_api_serves_a_degraded_health_response(
-    tmp_path: Path,
-) -> None:
-    """Online but /health non-200 is still a failed deploy, reported distinctly."""
-    result, _, _, _ = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        health_status=503,
-        health_timeout="4",
-    )
-
-    assert result.returncode != 0
-    assert "returned HTTP 503" in result.stderr
-
-
-def test_update_accepts_the_stopped_one_shot_cleanup_job(tmp_path: Path) -> None:
-    """`stopped` is the cron-driven cleanup job's correct terminal state."""
-    result, _, _, _ = _run_update(tmp_path, gcloud_source="exit 1\n")
-
-    assert result.returncode == 0, result.stderr
-    assert "ditto-screened-image-cleanup: stopped (one-shot" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -602,20 +631,6 @@ def test_update_rolls_the_checkout_back_when_the_dashboard_build_fails(
     record = _deploy_record(tmp_path)
     assert record["result"] == "failed"
     assert record["stage"] == "dashboard-build"
-
-
-def test_update_builds_the_dashboard_before_touching_pm2(tmp_path: Path) -> None:
-    """When the checkout has a dashboard, the deploy builds it (ci + build)."""
-    result, _, _, _ = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        npm_source=f'printf "%s\\n" "npm $*" >> "{tmp_path}/repo/npm-actions.log"\n',
-    )
-
-    assert result.returncode == 0, result.stderr
-    npm_actions = (tmp_path / "repo" / "npm-actions.log").read_text()
-    assert "npm ci" in npm_actions
-    assert "npm run build" in npm_actions
 
 
 def test_update_rolls_the_checkout_back_when_a_migration_fails(

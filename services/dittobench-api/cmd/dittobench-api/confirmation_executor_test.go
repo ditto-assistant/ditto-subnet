@@ -449,13 +449,42 @@ func TestConfirmationExecutionFailurePreservesFirstReviewedStageAndCause(t *test
 }
 
 func TestConfirmationExecutionDiagnosticDoesNotDeriveFromPrivateErrorText(t *testing.T) {
+	// The property under test is that the diagnostic comes from the reviewed
+	// stage vocabulary and NEVER from the wrapped error's text. The class is now
+	// the stage rather than "unclassified" -- the stage is a literal this binary
+	// declares at its own failure points, not anything the error carries -- so
+	// assert that the private words cannot appear anywhere in the diagnostic
+	// while the stage itself still does.
 	err := wrapConfirmationExecutionFailure(
 		"dimension_execution",
 		errors.New("private submitted response credential-material"),
 	)
 	class, status := confirmationExecutionDiagnostic(err)
+	if class != "longmem_exec_dimension_execution" {
+		t.Fatalf("diagnostic class = %q, want longmem_exec_dimension_execution", class)
+	}
+	if status != 0 {
+		t.Fatalf("diagnostic status = %d, want 0", status)
+	}
+	for _, forbidden := range []string{"private", "submitted", "credential-material"} {
+		if strings.Contains(class, forbidden) {
+			t.Fatalf("diagnostic class %q derived from private error text %q", class, forbidden)
+		}
+	}
+}
+
+func TestConfirmationExecutionDiagnosticIsUnclassifiedForAnUndeclaredStage(t *testing.T) {
+	// The fail-closed half of the same rule: a stage outside the reviewed map
+	// must not reach the wire, because Platform and the validator share a signed
+	// allowlist and would reject an unknown slug at exactly the moment a failure
+	// is being reported.
+	err := wrapConfirmationExecutionFailure(
+		"a_stage_nobody_declared",
+		errors.New("private submitted response credential-material"),
+	)
+	class, status := confirmationExecutionDiagnostic(err)
 	if class != "unclassified" || status != 0 {
-		t.Fatalf("diagnostic = %q, %d", class, status)
+		t.Fatalf("diagnostic = %q, %d; want unclassified, 0", class, status)
 	}
 }
 
@@ -614,9 +643,9 @@ func TestConfirmationSubjectEpochAllowListTracksEvidenceStack(t *testing.T) {
 	// A >= v9 floor bounded by the scorer's accepted set: every version
 	// scoregates accepts is a confirmable subject, and the first one it does not
 	// accept yet is refused.
-	unaccepted := scoregates.BenchVersionV14 + 1
+	unaccepted := protocol.NewestGeneratableBenchVersion() + 1
 	for version, want := range map[int]bool{
-		8: false, 9: true, 10: true, 11: true, 12: true, 13: true, 14: true, unaccepted: false, 0: false,
+		8: false, 9: true, 10: true, 11: true, 12: true, 13: true, 14: true, 15: true, 16: true, unaccepted: false, 0: false,
 	} {
 		if got := confirmationSubjectEpochSupported(version); got != want {
 			t.Fatalf("confirmationSubjectEpochSupported(%d) = %v, want %v", version, got, want)
@@ -663,7 +692,7 @@ func TestTrustedConfirmationExecuteAcceptsV13SubjectAgainstV9Instrument(t *testi
 	}
 	// The first version the scorer does not accept yet still fails closed at
 	// the request validator, before any runtime is acquired.
-	request.BenchVersion = scoregates.BenchVersionV14 + 1
+	request.BenchVersion = protocol.NewestGeneratableBenchVersion() + 1
 	if _, err := executor.Execute(ctx, request); err == nil {
 		t.Fatal("unaccepted subject epoch passed the confirmation request validator")
 	}

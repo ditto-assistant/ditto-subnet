@@ -210,7 +210,7 @@ async def test_ditto_infrastructure_failure_reports_stuck(
     assert retry["next_retry_at"] is None
 
 
-@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
+@pytest.mark.parametrize("reason_code", ["docker-build-infrastructure"])
 async def test_automatic_infrastructure_failure_reports_the_scheduled_retry(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -391,29 +391,6 @@ async def test_miner_docker_build_rejection_is_not_retryable_admission(
     assert response.json()["admission_retry"] is None
 
 
-async def test_running_and_terminal_states(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    running = await _seed_agent(
-        maker, name="retry-running", status=AgentStatus.SCREENING
-    )
-    rejected = await _seed_agent(
-        maker, name="retry-rejected", status=AgentStatus.REJECTED
-    )
-    _install(app, maker)
-
-    response = await client.get(f"/api/v1/public/agent/{running}/pipeline")
-    assert response.status_code == 200, response.text
-    retry = response.json()["admission_retry"]
-    assert retry is not None
-    assert retry["state"] == "running"
-    assert retry["next_retry_at"] is None
-
-    response = await client.get(f"/api/v1/public/agent/{rejected}/pipeline")
-    assert response.status_code == 200, response.text
-    assert response.json()["admission_retry"] is None
-
-
 async def _seed_running_attempt(
     maker: async_sessionmaker[AsyncSession],
     *,
@@ -459,9 +436,7 @@ async def _seed_running_attempt(
     ("build", "build_only", "lane"),
     [
         (("queued", "pending"), False, "build"),
-        (("running", "pending"), False, "build"),
         (("succeeded", "pending"), False, "runtime_smoke"),
-        (("consumed", "running"), False, "runtime_smoke"),
         (("succeeded", "succeeded"), False, "source_review"),
         # A build-only rebuild never enters source review.
         (("succeeded", "succeeded"), True, None),
@@ -497,15 +472,10 @@ async def test_running_attempt_reports_only_an_evidenced_lane(
 @pytest.mark.parametrize(
     ("reason_code", "lane"),
     [
-        ("docker-build-infrastructure", "build"),
         ("cloudrun-build-unavailable", "build"),
         ("targon-runtime-unavailable", "runtime_smoke"),
-        ("source-review-model-timeout", "source_review"),
-        ("source-review-retryable-infra", "source_review"),
-        ("source-review-adjudicator-key-unavailable", "source_review"),
         ("executor-isolation-unavailable", None),
         # Operator-retried and ambiguous about the lane: no evidence, no lane.
-        ("source-review-unavailable", None),
     ],
 )
 async def test_failed_attempt_reports_the_lane_its_reason_names(

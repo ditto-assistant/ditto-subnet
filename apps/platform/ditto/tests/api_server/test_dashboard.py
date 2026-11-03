@@ -154,6 +154,13 @@ class TestDashboard:
         assert response.headers["content-type"].startswith("text/html")
         assert '<div id="root">' in response.text
 
+    async def test_generators_direct_load_serves_the_dashboard(self) -> None:
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        response = await _get(app, "/generators")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert '<div id="root">' in response.text
+
     async def test_served_at_root_with_injected_wandb_url(self) -> None:
         url = "https://wandb.ai/ditto/ditto-sn118"
         app = create_api_server(

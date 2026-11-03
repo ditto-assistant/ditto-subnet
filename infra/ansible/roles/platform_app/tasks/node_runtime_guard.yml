@@ -1,0 +1,56 @@
+---
+# Read-only admission: this role never purges packages or restarts the app.
+- name: Inspect the distro Node binary
+  ansible.builtin.stat:
+    path: /usr/bin/node
+    follow: true
+    get_checksum: false
+    get_attributes: false
+    get_mime: false
+  register: platform_node_distro_binary
+
+- name: Read the remaining distro Node version
+  ansible.builtin.command:
+    argv: [/usr/bin/node, --version]
+  register: platform_node_distro_version
+  changed_when: false
+  when: platform_node_distro_binary.stat.exists
+
+- name: Find the Platform owner's existing PM2 daemons
+  ansible.builtin.command:
+    argv: [pgrep, -u, "{{ platform_owner }}", -f, 'PM2.*God Daemon']
+  register: platform_node_pm2_pids
+  changed_when: false
+  failed_when: platform_node_pm2_pids.rc not in [0, 1]
+
+- name: Read each PM2 daemon's actually mapped Node executable
+  ansible.builtin.command:
+    argv: ["/proc/{{ item }}/exe", --version]
+  loop: "{{ platform_node_pm2_pids.stdout_lines }}"
+  register: platform_node_pm2_versions
+  changed_when: false
+
+- name: Refuse affected distro or running PM2 runtimes before provisioning
+  vars:
+    platform_node_observed_release: "{{ item.stdout | trim | regex_replace('^v', '') }}"
+    platform_node_observed_major: "{{ platform_node_observed_release.split('.')[0] }}"
+    platform_node_security_floors:
+      "22": "22.23.4"
+      "24": "24.22.1"
+      "26": "26.12.1"
+  ansible.builtin.assert:
+    that:
+      - >-
+        platform_node_observed_release is match('^[0-9]+\.[0-9]+\.[0-9]+$') and
+        platform_node_observed_major in platform_node_security_floors and
+        platform_node_observed_release is version(platform_node_security_floors[platform_node_observed_major], '>=')
+    fail_msg: >-
+      Found affected or unsupported Node {{ item.stdout | trim }} in
+      {{ item.cmd | default(['/usr/bin/node']) | first }}. Provisioning has
+      stopped before host changes. Inventory distro package dependents and
+      schedule separately authorized Node retirement and/or PM2 maintenance;
+      changing /usr/local/bin/node does not update a running daemon.
+    quiet: true
+  loop: >-
+    {{ ([platform_node_distro_version] + platform_node_pm2_versions.results)
+       | selectattr('stdout', 'defined') | list }}

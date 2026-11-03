@@ -43,6 +43,7 @@ func TestFrozenWorldBytesAreUnchangedBelowV13(t *testing.T) {
 // v13 world is an entry of the frozen public corpora, and the world still
 // satisfies the identity invariants the frozen world is held to.
 func TestV13WorldDrawsVocabularyFromPublicCorpora(t *testing.T) {
+	t.Parallel()
 	cities := set(publicdata.AllCities())
 	occupations := set(publicdata.AllOccupations())
 	stems := set(publicdata.AllOrgStems())
@@ -160,6 +161,7 @@ var cities12 = []string{"Baltimore", "Providence", "Montreal", "Lisbon", "Osaka"
 // break the answerability contract: every scored full profile still yields its
 // validated question envelope on the pinned qualification seeds.
 func TestV13WorldQuestionsRemainAnswerable(t *testing.T) {
+	t.Parallel()
 	for seed := int64(1); seed <= 40; seed++ {
 		w := GenerateForVersion(seed, 3, protocol.BenchVersionV13)
 		plans, err := w.QuestionPlans(150)
@@ -195,6 +197,7 @@ func TestV13WorldQuestionsRemainAnswerable(t *testing.T) {
 // the frozen 137-hour stride, while chronological order within each entity's
 // record chain is preserved for the oracles.
 func TestV13WorldSessionIDsAndTimestampsCarryNoLabels(t *testing.T) {
+	t.Parallel()
 	for seed := int64(1); seed <= 40; seed++ {
 		w := GenerateForVersion(seed, 3, protocol.BenchVersionV13)
 		byID := map[string]protocol.MemoryPair{}

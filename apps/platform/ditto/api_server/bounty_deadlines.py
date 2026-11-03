@@ -3,14 +3,18 @@
 Every bounty write applies the bounty's due deadlines first, under its bounty
 lock, and a platform-role sweeper applies them to bounties nobody touches.
 Both run :func:`apply_deadlines`, which stamps each transition at its
-deadline (never when it was noticed) and is idempotent, so a restart, a race
-or a second replica changes nothing:
+deadline and is idempotent, so a restart, a race or a second replica changes
+nothing:
 
 - an unpaid hold past ``hold_expires_at`` reopens its slot (``hold_expired``);
 - a claimed slot past its delivery deadline, or a rework slot past its rework
   deadline, expires (``deadline_missed``); the entry fee is retained;
 - a submission past its review due date stays held, since the contributor is
   not at fault, and is reported overdue once per due date (``review_overdue``).
+
+When a transition was noticed is kept apart, in ``noticed_at``. A missed
+deadline can be appealed only once it is recorded, so its appeal window runs
+from then, however late a request or sweep got to it.
 
 Reads never write: :func:`effective_slot_status` shows the same outcome
 before any request or sweep records it. A deadline is reached at its instant:
@@ -154,6 +158,7 @@ async def apply_deadlines(
                 slot_id=slot.slot_id,
                 claim_id=claim.claim_id,
                 recorded_at=at,
+                noticed_at=now,
             )
         )
     await session.flush()

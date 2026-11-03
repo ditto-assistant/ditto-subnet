@@ -10,6 +10,7 @@ import (
 )
 
 func TestV13CrossAnchorRecoveryRegression(t *testing.T) {
+	t.Parallel()
 	for _, seed := range []int64{2001896, 2001897, 2001898} {
 		_, err := v13CrossUserFacts(seed, 250, universe.V13Allocation{CrossPeople: []int{0, 2, 4}}, 13)
 		if err != nil {
@@ -25,6 +26,7 @@ func TestV13CrossAnchorRecoveryRegression(t *testing.T) {
 // The prelaunch enterprise slice deliberately changes the former qualification
 // artifact. Pin its corrected bytes; old receipts do not qualify this candidate.
 func TestV13CrossAnchorRecoveryPinsCurrentCandidate(t *testing.T) {
+	t.Parallel()
 	profile, _ := ProfileForVersion("full", 13)
 	a, err := GenerateDataset(1294236556, profile, 13)
 	if err != nil {

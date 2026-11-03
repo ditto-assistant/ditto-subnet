@@ -149,10 +149,34 @@ BountyTransferState = Literal[
     "dispatched", "confirmed", "failed", "expired", "uncertain"
 ]
 BountyFactKind = Literal["merged", "deployed", "adopted"]
+# How far accepted work has been integrated: its furthest delivery fact.
+BountyClaimIntegration = Literal["pending", "merged", "deployed", "adopted"]
 # Rehearsal only: what the simulated executor reports. Live transfers have none.
 BountyRehearsalOutcome = Literal["confirmed", "failed", "unknown"]
 BountyReconcileOutcome = Literal["confirmed", "failed", "expired", "unknown"]
 BountyReviewDecision = Literal["accept", "changes_requested", "reject"]
+# The public events a claimant can appeal: a rejection or a missed deadline.
+BountyAppealSubjectKind = Literal["rejected", "deadline_missed"]
+# A bounty's evaluation (#2944): what its build was estimated to cost, what it
+# cost, and the operators' decision on the pilot. Hours, or days of turnaround.
+BountyEvaluationKind = Literal["estimate", "actual"]
+BountyEvaluationMetric = Literal[
+    "build_hours",
+    "reviewer_hours",
+    "integration_hours",
+    "operator_hours",
+    "turnaround_days",
+]
+BountyEvaluationDecisionKind = Literal["expand", "revise", "stop"]
+BountyEvaluationIntegration = Literal[
+    "not_integrated", "integrating", "integrated", "adopted", "not_adopted"
+]
+MAX_EVALUATION_VALUE = 1_000_000
+EvaluationValue = Annotated[
+    float, Field(strict=True, ge=0, le=MAX_EVALUATION_VALUE, allow_inf_nan=False)
+]
+# An evaluation record's id; 0 names none, before the first.
+EvaluationId = Annotated[int, Field(strict=True, ge=0, le=2**63 - 1)]
 BountyCancelKind = Literal["team", "system_fault"]
 GitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 BlockHash = Annotated[str, Field(pattern=r"^0x[0-9a-f]{64}$")]
@@ -396,6 +420,18 @@ def bounty_reconcile_confirmation(*, transfer_id: UUID) -> str:
 
 def bounty_fact_confirmation(*, claim_id: UUID, kind: str) -> str:
     return f"RECORD BOUNTY {kind.upper()} {claim_id}"
+
+
+def bounty_evaluation_entry_confirmation(
+    *, repo: str, issue: int, kind: str, metric: str
+) -> str:
+    return f"RECORD BOUNTY {kind.upper()} {metric.upper()} {repo}#{issue}"
+
+
+def bounty_evaluation_decision_confirmation(
+    *, repo: str, issue: int, decision: str
+) -> str:
+    return f"DECIDE BOUNTY EVALUATION {repo}#{issue} {decision.upper()}"
 
 
 SIMULATED_TRANSFER_DOMAIN = "ditto-bounty-simulated-transfer:v1"
@@ -652,6 +688,28 @@ class BountyFactRequest(WireModel):
     confirmation: Annotated[str, Field(min_length=1, max_length=400)]
 
 
+class BountyEvaluationEntryRequest(WireModel):
+    kind: BountyEvaluationKind
+    metric: BountyEvaluationMetric
+    value: EvaluationValue
+    # The current entry of this kind and metric, which this one supersedes;
+    # 0 when there is none yet.
+    expected_entry_id: EvaluationId
+    # Context for the value, such as how it was measured.
+    note: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+    reason: Annotated[str, Field(min_length=8)]
+    confirmation: Annotated[str, Field(min_length=1, max_length=400)]
+
+
+class BountyEvaluationDecisionRequest(WireModel):
+    decision: BountyEvaluationDecisionKind
+    integration_status: BountyEvaluationIntegration
+    # The current decision, which this one supersedes; 0 when there is none.
+    expected_decision_id: EvaluationId
+    reasons: Annotated[str, Field(min_length=8)]
+    confirmation: Annotated[str, Field(min_length=1, max_length=400)]
+
+
 class BountyTransferView(WireModel):
     transfer_id: UUID
     round: int
@@ -828,6 +886,8 @@ BountyAuditKind = Literal[
     "transfer_dispatched",
     "transfer_reconciled",
     "fact_recorded",
+    "evaluation_recorded",
+    "evaluation_decided",
 ]
 
 
@@ -869,6 +929,34 @@ class BountyAdminAppealView(WireModel):
     restored_deadline_at: datetime | None
 
 
+class BountyEvaluationEntryView(WireModel):
+    entry_id: int
+    kind: BountyEvaluationKind
+    metric: BountyEvaluationMetric
+    value: float
+    note: str | None
+    reason: str
+    actor: str
+    recorded_at: datetime
+
+
+class BountyEvaluationDecisionView(WireModel):
+    decision_id: int
+    decision: BountyEvaluationDecisionKind
+    integration_status: BountyEvaluationIntegration
+    reasons: str
+    actor: str
+    recorded_at: datetime
+
+
+class BountyEvaluationView(WireModel):
+    """Every evaluation record, oldest first. The latest entry of each kind
+    and metric, and the latest decision, are current."""
+
+    entries: list[BountyEvaluationEntryView]
+    decisions: list[BountyEvaluationDecisionView]
+
+
 class BountyReportAmount(WireModel):
     count: int
     alpha_rao: int
@@ -886,6 +974,33 @@ class BountyReportCheck(WireModel):
 BountyReportFee = Literal["unpaid", "undecided", "refund_owed", "refunded", "retained"]
 
 
+class BountyReportReceipt(WireModel):
+    """A confirmed transfer of one of a claim's obligations, with its receipt."""
+
+    obligation_id: UUID
+    kind: BountyObligationKind
+    amount_alpha_rao: int
+    round: int
+    receipt: BountyFeeReceipt
+    simulated: bool
+    settled_at: datetime | None
+
+
+class BountyReportAccepted(WireModel):
+    """What an accepted claim delivered, how far it was integrated, and what
+    it was paid."""
+
+    pr_number: int
+    head_sha: str
+    accepted_at: datetime
+    # From the fee's confirmation to the acceptance, rounded to the second.
+    claim_to_accept_seconds: int
+    # The furthest delivery fact recorded: merged, deployed or adopted.
+    integration_status: BountyClaimIntegration
+    facts: list[BountyFactView]
+    receipts: list[BountyReportReceipt]
+
+
 class BountyReportClaim(WireModel):
     claim_id: UUID
     github_login: str
@@ -900,15 +1015,51 @@ class BountyReportClaim(WireModel):
     submissions: int
     claimed_at: datetime | None
     decided_at: datetime | None
+    # Accepted claims only; null for every other outcome.
+    accepted: BountyReportAccepted | None
+
+
+class BountyReportMetrics(WireModel):
+    """The current value of each evaluation metric; null when none is recorded."""
+
+    build_hours: float | None
+    reviewer_hours: float | None
+    integration_hours: float | None
+    operator_hours: float | None
+    turnaround_days: float | None
+
+
+class BountyReportEvaluation(WireModel):
+    """The pilot's evaluation. Estimates and actuals are kept apart, and no
+    operator is named; an absent record reads null."""
+
+    estimates: BountyReportMetrics
+    actuals: BountyReportMetrics
+    decision: BountyEvaluationDecisionKind | None
+    integration_status: BountyEvaluationIntegration | None
+    reasons: str | None
+    decided_at: datetime | None
 
 
 class BountyReport(WireModel):
     """A source-safe account of one bounty for its evaluation (#2944).
 
-    It names only what public views show and counts operator actions without
-    naming operators, so it can be published as it is.
+    Beyond what public views show, it adds only the current evaluation
+    values and decision with its reasons, and it counts operator actions
+    without naming operators, so it can be published as it is.
     """
 
+    # The bounty: its issue, the current revision's title and digest, and
+    # when its first revision was published.
+    repo: str
+    issue: int
+    title: str
+    revision: int
+    spec_digest: Digest
+    published_at: datetime
+    # From that first publication to the first acceptance, rounded to the
+    # second; null until work is accepted.
+    publish_to_first_accept_seconds: int | None
     funding_mode: FundingMode
     slots: BountySlotCounts
     claims: list[BountyReportClaim]
@@ -934,6 +1085,7 @@ class BountyReport(WireModel):
     facts: dict[BountyFactKind, int]
     operator_actions: int
     checks: list[BountyReportCheck]
+    evaluation: BountyReportEvaluation
 
 
 class BountyOperatorView(WireModel):
@@ -943,6 +1095,7 @@ class BountyOperatorView(WireModel):
     claims: list[BountyClaimView]
     appeals: list[BountyAdminAppealView]
     audit: list[BountyAuditEntry]
+    evaluation: BountyEvaluationView
     report: BountyReport
 
 
@@ -979,4 +1132,33 @@ class BountySettlementItem(WireModel):
 
 class BountySettlementQueue(WireModel):
     items: list[BountySettlementItem]
+    total: int
+
+
+class BountyAppealQueueItem(WireModel):
+    """One appeal awaiting a decision, with what an operator decides it on."""
+
+    appeal_id: UUID
+    claim_id: UUID
+    bounty_id: UUID
+    repo: str
+    issue: int
+    title: str
+    slot_id: UUID
+    round: int
+    position: int
+    hotkey: str
+    github_login: str
+    # The appealed public event: a rejection or a missed deadline.
+    subject_event_id: int
+    subject_kind: BountyAppealSubjectKind
+    subject_recorded_at: datetime
+    # The appellant's statement; public views show only its digest.
+    statement: str
+    reason_digest: Digest
+    filed_at: datetime
+
+
+class BountyAppealQueue(WireModel):
+    items: list[BountyAppealQueueItem]
     total: int

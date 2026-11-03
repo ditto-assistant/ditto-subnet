@@ -796,6 +796,27 @@
     - not screener_fleet_source_review_key.stat.exists
   no_log: true
 
+- name: Assert operator source markers are literal-safe for systemd
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_source_marker_patterns is sequence
+      - screener_fleet_source_marker_patterns is not string
+      - screener_fleet_source_marker_patterns | length <= 64
+      - >-
+        screener_fleet_source_marker_patterns
+        | rejectattr('id', 'defined') | list | length == 0
+      - >-
+        screener_fleet_source_marker_patterns
+        | rejectattr('pattern', 'defined') | list | length == 0
+      - >-
+        (screener_fleet_source_marker_patterns | to_json)
+        is not search("['\\\\\n]")
+    fail_msg: >-
+      screener_fleet_source_marker_patterns must be a list of at most 64
+      {id, pattern} entries with no single quote, backslash, or newline.
+    quiet: true
+  when: screener_fleet_runtime_enabled
+
 - name: Render the screener fleet environment
   ansible.builtin.template:
     src: fleet.env.j2

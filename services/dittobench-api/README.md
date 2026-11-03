@@ -28,8 +28,11 @@ A subnet validator scores miner submissions and sets on-chain weights from the
 results. This repo is the scoring half of that job. Per submission it:
 
 1. Loads the exact language-neutral OCI image built by the trusted screener.
-   The source tarball is unpacked only for bounded, cross-language anti-copy
-   fingerprinting; V7/V8 validator tickets never rebuild miner source.
+   Validators never receive miner source: the scorer advertises
+   `screened-image-source-free-v1`, and Platform then sends only the screened
+   image and the artifact digest. Platform computes the structural anti-copy
+   fingerprint from the trusted upload. A legacy request that still carries
+   `tarball_url` is fingerprinted here as before; no ticket rebuilds source.
 2. Generates a fresh randomized DittoBench dataset, so no two evaluations match
    and a memorized lookup table cannot score.
 3. Seeds the harness, runs every tool and memory case, and grades each case
@@ -458,9 +461,12 @@ on the on-chain validator.
 ## Anti-copy
 
 Duplicate detection is a platform-side gate, not part of any score computed here.
-This engine forwards two inputs to it: the `structural_fingerprint` sketch in the
-`ScoreReport` and the observed tool-call trajectory (see `PROTOCOL.md`, Anti-copy
-signals). The gate holds a suspected copy for review, with first-seen protecting
+Platform computes the structural sketch itself at upload
+(`apps/platform/ditto/api_server/structural_fingerprint.py`, a parity port of
+`internal/astfp`). This engine forwards the observed tool-call trajectory, plus a
+`structural_fingerprint` only on legacy source-bearing requests, which Platform
+uses to fill a missing sketch and never to replace a stored one (see
+`PROTOCOL.md`, Anti-copy signals). The gate holds a suspected copy for review, with first-seen protecting
 the original author, and requires agreement across independent signals before
 flagging, so independent convergence on the shared reference harness is not
 penalized.

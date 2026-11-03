@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/ditto-assistant/dittobench-datagen/internal/multilingual"
 )
@@ -53,6 +54,8 @@ import (
 // of the case's question language (multilingual.For). Every list is folded.
 type claimLexicon struct {
 	setMembership                 bool // Completed removal is nonmembership only for set claims.
+	setRemovalPlace               bool // v14: that removal may end in a short place phrase ("from the list").
+	protectedCorrection           bool
 	rejection, contrast, boundary []string
 	pastStrong, pastWeak, current []string
 	correction, hedge, enumerator []string
@@ -68,6 +71,14 @@ type claimLexicon struct {
 	numberWords                   map[string]int
 	months                        map[string]int
 	minorUnit, majorUnit          []string
+	// v14 action claims: a gerund-taking negator immediately before a reviewed
+	// value ("avoid pausing it") and a post-posed negative predicate right after
+	// one ("pausing isn't possible") reject that value. Empty elsewhere.
+	gerundNegation, postposedRejection []string
+	// v14 reply reading: a "." or "," that no digit follows ends a number token
+	// (numberPunctuationBounds), and a percentage quantity claim reads "15%"
+	// (percentClaims). False below v14.
+	numberPunctuationBounds, percentClaim bool
 }
 
 var (
@@ -323,7 +334,8 @@ func analyzeV13(slot, finalText string, lex claimLexicon) analysis {
 	sentences := splitSentencesV13(an.prose)
 	an.sentences = sentences
 	for si, sent := range sentences {
-		if si > 0 && startsWithPhrase(sent.text, lex.correction) {
+		if si > 0 && startsWithPhrase(sent.text, lex.correction) &&
+			!(lex.protectedCorrection && isClaimValueSentence(sent.text, lex.semanticValues)) {
 			for i := range an.segments {
 				if an.segments[i].sentence == si-1 {
 					an.segments[i].rejected = true
@@ -415,6 +427,9 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 						seg.past = true
 					}
 				}
+				if lex.setRemovalPlace && !seg.past && removedThenPlaceV14(context) && !anyBounded(context, lex.hedge) {
+					seg.past = true
+				}
 			}
 			seg.weakPast = !seg.past && anyBounded(context, lex.pastWeak)
 			seg.current = anyBounded(seg.text, lex.current)
@@ -438,13 +453,46 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 			rejected = false
 		}
 	}
+	// valueStart is where the reviewed value that ends cur begins, or -1 when
+	// cur does not end in one (v14 post-posed rejection).
+	valueStart := -1
 	for i := 0; i < len(words); {
 		if n := matchPhraseAt(words, i, lex.protected); n > 0 {
+			valueStart = -1
+			if matchPhraseAt(words, i, lex.semanticValues) == n {
+				valueStart = len(cur)
+			}
 			cur = append(cur, words[i:i+n]...)
 			i += n
 			// Protect the semantic phrase, not punctuation following it. A
 			// historical explanation after "video meeting," is another clause.
 			finishChunk(words[i-1], i)
+			if len(cur) == 0 {
+				valueStart = -1
+			}
+			continue
+		}
+		if n := matchPhraseAt(words, i, lex.postposedRejection); n > 0 && valueStart >= 0 {
+			// "pausing isn't possible": the clause up to the value keeps its
+			// status; the value itself is rejected.
+			value := append([]string(nil), cur[valueStart:]...)
+			cur = cur[:valueStart]
+			flush()
+			rejected = true
+			cur = append(cur, value...)
+			cur = append(cur, words[i:i+n]...)
+			i += n
+			valueStart = -1
+			continue
+		}
+		valueStart = -1
+		if n := matchPhraseAt(words, i, lex.gerundNegation); n > 0 && !strings.ContainsAny(words[i+n-1], ",;:)") && matchPhraseAt(words, i+n, lex.semanticValues) > 0 {
+			// "avoid pausing it": the negator opens a rejected span over the
+			// value it governs, like a rejection connective.
+			flush()
+			rejected = true
+			cur = append(cur, words[i:i+n]...)
+			i += n
 			continue
 		}
 		if n := matchPhraseAt(words, i, lex.rejection); n > 0 {
@@ -508,6 +556,16 @@ func matchPhraseAt(words []string, i int, phrases []string) int {
 		}
 	}
 	return 0
+}
+
+func isClaimValueSentence(text string, values []string) bool {
+	bare := strings.TrimFunc(text, func(r rune) bool { return unicode.IsPunct(r) || unicode.IsSpace(r) })
+	for _, value := range values {
+		if bare != "" && bare == value {
+			return true
+		}
+	}
+	return false
 }
 
 func startsWithPhrase(text string, phrases []string) bool {
@@ -849,7 +907,7 @@ func cueStrength(text string, m mention, ms []mention, lex claimLexicon) int {
 // knownValueExtractor builds a value-kind extractor over the case's known
 // values: expected/accepted forms share the key "expected"; each distractor
 // gets its own key. Only known values can be candidates for a value claim.
-func knownValueExtractor(expected []string, distractors []string) extractor {
+func knownValueExtractor(expected []string, distractors []string, punctBounds bool) extractor {
 	type known struct {
 		form, key string
 	}
@@ -872,7 +930,7 @@ func knownValueExtractor(expected []string, distractors []string) extractor {
 				// "2026" is never positioned as a mention and a repeated number
 				// is seen as many times as it occurs.
 				for from := 0; ; {
-					j := indexNumberTokenV13(text, k.form, from)
+					j := indexNumberTokenRuleV13(text, k.form, from, punctBounds)
 					if j < 0 {
 						break
 					}

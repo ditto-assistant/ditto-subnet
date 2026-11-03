@@ -238,20 +238,37 @@ describe("bounty detail", () => {
   });
 
   it("shows each slot's effective status, claimant and deadline", async () => {
-    await openBounty();
-    for (const slot of detail.slots) {
-      const row = slotRow(slot.position);
-      const label = {
-        accepted: "Accepted",
-        rejected: "Rejected",
-        claimed: "Claimed",
-        open: "Open",
-      }[slot.status as "accepted" | "rejected" | "claimed" | "open"];
-      expect(row, slot.status).toHaveTextContent(label);
-      if (slot.claimant) expect(row).toHaveTextContent(slot.claimant.github_login);
-    }
     const working = detail.slots.find((slot) => slot.status === "claimed")!;
-    expect(slotRow(working.position)).toHaveTextContent("Delivery due");
+    // Recorded fixture deadlines must not expire with the CI wall clock.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(working.deadline_at!) - 1000);
+    try {
+      await openBounty();
+      for (const slot of detail.slots) {
+        const row = slotRow(slot.position);
+        const label = {
+          accepted: "Accepted",
+          rejected: "Rejected",
+          claimed: "Claimed",
+          open: "Open",
+        }[slot.status as "accepted" | "rejected" | "claimed" | "open"];
+        expect(row, slot.status).toHaveTextContent(label);
+        if (slot.claimant) expect(row).toHaveTextContent(slot.claimant.github_login);
+      }
+      expect(slotRow(working.position)).toHaveTextContent("Delivery due");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("shows a delivery as overdue after its recorded deadline", async () => {
+    const working = detail.slots.find((slot) => slot.status === "claimed")!;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(working.deadline_at!) + 1000);
+    try {
+      await openBounty();
+      expect(slotRow(working.position)).toHaveTextContent("Delivery overdue");
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("opens the accepted claim's review, award and payments", async () => {

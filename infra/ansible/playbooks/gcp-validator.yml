@@ -11,10 +11,36 @@
 # docs/validator-deploy.md).
 #
 #   GCP_OSLOGIN_USER=… \
-#     ansible-playbook -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-validator.yml
+#     ansible-playbook -i infra/ansible/inventory/gcp.yml infra/ansible/playbooks/gcp-validator.yml \
+#       -e validator_native_legacy_ack=true   # see the guard below before passing this
 - ansible.builtin.import_playbook: require-hosts.yml
   vars:
     required_group: role_validator
+
+# This native-VM path predates the monorepo: the dittobench role still builds
+# the archived ditto-assistant/dittobench-api repo and validator_worker pins
+# ditto-subnet v0.25.2. Converging it installs a frozen v6 relay that collides
+# with the host's existing relay on :11435 and starts a worker that requires a
+# setting the role never renders. Production validators run the Compose stack
+# (gcp-validator-prod.yml). Refuse to converge until the roles are rebuilt on
+# monorepo sources, unless an operator explicitly accepts the stale pins.
+- name: Refuse to converge the pre-monorepo native validator
+  hosts: localhost:all
+  gather_facts: false
+  tags: always
+  tasks:
+    - name: Require an explicit legacy acknowledgement
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - validator_native_legacy_ack | default(false) | bool
+        fail_msg: >-
+          gcp-validator.yml converges pre-monorepo sources (dittobench-api
+          001d3aa, ditto-subnet v0.25.2) and leaves dittobench-model-relay and
+          ditto-validator crash-looping. Use gcp-validator-prod.yml for
+          production. Pass -e validator_native_legacy_ack=true only to
+          deliberately converge these stale pins.
+        quiet: true
 
 - name: Converge the SN118 validator VM
   hosts: role_validator

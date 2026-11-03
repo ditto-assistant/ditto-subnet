@@ -9,6 +9,7 @@ import (
 )
 
 func TestV10RoutesSameRequestShapeFromSeededState(t *testing.T) {
+	t.Parallel()
 	routes := map[string]bool{}
 	seen := 0
 	seenSharedWorldCarrier := false

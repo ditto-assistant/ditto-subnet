@@ -8,7 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.emission_allocation import EmissionSplitView
 from ditto.api_models.treasury_allocation import (
+    PublicEmissionShare,
     PublicServiceBucket,
     PublicTreasuryAllocation,
     PublicTreasuryRuntime,
@@ -16,6 +18,7 @@ from ditto.api_models.treasury_allocation import (
 from ditto.api_models.treasury_settings import TreasurySettings, public_wallet_address
 from ditto.api_server.burn_settings import settings_from_row
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.emission_allocation import PublicSplit, public_in_force_split
 from ditto.api_server.koth import BLOCKS_PER_TEMPO
 from ditto.api_server.ledger_pin import LedgerPin, treasury_pin_from_context
 from ditto.api_server.treasury_runtime import (
@@ -25,6 +28,7 @@ from ditto.api_server.treasury_runtime import (
 )
 from ditto.db.models import TreasurySettingsRevision
 from ditto.db.queries.burn_settings import latest_burn_settings_revision
+from ditto.db.queries.emission_allocation import latest_emission_allocation_number
 from ditto.db.queries.ledger_epochs import latest_pin
 from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
 
@@ -134,6 +138,13 @@ async def get_public_treasury_allocation(
     routing_status, routing_epoch, effective = await served_routing(
         session, netuid=request.app.state.config.chain.netuid, runtime=runtime
     )
+    netuid = request.app.state.config.chain.netuid
+    try:
+        in_force, configured = await public_in_force_split(session, netuid=netuid)
+    except (ValueError, SQLAlchemyError):
+        # A malformed stored policy never 500s the public page.
+        in_force, configured = PublicSplit(None, None, "unavailable"), None
+    allocation_revision = await latest_emission_allocation_number(session)
     response.headers["Cache-Control"] = "public, max-age=5"
     return PublicTreasuryAllocation(
         policy_revision=row.revision if row else 0,
@@ -168,4 +179,23 @@ async def get_public_treasury_allocation(
             for b in policy.service_buckets
         ],
         runtime=runtime,
+        emission_allocation_revision=allocation_revision,
+        emission_split=_public_shares(in_force.view),
+        emission_split_epoch=in_force.epoch,
+        emission_split_source=in_force.source,
+        forecast_split=_public_shares(configured),
     )
+
+
+def _public_shares(view: EmissionSplitView | None) -> list[PublicEmissionShare]:
+    if view is None:
+        return []
+    return [
+        PublicEmissionShare(
+            kind=share.kind,
+            id=share.id if share.kind == "track" else share.bucket,
+            share=share.bps / 10_000,
+            bps=share.bps,
+        )
+        for share in view.split
+    ]

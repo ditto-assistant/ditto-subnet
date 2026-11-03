@@ -376,3 +376,50 @@ func TestApplyV13ClaimProvenanceBank(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyV14ClaimProvenanceAcceptsTypographicHyphenIdentifiers is the
+// claim-gate half of #2734. The v14 grader folds the model's U+2011 to ASCII
+// before crediting "VK-48HJXP6A63", but the relay tokenizes the raw completion,
+// where the published normaliser reads "VK‑48HJXP6A63" as "48…" and the ASCII
+// form as a signed "-48". The v14 claim vocabulary carries the U+2010 form, so
+// the honest model is not flagged; the published normaliser itself is
+// unchanged, so v13 evidence bytes do not move.
+func TestApplyV14ClaimProvenanceAcceptsTypographicHyphenIdentifiers(t *testing.T) {
+	const raw = "Answer: VK‑48HJXP6A63"
+	completion := ledgerFromCalls([2][]string{{"What Signal handle do I have for Melanie?"}, {"Your handle is VK‑48HJXP6A63. " + raw}})
+	// The reviewer's repro: the published normaliser alone cannot match the
+	// folded span against the model's U+2011 completion.
+	if scoregates.EvaluateClaim("Answer: VK-48HJXP6A63", [][]string{{"VK-48HJXP6A63"}}, completion).ModelEmitted {
+		t.Fatal("published normaliser changed: ASCII and U+2011 forms now tokenize alike")
+	}
+
+	mc := protocol.MemoryCase{
+		BenchVersion: protocol.BenchVersionV14, ID: "case-handle",
+		Question:   "What Signal handle do I have for Melanie?",
+		AnswerKind: protocol.AnswerValue, ExpectedAnswer: "VK-48HJXP6A63",
+	}
+	resp := protocol.RunResponse{Answer: "VK‑48HJXP6A63", FinalText: "Your handle is VK‑48HJXP6A63. " + raw}
+	reader := fixtureClaimReader{"case-handle": {Ledger: completion, Complete: true}}
+	cs := scorer.GradeMemory(mc, resp)
+	if cs.Score != 1 {
+		t.Fatalf("precondition: v14 grader credits the U+2011 identifier, score %.2f (%v)", cs.Score, cs.Notes)
+	}
+	got := applyV13ClaimProvenance(protocol.BenchVersionV14, scorer.ScopeScored, scoregates.ClaimProvenanceEnforce, cs, mc, resp, "", nil, reader, "sess")
+	if got.Score != 1 || got.ClaimProvenance.ModelEmitted == nil || !*got.ClaimProvenance.ModelEmitted || len(got.ClaimProvenance.Findings) != 0 {
+		t.Fatalf("honest U+2011 identifier flagged: score %.2f evidence %+v notes %v", got.Score, got.ClaimProvenance, got.Notes)
+	}
+
+	// A harness that served the value the model never wrote is still caught.
+	rewritten := fixtureClaimReader{"case-handle": {Ledger: ledgerFromCalls([2][]string{{mc.Question}, {"I could not find that handle."}}), Complete: true}}
+	got = applyV13ClaimProvenance(protocol.BenchVersionV14, scorer.ScopeScored, scoregates.ClaimProvenanceEnforce, cs, mc, resp, "", nil, rewritten, "sess")
+	if got.Score != 0 {
+		t.Fatalf("served-but-not-emitted identifier passed at v14: %+v", got.ClaimProvenance)
+	}
+
+	// V13 does not fold, so the same reply is a grader miss and never reaches
+	// the gate: the v13 contract is untouched.
+	mc.BenchVersion = protocol.BenchVersionV13
+	if cs := scorer.GradeMemory(mc, resp); cs.Score != 0 {
+		t.Fatalf("v13 credited a U+2011 identifier: %.2f", cs.Score)
+	}
+}

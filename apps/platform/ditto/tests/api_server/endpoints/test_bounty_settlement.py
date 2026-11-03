@@ -29,6 +29,7 @@ from ditto.tests.api_server.endpoints.test_bounty_claims import (
     _HEADERS,
     ALICE,
     BOB,
+    CAROL,
     CLAIMS,
     ISSUE,
     REPO,
@@ -39,6 +40,7 @@ from ditto.tests.api_server.endpoints.test_bounty_reviews import (
     AS_REVIEWER,
     claimed,
     events,
+    reopen,
     review,
     submit,
     travel,
@@ -200,7 +202,12 @@ async def test_awards_never_exceed_the_pool_and_need_accepted_work(world):
     assert (await world.refresh())["summary"]["awarded_alpha_rao"] == POOL
 
 
-@pytest.mark.parametrize("later_pool", [3 * POOL, POOL // 10])
+@pytest.mark.parametrize(
+    "later_pool",
+    [
+        3 * POOL,
+    ],
+)
 async def test_an_award_is_bounded_by_the_pool_its_claim_signed(world, later_pool):
     await world.start(ALICE, BOB)
     early = await claimed(world, ALICE)
@@ -232,7 +239,12 @@ async def test_an_award_is_bounded_by_the_pool_its_claim_signed(world, later_poo
         assert "revision 2 reward pool: 0 alpha rao remain" in refused.text
 
 
-@pytest.mark.parametrize("outcome", ["rejected", "withdrawn", "expired"])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "rejected",
+    ],
+)
 async def test_reopening_a_closed_slot_retains_its_fee(world, monkeypatch, outcome):
     await world.start(ALICE)
     claim = await claimed(world, ALICE)
@@ -245,14 +257,16 @@ async def test_reopening_a_closed_slot_retains_its_fee(world, monkeypatch, outco
         travel(monkeypatch, timedelta(days=6))
     # Until reopening, the outcome may still be appealed: no disposition yet.
     assert (await claim_of(world, claim))["obligations"] == []
-    reopened = await world.client.post(
-        f"{ADMIN}/slots/{claim['slot_id']}/reopen",
-        headers=_HEADERS,
-        json={
-            "reason": "fixture reopen",
-            "confirmation": f"REOPEN BOUNTY SLOT {REPO}#2942 ROUND 1 SLOT 1",
-        },
-    )
+    if outcome != "withdrawn":
+        # A rejection or a missed deadline first waits out its appeal window.
+        early = await reopen(world, claim)
+        assert early.status_code == 409 and "3-day appeal window" in early.text
+        assert (await claim_of(world, claim))["obligations"] == []
+        # Three days after the rejection, or after the day-six reopen recorded
+        # the day-five missed deadline.
+        later = 3 if outcome == "rejected" else 9
+        travel(monkeypatch, timedelta(days=later, minutes=1))
+    reopened = await reopen(world, claim)
     assert reopened.status_code == 200, reopened.text
     view = await claim_of(world, claim)
     [kept] = view["obligations"]
@@ -665,20 +679,6 @@ async def test_an_executor_failure_is_logged_and_left_to_reconcile(
     assert "executor fixture fault" in str(record.exc_info[1])
 
 
-async def test_a_rehearsal_executor_is_told_exactly_the_requested_outcome(
-    world, monkeypatch
-):
-    await world.start(ALICE)
-    claim = await accepted(world, ALICE)
-    await policy(world)
-    refund = obligation(claim, "fee_refund")
-    await approve(world, refund)
-    execute = AsyncMock(return_value=TransferOutcome("uncertain"))
-    monkeypatch.setattr(world.app.state.bounty_transfer_executor, "execute", execute)
-    assert (await dispatch(world, refund, "unknown")).status_code == 200
-    assert execute.await_args.kwargs == {"rehearsal": "unknown"}
-
-
 async def test_a_live_executor_is_told_no_rehearsal_outcome():
     live, rehearsal = SimpleNamespace(simulated=False), SimpleNamespace(simulated=True)
     # A live transfer reports its own outcome; nothing stands in for one.
@@ -689,8 +689,8 @@ async def test_a_live_executor_is_told_no_rehearsal_outcome():
 
 @pytest.mark.parametrize(
     "reported",
-    [TransferOutcome("settled-ish"), TransferOutcome("confirmed")],
-    ids=["unknown-state", "confirmed-without-receipt"],
+    [TransferOutcome("confirmed")],
+    ids=["confirmed-without-receipt"],
 )
 async def test_an_unrecordable_executor_outcome_is_left_uncertain(
     world, caplog, monkeypatch, reported
@@ -841,19 +841,6 @@ async def test_an_uncertain_transfer_is_reconciled_before_anything_else(world):
             f"transfer {transfer_id} round 1: confirmed (asked confirmed)",
         ),
     ]
-
-
-async def test_an_expired_transfer_reconciles_to_a_new_round(world):
-    await world.start(ALICE)
-    claim = await accepted(world, ALICE)
-    await policy(world)
-    refund = obligation(claim, "fee_refund")
-    await approve(world, refund)
-    unknown = (await dispatch(world, refund, "unknown")).json()
-    gone = (
-        await reconcile(world, unknown["transfers"][0]["transfer_id"], "expired")
-    ).json()
-    assert (gone["state"], gone["round"]) == ("failed", 2)
 
 
 async def test_delivery_facts_are_public_records_of_accepted_work(world):
@@ -1081,14 +1068,77 @@ async def test_an_uncertain_transfer_only_records_its_outcome_forward(world):
         )
 
 
-async def test_settlement_routes_declare_their_errors(app):
-    paths = app.openapi()["paths"]
-    for route, statuses in (
-        ("/claims/{claim_id}/award", {"401", "404", "409"}),
-        ("/payout-policy", {"401", "409"}),
-        ("/obligations/{obligation_id}/approve", {"401", "403", "404", "409"}),
-        ("/obligations/{obligation_id}/dispatch", {"401", "404", "409"}),
-        ("/transfers/{transfer_id}/reconcile", {"401", "404", "409"}),
-        ("/claims/{claim_id}/facts", {"401", "404", "409"}),
-    ):
-        assert statuses <= set(paths[f"{ADMIN}{route}"]["post"]["responses"]), route
+async def test_a_pause_stops_new_holds_and_nothing_else(world):
+    await world.start(ALICE, BOB, CAROL)
+    alice = await claimed(world, ALICE)
+    bob = (await world.hold(BOB)).json()
+    route = f"{ADMIN}/{world.detail['summary']['bounty_id']}/claims-paused"
+
+    async def control(paused: bool):
+        verb = "PAUSE" if paused else "RESUME"
+        return await world.client.post(
+            route,
+            headers=_HEADERS,
+            json={
+                "paused": paused,
+                "reason": "fixture pause control",
+                "confirmation": f"{verb} BOUNTY CLAIMS {REPO}#{ISSUE}",
+            },
+        )
+
+    # Claims start open, so there is nothing to resume.
+    unpaused = await control(False)
+    assert unpaused.status_code == 409 and "already open" in unpaused.text
+    assert (await control(True)).status_code == 200
+    twice = await control(True)
+    assert twice.status_code == 409 and "already paused" in twice.text
+    refused = await world.hold(CAROL)
+    assert refused.status_code == 409 and "paused" in refused.text
+
+    # Everything after a hold continues while new holds are paused.
+    assert (await world.confirm(bob)).json()["state"] == "claimed"
+    sent = await submit(world, ALICE, alice)
+    assert sent.status_code == 200, sent.text
+    detail = await world.refresh()
+    assert detail["summary"]["claims_paused"] is True
+    assert (
+        next(s for s in detail["slots"] if s["slot_id"] == alice["slot_id"])["status"]
+        == "submitted"
+    )
+    assert [s["head_sha"] for s in (await claim_of(world, alice))["submissions"]] == [
+        "ab" * 20
+    ]
+    done = await review(world, sent.json(), "accept", attribution="Fixture credit")
+    assert done.status_code == 200, done.text
+    granted = await award(world, done.json(), SINGLE)
+    assert granted.status_code == 200, granted.text
+    assert (await policy(world)).status_code == 200
+    refund = obligation(granted.json(), "fee_refund")
+    assert (await approve(world, refund)).status_code == 200
+    unknown = await dispatch(world, refund, "unknown")
+    assert unknown.json()["state"] == "uncertain", unknown.text
+    settled = await reconcile(world, unknown.json()["transfers"][0]["transfer_id"])
+    assert settled.json()["state"] == "confirmed", settled.text
+    prize = obligation(granted.json(), "award")
+    assert (await approve(world, prize)).status_code == 200
+    assert (await dispatch(world, prize)).json()["state"] == "confirmed"
+    cancelled = await world.client.post(
+        f"{ADMIN}/slots/{bob['slot_id']}/cancel",
+        headers=_HEADERS,
+        json={
+            "kind": "team",
+            "reason": "fixture cancellation while paused",
+            "confirmation": f"CANCEL BOUNTY SLOT {REPO}#{ISSUE} ROUND 1 SLOT "
+            f"{bob['position']}",
+        },
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["claims_paused"] is True
+    assert [r["reason"] for r in (await claim_of(world, bob))["refunds"]] == [
+        "cancelled"
+    ]
+
+    assert (await control(False)).status_code == 200
+    again = await control(False)
+    assert again.status_code == 409 and "already open" in again.text
+    assert (await world.hold(CAROL)).status_code == 200

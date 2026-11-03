@@ -1,7 +1,6 @@
 package datagen
 
 import (
-	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,12 +14,7 @@ import (
 
 func genV13(t *testing.T, seed int64, n int) []protocol.ToolCase {
 	t.Helper()
-	rotated, err := protocol.RotateSeedForVersion(seed, protocol.BenchVersionV13)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cases, _ := GenerateCasesWithFillersForVersion(rand.New(rand.NewSource(rotated)), seed, n, protocol.BenchVersionV13)
-	return cases
+	return v13CasesForSize(t, seed, n)
 }
 
 // bakedPoolValues are the v8..v12 setter pools a phrase table could bake
@@ -71,6 +65,7 @@ func carriesNumber(text, num string) bool {
 // TestV13ToolBenchContractAcrossFortySeeds pins the v13 tool-bench contract on
 // the full profile (issues #1843, #1842, #1580, #1840).
 func TestV13ToolBenchContractAcrossFortySeeds(t *testing.T) {
+	t.Parallel()
 	legacyRegistry := map[string]bool{}
 	for _, v := range []string{"teal", "indigo", "amber", "emerald", "crimson", "violet", "cobalt", "coral", "inter", "jetbrains mono", "georgia", "system default"} {
 		legacyRegistry[v] = true
@@ -279,6 +274,7 @@ func TestV13ToolBenchContractAcrossFortySeeds(t *testing.T) {
 // world_theme_discover_set cap at every public run size (the cap must hold
 // even when the discovery quota is already spent).
 func TestV13PublicProfileQuotas(t *testing.T) {
+	t.Parallel()
 	for _, profile := range []struct {
 		n                               int
 		discovery, decoyMin, unexpected int
@@ -316,7 +312,7 @@ func TestV13PublicProfileQuotas(t *testing.T) {
 func TestV13ThemeCapHoldsWhenQuotaIsSpent(t *testing.T) {
 	const n = 48
 	seed := int64(7)
-	cases := genV13(t, seed, n)
+	cases := freshV13Cases(t, seed, n) // mutated below, so not the shared cache
 	quota := v13QuotaFor(n)
 	// Force well over cap + quota theme cases onto ordinary convertible slots.
 	forced := 0
@@ -350,6 +346,7 @@ func TestV13ThemeCapHoldsWhenQuotaIsSpent(t *testing.T) {
 // the /public/bench/glossary endpoint cannot explain a v13 run. Skips when the
 // mirror is absent (standalone module use).
 func TestV13CategoriesAreInPublicGlossary(t *testing.T) {
+	t.Parallel()
 	rel := filepath.Join("..", "..", "..", "apps", "platform", "ditto", "api_models", "bench_glossary.py")
 	raw, err := os.ReadFile(rel)
 	if err != nil {
@@ -404,6 +401,7 @@ func TestV13CategoriesAreInPublicGlossary(t *testing.T) {
 // name outside the production surface is one of that seed's decoys inside a
 // decoy-correct case.
 func TestV13CatalogCoverageWithDecoyExemption(t *testing.T) {
+	t.Parallel()
 	production := map[string]bool{}
 	for _, tool := range catalog.CatalogForVersion(protocol.BenchVersionV13) {
 		production[tool.Name] = true
@@ -441,6 +439,7 @@ func TestV13CatalogCoverageWithDecoyExemption(t *testing.T) {
 // non-bearer coined fixtures carry six-digit fillers only, so this holds by
 // construction rather than by luck).
 func TestV13NeedleIsAbsentFromOtherFixturesAndRecords(t *testing.T) {
+	t.Parallel()
 	listTools := []string{"list_workflows", "list_schedules", "list_agent_jobs", "search_tools", "run_code", "discover_capabilities"}
 	for seed := int64(1); seed <= 40; seed++ {
 		cases := genV13(t, seed, 100)

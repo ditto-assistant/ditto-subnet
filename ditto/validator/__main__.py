@@ -36,6 +36,7 @@ from ditto.validator.coding_supervisor import (
 from ditto.validator.coding_worker import CodingShadowWorker
 from ditto.validator.config import ValidatorConfig, parse_validator_config_from_env
 from ditto.validator.dittobench import DittobenchClient
+from ditto.validator.liveness import LivenessWatchdog, install_task_dump_signal
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import load_validator_keypair, sign_coding_certification
 from ditto.validator.stack_health import StackHealthCollector
@@ -49,6 +50,7 @@ from ditto.validator.update_control import (
     write_update_state,
 )
 from ditto.validator.worker import (
+    PlatformGeneratorLedgerSource,
     PlatformRouterLedgerSource,
     ValidatorWorker,
 )
@@ -79,6 +81,8 @@ def _install_signal_handlers(
             drain_requested.clear()
 
         loop.add_signal_handler(signal.SIGUSR2, resume)
+    # USR1/USR2 belong to the updater, so the live task dump uses SIGQUIT.
+    install_task_dump_signal(loop)
 
 
 async def _amain() -> int:
@@ -183,6 +187,13 @@ async def _amain() -> int:
                     if config.router_ledger_read_enabled
                     else None
                 )
+                # Generator-competition track: same default-off read seam. The
+                # track is SHADOW at 0 bps, so reading changes no chain output.
+                generator_ledger_source = (
+                    PlatformGeneratorLedgerSource(read=platform.get_generator_ledger)
+                    if config.generator_ledger_read_enabled
+                    else None
+                )
                 worker = ValidatorWorker(
                     config=config,
                     platform=platform,
@@ -196,6 +207,7 @@ async def _amain() -> int:
                         coding_canary.offer if coding_canary is not None else None
                     ),
                     router_ledger_source=router_ledger_source,
+                    generator_ledger_source=generator_ledger_source,
                 )
                 async with AsyncExitStack() as coding_resources:
                     coding_worker = await _create_coding_shadow_worker(
@@ -207,16 +219,25 @@ async def _amain() -> int:
                     _apply_ditto_logging()  # re-assert: bittensor has initialised
 
                     async def run_ordinary_worker() -> None:
-                        await worker.run_forever(
-                            stop,
-                            drain_requested=drain_requested,
-                            bootstrap_resume=(
-                                mark_bootstrap_resumed
-                                if bootstrap_drain_pending
-                                else None
-                            ),
-                            extra_busy=_extra_busy(coding_worker, coding_canary),
+                        watchdog = LivenessWatchdog(
+                            loop=asyncio.get_running_loop(),
+                            age_seconds=worker.heartbeat_attempt_age_seconds,
+                            timeout_seconds=config.liveness_watchdog_seconds,
                         )
+                        watchdog.start()
+                        try:
+                            await worker.run_forever(
+                                stop,
+                                drain_requested=drain_requested,
+                                bootstrap_resume=(
+                                    mark_bootstrap_resumed
+                                    if bootstrap_drain_pending
+                                    else None
+                                ),
+                                extra_busy=_extra_busy(coding_worker, coding_canary),
+                            )
+                        finally:
+                            watchdog.stop()
 
                     extras: list[tuple[str, _ExtraWorker]] = []
                     if coding_worker is not None:

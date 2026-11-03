@@ -5,6 +5,8 @@ name: Publish dashboard preview
 # Inspect checks out only the default branch, sanitizes a downloaded artifact,
 # and injects the repository-owned Worker. Publish and retire may enter the
 # preview environment for a Pages-only token.
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_call:
     inputs:
@@ -247,7 +249,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: pnpm
           cache-dependency-path: apps/backroom/pnpm-lock.yaml
 
@@ -621,7 +623,7 @@ jobs:
           steps.existing.outputs.found == 'true' &&
           steps.current.outputs.current == 'true'
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: pnpm
           cache-dependency-path: apps/backroom/pnpm-lock.yaml
 

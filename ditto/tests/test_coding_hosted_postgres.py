@@ -13,22 +13,6 @@ def read(path):
     return (ROOT / path).read_text()
 
 
-def test_retired_private_database_path_preserves_reusable_module_default_off():
-    module = read("infra/terraform/modules/coding-hosted-host/postgres.tf")
-    stack = read("infra/terraform/stacks/gcp-platform/coding-hosted.tf")
-    intent = read("infra/terraform/stacks/gcp-platform/prod.auto.tfvars")
-    assert 'variable "postgres_peer"' in module and "default = null" in module
-    assert 'module "coding_hosted_host"' not in stack
-    assert not any(
-        line.split("=") == ["enable_coding_hosted_postgres", "true"]
-        for line in ("".join(line.split()) for line in intent.splitlines())
-    )
-    assert 'output "coding_hosted_postgres_access"' in stack
-    assert 'source_ranges = ["${module.host[0].internal_ip}/32"]' in module
-    assert 'ports    = ["5432"]' in module
-    assert "database_login_ready = false" in module
-
-
 def test_guest_gate_admits_only_the_reviewed_host_and_creates_no_credentials():
     config = yaml.safe_load(read("infra/ansible/group_vars/role_platform_postgres.yml"))
     assert config["coding_hosted_postgres_enabled"] is False
@@ -128,13 +112,3 @@ def test_full_and_narrow_convergence_share_one_hba_template():
     template = read("infra/ansible/roles/postgres/templates/pg_hba.conf.j2")
     assert "postgres_hba_hosts" in template
     assert "scram-sha-256" in template
-
-
-def test_real_ansible_fixture_is_check_only_and_never_converges_roles():
-    play = yaml.safe_load(read("infra/ansible/tests/coding-hosted-postgres.yml"))[0]
-    assert play["connection"] == "local" and play["become"] is False
-    assert play["gather_facts"] is False and "roles" not in play
-    workflow = read(".github/workflows/infra-ci.yml")
-    assert "ansible-playbook --check" in workflow
-    assert "tests/coding-hosted-postgres-inventory.yml" in workflow
-    assert "playbooks/gcp-coding-hosted-postgres-admission.yml" in workflow

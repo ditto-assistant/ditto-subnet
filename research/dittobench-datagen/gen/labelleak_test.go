@@ -58,10 +58,7 @@ func labeledArtifactPairs(t *testing.T, seed int64, version int) []labeledPair {
 	if !ok {
 		t.Fatalf("no full profile for v%d", version)
 	}
-	artifact, err := GenerateDataset(seed, prof, version)
-	if err != nil {
-		t.Fatalf("seed %d v%d: %v", seed, version, err)
-	}
+	artifact := cachedDataset(t, seed, "full", version, 0)
 	scale, _ := v8WorldProfile(prof.Mem)
 	world := universe.GenerateForVersion(seed, scale, version)
 	family := map[string]string{}
@@ -256,6 +253,7 @@ func leakProbe(train, held []labeledPair, label func(labeledPair) string, keep f
 // the folds below reuse them so the probe's cost is generation, not scoring.
 func labeledSeeds(t *testing.T, version int) [][]labeledPair {
 	t.Helper()
+	cachedDatasets(t, 1, 40, "full", version, 0) // generate the sweep concurrently
 	out := make([][]labeledPair, 0, 40)
 	for seed := int64(1); seed <= 40; seed++ {
 		out = append(out, labeledArtifactPairs(t, seed, version))
@@ -345,6 +343,7 @@ func assertAtChance(t *testing.T, task string, seeds [][]labeledPair, label func
 // on 40 v13 seeds, no session-id or timestamp feature predicts a pair's
 // generator family, its story slot, or its program record slot above chance.
 func TestV13SeedWireCarriesNoFamilyArcOrSlotLabel(t *testing.T) {
+	t.Parallel()
 	seeds := labeledSeeds(t, protocol.BenchVersionV13)
 	var all []labeledPair
 	for _, pairs := range seeds {
@@ -379,6 +378,7 @@ func TestV13SeedWireCarriesNoFamilyArcOrSlotLabel(t *testing.T) {
 // v12 contract the same classifier recovers the family from the session id
 // alone, so a v13 pass is evidence of closure rather than of a blind probe.
 func TestLeakProbeDetectsTheFrozenV12Labels(t *testing.T) {
+	t.Parallel()
 	var train, held []labeledPair
 	for seed := int64(1); seed <= 8; seed++ {
 		pairs := labeledArtifactPairs(t, seed, protocol.BenchVersionV12)
@@ -409,13 +409,9 @@ func TestLeakProbeDetectsTheFrozenV12Labels(t *testing.T) {
 // own index, so /seed cannot enumerate the three-record join a story oracle
 // needs. The v2-v7 persona path (synthesizeSubjects) is frozen and unreachable
 // at v13.
-func TestV13SeedSubjectLinksDoNotEnumerateTheStoryJoin(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
-	for seed := int64(1); seed <= 10; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-		if err != nil {
-			t.Fatalf("seed %d: %v", seed, err)
-		}
+func checkV13SeedSubjectLinksDoNotEnumerateTheStoryJoin(t *testing.T, seeds []DatasetArtifact) {
+	for _, artifact := range seeds {
+		seed := artifact.Seed
 		for _, wave := range artifact.MemoryWaves {
 			if len(wave.Subjects) != 0 || len(wave.Links) != 0 {
 				t.Fatalf("seed %d wave %d emits %d subjects and %d links: /seed would hand over a prepared join", seed, wave.Wave, len(wave.Subjects), len(wave.Links))

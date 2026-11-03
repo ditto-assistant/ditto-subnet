@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from ditto_screening_protocol.dueling import DUELING_MIN_BENCH_VERSION
 from ditto_screening_protocol.treasury_enforcement import TreasuryWeightCapability
 
 _DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
@@ -205,6 +206,16 @@ class V14ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
     bench_version: Literal[14]
 
 
+class V15ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
+    """Keys reported by a descriptor-verified scorer for its v15 sandbox.
+
+    v15 adds the decision-lane URL key, so its packet has its own slot and
+    digest; a v14 packet can never qualify a v15 rollout.
+    """
+
+    bench_version: Literal[15]
+
+
 class ScorerBenchmarkCapability(BaseModel):
     """Identity-bound benchmark support observed from the scorer sidecar."""
 
@@ -221,9 +232,46 @@ class ScorerBenchmarkCapability(BaseModel):
     v14_scored_runtime_env: V14ScoredRuntimeEnvEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    v15_scored_runtime_env: V15ScoredRuntimeEnvEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     v7_calibration: V7InferenceCalibration | None = None
     private_datasets: bool = Field(default=False, exclude_if=lambda value: not value)
     deterministic_v13_datasets: bool = Field(
+        default=False, exclude_if=lambda value: not value
+    )
+    # The scorer accepts ``generator-round-v1`` round datasets. Absent unless
+    # true, so validators without it sign exactly the bytes they always did.
+    generator_rounds: bool = Field(default=False, exclude_if=lambda value: not value)
+    # The largest round column (cases per pack) the scorer runs, read from its
+    # ``generator-round-max-cases-<n>`` feature and capped at what this
+    # validator accepts. Absent unless advertised, so validators without it sign
+    # exactly the bytes they always did; Platform then assumes the legacy column
+    # size and leases them no larger round.
+    generator_round_max_cases: int | None = Field(
+        default=None, ge=1, le=1000, exclude_if=lambda value: value is None
+    )
+    # The bench versions the scorer runs a generator round at, read from its
+    # ``generator-round-bench-<n>`` features and capped at the versions this
+    # validator runs. Absent unless advertised, so validators without it sign
+    # exactly the bytes they always did; Platform then assumes the original
+    # v13-only round mode and leases them no round at another version.
+    generator_round_bench_versions: SupportedBenchVersions | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    # The bench versions the scorer runs with a ``dueling-slice-v1`` generator
+    # slice, read from its ``dueling-slice-bench-<n>`` features and capped at
+    # the versions this validator runs. Absent unless advertised, so validators
+    # without it sign exactly the bytes they always did; Platform leases a
+    # bench >= 16 ticket only to a validator that forwards its version here.
+    dueling_slice_bench_versions: SupportedBenchVersions | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    # The scorer runs a screened image without the source tarball (its
+    # ``screened-image-source-free-v1`` feature). Platform then withholds the
+    # source URL from this validator. Absent unless true, so validators without
+    # it sign exactly the bytes they always did.
+    source_free_screened_images: bool = Field(
         default=False, exclude_if=lambda value: not value
     )
     # Additive and optional so a validator that predates heartbeat protocol v15
@@ -234,6 +282,26 @@ class ScorerBenchmarkCapability(BaseModel):
     @model_validator(mode="after")
     def support_matches_verified_identity(self) -> ScorerBenchmarkCapability:
         versions = self.supported_bench_versions
+        if self.generator_round_bench_versions is not None and (
+            not self.generator_rounds
+            or not set(self.generator_round_bench_versions) <= set(versions)
+        ):
+            raise ValueError(
+                "generator round bench versions require the round mode and "
+                "verified support for each version"
+            )
+        if self.dueling_slice_bench_versions is not None and (
+            self.status != "fresh_verified"
+            or not set(self.dueling_slice_bench_versions) <= set(versions)
+            or any(
+                version < DUELING_MIN_BENCH_VERSION
+                for version in self.dueling_slice_bench_versions
+            )
+        ):
+            raise ValueError(
+                "dueling slice bench versions require a verified scorer that "
+                "runs each version, all at or above the dueling floor"
+            )
         if self.scored_runtime_env is not None and (
             self.status != "fresh_verified"
             or 13 not in versions
@@ -248,6 +316,12 @@ class ScorerBenchmarkCapability(BaseModel):
             or self.source_revision != self.v14_scored_runtime_env.source_revision
         ):
             raise ValueError("v14 runtime environment requires verified v14 identity")
+        if self.v15_scored_runtime_env is not None and (
+            self.status != "fresh_verified"
+            or 15 not in versions
+            or self.source_revision != self.v15_scored_runtime_env.source_revision
+        ):
+            raise ValueError("v15 runtime environment requires verified v15 identity")
         if self.deterministic_v13_datasets and (
             self.status != "fresh_verified" or 13 not in versions
         ):
@@ -258,6 +332,8 @@ class ScorerBenchmarkCapability(BaseModel):
             self.status != "fresh_verified" or 13 not in versions
         ):
             raise ValueError("private datasets require verified v13 scorer support")
+        if self.source_free_screened_images and self.status != "fresh_verified":
+            raise ValueError("source-free screened images require a verified scorer")
         if tuple(sorted(set(versions))) != versions:
             raise ValueError("supported benchmark versions must be unique and sorted")
         if self.status == "fresh_verified":
@@ -323,6 +399,14 @@ class ValidatorCapabilities(BaseModel):
     sandbox_egress_restricted: bool
     ticket_inference: bool = Field(default=False, exclude_if=lambda value: not value)
     signed_score_quorum: bool = Field(default=False, exclude_if=lambda value: not value)
+    # Applies the lease's benchmark_runtime.sandbox_memory_limit_mib instead of
+    # the host's own sandbox memory default.
+    sandbox_memory_limit: bool = Field(
+        default=False, exclude_if=lambda value: not value
+    )
+    # Publishes generator-round seed commitments Platform elects it for
+    # (``Commitments.set_commitment`` from its own Pylon identity).
+    round_commitments: bool = Field(default=False, exclude_if=lambda value: not value)
     executor_isolation: ExecutorIsolation
     scorer_benchmarks: ScorerBenchmarkCapability | None = Field(
         default=None, exclude_if=lambda value: value is None

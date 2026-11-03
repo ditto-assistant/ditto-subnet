@@ -11,17 +11,6 @@ export const listV13BenignApprovalsInputSchema = z.object({
 
 export const v13BenignApprovalLookupInputSchema = z.object({ approvalId: id })
 
-export const v13BenignApprovalWriteInputSchema = z.object({
-  agentId: id,
-  attemptId: id,
-  artifactSha256: sha,
-  imageSha256: sha,
-  profileSha256: sha,
-  reviewEvidenceSha256: sha,
-  reason: z.string().min(8),
-  confirmation: z.literal('RECORD V13 BENIGN CONTROL'),
-})
-
 export const v13BenignApprovalSchema = z.object({
   approval_id: id,
   agent_id: id,
@@ -40,26 +29,6 @@ export const v13BenignApprovalSchema = z.object({
 export const v13ReplayPrivateLookupInputSchema = z.object({
   replayId: id,
   role: role.optional(),
-})
-
-export const v13ReplayGroupWriteInputSchema = z.object({
-  replayId: id,
-  targetAgentId: id,
-  targetAttemptId: id,
-  targetArtifactSha256: sha,
-  targetImageSha256: sha,
-  approvalId: id,
-  profileSha256: sha,
-  confirmation: z.literal('RECORD V13 REPLAY GENERATION'),
-})
-
-export const v13ReplayPackageWriteInputSchema = z.object({
-  replayId: id,
-  role,
-  generationReceiptSha256: sha,
-  manifestSha256: sha,
-  pairInventorySha256: sha,
-  confirmation: z.literal('REGISTER V13 REPLAY PACKAGE'),
 })
 
 export const v13ReplayGroupSchema = z.object({

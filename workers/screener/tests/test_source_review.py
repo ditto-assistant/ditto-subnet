@@ -4037,7 +4037,8 @@ def test_policy_v10_prompt_separates_replacement_retry_and_strict_controls() -> 
     assert all(fragment in prompt for fragment in required)
 
 
-def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
+@pytest.mark.parametrize("policy_version", (10, 11, 12, 13))
+def test_prompt_teaches_independent_versioned_invariants(policy_version) -> None:
     from ditto_screener.source_review import (
         _prompt_revision,
     )
@@ -4045,10 +4046,9 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v32-policy-v13"
+    assert _prompt_revision(13) == "source-review-v41-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
-        "I2 EVIDENCE RETENTION",
         "I3 MODEL DISSENT",
         "I4 DERIVED-VALUE AUTHORITY",
         "I5 PRODUCTION ENGINE",
@@ -4069,7 +4069,12 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
         "exact-deck planners",
     }
 
-    prompt = _prompt(SCREENING_POLICY_VERSION)
+    required.add(
+        "I2 protects applicable trusted instructions and authorization"
+        if policy_version == 13
+        else "I2 EVIDENCE RETENTION"
+    )
+    prompt = _prompt(policy_version)
     assert all(fragment in prompt for fragment in required)
 
 
@@ -4098,12 +4103,12 @@ def test_policy_v13_provider_lead_uses_scored_runtime_selector() -> None:
     assert "do not infer the scored environment from Dockerfile ENV" not in _prompt(12)
 
 
-def test_policy_v10_prompt_keeps_false_positive_valves() -> None:
+@pytest.mark.parametrize("policy_version", (10, 11, 12, 13))
+def test_prompt_keeps_versioned_false_positive_valves(policy_version) -> None:
     from ditto_screener.source_review import _source_review_system_prompt as _prompt
 
     required = {
         "untrusted_candidate_channel pass",
-        "complete records remain",
         "disagreement is accepted",
         "no correctness gate",
         "policy-forbidden capabilities",
@@ -4123,7 +4128,12 @@ def test_policy_v10_prompt_keeps_false_positive_valves() -> None:
         "Practice stubs, local launchers",
     }
 
-    prompt = _prompt(SCREENING_POLICY_VERSION)
+    required.add(
+        "selected/summarized context is permitted"
+        if policy_version == 13
+        else "complete records remain"
+    )
+    prompt = _prompt(policy_version)
     assert all(fragment in prompt for fragment in required)
 
 
@@ -4318,8 +4328,7 @@ def test_written_policy_v13_covers_new_invariant_and_activation_boundaries() -> 
         "`bench_version` or another protocol-version field",
         "Conditionality is neither necessary nor sufficient",
         "V1: required submission evidence missing",
-        "V2: platform verification not completed",
-        "V3: provider verification not completed",
+        "Platform and provider verification not completed",
         "Approval and emission eligibility",
         "Activation prerequisites",
         "policy-v13-opaque-verification.md",
@@ -4349,7 +4358,7 @@ def test_written_policy_v13_accepts_exact_official_component_provenance() -> Non
         "verification-profile digest all match",
         "artifact-bound screening and challenge records",
         "V1.required_submission_evidence_missing",
-        "V2.platform_verification_failed",
+        "Historical V2 records remain readable",
     }
 
     assert not sorted(
@@ -4360,20 +4369,18 @@ def test_written_policy_v13_accepts_exact_official_component_provenance() -> Non
     )
 
 
-def test_written_policy_v13_is_strictly_two_outcome() -> None:
-    """v13 resolves every completed review to CLEAR or REJECT.
-
-    A verification failure is a rejection with ``violation_proven: false`` and
-    a named failure domain, never an indefinite hold and never an allegation
-    of cheating.
-    """
+def test_written_policy_v13_parks_incomplete_verification() -> None:
+    """Eligibility decisions need evidence; reviewer failure grants no verdict."""
 
     policy = (
         Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
     ).read_text()
     required = {
         "Policy v13 has exactly two final outcomes",
-        "There is no `REVIEW_INCOMPLETE`, `INCONCLUSIVE`, implied clearance",
+        "submission stays `screening_failed`",
+        "Repeated inconclusive reviews and platform/provider failures are evidence of",
+        "There are no automatic cost-bearing retries",
+        "Counting reviews does not supply missing evidence",
         "violation_proven: true | false",
         "failure_domain: artifact | submission | platform | provider | none",
         "must never be described as cheating",
@@ -4443,7 +4450,7 @@ def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
 
     assert "may produce `CLEAR`, and none of them may submit a passing" in policy
     assert "v13 protocol guard that rejects\n  `pass_inconclusive`" in policy
-    assert "deadline finalizer" in policy
+    assert "Expire unresolved attempts into a parked failure" in policy
 
 
 def test_written_policy_v13_covers_the_prompt_security_surface() -> None:
@@ -7762,3 +7769,72 @@ def test_parse_review_resolves_runtime_paths_only_for_test_directory_citations(
     )
 
     assert observation.risk_level == "high"
+
+
+def test_source_marker_scan_is_noop_without_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    monkeypatch.delenv("SCREENER_SOURCE_MARKER_PATTERNS", raising=False)
+    repo = TarSourceRepository(str(_archive(tmp_path, "fn main() {}\n")))
+    markers = repo.review_leads()["source_markers"]
+    assert markers == {"configured": 0, "matched_markers": [], "locations": []}
+
+
+def test_source_marker_scan_reports_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    monkeypatch.setenv(
+        "SCREENER_SOURCE_MARKER_PATTERNS",
+        '[{"id":"alpha","pattern":"CANARY_[0-9a-f]{6}"},'
+        '{"id":"beta","pattern":"never-naturally-written-phrase"}]',
+    )
+    source = (
+        "fn main() {\n"
+        '    let _ = "CANARY_abc123";\n'
+        "    // never-naturally-written-phrase\n"
+        "}\n"
+    )
+    repo = TarSourceRepository(str(_archive(tmp_path, source)))
+    with caplog.at_level("WARNING"):
+        markers = repo.review_leads()["source_markers"]
+    assert markers["configured"] == 2
+    assert markers["matched_markers"] == ["alpha", "beta"]
+    hit_markers = {loc["marker_id"] for loc in markers["locations"]}
+    assert hit_markers == {"alpha", "beta"}
+    assert all(loc["path"] == "src/main.rs" for loc in markers["locations"])
+    assert any("source marker hit" in record.message for record in caplog.records)
+
+
+def test_source_marker_scan_drops_invalid_patterns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    # A malformed regex and a non-dict entry are dropped; the valid one stays.
+    monkeypatch.setenv(
+        "SCREENER_SOURCE_MARKER_PATTERNS",
+        '[{"id":"bad","pattern":"("},"notadict",{"id":"good","pattern":"ZZTOKEN"}]',
+    )
+    repo = TarSourceRepository(str(_archive(tmp_path, "let x = ZZTOKEN;\n")))
+    markers = repo.review_leads()["source_markers"]
+    assert markers["configured"] == 1
+    assert markers["matched_markers"] == ["good"]
+
+
+def test_source_marker_scan_tolerates_malformed_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    monkeypatch.setenv("SCREENER_SOURCE_MARKER_PATTERNS", "{not json")
+    repo = TarSourceRepository(str(_archive(tmp_path, "fn main() {}\n")))
+    markers = repo.review_leads()["source_markers"]
+    assert markers == {"configured": 0, "matched_markers": [], "locations": []}

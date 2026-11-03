@@ -120,6 +120,8 @@ const TERMINAL_CAUSES: Record<string, string> = {
     "The platform rejected the agent's inference requests, so no run could complete.",
   model_inference_required:
     "The agent answered without the model inference the benchmark requires.",
+  harness_oom:
+    "The harness exceeded its published sandbox memory cap while the validator host had memory to spare.",
 };
 
 /** Codes that name a failure Ditto owns, with the sentence that explains it.
@@ -137,6 +139,8 @@ const HOLD_CAUSES: Record<string, string> = {
     "An inference grant check failed inside Ditto, not anything in this submission.",
   budget_evidence_absent:
     "An inference budget record was missing inside Ditto, not anything in this submission.",
+  host_memory_pressure:
+    "The validator host ran short of memory and the kernel stopped the harness, not anything in this submission.",
 };
 
 /** Codes that name the stage that stopped a run without blaming either side.
@@ -151,6 +155,13 @@ const UNATTRIBUTED_HOLD_STAGES: Record<string, { label: string; title: string }>
       "A validator stopped the run because the harness did not finish loading its memory " +
       "before the scorer's deadline. A busy validator and a slow harness both cause this, " +
       "so the platform has not attributed it to either side.",
+  },
+  harness_killed_137: {
+    label: "On hold · killed",
+    title:
+      "The harness was stopped by SIGKILL with no out-of-memory flag, so nothing shows who " +
+      "sent it. It is retried on another validator; the same kill there counts as the " +
+      "harness's own failure.",
   },
 };
 

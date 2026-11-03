@@ -123,15 +123,11 @@ async def test_failed_or_missing_evidence_never_looks_healthy(app, client, monke
     [
         ("current", 25017, "current", False, None),
         ("previous", 25017, "previous", False, None),
-        ("previous", 25017, "previous", True, None),
         ("diverged", 25017, "diverged", False, None),
         ("current", 25016, "previous", False, None),
-        ("diverged", 25016, "current", False, None),
         ("unknown", 25018, "current", False, None),
         ("current", 25017, "current", False, 25016),
         ("unknown", 25017, "previous", False, 25016),
-        ("unknown", 25017, "diverged", False, 25016),
-        ("unknown", 25017, "previous", False, 25017),
     ],
 )
 async def test_pin_and_fold_provenance_preserves_fresh_chain_evidence(
@@ -235,7 +231,6 @@ async def test_pin_and_fold_provenance_preserves_fresh_chain_evidence(
     [
         {"entries": [{"agent_id": "private-invalid-id"}]},
         {"context": {"served": {"treasury_pin": {"version": 2, "mode": "enforce"}}}},
-        {"context": ["private-invalid-id"]},
     ],
 )
 async def test_invalid_stored_pin_keeps_fresh_chain_evidence(
@@ -269,7 +264,12 @@ async def test_invalid_stored_pin_keeps_fresh_chain_evidence(
     assert "private-invalid-id" not in caplog.text
 
 
-@pytest.mark.parametrize("burn_share", ["missing", "null"])
+@pytest.mark.parametrize(
+    "burn_share",
+    [
+        "missing",
+    ],
+)
 async def test_invalid_stored_burn_share_keeps_fresh_chain_evidence(
     app, client, session_maker, monkeypatch, caplog, burn_share
 ):

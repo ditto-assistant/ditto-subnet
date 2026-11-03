@@ -1,0 +1,6 @@
+FROM scratch
+ARG DITTO_REVISION
+LABEL org.opencontainers.image.revision=$DITTO_REVISION
+LABEL io.heyditto.generator-scorer.update-protocol="1"
+COPY build/generator-scorer-release/ /release/
+ENTRYPOINT ["/release/challenge-scorer"]

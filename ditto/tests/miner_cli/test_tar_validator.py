@@ -190,6 +190,27 @@ class TestArchiveContract:
             ([_DOCKERFILE, ("/abs", b"x")], "SCR-ARCHIVE-001"),
             ([_DOCKERFILE, ("src//main.rs", b"x")], "SCR-ARCHIVE-001"),
             ([_DOCKERFILE, _DOCKERFILE], "SCR-ARCHIVE-002"),
+            (
+                [
+                    (
+                        "Dockerfile",
+                        b"FROM python:3.12\n"
+                        b"RUN --network=host pip install -r requirements.txt\n",
+                    )
+                ],
+                "SCR-CONTRACT-004",
+            ),
+            (
+                [
+                    (
+                        "Dockerfile",
+                        b"FROM rust:1.82\n"
+                        b"RUN --mount=type=cache,target=/root/.cargo \\\n"
+                        b"    --SECURITY=INSECURE cargo build --release\n",
+                    )
+                ],
+                "SCR-CONTRACT-004",
+            ),
         ],
         ids=[
             "no-dockerfile",
@@ -200,6 +221,8 @@ class TestArchiveContract:
             "absolute-path",
             "non-canonical-path",
             "duplicate-path",
+            "run-network-host",
+            "run-security-insecure-continued",
         ],
     )
     def test_screener_rejection_fails_before_upload(
@@ -227,6 +250,18 @@ class TestArchiveContract:
 
         assert self._contract(path).passed is True
         assert run_preflight(path).passed is True
+
+    def test_entitlement_outside_a_run_instruction_passes(self, tmp_path: Path) -> None:
+        # The screener only rejects the flags on RUN: a comment or a CMD
+        # argument mentioning them is not a build entitlement.
+        dockerfile = (
+            b"FROM scratch\n"
+            b"# never use RUN --network=host here\n"
+            b'CMD ["serve", "--network=host"]\n'
+        )
+        path = _archive(tmp_path, [("Dockerfile", dockerfile)])
+
+        assert self._contract(path).passed is True
 
     def test_member_and_unpacked_limits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -63,7 +63,10 @@ from ditto.db.models import (
     ScoreAuditEntry,
 )
 from ditto.db.queries.audit import benchmark_contract_refresh_event
-from ditto.db.queries.benchmark_admission import validator_queue_admission_predicate
+from ditto.db.queries.benchmark_admission import (
+    first_queued_in_era_predicate,
+    validator_queue_admission_predicate,
+)
 from ditto.db.queries.benchmark_rollout import DatasetPin, append_rollout_audit
 from ditto.db.queries.retirement import retirement_admission_predicate
 from ditto.db.queries.retry_state import classify_agent_retry_states
@@ -152,9 +155,10 @@ async def stranded_prev_gen_candidates(
     * its accepted prior-era score count is at least ``min_score_count`` and
       below :data:`SCORING_QUORUM` -- at or above quorum it is finalized, so by
       definition not stranded;
-    * it was submitted strictly before the rollout started, so it is genuinely
-      previous-generation and not something the ``created_at`` admission
-      disjunct already covers;
+    * it was submitted strictly before the rollout started, and first reached
+      a validator queue before then too, so it is genuinely previous-generation
+      and not something the ``created_at`` or first-queued-in-era admission
+      disjuncts already cover;
     * no other admission disjunct already covers it -- not a frozen cohort
       member, no version-scoped contract-refresh audit entry for the desired
       version, not already adopted;
@@ -220,6 +224,8 @@ async def stranded_prev_gen_candidates(
             ~already_member,
             ~already_adopted,
             ~already_refreshed,
+            # Already admitted on its own, so a carryover slot would be wasted.
+            ~first_queued_in_era_predicate(rollout=rollout),
             # Withdrawal is per (agent, version). Respect it in both eras: the
             # era the submission is stranded in, and the era we would adopt it
             # into. Either withdrawal is the miner asking to be left alone.

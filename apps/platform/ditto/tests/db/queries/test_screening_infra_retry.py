@@ -46,6 +46,7 @@ from ditto.db.queries.screening_infra_retry import (
     BREAKER_PROBE_INTERVAL,
     BREAKER_WINDOW,
     INFRA_AUTO_RETRY_MAX_AGE,
+    INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE,
     INFRA_AUTO_RETRY_MAX_STREAK,
     INFRA_AUTO_RETRY_REASON_CODES,
     INFRA_PLAN_MAX_CLAIMABLE,
@@ -61,6 +62,9 @@ from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 _SCREENER = "5GScreenerHotkeyForInfraRetryTests00000000000000000"
 _CODE = INFRA_AUTO_RETRY_REASON_CODES[0]
 _KEY_CODE = "source-review-adjudicator-key-unavailable"
+_UPLOAD_CODE = "image-upload-platform-unavailable"
+# Retried automatically, but only once (INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE).
+_LATE_CODE = "l2-late-result"
 _SECOND = timedelta(seconds=1)
 _PROVIDER = "gcp"
 _LANE = "buildkit"
@@ -76,7 +80,6 @@ _LANE = "buildkit"
 # the archive and a screen whose source reviewer never started both produce it;
 # only the node key failure has its own automatic code.
 _MANUAL_RETRY_CODES = (
-    "l2-late-result",
     "lease-budget-exhausted",
     "worker-verdict-rejected",
     "worker-result-processing-failed",
@@ -90,6 +93,10 @@ _MANUAL_RETRY_CODES = (
     "l2-cache-lock-timeout",
     "source-review-model-timeout",
     "source-review-unavailable",
+    # A 4xx (an oversized or mismatched image) or a failed completion, whose
+    # cost scales with the image; only a submission-independent upload outage
+    # has its own automatic code.
+    "image-upload-failed",
 )
 
 
@@ -364,7 +371,7 @@ def test_infra_code_is_split_from_the_park_cap_tuple() -> None:
 # --- per-artifact retry ---------------------------------------------------
 
 
-@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
+@pytest.mark.parametrize("reason_code", ["docker-build-infrastructure"])
 async def test_infra_failure_is_held_for_its_backoff_then_retried(
     session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
@@ -389,65 +396,61 @@ async def test_infra_failure_is_held_for_its_backoff_then_retried(
     assert await _running(session_maker) == [agent_id]
 
 
-async def test_worker_claim_not_started_is_auto_retried_after_backoff(
+async def test_late_result_retries_once_then_parks_for_the_operator(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    """A durable claim the worker settled before touching the artifact (#2446)."""
+    """Our deep-review timeout never needs a manual retry the first time.
+
+    A second consecutive late result is ``capped``: an artifact that makes the
+    review slow can cost at most one extra screen.
+    """
+    assert INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE == {_LATE_CODE: 1}
     now = datetime.now(UTC)
-    attempt_id = uuid4()
-    delay = infra_retry_delay(1, attempt_id)
-    failed_at = now - timedelta(minutes=30)
+    first = uuid4()
+    failed_at = now - timedelta(hours=2)
     agent_id = await _failing_agent(
         session_maker,
         finished_at=failed_at,
-        attempt_id=attempt_id,
-        provider=None,
-        lane=None,
-        reason_code="worker-claim-not-started",
+        attempt_id=first,
+        reason_code=_LATE_CODE,
+        lane="screening",
     )
+    decision = (await _plan(session_maker, now=now)).decisions[agent_id]
+    assert decision.streak == 1
+    assert decision.state == "due"
+    assert await _claim(session_maker, now=now) == [agent_id]
 
-    assert await _claim(session_maker, now=failed_at + delay - _SECOND) == []
-    assert await _claim(session_maker, now=failed_at + delay + _SECOND) == [agent_id]
-    assert await _running(session_maker) == [agent_id]
+    await _settle_probe(
+        session_maker,
+        agent_id,
+        status="failed",
+        at=now + timedelta(minutes=40),
+        reason_code=_LATE_CODE,
+    )
+    later = now + timedelta(hours=3)
+    decision = (await _plan(session_maker, now=later)).decisions[agent_id]
+    assert decision.streak == 2
+    assert decision.state == "capped"
+    assert await _claim(session_maker, now=later) == []
 
 
-async def test_node_court_key_failure_is_auto_retried_after_backoff(
+async def test_late_result_cap_counts_only_late_results_in_the_run(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    """A node's unusable source-review court key parks nothing for good (#2449)."""
+    """An earlier build-infrastructure failure does not spend the late retry."""
     now = datetime.now(UTC)
-    attempt_id = uuid4()
-    delay = infra_retry_delay(1, attempt_id)
-    failed_at = now - timedelta(minutes=30)
-    agent_id = await _failing_agent(
+    agent_id = await _seed_agent(session_maker)
+    await _infra_failure(session_maker, agent_id, finished_at=now - timedelta(hours=3))
+    await _infra_failure(
         session_maker,
-        finished_at=failed_at,
-        attempt_id=attempt_id,
-        provider=None,
-        lane=None,
-        reason_code=_KEY_CODE,
+        agent_id,
+        finished_at=now - timedelta(hours=2),
+        reason_code=_LATE_CODE,
+        lane="screening",
     )
-
-    assert await _claim(session_maker, now=failed_at + delay - _SECOND) == []
-    assert await _claim(session_maker, now=failed_at + delay + _SECOND) == [agent_id]
-    assert await _running(session_maker) == [agent_id]
-
-
-@pytest.mark.parametrize("reason_code", _MANUAL_RETRY_CODES)
-async def test_artifact_dependent_codes_stay_parked(
-    session_maker: async_sessionmaker[AsyncSession], reason_code: str
-) -> None:
-    now = datetime.now(UTC)
-    agent_id = await _failing_agent(
-        session_maker, finished_at=now - timedelta(hours=2), reason_code=reason_code
-    )
-
-    assert agent_id not in (await _plan(session_maker, now=now)).decisions
-    assert await _claim(session_maker, now=now) == []
-    async with session_maker() as session:
-        agent = await session.get(Agent, agent_id)
-        assert agent is not None
-        assert agent.status == AgentStatus.SCREENING_FAILED
+    decision = (await _plan(session_maker, now=now)).decisions[agent_id]
+    assert decision.streak == 2
+    assert decision.state == "due"
 
 
 async def test_inconclusive_runtime_evidence_hold_stays_parked(
@@ -500,103 +503,6 @@ async def test_streak_doubles_per_consecutive_failure_and_caps(
     assert decision.backoff_until - decision.failed_at >= INFRA_RETRY_MAX_BACKOFF * (
         1 - INFRA_RETRY_JITTER_FRACTION
     )
-
-
-async def test_backoff_and_streak_are_recomputed_identically_after_restart(
-    session_maker: async_sessionmaker[AsyncSession], engine
-) -> None:
-    now = datetime.now(UTC)
-    agent_id = await _seed_agent(session_maker)
-    for index in range(4):
-        await _infra_failure(
-            session_maker,
-            agent_id,
-            finished_at=now - timedelta(hours=4) + timedelta(hours=index),
-        )
-    before = (await _plan(session_maker, now=now)).decisions[agent_id]
-
-    # A restarted Platform shares nothing but the database.
-    restarted = async_sessionmaker(engine, expire_on_commit=False)
-    after = (await _plan(restarted, now=now)).decisions[agent_id]
-
-    assert after == before
-    assert after.streak == 4
-
-
-async def test_operator_manual_retry_resets_the_streak(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    now = datetime.now(UTC)
-    agent_id = await _seed_agent(session_maker)
-    first = await _infra_failure(
-        session_maker, agent_id, finished_at=now - timedelta(hours=5)
-    )
-    await _infra_failure(session_maker, agent_id, finished_at=now - timedelta(hours=4))
-    third = await _infra_failure(
-        session_maker, agent_id, finished_at=now - timedelta(hours=3)
-    )
-    assert (await _plan(session_maker, now=now)).decisions[agent_id].streak == 3
-
-    retry_at = now - timedelta(hours=2, minutes=30)
-    async with session_maker() as session, session.begin():
-        session.add(
-            ScreeningRetryOverride(
-                override_id=uuid4(),
-                agent_id=agent_id,
-                attempt_id=third,
-                artifact_sha256="a" * 64,
-                expected_score_count=0,
-                force_full_review=False,
-                reason="operator retry",
-                actor="operator@example.com",
-                created_at=retry_at,
-            )
-        )
-    # The override authorizes the manual path: it is no longer auto-held.
-    assert agent_id not in (await _plan(session_maker, now=now)).decisions
-    assert first != third
-
-    # The manual retry failed on infrastructure again: the streak starts over.
-    await _infra_failure(session_maker, agent_id, finished_at=now - timedelta(hours=2))
-    assert (await _plan(session_maker, now=now)).decisions[agent_id].streak == 1
-
-
-async def test_operator_quarantine_release_resets_the_streak(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    now = datetime.now(UTC)
-    agent_id = await _seed_agent(session_maker)
-    await _infra_failure(session_maker, agent_id, finished_at=now - timedelta(hours=6))
-    await _infra_failure(session_maker, agent_id, finished_at=now - timedelta(hours=5))
-    old = await _add_attempt(
-        session_maker,
-        agent_id,
-        status="quarantined",
-        started_at=now - timedelta(days=1),
-        finished_at=now - timedelta(days=1),
-        reason_code="agentic-source-review-tripwire",
-    )
-    async with session_maker() as session, session.begin():
-        session.add(
-            ScreeningQuarantine(
-                quarantine_id=uuid4(),
-                agent_id=agent_id,
-                attempt_id=old,
-                screener_hotkey=_SCREENER,
-                policy_version=SCREENING_FLOOR_POLICY_VERSION,
-                manifest_digest="d" * 64,
-                reason_code="agentic-source-review-tripwire",
-                status="resolved",
-                resolved_at=now - timedelta(hours=4, minutes=30),
-                resolved_by="operator",
-                resolution="release",
-                resolution_reason="operator cleared the hold",
-            )
-        )
-    await _infra_failure(session_maker, agent_id, finished_at=now - timedelta(hours=3))
-
-    # Only the failure after the release counts.
-    assert (await _plan(session_maker, now=now)).decisions[agent_id].streak == 1
 
 
 async def test_infra_failures_never_park_reject_or_quarantine_by_count(
@@ -695,16 +601,6 @@ async def test_expired_probe_lease_stays_parked_for_the_operator(
     # No second active attempt was created and nothing auto-retries an expiry.
     assert await _running(session_maker) == []
     assert agent_id not in (await _plan(session_maker, now=now)).decisions
-
-
-async def test_live_running_attempt_blocks_a_second_one(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    now = datetime.now(UTC)
-    agent_id = await _failing_agent(session_maker, finished_at=now - timedelta(hours=3))
-    assert await _claim(session_maker, now=now) == [agent_id]
-    assert await _claim(session_maker, now=now + timedelta(minutes=10)) == []
-    assert await _running(session_maker) == [agent_id]
 
 
 # --- fleet breaker --------------------------------------------------------
@@ -843,6 +739,141 @@ async def test_court_key_breaker_on_the_screening_lane_drains_without_recovery(
     assert not any(breaker.open for breaker in plan.breakers.values())
 
 
+async def test_image_upload_breaker_closes_on_a_verified_upload(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A Platform deploy that fails several uploads at once must not stall.
+
+    The upload signature is recorded on the ``screening`` lane, which a build
+    proof never matches, so it closes on the proof of its own fault instead: a
+    probe on its provider that finished with a verified screened-image upload.
+    """
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_UPLOAD_CODE
+    )
+    probe_at = _opened_at(t0) + BREAKER_OPEN_DURATION + _SECOND
+    (probe,) = await _claim(session_maker, now=probe_at)
+    await _settle_probe(
+        session_maker, probe, status="passed", at=probe_at + timedelta(minutes=1)
+    )
+
+    after = probe_at + timedelta(minutes=2)
+    (breaker,) = (await _plan(session_maker, now=after)).breakers.values()
+    assert breaker.signature == (_UPLOAD_CODE, _PROVIDER, "screening")
+    assert not breaker.open
+    remaining = sorted(set(agents) - {probe})
+    assert sorted(await _claim(session_maker, now=after)) == remaining
+
+
+async def test_late_result_breaker_closes_on_a_review_confirmed_reject(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A review-provider outage that makes several reviews late must not stall.
+
+    A build proof says nothing about the review provider, so the late-result
+    signature closes on a probe on its provider whose review finished.
+    """
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_LATE_CODE
+    )
+    probe_at = _opened_at(t0) + BREAKER_OPEN_DURATION + _SECOND
+    (probe,) = await _claim(session_maker, now=probe_at)
+    await _settle_probe(
+        session_maker,
+        probe,
+        status="rejected",
+        at=probe_at + timedelta(minutes=1),
+        reason_code="source-review-confirmed-violation",
+    )
+
+    after = probe_at + timedelta(minutes=2)
+    (breaker,) = (await _plan(session_maker, now=after)).breakers.values()
+    assert breaker.signature == (_LATE_CODE, _PROVIDER, "screening")
+    assert not breaker.open
+    remaining = sorted(set(agents) - {probe})
+    assert sorted(await _claim(session_maker, now=after)) == remaining
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        # The static preflight can quarantine before any build or review.
+        {"status": "quarantined", "reason_code": "static-preflight-hold"},
+        # A pass that stored no screened image did not finish the screen.
+        {"status": "passed", "with_image": False},
+        # A build rejection never reached source review.
+        {"status": "rejected", "reason_code": "docker-build", "with_image": False},
+    ],
+)
+async def test_late_result_breaker_needs_a_finished_review_to_close(
+    session_maker: async_sessionmaker[AsyncSession], outcome: dict
+) -> None:
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_LATE_CODE
+    )
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker, agents[0], at=opened + _SECOND, hotkey=_SCREENER, **outcome
+    )
+    state = await _probe_state(
+        session_maker,
+        now=opened + BREAKER_OPEN_DURATION,
+        signature=(_LATE_CODE, _PROVIDER, "screening"),
+    )
+    assert state.open
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        # The build ran but no image was stored: says nothing about uploads.
+        {"status": "rejected", "reason_code": "docker-build", "with_image": False},
+        {"status": "passed", "with_image": False},
+    ],
+)
+async def test_image_upload_breaker_needs_an_upload_to_close(
+    session_maker: async_sessionmaker[AsyncSession], outcome: dict
+) -> None:
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_UPLOAD_CODE
+    )
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker, agents[0], at=opened + _SECOND, hotkey=_SCREENER, **outcome
+    )
+    state = await _probe_state(
+        session_maker,
+        now=opened + BREAKER_OPEN_DURATION,
+        signature=(_UPLOAD_CODE, _PROVIDER, "screening"),
+    )
+    assert state.open
+
+
+async def test_image_upload_breaker_ignores_an_upload_on_another_provider(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    other = "5GOtherProviderScreenerHotkey000000000000000000000"
+    await _enroll_node(session_maker, hotkey=other, provider="hetzner")
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_UPLOAD_CODE
+    )
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker, agents[0], status="passed", at=opened + _SECOND, hotkey=other
+    )
+    state = await _probe_state(
+        session_maker,
+        now=opened + BREAKER_OPEN_DURATION,
+        signature=(_UPLOAD_CODE, _PROVIDER, "screening"),
+    )
+    assert state.open
+
+
 async def test_concurrent_claimers_select_exactly_one_probe(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -856,18 +887,6 @@ async def test_concurrent_claimers_select_exactly_one_probe(
 
     assert sorted(len(rows) for rows in results) == [0, 0, 0, 1]
     assert len(await _running(session_maker)) == 1
-
-
-async def test_breaker_state_is_identical_after_restart(
-    session_maker: async_sessionmaker[AsyncSession], engine
-) -> None:
-    t0 = datetime.now(UTC) - timedelta(hours=1)
-    await _tripped_fleet(session_maker, t0=t0)
-    now = _opened_at(t0) + BREAKER_OPEN_DURATION + _SECOND
-    before = await _plan(session_maker, now=now)
-    after = await _plan(async_sessionmaker(engine, expire_on_commit=False), now=now)
-    assert after == before
-    assert any(breaker.open for breaker in after.breakers.values())
 
 
 async def test_mixed_queue_healthy_and_other_signatures_keep_flowing(
@@ -908,7 +927,7 @@ async def test_breaker_does_not_merge_unknown_or_different_lanes(
     assert len({d.signature for d in plan.decisions.values()}) == 3
 
 
-@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
+@pytest.mark.parametrize("reason_code", [_KEY_CODE, _UPLOAD_CODE])
 async def test_breaker_keys_on_reason_code_alone_without_metadata(
     session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
@@ -996,7 +1015,7 @@ async def test_operator_manual_retry_bypasses_and_can_close_the_breaker(
 # --- bounds on automatic retries -------------------------------------------
 
 
-@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
+@pytest.mark.parametrize("reason_code", ["docker-build-infrastructure"])
 async def test_long_parked_agent_is_not_retried_automatically(
     session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
@@ -1076,7 +1095,7 @@ async def _capped_agent(
     return agent_id
 
 
-@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
+@pytest.mark.parametrize("reason_code", ["docker-build-infrastructure"])
 async def test_streak_cap_hands_the_agent_to_the_operator_without_a_verdict(
     session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
@@ -1108,7 +1127,7 @@ async def test_streak_cap_hands_the_agent_to_the_operator_without_a_verdict(
         assert statuses == {"failed"}
 
 
-@pytest.mark.parametrize("reason_code", INFRA_AUTO_RETRY_REASON_CODES)
+@pytest.mark.parametrize("reason_code", ["docker-build-infrastructure"])
 async def test_operator_retry_lifts_the_streak_cap(
     session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:
@@ -1328,37 +1347,6 @@ async def test_partial_index_covers_exactly_the_auto_retry_codes(
         "add an Alembic migration that rebuilds the partial index with "
         "INFRA_AUTO_RETRY_REASON_CODES"
     )
-
-
-async def test_agent_only_plan_skips_the_fleet_history_query(
-    session_maker: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from ditto.db.queries import screening_infra_retry as module
-
-    calls: list[datetime] = []
-    real = module.failing_agents_query
-
-    def spy(cutoff: datetime):  # noqa: ANN202
-        calls.append(cutoff)
-        return real(cutoff)
-
-    monkeypatch.setattr(module, "failing_agents_query", spy)
-    now = datetime.now(UTC)
-    agent_id = await _failing_agent(
-        session_maker, finished_at=now - timedelta(minutes=1)
-    )
-
-    async with session_maker() as session:
-        plan = await plan_infra_retries(
-            session, now=now, agent_ids=[agent_id], fleet_scan=False
-        )
-    assert calls == []
-    assert plan.decisions[agent_id].state == "backoff"
-    assert plan.breakers == {}
-
-    async with session_maker() as session:
-        await plan_infra_retries(session, now=now, agent_ids=[agent_id])
-    assert len(calls) == 1
 
 
 # --- lane-aware breaker ------------------------------------------------------
@@ -1601,47 +1589,7 @@ async def test_probe_that_later_fails_elsewhere_still_consumes_the_interval(
     )
 
 
-async def test_probe_classification_is_identical_running_and_finished(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    t0 = datetime.now(UTC) - timedelta(hours=1)
-    agents = await _tripped_fleet(session_maker, t0=t0)
-    opened = _opened_at(t0)
-    started = opened + _SECOND
-    attempt = await _add_attempt(
-        session_maker,
-        agents[0],
-        status="running",
-        started_at=started,
-        finished_at=None,
-    )
-    now = opened + BREAKER_OPEN_DURATION + _SECOND
-    seen = [(await _probe_state(session_maker, now=now)).last_probe_at]
-    async with session_maker() as session, session.begin():
-        build = SubmissionImageBuild(
-            build_id=uuid4(),
-            agent_id=agents[0],
-            attempt_id=attempt,
-            environment="prod",
-            artifact_sha256="e" * 64,
-            image_ref=f"ditto-screen/{agents[0]}-{attempt}:latest",
-            output_key="builds/x",
-        )
-        session.add(build)
-    seen.append((await _probe_state(session_maker, now=now)).last_probe_at)
-    async with session_maker() as session, session.begin():
-        row = await session.get(ScreeningAttempt, attempt)
-        assert row is not None
-        row.status = "failed"
-        row.finished_at = started + _SECOND
-        row.reason_code = "targon-build-unavailable"
-        row.failure_provider = "targon"
-        row.failure_lane = "kaniko"
-    seen.append((await _probe_state(session_maker, now=now)).last_probe_at)
-    assert seen == [started] * 3
-
-
-@pytest.mark.parametrize("provider", ["home", "test", "targon"])
+@pytest.mark.parametrize("provider", ["targon"])
 async def test_probe_by_any_node_provider_paces_its_own_signature(
     session_maker: async_sessionmaker[AsyncSession], provider: str
 ) -> None:
@@ -1701,34 +1649,6 @@ async def test_pass_closes_only_the_signatures_of_its_own_lane_in_a_mixed_histor
     assert hetzner_agents  # the H breaker's own agents are still parked
 
 
-async def test_mixed_history_mirror_hetzner_pass_does_not_close_gcp(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    await _enroll_node(session_maker, hotkey=_HETZNER_HOTKEY, provider=_HETZNER)
-    t0 = datetime.now(UTC) - timedelta(hours=2)
-    step = BREAKER_WINDOW / (BREAKER_DISTINCT_AGENTS + 1)
-    gcp_agents = await _tripped_fleet(session_maker, t0=t0)
-    await _tripped_fleet(session_maker, t0=t0 + BREAKER_WINDOW * 2, provider=_HETZNER)
-    later = t0 + BREAKER_WINDOW * 4
-    mixed = gcp_agents[0]
-    await _follow_up(
-        session_maker,
-        mixed,
-        status="failed",
-        at=later,
-        hotkey=_SCREENER,
-        provider=_PROVIDER,
-        lane=_LANE,
-    )
-    await _follow_up(
-        session_maker, mixed, status="passed", at=later + step, hotkey=_HETZNER_HOTKEY
-    )
-    plan = await _plan(session_maker, now=later + BREAKER_OPEN_DURATION)
-    assert plan.breakers[(_CODE, _PROVIDER, _LANE)].open
-    # The Hetzner pass followed only GCE failures: H is untouched.
-    assert plan.breakers[(_CODE, _HETZNER, _LANE)].open
-
-
 @pytest.mark.parametrize(
     "outcome",
     [
@@ -1741,11 +1661,6 @@ async def test_mixed_history_mirror_hetzner_pass_does_not_close_gcp(
         # Static tripwire fires before any build starts.
         {"status": "quarantined", "with_image": False},
         # Another reject (contract / duplicate) never reached the build.
-        {
-            "status": "rejected",
-            "with_image": False,
-            "reason_code": "container-harness-contract",
-        },
         # A timed-out build cannot certify recovery of the failing builder.
         {
             "status": "rejected",

@@ -7,6 +7,7 @@ const originalBaseUrl = process.env.DITTO_PLATFORM_API_BASE_URL
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   if (originalToken === undefined) delete process.env.DITTO_ADMIN_API_TOKEN
   else process.env.DITTO_ADMIN_API_TOKEN = originalToken
   if (originalLegacyToken === undefined) delete process.env.DITTO_PLATFORM_ADMIN_TOKEN
@@ -63,6 +64,18 @@ describe('platformAdminRequest', () => {
     await expect(platformAdminRequest('/api/v1/admin/screening-quarantines/id')).rejects.toThrow(
       'quarantine is not active',
     )
+  })
+
+  it.each([
+    ['/api/v1/admin/ath-rulings/batch-execute', 'POST', 503, { batch_id: 'invalid' }],
+    ['/api/v1/admin/other', 'POST', 503, { secret: 'never-reflect-this' }],
+    ['/api/v1/admin/ath-rulings/batch-execute', 'GET', 503, { secret: 'never-reflect-this' }],
+  ])('does not reflect arbitrary object detail from %s %s', async (path, method, status, detail) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ detail }, { status }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(platformAdminRequest(path, { method })).rejects.toThrow('Ditto API request failed (503)')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('refuses to retry a write, however transient the failure looks', async () => {
@@ -228,6 +241,22 @@ describe('platformAdminRequest', () => {
     expect((error as PlatformAdminError).failure).toBe('request')
     expect((error as PlatformAdminError).status).toBe(304)
     expect((error as Error).message).not.toContain('redirected')
+  })
+
+  it('does not replay path-bound operator proof on a redirected GET', async () => {
+    vi.stubEnv('DITTO_ADMIN_API_TOKEN', 'synthetic-admin-token')
+    vi.stubEnv('BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET', 'synthetic-proof-secret-with-more-than-32-bytes')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
+      status: 307, headers: { Location: '/api/v1/admin/different-path' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(platformAdminRequest('/api/v1/admin/original-path', {
+      actor: 'operator@omniaura.ai', operatorProof: true,
+    })).rejects.toMatchObject({ failure: 'request', status: 307 })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'GET', redirect: 'manual' })
+    expect(fetchMock.mock.calls[0][1].headers).toHaveProperty('X-Backroom-Operator-Proof')
   })
 
   it('never follows a redirect on a write and leaves its outcome to the read-back', async () => {

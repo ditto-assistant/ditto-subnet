@@ -275,6 +275,20 @@ class PaymentRecoveryExpiredError(PreCheckRejectedError):
     """Raised when a finalized receipt is outside its recovery window."""
 
 
+class GeneratorPaymentRejectedError(ApiResponseError):
+    """Raised when Platform definitively refuses a generator fee proof.
+
+    This can happen when:
+    - The proof's transfer failed on chain, paid the wrong amount or address,
+      was signed by a coldkey that does not own the hotkey, or is not a
+      ``Balances.transfer_keep_alive``.
+    - The proof already funded another upload.
+    - The proof is outside the 24-hour window.
+
+    The same proof can never fund this upload, so retrying it is pointless.
+    """
+
+
 class TransientApiError(ApiResponseError):
     """Raised for transport faults and retryable HTTP responses.
 

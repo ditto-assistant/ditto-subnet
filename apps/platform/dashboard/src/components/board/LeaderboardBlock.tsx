@@ -50,8 +50,8 @@ import {
 import type { BandDecayParams } from "../../lib/scoring";
 import { Tip } from "../ui/Tooltip";
 import { EntityButton } from "../ui/EntityButton";
+import { CrownDuel } from "./CrownDuel";
 import { BoardTable } from "./BoardTable";
-import { CodingShadowSummary } from "./CodingShadowSummary";
 import {
   leaderboardVersionView,
   restoreBoardPage,
@@ -1305,7 +1305,9 @@ export function LeaderboardBlock(props: { mode: "overview" | "page" }): JSX.Elem
       </div>
       <VersionSwitch store={store} />
       <KothStandingCallout store={store} />
-      <CodingShadowSummary store={store} />
+      {/* The King and the challengers dueling it. The overview masthead
+          already names the King, so that mount shows only the duels. */}
+      <CrownDuel store={store} showKing={props.mode !== "overview"} />
       <BoardTable store={store} />
       {/* Post-table context: emissions, rollout, and standing notices sit
           below the board so the table starts at the top of the Leaderboard

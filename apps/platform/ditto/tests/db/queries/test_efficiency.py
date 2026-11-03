@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import copy
 import json
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +34,10 @@ from ditto.api_server.efficiency import (
     preview_efficiency_board,
     reference_from_snapshot,
 )
+from ditto.api_server.efficiency_projection import (
+    EfficiencyProjectionUnavailable,
+    project_frozen_efficiency,
+)
 from ditto.db.models import Agent, ConfirmationScore, EfficiencyCohortSnapshot
 from ditto.db.queries.efficiency import (
     get_bonus_rows,
@@ -43,6 +48,8 @@ from ditto.db.queries.efficiency import (
     latest_snapshot,
     promote_v3_compatibility_placeholder,
 )
+from ditto.db.queries.score_ranking import resolve_efficiency_adjustments
+from ditto.db.queries.scores import LedgerRow
 from ditto_screening_protocol.bench_v9 import V9BaseEvidence, V9ScoreGateEvidence
 
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
@@ -1200,3 +1207,234 @@ class TestBoundedFactorMaterialization:
             epoch_index=epoch_index_for(now, 24),
         )
         assert len(assignments) == 6
+
+
+class TestFrozenCourtProjection:
+    @staticmethod
+    async def _board(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
+        now = datetime(2026, 8, 13, 12, tzinfo=UTC)
+        agents = [await _seed_agent(session) for _ in range(6)]
+        rows = [
+            LedgerRow(
+                agent_id=agent.agent_id,
+                miner_hotkey=agent.miner_hotkey,
+                sha256=f"{index + 1:064x}",
+                composite=0.8,
+                tool_mean=0.8,
+                memory_mean=0.8,
+                first_seen=now,
+                bench_version=9,
+                eligible=True,
+                official_composite=0.8,
+                size_bytes=1,
+                run_id=str(uuid4()),
+                seed=1,
+                validator_hotkey="validator",
+                signature=None,
+                status=AgentStatus.SCORED,
+                v9_confirmation={"full_effective_micros": 800_000},
+            )
+            for index, agent in enumerate(agents)
+        ]
+        finalized = rows[:5]
+        costs = {row.agent_id: 10_000 * (index + 1) for index, row in enumerate(rows)}
+        reads: list[list[UUID]] = []
+
+        async def quorum(_session, agent_ids, *, bench_versions, details_keys=None):
+            del details_keys
+            ids = list(agent_ids)
+            assert bench_versions == dict.fromkeys(ids, 9)
+            reads.append(ids)
+            return {
+                agent_id: [SimpleNamespace(details=_v9_details(costs[agent_id]))] * 3
+                for agent_id in ids
+                if agent_id in costs
+            }
+
+        async def current(_session):
+            return finalized
+
+        monkeypatch.setattr(
+            "ditto.api_server.efficiency._finalized_ranked_rows", current
+        )
+        monkeypatch.setattr("ditto.db.queries.scores.quorum_score_rows", quorum)
+        return now, rows, finalized, costs, reads
+
+    async def test_restoration_is_read_only_and_matches_later_canonical_assignment(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now, rows, finalized, costs, reads = await self._board(session, monkeypatch)
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True, min_cohort=5)
+        await ensure_efficiency_state(session, config, now=now)
+        restored = rows[-1].agent_id
+        with pytest.raises(
+            EfficiencyProjectionUnavailable, match="current efficiency assignments"
+        ):
+            await project_frozen_efficiency(
+                session,
+                config=config,
+                rows=rows,
+                bench_version=9,
+                now=now,
+                restored_ids=frozenset(),
+            )
+        statements: list[str] = []
+
+        def read_only(_conn, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement)
+            assert (
+                not statement.lstrip()
+                .upper()
+                .startswith(("INSERT", "UPDATE", "DELETE", "TRUNCATE"))
+            )
+
+        bind = session.bind
+        assert bind is not None
+        event.listen(bind.sync_engine, "before_cursor_execute", read_only)
+        try:
+            projected = await project_frozen_efficiency(
+                session,
+                config=config,
+                rows=rows,
+                bench_version=9,
+                now=now,
+                restored_ids=frozenset({restored}),
+            )
+            assert projected is not None
+            expected = await resolve_efficiency_adjustments(
+                session,
+                rows=rows,
+                efficiency_config=config,
+                now=now,
+                factor_fleet_ready=True,
+                diagnostic_assignments=projected.assignments,
+            )
+            assert expected[1][restored] == pytest.approx((20_000 / 60_000) ** 0.25)
+            assert await resolve_efficiency_adjustments(
+                session,
+                rows=rows,
+                efficiency_config=config,
+                now=now,
+                factor_fleet_ready=False,
+                diagnostic_assignments=projected.assignments,
+            ) == ({}, {}, {})
+            with pytest.raises(ValueError, match="cannot serve a validator"):
+                await resolve_efficiency_adjustments(
+                    session,
+                    rows=rows,
+                    efficiency_config=config,
+                    now=now,
+                    requesting_validator_hotkey="validator",
+                    diagnostic_assignments=projected.assignments,
+                )
+            # Changing live knobs cannot refreeze a cohort. Changing accepted
+            # restored-row evidence changes only the values guard, not context.
+            costs[restored] = 80_000
+            changed = await project_frozen_efficiency(
+                session,
+                config=replace(config, factor_alpha=0.5),
+                rows=rows,
+                bench_version=9,
+                now=now,
+                restored_ids=frozenset({restored}),
+            )
+            assert changed is not None and changed.context == projected.context
+            assert changed.values_digest != projected.values_digest
+            assert changed.assignments[restored].factor == pytest.approx(
+                (20_000 / 80_000) ** 0.25
+            )
+            costs[restored] = 60_000
+            with pytest.raises(
+                EfficiencyProjectionUnavailable, match="frozen efficiency reference"
+            ):
+                await project_frozen_efficiency(
+                    session,
+                    config=config,
+                    rows=rows,
+                    bench_version=9,
+                    now=now + timedelta(days=1),
+                    restored_ids=frozenset({restored}),
+                )
+        finally:
+            event.remove(bind.sync_engine, "before_cursor_execute", read_only)
+        assert statements and reads[-1] == [restored]
+        assert (
+            len(
+                await get_bonus_rows(
+                    session,
+                    [row.agent_id for row in rows],
+                    bench_versions=dict.fromkeys([row.agent_id for row in rows], 9),
+                    epoch_index=epoch_index_for(now, 24),
+                )
+            )
+            == 5
+        )
+        await session.rollback()
+        finalized.append(rows[-1])
+        await ensure_efficiency_state(session, config, now=now)
+        persisted = await project_frozen_efficiency(
+            session,
+            config=config,
+            rows=rows,
+            bench_version=9,
+            now=now,
+            restored_ids=frozenset(),
+        )
+        assert persisted is not None
+        assert persisted == projected
+        assert (
+            await resolve_efficiency_adjustments(
+                session,
+                rows=rows,
+                efficiency_config=config,
+                now=now,
+                factor_fleet_ready=True,
+            )
+            == expected
+        )
+
+    async def test_inactive_reference_legitimately_has_no_assignments(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now, rows, _finalized, _costs, reads = await self._board(session, monkeypatch)
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True, min_cohort=8)
+        await ensure_efficiency_state(session, config, now=now)
+        reads.clear()
+        view = await project_frozen_efficiency(
+            session,
+            config=config,
+            rows=rows,
+            bench_version=9,
+            now=now,
+            restored_ids=frozenset({rows[-1].agent_id}),
+        )
+        assert view is not None and view.assignments == {}
+        assert reads == []
+        reference = await get_snapshot(
+            session,
+            bench_version=9,
+            run_size="full",
+            epoch_index=epoch_index_for(now, 24),
+        )
+        assert reference is not None and not reference.active
+
+    async def test_active_reference_keeps_stored_factors_despite_missing_cost(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now, rows, _finalized, costs, reads = await self._board(session, monkeypatch)
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True, min_cohort=5)
+        await ensure_efficiency_state(session, config, now=now)
+        costs.clear()
+        reads.clear()
+        view = await project_frozen_efficiency(
+            session,
+            config=config,
+            rows=rows,
+            bench_version=9,
+            now=now,
+            restored_ids=frozenset(),
+        )
+        assert view is not None and len(view.assignments) == 5
+        assert rows[-1].agent_id not in view.assignments
+        assert reads == [[rows[-1].agent_id]]
+        assert view.assignments[rows[0].agent_id].factor == pytest.approx(2**0.25)

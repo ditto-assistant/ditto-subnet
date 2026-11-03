@@ -599,6 +599,16 @@ func adaptProviderRequestCompatibility(upstream map[string]any, preferences map[
 	if only, ok := preferences["only"].([]string); ok {
 		if len(only) == 1 && strings.EqualFold(strings.TrimSpace(only[0]), "groq") {
 			delete(upstream, "response_format")
+			return
+		}
+		// A multi-provider allowlist (the bf16 price order) drops Groq from
+		// both the allowlist and the order, like the order-only route below.
+		compatible := providerListWithout(only, "groq")
+		if len(compatible) > 0 && len(compatible) != len(only) {
+			preferences["only"] = compatible
+			if order, ok := preferences["order"].([]string); ok {
+				preferences["order"] = providerListWithout(order, "groq")
+			}
 		}
 		return
 	}

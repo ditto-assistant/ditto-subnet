@@ -1,6 +1,9 @@
-// The submission-pipeline page: the atlas map (board, rescreen notice,
-// deferred source review branch) split out of the old single operations page so
-// the flow reads as its own surface. Every panel consumes exactly ONE
+// The submission-pipeline page. The top is the pipeline theater: the same
+// flow told as three acts (a factory that builds each submission into its
+// Paper Ditto, airport-style screening, and the scoring arena), each with its
+// authoritative counts and cast. Beneath it the atlas map (board, rescreen
+// notice, deferred source review branch) stays as the stage-by-stage
+// manifest with every row, filter and link. Every panel consumes exactly ONE
 // /public/operations snapshot per tick, and the snapshot note states the
 // reconciliation plus its age (skew is visible, not papered over).
 import { createMemo, onMount } from "solid-js";
@@ -12,6 +15,7 @@ import {
   RescreenNotice,
 } from "../components/operations/PipelineBoard";
 import type { FleetReportExt } from "../components/operations/fleet";
+import { PipelineTheater } from "../components/theater/PipelineTheater";
 import type { PipelineEntryExt } from "../components/operations/pipeline";
 import { operationsResource } from "../data/operations";
 import { useEndpoint } from "../data/useEndpoint";
@@ -43,11 +47,22 @@ export function PipelinePage(
 
   return (
     <section class="page active" data-page="pipeline">
-      <section class="operations" aria-labelledby="page-title">
+      <p class="atlas-note theater-snapshot" id="operations-snapshot" aria-live="polite">
+        {snap.snapshotNote()}
+      </p>
+      <PipelineTheater
+        entries={pipelineEntries()}
+        statusCounts={statusCounts()}
+        screeners={latest(screeners) ?? null}
+        activeVersion={benchVersion()}
+        unavailable={snap.opsUnavailable()}
+      />
+      <section class="operations pipeline-manifest" aria-labelledby="pipeline-manifest-title">
+        <h2 id="pipeline-manifest-title" class="pipeline-manifest-title">
+          Every submission, stage by stage
+        </h2>
         <div class="fleet-atlas">
           <div class="pipeline-map">
-            {/* The page title already names the surface; the atlas label
-                carries only the explainer and the snapshot provenance. */}
             <div class="atlas-label">
               <div>
                 <span class="atlas-note">
@@ -55,9 +70,6 @@ export function PipelinePage(
                   review happens later only for qualifying or anomalous results; entering it is not
                   a finding. Each held row names its trigger and what the automated review
                   concluded.
-                </span>
-                <span class="atlas-note" id="operations-snapshot" aria-live="polite">
-                  {snap.snapshotNote()}
                 </span>
               </div>
             </div>

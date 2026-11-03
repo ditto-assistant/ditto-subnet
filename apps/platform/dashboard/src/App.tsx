@@ -58,6 +58,7 @@ import { ActivityPage } from "./pages/ActivityPage";
 import { GammaPage } from "./pages/GammaPage";
 import { AthPage } from "./pages/AthPage";
 import { BountiesPage } from "./pages/BountiesPage";
+import { GeneratorsPage } from "./pages/GeneratorsPage";
 import { ReviewsPage } from "./pages/ReviewsPage";
 import { SubmissionsPage } from "./pages/SubmissionsPage";
 
@@ -389,6 +390,9 @@ export default function App(): JSX.Element {
               </Match>
               <Match when={currentPage() === "bounties"}>
                 <BountiesPage />
+              </Match>
+              <Match when={currentPage() === "generators"}>
+                <GeneratorsPage />
               </Match>
               <Match when={currentPage() === "benchmark"}>
                 <BenchmarkPage />

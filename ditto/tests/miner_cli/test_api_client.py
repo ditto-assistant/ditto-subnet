@@ -38,6 +38,7 @@ from ditto.miner_cli.errors import (
     AgentNotFoundError,
     ApiResponseError,
     AttestationRejectedError,
+    GeneratorPaymentRejectedError,
     HotkeyAgentNotFoundError,
     LoginRejectedError,
     LoginRequiredError,
@@ -77,6 +78,85 @@ def _envelope_response(
         },
         headers=headers,
     )
+
+
+class TestGeneratorUploadTerms:
+    @pytest.mark.parametrize(
+        ("status", "code", "definitive"),
+        [
+            (402, 3203, True),
+            (402, 3207, True),
+            (402, 3208, True),
+            (402, 3201, False),
+            (402, 3002, False),
+            (503, 3000, False),
+        ],
+    )
+    def test_upload_maps_definitive_payment_refusals(
+        self, status: int, code: int, definitive: bool
+    ) -> None:
+        with (
+            make_client(lambda _r: _envelope_response(status, code, "no")) as client,
+            pytest.raises(ApiResponseError) as caught,
+        ):
+            client.post_generator_submission({})
+        assert isinstance(caught.value, GeneratorPaymentRejectedError) is definitive
+
+    def test_terms_pass_the_hotkey_and_digest(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"payment_required": True})
+
+        with make_client(_handler) as client:
+            terms = client.get_generator_upload_terms(
+                hotkey="5Hot", source_sha256="ab" * 32
+            )
+        assert terms == {"payment_required": True}
+        assert seen[0].url.path == "/api/v1/generator/upload-terms"
+        assert seen[0].url.params["hotkey"] == "5Hot"
+        assert seen[0].url.params["source_sha256"] == "ab" * 32
+
+    def test_an_older_platform_without_terms_reads_as_none(self) -> None:
+        with make_client(lambda _request: httpx.Response(404)) as client:
+            assert (
+                client.get_generator_upload_terms(hotkey="5Hot", source_sha256="ab")
+                is None
+            )
+
+    def test_other_failures_raise(self) -> None:
+        with (
+            make_client(
+                lambda _request: _envelope_response(500, 3000, "boom")
+            ) as client,
+            pytest.raises(ApiResponseError, match="generator upload terms"),
+        ):
+            client.get_generator_upload_terms(hotkey="5Hot", source_sha256="ab")
+
+
+class TestSubmissionTerms:
+    def test_reads_one_competition(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"competition": "memory"})
+
+        with make_client(_handler) as client:
+            assert client.get_submission_terms("memory") == {"competition": "memory"}
+        assert seen[0].url.path == "/api/v1/public/submission-terms/memory"
+
+    def test_an_older_platform_reads_as_none_and_failures_raise(self) -> None:
+        with make_client(lambda _request: httpx.Response(404)) as client:
+            assert client.get_submission_terms("generator") is None
+        with (
+            make_client(
+                lambda _request: _envelope_response(500, 3000, "boom")
+            ) as client,
+            pytest.raises(ApiResponseError, match="submission terms"),
+        ):
+            client.get_submission_terms("generator")
 
 
 class TestContributorAuthenticationErrors:

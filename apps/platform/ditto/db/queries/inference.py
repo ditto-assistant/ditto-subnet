@@ -44,6 +44,27 @@ def _cancel_unsettled_request(request: InferenceRequest, now: datetime) -> None:
     request.completed_at = now
 
 
+def _decision_grant_stamps(
+    ticket: ValidatorTicket, config: InferenceProxyConfig
+) -> dict[str, object]:
+    """Decision-lane columns for a new grant.
+
+    Only bench v15+ leases get the lane (v15 is the first contract whose
+    scored harness may call it), and only while the operator's
+    ``decision_lane`` board pins a model. Otherwise the grant keeps the column
+    defaults (no model, zero walls), identical to a grant minted before the
+    lane existed, so every v14-and-earlier lease is byte-identical to before.
+    """
+    if ticket.bench_version < 15 or not config.decision_model:
+        return {}
+    return {
+        "decision_model": config.decision_model,
+        "decision_input_microusd_per_mtok": config.decision_input_microusd_per_mtok,
+        "decision_request_budget": config.decision_request_budget,
+        "decision_token_budget": config.decision_token_budget,
+    }
+
+
 USAGE_ACCOUNTING_VERSION = 2
 """The metering contract new grants are booked under.
 
@@ -222,6 +243,7 @@ async def ensure_inference_grant(
                     embedding_tokens=0,
                     embedding_cost_microusd=0,
                     embedding_active_requests=0,
+                    **_decision_grant_stamps(ticket, config),
                     request_count=0,
                     usage_accounting_version=USAGE_ACCOUNTING_VERSION,
                     prompt_tokens=0,
@@ -307,6 +329,7 @@ async def activate_inference_grant(
     grant.expires_at = _aware(ticket.deadline)
     grant.active_requests = 0
     grant.embedding_active_requests = 0
+    grant.decision_active_requests = 0
     grant.updated_at = now
     await session.flush()
     return grant, bearer
@@ -354,6 +377,7 @@ async def revoke_ticket_inference(
         grant.status = "revoked"
         grant.active_requests = 0
         grant.embedding_active_requests = 0
+        grant.decision_active_requests = 0
         grant.updated_at = now
 
 

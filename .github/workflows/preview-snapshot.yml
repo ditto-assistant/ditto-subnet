@@ -1,8 +1,8 @@
 name: Sanitize preview snapshot
 
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
-  schedule:
-    - cron: "17 5 * * *"
   workflow_dispatch: {}
 
 permissions:

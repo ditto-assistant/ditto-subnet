@@ -27,9 +27,11 @@ from ditto_screener.errors import (
     PlatformAuthUnavailable,
     PlatformError,
     PlatformRejected,
+    ScreenedImageUploadUnavailable,
 )
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
 from ditto_screener.platform import (
+    _IMAGE_INIT_RETRY_DELAYS,
     _TRANSIENT_PLATFORM_RETRY_DELAYS,
     ClaimResponseInvalid,
     PlatformClient,
@@ -1269,6 +1271,177 @@ async def test_upload_completion_replays_after_gateway_502(
     assert not aborted
 
 
+def _initiate_handler(
+    initiate: Callable[[int], httpx.Response | None],
+    *,
+    complete_status: int = 200,
+) -> tuple[Callable[[httpx.Request], httpx.Response], dict[str, int]]:
+    """Upload handler whose initiation answers ``initiate(call_number)``.
+
+    ``None`` from ``initiate`` means a normal session; the counters record how
+    many initiations, completions and aborts Platform saw.
+    """
+    seen = {"initiate": 0, "complete": 0, "abort": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/screened-image-upload"):
+            seen["initiate"] += 1
+            answer = initiate(seen["initiate"])
+            if answer is not None:
+                return answer
+            return httpx.Response(
+                200,
+                json={
+                    "image_upload_id": json.loads(request.content)["image_upload_id"],
+                    "storage_upload_id": "storage-upload",
+                    "part_size_bytes": 5 * 1024**2,
+                    "expires_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        if request.url.path.endswith("/part"):
+            return httpx.Response(
+                200,
+                json={
+                    "upload_url": "https://storage.test/image.part",
+                    "expires_at": datetime.now(UTC).isoformat(),
+                    "required_headers": {},
+                },
+            )
+        if request.method == "PUT":
+            return httpx.Response(200, headers={"ETag": '"part-etag"'})
+        if request.url.path.endswith("/complete"):
+            seen["complete"] += 1
+            if complete_status != 200:
+                return httpx.Response(complete_status, text="")
+            return httpx.Response(200, json={"verified": True})
+        if request.url.path.endswith("/abort"):
+            seen["abort"] += 1
+            return httpx.Response(200, json={"aborted": True})
+        raise AssertionError(request.url)
+
+    return handler, seen
+
+
+async def _upload(client: PlatformClient, archive: Path) -> UUID:
+    return await client.upload_screened_image(
+        _AGENT,
+        attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+        path=str(archive),
+        sha256="12" * 32,
+        size_bytes=archive.stat().st_size,
+        image_id="sha256:" + "34" * 32,
+        image_ref=f"ditto-screen/{_AGENT}:latest",
+    )
+
+
+async def test_upload_initiation_waits_out_a_platform_restart(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Production 2026-11-01: a deploy reloaded the single ditto-api process and
+    # nginx answered 502 with an empty body for about 22 seconds; the old
+    # 1.5 second initiation budget failed the screen as image-upload-failed.
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"docker-image")
+    slept: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        slept.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    restart_502s = 5
+    handler, seen = _initiate_handler(
+        lambda call: httpx.Response(502, text="") if call <= restart_502s else None
+    )
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        await _upload(client, archive)
+    assert seen["initiate"] == restart_502s + 1
+    assert seen["complete"] == 1
+    assert slept == list(_IMAGE_INIT_RETRY_DELAYS[:restart_502s])
+    assert sum(_IMAGE_INIT_RETRY_DELAYS) >= 45.0
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(lambda: httpx.Response(502, text=""), id="502"),
+        pytest.param(lambda: httpx.Response(503, text="unavailable"), id="503"),
+        pytest.param(lambda: httpx.ConnectError("connection refused"), id="refused"),
+    ],
+)
+async def test_upload_initiation_outage_is_fleet_owned(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: Callable[[], httpx.Response | httpx.TransportError],
+) -> None:
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"docker-image")
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    def initiate(_call: int) -> httpx.Response:
+        result = answer()
+        if isinstance(result, httpx.TransportError):
+            raise result
+        return result
+
+    handler, seen = _initiate_handler(initiate)
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(ScreenedImageUploadUnavailable, match="image upload"):
+            await _upload(client, archive)
+    assert seen["initiate"] == len(_IMAGE_INIT_RETRY_DELAYS) + 1
+    assert seen["complete"] == 0
+
+
+@pytest.mark.parametrize("status", [400, 409, 413, 422])
+async def test_upload_initiation_4xx_stays_operator_owned(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    status: int,
+) -> None:
+    # A 4xx can come from the submission (an oversized image) or its lease;
+    # it is never retried and never reaches the automatic infra retry.
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"docker-image")
+    handler, seen = _initiate_handler(
+        lambda _call: httpx.Response(status, text="image too large")
+    )
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError) as raised:
+            await _upload(client, archive)
+    assert not isinstance(raised.value, ScreenedImageUploadUnavailable)
+    assert f"({status})" in str(raised.value)
+    assert seen["initiate"] == 1
+
+
+async def test_upload_completion_5xx_stays_operator_owned(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Completion hashes the whole stored image, so its cost scales with the
+    # submission: a gateway timeout there stays on the operator retry.
+    monkeypatch.setattr(platform_module, "_IMAGE_COMPLETE_RETRY_DELAYS", (0.0,))
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"docker-image")
+    handler, seen = _initiate_handler(lambda _call: None, complete_status=504)
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError) as raised:
+            await _upload(client, archive)
+    assert not isinstance(raised.value, ScreenedImageUploadUnavailable)
+    assert seen["complete"] == 2
+    assert seen["abort"] == 1
+
+
 async def test_upload_initiation_rejects_platform_that_ignores_idempotency_id(
     make_config: Callable[..., ScreenerConfig], tmp_path: Path
 ) -> None:
@@ -1378,7 +1551,8 @@ async def test_multipart_part_failure_exhausts_retries_and_aborts(
 
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
     async with http:
-        with pytest.raises(PlatformError, match="503"):
+        # Object storage refusing a fixed-size part is fleet-owned.
+        with pytest.raises(ScreenedImageUploadUnavailable, match="503"):
             await client.upload_screened_image(
                 _AGENT,
                 attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),

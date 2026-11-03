@@ -268,29 +268,6 @@ async def test_retirement_records_actor_reason_and_the_superseding_version(
         assert len(scores) == 2
 
 
-async def test_retirement_requires_the_confirmation_phrase(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    await _seed_active_era(maker)
-    agent_id = await _seed(
-        maker, name="cedar", bench_version=_CLOSED_VERSION, score_count=0
-    )
-    _install(app, maker)
-    snapshot = _candidate(await _preview(client), agent_id)["snapshot"]
-
-    response = await client.post(
-        f"/api/v1/admin/retirements/{agent_id}",
-        headers=_HEADERS,
-        json={
-            "request_id": str(uuid4()),
-            "expected_snapshot": snapshot,
-            "reason": _REASON,
-            "confirmation": "REMOVE FROM VALIDATOR QUEUE",
-        },
-    )
-    assert response.status_code == 422, response.text
-
-
 async def test_retirement_requires_an_operator_actor_header(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:

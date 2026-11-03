@@ -228,3 +228,31 @@ it('accepts an empty journal observation without authorizing a transfer', () => 
     expect(manualControlSchema.safeParse({ ...control, readiness: { ...readiness, after_operation: value } }).success).toBe(false)
   }
 })
+
+it('shows verified delivery separately from incomplete source attribution without resending', () => {
+  const state = manualControlSchema.parse({ ...control,
+    blocked_reason: 'A previous transfer or its public receipt is still pending',
+    requests: [{ request_id: result.envelope.request.request_id, envelope: result.envelope,
+      status: 'audit_pending', actor: 'operator@example.com', last_error: null,
+      created_at: '2026-10-21T04:00:00Z', updated_at: '2026-10-21T04:01:00Z',
+      receipt: { receipt_id: 'c'.repeat(64), extrinsic_hash: '0x' + 'd'.repeat(64),
+        published: true, source_attribution: 'incomplete' } }],
+  })
+  render(<TreasuryManualTransferPanel initialState={state} readOnly={false} />)
+  expect(screen.getByText(/Public wallet receipt published/)).toBeTruthy()
+  expect(screen.getByText(/do not resend this transfer/)).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'View transaction on Taostats' }).getAttribute('href')).toBe(
+    'https://taostats.io/extrinsic/0x' + 'd'.repeat(64),
+  )
+  expect(queue).not.toHaveBeenCalled()
+  expect(preview).not.toHaveBeenCalled()
+})
+
+
+it('shows the custody fee wallet and its signed reserve in TAO', () => {
+  const readiness = { policy: 'a'.repeat(64), after_operation: 2, previous_state: 'finalized', bounded_claim_available: true, finalized_block: 1000, available_alpha_rao: 9000e9, max_distribution_rao: 100e9, sources: [], transfer_delegate: '5' + 'b'.repeat(47), delegate_free_rao: 6630018, required_delegate_free_rao: 7000000 }
+  render(<TreasuryManualTransferPanel initialState={manualControlSchema.parse({ ...control, readiness, blocked_reason: 'Transfer fee wallet is below its signed reserve requirement' })} readOnly={false} />)
+  expect(screen.getByText('Transfer fee wallet: 0.006630018 TAO · signed minimum 0.007 TAO')).toBeTruthy()
+  expect(screen.getByText(readiness.transfer_delegate)).toBeTruthy()
+  expect(screen.getByText('Transfer fee wallet is below its signed reserve requirement')).toBeTruthy()
+})
