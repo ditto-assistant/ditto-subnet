@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -95,6 +95,15 @@ class InferenceExchangeResponse(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     decision_token_budget: Annotated[int, Field(ge=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    # The run's ledger-cost ceiling (#3271). Present only when the grant has a
+    # stamped ceiling in shadow or enforce mode; omitted means no ceiling, so
+    # an off-mode exchange is byte-identical to one from before the ceiling.
+    cost_ceiling_microusd: Annotated[int, Field(ge=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    cost_ceiling_mode: Literal["off", "shadow", "enforce"] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 

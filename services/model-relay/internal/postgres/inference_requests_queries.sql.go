@@ -15,6 +15,7 @@ const cancelInferenceRequestChargingReservation = `-- name: CancelInferenceReque
 UPDATE inference_requests
 SET status = 'canceled',
     prompt_tokens = 0,
+    ledger_cost_microusd = 0,
     completed_at = $1::timestamptz
 WHERE grant_id = $2::uuid
   AND nonce = $3::uuid
@@ -28,8 +29,8 @@ type CancelInferenceRequestChargingReservationParams struct {
 
 // Reclamation write: cancel a (locked) started request without booking the
 // reservation estimate. Token spend is receipted provider usage only; a stale
-// or rotated call that never settled charges zero. The request still counts
-// against the request-count budget.
+// or rotated call that never settled charges zero, and so does its ledger
+// cost (#3271). The request still counts against the request-count budget.
 func (q *Queries) CancelInferenceRequestChargingReservation(ctx context.Context, arg CancelInferenceRequestChargingReservationParams) error {
 	_, err := q.db.Exec(ctx, cancelInferenceRequestChargingReservation, arg.Now, arg.GrantID, arg.Nonce)
 	return err
@@ -124,7 +125,7 @@ func (q *Queries) CountStartedInferenceRequests(ctx context.Context, arg CountSt
 
 const getInferenceRequest = `-- name: GetInferenceRequest :one
 
-SELECT grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code FROM inference_requests
+SELECT grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code, ledger_cost_microusd FROM inference_requests
 WHERE grant_id = $1::uuid
   AND nonce = $2::uuid
 `
@@ -164,12 +165,13 @@ func (q *Queries) GetInferenceRequest(ctx context.Context, arg GetInferenceReque
 		&i.OpenrouterAttempts,
 		&i.FallbackPhase,
 		&i.TerminalErrorCode,
+		&i.LedgerCostMicrousd,
 	)
 	return i, err
 }
 
 const getInferenceRequestForUpdate = `-- name: GetInferenceRequestForUpdate :one
-SELECT grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code FROM inference_requests
+SELECT grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code, ledger_cost_microusd FROM inference_requests
 WHERE grant_id = $1::uuid
   AND nonce = $2::uuid
 FOR UPDATE
@@ -205,6 +207,7 @@ func (q *Queries) GetInferenceRequestForUpdate(ctx context.Context, arg GetInfer
 		&i.OpenrouterAttempts,
 		&i.FallbackPhase,
 		&i.TerminalErrorCode,
+		&i.LedgerCostMicrousd,
 	)
 	return i, err
 }
@@ -237,7 +240,7 @@ INSERT INTO inference_requests (
     0,
     $8::timestamptz
 )
-RETURNING grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code
+RETURNING grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code, ledger_cost_microusd
 `
 
 type InsertInferenceRequestParams struct {
@@ -288,12 +291,13 @@ func (q *Queries) InsertInferenceRequest(ctx context.Context, arg InsertInferenc
 		&i.OpenrouterAttempts,
 		&i.FallbackPhase,
 		&i.TerminalErrorCode,
+		&i.LedgerCostMicrousd,
 	)
 	return i, err
 }
 
 const listStaleStartedInferenceRequestsForUpdate = `-- name: ListStaleStartedInferenceRequestsForUpdate :many
-SELECT grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code FROM inference_requests
+SELECT grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code, ledger_cost_microusd FROM inference_requests
 WHERE grant_id = $1::uuid
   AND status = 'started'
   AND request_kind = $2::text
@@ -341,6 +345,7 @@ func (q *Queries) ListStaleStartedInferenceRequestsForUpdate(ctx context.Context
 			&i.OpenrouterAttempts,
 			&i.FallbackPhase,
 			&i.TerminalErrorCode,
+			&i.LedgerCostMicrousd,
 		); err != nil {
 			return nil, err
 		}
@@ -353,7 +358,7 @@ func (q *Queries) ListStaleStartedInferenceRequestsForUpdate(ctx context.Context
 }
 
 const listStartedInferenceRequestsForUpdate = `-- name: ListStartedInferenceRequestsForUpdate :many
-SELECT grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code FROM inference_requests
+SELECT grant_id, nonce, generation, status, model, reserved_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at, completed_at, upstream_provider, timed_out, latency_ms, request_kind, upstream_attempts, max_chargeable_tokens, openrouter_attempts, fallback_phase, terminal_error_code, ledger_cost_microusd FROM inference_requests
 WHERE grant_id = $1::uuid
   AND status = 'started'
 ORDER BY nonce
@@ -393,6 +398,7 @@ func (q *Queries) ListStartedInferenceRequestsForUpdate(ctx context.Context, gra
 			&i.OpenrouterAttempts,
 			&i.FallbackPhase,
 			&i.TerminalErrorCode,
+			&i.LedgerCostMicrousd,
 		); err != nil {
 			return nil, err
 		}
@@ -410,16 +416,17 @@ SET status = $1::text,
     prompt_tokens = $2::bigint,
     completion_tokens = $3::bigint,
     cost_microusd = $4::bigint,
-    upstream_provider = $5::text,
-    upstream_attempts = $6::integer,
-    openrouter_attempts = $7::integer,
-    fallback_phase = $8::integer,
-    terminal_error_code = $9::text,
-    timed_out = $10::boolean,
-    latency_ms = $11::integer,
-    completed_at = $12::timestamptz
-WHERE grant_id = $13::uuid
-  AND nonce = $14::uuid
+    ledger_cost_microusd = $5::bigint,
+    upstream_provider = $6::text,
+    upstream_attempts = $7::integer,
+    openrouter_attempts = $8::integer,
+    fallback_phase = $9::integer,
+    terminal_error_code = $10::text,
+    timed_out = $11::boolean,
+    latency_ms = $12::integer,
+    completed_at = $13::timestamptz
+WHERE grant_id = $14::uuid
+  AND nonce = $15::uuid
 `
 
 type SettleInferenceRequestParams struct {
@@ -427,6 +434,7 @@ type SettleInferenceRequestParams struct {
 	PromptTokens       int64              `json:"promptTokens"`
 	CompletionTokens   int64              `json:"completionTokens"`
 	CostMicrousd       int64              `json:"costMicrousd"`
+	LedgerCostMicrousd int64              `json:"ledgerCostMicrousd"`
 	UpstreamProvider   pgtype.Text        `json:"upstreamProvider"`
 	UpstreamAttempts   int32              `json:"upstreamAttempts"`
 	OpenrouterAttempts int32              `json:"openrouterAttempts"`
@@ -450,6 +458,7 @@ func (q *Queries) SettleInferenceRequest(ctx context.Context, arg SettleInferenc
 		arg.PromptTokens,
 		arg.CompletionTokens,
 		arg.CostMicrousd,
+		arg.LedgerCostMicrousd,
 		arg.UpstreamProvider,
 		arg.UpstreamAttempts,
 		arg.OpenrouterAttempts,

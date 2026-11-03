@@ -98,18 +98,20 @@ SET active_requests = $1::integer,
     prompt_tokens = prompt_tokens + $2::bigint,
     completion_tokens = completion_tokens + $3::bigint,
     cost_microusd = cost_microusd + $4::bigint,
-    updated_at = $5::timestamptz
-WHERE grant_id = $6::uuid
-RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests
+    ledger_cost_microusd = ledger_cost_microusd + $5::bigint,
+    updated_at = $6::timestamptz
+WHERE grant_id = $7::uuid
+RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests, ledger_cost_microusd, cost_ceiling_microusd, cost_ceiling_mode, cost_ceiling_would_decline, ledger_prompt_price_per_token, ledger_completion_price_per_token, embedding_price_microusd_per_token
 `
 
 type ApplyGrantChatSettlementParams struct {
-	ActiveRequests   int32              `json:"activeRequests"`
-	PromptTokens     int64              `json:"promptTokens"`
-	CompletionTokens int64              `json:"completionTokens"`
-	CostMicrousd     int64              `json:"costMicrousd"`
-	Now              pgtype.Timestamptz `json:"now"`
-	GrantID          pgtype.UUID        `json:"grantId"`
+	ActiveRequests     int32              `json:"activeRequests"`
+	PromptTokens       int64              `json:"promptTokens"`
+	CompletionTokens   int64              `json:"completionTokens"`
+	CostMicrousd       int64              `json:"costMicrousd"`
+	LedgerCostMicrousd int64              `json:"ledgerCostMicrousd"`
+	Now                pgtype.Timestamptz `json:"now"`
+	GrantID            pgtype.UUID        `json:"grantId"`
 }
 
 // Settle-transaction grant accounting for the chat lane. active_requests is
@@ -125,6 +127,7 @@ func (q *Queries) ApplyGrantChatSettlement(ctx context.Context, arg ApplyGrantCh
 		arg.PromptTokens,
 		arg.CompletionTokens,
 		arg.CostMicrousd,
+		arg.LedgerCostMicrousd,
 		arg.Now,
 		arg.GrantID,
 	)
@@ -175,6 +178,13 @@ func (q *Queries) ApplyGrantChatSettlement(ctx context.Context, arg ApplyGrantCh
 		&i.DecisionTokens,
 		&i.DecisionCostMicrousd,
 		&i.DecisionActiveRequests,
+		&i.LedgerCostMicrousd,
+		&i.CostCeilingMicrousd,
+		&i.CostCeilingMode,
+		&i.CostCeilingWouldDecline,
+		&i.LedgerPromptPricePerToken,
+		&i.LedgerCompletionPricePerToken,
+		&i.EmbeddingPriceMicrousdPerToken,
 	)
 	return i, err
 }
@@ -184,28 +194,33 @@ UPDATE inference_grants
 SET decision_active_requests = $1::integer,
     decision_tokens = decision_tokens + $2::bigint,
     decision_cost_microusd = decision_cost_microusd + $3::bigint,
-    updated_at = $4::timestamptz
-WHERE grant_id = $5::uuid
-RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests
+    ledger_cost_microusd = ledger_cost_microusd + $4::bigint,
+    updated_at = $5::timestamptz
+WHERE grant_id = $6::uuid
+RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests, ledger_cost_microusd, cost_ceiling_microusd, cost_ceiling_mode, cost_ceiling_would_decline, ledger_prompt_price_per_token, ledger_completion_price_per_token, embedding_price_microusd_per_token
 `
 
 type ApplyGrantDecisionSettlementParams struct {
 	DecisionActiveRequests int32              `json:"decisionActiveRequests"`
 	DecisionTokens         int64              `json:"decisionTokens"`
 	DecisionCostMicrousd   int64              `json:"decisionCostMicrousd"`
+	LedgerCostMicrousd     int64              `json:"ledgerCostMicrousd"`
 	Now                    pgtype.Timestamptz `json:"now"`
 	GrantID                pgtype.UUID        `json:"grantId"`
 }
 
 // Decision-lane settle accounting. decision_cost_microusd is LEDGER cost
 // (receipted input tokens x the grant-stamped price), never the provider
-// bill, so a per-run dollar ceiling can sum it with the other lanes. No
-// exhaustion rule: a spent decision wall must not take chat down with it.
+// bill. The same figure is added to the lane-agnostic ledger_cost_microusd
+// total the per-run cost ceiling (#3271) compares. No token/request exhaustion
+// rule: a spent decision wall must not take chat down with it (only the run's
+// enforced cost ceiling, applied by the caller, ends every lane).
 func (q *Queries) ApplyGrantDecisionSettlement(ctx context.Context, arg ApplyGrantDecisionSettlementParams) (InferenceGrant, error) {
 	row := q.db.QueryRow(ctx, applyGrantDecisionSettlement,
 		arg.DecisionActiveRequests,
 		arg.DecisionTokens,
 		arg.DecisionCostMicrousd,
+		arg.LedgerCostMicrousd,
 		arg.Now,
 		arg.GrantID,
 	)
@@ -256,6 +271,13 @@ func (q *Queries) ApplyGrantDecisionSettlement(ctx context.Context, arg ApplyGra
 		&i.DecisionTokens,
 		&i.DecisionCostMicrousd,
 		&i.DecisionActiveRequests,
+		&i.LedgerCostMicrousd,
+		&i.CostCeilingMicrousd,
+		&i.CostCeilingMode,
+		&i.CostCeilingWouldDecline,
+		&i.LedgerPromptPricePerToken,
+		&i.LedgerCompletionPricePerToken,
+		&i.EmbeddingPriceMicrousdPerToken,
 	)
 	return i, err
 }
@@ -265,26 +287,32 @@ UPDATE inference_grants
 SET embedding_active_requests = $1::integer,
     embedding_tokens = embedding_tokens + $2::bigint,
     embedding_cost_microusd = embedding_cost_microusd + $3::bigint,
-    updated_at = $4::timestamptz
-WHERE grant_id = $5::uuid
-RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests
+    ledger_cost_microusd = ledger_cost_microusd + $4::bigint,
+    updated_at = $5::timestamptz
+WHERE grant_id = $6::uuid
+RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests, ledger_cost_microusd, cost_ceiling_microusd, cost_ceiling_mode, cost_ceiling_would_decline, ledger_prompt_price_per_token, ledger_completion_price_per_token, embedding_price_microusd_per_token
 `
 
 type ApplyGrantEmbeddingSettlementParams struct {
 	EmbeddingActiveRequests int32              `json:"embeddingActiveRequests"`
 	EmbeddingTokens         int64              `json:"embeddingTokens"`
 	EmbeddingCostMicrousd   int64              `json:"embeddingCostMicrousd"`
+	LedgerCostMicrousd      int64              `json:"ledgerCostMicrousd"`
 	Now                     pgtype.Timestamptz `json:"now"`
 	GrantID                 pgtype.UUID        `json:"grantId"`
 }
 
-// Embedding-lane settle accounting. No exhaustion rule on this lane (killing
-// the grant would take the chat lane down with it).
+// Embedding-lane settle accounting. No token exhaustion rule on this lane
+// (killing the grant would take the chat lane down with it); only the run's
+// enforced cost ceiling, applied by the caller, ends both lanes.
+// ledger_cost_microusd is the lane-agnostic list-price total (#3271): any lane
+// joins the cost ceiling purely by adding to it here.
 func (q *Queries) ApplyGrantEmbeddingSettlement(ctx context.Context, arg ApplyGrantEmbeddingSettlementParams) (InferenceGrant, error) {
 	row := q.db.QueryRow(ctx, applyGrantEmbeddingSettlement,
 		arg.EmbeddingActiveRequests,
 		arg.EmbeddingTokens,
 		arg.EmbeddingCostMicrousd,
+		arg.LedgerCostMicrousd,
 		arg.Now,
 		arg.GrantID,
 	)
@@ -335,6 +363,13 @@ func (q *Queries) ApplyGrantEmbeddingSettlement(ctx context.Context, arg ApplyGr
 		&i.DecisionTokens,
 		&i.DecisionCostMicrousd,
 		&i.DecisionActiveRequests,
+		&i.LedgerCostMicrousd,
+		&i.CostCeilingMicrousd,
+		&i.CostCeilingMode,
+		&i.CostCeilingWouldDecline,
+		&i.LedgerPromptPricePerToken,
+		&i.LedgerCompletionPricePerToken,
+		&i.EmbeddingPriceMicrousdPerToken,
 	)
 	return i, err
 }
@@ -399,7 +434,7 @@ func (q *Queries) CountFreshValidatorActiveRequests(ctx context.Context, arg Cou
 
 const getInferenceGrant = `-- name: GetInferenceGrant :one
 
-SELECT grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests FROM inference_grants
+SELECT grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests, ledger_cost_microusd, cost_ceiling_microusd, cost_ceiling_mode, cost_ceiling_would_decline, ledger_prompt_price_per_token, ledger_completion_price_per_token, embedding_price_microusd_per_token FROM inference_grants
 WHERE grant_id = $1::uuid
 `
 
@@ -464,12 +499,19 @@ func (q *Queries) GetInferenceGrant(ctx context.Context, grantID pgtype.UUID) (I
 		&i.DecisionTokens,
 		&i.DecisionCostMicrousd,
 		&i.DecisionActiveRequests,
+		&i.LedgerCostMicrousd,
+		&i.CostCeilingMicrousd,
+		&i.CostCeilingMode,
+		&i.CostCeilingWouldDecline,
+		&i.LedgerPromptPricePerToken,
+		&i.LedgerCompletionPricePerToken,
+		&i.EmbeddingPriceMicrousdPerToken,
 	)
 	return i, err
 }
 
 const getInferenceGrantForUpdate = `-- name: GetInferenceGrantForUpdate :one
-SELECT grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests FROM inference_grants
+SELECT grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests, ledger_cost_microusd, cost_ceiling_microusd, cost_ceiling_mode, cost_ceiling_would_decline, ledger_prompt_price_per_token, ledger_completion_price_per_token, embedding_price_microusd_per_token FROM inference_grants
 WHERE grant_id = $1::uuid
 FOR UPDATE
 `
@@ -525,6 +567,13 @@ func (q *Queries) GetInferenceGrantForUpdate(ctx context.Context, grantID pgtype
 		&i.DecisionTokens,
 		&i.DecisionCostMicrousd,
 		&i.DecisionActiveRequests,
+		&i.LedgerCostMicrousd,
+		&i.CostCeilingMicrousd,
+		&i.CostCeilingMode,
+		&i.CostCeilingWouldDecline,
+		&i.LedgerPromptPricePerToken,
+		&i.LedgerCompletionPricePerToken,
+		&i.EmbeddingPriceMicrousdPerToken,
 	)
 	return i, err
 }
@@ -546,6 +595,26 @@ type IncrementGrantChatAdmissionParams struct {
 // admitted and in flight. Grant row is locked by the caller.
 func (q *Queries) IncrementGrantChatAdmission(ctx context.Context, arg IncrementGrantChatAdmissionParams) error {
 	_, err := q.db.Exec(ctx, incrementGrantChatAdmission, arg.Now, arg.GrantID)
+	return err
+}
+
+const incrementGrantCostCeilingWouldDecline = `-- name: IncrementGrantCostCeilingWouldDecline :exec
+UPDATE inference_grants
+SET cost_ceiling_would_decline = cost_ceiling_would_decline + 1,
+    updated_at = $1::timestamptz
+WHERE grant_id = $2::uuid
+`
+
+type IncrementGrantCostCeilingWouldDeclineParams struct {
+	Now     pgtype.Timestamptz `json:"now"`
+	GrantID pgtype.UUID        `json:"grantId"`
+}
+
+// Shadow-mode cost ceiling (#3271): one more admission that enforce mode
+// would have declined with 4110. Runs inside the (committing) admission
+// transaction of an admitted request, on the caller-locked grant row.
+func (q *Queries) IncrementGrantCostCeilingWouldDecline(ctx context.Context, arg IncrementGrantCostCeilingWouldDeclineParams) error {
+	_, err := q.db.Exec(ctx, incrementGrantCostCeilingWouldDecline, arg.Now, arg.GrantID)
 	return err
 }
 

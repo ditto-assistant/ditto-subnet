@@ -26,6 +26,11 @@ const (
 	CodeDeclineModelNotPermitted   = 4107
 	CodeDeclineGrantNotExchanged   = 4108
 	CodeDeclineReservationTooLarge = 4109
+	// CodeDeclineCostCeiling is the run's dollar ceiling (#3271): settled
+	// list-price ledger cost over every lane meets the grant's enforced
+	// ceiling. Ship the 4110-aware scorer before enforcing: an old broker
+	// treats an unknown 4110 as platform fault and re-leases the run.
+	CodeDeclineCostCeiling = 4110
 )
 
 // ErrorEnvelope is the exact JSON error body shape:
@@ -89,6 +94,7 @@ const (
 	DeclineModelNotPermitted
 	DeclineGrantNotExchanged
 	DeclineReservationTooLarge
+	DeclineCostCeilingExhausted
 )
 
 // Lane names used in decline messages. Note the chat lane is called
@@ -115,6 +121,7 @@ var declineWire = map[Decline]struct {
 	DeclineModelNotPermitted:    {http.StatusTooManyRequests, CodeDeclineModelNotPermitted, "grant does not permit this model"},
 	DeclineGrantNotExchanged:    {http.StatusTooManyRequests, CodeDeclineGrantNotExchanged, "grant has not been exchanged for a bearer"},
 	DeclineReservationTooLarge:  {http.StatusTooManyRequests, CodeDeclineReservationTooLarge, "request exceeds the grant's entire token budget"},
+	DeclineCostCeilingExhausted: {http.StatusTooManyRequests, CodeDeclineCostCeiling, "grant has spent its cost ceiling"},
 }
 
 // Retryable reports whether the decline is the one retryable member
@@ -145,6 +152,8 @@ func (d Decline) String() string {
 		return "grant_not_exchanged"
 	case DeclineReservationTooLarge:
 		return "reservation_too_large"
+	case DeclineCostCeilingExhausted:
+		return "cost_ceiling_exhausted"
 	}
 	return "unknown"
 }

@@ -191,6 +191,14 @@ class InferenceProxyConfig:
     # The board's ``scored_provider_routing``; never read from env. The chat
     # endpoint resolves the canary mode per ticket before the provider call.
     scored_provider_routing: str = "throughput"
+    run_cost_ceiling_microusd: int | None = None
+    """Per-run ledger-cost ceiling stamped on new grants (#3271); overlaid from
+    the inference concurrency board, never an env var."""
+    cost_ceiling_mode: str = "off"
+    """``off`` / ``shadow`` / ``enforce``; overlaid from the board."""
+    embedding_price_microusd_per_token: float = 0.004
+    """Embedding list price stamped on new grants: $0.004 per 1M input tokens,
+    the catalog price the proxy has always settled embeddings at."""
 
 
 @dataclass(frozen=True)
