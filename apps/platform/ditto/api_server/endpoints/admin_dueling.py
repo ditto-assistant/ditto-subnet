@@ -172,6 +172,8 @@ async def _rotation(
             .where(
                 ScoreAuditEntry.agent_id.in_(cohort),
                 ScoreAuditEntry.event.in_(SCORE_RETEST_EVENTS),
+                ScoreAuditEntry.payload["bench_version"].as_integer()
+                == season.bench_version,
             )
             .distinct(ScoreAuditEntry.agent_id, ScoreAuditEntry.validator_hotkey)
             .order_by(
