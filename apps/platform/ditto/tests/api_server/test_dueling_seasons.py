@@ -519,3 +519,27 @@ class TestDuelingSeasons:
         again = (await client.get(_WORK, headers=_SCORER, params=_POLL)).json()["work"]
         assert again["preparation_id"] == work["preparation_id"]
         assert UUID(again["lease_id"]) != UUID(work["lease_id"])
+        # An unsupported request (here a digest mismatch) fails it for good.
+        refused = await client.post(
+            "/api/v1/generator-scorer/fault",
+            headers=_SCORER,
+            json={
+                "work": "dueling",
+                "lease_id": again["lease_id"],
+                "season_id": again["season_id"],
+                "preparation_id": again["preparation_id"],
+                "error_kind": "unsupported_request",
+                "detail": "tree digest mismatch",
+                "scorer_version": "challenge-scorer/9",
+            },
+        )
+        assert refused.status_code == 200 and refused.json()["action"] == "voided"
+        assert (await client.get(_WORK, headers=_SCORER, params=_POLL)).json() == {
+            "work": None
+        }
+        async with session_maker() as session:
+            prep = await session.get(
+                DuelingSlicePreparation, UUID(work["preparation_id"])
+            )
+            assert prep is not None and prep.status == "failed"
+            assert "tree digest mismatch" in (prep.error or "")

@@ -1155,8 +1155,9 @@ async def record_slice(
 async def record_dueling_fault(
     session: AsyncSession, payload: GeneratorScorerFault, *, now: datetime
 ) -> str:
-    """A scorer-side fault on a dueling lease: release it, or fail it on an
-    unsupported request. Never blames a generator."""
+    """A scorer-side fault on a dueling lease: release it (sandbox), or fail
+    it without re-leasing on an unsupported request (including a source or
+    tree digest mismatch). Never blames a generator."""
     detail = f"infra: {payload.error_kind}: {payload.detail}"[:2000]
     slice_row = await session.scalar(
         select(DuelingSlicePreparation)
@@ -1185,6 +1186,13 @@ async def record_dueling_fault(
     )
     if not rows:
         raise DuelingResultRejected("dueling lease is not current")
+    if payload.error_kind == "unsupported_request":
+        # The scorer refused the request itself (a version, column or digest
+        # it cannot build): re-leasing would only repeat it.
+        for row in rows:
+            _finish_battery(row, ok=False, error=detail, now=now)
+        await session.flush()
+        return "voided"
     for row in rows:
         row.status = "pending"
         row.error = detail
