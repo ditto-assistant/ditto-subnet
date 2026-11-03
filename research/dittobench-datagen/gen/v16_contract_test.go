@@ -3,6 +3,7 @@ package gen
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -352,7 +353,8 @@ func fixtureRefusal(f toolexec.Fixture, name string, args []byte) (string, bool)
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/tool", bytes.NewReader(body)))
 	var resp protocol.ToolExecResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		return err.Error(), true
+		// A malformed endpoint response is a broken endpoint, never a refusal.
+		panic(fmt.Sprintf("tool endpoint returned malformed JSON for %s: %v", name, err))
 	}
 	if resp.Error != "" {
 		return resp.Error, true

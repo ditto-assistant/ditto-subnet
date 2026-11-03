@@ -64,7 +64,7 @@ func v13StoryMixFamilies(a DatasetArtifact) (map[string]mixFamily, error) {
 		}
 	}
 	if scale == 0 {
-		return nil, fmt.Errorf("mix audit: unknown v13 envelope %d", len(a.MemoryCases))
+		return nil, fmt.Errorf("mix audit: unknown v%d envelope %d", a.BenchVersion, len(a.MemoryCases))
 	}
 	w := universe.GenerateForVersion(a.Seed, scale, a.BenchVersion)
 	plans, _, err := w.SelectQuestionPlans(universe.WorldPlanSelection{StoryPerArc: 6, Salt: "v13"})
