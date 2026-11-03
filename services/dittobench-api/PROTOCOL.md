@@ -245,7 +245,12 @@ only in trusted screened-image mode. The validator forwards the set as
 
 A `bench_version >= 16` canonical request without all four is refused
 (`dueling slice required`); a `< 16` request, a generator round, or a practice
-submission carrying any of them is refused. The datagen half is never sent: it
+submission carrying any of them is refused. The one practice exception is the
+miner kit's local slice rehearsal: a scorer started with
+`DITTOBENCH_ALLOW_PRIVATE_HARNESS` (which can never also load screened images)
+accepts all four fields on `/v1/submit` at `bench_version >= 16` with an
+explicit `seed`, and scores the slice exactly as below. Hosted practice and a
+practice run without the fields score the datagen half only. The datagen half is never sent: it
 is regenerated from the public seed and checked against `dataset_sha256`
 exactly as before. The slice must hash to its pin, decode under
 `challenge.DecodeSliceDataset` (every pack re-validated, echoing its

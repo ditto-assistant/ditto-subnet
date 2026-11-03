@@ -66,6 +66,159 @@ class LocalRehearsalTest(unittest.TestCase):
         body = LOCAL.submit_body("medium", "http://127.0.0.1:8080", 42)
         self.assertEqual(body["seed"], 42)
 
+    def test_dueling_slice_rides_on_the_submit_body(self) -> None:
+        raw = b'{"contract":"dittobench-dueling-slice/v1"}'
+        body = LOCAL.submit_body("small", "http://127.0.0.1:8080", 7, 16, raw)
+        self.assertEqual(body["dueling_slice_mode"], "dueling-slice-v1")
+        self.assertEqual(LOCAL.base64.b64decode(body["dueling_slice_bytes"]), raw)
+        self.assertEqual(
+            body["expected_slice_sha256"], LOCAL.hashlib.sha256(raw).hexdigest()
+        )
+        # All local columns are the public default generator: nothing masked.
+        self.assertEqual(body["dueling_owner_key"], "")
+        with self.assertRaisesRegex(LOCAL.RehearsalError, "explicit seed"):
+            LOCAL.submit_body("small", "http://127.0.0.1:8080", None, 16, raw)
+        self.assertNotIn(
+            "dueling_slice_mode", LOCAL.submit_body("small", "http://x", 7, 16)
+        )
+
+    def test_local_slice_uses_only_the_public_default_generator(self) -> None:
+        pins = LOCAL.local_slice_pins(16)
+        columns = pins["columns"]
+        self.assertEqual(
+            [c["column_id"] for c in columns], [f"c{i}" for i in range(5)]
+        )
+        for column in columns:
+            self.assertTrue(column["public_default"])
+            self.assertFalse(column["substituted"])
+            self.assertEqual(column["owner_key"], "")
+            self.assertEqual(column["grading_bench_version"], 16)
+            self.assertEqual(
+                column["miner_hotkey"], LOCAL.LOCAL_SLICE_GENERATOR_HOTKEY
+            )
+        command = LOCAL.local_slice_command(
+            Path("/bin/challenge-scorer"),
+            pins_path=Path("/t/pins.json"),
+            out_path=Path("/t/slice.json"),
+            run_seed=42,
+            bench_version=16,
+            sandbox="local",
+            season_secret="ab" * 32,
+            anchor_block_hash="0x" + "cd" * 32,
+        )
+        self.assertEqual(command[1], "reproduce-slice")
+        sources = [command[i + 1] for i, arg in enumerate(command) if arg == "-source"]
+        self.assertEqual(
+            sources, [f"c{i}={LOCAL.GENERATOR_KIT_DIR}" for i in range(5)]
+        )
+        self.assertEqual(command[command.index("-run-seed") + 1], "42")
+        self.assertTrue(
+            (LOCAL.GENERATOR_KIT_DIR / "main.go").is_file(),
+            "the local slice builds from miners/dittobench-generator-starter-kit",
+        )
+
+    def test_local_slice_build_is_bounded_by_the_rehearsal_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            LOCAL.subprocess, "run"
+        ), patch.object(
+            LOCAL,
+            "_run_local_slice",
+            side_effect=subprocess.TimeoutExpired("challenge-scorer", 5),
+        ) as slice_run:
+            with self.assertRaisesRegex(LOCAL.RehearsalError, "within 5 seconds"):
+                LOCAL.build_local_slice(
+                    Path(directory),
+                    run_seed=7,
+                    bench_version=16,
+                    sandbox="local",
+                    timeout=5,
+                )
+        self.assertEqual(slice_run.call_args.kwargs["timeout"], 5)
+
+    def test_local_slice_scorer_build_is_bounded_by_the_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            LOCAL.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(["go", "build"], 5),
+        ) as build:
+            with self.assertRaisesRegex(LOCAL.RehearsalError, "--no-slice"):
+                LOCAL.build_local_slice(
+                    Path(directory),
+                    run_seed=7,
+                    bench_version=16,
+                    sandbox="local",
+                    timeout=5,
+                )
+        self.assertEqual(build.call_args.kwargs["timeout"], 5)
+
+    def test_local_slice_scorer_build_failure_is_a_rehearsal_error(self) -> None:
+        failure = subprocess.CalledProcessError(1, ["go"], stderr="undefined: x")
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            LOCAL.subprocess, "run", side_effect=failure
+        ):
+            with self.assertRaisesRegex(LOCAL.RehearsalError, "--no-slice.*undefined: x"):
+                LOCAL.build_local_slice(
+                    Path(directory),
+                    run_seed=7,
+                    bench_version=16,
+                    sandbox="local",
+                    timeout=5,
+                )
+
+    def test_slice_is_built_only_at_a_dueling_bench_version(self) -> None:
+        self.assertEqual(LOCAL.DUELING_MIN_BENCH_VERSION, 16)
+        self.assertGreaterEqual(LOCAL.MAX_BENCH_VERSION, LOCAL.DUELING_MIN_BENCH_VERSION)
+        for argv, want in (
+            (["--bench-version", "15"], False),
+            (["--bench-version", "16"], True),
+            (["--bench-version", "16", "--no-slice"], False),
+        ):
+            args = LOCAL.parse_args(argv)
+            self.assertEqual(LOCAL.uses_dueling_slice(args), want, argv)
+        self.assertEqual(LOCAL.parse_args([]).slice_sandbox, "local")
+        self.assertEqual(
+            LOCAL.parse_args(["--slice-sandbox", "docker"]).slice_sandbox, "docker"
+        )
+
+    def test_dueling_summary_prints_the_composite_halves_and_column_means(
+        self,
+    ) -> None:
+        self.assertEqual(LOCAL.format_dueling_summary({"details": {}}), "")
+        summary = LOCAL.format_dueling_summary(
+            {
+                "details": {
+                    "dueling": {
+                        "datagen_raw": 0.8,
+                        "datagen_gate": 1.0,
+                        "column_weight": 0.1,
+                        "composite_stderr": 0.02,
+                        "columns": [
+                            {"column_id": "c0", "n": 35, "sum": 28.0, "grading_bench_version": 16},
+                            {"column_id": "c1", "n": 0, "sum": 0, "substituted": True},
+                        ],
+                    }
+                }
+            }
+        )
+        self.assertIn("datagen_raw:         0.800", summary)
+        self.assertIn("column c0:           mean 0.800 over 35 cases, policy v16", summary)
+        self.assertIn("mean 0.000 over 0 cases", summary)
+        self.assertIn("(substituted)", summary)
+        self.assertIn("PUBLIC default generator", summary)
+        nulls = LOCAL.format_dueling_summary(
+            {
+                "details": {
+                    "dueling": {
+                        "datagen_raw": None,
+                        "composite_stderr": None,
+                        "columns": [{"column_id": "c0", "n": None, "sum": None}],
+                    }
+                }
+            }
+        )
+        self.assertIn("datagen_raw:         0.000", nulls)
+        self.assertIn("mean 0.000 over 0 cases", nulls)
+
     def test_process_ports_are_distinct(self) -> None:
         ports = LOCAL.reserve_ports(3)
         self.assertEqual(len(ports), 3)

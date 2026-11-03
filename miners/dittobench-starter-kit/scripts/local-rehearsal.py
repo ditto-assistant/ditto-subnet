@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +49,18 @@ MIN_BENCH_VERSION = 8
 # Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
 # ditto/tests/test_bench_version_pins.py diffs across every layer.
 MAX_BENCH_VERSION = 16
+# Bench 16+ canonical runs are a datagen half plus a five-column generator
+# slice (research/dittobench-datagen/docs/dueling-bench.md). A local rehearsal
+# at 16+ builds its own slice from the PUBLIC default generator only: miner
+# generators stay private until their source is released.
+DUELING_MIN_BENCH_VERSION = 16
+DUELING_SLICE_COLUMNS = 5
+DUELING_SLICE_MODE = "dueling-slice-v1"
+GENERATOR_KIT_DIR = REPO_ROOT / "miners" / "dittobench-generator-starter-kit"
+# The default generator's packs are bound to a hotkey. Live slices use the
+# registered default generator's; a local slice uses this well-known public
+# development key (Substrate "Alice"), never a real miner's.
+LOCAL_SLICE_GENERATOR_HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 # Environment variables the harness honours only during a local rehearsal.
 COMPLETION_LOG_ENV = "DITTOBENCH_COMPLETION_LOG"
 # The kit's `answer` slot is off by default (the wire stays at bench 9, so a
@@ -160,6 +174,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--seed",
         type=int,
         help="pin the generated dataset; omit for a fresh random seed",
+    )
+    parser.add_argument(
+        "--no-slice",
+        action="store_true",
+        help=(
+            "at bench 16+, score the datagen half only instead of building a "
+            "local generator slice from the public default generator"
+        ),
+    )
+    parser.add_argument(
+        "--slice-sandbox",
+        choices=("local", "docker"),
+        default="local",
+        help=(
+            "where the public default generator runs while building the local "
+            "slice (default: local; docker isolates it like the live scorer)"
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -372,6 +403,7 @@ def submit_body(
     harness_url: str,
     seed: int | None,
     bench_version: int = LIVE_SCORING_BENCH_VERSION,
+    slice_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "bench_version": bench_version,
@@ -380,7 +412,191 @@ def submit_body(
     }
     if seed is not None:
         body["seed"] = seed
+    if slice_bytes is not None:
+        if seed is None:
+            raise RehearsalError("a local dueling slice is built for an explicit seed")
+        body.update(
+            {
+                "dueling_slice_mode": DUELING_SLICE_MODE,
+                "dueling_slice_bytes": base64.b64encode(slice_bytes).decode("ascii"),
+                "expected_slice_sha256": hashlib.sha256(slice_bytes).hexdigest(),
+                # Every local column is the public default generator (owner
+                # ""), so nothing is masked and the composite averages all 5.
+                "dueling_owner_key": "",
+            }
+        )
     return body
+
+
+def uses_dueling_slice(args: argparse.Namespace) -> bool:
+    return args.bench_version >= DUELING_MIN_BENCH_VERSION and not args.no_slice
+
+
+def local_slice_pins(bench_version: int) -> dict[str, Any]:
+    """Season pins for a local slice: every column is the public default
+    generator, at the newest pack policy a season at ``bench_version``
+    accepts (policy N, which the default generator declares when offered)."""
+    return {
+        "season_id": str(uuid.uuid4()),
+        "columns": [
+            {
+                "column_id": f"c{index}",
+                "submission_id": "default",
+                "owner_key": "",
+                "miner_hotkey": LOCAL_SLICE_GENERATOR_HOTKEY,
+                "tree_sha256": "",
+                "grading_bench_version": bench_version,
+                "public_default": True,
+                "substituted": False,
+            }
+            for index in range(DUELING_SLICE_COLUMNS)
+        ],
+    }
+
+
+def local_slice_command(
+    challenge_scorer: Path,
+    *,
+    pins_path: Path,
+    out_path: Path,
+    run_seed: int,
+    bench_version: int,
+    sandbox: str,
+    season_secret: str,
+    anchor_block_hash: str,
+) -> list[str]:
+    """``challenge-scorer reproduce-slice`` with a throwaway season.
+
+    The season secret and anchor are fresh random values that exist only for
+    this rehearsal, so the slice seeds derive through the same primitives as a
+    live season (``SeasonSeed``, ``SliceSeed``) without touching a real one.
+    """
+    command = [
+        str(challenge_scorer),
+        "reproduce-slice",
+        "-season-secret",
+        season_secret,
+        "-season-index",
+        "0",
+        "-anchor-block-hash",
+        anchor_block_hash,
+        "-run-seed",
+        str(run_seed),
+        "-bench-version",
+        str(bench_version),
+        "-pins",
+        str(pins_path),
+        "-sandbox",
+        sandbox,
+        "-out",
+        str(out_path),
+    ]
+    for index in range(DUELING_SLICE_COLUMNS):
+        command += ["-source", f"c{index}={GENERATOR_KIT_DIR}"]
+    return command
+
+
+def _run_local_slice(
+    command: list[str], *, timeout: float
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=API_DIR,
+        env=sanitized_build_env(),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def build_local_slice(
+    tmp: Path, *, run_seed: int, bench_version: int, sandbox: str, timeout: float
+) -> bytes:
+    """Build the run's generator slice from the public default generator."""
+    if not GENERATOR_KIT_DIR.is_dir():
+        raise RehearsalError(
+            "a bench 16+ local slice needs the public default generator at "
+            f"{GENERATOR_KIT_DIR}; run --no-slice to score the datagen half only"
+        )
+    challenge_scorer = tmp / "challenge-scorer"
+    try:
+        subprocess.run(
+            ["go", "build", "-o", str(challenge_scorer), "./cmd/challenge-scorer"],
+            cwd=API_DIR,
+            env=sanitized_build_env(),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        detail = getattr(exc, "stderr", None) or getattr(exc, "stdout", None) or str(exc)
+        raise RehearsalError(
+            "building challenge-scorer for the local dueling slice failed "
+            "(rerun with --no-slice to score the datagen half only): "
+            + redact(str(detail).strip()[-2000:])
+        ) from exc
+    pins_path = tmp / "slice-pins.json"
+    pins_path.write_text(json.dumps(local_slice_pins(bench_version)))
+    out_path = tmp / "slice.json"
+    try:
+        result = _run_local_slice(
+            local_slice_command(
+            challenge_scorer,
+            pins_path=pins_path,
+            out_path=out_path,
+            run_seed=run_seed,
+            bench_version=bench_version,
+            sandbox=sandbox,
+                season_secret=secrets.token_hex(32),
+                anchor_block_hash="0x" + secrets.token_hex(32),
+            ),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RehearsalError(
+            f"building the local dueling slice did not finish within {int(timeout)} "
+            "seconds; rerun with --no-slice to score the datagen half only"
+        ) from exc
+    if result.returncode != 0:
+        raise RehearsalError(
+            "building the local dueling slice failed: "
+            + redact((result.stderr or result.stdout).strip()[-2000:])
+        )
+    raw = out_path.read_bytes()
+    digest = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    if digest != hashlib.sha256(raw).hexdigest():
+        raise RehearsalError("local dueling slice digest does not match its bytes")
+    return raw
+
+
+def format_dueling_summary(report: dict[str, Any]) -> str:
+    """The composite's two halves and each generator column's mean."""
+    dueling = (report.get("details") or {}).get("dueling")
+    if not isinstance(dueling, dict):
+        return ""
+    lines = [
+        "",
+        "--- dueling (bench 16+: datagen half + generator slice) ---",
+        f"datagen_raw:         {float(dueling.get('datagen_raw') or 0):.3f}",
+        f"datagen_gate:        {float(dueling.get('datagen_gate') or 0):.3f}",
+        f"column_weight:       {float(dueling.get('column_weight') or 0):.3f}",
+        f"composite_stderr:    {float(dueling.get('composite_stderr') or 0):.3f}",
+    ]
+    for column in dueling.get("columns") or []:
+        n = int(column.get("n") or 0)
+        mean = float(column.get("sum") or 0) / n if n else 0.0
+        tag = " (substituted)" if column.get("substituted") else ""
+        lines.append(
+            f"column {column.get('column_id', '?')}:           mean {mean:.3f} over "
+            f"{n} cases, policy v{column.get('grading_bench_version', '?')}{tag}"
+        )
+    lines += [
+        "Every local column is the PUBLIC default generator. Live seasons pin",
+        "the top eligible miner generators, whose cases stay private until",
+        "their source is released; expect different, usually harder, columns.",
+    ]
+    return "\n".join(lines)
 
 
 def poll_run(api_url: str, run_id: str, *, timeout: float) -> dict[str, Any]:
@@ -1149,6 +1365,12 @@ def run(args: argparse.Namespace) -> int:
         )
     args.bench_version = resolve_bench_version(args.bench_version)
     print(f"rehearsing bench_version {args.bench_version}", flush=True)
+    if uses_dueling_slice(args):
+        # The slice is built for one seed (run_seed == seed), so pin it now.
+        if args.seed is None:
+            args.seed = secrets.randbelow(2**62) + 1
+        elif args.seed <= 0:
+            raise RehearsalError("a bench 16+ slice rehearsal needs a positive --seed")
 
     with tempfile.TemporaryDirectory(prefix="dittobench-local-rehearsal-") as raw_tmp:
         tmp = Path(raw_tmp)
@@ -1224,6 +1446,20 @@ def run(args: argparse.Namespace) -> int:
                 wait_for_health(api_url, api)
                 require_scorer_bench_version(api_url, args.bench_version)
 
+                slice_bytes = None
+                if uses_dueling_slice(args):
+                    print(
+                        "building a local dueling slice from the public default "
+                        f"generator (seed {args.seed})...",
+                        flush=True,
+                    )
+                    slice_bytes = build_local_slice(
+                        tmp,
+                        run_seed=args.seed,
+                        bench_version=args.bench_version,
+                        sandbox=args.slice_sandbox,
+                        timeout=args.timeout,
+                    )
                 accepted = request_json(
                     f"{api_url}/v1/submit",
                     method="POST",
@@ -1232,6 +1468,7 @@ def run(args: argparse.Namespace) -> int:
                         harness_url,
                         args.seed,
                         args.bench_version,
+                        slice_bytes,
                     ),
                 )
                 run_id = accepted.get("run_id")
@@ -1259,6 +1496,9 @@ def run(args: argparse.Namespace) -> int:
                     )
                     raise RehearsalError(f"local scorer failed run {run_id}: {detail}")
                 print(format_summary(completed))
+                dueling_summary = format_dueling_summary(completed.get("report") or {})
+                if dueling_summary:
+                    print(dueling_summary)
                 combined = dict(completed)
                 if args.gates:
                     gates = replay_gates(tmp, completed)

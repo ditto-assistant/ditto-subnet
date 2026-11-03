@@ -318,6 +318,44 @@ func TestScoreAndPracticeRefuseMisplacedDuelingSlices(t *testing.T) {
 	}
 }
 
+// Only a local private-harness scorer (the miner kit's slice rehearsal) takes
+// a slice on practice, complete and bound to an explicit seed; hosted
+// practice refuses one at any version.
+func TestPracticeAdmitsALocalDuelingSliceOnly(t *testing.T) {
+	sha := strings.Repeat("b", 64)
+	full := `"dueling_slice_mode":"dueling-slice-v1","dueling_slice_bytes":"e30=","expected_slice_sha256":"` + sha + `","dueling_owner_key":""`
+	for _, tc := range []struct {
+		name  string
+		local bool
+		body  string
+		want  string
+	}{
+		{"hosted v16", false, `{"bench_version":16,"seed":7,` + full + `}`, "dueling slices are not accepted on practice"},
+		{"local v16 complete", true, `{"bench_version":16,"seed":7,` + full + `}`, ""},
+		{"local v16 without a seed", true, `{"bench_version":16,` + full + `}`, "explicit seed"},
+		{"local v16 partial", true, `{"bench_version":16,"seed":7,"dueling_owner_key":""}`, "dueling slice required"},
+		{"local v15 with a slice", true, `{"bench_version":15,"seed":7,` + full + `}`, "only on a canonical"},
+		{"local v16 without a slice", true, `{"bench_version":16,"seed":7}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var req submitRequest
+			if err := json.Unmarshal([]byte(tc.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			got := validatePracticeDuelingSlice(req, tc.local)
+			if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+				t.Fatalf("validatePracticeDuelingSlice = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if (&server{}).practiceBodyBytes() != maxSubmitBody {
+		t.Fatal("hosted practice keeps the tiny body cap")
+	}
+	if (&server{allowPrivate: true}).practiceBodyBytes() < int64(challenge.MaxRoundDatasetBytes) {
+		t.Fatal("a local scorer must accept a full base64 slice body")
+	}
+}
+
 func TestDecodeDuelingSliceBindsVersionSeedAndDigest(t *testing.T) {
 	req := duelingRequest(t, 777, [5]int{0, 1, 2, 3, 4})
 	slice := decodedTestSlice(t, 777, [5]int{0, 1, 2, 3, 4})
