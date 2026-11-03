@@ -3294,7 +3294,8 @@ describe('Backroom MCP tools', () => {
       policy: {
         auto_retry_reason_codes: ['docker-build-infrastructure'],
         base_backoff_seconds: 600, max_backoff_seconds: 3600, jitter_fraction: 0.2,
-        auto_retry_max_age_seconds: 86400, auto_retry_max_streak: 8, plan_max_claimable: 500,
+        auto_retry_max_age_seconds: 86400, auto_retry_max_streak: 8,
+        auto_retry_max_retries_by_code: { 'l2-late-result': 1 }, plan_max_claimable: 500,
         breaker_distinct_agents: 3, breaker_window_seconds: 300, breaker_open_seconds: 600,
         breaker_probe_interval_seconds: 300, breaker_history_lookback_seconds: 172800,
       },
@@ -3334,7 +3335,7 @@ describe('Backroom MCP tools', () => {
       expect(readJsonResult(response)).toMatchObject({
         summary: { by_state: { capped: 1 }, aged_out_agents: 2 },
         agents: [{ state: 'capped', claim_outlook: 'needs_operator', consecutive_failures: 8 }],
-        policy: { auto_retry_max_streak: 8 },
+        policy: { auto_retry_max_streak: 8, auto_retry_max_retries_by_code: { 'l2-late-result': 1 } },
       })
       expect(fetchMock).toHaveBeenCalledWith(
         'https://platform-api.heyditto.ai/api/v1/admin/screening-infra-retries',
@@ -3357,6 +3358,8 @@ describe('Backroom MCP tools', () => {
       expect(help.guidance).toContain('source-review-adjudicator-key-unavailable')
       expect(help.guidance).toContain('image-upload-platform-unavailable')
       expect(help.guidance).toContain('verified screened-image upload')
+      expect(help.guidance).toContain('l2-late-result')
+      expect(help.guidance).toContain('auto_retry_max_retries_by_code')
       expect(help.guidance).toContain('screening-lane signature')
       // half_open still holds all but one probe per signature per interval.
       expect(help.guidance).not.toContain('nothing is held')

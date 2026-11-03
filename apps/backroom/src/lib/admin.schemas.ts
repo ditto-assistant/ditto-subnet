@@ -1153,6 +1153,8 @@ export const screeningInfraRetryViewSchema = z.object({
     jitter_fraction: z.number().nonnegative(),
     auto_retry_max_age_seconds: nonNegativeInt,
     auto_retry_max_streak: nonNegativeInt,
+    // Per-code automatic retry bound (l2-late-result: 1); absent on older Platform.
+    auto_retry_max_retries_by_code: z.record(z.string(), nonNegativeInt).default({}),
     plan_max_claimable: nonNegativeInt,
     breaker_distinct_agents: nonNegativeInt,
     breaker_window_seconds: nonNegativeInt,

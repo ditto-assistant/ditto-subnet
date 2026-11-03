@@ -50,6 +50,8 @@ def test_current_platform_policy_is_recorded_exactly() -> None:
         "l2-runtime-evidence-unavailable",
         "source-review-adjudicator-key-unavailable",
         "image-upload-platform-unavailable",
+        # Retried once only (operator ruling 2026-11-03); Platform caps it.
+        "l2-late-result",
     )
     assert PROVIDER_BACKOFF_REASON_CODES == (
         "targon-build-unavailable",
