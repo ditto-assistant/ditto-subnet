@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 func TestCommittedFixtureMatchesProductionEvidence(t *testing.T) {
@@ -55,7 +56,7 @@ func TestBuildFixtureFollowsConfirmationInstrumentFloor(t *testing.T) {
 	// converter carries bench_version), but the builder must not fail a v13
 	// instrument closed, and must still refuse the unbuilt v10/v11 epochs and
 	// the first version the scorer does not accept.
-	for _, version := range []int{scoregates.BenchVersionV13, scoregates.BenchVersionV14, scoregates.BenchVersionV15, scoregates.BenchVersionV16} {
+	for _, version := range []int{scoregates.BenchVersionV13, scoregates.BenchVersionV14, scoregates.BenchVersionV15, protocol.BenchVersionV16} {
 		fixture, err := BuildFixtureForBenchVersion(version)
 		if err != nil {
 			t.Fatal(err)
@@ -64,7 +65,7 @@ func TestBuildFixtureFollowsConfirmationInstrumentFloor(t *testing.T) {
 			t.Fatalf("producer evidence does not carry bench_version %d", version)
 		}
 	}
-	for _, benchVersion := range []int{8, 10, 11, scoregates.BenchVersionV16 + 1} {
+	for _, benchVersion := range []int{8, 10, 11, protocol.NewestGeneratableBenchVersion() + 1} {
 		if _, err := BuildFixtureForBenchVersion(benchVersion); err == nil {
 			t.Fatalf("confirmation fixture accepted bench_version %d", benchVersion)
 		}
