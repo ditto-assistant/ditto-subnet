@@ -81,8 +81,9 @@ async def current_override(
 
 
 async def override_history(
-    session: AsyncSession, *, scope: OwnerScope, owner_key: str, limit: int = 50
+    session: AsyncSession, *, scope: OwnerScope, owner_key: str
 ) -> list[OwnerSubmissionCooldownRevision]:
+    """Every revision of one identity, newest first: the whole audit trail."""
     return list(
         await session.scalars(
             select(OwnerSubmissionCooldownRevision)
@@ -91,7 +92,6 @@ async def override_history(
                 OwnerSubmissionCooldownRevision.owner_key == owner_key,
             )
             .order_by(OwnerSubmissionCooldownRevision.revision.desc())
-            .limit(limit)
         )
     )
 
@@ -228,7 +228,19 @@ async def identity_latest_submission_at(
         )
         predicate = or_(paid_by_key, Agent.miner_hotkey.in_(linked_hotkeys))
     latest = await session.scalar(select(func.max(Agent.created_at)).where(predicate))
-    return None if latest is None else _utc(latest)
+    latest = None if latest is None else _utc(latest)
+    if scope == "hotkey":
+        # Enforcement counts another coldkey's live reservation on this hotkey
+        # as a submission in flight; report the same bound.
+        reserved = await session.scalar(
+            select(func.max(UploadAdmissionReservation.created_at)).where(
+                UploadAdmissionReservation.miner_hotkey == owner_key,
+                UploadAdmissionReservation.expires_at > func.now(),
+            )
+        )
+        if reserved is not None and (latest is None or _utc(reserved) > latest):
+            latest = _utc(reserved)
+    return latest
 
 
 async def lock_owner_cooldown_hotkey(session: AsyncSession, miner_hotkey: str) -> None:

@@ -490,3 +490,34 @@ async def test_lookup_measures_from_linked_identities(
     assert abs(
         datetime.fromisoformat(lookup["next_allowed_at"]) - decision.retry_at
     ) < timedelta(seconds=1)
+
+
+async def test_lookup_counts_a_live_reservation_on_the_hotkey(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    await _seed_submission(
+        session, hotkey=_HOTKEY, coldkey=_COLDKEY, created_at=now - timedelta(days=3)
+    )
+    settings = EffectiveSubmissionSettings(
+        revision=1, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
+    async with session.begin():
+        await reserve_upload_admission(
+            session,
+            miner_coldkey=_FRESH_COLDKEY,
+            miner_hotkey=_HOTKEY,
+            sha256="c" * 64,
+            settings=settings,
+            now=now,
+        )
+    created = await client.post(_URL, headers=_HEADERS, json=_set())
+    assert created.status_code == 200, created.text
+    latest = datetime.fromisoformat(created.json()["latest_submission_at"])
+    assert abs(latest - now) < timedelta(seconds=1)
+    next_allowed = datetime.fromisoformat(created.json()["next_allowed_at"])
+    assert next_allowed > now + timedelta(hours=23)
