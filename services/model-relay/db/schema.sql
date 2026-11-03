@@ -3914,6 +3914,26 @@ CREATE TABLE public.dueling_season_batteries (
 
 
 --
+-- Name: dueling_season_commitment_publications; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dueling_season_commitment_publications (
+    season_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    commitment text NOT NULL,
+    status text NOT NULL,
+    claimed_at timestamp with time zone NOT NULL,
+    claim_expires_at timestamp with time zone NOT NULL,
+    reported_at timestamp with time zone,
+    block_number bigint,
+    extrinsic_hash text,
+    detail text,
+    CONSTRAINT ck_dueling_season_commitment_publications_season_public_282a CHECK (((status <> 'confirmed'::text) OR (block_number IS NOT NULL))),
+    CONSTRAINT ck_dueling_season_commitment_publications_season_public_db3a CHECK ((status = ANY (ARRAY['claimed'::text, 'confirmed'::text, 'failed'::text])))
+);
+
+
+--
 -- Name: dueling_seasons; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3945,8 +3965,14 @@ CREATE TABLE public.dueling_seasons (
     rotation_actor text,
     rotation_reason text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    commitment_publication text DEFAULT 'disabled'::text NOT NULL,
+    commitment_published_at timestamp with time zone,
+    commitment_block bigint,
+    commitment_extrinsic_hash text,
+    commitment_error text,
     CONSTRAINT ck_dueling_seasons_dueling_seasons_bench_floor CHECK ((bench_version >= 16)),
     CONSTRAINT ck_dueling_seasons_dueling_seasons_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_commitment_publication_check CHECK ((commitment_publication = ANY (ARRAY['pending'::text, 'published'::text, 'failed'::text, 'disabled'::text]))),
     CONSTRAINT ck_dueling_seasons_dueling_seasons_index_check CHECK (((season_index >= 0) AND ((rounds_per_season >= 1) AND (rounds_per_season <= 48)))),
     CONSTRAINT ck_dueling_seasons_dueling_seasons_open_check CHECK (((season_seed IS NULL) OR ((season_seed ~ '^[0-9a-f]{64}$'::text) AND (anchor_block_hash IS NOT NULL) AND (columns IS NOT NULL)))),
     CONSTRAINT ck_dueling_seasons_dueling_seasons_reveal_check CHECK (((status = 'revealed'::text) = (revealed_at IS NOT NULL))),
@@ -9957,6 +9983,14 @@ ALTER TABLE ONLY public.dueling_season_batteries
 
 
 --
+-- Name: dueling_season_commitment_publications pk_dueling_season_commitment_publications; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_season_commitment_publications
+    ADD CONSTRAINT pk_dueling_season_commitment_publications PRIMARY KEY (season_id, validator_hotkey);
+
+
+--
 -- Name: dueling_seasons pk_dueling_seasons; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -15283,6 +15317,14 @@ ALTER TABLE ONLY public.conversation_assessments
 
 ALTER TABLE ONLY public.dueling_season_batteries
     ADD CONSTRAINT fk_dueling_season_batteries_season_id_dueling_seasons FOREIGN KEY (season_id) REFERENCES public.dueling_seasons(id) ON DELETE CASCADE;
+
+
+--
+-- Name: dueling_season_commitment_publications fk_dueling_season_commitment_publications_season_id_due_bd00; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_season_commitment_publications
+    ADD CONSTRAINT fk_dueling_season_commitment_publications_season_id_due_bd00 FOREIGN KEY (season_id) REFERENCES public.dueling_seasons(id) ON DELETE CASCADE;
 
 
 --

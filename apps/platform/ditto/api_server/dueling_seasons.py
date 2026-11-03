@@ -9,11 +9,11 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
 1. **Commit.** While the previous season (or round) runs, Platform draws the
    next season's 32-byte secret and publishes ``commitment =
    season_commitment(s, secret)`` on Platform, where ``s`` is the round index
-   the season opens on. The anchor block does not exist yet.
-   TODO(dueling): publish ``dds1:{s}:{commitment}`` on chain when
-   ``onchain_commitment`` is set. The round machinery elects validators to
-   write ``dgr1`` payloads; a ``dds1`` job needs the validator's publisher to
-   accept it, which is a validator change outside this layer.
+   the season opens on. The anchor block does not exist yet. When
+   ``onchain_commitment`` is set, elected validators publish
+   ``dds1:{s}:{commitment}`` on chain while the season is committed
+   (:mod:`ditto.api_server.dueling_season_commitments`, the season twin of
+   the round lane's ``dgr1``); shadow seasons publish too.
 2. **Battery.** Each candidate column (eligibility rules 1, 2 and 4 of section
    1: active, qualified, a counted or challenger column in a scored round
    inside ``window_days`` with ``column score > 0`` and an unsolved fraction of
@@ -79,6 +79,9 @@ from ditto.api_models.dueling import (
 )
 from ditto.api_models.generator_round_validator import accepted_grading_versions
 from ditto.api_models.source_disclosure import SourceDisclosure
+from ditto.api_server.dueling_season_commitments import (
+    settle_season_commitment_publications,
+)
 from ditto.api_server.generator_source_releases import (
     prune_released_slice_bytes,
     sync_generator_source_releases,
@@ -355,6 +358,9 @@ def _commit_season(
         rounds_per_season=resolved.settings.rounds_per_season,
         settings_revision=resolved.revision,
         detail={"committed_epoch_index": position.subnet_epoch_index},
+        commitment_publication=(
+            "pending" if resolved.settings.onchain_commitment else "disabled"
+        ),
     )
 
 
@@ -854,6 +860,8 @@ async def advance_seasons(
                     f"season {committed.season_index}: {queued} battery candidate(s)"
                 )
     await session.flush()
+    # Close on-chain commitment publication for seasons that left committed.
+    notes.extend(await settle_season_commitment_publications(session))
     # 5. Publish pinned generator sources whose embargo and reveal have passed.
     try:
         async with session.begin_nested():

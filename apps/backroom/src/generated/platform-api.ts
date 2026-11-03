@@ -1889,6 +1889,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/dueling/seasons/{season_id}/republish-commitment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Republish Dueling Season Commitment
+         * @description Ask elected validators to publish a committed season's commitment again.
+         *
+         *     Platform never publishes a commitment itself. This reopens publication
+         *     (``pending``) and forgets every failed or unconfirmed validator claim, so
+         *     the season's publisher order elects again from the validators fresh now.
+         *     Confirmed publications are kept and still count toward the target.
+         */
+        post: operations["admin_republish_dueling_season_commitment_api_v1_admin_generator_competition_dueling_seasons__season_id__republish_commitment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/dueling/slices": {
         parameters: {
             query?: never;
@@ -9611,6 +9636,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/dueling-season-commitment-job": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Dueling Season Commitment Job
+         * @description Claim a committed dueling season's on-chain commitment if elected.
+         */
+        post: operations["request_dueling_season_commitment_job_api_v1_validator_dueling_season_commitment_job_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/dueling-season-commitment-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Dueling Season Commitment
+         * @description Record a claimed season commitment publication's signed outcome.
+         */
+        post: operations["report_dueling_season_commitment_api_v1_validator_dueling_season_commitment_report_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/generator-round-commitment-job": {
         parameters: {
             query?: never;
@@ -12215,6 +12280,21 @@ export interface components {
             } | null;
             /** Triggers */
             triggers: ("top_five" | "composite_anomaly" | "tool_anomaly" | "memory_anomaly")[];
+        };
+        /**
+         * AdminDuelingCommitmentRepublishRequest
+         * @description Re-elect validators to publish a committed season's commitment.
+         */
+        AdminDuelingCommitmentRepublishRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * AdminDuelingRotateRequest
@@ -22855,6 +22935,131 @@ export interface components {
              */
             standing: "current" | "provisional" | "expired" | "not_opened";
         };
+        /**
+         * DuelingSeasonCommitmentJobRequest
+         * @description Ask Platform whether this validator should publish a season commitment.
+         */
+        DuelingSeasonCommitmentJobRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * DuelingSeasonCommitmentJobResponse
+         * @description One committed dueling season this validator is elected to publish.
+         *
+         *     ``payload`` is exactly ``season_commitment_payload(season_index,
+         *     commitment)``; a validator refuses any other value. ``claim_expires_at`` is
+         *     when Platform stops waiting for this validator's report.
+         */
+        DuelingSeasonCommitmentJobResponse: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Claim Expires At
+             * Format: date-time
+             */
+            claim_expires_at: string;
+            /** Commitment */
+            commitment: string;
+            /** Payload */
+            payload: string;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /** Shadow */
+            shadow: boolean;
+        };
+        /**
+         * DuelingSeasonCommitmentReportRequest
+         * @description Signed outcome of one elected season-commitment publication.
+         *
+         *     Same semantics as :class:`GeneratorRoundCommitmentReportRequest`:
+         *     ``confirmed`` names the block the validator read its own commitment back
+         *     at; ``failed`` means the submission or the read-back did not succeed.
+         */
+        DuelingSeasonCommitmentReportRequest: {
+            /** Block Number */
+            block_number?: number | null;
+            /** Commitment */
+            commitment: string;
+            /** Detail */
+            detail?: string | null;
+            /** Extrinsic Hash */
+            extrinsic_hash?: string | null;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "failed";
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** DuelingSeasonCommitmentReportResponse */
+        DuelingSeasonCommitmentReportResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /**
+             * Confirmations
+             * @default 0
+             */
+            confirmations: number;
+            /**
+             * Duplicate
+             * @default false
+             */
+            duplicate: boolean;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /**
+             * Target
+             * @default 0
+             */
+            target: number;
+        };
         /** DuelingSeasonView */
         DuelingSeasonView: {
             /** Anchor Block */
@@ -22877,6 +23082,24 @@ export interface components {
             }[] | null;
             /** Commitment */
             commitment: string;
+            /** Commitment Block */
+            commitment_block?: number | null;
+            /** Commitment Error */
+            commitment_error?: string | null;
+            /** Commitment Extrinsic Hash */
+            commitment_extrinsic_hash?: string | null;
+            /**
+             * Commitment Publication
+             * @default disabled
+             * @enum {string}
+             */
+            commitment_publication: "pending" | "published" | "failed" | "disabled";
+            /** Commitment Publications */
+            commitment_publications?: components["schemas"]["GeneratorRoundCommitmentPublicationView"][];
+            /** Commitment Published At */
+            commitment_published_at?: string | null;
+            /** Commitment Publishers Elected */
+            commitment_publishers_elected?: string[];
             /**
              * Committed At
              * Format: date-time
@@ -44739,6 +44962,11 @@ export interface components {
             /** Screened Images */
             screened_images: boolean;
             /**
+             * Season Commitments
+             * @default false
+             */
+            season_commitments: boolean;
+            /**
              * Signed Score Quorum
              * @default false
              */
@@ -50297,6 +50525,43 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_republish_dueling_season_commitment_api_v1_admin_generator_competition_dueling_seasons__season_id__republish_commitment_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                season_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDuelingCommitmentRepublishRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -64450,6 +64715,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmitTranscriptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_dueling_season_commitment_job_api_v1_validator_dueling_season_commitment_job_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingSeasonCommitmentJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonCommitmentJobResponse"];
+                };
+            };
+            /** @description No season commitment needs this validator. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_dueling_season_commitment_api_v1_validator_dueling_season_commitment_report_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingSeasonCommitmentReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonCommitmentReportResponse"];
                 };
             };
             /** @description Validation Error */
