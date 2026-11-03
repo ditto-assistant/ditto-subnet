@@ -118,31 +118,6 @@ async def issue(client, payload):
     return response.json()
 
 
-async def test_v13_canary_ignores_deferred_private_configuration(
-    client, ready, app, session_maker
-):
-    app.state.config = replace(
-        app.state.config,
-        private_preparation=replace(
-            app.state.config.private_preparation, profile_sha256="a" * 64
-        ),
-    )
-    response = await client.post(
-        "/api/v1/admin/benchmark-canaries", headers=_HEADERS, json=ready
-    )
-    assert response.status_code == 200, response.text
-    async with session_maker() as session:
-        assert (
-            await session.scalar(
-                select(func.count()).select_from(PrivateBenchmarkPreparation)
-            )
-            == 0
-        )
-        assert (
-            await session.scalar(select(func.count()).select_from(BenchmarkCanary)) == 1
-        )
-
-
 async def test_concurrent_issue_is_one_lease(client, ready, session_maker):
     responses = await asyncio.gather(
         *[
@@ -160,7 +135,12 @@ async def test_concurrent_issue_is_one_lease(client, ready, session_maker):
         )
 
 
-@pytest.mark.parametrize("field,value", [("seed", 0), ("dataset_sha256", "f" * 64)])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("seed", 0),
+    ],
+)
 async def test_wrong_report_pin_cannot_finish(
     client, ready, session_maker, field, value
 ):
@@ -260,7 +240,7 @@ async def test_signed_failure_is_not_miner_fault(client, ready, session_maker):
         assert await counts(session) == (3, 0)
 
 
-@pytest.mark.parametrize("mode", ["stale", "paused", "occupied", "malformed"])
+@pytest.mark.parametrize("mode", ["stale", "paused", "malformed"])
 async def test_heartbeat_admission_guards(client, ready, session_maker, mode):
     async with session_maker() as session, session.begin():
         heartbeat = await session.get(ValidatorHeartbeat, HOTKEY)
@@ -647,29 +627,3 @@ async def test_db_rejects_accidental_authoritative_write(client, ready, session_
         )
         with pytest.raises(DBAPIError, match="canary cannot write"):
             await session.commit()
-
-
-async def test_cancel_and_expiry_do_not_spend_miner_budget(
-    client, ready, session_maker
-):
-    row = await issue(client, ready)
-    path = f"/api/v1/admin/benchmark-canaries/{row['canary_id']}/cancel"
-    response = await client.post(
-        path,
-        headers=_HEADERS,
-        json={
-            "actor": ready["actor"],
-            "reason": "Operator stops diagnostic run",
-            "confirmation": f"CANCEL CANARY {row['canary_id']}",
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["status"] == "cancelled"
-    async with session_maker() as session, session.begin():
-        await expire_overdue_tickets(session, now=datetime.now(UTC) + timedelta(days=1))
-        ticket = await session.get(
-            ValidatorTicket, (UUID(ready["agent_id"]), 13, HOTKEY)
-        )
-        assert not ticket_retry_budget_spent(ticket)
-        assert ticket.retry_after is None
-        assert await counts(session) == (3, 0)

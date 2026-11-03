@@ -39,7 +39,7 @@ from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollou
 from ditto.db.queries.provider_outages import provider_outage_active
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.db.queries.tickets import ticket_retry_budget_spent
+from ditto.db.queries.tickets import scoring_retry_ticket, ticket_retry_budget_spent
 from ditto.screener_policy_state import effective_screening_policy_version
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
@@ -55,8 +55,14 @@ AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
         "inference_allowance_exhausted",
         "inference_request_rejected",
         "model_inference_required",
+        # OOM kill at the harness's own published cap on a host with headroom.
+        "harness_oom",
     }
 )
+# A SIGKILL with no OOM flag is no-fault on its first validator: retry once.
+# The same kill on a second validator is the harness's own crash.
+HARNESS_KILLED_137_DETAIL = "harness_killed_137"
+HARNESS_KILLED_137_AGENT_REPEATS = 2
 _ADMISSION_DETAIL_PREFIX = "inference_request_rejected:"
 _AGENT_ADMISSION_DETAIL_CODES = frozenset(
     {
@@ -145,7 +151,10 @@ def resolve_bench_version(
         ticket
         for ticket in all_tickets
         if ticket.status in (TicketStatus.ISSUED, TicketStatus.EXPIRED)
-        and ticket.purpose != TicketPurpose.BENCHMARK_CANARY
+        # Neither a canary nor a generator-round lease is scoring work, so
+        # neither may pull the agent's retry era toward its version.
+        and ticket.purpose
+        not in (TicketPurpose.BENCHMARK_CANARY, TicketPurpose.GENERATOR_ROUND)
     ]
     if work_tickets:
         return max(
@@ -211,8 +220,14 @@ def is_agent_attributable_exhaustion(
     if any(ticket.status == TicketStatus.ISSUED for ticket in tickets):
         return False
     details = [current_failure_detail(ticket) for ticket in remaining]
+    repeated_kill = (
+        sum(detail == HARNESS_KILLED_137_DETAIL for detail in details)
+        >= HARNESS_KILLED_137_AGENT_REPEATS
+    )
     return bool(details) and all(
-        is_agent_attributable_failure_detail(detail) for detail in details
+        is_agent_attributable_failure_detail(detail)
+        or (repeated_kill and detail == HARNESS_KILLED_137_DETAIL)
+        for detail in details
     )
 
 
@@ -355,6 +370,7 @@ def recovery_gate(
     bench_version: int,
     rollout_qualification: bool = False,
     work_available_hotkeys: set[str] | None = None,
+    target_validator_hotkey: str | None = None,
 ) -> tuple[bool, bool, str | None, list[ValidatorTicket]]:
     """Decide whether an operator retry is possible.
 
@@ -422,6 +438,27 @@ def recovery_gate(
         return False, False, "not enough expired tickets to restore quorum", []
     if is_agent_attributable_exhaustion(scores=scores, tickets=tickets):
         return False, False, AGENT_ATTRIBUTABLE_WITHDRAW_REASON, []
+    if target_validator_hotkey is not None:
+        if needed != 1:
+            return (
+                False,
+                False,
+                "validator selection requires exactly one missing score",
+                [],
+            )
+        selected = [
+            ticket
+            for ticket in exhausted
+            if ticket.validator_hotkey == target_validator_hotkey
+        ]
+        if not selected:
+            return False, False, "selected validator has no exhausted ticket", []
+        if (
+            work_available_hotkeys is not None
+            and target_validator_hotkey not in work_available_hotkeys
+        ):
+            return False, False, "selected validator is not currently available", []
+        return False, True, None, selected
     return False, True, None, exhausted[:needed]
 
 
@@ -722,7 +759,7 @@ async def classify_agent_retry_states(
         await session.scalars(
             select(ValidatorTicket).where(
                 ValidatorTicket.agent_id.in_(id_subq),
-                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+                scoring_retry_ticket(),
             )
         )
     ).all():

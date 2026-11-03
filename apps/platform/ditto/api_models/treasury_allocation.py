@@ -18,6 +18,20 @@ class PublicServiceBucket(BaseModel):
     payee_rules: list[TreasuryPayeeRule]
 
 
+class PublicEmissionShare(BaseModel):
+    """One recipient's share of total miner emission."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    kind: Literal["burn", "track", "gamma"]
+    id: str | None
+    """Track id (memory, generator) or Gamma bucket id; ``None`` for burn."""
+    share: float
+    """Fraction of total miner emission, 0..1."""
+    bps: float
+    """The same share in basis points (float: validators fold in float)."""
+
+
 class PublicTreasuryRuntime(BaseModel):
     """Recorded control only; no chain dispatch, payment or signer authority."""
 
@@ -64,3 +78,13 @@ class PublicTreasuryAllocation(BaseModel):
     buckets: list[PublicServiceBucket]
     # Runtime control is not finalized funding proof; receipts are.
     runtime: PublicTreasuryRuntime = Field(default_factory=PublicTreasuryRuntime)
+    # SN-350: the whole split of total miner emission per recipient (burn,
+    # each paid competition track, each Gamma service bucket), derived from
+    # the same fields validators are served. See docs/public-telemetry.md.
+    emission_allocation_revision: int = Field(default=0, ge=0)
+    emission_split: list[PublicEmissionShare] = Field(default_factory=list)
+    emission_split_epoch: int | None = Field(default=None, ge=0)
+    emission_split_source: Literal["epoch_pin", "settings", "unavailable"] = (
+        "unavailable"
+    )
+    forecast_split: list[PublicEmissionShare] = Field(default_factory=list)

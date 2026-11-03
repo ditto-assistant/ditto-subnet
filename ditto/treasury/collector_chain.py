@@ -25,18 +25,27 @@ from ditto.treasury.collector import (
 from ditto.treasury.service_allocation import ServiceDestination
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
+    AUDITED_COLLECTOR_REFERENCE_BLOCK,
     COLLECTOR_POW_REGISTRATION_HASHES,
     COLLECTOR_READABLE_RUNTIME_HASHES,
+    COLLECTOR_SIGNER_SURFACE,
     FINNEY_GENESIS,
+    V473_COLLECTOR_CODE_HASH,
+    V475_COLLECTOR_CODE_HASH,
     collector_gross_incentive,
     collector_receipt_runtime,
     collector_transfer_effect,
     liquid_collector_credit,
 )
+from ditto_screening_protocol.runtime_interface import runtime_interface
 
-# Exact v481 official artifact and reviewed source. Historical receipt hashes
-# are accepted only on the observation path, never for preparation/broadcast.
+# Exact v483 runtime that the cold-signed policy names (revision 9). Historical
+# receipt hashes are accepted only on the observation path, never for
+# preparation/broadcast. A later runtime is read and signed as this one only
+# when COLLECTOR_SIGNER_SURFACE is byte-identical to it.
 AUDITED_CODE_HASH = AUDITED_COLLECTOR_CODE_HASH
+# (signed runtime, live runtime) -> whether the signer surface is unchanged.
+SIGNER_SURFACE_VERDICTS: dict[tuple[str, str], bool] = {}
 
 
 class CollectorRuntimeRefused(ValueError):
@@ -154,18 +163,29 @@ class PublicCollectorChain:
             else {policy.runtime_code_hash}
         )
         if code_hash not in allowed:
-            raise CollectorRuntimeRefused(
-                "runtime_changed",
-                "runtime changed; stop for independent contract audit",
-                policy.runtime_code_hash,
-                code_hash,
-            )
-        if (
-            code_hash in COLLECTOR_POW_REGISTRATION_HASHES
-            and self.query("SubtensorModule", "SubnetEpochConsensus", [118], block_hash)
-            != "Yuma"
-        ):
-            raise ValueError("collector requires audited Yuma consensus")
+            if not self._signer_surface_unchanged(policy, code_hash, block_hash):
+                raise CollectorRuntimeRefused(
+                    "runtime_changed",
+                    "runtime changed; stop for independent contract audit",
+                    policy.runtime_code_hash,
+                    code_hash,
+                )
+            # Everything this module reads, decodes and signs is identical to
+            # the cold-signed runtime's, so it reads and signs as that runtime.
+            code_hash = policy.runtime_code_hash
+        if code_hash in COLLECTOR_POW_REGISTRATION_HASHES:
+            from async_substrate_interface.errors import StorageFunctionNotFound
+
+            try:
+                consensus = self.query(
+                    "SubtensorModule", "SubnetEpochConsensus", [118], block_hash
+                )
+            except StorageFunctionNotFound:
+                if not historical:
+                    raise
+                consensus = self._v475_upgrade_consensus(block_hash, code_hash)
+            if consensus != "Yuma":
+                raise ValueError("collector requires audited Yuma consensus")
         # SDK 10.5.0's singular helper does not match the audited plural API.
         filters = unwrap(
             s.runtime_call(
@@ -206,6 +226,143 @@ class PublicCollectorChain:
             } != allowed or len(calls) != len(allowed):
                 raise ValueError("proxy scope differs from audited allowlist")
         return code_hash
+
+    def _signer_surface_unchanged(self, policy, code_hash, block_hash):
+        """True when ``code_hash`` has the signed runtime's consumed surface.
+
+        Both fingerprints are computed here, from the exact metadata stored at
+        the reference block and at ``block_hash``, so no digest is trusted from
+        another process or library version. A verdict depends only on the two
+        code hashes and is cached; read failures raise and are retried.
+        """
+        if not isinstance(code_hash, str) or not re.fullmatch(
+            r"0x[0-9a-f]{64}", code_hash
+        ):
+            return False
+        key = (policy.runtime_code_hash, code_hash)
+        if key in SIGNER_SURFACE_VERDICTS:
+            return SIGNER_SURFACE_VERDICTS[key]
+        s = self.substrate
+        number, reference = AUDITED_COLLECTOR_REFERENCE_BLOCK
+        if (
+            s.get_block_hash(number) != reference
+            or s.rpc_request("state_getStorageHash", ["0x3a636f6465", reference]).get(
+                "result"
+            )
+            != policy.runtime_code_hash
+        ):
+            # Without the signed runtime's own surface nothing is comparable.
+            # Not cached: a later read of the reference may succeed.
+            return False
+        signed, current = (
+            s.rpc_request("state_getRuntimeVersion", [at]).get("result") or {}
+            for at in (reference, block_hash)
+        )
+        # Runtimes bump transactionVersion when a dispatchable's encoding or
+        # meaning changes for signed transactions; that always needs an audit,
+        # as does any downgrade below the signed runtime.
+        if (
+            type(signed.get("transactionVersion")) is not int
+            or type(current.get("transactionVersion")) is not int
+            or current["transactionVersion"] != signed["transactionVersion"]
+            or type(current.get("specVersion")) is not int
+            or type(signed.get("specVersion")) is not int
+            or current["specVersion"] < signed["specVersion"]
+        ):
+            SIGNER_SURFACE_VERDICTS[key] = False
+            return False
+        try:
+            pinned = runtime_interface(
+                self._metadata(reference), COLLECTOR_SIGNER_SURFACE
+            )
+            live = runtime_interface(
+                self._metadata(block_hash), COLLECTOR_SIGNER_SURFACE
+            )
+        except ValueError:
+            # Unreadable or removed dependencies refuse like a changed shape.
+            verdict = False
+        else:
+            verdict = live.digest == pinned.digest
+        SIGNER_SURFACE_VERDICTS[key] = verdict
+        return verdict
+
+    def _metadata(self, block_hash):
+        """Exact metadata stored at ``block_hash``, never the parent runtime's.
+
+        The SDK decodes a block with its parent's runtime and shares one type
+        registry per session, so decode ``state_getMetadata`` afresh.
+        """
+        from scalecodec import ScaleBytes
+        from scalecodec.base import RuntimeConfigurationObject
+        from scalecodec.type_registry import load_type_registry_preset
+
+        raw = self.substrate.rpc_request("state_getMetadata", [block_hash]).get(
+            "result"
+        )
+        if not isinstance(raw, str) or not raw.startswith("0x"):
+            raise ConnectionError("runtime metadata unavailable")
+        config = RuntimeConfigurationObject()
+        config.clear_type_registry()
+        config.update_type_registry(load_type_registry_preset(name="core") or {})
+        metadata = config.create_scale_object("MetadataVersioned", ScaleBytes(raw))
+        metadata.decode()
+        return metadata
+
+    def _v475_upgrade_consensus(self, block_hash, code_hash):
+        """Decode exact post-state with post-state metadata, never skip Yuma.
+
+        SDK 10.5.0 intentionally selects parent/execution metadata. At the
+        reviewed v473 -> v475 upgrade block that metadata has no consensus map.
+        The finalized child selects this block's metadata, but the raw storage
+        read remains at this exact upgrade hash. Event decoding is untouched.
+        """
+        from scalecodec import ScaleBytes
+
+        s = self.substrate
+        if code_hash != V475_COLLECTOR_CODE_HASH:
+            raise ValueError("unsupported historical consensus metadata boundary")
+        block = s.get_block_number(block_hash)
+        if not 0 < block < s.get_block_number(s.get_chain_finalised_head()):
+            raise ValueError("finalized metadata child unavailable")
+        parent = s.get_block_hash(block - 1)
+        if (
+            s.rpc_request("state_getStorageHash", ["0x3a636f6465", parent]).get(
+                "result"
+            )
+            != V473_COLLECTOR_CODE_HASH
+        ):
+            raise ValueError("unsupported historical consensus parent")
+        child = s.get_block_hash(block + 1)
+        if (
+            s.get_parent_block_hash(child) != block_hash
+            or s.rpc_request("state_getStorageHash", ["0x3a636f6465", child]).get(
+                "result"
+            )
+            != code_hash
+        ):
+            raise ValueError("historical consensus metadata child changed")
+        key = s.create_storage_key(
+            "SubtensorModule", "SubnetEpochConsensus", [118], block_hash=child
+        )
+        result = s.rpc_request("state_getStorageAt", [key.to_hex(), block_hash])
+        raw = result.get("result")
+        if (
+            result.get("error")
+            or "result" not in result
+            or (
+                raw is not None
+                and (
+                    not isinstance(raw, str)
+                    or not re.fullmatch(r"0x(?:[0-9a-fA-F]{2}){0,32}", raw)
+                )
+            )
+        ):
+            raise ValueError("historical consensus storage unavailable")
+        # Use the real metadata modifier/default for absence, exactly as the
+        # normal SDK query does; never manufacture Yuma for missing evidence.
+        return unwrap(
+            key.decode_scale_value(ScaleBytes(raw) if raw is not None else None)
+        )
 
     def identity(self, policy, block_hash, *, allow_unowned=False):
         owner = self.query(

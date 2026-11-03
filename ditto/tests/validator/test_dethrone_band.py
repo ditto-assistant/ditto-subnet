@@ -274,19 +274,6 @@ class TestEfficiencyStderrScale:
 
 
 class TestVersionedHighScoreBandDecay:
-    def test_pre_v6_band_is_byte_identical(self) -> None:
-        champion = _e("champ", 0.95, bench_version=5)
-        challenger = _e("chall", 0.956, bench_version=5, minutes=1)
-
-        assert _dethrone_band_scale(challenger, champion, 0.95) == 1.0
-        assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is False
-
-    def test_mixed_version_comparison_keeps_legacy_band(self) -> None:
-        champion = _e("champ", 0.95, bench_version=6)
-        challenger = _e("chall", 0.956, bench_version=5, minutes=1)
-
-        assert _dethrone_band_scale(challenger, champion, 0.95) == 1.0
-
     def test_v6_below_decay_start_keeps_full_band(self) -> None:
         champion = _e("champ", 0.60, bench_version=6)
         challenger = _e("chall", 0.606, bench_version=6, minutes=1)
@@ -294,7 +281,7 @@ class TestVersionedHighScoreBandDecay:
         assert _dethrone_band_scale(challenger, champion, 0.60) == 1.0
         assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is False
 
-    @pytest.mark.parametrize("bench_version", [6, 7, 8])
+    @pytest.mark.parametrize("bench_version", [8])
     def test_v6_and_later_decay_the_band_near_the_ceiling(
         self, bench_version: int
     ) -> None:

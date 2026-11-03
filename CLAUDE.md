@@ -36,6 +36,9 @@ Load only the returned anchors and the relevant specialized skill:
   dependency-PR security review;
 - `.agents/skills/backroom-review` for quarantine triage, high-score ATH
   review, and precedents;
+- `.agents/skills/scoring-infra-triage` for a low or failed score that looks
+  like infrastructure: find the failure, fix ours before any retry, pick the
+  retry tool, or explain why the agent cannot be retried;
 - `.agents/skills/miner-comms` for Discord/DM miner replies after a live
   Backroom investigation.
 
@@ -59,6 +62,7 @@ Load only the returned anchors and the relevant specialized skill:
 | Terraform and Ansible | `infra/` |
 | Release ownership graph | `release/components.toml` |
 | Backroom quarantine and ATH review | `.agents/skills/backroom-review/` |
+| Scoring infra-failure triage and retries | `.agents/skills/scoring-infra-triage/` |
 | Miner Discord / DM replies | `.agents/skills/miner-comms/` |
 | Dependabot / dependency-PR review | `.agents/skills/ditto-subnet-dependabot-review/` |
 | Preview channels and mock engine | `ditto/preview/`, `preview/` |

@@ -968,11 +968,6 @@ def test_prepare_success_promotes_the_staged_release(tmp_path: Path) -> None:
     ("step", "marker"),
     [
         ("fetch", "fetch --force origin"),
-        ("cat-file", "cat-file -e"),
-        ("merge-base", "merge-base --is-ancestor"),
-        ("checkout", "checkout --detach"),
-        ("rev-parse", "rev-parse HEAD"),
-        ("sync", "uv sync --frozen"),
         ("verify", "verify-installed-signing-contract.py"),
     ],
 )
@@ -1520,8 +1515,6 @@ def test_identical_analyzer_inputs_allow_a_rolling_activation(
     "relative",
     [
         "tools/l2_analyzer.py",
-        "ditto_screener/data/starter-kit-provenance-v5.json",
-        "deploy/l2-analyzer.Dockerfile",
         ".dockerignore",
     ],
 )

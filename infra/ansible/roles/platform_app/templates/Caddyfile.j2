@@ -5,6 +5,21 @@
     email {{ platform_caddy_email }}
 }
 
+# `ditto-api` is one fork-mode pm2 process, so every deploy is a stop/start
+# with ~6s of refused connections (scripts/update.sh, ecosystem.config.js).
+# Without a try window Caddy answers each of those requests with an immediate
+# 502, which validators saw on artifact fetches, ticket hand-backs and
+# confirmation claims (SN-426). Holding the request and re-dialing until the
+# new process listens turns the restart into latency instead.
+#
+# Caddy only retries a request whose upstream DIAL failed, so a request that
+# reached the old process is never replayed. The window stays below the
+# validator's 30s HTTP timeout so a genuinely dead API still surfaces as a 502.
+(ditto_api_restart_handover) {
+    lb_try_duration {{ platform_api_restart_try_duration }}
+    lb_try_interval 250ms
+}
+
 {{ ([platform_domain] + platform_alias_domains) | join(', ') }} {
     encode zstd gzip
 
@@ -85,13 +100,38 @@
         request_body {
             max_size {{ platform_request_body_max_size }}
         }
-        reverse_proxy localhost:{{ platform_api_port }}
+{% if platform_api_standby_port | default(0) | int > 0 %}
+        # Primary owns singleton loops. Passive failure detection sends new
+        # requests to the standby while a PM2 fork-mode reload stops primary;
+        # the restart handover keeps re-dialing if both are down at once.
+        reverse_proxy localhost:{{ platform_api_port }} localhost:{{ platform_api_standby_port }} {
+            lb_policy first
+            fail_duration 10s
+            max_fails 1
+            import ditto_api_restart_handover
+        }
+{% else %}
+        reverse_proxy localhost:{{ platform_api_port }} {
+            import ditto_api_restart_handover
+        }
+{% endif %}
     }
 {% else %}
     request_body {
         max_size {{ platform_request_body_max_size }}
     }
-    reverse_proxy localhost:{{ platform_api_port }}
+{% if platform_api_standby_port | default(0) | int > 0 %}
+    reverse_proxy localhost:{{ platform_api_port }} localhost:{{ platform_api_standby_port }} {
+        lb_policy first
+        fail_duration 10s
+        max_fails 1
+        import ditto_api_restart_handover
+    }
+{% else %}
+    reverse_proxy localhost:{{ platform_api_port }} {
+        import ditto_api_restart_handover
+    }
+{% endif %}
 {% endif %}
 
     # request_body bounds streamed reads while proxying. Format these edge

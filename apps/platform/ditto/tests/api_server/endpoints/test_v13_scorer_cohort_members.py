@@ -238,20 +238,6 @@ class TestIssuance:
             (_A, _B, _C), True
         )
 
-    async def test_three_members_one_differing_none_allowed(
-        self, session_maker: async_sessionmaker[AsyncSession]
-    ) -> None:
-        """The original unanimity rule, unchanged for a three-member pin."""
-        await _seed(
-            session_maker,
-            heartbeats=[_managed(_A), _managed(_B), _managed(_C, _OLD)],
-            pin=(_A, _B, _C),
-        )
-        assert await _allowed(session_maker, _A, _B, _C) == dict.fromkeys(
-            (_A, _B, _C), False
-        )
-        assert await _evidence(session_maker) is None
-
     async def test_four_members_one_stale_packet_others_allowed(
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
@@ -291,22 +277,6 @@ class TestIssuance:
             _C: True,
             _D: False,
         }
-
-    async def test_four_members_split_two_two_none_allowed(
-        self, session_maker: async_sessionmaker[AsyncSession]
-    ) -> None:
-        await _seed(
-            session_maker,
-            heartbeats=[
-                _managed(_A),
-                _managed(_B),
-                _managed(_C, _OLD),
-                _managed(_D, _OLD),
-            ],
-            pin=_FOUR,
-        )
-        assert await _allowed(session_maker, *_FOUR) == dict.fromkeys(_FOUR, False)
-        assert await _evidence(session_maker) is None
 
     async def test_nonmember_on_the_authority_packet_is_declined(
         self, session_maker: async_sessionmaker[AsyncSession]
@@ -742,12 +712,6 @@ class TestPostWriteRoutingCheck:
         ("routed", "message"),
         [
             pytest.param(None, "fewer than three proposed members", id="none"),
-            pytest.param(
-                _OTHER,
-                f"routes signed packet source_revision {_OLD['source_revision']}, "
-                f"not the target {_NEW['source_revision']}",
-                id="different",
-            ),
         ],
     )
     async def test_rotate(

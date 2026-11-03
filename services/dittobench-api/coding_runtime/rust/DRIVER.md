@@ -49,7 +49,7 @@ counts, invalid authority or changed freeze inputs produce no successful report.
 
 ## Runtime image and isolation
 
-`Dockerfile.coding-rust` uses pinned Rust 1.98.0/Go 1.26.6 Linux-amd64 toolchains.
+`Dockerfile.coding-rust` uses pinned Rust 1.98.0/Go 1.27.3 Linux-amd64 toolchains.
 It installs the fixed C bootstrap, trusted Go supervisor, Rust driver, core-only
 bridge libraries, and an immutable toolchain hash manifest. The candidate core
 is built without the `driver` feature before the separate JSON-enabled driver

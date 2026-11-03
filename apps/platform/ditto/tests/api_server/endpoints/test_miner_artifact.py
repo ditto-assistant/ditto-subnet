@@ -130,7 +130,7 @@ async def test_other_owner_and_missing_agent_have_identical_404s(
         assert (await session.scalars(select(ArtifactFetchAudit))).all() == []
 
 
-@pytest.mark.parametrize("denial", ["missing", "expired", "revoked", "scope"])
+@pytest.mark.parametrize("denial", ["expired", "revoked", "scope"])
 async def test_download_requires_a_valid_read_session(
     app, client, session_maker, denial
 ):

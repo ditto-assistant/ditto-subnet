@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
@@ -109,12 +109,52 @@ async def _bounty_and_revision(
     return bounty, int(current or 0)
 
 
+async def _reviewer_claim_refusal(
+    session: AsyncSession, bounty_id: UUID, reviewer_login: str, *, now: datetime
+) -> str | None:
+    """Why ``reviewer_login`` cannot review the bounty, if it holds a live claim.
+
+    A claim whose login is the reviewer's is refused when it is placed
+    (``bounty_claims._check_not_reviewer``); this keeps a later revision from
+    naming the holder of a live claim. GitHub logins are case-insensitive.
+    """
+    claim_id = await session.scalar(
+        select(BountyClaim.claim_id)
+        .join(BountySlot, BountySlot.claim_id == BountyClaim.claim_id)
+        .where(
+            BountySlot.bounty_id == bounty_id,
+            BountySlot.status.in_(bounty_claims.LIVE_SLOT_STATUSES),
+            # An unpaid hold past its expiry is already an open slot.
+            or_(BountySlot.status != "held", BountyClaim.hold_expires_at > now),
+            func.lower(BountyClaim.github_login) == reviewer_login.lower(),
+        )
+        .limit(1)
+    )
+    if claim_id is None:
+        return None
+    return (
+        f"reviewer_login {reviewer_login} holds a live claim on this bounty "
+        f"({claim_id}); its reviewer cannot be a claimant"
+    )
+
+
 async def preview_revision(
     session: AsyncSession, body: BountyPublishPreviewRequest
 ) -> BountyPublishPreview:
     """The exact digest and confirmation phrase for publishing ``body``."""
-    _, current = await _bounty_and_revision(session, repo=body.repo, issue=body.issue)
+    bounty, current = await _bounty_and_revision(
+        session, repo=body.repo, issue=body.issue
+    )
     refusals = publication_refusals(body.terms)
+    if bounty is not None and (
+        refusal := await _reviewer_claim_refusal(
+            session,
+            bounty.bounty_id,
+            body.terms.reviewer_login,
+            now=datetime.now(UTC),
+        )
+    ):
+        refusals.append(refusal)
     if current != body.expected_revision:
         refusals.append(
             f"the current revision is {current}; preview against it before publishing"
@@ -168,6 +208,14 @@ async def publish_revision(
                 409, "the bounty revision changed; preview again before publishing"
             )
         now = datetime.now(UTC)
+        if bounty is not None:
+            # Claims check the reviewer under this lock, so neither can race.
+            await bounty_claims.locked_bounty(session, bounty.bounty_id)
+            refusal = await _reviewer_claim_refusal(
+                session, bounty.bounty_id, body.terms.reviewer_login, now=now
+            )
+            if refusal is not None:
+                raise HTTPException(409, refusal)
         if bounty is None:
             bounty = Bounty(
                 bounty_id=uuid4(),

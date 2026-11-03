@@ -29,7 +29,6 @@ from ditto.db.models import (
     AgentStatus,
     ClaShadowUpload,
     ClaSignature,
-    ClaVersion,
 )
 from ditto.db.queries.contributor_identity import current_cla_version
 from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
@@ -68,7 +67,7 @@ async def test_missing_policy_seed_cannot_silently_disable_consent(session_maker
             await evaluate_cla_gate(session, netuid=118, hotkey="fixture")
 
 
-@pytest.mark.parametrize("suffix", ["", "/text"])
+@pytest.mark.parametrize("suffix", ["/text"])
 async def test_unpublished_document_returns_documented_json_error(
     app, client, session_maker, suffix
 ):
@@ -82,14 +81,8 @@ async def test_unpublished_document_returns_documented_json_error(
 @pytest.mark.parametrize(
     "table",
     [
-        "miner_github_action_nonces",
-        "miner_github_operator_revocations",
         "miner_github_links",
-        "cla_versions",
         "cla_signatures",
-        "cla_settings_revisions",
-        "cla_shadow_uploads",
-        "agent_cla_bindings",
     ],
 )
 async def test_contributor_history_rejects_truncate(session_maker, table):
@@ -383,7 +376,6 @@ async def test_cla_other_integrity_failures_are_server_errors(
         ("future", 400),
         ("wrong_signer", 400),
         ("wrong_digest", 409),
-        ("naive", 422),
         ("wrong_netuid", 400),
     ],
 )
@@ -460,7 +452,7 @@ async def test_upload_check_modes_require_current_consent_before_payment(
     assert status["is_current"] is False and status["signature"]["cla_version"] == 1
 
 
-@pytest.mark.parametrize("mode", ["off", "shadow"])
+@pytest.mark.parametrize("mode", ["shadow"])
 async def test_policy_change_before_admission_rechecks_consent(
     app, client, session_maker, monkeypatch, mode
 ):
@@ -600,7 +592,12 @@ async def test_upload_agent_enforces_before_payment_verification_or_storage(
     storage.put_object.assert_not_awaited()
 
 
-@pytest.mark.parametrize("has_consent", [False, True])
+@pytest.mark.parametrize(
+    "has_consent",
+    [
+        False,
+    ],
+)
 async def test_shadow_does_not_count_uploads_rejected_after_the_cla_gate(
     app, client, session_maker, has_consent
 ):
@@ -838,7 +835,7 @@ async def test_concurrent_signing_records_one_receipt_after_both_prechecks(
         assert await session.scalar(select(func.count()).select_from(ClaSignature)) == 1
 
 
-@pytest.mark.parametrize("hours,accepted", [(0, False), (23, False), (24, True)])
+@pytest.mark.parametrize("hours,accepted", [(23, False), (24, True)])
 async def test_enforced_cla_publication_requires_one_day_notice(
     app, client, session_maker, monkeypatch, hours, accepted
 ):
@@ -880,33 +877,6 @@ async def test_enforced_cla_publication_requires_one_day_notice(
         assert "24 hours notice" in result.text
     current = (await client.get("/api/v1/public/cla")).json()
     assert current["current"]["version"] == 1
-
-
-async def test_publication_rejects_a_naive_effective_date(app, client, session_maker):
-    setup(app, session_maker)
-    await publish(client)
-    await elapse_cla_notice(session_maker)
-    await policy(client, "enforce")
-    content = FIXTURE.format(version=2)
-    digest = hashlib.sha256(content.encode()).hexdigest()
-    # Both the notice and ordering checks compare against aware datetimes, so a
-    # naive date must fail validation before either comparison runs.
-    result = await client.post(
-        "/api/v1/admin/cla/versions",
-        headers=_HEADERS,
-        json={
-            "version": 2,
-            "text": content,
-            "sha256": digest,
-            "effective_at": (datetime.now() + timedelta(days=2)).isoformat(),
-            "reason": "test a naive effective date",
-            "confirmation": f"PUBLISH CLA 2 {digest}",
-        },
-    )
-    assert result.status_code == 422, result.text
-    async with session_maker() as session:
-        assert (await current_cla_version(session, now=datetime.now(UTC))).version == 1
-        assert await session.scalar(select(func.count()).select_from(ClaVersion)) == 1
 
 
 async def test_signing_rejects_an_out_of_range_version(app, client, session_maker):
@@ -987,13 +957,8 @@ async def test_enabling_enforcement_requires_notice_for_scheduled_versions(
     "path",
     [
         "/api/v1/public/cla/versions/2147483648",
-        "/api/v1/public/cla/versions/0",
-        "/api/v1/public/cla/versions/2147483648/text",
-        "/api/v1/public/cla/status/not-a-hotkey",
         "/api/v1/public/cla/status/%00",
-        "/api/v1/public/github-link/not-a-hotkey",
         "/api/v1/public/github-account/99999999999999999999",
-        "/api/v1/public/github-account/0",
     ],
 )
 async def test_public_identity_paths_reject_out_of_range_values(

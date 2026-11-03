@@ -159,6 +159,7 @@ func TestV8IsolationUsesWorldMemoriesAndExactGraphConflicts(t *testing.T) {
 }
 
 func TestV8IsolationUsesPlausibleSharedGivenNames(t *testing.T) {
+	t.Parallel()
 	seeds := []int64{123456789, 3473949159349387300}
 	for seed := int64(1); seed <= 128; seed++ {
 		seeds = append(seeds, seed)
@@ -238,6 +239,7 @@ func TestV8IsolationUsesPlausibleSharedGivenNames(t *testing.T) {
 }
 
 func TestV8IsolationSourceMatchingAcrossScoredProfiles(t *testing.T) {
+	t.Parallel()
 	profiles := []struct {
 		primaryN int
 		waves    int

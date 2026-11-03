@@ -13,7 +13,7 @@
   "ablation_selection_key_sha256": "2744541342deb53d3504556838313ba27d3bfca625db939054043f5e495b3831",
   "ablation_threshold_manifest_sha256": "fa0ad000b263d3660ad60d6a509573b3154fad8490a16320f34d99c72eaa0c21",
   "bench_version": 12,
-  "checksum": "d7c9ab99a1920bf3840ebe416368153866c6a5fe4d6c645ad0314df43eb1ee8d",
+  "checksum": "91338ea0ed7b0e180fc372afa4b26688c2d3ae30fb806a8279571bd8a3bf9bed",
   "composite": {
     "base_weight_bps": 7000,
     "checksum": "1ce77c31a1b6f146c4eb79c2422f066441c0eaff6cf3ca67fa13989a87c8101f",
@@ -61,8 +61,8 @@
   "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
   "longmem_min_history_bytes": 400000,
   "longmem_min_history_sessions": 55,
-  "longmem_profile_checksum": "d844e29da3f7f453bd31a157d20ab80980cc8033f6557a7a052d6bf00cac366b",
-  "longmem_profile_revision": "longmemeval-s-v12-shadow-48-zdr-v4",
+  "longmem_profile_checksum": "c015feeb03dcd2ceb5cd340b72364a5387663dbb36d9cdaa8a8be7797be17594",
+  "longmem_profile_revision": "longmemeval-s-v12-shadow-48-zdr-v5",
   "longmem_projection_key_sha256": "8b228aa55a4d37004649554158309f3526b8a0c4454d96cd49ed1b5cc2fec09b",
   "longmem_seed_batch_pairs": 32,
   "longmem_selection_seed": 17,
@@ -70,16 +70,16 @@
   "provider_lanes": [
     {
       "lane": "judge",
-      "max_completion_tokens": 24000,
+      "max_completion_tokens": 200000,
       "max_cost_usd_micros": 4000000,
-      "max_prompt_tokens": 80000,
+      "max_prompt_tokens": 160000,
       "max_requests": 48,
-      "max_total_tokens": 104000,
-      "model": "openai/gpt-4o-2024-08-06",
-      "profile_revision": "longmemeval-official-gpt4o-azure-zdr-v2",
+      "max_total_tokens": 400000,
+      "model": "deepseek/deepseek-v4.1-flash",
+      "profile_revision": "longmemeval-deepseek-v41-flash-together-v1",
       "provider": "openrouter",
-      "receipt_provider": "Azure",
-      "route_provider": "azure"
+      "receipt_provider": "Together",
+      "route_provider": "together"
     },
     {
       "lane": "reader",
@@ -95,6 +95,6 @@
       "route_provider": "throughput"
     }
   ],
-  "revision": "v12-confirmation-shadow-bounded-2026-08-27-no-retry-v8",
+  "revision": "v12-confirmation-shadow-bounded-2026-10-25-deepseek-judge-v9",
   "schema_version": 1
 }

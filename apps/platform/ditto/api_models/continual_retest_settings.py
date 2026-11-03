@@ -40,6 +40,11 @@ MAX_RETEST_COHORT_SIZE = 25
 # beyond it the band stops meaning "tied" and starts meaning "nearby", and the
 # only thing still bounding the cohort would be the size ceiling.
 MAX_RETEST_ELIGIBILITY_Z = 3.0
+# Tempo-aligned wave pacing (``wave_cadence_tempos``). Twenty-four epochs is
+# about a day of SN118 tempos; beyond it a "wave" stops tracking the chain.
+MAX_WAVE_CADENCE_TEMPOS = 24
+MAX_WAVE_SEEDS_PER_WINDOW = 16
+DEFAULT_WAVE_SEEDS_PER_WINDOW = 3
 DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 
 
@@ -55,6 +60,15 @@ CROWN_INCUMBENT_PROTOCOL = 27
 # the pool only once every recently-live weight setter reports at least this;
 # an older validator would crown and pay the runner-up instead.
 PROVISIONAL_INCUMBENT_PROTOCOL = 28
+
+# The first validator heartbeat protocol whose fold reads ``crown_gate``: the
+# minimum shared-seed confirmations a challenger needs before the paired
+# comparison may move the crown, and the official standing the crown must keep.
+CROWN_GATE_PROTOCOL = 34
+DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
+DEFAULT_CHAMPION_STANDING_RANK = 3
+# A challenger cannot hold more shared seeds than the continual lane retains.
+MAX_MIN_DETHRONE_CONFIRMATIONS = 15
 
 
 class LedgerPinStatus(BaseModel):
@@ -94,6 +108,31 @@ class ContinualRetestSettings(BaseModel):
     """Activate the protocol-29 statistical cap only after operator selection
     and every recently-live weight setter reports support. The default keeps
     the historical fold throughout a rolling upgrade."""
+
+    crown_gate_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Whether the KOTH fold gates the crown on shared-seed evidence (protocol 34).
+
+    ``disabled`` is the pre-34 walk and the exact rollback: any challenger that
+    clears the indifference band takes the crown, including on an unpaired
+    comparison of a newcomer's three-seed canonical against the incumbent's
+    retest-folded score. ``fleet_ready`` serves ``crown_gate`` once every
+    recently-live weight setter reports protocol 34: the crown then moves only
+    on the paired statistic over at least :attr:`min_dethrone_confirmations`
+    shared seeds, and only within the top :attr:`champion_standing_rank`
+    official places. There is deliberately no unconditional override.
+    """
+
+    min_dethrone_confirmations: Annotated[
+        int, Field(ge=2, le=MAX_MIN_DETHRONE_CONFIRMATIONS)
+    ] = DEFAULT_MIN_DETHRONE_CONFIRMATIONS
+    """Shared-seed confirmations a challenger must hold against the champion
+    before it may dethrone. Two is the paired statistic's own floor."""
+
+    champion_standing_rank: Annotated[int, Field(ge=1, le=EMISSION_SET_SIZE)] = (
+        DEFAULT_CHAMPION_STANDING_RANK
+    )
+    """Official places the crown must stay within. A champion that falls below
+    it hands the crown to the best-qualified standing challenger."""
 
     ledger_pin_mode: Literal["live", "epoch"] = "epoch"
     """Whether ``GET /scoring/scores`` serves one pinned ledger per chain epoch.
@@ -167,6 +206,32 @@ class ContinualRetestSettings(BaseModel):
     """
 
     idle_retests_enabled: bool = False
+
+    wave_cadence_tempos: Annotated[int, Field(ge=0, le=MAX_WAVE_CADENCE_TEMPOS)] = 0
+    """Tempo-aligned waves: open new shared seeds only once per N chain epochs.
+
+    ``0`` (the default, and the exact rollback) is the historical pacing: the
+    next growth seed opens as soon as the previous wave completes, so the board
+    moves whenever validators happen to finish. A positive ``N`` aligns the
+    agent competition to the chain: the epoch grid is cut into windows of ``N``
+    ``SubnetEpochIndex`` values starting at a multiple of ``N`` (the same grid
+    generator rounds use at ``epochs_per_round`` ``N``), and at most
+    :attr:`wave_seeds_per_window` NEW seeds open per window. A seed that is
+    already open keeps being leased until every member has it, and catch-up of
+    recorded coverage is never paced, so a new entrant still converges in one
+    round. Only the introduction of fresh shared seeds waits for the next
+    window. Crown changes therefore land on a tempo-aligned wave cadence, and
+    retest spend is bounded at ``wave_seeds_per_window`` seeds per window.
+    """
+
+    wave_seeds_per_window: Annotated[int, Field(ge=1, le=MAX_WAVE_SEEDS_PER_WINDOW)] = (
+        DEFAULT_WAVE_SEEDS_PER_WINDOW
+    )
+    """New shared seeds a tempo-aligned window may open (ignored at cadence 0).
+
+    Three matches the crown gate's ``min_dethrone_confirmations`` default, so
+    one window can carry a full dethrone case for a challenger."""
+
     rollout_standdown: Literal["off", "capable_validators", "all"] = (
         "capable_validators"
     )
@@ -294,6 +359,9 @@ class EffectiveContinualRetestSettings(BaseModel):
     crown_incumbent_fleet_ready: bool = False
     crown_incumbent_active: bool = False
     crown_incumbent_required_protocol: int = CROWN_INCUMBENT_PROTOCOL
+    crown_gate_fleet_ready: bool = False
+    crown_gate_active: bool = False
+    crown_gate_required_protocol: int = CROWN_GATE_PROTOCOL
     ledger_pin: LedgerPinStatus | None = None
     """The pin validators are folding right now, or ``None`` when no pin has
     ever been taken (bootstrap) or the mode is ``live``."""

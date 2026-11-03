@@ -71,6 +71,12 @@ class TestConfirmPayment:
 
         assert "1.5 TAO" in capsys.readouterr().out
 
+    def test_preview_names_the_competition_being_paid(self, capsys) -> None:
+        confirm_payment(
+            **self._kwargs(skip=True), purpose="generator competition upload fee"
+        )
+        assert "For:     generator competition upload fee" in capsys.readouterr().out
+
 
 class TestConfirmRegistration:
     """The recycle amount is burned outright, so the preview must be exact."""

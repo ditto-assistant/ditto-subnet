@@ -1,0 +1,540 @@
+"""Deterministic predicates over a probe record.
+
+A probe verdict is only as strong as its predicates. Every predicate here reads
+the served ``/run`` response, the authoritative tool-endpoint ledger, or the
+recorded model requests; none consults a model. Replay re-executes the same
+stimulus and re-evaluates the same predicate list, so a verdict that cites
+predicates is verifiable without another review layer.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+import subprocess
+import sys
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
+
+from ditto_screener.probe_review.sandbox import ProbeRecord
+
+Check = Mapping[str, Any]
+
+
+def served_answer(record: ProbeRecord) -> str | None:
+    response = record.response if isinstance(record.response, dict) else {}
+    answer = response.get("answer")
+    # The v13 scorer's AssertedAnswer: the slot when it is non-blank, else
+    # the prose (services/dittobench-api/internal/scorer/twins_v13.go).
+    if isinstance(answer, str) and answer.strip():
+        return answer
+    final = response.get("final_text")
+    return final if isinstance(final, str) else None
+
+
+def _field(value: Any, path: str) -> Any:
+    for part in path.split("."):
+        if isinstance(value, dict):
+            value = value.get(part)
+        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+            value = value[int(part)]
+        else:
+            return None
+    return value
+
+
+_COMPARISONS: dict[str, Callable[[float, float], bool]] = {
+    ">=": lambda a, b: a >= b,
+    "<=": lambda a, b: a <= b,
+    "==": lambda a, b: a == b,
+    ">": lambda a, b: a > b,
+    "<": lambda a, b: a < b,
+    "!=": lambda a, b: a != b,
+}
+# Word spellings a reviewer reaches for; without them a verdict written with
+# ``"cmp": "eq"`` fails every predicate silently and a proven finding is lost.
+_COMPARISON_ALIASES = {
+    "eq": "==",
+    "ne": "!=",
+    "gt": ">",
+    "ge": ">=",
+    "gte": ">=",
+    "lt": "<",
+    "le": "<=",
+    "lte": "<=",
+    "=": "==",
+}
+
+
+def comparison(op: Any) -> str | None:
+    """The canonical comparison operator for ``op``, or None when unknown."""
+    if not isinstance(op, str):
+        return None
+    op = _COMPARISON_ALIASES.get(op.strip().lower(), op.strip())
+    return op if op in _COMPARISONS else None
+
+
+def _compare(actual: Any, op: Any, expected: Any) -> bool:
+    """A malformed comparison is a failed predicate, not an evaluation crash."""
+    numeric = (int, float)
+    if (
+        not isinstance(actual, numeric)
+        or not isinstance(expected, numeric)
+        or isinstance(actual, bool)
+        or isinstance(expected, bool)
+        # Huge ints are exact and finite; isfinite would overflow on them.
+        or (not isinstance(actual, int) and not math.isfinite(actual))
+        or (not isinstance(expected, int) and not math.isfinite(expected))
+    ):
+        return False
+    canonical = comparison(op)
+    return _COMPARISONS[canonical](actual, expected) if canonical else False
+
+
+def _parse_args(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _json_equal(expected: Any, actual: Any) -> bool:
+    """JSON equality: booleans never equal numbers (Python's True == 1 does)."""
+    if isinstance(expected, bool) or isinstance(actual, bool):
+        return (
+            isinstance(expected, bool)
+            and isinstance(actual, bool)
+            and (expected is actual)
+        )
+    if isinstance(expected, dict):
+        return (
+            isinstance(actual, dict)
+            and expected.keys() == actual.keys()
+            and all(_json_equal(v, actual[k]) for k, v in expected.items())
+        )
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(expected) == len(actual)
+            and all(_json_equal(e, a) for e, a in zip(expected, actual, strict=True))
+        )
+    return bool(expected == actual)
+
+
+def _subset(expected: Any, actual: Any) -> bool:
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            k in actual and _subset(v, actual[k]) for k, v in expected.items()
+        )
+    return _json_equal(expected, actual)
+
+
+def executions(
+    record: ProbeRecord, name: str | None = None, *, successful_only: bool = False
+) -> list[dict[str, Any]]:
+    """Calls the tool endpoint received (the delivery ledger).
+
+    ``successful_only`` keeps 2xx deliveries: a failed delivery is not an
+    executed call for report-vs-ledger (I6) checks, while delivery alone still
+    proves the harness let a call run (I7).
+    """
+    out = []
+    for entry in record.tool_executions:
+        status = entry.get("status")
+        if successful_only and not (isinstance(status, int) and 200 <= status < 300):
+            continue
+        request = as_dict(entry.get("request"))
+        if name is None or request.get("name") == name:
+            out.append(
+                {"name": request.get("name"), "args": _parse_args(request.get("args"))}
+            )
+    return out
+
+
+def _model_request_view(entry: dict[str, Any]) -> dict[str, Any]:
+    request = as_dict(entry.get("request"))
+    # Legacy function calling: ``functions`` + ``function_call``.
+    tools = request.get("tools") or request.get("functions") or []
+    names = []
+    for tool in tools if isinstance(tools, list) else []:
+        if isinstance(tool, dict):
+            fn = as_dict(tool.get("function")) or tool
+            names.append(fn.get("name"))
+    choice = request.get("tool_choice")
+    if choice is None:
+        choice = request.get("function_call")
+        if isinstance(choice, str) and choice not in {"auto", "none"}:
+            # Legacy ``function_call: "<name>"`` forces that function.
+            choice = {"type": "function", "function": {"name": choice}}
+        elif isinstance(choice, dict) and choice.get("name"):
+            choice = {"type": "function", "function": choice}
+    return {
+        "text": json.dumps(
+            request.get("messages")
+            or request.get("input")
+            or request.get("prompt")
+            or "",
+            ensure_ascii=False,
+        ),
+        "tool_names": names,
+        "tool_choice": choice,
+        "pinned": _choice_pinned(choice),
+    }
+
+
+def _choice_pinned(choice: Any) -> bool:
+    """Whether a tool_choice removes the model's discretion (any wire format)."""
+    if isinstance(choice, str):
+        return choice in {"required", "any"}
+    if not isinstance(choice, dict):
+        return False
+    kind = choice.get("type")
+    if kind == "any":
+        return True
+    named = as_dict(choice.get("function")).get("name") or choice.get("name")
+    return kind in {"function", "tool"} and bool(named)
+
+
+_REGEX_TIMEOUT_S = 5.0
+# Pattern and text both arrive on stdin, so neither is bounded by argv limits.
+_REGEX_SCRIPT = (
+    "import json,re,sys\n"
+    "d=json.load(sys.stdin)\n"
+    "print(1 if re.search(d['pattern'], d['text']) else 0)"
+)
+
+
+def _search(pattern: str, text: str) -> bool:
+    """Regex predicate in a killable child: malformed or runaway patterns fail.
+
+    A verdict's pattern is reviewer-written and the answer harness-written, so
+    neither may stall evaluation or replay with catastrophic backtracking.
+    """
+    try:
+        re.compile(pattern)
+    except (re.error, RecursionError, OverflowError):
+        return False
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", _REGEX_SCRIPT],
+            input=json.dumps({"pattern": pattern, "text": text}),
+            capture_output=True,
+            text=True,
+            timeout=_REGEX_TIMEOUT_S,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return completed.returncode == 0 and completed.stdout.strip() == "1"
+
+
+def _request_matches(view: dict[str, Any], spec: Mapping[str, Any]) -> bool:
+    if "prompt_contains" in spec and str(spec["prompt_contains"]) not in view["text"]:
+        return False
+    if "prompt_lacks" in spec and str(spec["prompt_lacks"]) in view["text"]:
+        return False
+    if "tool_choice_pinned" in spec and view["pinned"] != bool(
+        spec["tool_choice_pinned"]
+    ):
+        return False
+    if "tools_count" in spec:
+        op, n = spec["tools_count"]
+        if not _compare(len(view["tool_names"]), op, n):
+            return False
+    if "offers_tool" in spec and spec["offers_tool"] not in view["tool_names"]:
+        return False
+    return not ("lacks_tool" in spec and spec["lacks_tool"] in view["tool_names"])
+
+
+PREDICATES = frozenset(
+    {
+        "http_ok",
+        "answer_equals",
+        "answer_not_equals",
+        "answer_contains",
+        "answer_lacks",
+        "answer_matches",
+        "final_text_contains",
+        "final_text_lacks",
+        "field_equals",
+        "model_calls",
+        "tool_executed",
+        "tool_not_executed",
+        "tool_execution_count",
+        "reported_not_executed",
+        "executed_not_reported",
+        "any_model_request",
+        "no_model_request",
+        "last_model_request",
+        "model_requests_matching",
+        "model_request_after_tool",
+    }
+)
+_COUNTED = {"model_calls", "tool_execution_count", "model_requests_matching"}
+_WHERE = {
+    "any_model_request",
+    "no_model_request",
+    "last_model_request",
+    "model_requests_matching",
+}
+
+
+def _usable_count(n: Any) -> bool:
+    """A threshold ``_compare`` can match: a non-bool int or finite float."""
+    if isinstance(n, bool) or not isinstance(n, (int, float)):
+        return False
+    return isinstance(n, int) or math.isfinite(n)
+
+
+def predicate_problems(check: Any) -> list[str]:
+    """Why a predicate can never be evaluated as written (empty when usable).
+
+    Evaluation treats a malformed predicate as failing, which is right for
+    replay but loses a proven finding to a typo; ``verdict`` reports these so
+    the reviewer can fix the file.
+    """
+    if not isinstance(check, Mapping):
+        return ["predicate must be an object"]
+    op = check.get("op")
+    if not isinstance(op, str) or op not in PREDICATES:
+        return [f"unknown predicate {op!r}"]
+    problems = []
+    if op in _COUNTED:
+        if comparison(check.get("cmp")) is None:
+            problems.append(
+                f"{op} cmp {check.get('cmp')!r} is not one of == != > >= < <="
+            )
+        if not _usable_count(check.get("n")):
+            problems.append(f"{op} n must be a finite number")
+    if op in _WHERE:
+        where = check.get("where")
+        if where is not None and not isinstance(where, Mapping):
+            problems.append(f"{op} where must be an object")
+        elif isinstance(where, Mapping) and "tools_count" in where:
+            pair = where["tools_count"]
+            if (
+                not isinstance(pair, (list, tuple))
+                or len(pair) != 2
+                or comparison(pair[0]) is None
+                or not _usable_count(pair[1])
+            ):
+                problems.append(f"{op} where.tools_count must be [cmp, n]")
+    return problems
+
+
+def evaluate(record: ProbeRecord, check: Check) -> tuple[bool, str]:
+    """Return ``(holds, observed)`` for one predicate."""
+    if not isinstance(check, Mapping):
+        return False, f"malformed predicate: {type(check).__name__}"
+    op = check.get("op")
+    served = served_answer(record)
+    if isinstance(op, str) and op.startswith("answer_") and served is None:
+        # No served answer: no answer-content predicate can hold, not even
+        # answer_lacks or answer_not_equals.
+        return False, "answer=None"
+    answer = served or ""
+    response = record.response if isinstance(record.response, dict) else {}
+    value = check.get("value")
+    handlers: dict[str, Callable[[], tuple[bool, str]]] = {
+        "http_ok": lambda: (
+            record.http_status is not None and 200 <= record.http_status < 300,
+            f"http_status={record.http_status}",
+        ),
+        "answer_equals": lambda: (
+            answer.strip() == str(value),
+            f"answer={answer[:200]!r}",
+        ),
+        "answer_not_equals": lambda: (
+            answer.strip() != str(value),
+            f"answer={answer[:200]!r}",
+        ),
+        "answer_contains": lambda: (str(value) in answer, f"answer={answer[:200]!r}"),
+        "answer_lacks": lambda: (str(value) not in answer, f"answer={answer[:200]!r}"),
+        "answer_matches": lambda: (
+            _search(str(value), answer),
+            f"answer={answer[:200]!r}",
+        ),
+        "final_text_contains": lambda: (
+            str(value) in str(response.get("final_text", "")),
+            f"final_text={str(response.get('final_text', ''))[:200]!r}",
+        ),
+        "final_text_lacks": lambda: (
+            str(value) not in str(response.get("final_text", "")),
+            f"final_text={str(response.get('final_text', ''))[:200]!r}",
+        ),
+        "field_equals": lambda: (
+            _json_equal(value, _field(response, str(check.get("path")))),
+            f"{check.get('path')}={_field(response, str(check.get('path')))!r}",
+        ),
+        "model_calls": lambda: (
+            _compare(len(record.model_requests), check["cmp"], check["n"]),
+            f"model_calls={len(record.model_requests)}",
+        ),
+        "tool_executed": lambda: _tool_executed(record, check),
+        "tool_not_executed": lambda: _negate(_tool_executed(record, check)),
+        "tool_execution_count": lambda: (
+            _compare(
+                len(executions(record, check.get("name"))), check["cmp"], check["n"]
+            ),
+            f"executions={[e['name'] for e in executions(record)]}",
+        ),
+        "reported_not_executed": lambda: _reported_not_executed(record),
+        "executed_not_reported": lambda: _executed_not_reported(record),
+        "any_model_request": lambda: _any_request(record, check.get("where") or {}),
+        "no_model_request": lambda: _negate(
+            _any_request(record, check.get("where") or {})
+        ),
+        "last_model_request": lambda: _last_request(record, check.get("where") or {}),
+        "model_requests_matching": lambda: (
+            _compare(
+                _count_matching(record, check.get("where") or {}),
+                check["cmp"],
+                check["n"],
+            ),
+            f"matching_requests={_count_matching(record, check.get('where') or {})}",
+        ),
+        "model_request_after_tool": lambda: _model_request_after_tool(
+            record, check.get("name")
+        ),
+    }
+    handler = handlers.get(str(op))
+    if handler is None:
+        return False, f"unknown predicate {op!r}"
+    try:
+        return handler()
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        AttributeError,
+        OverflowError,
+        RecursionError,
+    ) as error:
+        # A malformed check is a failed predicate, never an evaluation crash.
+        return False, f"malformed predicate {op!r}: {type(error).__name__}"
+
+
+def _negate(result: tuple[bool, str]) -> tuple[bool, str]:
+    return not result[0], result[1]
+
+
+def _tool_executed(record: ProbeRecord, check: Check) -> tuple[bool, str]:
+    seen = executions(record, check.get("name"))
+    if "args" in check:
+        hit = any(_subset(check["args"], e["args"]) for e in seen)
+    elif "args_exact" in check:
+        hit = any(_json_equal(check["args_exact"], e["args"]) for e in seen)
+    else:
+        hit = bool(seen)
+    return hit, f"executions={json.dumps(executions(record))[:400]}"
+
+
+def _reported(record: ProbeRecord) -> list[dict[str, Any]]:
+    response = record.response if isinstance(record.response, dict) else {}
+    calls = response.get("tool_calls")
+    if not calls and isinstance(response.get("function_call"), dict):
+        # Legacy single-call responses report {name, arguments}.
+        calls = [response["function_call"]]
+    calls = calls or []
+    reported = []
+    if isinstance(calls, dict):
+        calls = [calls]  # a single call object reported without a list
+    for c in calls if isinstance(calls, list) else []:
+        if not isinstance(c, dict):
+            continue
+        # Flat {name, args} or OpenAI-nested {function: {name, arguments}}.
+        call = as_dict(c.get("function")) or c
+        args = call.get("arguments", c.get("args"))
+        reported.append({"name": call.get("name"), "args": _parse_args(args)})
+    return reported
+
+
+def _count_matching(record: ProbeRecord, where: Mapping[str, Any]) -> int:
+    return sum(
+        _request_matches(_model_request_view(e), where) for e in record.model_requests
+    )
+
+
+def _model_request_after_tool(
+    record: ProbeRecord, name: str | None
+) -> tuple[bool, str]:
+    """A model request follows the first (named) tool execution in the transcript."""
+    tool_seqs = [
+        int(e.get("seq") or 0)
+        for e in record.tool_executions
+        if name is None or as_dict(e.get("request")).get("name") == name
+    ]
+    if not tool_seqs:
+        return False, "no matching tool execution"
+    first = min(tool_seqs)
+    later = [int(e.get("seq") or 0) for e in record.model_requests]
+    after = [seq for seq in later if seq > first]
+    return bool(after), f"tool_seq={first} later_model_seqs={after[:8]}"
+
+
+def _unmatched(
+    calls: list[dict[str, Any]], against: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Calls with no counterpart, consuming one counterpart per call."""
+    remaining = list(against)
+    missing = []
+    for call in calls:
+        # JSON equality: a reported true must not match a delivered 1.
+        match = next(
+            (
+                i
+                for i, candidate in enumerate(remaining)
+                if _json_equal(call, candidate)
+            ),
+            None,
+        )
+        if match is not None:
+            remaining.pop(match)
+        else:
+            missing.append(call)
+    return missing
+
+
+def _reported_not_executed(record: ProbeRecord) -> tuple[bool, str]:
+    missing = _unmatched(_reported(record), executions(record, successful_only=True))
+    return bool(missing), f"reported_not_executed={json.dumps(missing)[:400]}"
+
+
+def _executed_not_reported(record: ProbeRecord) -> tuple[bool, str]:
+    missing = _unmatched(executions(record, successful_only=True), _reported(record))
+    return bool(missing), f"executed_not_reported={json.dumps(missing)[:400]}"
+
+
+def _any_request(record: ProbeRecord, where: Mapping[str, Any]) -> tuple[bool, str]:
+    views = [_model_request_view(e) for e in record.model_requests]
+    hits = [i for i, v in enumerate(views) if _request_matches(v, where)]
+    summary = [
+        {"i": i, "tools": len(v["tool_names"]), "tool_choice": v["tool_choice"]}
+        for i, v in enumerate(views)
+    ]
+    return bool(hits), f"matching_requests={hits} of {json.dumps(summary)[:400]}"
+
+
+def _last_request(record: ProbeRecord, where: Mapping[str, Any]) -> tuple[bool, str]:
+    views = [_model_request_view(e) for e in record.model_requests]
+    if not views:
+        return False, "no model requests"
+    return _request_matches(
+        views[-1], where
+    ), f"last_tool_choice={views[-1]['tool_choice']}"
+
+
+def evaluate_all(record: ProbeRecord, checks: Sequence[Check]) -> list[dict[str, Any]]:
+    results = []
+    for check in checks:
+        holds, observed = evaluate(record, check)
+        shown = dict(check) if isinstance(check, Mapping) else {"malformed": check}
+        results.append({"check": shown, "holds": holds, "observed": observed})
+    return results

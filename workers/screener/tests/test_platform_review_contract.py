@@ -61,3 +61,48 @@ def test_platform_revision_deserializes_and_applies(
     # Applying a revision rebuilds the real layered reviewer. Its constructor
     # must accept the same values, not merely the transport schema.
     BuildGate(runtime, Mock(), policy=Mock(), journal=Mock())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"probe_battery_mode": "shadow"},
+        {"probe_battery_mode": "shadow", "probe_battery_timeout_seconds": 300},
+        {"probe_battery_timeout_seconds": 300},
+        {"probe_battery_mode": "shadow", "l2_always_escalate": True},
+        {"probe_battery_mode": "shadow", "probe_review_mode": "shadow"},
+        {
+            "probe_battery_mode": "shadow",
+            "probe_review_mode": "shadow",
+            "probe_review_timeout_seconds": 600,
+            "probe_review_max_cost_usd": 0.5,
+        },
+        {"probe_review_timeout_seconds": 600},
+        {
+            "probe_battery_mode": "shadow",
+            "fanout_shadow_mode": "shadow",
+            "fanout_shadow_image_source_sha": "1" * 40,
+        },
+    ],
+)
+def test_probe_battery_revisions_verify_and_apply(platform_contract, overrides):
+    settings = platform_contract.ScreenerReviewSettings(mode="shadow", **overrides)
+    effective = EffectiveReviewSettings.model_validate(
+        {
+            "revision": 7,
+            "scope": "*",
+            "max_age_seconds": 900,
+            "settings": settings.model_dump(mode="json"),
+            "checksum": platform_contract.review_settings_checksum(settings),
+        }
+    )
+    assert effective.settings.probe_battery_mode == settings.probe_battery_mode
+    assert (
+        effective.settings.probe_battery_timeout_seconds
+        == settings.probe_battery_timeout_seconds
+    )
+    assert effective.settings.probe_review_mode == settings.probe_review_mode
+    assert (
+        effective.settings.probe_review_max_cost_usd
+        == settings.probe_review_max_cost_usd
+    )

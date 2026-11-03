@@ -273,6 +273,23 @@ def _print_claim(view: BountyClaimView) -> None:
         print(f"Hold expires at {view.hold_expires_at.isoformat()}")
     if view.deadline_at is not None:
         print(f"Delivery deadline: {view.deadline_at.isoformat()}")
+    for submission in view.submissions:
+        decision = (
+            submission.decision.replace("_", " ")
+            if submission.decision
+            else f"awaiting review, due {submission.review_due_at.isoformat()}"
+        )
+        print(
+            f"Submission PR #{submission.pr_number} {submission.head_sha}: {decision}"
+            + (f" — {submission.decision_reason}" if submission.decision_reason else "")
+        )
+        if submission.attribution:
+            print(f"  Credit: {submission.attribution}")
+        if submission.rework_deadline_at is not None:
+            print(f"  Rework deadline: {submission.rework_deadline_at.isoformat()}")
+    for filed in view.appeals:
+        outcome = {None: "pending", True: "upheld", False: "denied"}[filed.upheld]
+        print(f"Appeal of event {filed.subject_event_id}: {outcome}")
     settled = {o.obligation_id for o in view.obligations}
     for refund in view.refunds:
         if refund.obligation_id in settled:

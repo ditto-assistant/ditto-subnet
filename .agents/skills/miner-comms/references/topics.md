@@ -33,6 +33,16 @@ the tail to finish catch-up. See
 
 Shares are 65 / 14 / 10 / 7 / 4 for champion plus four tail slots.
 
+Once the protocol-34 crown gate is active (`emissions.crown_rules.active`),
+a challenger needs at least `min_dethrone_confirmations` (default 3)
+shared-seed confirmations against the King before the paired comparison can
+move the crown, and the King must stay in the top `champion_standing_rank`
+(default 3) official places. Read `emissions.challengers[]` for the miner's
+exact status: `needs_confirmations` (wait for the lane), `dueling` (enough
+seeds, not enough paired lead; `lead_needed` says how much), or
+`outside_standing`. A higher canonical composite with zero shared seeds is
+not a dethrone. See [crown churn precedent](../../backroom-review/references/precedents/october-30-crown-churn-shared-seed-gate.md).
+
 ## "Seeds" on the public board
 
 Quorum is **three validators** on the submission's own dataset seed. That

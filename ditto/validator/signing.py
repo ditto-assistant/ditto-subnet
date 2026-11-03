@@ -1152,6 +1152,7 @@ def v9_confirmation_fail_signing_message(
     requested_at: datetime,
     failure_class: str | None = None,
     failure_stage: str | None = None,
+    failure_status: int | None = None,
 ) -> bytes:
     """Bind one hand-back, and its diagnostics when the reporter sent any.
 
@@ -1160,12 +1161,21 @@ def v9_confirmation_fail_signing_message(
     the allowlisted class and stage into the signature so a persisted diagnostic
     is exactly what the reporter signed — an unsigned advisory field could be
     forged or stripped by anything on the path, and this one is read by
-    operators deciding whether to spend the next bounded canary.
+    operators deciding whether to spend the next bounded canary. v3 adds the
+    scorer's bounded status alongside a scorer-forwarded class.
+
+    The version is chosen by what the reporter actually sent, never by what it
+    is capable of sending, so all three remain simultaneously valid during a
+    rolling fleet upgrade. Platform rebuilds the same string from the fields it
+    received: a stripped status downgrades the rebuild to v2 and fails the
+    signature rather than silently persisting a diagnostic nobody signed.
     """
     if requested_at.tzinfo is None:
         raise ValueError("confirmation failure timestamp must include a timezone")
     if (failure_class is None) != (failure_stage is None):
         raise ValueError("confirmation failure class and stage must travel together")
+    if failure_status is not None and failure_class is None:
+        raise ValueError("confirmation failure status requires a failure class")
     requested = (
         requested_at.astimezone(UTC)
         .isoformat(timespec="microseconds")
@@ -1176,10 +1186,16 @@ def v9_confirmation_fail_signing_message(
             "validator-v9-confirmation-fail:v1:"
             f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:{nonce}:{requested}"
         ).encode()
+    if failure_status is None:
+        return (
+            "validator-v9-confirmation-fail:v2:"
+            f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:"
+            f"{failure_class}:{failure_stage}:{nonce}:{requested}"
+        ).encode()
     return (
-        "validator-v9-confirmation-fail:v2:"
+        "validator-v9-confirmation-fail:v3:"
         f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:"
-        f"{failure_class}:{failure_stage}:{nonce}:{requested}"
+        f"{failure_class}:{failure_stage}:{failure_status}:{nonce}:{requested}"
     ).encode()
 
 
@@ -1194,12 +1210,14 @@ def sign_v9_confirmation_fail(
     requested_at: datetime,
     failure_class: str | None = None,
     failure_stage: str | None = None,
+    failure_status: int | None = None,
 ) -> str:
     return keypair.sign(
         v9_confirmation_fail_signing_message(
             validator_hotkey=validator_hotkey,
             failure_class=failure_class,
             failure_stage=failure_stage,
+            failure_status=failure_status,
             bundle_id=bundle_id,
             ticket_id=ticket_id,
             reason=reason,

@@ -128,9 +128,6 @@ func (request confirmationExecutionRequest) validate(now time.Time, readiness co
 	if len(request.ExecutionProfile) == 0 || bytes.Equal(request.ExecutionProfile, []byte("null")) {
 		return errors.New("confirmation execution profile is missing")
 	}
-	if strings.TrimSpace(request.ArtifactURL) == "" {
-		return errors.New("confirmation artifact URL is missing")
-	}
 	if strings.TrimSpace(request.ScreenedImageURL) == "" ||
 		!canonicalConfirmationSHA256(request.ScreenedImageSHA256) ||
 		request.ScreenedImageSizeBytes <= 0 ||

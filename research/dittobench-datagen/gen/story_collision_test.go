@@ -6,6 +6,7 @@ import (
 )
 
 func TestV13InvoiceStoryCollisionSeedGenerates(t *testing.T) {
+	t.Parallel()
 	p, _ := gen.ProfileForVersion("full", 13)
 	for _, seed := range []int64{2000260, 2000261, 2000262} {
 		if _, err := gen.GenerateDataset(seed, p, 13); err != nil {

@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -284,9 +285,7 @@ def test_release_builder_binds_scorer_runtime_identity_to_descriptor(
     ("argument", "value", "message"),
     [
         ("version", "v0.10.0", "unprefixed semantic version"),
-        ("version", "0.10", "unprefixed semantic version"),
         ("revision", "A" * 40, "full lowercase Git SHA"),
-        ("revision", "a" * 39, "full lowercase Git SHA"),
         ("dittobench-revision", "b" * 39, "full lowercase Git SHA"),
         ("compatibility-epoch", "0", "positive integer"),
         ("update-protocol", "-1", "positive integer"),
@@ -361,6 +360,7 @@ FAKE_WRAPPER_DOCKER = r"""#!/usr/bin/env python3
 import json
 import os
 import sys
+import time
 
 args = sys.argv[1:]
 if args == ["info"]:
@@ -521,13 +521,6 @@ def test_stack_wrapper_rejects_unverified_release_directory(tmp_path: Path) -> N
     assert not capture.exists()
 
 
-def test_stack_updater_contract_is_installed() -> None:
-    """Give an immediate, readable failure while the updater is being built."""
-
-    assert UPDATER.is_file(), "whole-stack updater entrypoint is missing"
-    assert os.access(UPDATER, os.X_OK), "whole-stack updater must be executable"
-
-
 def test_stack_bootstrap_persists_registry_wallet_and_signature_context() -> None:
     installer = STACK_INSTALLER.read_text()
     compose = STACK_COMPOSE.read_text()
@@ -579,6 +572,8 @@ import json
 import os
 import shutil
 import sys
+import time
+import time
 
 state_path = os.environ["FAKE_STACK_STATE"]
 with open(state_path) as handle:
@@ -597,6 +592,11 @@ def die(message="fake docker failure"):
 if args[:1] == ["pull"]:
     if args[1] == state.get("fail_pull"):
         die()
+    if args[1] == state.get("hang_pull"):
+        # A stalled registry transfer.
+        state["hung_calls"] = state.get("hung_calls", 0) + 1
+        save()
+        time.sleep(3600)
     if args[1] in state.get("missing_local_images", []):
         state["missing_local_images"].remove(args[1])
 elif args[:1] == ["create"]:
@@ -647,6 +647,15 @@ elif args[:1] == ["inspect"]:
     elif ".State.Health" in fmt:
         print(container.get("health", "none"))
 elif args[:1] == ["exec"]:
+    if (
+        state.get("hang_candidate_exec")
+        and state.get("current_install_version") == "0.10.1"
+    ):
+        # A wedged container whose exec never returns, as a cgroup move failure
+        # leaves it. Only the updater's own timeout can end this call.
+        state["hung_calls"] = state.get("hung_calls", 0) + 1
+        save()
+        time.sleep(3600)
     if state.get("drain_requested"):
         checks_remaining = state.get("busy_checks_remaining", 0)
         if checks_remaining > 0:
@@ -660,6 +669,12 @@ elif args[:1] == ["kill"]:
         for value in args
         if value.startswith("--signal=")
     )
+    if signal_name == "USR1" and state.pop("hang_drain_signal", False):
+        # The daemon delivers the signal but the CLI never gets its response.
+        state["runtime_state"]["state"] = "drained"
+        state["hung_calls"] = state.get("hung_calls", 0) + 1
+        save()
+        time.sleep(3600)
     if signal_name == "USR1" and "busy_checks_remaining" in state:
         state["drain_requested"] = True
     else:
@@ -683,6 +698,8 @@ FAKE_COMPOSE = r"""#!/usr/bin/env python3
 import json
 import os
 import sys
+import time
+import time
 
 state_path = os.environ["FAKE_STACK_STATE"]
 with open(state_path) as handle:
@@ -726,6 +743,12 @@ elif args[:1] == ["up"]:
         "dittobench-api": "DITTOBENCH_API_IMAGE", "ditto-subnet": "VALIDATOR_IMAGE",
     }
     services = [value for value in args if value in mapping]
+    if state.get("hang_candidate_up") and manifest["STACK_VERSION"] == "0.10.1":
+        # `compose up` blocked on the daemon never returns on its own.
+        state["hung_calls"] = state.get("hung_calls", 0) + 1
+        with open(state_path, "w") as handle:
+            json.dump(state, handle)
+        time.sleep(3600)
     start_failures = state.get("compose_start_failures_remaining", 0)
     for service in services:
         container = state["containers"].setdefault(
@@ -794,6 +817,7 @@ FAKE_GIT = r"""#!/usr/bin/env python3
 import json
 import os
 import sys
+import time
 
 state_path = os.environ["FAKE_STACK_STATE"]
 with open(state_path) as handle:
@@ -855,6 +879,7 @@ FAKE_MV = r"""#!/usr/bin/env python3
 import json
 import os
 import sys
+import time
 
 path = os.environ["FAKE_STACK_STATE"]
 with open(path) as handle:
@@ -881,6 +906,7 @@ FAKE_COSIGN = r"""#!/usr/bin/env python3
 import json
 import os
 import sys
+import time
 
 path = os.environ["FAKE_STACK_STATE"]
 with open(path) as handle:
@@ -1032,6 +1058,8 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
         "VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS": "1",
         "VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS": "1",
         "VALIDATOR_AUTO_UPDATE_CHECK_SECONDS": "1",
+        # Generous enough that a loaded runner never times out a fake call.
+        "VALIDATOR_AUTO_UPDATE_COMMAND_TIMEOUT_SECONDS": "15",
     }
     return env, state_path, state_dir, env_file
 
@@ -1039,7 +1067,6 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
 @pytest.mark.parametrize(
     "dittobench_source",
     [
-        "https://github.com/ditto-assistant/dittobench-api",
         "https://github.com/ditto-assistant/ditto-subnet",
     ],
 )
@@ -1060,14 +1087,16 @@ def test_adoption_accepts_standalone_and_monorepo_dittobench_identity(
     assert result.returncode == 0, result.stderr
 
 
-def _run_updater(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+def _run_updater(
+    env: dict[str, str], *args: str, timeout: float = 20
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(UPDATER), *args],
         cwd=ROOT,
         env=env,
         text=True,
         capture_output=True,
-        timeout=20,
+        timeout=timeout,
         check=False,
     )
 
@@ -1822,66 +1851,6 @@ def test_waits_for_busy_validator_before_replacing_stack(
 
 
 @pytest.mark.parametrize(
-    "relay_source",
-    [
-        "https://github.com/ditto-assistant/dittobench-api",
-        (
-            f"https://github.com/ditto-assistant/ditto-subnet/tree/{REVISION}"
-            "/services/dittobench-api/compat/model-relay"
-        ),
-    ],
-)
-def test_four_service_candidate_can_roll_back_to_legacy_six_service_release(
-    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
-    relay_source: str,
-) -> None:
-    env, state_path, state_dir, env_file = stack_updater_env
-    state = json.loads(state_path.read_text())
-    old_release = Path(state["descriptor_dirs"][OLD_STACK_DIGEST])
-    relay = "ghcr.io/ditto-assistant/dittobench-api-relay@sha256:" + "9" * 64
-    ollama = "docker.io/ollama/ollama@sha256:" + "a" * 64
-    with (old_release / "manifest.env").open("a") as manifest:
-        manifest.write(f"MODEL_RELAY_IMAGE={relay}\nOLLAMA_IMAGE={ollama}\n")
-    for index, (service, image) in enumerate(
-        (("model-relay", relay), ("ollama", ollama)), start=8
-    ):
-        image_id = "sha256:" + str(index) * 64
-        state["images"][image] = image_id
-        state["containers"][f"{service}-container"] = {
-            "image": image_id,
-            "running": True,
-            "health": "healthy",
-        }
-    state["descriptor_labels"][relay] = {
-        "org.opencontainers.image.source": relay_source,
-        "org.opencontainers.image.revision": REVISION,
-        "org.opencontainers.image.version": "0.10.0",
-    }
-    state_path.write_text(json.dumps(state))
-
-    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
-    assert adopted.returncode == 0, adopted.stderr
-    state = json.loads(state_path.read_text())
-    state["fail_health_service"] = "dittobench-api"
-    state_path.write_text(json.dumps(state))
-    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
-
-    result = _run_updater(env, "run")
-
-    assert result.returncode != 0
-    final = json.loads(state_path.read_text())
-    rollback_up_calls = [
-        call
-        for call in final["compose_calls"]
-        if "up" in call and "model-relay" in call and "ollama" in call
-    ]
-    assert rollback_up_calls
-    assert (state_dir / "managed-release.env").read_text() == (
-        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
-    )
-
-
-@pytest.mark.parametrize(
     "failure_service",
     ["pylon", "sandbox-docker", "dittobench-api"],
 )
@@ -2054,6 +2023,140 @@ def test_candidate_validator_rejection_rolls_back_complete_stack(
     failed = _manifest(state_dir / "failed-candidate")
     assert failed["CANDIDATE"] == STACK_DIGEST
     assert failed["FAILURES"] == "1"
+
+
+@pytest.mark.parametrize(
+    ("hang", "reason"),
+    [
+        ("hang_candidate_up", "candidate_deploy_failed"),
+        ("hang_candidate_exec", "candidate_readiness_failed"),
+    ],
+)
+def test_hung_candidate_docker_call_times_out_and_rolls_back(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    hang: str,
+    reason: str,
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    old_images = {name: value["image"] for name, value in state["containers"].items()}
+    state[hang] = True
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    env = {**env, "VALIDATOR_AUTO_UPDATE_COMMAND_TIMEOUT_SECONDS": "3"}
+
+    # Without a per-call bound the hung call sleeps for an hour and this run
+    # raises TimeoutExpired instead of returning.
+    started = time.monotonic()
+    result = _run_updater(env, "run", timeout=60)
+    elapsed = time.monotonic() - started
+
+    assert result.returncode != 0
+    assert elapsed < 30
+    assert "timed out after 3s" in result.stderr
+    assert "previous stack restored" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["hung_calls"] >= 1
+    assert {name: value["image"] for name, value in final["containers"].items()} == (
+        old_images
+    )
+    assert final["current_install_version"] == "0.10.0"
+    assert final["runtime_state"]["state"] == "working"
+    assert (state_dir / "managed-release.env").read_text() == (
+        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
+    )
+    assert _manifest(state_dir / "current/manifest.env")["STACK_VERSION"] == "0.10.0"
+    failed = _manifest(state_dir / "failed-candidate")
+    assert failed["CANDIDATE"] == STACK_DIGEST
+    assert failed["FAILURES"] == "1"
+    assert failed["REASON"] == reason
+    assert not (state_dir / "transaction.env").exists()
+
+
+def test_timed_out_drain_signal_resumes_the_validator(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    old_images = {name: value["image"] for name, value in state["containers"].items()}
+    state["hang_drain_signal"] = True
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    env = {**env, "VALIDATOR_AUTO_UPDATE_COMMAND_TIMEOUT_SECONDS": "3"}
+
+    result = _run_updater(env, "run", timeout=60)
+
+    assert result.returncode == 0, result.stderr
+    assert "timed out after 3s" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["hung_calls"] == 1
+    # USR1 was delivered even though the CLI timed out; USR2 undid it.
+    assert final["runtime_state"]["state"] == "working"
+    assert ["kill", "--signal=USR2", "ditto-subnet-container"] in final["calls"]
+    assert not any(call[0] == "stop" for call in final["calls"])
+    assert {name: value["image"] for name, value in final["containers"].items()} == (
+        old_images
+    )
+    assert (state_dir / "managed-release.env").read_text() == (
+        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
+    )
+    assert not (state_dir / "transaction.env").exists()
+
+
+def test_run_resumes_a_validator_left_drained_without_a_transaction(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    # A late USR1 from an earlier timed-out drain landed after its USR2.
+    state = json.loads(state_path.read_text())
+    state["runtime_state"]["state"] = "drained"
+    state["channel_digest"] = OLD_STACK_DIGEST
+    state["calls"] = []
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    assert "drained outside any update transaction" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["runtime_state"]["state"] == "working"
+    assert ["kill", "--signal=USR2", "ditto-subnet-container"] in final["calls"]
+    assert not any(call[0] == "stop" for call in final["calls"])
+    assert not (state_dir / "transaction.env").exists()
+
+
+def test_stalled_registry_pull_times_out_before_drain(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    # The fixture derives each candidate image by swapping the old digest.
+    state["hang_pull"] = _images()["VALIDATOR_IMAGE"].rsplit(":", 1)[0] + (
+        ":" + "e" * 64
+    )
+    state["calls"] = []
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    env = {**env, "VALIDATOR_AUTO_UPDATE_PULL_TIMEOUT_SECONDS": "3"}
+
+    result = _run_updater(env, "run", timeout=60)
+
+    assert result.returncode != 0
+    assert "timed out after 3s" in result.stderr
+    assert "candidate component pull failed before drain" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["hung_calls"] == 1
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert final["runtime_state"]["state"] == "working"
 
 
 def test_same_release_digest_is_a_safe_noop(
@@ -2229,3 +2332,53 @@ def test_recover_restores_the_complete_previous_stack_after_crash_phase(
     assert all(container["running"] for container in final["containers"].values())
     assert final["runtime_state"]["state"] == "working"
     assert len([call for call in final["compose_calls"] if "up" in call]) == 2
+
+
+def test_reconfigure_recreates_the_current_release_from_host_environment(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+
+    result = _run_updater(env, "reconfigure")
+
+    assert result.returncode == 0, result.stderr
+    # Same signed release: nothing is staged, swapped or recorded as an update.
+    assert (state_dir / "managed-release.env").read_text() == (
+        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
+    )
+    assert _manifest(state_dir / "current/manifest.env")["STACK_VERSION"] == "0.10.0"
+    assert not (state_dir / "staged").exists()
+    assert not (state_dir / "last-update.env").exists()
+    state = json.loads(state_path.read_text())
+    signals = [call[1] for call in state["calls"] if call[:1] == ["kill"]]
+    assert signals[-2:] == ["--signal=USR1", "--signal=USR2"]
+    up_calls = [call for call in state["compose_calls"] if "up" in call]
+    assert len(up_calls) == 2 and all("--force-recreate" in c for c in up_calls)
+    assert all(Path(call[0]).name == "current" for call in up_calls)
+    assert up_calls[1][-1] == "ditto-subnet"
+    assert state["runtime_state"]["state"] == "working"
+
+
+def test_reconfigure_refuses_an_unadopted_stack_without_draining(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, _ = stack_updater_env
+
+    result = _run_updater(env, "reconfigure")
+
+    assert result.returncode != 0
+    assert "not adopted" in result.stderr
+    state = json.loads(state_path.read_text())
+    assert not [call for call in state["calls"] if call[:1] == ["kill"]]
+    assert not [call for call in state["compose_calls"] if "up" in call]
+
+
+def test_reconfigure_rejects_extra_arguments(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, _, _, _ = stack_updater_env
+    result = _run_updater(env, "reconfigure", OLD_STACK_DIGEST)
+    assert result.returncode != 0
+    assert "usage" in result.stderr

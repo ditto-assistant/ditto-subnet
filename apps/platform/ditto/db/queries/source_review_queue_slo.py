@@ -10,13 +10,16 @@ actionable reason:
   ever been claimed yet; the item is waiting on screener capacity.
 * ``screening``         -- the current attempt is claimed and running.
 * ``screening_failed``  -- the current attempt ended non-terminal
-  (``retryable_infra``/``inconclusive``); fail-closed policy parks it until an
-  operator authorizes one exact retry (see
-  ``ditto.db.queries.screening_retry``). This is the "infrastructure backoff"
-  reason: a technical parking state, not a content judgment.
-* ``quarantined``       -- an active anti-cheat hold
-  (:class:`~ditto.db.models.ScreeningQuarantine`, ``status='active'``); this
-  is the "escalation" reason, a human judgment call on the artifact itself.
+  (``retryable_infra``, or an infrastructure fault the worker carried as
+  ``inconclusive``); fail-closed policy parks it until an operator authorizes
+  one exact retry (see ``ditto.db.queries.screening_retry``). This is the
+  "infrastructure backoff" reason: a technical parking state, not a content
+  judgment.
+* ``quarantined``       -- an active anti-cheat or review hold
+  (:class:`~ditto.db.models.ScreeningQuarantine`, ``status='active'``),
+  including a reviewer-inconclusive screening held for operator review
+  (``ditto.api_server.screening_inconclusive``); this is the "escalation"
+  reason, a human judgment call on the artifact itself.
 
 Stronger top-agent review, copy review, ATH review, and human escalation (the
 other four review classes #2042 names) are explicitly OUT of scope here. They

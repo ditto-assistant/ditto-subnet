@@ -55,6 +55,7 @@ from ditto.db.queries.benchmark_admission import (
     validator_queue_admission_predicate,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
+from ditto.db.queries.review_lineage import select_lineage_parent
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.screening_infra_retry import (
     InfraRetryDecision,
@@ -122,10 +123,6 @@ EXHAUSTED_REASON_CODE = reason_codes.REPEATEDLY_INCONCLUSIVE
 (:mod:`ditto.api_server.emission_eligibility`) classifies this code as
 inconclusive, and must not carry its own copy of the string."""
 _EXHAUSTED_REASON_CODE = EXHAUSTED_REASON_CODE
-# The worker's code for a complete review the model could not settle from
-# source. Deliberately unregistered in the shared registry (an operator retry);
-# policy v13 V2 counts it (:func:`complete_static_inconclusive_count`).
-L2_MODEL_INCONCLUSIVE_REASON_CODE = "l2-model-inconclusive"
 _EXHAUSTED_PUBLIC_REASON = (
     "Screening was inconclusive repeatedly; held for operator review"
 )
@@ -1136,31 +1133,6 @@ async def _inconclusive_attempt_count(session: AsyncSession, *, agent_id: UUID) 
     return int(count or 0)
 
 
-async def complete_static_inconclusive_count(
-    session: AsyncSession, *, agent_id: UUID, policy_version: int
-) -> int:
-    """Count finished source reviews of this agent that ended statically unsettled.
-
-    Policy v13's V2 rule counts complete reviews of the exact artifact, so
-    neither an operator retry nor a quarantine release resets the tally the way
-    they reset ``_inconclusive_attempt_count``. Only the worker's model-chosen
-    ``l2-model-inconclusive`` verdict counts: budget, time, provider and
-    infrastructure stops carry other codes. An agent's artifact is immutable,
-    so the agent id binds the exact artifact.
-    """
-    count = await session.scalar(
-        select(func.count())
-        .select_from(ScreeningAttempt)
-        .where(
-            ScreeningAttempt.agent_id == agent_id,
-            ScreeningAttempt.policy_version == policy_version,
-            ScreeningAttempt.status == "expired",
-            ScreeningAttempt.reason_code == L2_MODEL_INCONCLUSIVE_REASON_CODE,
-        )
-    )
-    return int(count or 0)
-
-
 async def _park_repeatedly_inconclusive(
     session: AsyncSession,
     agent: Agent,
@@ -1248,6 +1220,7 @@ async def claim_screening_attempts(
     review_settings_enrolled_node_id: str | None = None,
     canary_policy_version: int | None = None,
     claim_lock_held: bool = False,
+    lineage_reference_mode: str = "same_owner_version",
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
     """Claim completion-lane contenders, then least-scored eligible work.
 
@@ -1866,10 +1839,25 @@ async def claim_screening_attempts(
                 )
             )
         )
+        # A same-hotkey prior version scopes the model review to its diff and
+        # review history. Duplicates, mechanical rebuilds, canaries and forced
+        # full reviews keep the ordinary full review.
+        lineage_parent = (
+            await select_lineage_parent(session, agent, mode=lineage_reference_mode)
+            if not build_only
+            and duplicate_of is None
+            # A canary or integrity double-check pins its own posture.
+            and attempt_review_settings_binding == review_settings_binding
+            and not force_full_review
+            else None
+        )
         attempt = ScreeningAttempt(
             attempt_id=uuid4(),
             agent_id=agent.agent_id,
             artifact_sha256=agent.sha256,
+            lineage_parent_agent_id=(
+                lineage_parent.agent_id if lineage_parent is not None else None
+            ),
             screener_hotkey=screener_hotkey,
             policy_version=attempt_policy_version,
             status="running",

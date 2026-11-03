@@ -153,6 +153,39 @@ def _check_tar_opens(tar_path: Path) -> PreflightCheckResult:
     )
 
 
+def _dockerfile_instructions(text: str) -> list[tuple[str, str]]:
+    """Parse a Dockerfile into (INSTRUCTION, remainder) pairs.
+
+    Line continuations are joined and standalone comment lines are dropped.
+    This is a bounded static parse, not a full Dockerfile grammar.
+
+    A verbatim copy of the screener's parser in
+    ``workers/screener/ditto_screener/gate.py``, so ``ditto verify`` reads the
+    Dockerfile exactly as screening will; ``test_archive_contract_pins`` fails
+    if the two drift apart.
+    """
+    logical: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not buffer and (not stripped or stripped.startswith("#")):
+            continue
+        buffer = f"{buffer} {stripped}".strip() if buffer else stripped
+        if buffer.endswith("\\"):
+            buffer = buffer[:-1].rstrip()
+            continue
+        logical.append(buffer)
+        buffer = ""
+    if buffer:
+        logical.append(buffer)
+    instructions: list[tuple[str, str]] = []
+    for line in logical:
+        parts = line.split(None, 1)
+        if parts:
+            instructions.append((parts[0].upper(), parts[1] if len(parts) > 1 else ""))
+    return instructions
+
+
 def _contract_failure(code: str, problem: str, fix: str) -> PreflightCheckResult:
     return PreflightCheckResult(
         name="archive_contract",
@@ -232,13 +265,23 @@ def _check_archive_contract(tar_path: Path) -> PreflightCheckResult:
                     "recreate the archive from readable regular files",
                 )
             try:
-                handle.read().decode("utf-8")
+                dockerfile_text = handle.read().decode("utf-8")
             except UnicodeDecodeError:
                 return _contract_failure(
                     "SCR-CONTRACT-003",
                     "Dockerfile is not valid UTF-8 text",
                     "commit a readable UTF-8 Dockerfile that builds the harness",
                 )
+            for instruction, remainder in _dockerfile_instructions(dockerfile_text):
+                lowered = remainder.casefold()
+                if instruction == "RUN" and (
+                    "--security=insecure" in lowered or "--network=host" in lowered
+                ):
+                    return _contract_failure(
+                        "SCR-CONTRACT-004",
+                        "Dockerfile requests an insecure build entitlement",
+                        "remove RUN --security=insecure and RUN --network=host",
+                    )
     except (tarfile.TarError, EOFError, OSError):
         return _contract_failure(
             "SCR-ARCHIVE-006",

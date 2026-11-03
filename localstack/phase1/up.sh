@@ -44,7 +44,7 @@ docker volume create ds_gocache >/dev/null 2>&1 || true; docker volume create ds
 log "building linux binaries (dittobench-api[cgo], refharness, modelharness)"
 docker run --rm -v "$ROOT":/src -w /src/services/dittobench-api \
   -v ds_gocache:/root/.cache/go-build -v ds_gomod:/go/pkg/mod -e GOOS=linux \
-  golang:1.26.6-alpine sh -c "apk add --no-cache build-base >/dev/null 2>&1 && \
+  golang:1.27.3-alpine sh -c "apk add --no-cache build-base >/dev/null 2>&1 && \
     CGO_ENABLED=1 go build -ldflags=\"-s -w -extldflags '-static'\" -o /src/localstack/.run/phase1/bin/dittobench-api.linux ./cmd/dittobench-api && \
     CGO_ENABLED=0 go build -o /src/localstack/.run/phase1/bin/refharness.linux ./cmd/refharness && \
     CGO_ENABLED=0 go build -o /src/localstack/.run/phase1/bin/modelharness.linux ./cmd/localstack-modelharness"

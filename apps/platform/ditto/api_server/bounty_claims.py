@@ -1,9 +1,10 @@
 """Paid bounty claims: signed holds, fee confirmation and refund-on-loss.
 
 A contributor signs a claim for the current bounty revision. Platform checks
-the signature, the finalized chain owner (the payee of record), the verified
-GitHub link and a current CLA signature, then holds the lowest open slot of
-the current round for ``hold_minutes``. A verified fee receipt then turns
+the signature, that the claimant is not the revision's reviewer, the
+finalized chain owner (the payee of record), the verified GitHub link and a
+current CLA signature, then holds the lowest open slot of the current round
+for ``hold_minutes``. A verified fee receipt then turns
 the hold into a claimed slot whose delivery deadline starts at that moment.
 
 No payment is ever forfeited by timing or a race: a receipt that cannot win
@@ -293,7 +294,9 @@ async def hold_claim(
         retry = await _retry_of(session, body, now=now)
         if retry is not None:
             return retry
-        _check_terms(await _current_revision(session, bounty_id), body)
+        current = await _current_revision(session, bounty_id)
+        _check_terms(current, body)
+        _check_not_reviewer(current, body)
         if await claims_paused(session, bounty_id):
             raise HTTPException(409, "new claims are paused for this bounty")
 
@@ -331,6 +334,7 @@ async def hold_claim(
             now = (clock or utcnow)()
             revision = await _current_revision(session, bounty_id)
             _check_terms(revision, body)
+            _check_not_reviewer(revision, body)
             if await claims_paused(session, bounty_id):
                 raise HTTPException(409, "new claims are paused for this bounty")
             try:
@@ -456,6 +460,18 @@ def _check_terms(revision: BountyRevision, body: BountyClaimRequest) -> None:
         )
     if revision.funding_mode != "rehearsal":
         raise HTTPException(409, "live bounty funding is not enabled")
+
+
+def _check_not_reviewer(revision: BountyRevision, body: BountyClaimRequest) -> None:
+    """The reviewer named in the terms never claims the work they review.
+
+    GitHub logins are case-insensitive, so any spelling of the reviewer's is
+    the reviewer.
+    """
+    if body.github_login.casefold() == revision.reviewer_login.casefold():
+        raise HTTPException(
+            403, "the bounty's reviewer cannot claim it: github_login is reviewer_login"
+        )
 
 
 async def _identity_changed(

@@ -83,6 +83,7 @@ from ditto.miner_cli.preferences import (
 )
 from ditto.miner_cli.registration import quote_registration, submit_registration
 from ditto.miner_cli.signing import sign_upload_payload
+from ditto.miner_cli.submission_terms import show_submission_terms
 from ditto.miner_cli.tar_validator import run_preflight
 from ditto.miner_cli.wallet import load_wallet
 
@@ -91,6 +92,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The agent lane is the memory competition, priced by the default submission
+# fee; every other competition (generator, ...) quotes its own price.
+MEMORY_COMPETITION = "memory"
+AGENT_UPLOAD_FEE_PURPOSE = "memory competition agent upload fee"
 _BLOCK_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 _UPLOAD_RETRY_DELAYS_S = (2.0, 4.0, 8.0, 16.0, 30.0, 30.0)
 
@@ -409,6 +414,10 @@ def _run_upload(
                 receipt_source = "saved_reassigned"
 
     with ApiClient(base_url=network_api_url) as client:
+        # The deliverable (artifact limits) and the memory competition's fee,
+        # shown before the pre-check reserves a slot or anything is paid.
+        # Informational; Platform enforces every term itself.
+        show_submission_terms(client, MEMORY_COMPETITION)
 
         def _check(candidate_receipt: PaymentReceipt | None):
             signature, signature_timestamp, signature_nonce = _fresh_signature()
@@ -561,6 +570,7 @@ def _run_upload(
                 hotkey_ss58=handle.hotkey_ss58,
                 coldkey_name=handle.coldkey_name,
                 skip=args.yes,
+                purpose=AGENT_UPLOAD_FEE_PURPOSE,
             )
 
             print(

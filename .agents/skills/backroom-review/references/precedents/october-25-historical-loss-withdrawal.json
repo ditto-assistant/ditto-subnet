@@ -1,0 +1,81 @@
+{
+  "date": "2026-10-25",
+  "scope": "operator-authorized reconsideration under the current evidence-loss holding; historical policy text unchanged; restoration requires separate native court readback",
+  "ath_items": [
+    {
+      "agent_id": "395973a1-99c8-492c-a279-ac80cdd5dead",
+      "artifact_sha256": "5d2d0c67569b96c2f62f8ac4adba206f87f2586f4759cba57c4b3ac5fcd5365c"
+    },
+    {
+      "agent_id": "32cfba41-9c90-4c83-9ec3-faf491b1032a",
+      "artifact_sha256": "c4a0ed2191ba0eb5e31a507c9ae13e24c7d4497778d51e157181ca961d7f8db6"
+    },
+    {
+      "agent_id": "8372f845-bf8d-4192-b133-6180c3006208",
+      "artifact_sha256": "762b74cf9598447846ea6f26b222c818fb2c1db292ebe99e9a25f69c4bb247e6"
+    },
+    {
+      "agent_id": "c9f5af97-9aa4-4a9b-9e5a-283c270d5046",
+      "artifact_sha256": "40d1dce19b4ca84de79a82f0181fd471174f21b8506ef08031efd82c4a530fa7"
+    },
+    {
+      "agent_id": "33639526-22f3-46be-b081-7bcecd80d057",
+      "artifact_sha256": "53a455a609159170b74df7f0e5c78eb87598cd76579a5b04781187f0fb4b20dd"
+    },
+    {
+      "agent_id": "ccc7d4d4-5fea-466e-bf03-f6b34ba5a260",
+      "artifact_sha256": "cf1df681c4351e4980b7080691dd168db3ca6b573884bd1b883e9e03ce9836ec"
+    },
+    {
+      "agent_id": "948513c6-78f6-4e7d-8f74-462dc6aa07e1",
+      "artifact_sha256": "7c5fd89031f354662ffc992241c047a6aecfbc8b2ff0cd35448f5c720bc1b3f1"
+    },
+    {
+      "agent_id": "7ef94b55-5644-4a8d-9969-94475bd98b12",
+      "artifact_sha256": "97a6f2899dafcb23fdb6e1c76d2e5e9f90843ab8c0f66eb0686957be3e0d5058"
+    },
+    {
+      "agent_id": "198bcc3a-ab98-40d6-9520-a69956458f41",
+      "artifact_sha256": "289ed981430c3448243607d7ca219b7e9939d91d941056b2479cf8f6b908f61c"
+    },
+    {
+      "agent_id": "84431437-19fe-40fc-9424-1755d1e34184",
+      "artifact_sha256": "36008ee556cbd23dfe28741d8acc7734cc3602dac840024a2764c8b4b9c43603"
+    },
+    {
+      "agent_id": "91ab21d4-2156-45d1-8321-4b4206033e7d",
+      "artifact_sha256": "9abbdfcd20f5e9b65c185f5f7e8380cb379fc5f31af15c82d2faa703abeaa432"
+    },
+    {
+      "agent_id": "f11fc1e5-87f5-4f37-8bd2-88d3962c67b2",
+      "artifact_sha256": "56fb8d9e9092ce94cbf79832ef53eaeab1a31e40e014cdd70d4e73263b32a8a3"
+    },
+    {
+      "agent_id": "12c1d4bc-e388-4f92-ae17-b01cad5369fe",
+      "artifact_sha256": "e4811ec4acca751ba6ea7686361ab9eb45a6daf2fe167b77f61b4cdef7bf8c97"
+    },
+    {
+      "agent_id": "d48656bc-b3c4-45ac-8c55-c16c092c8c16",
+      "artifact_sha256": "c1b59f1d07b57104d82f12618987ac8ca4e8c5fba9b431e5277440835014be86"
+    },
+    {
+      "agent_id": "efa3ed16-dcd4-4c51-8689-c431e4b21710",
+      "artifact_sha256": "5e96b03fc6cb7080466508cae4d753beaeec15e7e874c945010cdcc1be445ddf"
+    },
+    {
+      "agent_id": "66c5e11c-fe5e-4a16-94ff-fa03ed100212",
+      "artifact_sha256": "296e8c0dfdac3ae9aad6ec9a00ee4bc546bf4cf386f9a2aafc5d1302b230756e"
+    },
+    {
+      "agent_id": "01fdd955-1291-4e9b-887b-7a5a64389bbf",
+      "artifact_sha256": "224fd74fbab74e92b1bf195500962b1980f96e7ccd69156460b08d097c75846b"
+    }
+  ],
+  "screening_items": [
+    {
+      "agent_id": "1252e986-6ce5-4771-b7e5-39443d27d5d2",
+      "artifact_sha256": "29782c43c3e63b33f20d7c3c0c2e7c7c617cda5a5281fd1ba2bac3584ed03538"
+    }
+  ],
+  "restoration_condition": "exact-source review of other applicable invariants, then fresh native court/admission guards and readback; ground withdrawal is not CLEAR"
+}

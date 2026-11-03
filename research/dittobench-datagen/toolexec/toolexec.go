@@ -154,6 +154,9 @@ type Fixture struct {
 	category     string
 	decoys       map[string]catalog.Decoy
 	coined       Coined
+	// connectors is the seed's v16 connector plan (linked and named apps);
+	// nil below bench_version 16.
+	connectors *catalog.V16ConnectorPlan
 }
 
 // v13 reports whether the fixture serves under the public-corpora contract.

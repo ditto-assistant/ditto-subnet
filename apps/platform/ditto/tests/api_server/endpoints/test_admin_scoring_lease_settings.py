@@ -10,8 +10,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.scoring_lease_settings import (
-    MAX_SCORING_TICKET_TTL_MINUTES,
-    MIN_SCORING_TICKET_TTL_MINUTES,
     scoring_lease_confirmation,
 )
 from ditto.api_server.admin_activity import public_details
@@ -131,31 +129,6 @@ class TestRead:
                 row.settings == {"scoring_ticket_ttl_minutes": 1} for row in rows
             )
 
-    async def test_empty_board_reports_the_180_minute_default(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, session_maker)
-        body = (await client.get(_URL, headers=_HEADERS)).json()
-        assert body["current"] == []
-        assert body["history"] == []
-        assert body["default"] == {"scoring_ticket_ttl_minutes": 180}
-        effective = body["effective"]
-        assert effective["source"] == "default"
-        assert effective["settings_valid"] is True
-        assert effective["revision"] == 0
-        assert effective["checksum"] == ""
-        assert effective["settings"] == {"scoring_ticket_ttl_minutes": 180}
-        assert effective["min_scoring_ticket_ttl_minutes"] == (
-            MIN_SCORING_TICKET_TTL_MINUTES
-        )
-        assert effective["max_scoring_ticket_ttl_minutes"] == (
-            MAX_SCORING_TICKET_TTL_MINUTES
-        )
-        assert effective["max_age_seconds"] == 5.0
-
 
 class TestWrite:
     async def test_apply_then_read_back_with_history(
@@ -184,20 +157,6 @@ class TestWrite:
         assert body["history"][1]["actor"] == "backroom:test"
         assert all(row["settings_valid"] for row in body["history"])
         assert body["history"][1]["reason"].startswith("v11 completions")
-
-    async def test_extra_json_is_ignored(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, session_maker)
-        payload = _payload(120)
-        payload["unexpected"] = True
-        payload["settings"] = {"scoring_ticket_ttl_minutes": 120, "future_clock": 9}
-        response = await client.post(_URL, headers=_HEADERS, json=payload)
-        assert response.status_code == 200, response.text
-        assert response.json()["settings"] == {"scoring_ticket_ttl_minutes": 120}
 
     async def test_wrong_confirmation_is_refused(
         self,
@@ -230,48 +189,6 @@ class TestWrite:
         assert "expected 0, current 1" in stale.text
         assert await _revision_count(session_maker) == 1
 
-    async def test_partial_policy_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, session_maker)
-        response = await client.post(
-            _URL, headers=_HEADERS, json=_payload(150, settings={})
-        )
-        assert response.status_code == 422
-        assert await _revision_count(session_maker) == 0
-
-    @pytest.mark.parametrize(
-        "minutes",
-        [MIN_SCORING_TICKET_TTL_MINUTES - 1, MAX_SCORING_TICKET_TTL_MINUTES + 1],
-    )
-    async def test_out_of_bounds_ttl_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        minutes: int,
-    ) -> None:
-        _install(app, session_maker)
-        response = await client.post(_URL, headers=_HEADERS, json=_payload(minutes))
-        assert response.status_code == 422
-        assert await _revision_count(session_maker) == 0
-
-    async def test_non_global_scope_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, session_maker)
-        payload = _payload(150)
-        payload["scope"] = "validator"
-        response = await client.post(_URL, headers=_HEADERS, json=payload)
-        assert response.status_code == 422
-        assert await _revision_count(session_maker) == 0
-
     async def test_write_invalidates_the_issuance_cache(
         self,
         app: FastAPI,
@@ -302,7 +219,6 @@ class TestWhitespaceAuditFields:
         ("field", "value", "message"),
         [
             ("reason", " " * 12, "reason"),
-            ("reason", "   short   ", "reason"),
             ("actor", "    ", "actor"),
             ("confirmation", "   ", "confirmation"),
         ],

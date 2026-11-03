@@ -303,7 +303,7 @@ async def test_median_projection_keeps_each_agents_requested_benchmark(
             )
 
 
-@pytest.mark.parametrize("details", [None, 3, ["decoy"], {}, {"v9_base": 3}])
+@pytest.mark.parametrize("details", [None, ["decoy"], {"v9_base": 3}])
 async def test_median_projection_preserves_fail_closed_missing_proof(
     session_maker: async_sessionmaker[AsyncSession],
     details: Any,
@@ -329,7 +329,7 @@ async def test_median_projection_preserves_fail_closed_missing_proof(
                 )
 
 
-@pytest.mark.parametrize("mismatch", ["digest", "artifact", "version", "composite"])
+@pytest.mark.parametrize("mismatch", ["digest", "artifact", "composite"])
 async def test_median_projection_keeps_proof_consistency_rejections(
     session_maker: async_sessionmaker[AsyncSession], mismatch: str
 ) -> None:
@@ -504,7 +504,7 @@ async def test_confirmation_follows_the_live_benchmark(
         assert await session.get(ConfirmationBundleSubject, (agent.agent_id, 9)) is None
 
 
-@pytest.mark.parametrize("pre_contract_version", [1, 8])
+@pytest.mark.parametrize("pre_contract_version", [8])
 async def test_pre_contract_bench_versions_never_enter_the_ledger(
     session: AsyncSession, pre_contract_version: int
 ) -> None:

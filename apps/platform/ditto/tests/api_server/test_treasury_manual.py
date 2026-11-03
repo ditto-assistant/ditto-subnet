@@ -987,3 +987,23 @@ async def test_runtime_blocker_replaces_readiness_but_never_authorizes_transfer(
     async with session_maker() as session:
         view = await manual.state(session, None, enabled=True)
         assert view["blocked_reason"] is None and view["readiness"] is not None
+
+
+async def test_low_fee_wallet_is_visible_and_blocks_new_preview(session_maker):
+    current = report().model_dump()
+    current["readiness"].update(
+        transfer_delegate=GM,
+        delegate_free_rao=6630018,
+        required_delegate_free_rao=7000000,
+    )
+    async with session_maker() as session, session.begin():
+        await manual.accept_report(session, None, current)
+    async with session_maker() as session:
+        view = await manual.state(session, None, enabled=True)
+    assert (
+        view["blocked_reason"]
+        == "Transfer fee wallet is below its signed reserve requirement"
+    )
+    assert view["readiness"]["delegate_free_rao"] == 6630018
+    with pytest.raises(ValueError, match="fee wallet"):
+        await get_preview(session_maker)

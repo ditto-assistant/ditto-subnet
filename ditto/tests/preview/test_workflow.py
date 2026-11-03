@@ -21,12 +21,7 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     triggers = workflow.get("on", workflow[True])
     dispatch = triggers["workflow_dispatch"]["inputs"]
     assert "profiles" in dispatch
-    assert triggers["pull_request"]["types"] == [
-        "opened",
-        "reopened",
-        "synchronize",
-        "closed",
-    ]
+    assert set(triggers) == {"workflow_dispatch"}
     assert "cheatcodes" in workflow["jobs"]
     assert "dashboard-bundle" in workflow["jobs"]
     assert "dashboard-publish" in workflow["jobs"]
@@ -190,8 +185,7 @@ def test_preview_base_bake_is_scheduled_credential_empty_and_prunes() -> None:
     triggers = workflow.get("on", workflow[True])
     # Nightly, because a release commit rewrites the root pyproject/uv.lock and
     # invalidates the dependency layer that costs the most to rebuild.
-    assert triggers["schedule"] == [{"cron": "20 8 * * *"}]
-    assert set(triggers) == {"schedule", "workflow_dispatch"}
+    assert set(triggers) == {"workflow_dispatch"}
     assert "pull_request" not in triggers
     assert workflow["concurrency"]["group"] == "preview-base-bake"
     assert workflow["concurrency"]["cancel-in-progress"] is False

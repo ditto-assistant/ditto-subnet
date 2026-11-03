@@ -955,6 +955,40 @@ CREATE FUNCTION public.protect_private_benchmark_preparation_identity() RETURNS 
 
 
 --
+-- Name: protect_v13_official_control_approval(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.protect_v13_official_control_approval() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          RAISE EXCEPTION 'official control approvals are immutable audit evidence';
+        END;
+        $$;
+
+
+--
+-- Name: protect_v13_official_control_image(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.protect_v13_official_control_image() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'official control images are retained audit evidence';
+          END IF;
+          IF OLD.verified_at IS NOT NULL OR
+             (to_jsonb(NEW) - 'verified_at' - 'verified_storage_key') IS DISTINCT FROM
+             (to_jsonb(OLD) - 'verified_at' - 'verified_storage_key') THEN
+            RAISE EXCEPTION 'official control image identity is immutable';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+
+
+--
 -- Name: reject_benchmark_canary_score(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1036,6 +1070,17 @@ CREATE FUNCTION public.reject_screening_attempt_artifact_change() RETURNS trigge
 CREATE FUNCTION public.reject_screening_review_event_mutation() RETURNS trigger
     LANGUAGE plpgsql
     AS $$ BEGIN RAISE EXCEPTION 'screening_review_events is append-only'; END $$;
+
+
+--
+-- Name: reject_treasury_funding_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_treasury_funding_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+        RAISE EXCEPTION 'operator funding reconciliation history is append only';
+      END $$;
 
 
 --
@@ -1262,6 +1307,20 @@ CREATE TABLE public.agent_cla_bindings (
 
 
 --
+-- Name: agent_distinctive_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_distinctive_items (
+    agent_id uuid NOT NULL,
+    items_version text NOT NULL,
+    item_keys bigint[] NOT NULL,
+    item_count integer NOT NULL,
+    error text,
+    indexed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: agent_kingship; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1428,8 +1487,12 @@ CREATE TABLE public.ath_copy_court_recommendations (
     model text,
     prompt_revision text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    triage_revision text DEFAULT 'rules-v1'::text NOT NULL,
+    application jsonb,
+    applied_at timestamp with time zone,
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_1d59 CHECK ((length(settings_checksum) = 64)),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_23b5 CHECK ((hold_class = ANY (ARRAY['near_duplicate'::text, 'rejected_resubmission_byte_identical'::text, 'rejected_resubmission_repack'::text, 'rejected_resubmission_cross_miner'::text, 'unknown'::text]))),
+    CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_2d55 CHECK (((length(TRIM(BOTH FROM triage_revision)) >= 1) AND (length(TRIM(BOTH FROM triage_revision)) <= 64))),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_66af CHECK ((length(TRIM(BOTH FROM reason)) >= 3)),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_7daa CHECK ((((model IS NULL) AND (prompt_revision IS NULL)) OR ((model IS NOT NULL) AND (prompt_revision IS NOT NULL)))),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_fded CHECK ((verdict = ANY (ARRAY['clear'::text, 'reject'::text, 'escalate'::text])))
@@ -1758,6 +1821,68 @@ ALTER TABLE public.bounty_delivery_facts ALTER COLUMN fact_id ADD GENERATED ALWA
 
 
 --
+-- Name: bounty_evaluation_decisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_evaluation_decisions (
+    decision_id bigint NOT NULL,
+    bounty_id uuid NOT NULL,
+    decision text NOT NULL,
+    integration_status text NOT NULL,
+    reasons text NOT NULL,
+    actor text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_evaluation_decisions_decision CHECK (((decision = ANY (ARRAY['expand'::text, 'revise'::text, 'stop'::text])) AND (integration_status = ANY (ARRAY['not_integrated'::text, 'integrating'::text, 'integrated'::text, 'adopted'::text, 'not_adopted'::text])) AND (length(btrim(reasons)) > 0)))
+);
+
+
+--
+-- Name: bounty_evaluation_decisions_decision_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_evaluation_decisions ALTER COLUMN decision_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_evaluation_decisions_decision_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: bounty_evaluation_entries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bounty_evaluation_entries (
+    entry_id bigint NOT NULL,
+    bounty_id uuid NOT NULL,
+    kind text NOT NULL,
+    metric text NOT NULL,
+    value double precision NOT NULL,
+    note text,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_bounty_evaluation_entries_entry CHECK (((kind = ANY (ARRAY['estimate'::text, 'actual'::text])) AND (metric = ANY (ARRAY['build_hours'::text, 'reviewer_hours'::text, 'integration_hours'::text, 'operator_hours'::text, 'turnaround_days'::text])) AND (value >= (0)::double precision) AND (value <= (1000000)::double precision) AND ((note IS NULL) OR (length(btrim(note)) > 0)) AND (length(btrim(reason)) > 0)))
+);
+
+
+--
+-- Name: bounty_evaluation_entries_entry_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.bounty_evaluation_entries ALTER COLUMN entry_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.bounty_evaluation_entries_entry_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: bounty_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1773,8 +1898,10 @@ CREATE TABLE public.bounty_events (
     submission_id uuid,
     appeal_id uuid,
     obligation_id uuid,
+    noticed_at timestamp with time zone,
     CONSTRAINT ck_bounty_events_claim_scope CHECK (((claim_id IS NOT NULL) OR (kind = ANY (ARRAY['revision_published'::text, 'round_opened'::text, 'claims_paused'::text, 'claims_resumed'::text, 'reviewer_reassigned'::text, 'slot_cancelled'::text, 'slot_reopened'::text])))),
     CONSTRAINT ck_bounty_events_kind CHECK ((kind = ANY (ARRAY['revision_published'::text, 'round_opened'::text, 'slot_held'::text, 'hold_expired'::text, 'hold_released'::text, 'slot_claimed'::text, 'fee_refund_owed'::text, 'claims_paused'::text, 'claims_resumed'::text, 'submitted'::text, 'withdrawn'::text, 'deadline_missed'::text, 'review_overdue'::text, 'rework_requested'::text, 'accepted'::text, 'rejected'::text, 'reviewer_reassigned'::text, 'appeal_filed'::text, 'appeal_upheld'::text, 'appeal_denied'::text, 'slot_cancelled'::text, 'slot_reopened'::text, 'fee_retained'::text, 'award_recorded'::text, 'obligation_approved'::text, 'transfer_dispatched'::text, 'transfer_confirmed'::text, 'transfer_failed'::text, 'transfer_uncertain'::text, 'fact_recorded'::text]))),
+    CONSTRAINT ck_bounty_events_noticed_after_recorded CHECK (((noticed_at IS NULL) OR (noticed_at >= recorded_at))),
     CONSTRAINT ck_bounty_events_obligation_ref CHECK (((obligation_id IS NULL) OR (claim_id IS NOT NULL))),
     CONSTRAINT ck_bounty_events_review_refs CHECK ((((submission_id IS NULL) OR (claim_id IS NOT NULL)) AND ((appeal_id IS NULL) OR (claim_id IS NOT NULL))))
 );
@@ -3051,6 +3178,78 @@ CREATE TABLE public.coding_shadow_tickets (
 
 
 --
+-- Name: competition_improvement_daily; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competition_improvement_daily (
+    bench_version integer NOT NULL,
+    day date NOT NULL,
+    metrics_version text NOT NULL,
+    frontier_composite double precision,
+    frontier_agent_id uuid,
+    champion_agent_id uuid,
+    champion_composite double precision,
+    top_n_mean double precision,
+    top_n_min double precision,
+    finalized_agent_count integer NOT NULL,
+    new_high_count integer NOT NULL,
+    releases_on_day integer NOT NULL,
+    releases_to_date integer NOT NULL,
+    forks_on_day integer NOT NULL,
+    forks_to_date integer NOT NULL,
+    thin_forks_to_date integer NOT NULL,
+    embargo_hours integer NOT NULL,
+    disclosure text NOT NULL,
+    detail jsonb NOT NULL,
+    closed boolean NOT NULL,
+    backfilled boolean NOT NULL,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: competition_release_forks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competition_release_forks (
+    base_agent_id uuid NOT NULL,
+    fork_agent_id uuid NOT NULL,
+    metrics_version text NOT NULL,
+    bench_version integer,
+    released_at timestamp with time zone NOT NULL,
+    fork_uploaded_at timestamp with time zone NOT NULL,
+    lag_hours double precision NOT NULL,
+    containment double precision,
+    novel_fraction double precision,
+    declared boolean NOT NULL,
+    thin boolean NOT NULL,
+    base_composite double precision,
+    fork_composite double precision,
+    delta double precision,
+    shared_seed_count integer NOT NULL,
+    shared_seed_delta double precision,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: competition_source_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competition_source_releases (
+    agent_id uuid NOT NULL,
+    metrics_version text NOT NULL,
+    bench_version integer,
+    released_at timestamp with time zone NOT NULL,
+    uploaded_at timestamp with time zone NOT NULL,
+    embargo_hours integer NOT NULL,
+    disclosure text NOT NULL,
+    base_composite double precision,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: confirmation_budget_days; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3181,10 +3380,12 @@ CREATE TABLE public.confirmation_bundle_tickets (
     failure_stage text,
     prepare_rejection text,
     prepare_rejected_at timestamp with time zone,
+    failure_status integer,
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_att_89d2 CHECK ((attempt > 0)),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_dea_5293 CHECK ((deadline > issued_at)),
-    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_2246 CHECK (((failure_class IS NULL) OR (failure_class = ANY (ARRAY['sandbox_oom'::text, 'lease_revoked'::text, 'validator_infrastructure'::text, 'platform_infrastructure'::text, 'dittobench'::text, 'platform'::text, 'validator'::text, 'evidence_schema'::text, 'timeout'::text, 'transport'::text, 'unclassified'::text])))),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_2246 CHECK (((failure_class IS NULL) OR (failure_class = ANY (ARRAY['sandbox_oom'::text, 'lease_revoked'::text, 'validator_infrastructure'::text, 'platform_infrastructure'::text, 'dittobench'::text, 'platform'::text, 'validator'::text, 'evidence_schema'::text, 'timeout'::text, 'transport'::text, 'unclassified'::text, 'longmem_run_http_status'::text, 'longmem_run_malformed_json'::text, 'longmem_run_missing_final_text'::text, 'longmem_run_request'::text, 'longmem_run_response_read'::text, 'longmem_run_response_too_large'::text, 'longmem_run_tool_endpoint'::text, 'longmem_seed_http_status'::text, 'longmem_seed_incomplete_ack'::text, 'longmem_seed_malformed_json'::text, 'longmem_seed_request'::text, 'longmem_seed_response_read'::text, 'longmem_seed_response_too_large'::text, 'longmem_exec_ablation_dataset'::text, 'longmem_exec_broker_session'::text, 'longmem_exec_dimension_execution'::text, 'longmem_exec_embedding_phase'::text, 'longmem_exec_execution'::text, 'longmem_exec_harness_health'::text, 'longmem_exec_installation_validation'::text, 'longmem_exec_longmem_dataset'::text, 'longmem_exec_provider_capabilities'::text, 'longmem_exec_provider_session'::text, 'longmem_exec_runtime_acquire'::text, 'longmem_exec_runtime_close'::text, 'longmem_exec_runtime_material'::text, 'longmem_exec_runtime_validation'::text, 'longmem_exec_sandbox_availability'::text, 'longmem_exec_sandbox_start'::text, 'longmem_exec_sandbox_stop'::text, 'longmem_exec_screened_image'::text, 'longmem_exec_source_validation'::text, 'longmem_dim_ablation_construct'::text, 'longmem_dim_ablation_coordinate'::text, 'longmem_dim_ablation_evaluate'::text, 'longmem_dim_ablation_marshal'::text, 'longmem_dim_ablation_responder'::text, 'longmem_dim_ablation_upstream'::text, 'longmem_dim_budget_unfundable'::text, 'longmem_dim_deadline_missing'::text, 'longmem_dim_longmem_digest'::text, 'longmem_dim_longmem_execute'::text, 'longmem_dim_longmem_marshal'::text, 'longmem_dim_longmem_validate'::text, 'longmem_dim_mode_inactive'::text, 'longmem_dim_wire_digest'::text, 'longmem_eval_accounting_final'::text, 'longmem_eval_accounting_final_cost_source'::text, 'longmem_eval_accounting_final_fallback_used'::text, 'longmem_eval_accounting_final_identity_drift'::text, 'longmem_eval_accounting_final_mixed_zero_lanes'::text, 'longmem_eval_accounting_final_provider_evidence'::text, 'longmem_eval_accounting_final_request_free_accounting'::text, 'longmem_eval_accounting_initial'::text, 'longmem_eval_accounting_initial_cost_source'::text, 'longmem_eval_accounting_initial_fallback_used'::text, 'longmem_eval_accounting_initial_identity_drift'::text, 'longmem_eval_accounting_initial_lane_coverage'::text, 'longmem_eval_accounting_initial_meter_unavailable'::text, 'longmem_eval_accounting_initial_nonzero_start'::text, 'longmem_eval_accounting_initial_provider_evidence'::text, 'longmem_eval_accounting_initial_request_free_accounting'::text, 'longmem_eval_accounting_judge'::text, 'longmem_eval_accounting_judge_cost_source'::text, 'longmem_eval_accounting_judge_fallback_used'::text, 'longmem_eval_accounting_judge_identity_drift'::text, 'longmem_eval_accounting_judge_lane_coverage'::text, 'longmem_eval_accounting_judge_meter_unavailable'::text, 'longmem_eval_accounting_judge_provider_evidence'::text, 'longmem_eval_accounting_judge_receipt_changed'::text, 'longmem_eval_accounting_judge_receipt_uncommitted'::text, 'longmem_eval_accounting_judge_regressed'::text, 'longmem_eval_accounting_judge_request_free_accounting'::text, 'longmem_eval_accounting_run'::text, 'longmem_eval_accounting_run_cost_source'::text, 'longmem_eval_accounting_run_fallback_used'::text, 'longmem_eval_accounting_run_identity_drift'::text, 'longmem_eval_accounting_run_lane_coverage'::text, 'longmem_eval_accounting_run_meter_unavailable'::text, 'longmem_eval_accounting_run_provider_evidence'::text, 'longmem_eval_accounting_run_receipt_changed'::text, 'longmem_eval_accounting_run_receipt_uncommitted'::text, 'longmem_eval_accounting_run_regressed'::text, 'longmem_eval_accounting_run_request_free_accounting'::text, 'longmem_eval_accounting_seed'::text, 'longmem_eval_accounting_seed_cost_source'::text, 'longmem_eval_accounting_seed_fallback_used'::text, 'longmem_eval_accounting_seed_identity_drift'::text, 'longmem_eval_accounting_seed_lane_coverage'::text, 'longmem_eval_accounting_seed_meter_unavailable'::text, 'longmem_eval_accounting_seed_provider_evidence'::text, 'longmem_eval_accounting_seed_receipt_changed'::text, 'longmem_eval_accounting_seed_receipt_uncommitted'::text, 'longmem_eval_accounting_seed_regressed'::text, 'longmem_eval_accounting_seed_request_free_accounting'::text, 'longmem_eval_aggregate'::text, 'longmem_eval_dataset'::text, 'longmem_eval_evidence'::text, 'longmem_eval_judge_budget'::text, 'longmem_eval_judge_opaque'::text, 'longmem_eval_projection'::text, 'longmem_eval_reader_budget'::text, 'longmem_eval_run_opaque'::text, 'longmem_eval_run_unreceipted'::text, 'longmem_eval_seed_incomplete'::text, 'longmem_eval_seed_opaque'::text, 'longmem_eval_setup'::text, 'longmem_eval_time_budget'::text])))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_3459 CHECK (((failure_reason IS NULL) = (failed_at IS NULL))),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_723f CHECK (((failure_status IS NULL) OR ((failure_class IS NOT NULL) AND ((failure_status >= 0) AND (failure_status <= 599))))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_76ea CHECK (((failure_class IS NULL) OR (failure_reason IS NOT NULL))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_a665 CHECK (((failure_stage IS NULL) OR (failure_stage = ANY (ARRAY['preparing'::text, 'running_confirmation'::text, 'finalizing'::text, 'submitting_result'::text, 'failed_retrying'::text, 'unknown'::text])))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_aa75 CHECK (((status = 'expired'::text) OR ((failure_reason IS NULL) AND (failed_at IS NULL)))),
@@ -3315,9 +3516,17 @@ CREATE TABLE public.confirmation_inference_requests (
     upstream_provider text,
     started_at timestamp with time zone NOT NULL,
     completed_at timestamp with time zone,
+    failure_kind text,
+    upstream_http_status integer,
+    upstream_attempts integer,
+    receipt_free boolean,
+    upstream_error_code integer,
     CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_2e68 CHECK (((generation > 0) AND (reserved_tokens > 0) AND (max_chargeable_tokens >= reserved_tokens))),
     CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_3a48 CHECK ((status = ANY (ARRAY['started'::text, 'completed'::text, 'failed'::text, 'canceled'::text]))),
-    CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_4e49 CHECK (((prompt_tokens >= 0) AND (completion_tokens >= 0) AND (cost_microusd >= 0)))
+    CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_4e49 CHECK (((prompt_tokens >= 0) AND (completion_tokens >= 0) AND (cost_microusd >= 0))),
+    CONSTRAINT confirmation_inference_requests_error_code_check CHECK (((upstream_error_code IS NULL) OR ((upstream_error_code >= 400) AND (upstream_error_code <= 599)))),
+    CONSTRAINT confirmation_inference_requests_failure_detail_check CHECK ((((upstream_http_status IS NULL) OR ((upstream_http_status >= 100) AND (upstream_http_status <= 599))) AND ((upstream_attempts IS NULL) OR ((upstream_attempts >= 0) AND (upstream_attempts <= 16))))),
+    CONSTRAINT confirmation_inference_requests_failure_kind_check CHECK (((failure_kind IS NULL) OR (failure_kind = ANY (ARRAY['identity_mismatch'::text, 'receipt_invalid'::text, 'response_invalid'::text, 'response_too_large'::text, 'settle_rejected'::text, 'transport_error'::text, 'transport_timeout'::text, 'upstream_backpressure'::text, 'upstream_status'::text, 'upstream_error_envelope'::text]))))
 );
 
 
@@ -3348,6 +3557,36 @@ CREATE TABLE public.confirmation_retest_authorizations (
 
 
 --
+-- Name: confirmation_score_voids; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.confirmation_score_voids (
+    void_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    seed bigint NOT NULL,
+    void_generation integer NOT NULL,
+    sample_kind text NOT NULL,
+    run_id text NOT NULL,
+    composite double precision NOT NULL,
+    reason text NOT NULL,
+    evidence jsonb NOT NULL,
+    evidence_digest text NOT NULL,
+    actor text NOT NULL,
+    source text NOT NULL,
+    outage_started_at timestamp with time zone,
+    outage_ended_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_ev_6ab0 CHECK ((evidence_digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_ou_6d73 CHECK (((outage_ended_at IS NULL) OR (outage_started_at IS NOT NULL))),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_re_35e4 CHECK ((length(btrim(reason)) >= 8)),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_sa_64f4 CHECK ((sample_kind = 'continual_retest'::text)),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_so_097a CHECK ((source = ANY (ARRAY['operator'::text, 'outage_sweep'::text])))
+);
+
+
+--
 -- Name: confirmation_scores; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3362,10 +3601,14 @@ CREATE TABLE public.confirmation_scores (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     v9_efficiency_token_total bigint,
     v9_efficiency_cost_eligible boolean,
+    void_generation integer DEFAULT 0 NOT NULL,
+    dueling_season_id uuid,
+    dueling jsonb,
     CONSTRAINT ck_confirmation_scores_confirmation_scores_bench_versio_b860 CHECK ((bench_version > 0)),
     CONSTRAINT ck_confirmation_scores_confirmation_scores_composite_ra_71bb CHECK (((composite >= (0)::double precision) AND (composite <= (1)::double precision))),
     CONSTRAINT ck_confirmation_scores_confirmation_scores_efficiency_c_46c3 CHECK ((((v9_efficiency_cost_eligible IS NULL) AND (v9_efficiency_token_total IS NULL)) OR ((v9_efficiency_cost_eligible = false) AND (v9_efficiency_token_total IS NULL)) OR ((v9_efficiency_cost_eligible = true) AND (bench_version >= 9) AND (v9_efficiency_token_total > 0)))),
-    CONSTRAINT ck_confirmation_scores_confirmation_scores_seed_check CHECK ((seed >= 0))
+    CONSTRAINT ck_confirmation_scores_confirmation_scores_seed_check CHECK ((seed >= 0)),
+    CONSTRAINT ck_confirmation_scores_confirmation_scores_void_generat_010e CHECK ((void_generation >= 0))
 );
 
 
@@ -3639,6 +3882,113 @@ ALTER SEQUENCE public.core_qualification_policy_revisions_revision_seq OWNED BY 
 
 
 --
+-- Name: dueling_season_batteries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dueling_season_batteries (
+    season_id uuid NOT NULL,
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    owner_key text NOT NULL,
+    source_sha256 text NOT NULL,
+    tree_sha256 text NOT NULL,
+    rank integer NOT NULL,
+    evidence jsonb,
+    seeds jsonb NOT NULL,
+    status text NOT NULL,
+    lease_id uuid,
+    lease_expires_at timestamp with time zone,
+    attempts integer DEFAULT 0 NOT NULL,
+    grading_bench_version integer,
+    error text,
+    scorer_version text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_at_d825 CHECK ((attempts >= 0)),
+    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_le_7164 CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((status <> 'leased'::text) OR (lease_id IS NOT NULL)))),
+    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_po_02bb CHECK (((status <> 'passed'::text) OR (grading_bench_version >= 15))),
+    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_st_dedb CHECK ((status = ANY (ARRAY['pending'::text, 'leased'::text, 'passed'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: dueling_seasons; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dueling_seasons (
+    id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    season_index bigint NOT NULL,
+    shadow boolean NOT NULL,
+    status text NOT NULL,
+    commitment text NOT NULL,
+    secret bytea NOT NULL,
+    committed_at timestamp with time zone NOT NULL,
+    rounds_per_season integer NOT NULL,
+    settings_revision integer,
+    anchor_block bigint,
+    anchor_block_hash text,
+    season_seed text,
+    columns jsonb,
+    opened_at timestamp with time zone,
+    closes_at_round bigint,
+    closed_at timestamp with time zone,
+    close_epoch_index bigint,
+    reveal_at_epoch bigint,
+    revealed_at timestamp with time zone,
+    void_reason text,
+    detail jsonb,
+    rotation_requested_at timestamp with time zone,
+    rotation_immediate boolean,
+    rotation_actor text,
+    rotation_reason text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_bench_floor CHECK ((bench_version >= 16)),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_index_check CHECK (((season_index >= 0) AND ((rounds_per_season >= 1) AND (rounds_per_season <= 48)))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_open_check CHECK (((season_seed IS NULL) OR ((season_seed ~ '^[0-9a-f]{64}$'::text) AND (anchor_block_hash IS NOT NULL) AND (columns IS NOT NULL)))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_reveal_check CHECK (((status = 'revealed'::text) = (revealed_at IS NOT NULL))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_rotation_check CHECK ((((rotation_requested_at IS NULL) = (rotation_reason IS NULL)) AND ((rotation_requested_at IS NULL) = (rotation_actor IS NULL)))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_seed_check CHECK ((((status <> 'committed'::text) OR (season_seed IS NULL)) AND ((season_seed IS NOT NULL) OR (status = ANY (ARRAY['committed'::text, 'void'::text]))))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_status_check CHECK ((status = ANY (ARRAY['committed'::text, 'open'::text, 'closed'::text, 'revealed'::text, 'void'::text]))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_void_check CHECK (((status = 'void'::text) = (void_reason IS NOT NULL)))
+);
+
+
+--
+-- Name: dueling_slice_preparations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dueling_slice_preparations (
+    id uuid NOT NULL,
+    season_id uuid NOT NULL,
+    run_seed bigint NOT NULL,
+    status text NOT NULL,
+    lease_id uuid,
+    lease_expires_at timestamp with time zone,
+    attempts integer DEFAULT 0 NOT NULL,
+    slice_sha256 text,
+    slice_bytes bytea,
+    columns jsonb,
+    error text,
+    scorer_version text,
+    requested_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    first_leased_at timestamp with time zone,
+    ready_at timestamp with time zone,
+    failed_at timestamp with time zone,
+    bytes_pruned_at timestamp with time zone,
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_0913 CHECK ((attempts >= 0)),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_2b2c CHECK (((slice_bytes IS NULL) OR (((octet_length(slice_bytes) >= 1) AND (octet_length(slice_bytes) <= 33554432)) AND (slice_sha256 = encode(sha256(slice_bytes), 'hex'::text))))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_4cdf CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((status <> 'leased'::text) OR (lease_id IS NOT NULL)))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_6562 CHECK (((slice_sha256 IS NULL) OR (slice_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_7a53 CHECK ((status = ANY (ARRAY['pending'::text, 'leased'::text, 'ready'::text, 'failed'::text]))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_8022 CHECK ((((status = 'ready'::text) = (slice_sha256 IS NOT NULL)) AND ((status <> 'ready'::text) OR (slice_bytes IS NOT NULL) OR (bytes_pruned_at IS NOT NULL)))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_993c CHECK ((run_seed >= 0))
+);
+
+
+--
 -- Name: efficiency_bonus_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3732,6 +4082,50 @@ CREATE TABLE public.efficiency_cohort_snapshots (
     CONSTRAINT ck_efficiency_cohort_snapshots_efficiency_cohort_snapsh_a080 CHECK ((bench_version >= 7)),
     CONSTRAINT ck_efficiency_cohort_snapshots_efficiency_cohort_snapsh_a86c CHECK (((bonus_cap > (0)::double precision) AND (bonus_cap <= (0.1)::double precision)))
 );
+
+
+--
+-- Name: emission_allocation_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.emission_allocation_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    allocation jsonb NOT NULL,
+    served jsonb NOT NULL,
+    burn_settings_revision integer NOT NULL,
+    track_share_settings_revision integer NOT NULL,
+    treasury_settings_revision integer NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_ac_6add CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_ch_4c52 CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_pa_3099 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_re_f2f4 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_se_d33a CHECK (((burn_settings_revision >= 0) AND (track_share_settings_revision >= 0) AND (treasury_settings_revision >= 0)))
+);
+
+
+--
+-- Name: emission_allocation_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.emission_allocation_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: emission_allocation_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.emission_allocation_revisions_revision_seq OWNED BY public.emission_allocation_revisions.revision;
 
 
 --
@@ -3841,6 +4235,410 @@ CREATE TABLE public.feedback_track_contributions (
     CONSTRAINT ck_feedback_track_contributions_feedback_track_source_check CHECK ((source = 'ditto_feedback'::text)),
     CONSTRAINT ck_feedback_track_contributions_feedback_track_user_id_len CHECK (((length(ditto_user_id) >= 1) AND (length(ditto_user_id) <= 128))),
     CONSTRAINT ck_feedback_track_contributions_feedback_track_weight_nonneg CHECK (((weight IS NULL) OR (weight >= (0)::numeric)))
+);
+
+
+--
+-- Name: generator_case_verdicts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_case_verdicts (
+    run_id uuid NOT NULL,
+    seed_index integer NOT NULL,
+    case_id text NOT NULL,
+    "position" integer NOT NULL,
+    fingerprint text NOT NULL,
+    status text NOT NULL,
+    panel_size integer NOT NULL,
+    solvers integer NOT NULL,
+    solver_owners integer NOT NULL,
+    mean_score double precision NOT NULL,
+    champion_failed boolean NOT NULL,
+    credit double precision NOT NULL,
+    CONSTRAINT ck_generator_case_verdicts_generator_case_verdicts_fing_6dd6 CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_generator_case_verdicts_generator_case_verdicts_status_check CHECK ((status = ANY (ARRAY['discriminating'::text, 'trivial'::text, 'unsolved'::text, 'duplicate'::text])))
+);
+
+
+--
+-- Name: generator_competition_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_competition_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_10b7 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_7bff CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_8b8b CHECK ((scope = '*'::text)),
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_950c CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_generator_competition_settings_revisions_generator_s_9ef0 CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: generator_competition_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.generator_competition_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: generator_competition_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.generator_competition_settings_revisions_revision_seq OWNED BY public.generator_competition_settings_revisions.revision;
+
+
+--
+-- Name: generator_operator_actions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_operator_actions (
+    id bigint NOT NULL,
+    action text NOT NULL,
+    subject text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    detail jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: generator_operator_actions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.generator_operator_actions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: generator_operator_actions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.generator_operator_actions_id_seq OWNED BY public.generator_operator_actions.id;
+
+
+--
+-- Name: generator_probe_epochs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_probe_epochs (
+    epoch integer NOT NULL,
+    seed text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    retired_at timestamp with time zone,
+    CONSTRAINT ck_generator_probe_epochs_generator_probe_epochs_seed_check CHECK ((seed ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: generator_probe_epochs_epoch_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.generator_probe_epochs_epoch_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: generator_probe_epochs_epoch_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.generator_probe_epochs_epoch_seq OWNED BY public.generator_probe_epochs.epoch;
+
+
+--
+-- Name: generator_probe_results; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_probe_results (
+    submission_id uuid NOT NULL,
+    epoch integer NOT NULL,
+    run_id uuid NOT NULL,
+    fingerprints jsonb NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: generator_round_attempts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_round_attempts (
+    round_index bigint NOT NULL,
+    agent_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    ticket_deadline timestamp with time zone NOT NULL,
+    slot_id text NOT NULL,
+    status text NOT NULL,
+    detail text,
+    issued_at timestamp with time zone NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT ck_generator_round_attempts_generator_round_attempts_st_8330 CHECK ((status = ANY (ARRAY['leased'::text, 'completed'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: generator_round_case_verdicts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_round_case_verdicts (
+    round_index bigint NOT NULL,
+    column_id text NOT NULL,
+    case_id text NOT NULL,
+    submission_id uuid NOT NULL,
+    "position" integer NOT NULL,
+    fingerprint text NOT NULL,
+    status text NOT NULL,
+    panel_size integer NOT NULL,
+    solvers integer NOT NULL,
+    solver_owners integer NOT NULL,
+    mean_score double precision NOT NULL,
+    champion_failed boolean NOT NULL,
+    credit double precision NOT NULL,
+    CONSTRAINT ck_generator_round_case_verdicts_generator_round_case_v_b62d CHECK ((status = ANY (ARRAY['discriminating'::text, 'trivial'::text, 'unsolved'::text, 'duplicate'::text, 'insufficient_panel'::text])))
+);
+
+
+--
+-- Name: generator_round_commitment_publications; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_round_commitment_publications (
+    round_index bigint NOT NULL,
+    validator_hotkey text NOT NULL,
+    commitment text NOT NULL,
+    status text NOT NULL,
+    claimed_at timestamp with time zone NOT NULL,
+    claim_expires_at timestamp with time zone NOT NULL,
+    reported_at timestamp with time zone,
+    block_number bigint,
+    extrinsic_hash text,
+    detail text,
+    CONSTRAINT ck_generator_round_commitment_publications_publication__0173 CHECK ((status = ANY (ARRAY['claimed'::text, 'confirmed'::text, 'failed'::text]))),
+    CONSTRAINT ck_generator_round_commitment_publications_publication__b208 CHECK (((status <> 'confirmed'::text) OR (block_number IS NOT NULL)))
+);
+
+
+--
+-- Name: generator_round_results; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_round_results (
+    round_index bigint NOT NULL,
+    agent_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    ticket_deadline timestamp with time zone NOT NULL,
+    run_id text NOT NULL,
+    results jsonb NOT NULL,
+    answered integer NOT NULL,
+    faulted integer NOT NULL,
+    signature text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: generator_rounds; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_rounds (
+    round_index bigint NOT NULL,
+    status text NOT NULL,
+    epochs_per_round integer NOT NULL,
+    secret bytea NOT NULL,
+    commitment text NOT NULL,
+    committed_at timestamp with time zone NOT NULL,
+    committed_epoch_index bigint NOT NULL,
+    commitment_publication text NOT NULL,
+    commitment_published_at timestamp with time zone,
+    commitment_error text,
+    open_epoch_index bigint,
+    open_block bigint,
+    open_block_hash text,
+    opened_at timestamp with time zone,
+    seed text,
+    settings_revision integer,
+    cases_per_column integer,
+    columns jsonb,
+    panel jsonb,
+    lease_id uuid,
+    lease_expires_at timestamp with time zone,
+    lease_attempts integer DEFAULT 0 NOT NULL,
+    generation jsonb,
+    dataset_sha256 text,
+    dataset_bytes bytea,
+    column_cases jsonb,
+    closed_at timestamp with time zone,
+    score jsonb,
+    scorer_version text,
+    scored_at timestamp with time zone,
+    void_reason text,
+    revealed_at timestamp with time zone,
+    bench_version integer,
+    first_epoch_index bigint NOT NULL,
+    CONSTRAINT ck_generator_rounds_generator_rounds_bench_version_check CHECK (((bench_version IS NULL) OR (bench_version >= 13))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_dataset_check CHECK ((((dataset_sha256 IS NULL) = (dataset_bytes IS NULL)) AND ((dataset_sha256 IS NULL) OR (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text))))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_lease_check CHECK (((lease_id IS NULL) = (lease_expires_at IS NULL))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_publication_check CHECK ((commitment_publication = ANY (ARRAY['pending'::text, 'published'::text, 'failed'::text, 'disabled'::text]))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_seed_check CHECK ((((status <> 'committed'::text) OR (seed IS NULL)) AND ((seed IS NOT NULL) OR (status = ANY (ARRAY['committed'::text, 'void'::text]))))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_status_check CHECK ((status = ANY (ARRAY['committed'::text, 'generating'::text, 'running'::text, 'scoring'::text, 'scored'::text, 'void'::text]))),
+    CONSTRAINT ck_generator_rounds_generator_rounds_void_check CHECK (((status = 'void'::text) = (void_reason IS NOT NULL)))
+);
+
+
+--
+-- Name: generator_rounds_round_index_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.generator_rounds_round_index_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: generator_rounds_round_index_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.generator_rounds_round_index_seq OWNED BY public.generator_rounds.round_index;
+
+
+--
+-- Name: generator_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_runs (
+    run_id uuid NOT NULL,
+    submission_id uuid NOT NULL,
+    attempt integer NOT NULL,
+    seeds jsonb NOT NULL,
+    probe_epoch integer NOT NULL,
+    cases_per_seed integer NOT NULL,
+    panel jsonb NOT NULL,
+    settings_revision integer NOT NULL,
+    status text NOT NULL,
+    outcome text,
+    score double precision,
+    score_summary jsonb,
+    evaluation jsonb,
+    panel_results jsonb,
+    scorer_version text,
+    leased_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT ck_generator_runs_generator_runs_cases_check CHECK (((cases_per_seed >= 8) AND (cases_per_seed <= 80))),
+    CONSTRAINT ck_generator_runs_generator_runs_finished_check CHECK (((status = 'leased'::text) = (finished_at IS NULL))),
+    CONSTRAINT ck_generator_runs_generator_runs_score_check CHECK (((status = 'scored'::text) = (score IS NOT NULL))),
+    CONSTRAINT ck_generator_runs_generator_runs_status_check CHECK ((status = ANY (ARRAY['leased'::text, 'scored'::text, 'qualified'::text, 'invalid'::text, 'insufficient_panel'::text, 'copy'::text, 'abandoned'::text])))
+);
+
+
+--
+-- Name: generator_scorer_heartbeats; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_scorer_heartbeats (
+    scorer_id text NOT NULL,
+    scorer_version text NOT NULL,
+    min_cases integer,
+    max_cases integer,
+    sandbox text,
+    build_revision text,
+    last_poll text NOT NULL,
+    first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    grading_bench_versions jsonb,
+    dueling_work_kinds jsonb,
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_4487 CHECK (((grading_bench_versions IS NULL) OR ((jsonb_typeof(grading_bench_versions) = 'array'::text) AND ((jsonb_array_length(grading_bench_versions) >= 1) AND (jsonb_array_length(grading_bench_versions) <= 16))))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_46e0 CHECK (((dueling_work_kinds IS NULL) OR ((jsonb_typeof(dueling_work_kinds) = 'array'::text) AND ((jsonb_array_length(dueling_work_kinds) >= 1) AND (jsonb_array_length(dueling_work_kinds) <= 8))))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_8669 CHECK ((last_poll = ANY (ARRAY['qualification'::text, 'round'::text, 'dueling'::text]))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_c3f0 CHECK ((((min_cases IS NULL) = (max_cases IS NULL)) AND ((min_cases IS NULL) OR ((min_cases >= 1) AND (max_cases >= min_cases)))))
+);
+
+
+--
+-- Name: generator_submission_payments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_submission_payments (
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    miner_coldkey text NOT NULL,
+    amount_rao bigint NOT NULL,
+    tao_usd_rate numeric(20,8),
+    dest_address text NOT NULL,
+    "timestamp" timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_548c CHECK ((amount_rao > 0)),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_8849 CHECK ((extrinsic_index >= 0)),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_e702 CHECK ((block_hash = lower(block_hash))),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_fea8 CHECK (((tao_usd_rate IS NULL) OR (tao_usd_rate > (0)::numeric)))
+);
+
+
+--
+-- Name: generator_submissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_submissions (
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    owner_key text NOT NULL,
+    source_sha256 text NOT NULL,
+    tree_sha256 text NOT NULL,
+    source_bytes bytea NOT NULL,
+    size_bytes integer NOT NULL,
+    module text NOT NULL,
+    go_version text NOT NULL,
+    file_count integer NOT NULL,
+    status text NOT NULL,
+    status_reason text,
+    next_run_at timestamp with time zone NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    lease_id uuid,
+    lease_run_id uuid,
+    lease_expires_at timestamp with time zone,
+    submitted_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    qualified_at timestamp with time zone,
+    public_default boolean DEFAULT false NOT NULL,
+    round_score double precision,
+    round_scored_index bigint,
+    name text,
+    CONSTRAINT ck_generator_submissions_generator_submissions_attempts_check CHECK ((attempts >= 0)),
+    CONSTRAINT ck_generator_submissions_generator_submissions_digest_check CHECK (((source_sha256 ~ '^[0-9a-f]{64}$'::text) AND (tree_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_lease_check CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((lease_id IS NULL) = (lease_run_id IS NULL)))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_name_check CHECK (((name IS NULL) OR ((char_length(name) >= 1) AND (char_length(name) <= 64)))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_size_check CHECK (((size_bytes > 0) AND (size_bytes = octet_length(source_bytes)) AND (size_bytes <= 4194304))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_status_check CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'rejected'::text])))
 );
 
 
@@ -3989,7 +4787,16 @@ CREATE TABLE public.inference_grants (
     embedding_cost_microusd bigint DEFAULT '0'::bigint NOT NULL,
     embedding_active_requests integer DEFAULT 0 NOT NULL,
     usage_accounting_version integer DEFAULT 1 NOT NULL,
+    decision_model text,
+    decision_input_microusd_per_mtok bigint DEFAULT 0 NOT NULL,
+    decision_request_budget integer DEFAULT 0 NOT NULL,
+    decision_token_budget bigint DEFAULT 0 NOT NULL,
+    decision_request_count integer DEFAULT 0 NOT NULL,
+    decision_tokens bigint DEFAULT 0 NOT NULL,
+    decision_cost_microusd bigint DEFAULT 0 NOT NULL,
+    decision_active_requests integer DEFAULT 0 NOT NULL,
     CONSTRAINT ck_inference_grants_inference_grants_active_requests CHECK ((active_requests >= 0)),
+    CONSTRAINT ck_inference_grants_inference_grants_decision_accounting CHECK (((decision_input_microusd_per_mtok >= 0) AND (decision_request_budget >= 0) AND (decision_token_budget >= 0) AND (decision_request_count >= 0) AND (decision_tokens >= 0) AND (decision_cost_microusd >= 0) AND (decision_active_requests >= 0) AND ((decision_model IS NULL) OR ((decision_request_budget > 0) AND (decision_token_budget > 0))))),
     CONSTRAINT ck_inference_grants_inference_grants_embedding_active_requests CHECK ((embedding_active_requests >= 0)),
     CONSTRAINT ck_inference_grants_inference_grants_embedding_dimensions CHECK ((embedding_dimensions = 768)),
     CONSTRAINT ck_inference_grants_inference_grants_embedding_request_budget CHECK ((embedding_request_budget > 0)),
@@ -4070,7 +4877,7 @@ CREATE TABLE public.inference_requests (
     terminal_error_code text,
     CONSTRAINT ck_inference_requests_inference_requests_fallback_phase CHECK (((fallback_phase >= 0) AND (fallback_phase <= 1))),
     CONSTRAINT ck_inference_requests_inference_requests_generation CHECK ((generation > 0)),
-    CONSTRAINT ck_inference_requests_inference_requests_kind CHECK ((request_kind = ANY (ARRAY['chat'::text, 'embedding'::text]))),
+    CONSTRAINT ck_inference_requests_inference_requests_kind CHECK ((request_kind = ANY (ARRAY['chat'::text, 'embedding'::text, 'decision'::text]))),
     CONSTRAINT ck_inference_requests_inference_requests_openrouter_attempts CHECK ((openrouter_attempts >= 0)),
     CONSTRAINT ck_inference_requests_inference_requests_reserved_tokens CHECK ((reserved_tokens > 0)),
     CONSTRAINT ck_inference_requests_inference_requests_status CHECK ((status = ANY (ARRAY['started'::text, 'completed'::text, 'failed'::text, 'canceled'::text]))),
@@ -4471,6 +5278,31 @@ CREATE TABLE public.name_claims (
 
 
 --
+-- Name: outage_sweep_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.outage_sweep_runs (
+    sweep_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    finished_at timestamp with time zone NOT NULL,
+    watermark_from timestamp with time zone NOT NULL,
+    watermark_to timestamp with time zone NOT NULL,
+    watermark_to_key jsonb,
+    examined_count integer NOT NULL,
+    voided_count integer NOT NULL,
+    error_count integer NOT NULL,
+    voids jsonb NOT NULL,
+    outage_windows jsonb NOT NULL,
+    canonical_flagged jsonb NOT NULL,
+    errors jsonb NOT NULL,
+    CONSTRAINT ck_outage_sweep_runs_outage_sweep_runs_counts_check CHECK (((examined_count >= 0) AND (voided_count >= 0) AND (error_count >= 0) AND ((voided_count + error_count) <= examined_count))),
+    CONSTRAINT ck_outage_sweep_runs_outage_sweep_runs_finished_check CHECK ((finished_at >= started_at)),
+    CONSTRAINT ck_outage_sweep_runs_outage_sweep_runs_watermark_check CHECK ((watermark_to >= watermark_from))
+);
+
+
+--
 -- Name: owner_attestations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4497,6 +5329,44 @@ CREATE TABLE public.owner_attestations (
     CONSTRAINT ck_owner_attestations_owner_attestations_lo_key_kind_check CHECK ((lo_key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text]))),
     CONSTRAINT ck_owner_attestations_owner_attestations_lo_signature_check CHECK ((length(lo_signature) = 128)),
     CONSTRAINT ck_owner_attestations_owner_attestations_revocation_pair CHECK (((revoked_at IS NULL) = (revoked_by IS NULL)))
+);
+
+
+--
+-- Name: owner_submission_cooldown_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.owner_submission_cooldown_revisions (
+    revision_id bigint NOT NULL,
+    scope text NOT NULL,
+    owner_key text NOT NULL,
+    revision integer NOT NULL,
+    action text NOT NULL,
+    cooldown_seconds integer,
+    expires_at timestamp with time zone,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_9024 CHECK ((((action = 'set'::text) AND ((cooldown_seconds >= 60) AND (cooldown_seconds <= 2592000)) AND (expires_at IS NOT NULL) AND (expires_at > created_at)) OR ((action = 'revoke'::text) AND (cooldown_seconds IS NULL) AND (expires_at IS NULL)))),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_b35a CHECK (((length(owner_key) >= 1) AND (length(owner_key) <= 128))),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_c083 CHECK ((scope = ANY (ARRAY['coldkey'::text, 'hotkey'::text]))),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_c5ce CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_d375 CHECK ((revision >= 1)),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_f6d9 CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: owner_submission_cooldown_revisions_revision_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.owner_submission_cooldown_revisions ALTER COLUMN revision_id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.owner_submission_cooldown_revisions_revision_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -4740,6 +5610,8 @@ CREATE TABLE public.scores (
     model_completion_tokens bigint,
     gate_evidence jsonb,
     stderr_projection jsonb,
+    dueling_season_id uuid,
+    dueling jsonb,
     CONSTRAINT ck_scores_scores_bench_version_positive CHECK ((bench_version > 0)),
     CONSTRAINT ck_scores_scores_gate_evidence_bench_floor CHECK (((gate_evidence IS NULL) OR (bench_version >= 13))),
     CONSTRAINT scores_composite_check CHECK (((composite >= (0)::double precision) AND (composite <= (1)::double precision))),
@@ -5136,6 +6008,32 @@ ALTER SEQUENCE public.screener_policy_activations_revision_seq OWNED BY public.s
 
 
 --
+-- Name: screener_probe_batteries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_probe_batteries (
+    attempt_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    screener_hotkey text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    settings_revision integer NOT NULL,
+    settings_scope text NOT NULL,
+    settings_checksum text NOT NULL,
+    status text NOT NULL,
+    encoding text,
+    seed_first boolean NOT NULL,
+    items_run integer NOT NULL,
+    probe_count integer NOT NULL,
+    leads jsonb NOT NULL,
+    battery_ms integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    review jsonb,
+    CONSTRAINT ck_screener_probe_batteries_screener_probe_batteries_ar_68c0 CHECK ((length(artifact_sha256) = 64)),
+    CONSTRAINT ck_screener_probe_batteries_screener_probe_batteries_st_2d72 CHECK ((status = ANY (ARRAY['complete'::text, 'calibration_failed'::text, 'timeout'::text, 'error'::text])))
+);
+
+
+--
 -- Name: screener_provider_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5304,7 +6202,17 @@ CREATE TABLE public.screening_attempts (
     private_failure_log_tail text,
     failure_captured_at timestamp with time zone,
     artifact_sha256 text,
+    lineage_parent_agent_id uuid,
+    lineage_scope text,
+    lineage_packet_sha256 text,
+    lineage_full_review_reasons jsonb,
+    lineage_reference_kind text,
+    lineage_changed_file_count integer,
+    lineage_changed_line_count integer,
     CONSTRAINT ck_screening_attempts_screening_attempts_artifact_sha_check CHECK (((artifact_sha256 IS NULL) OR (length(artifact_sha256) = 64))),
+    CONSTRAINT ck_screening_attempts_screening_attempts_lineage_binding_check CHECK ((((lineage_scope IS NULL) AND (lineage_packet_sha256 IS NULL)) OR ((lineage_parent_agent_id IS NOT NULL) AND (lineage_scope = ANY (ARRAY['diff'::text, 'full'::text])) AND (length(lineage_packet_sha256) = 64)))),
+    CONSTRAINT ck_screening_attempts_screening_attempts_lineage_record_check CHECK (((lineage_scope IS NOT NULL) OR ((lineage_full_review_reasons IS NULL) AND (lineage_reference_kind IS NULL)))),
+    CONSTRAINT ck_screening_attempts_screening_attempts_lineage_refere_feae CHECK (((lineage_reference_kind IS NULL) OR (lineage_reference_kind = ANY (ARRAY['same_owner_version'::text, 'same_owner'::text, 'released_base'::text])))),
     CONSTRAINT ck_screening_attempts_screening_attempts_review_setting_b74a CHECK ((((review_settings_revision IS NULL) AND (review_settings_instance_id IS NULL) AND (review_settings_scope IS NULL) AND (review_settings_checksum IS NULL)) OR ((review_settings_revision > 0) AND (review_settings_instance_id IS NOT NULL) AND (review_settings_scope IS NOT NULL) AND (length(review_settings_checksum) = 64)))),
     CONSTRAINT screening_attempts_deadline_check CHECK ((deadline >= started_at)),
     CONSTRAINT screening_attempts_finished_check CHECK (((finished_at IS NULL) OR (finished_at >= started_at))),
@@ -5527,6 +6435,29 @@ CREATE TABLE public.screening_review_events (
 
 
 --
+-- Name: screening_review_usage; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_review_usage (
+    attempt_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    screener_hotkey text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    stages jsonb NOT NULL,
+    total_input_tokens bigint NOT NULL,
+    total_output_tokens bigint NOT NULL,
+    total_cost_usd numeric(14,6) NOT NULL,
+    elapsed_ms bigint,
+    lineage_scope text,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    budget_stop jsonb,
+    CONSTRAINT ck_screening_review_usage_screening_review_usage_artifa_6670 CHECK ((length(artifact_sha256) = 64)),
+    CONSTRAINT ck_screening_review_usage_screening_review_usage_lineag_ac7c CHECK (((lineage_scope IS NULL) OR (lineage_scope = ANY (ARRAY['diff'::text, 'full'::text])))),
+    CONSTRAINT ck_screening_review_usage_screening_review_usage_totals_check CHECK (((total_input_tokens >= 0) AND (total_output_tokens >= 0) AND (total_cost_usd >= (0)::numeric) AND ((elapsed_ms IS NULL) OR (elapsed_ms >= 0))))
+);
+
+
+--
 -- Name: screening_review_windows; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5686,7 +6617,8 @@ CREATE TABLE public.source_emission_collector_cursors (
     updated_at timestamp with time zone NOT NULL,
     runtime_code_hash text,
     last_blocked_reason text,
-    reveal_plan_shadow jsonb
+    reveal_plan_shadow jsonb,
+    catch_up jsonb
 );
 
 
@@ -5880,8 +6812,10 @@ CREATE TABLE public.submission_settings_revisions (
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     fee_amount_rao bigint NOT NULL,
+    competition_fees jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT ck_submission_settings_revisions_submission_settings_ac_6db4 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_co_109c CHECK (((cooldown_seconds >= 60) AND (cooldown_seconds <= 86400))),
+    CONSTRAINT ck_submission_settings_revisions_submission_settings_co_c3f0 CHECK ((jsonb_typeof(competition_fees) = 'object'::text)),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_fe_4fea CHECK (((fee_amount_rao >= 1) AND (fee_amount_rao <= '1000000000000'::bigint))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_pa_46f1 CHECK ((parent_revision >= 0)),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_re_fa8a CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
@@ -5946,6 +6880,47 @@ CREATE TABLE public.submission_source_reviews (
 
 
 --
+-- Name: track_share_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.track_share_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__1ff4 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__3a5f CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__a93e CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__b1ff CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__d7e4 CHECK ((scope = '*'::text))
+);
+
+
+--
+-- Name: track_share_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.track_share_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: track_share_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.track_share_settings_revisions_revision_seq OWNED BY public.track_share_settings_revisions.revision;
+
+
+--
 -- Name: transcript_mirror_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5980,6 +6955,21 @@ CREATE SEQUENCE public.transcript_mirror_settings_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.transcript_mirror_settings_revisions_revision_seq OWNED BY public.transcript_mirror_settings_revisions.revision;
+
+
+--
+-- Name: treasury_funding_reconciliations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_funding_reconciliations (
+    purchase_id text NOT NULL,
+    payment_reference text NOT NULL,
+    payload jsonb NOT NULL,
+    digest text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL
+);
 
 
 --
@@ -6289,6 +7279,65 @@ CREATE TABLE public.trusted_image_builds (
 
 
 --
+-- Name: unreleased_copy_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.unreleased_copy_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    mode text NOT NULL,
+    threshold double precision NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_78b4 CHECK (((threshold > (0)::double precision) AND (threshold <= (100000)::double precision))),
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_7c07 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_b508 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_e19e CHECK ((mode = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text])))
+);
+
+
+--
+-- Name: unreleased_copy_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.unreleased_copy_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: unreleased_copy_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.unreleased_copy_settings_revisions_revision_seq OWNED BY public.unreleased_copy_settings_revisions.revision;
+
+
+--
+-- Name: unreleased_copy_signals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.unreleased_copy_signals (
+    agent_id uuid NOT NULL,
+    signal_version text NOT NULL,
+    mode text NOT NULL,
+    threshold double precision NOT NULL,
+    flagged boolean NOT NULL,
+    top_score double precision NOT NULL,
+    top_matched_agent_id uuid,
+    compared_agent_count integer NOT NULL,
+    candidate_item_count integer NOT NULL,
+    evidence jsonb NOT NULL,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_unreleased_copy_signals_unreleased_copy_signals_mode_check CHECK ((mode = ANY (ARRAY['shadow'::text, 'enforce'::text])))
+);
+
+
+--
 -- Name: upload_admission_reservations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6353,6 +7402,53 @@ CREATE TABLE public.v13_known_benign_control_approvals (
     CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_profile_sha_af5d CHECK ((length(profile_sha256) = 64)),
     CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_reason CHECK ((length(reason) >= 8)),
     CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_review_evid_d26b CHECK ((length(review_evidence_sha256) = 64))
+);
+
+
+--
+-- Name: v13_official_control_approvals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_official_control_approvals (
+    approval_id uuid NOT NULL,
+    control_id uuid NOT NULL,
+    profile_sha256 text NOT NULL,
+    review_evidence_sha256 text NOT NULL,
+    approval_receipt_sha256 text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    approved_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_actor CHECK (((length(actor) >= 1) AND (length(actor) <= 320))),
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_approval_recei_048d CHECK ((approval_receipt_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_profile_sha256 CHECK ((profile_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_reason CHECK ((length(reason) >= 8)),
+    CONSTRAINT ck_v13_official_control_approvals_v13oca_review_evidence_sha256 CHECK ((review_evidence_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: v13_official_control_images; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_official_control_images (
+    control_id uuid NOT NULL,
+    request_id uuid NOT NULL,
+    fixture_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    image_sha256 text NOT NULL,
+    image_id text NOT NULL,
+    size_bytes bigint NOT NULL,
+    producer text NOT NULL,
+    staging_id uuid NOT NULL,
+    verified_storage_key text,
+    verified_at timestamp with time zone,
+    created_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_official_control_images_v13oci_artifact CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_images_v13oci_image CHECK ((image_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_images_v13oci_image_id CHECK ((image_id ~ '^sha256:[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_v13_official_control_images_v13oci_producer CHECK (((length(producer) >= 1) AND (length(producer) <= 320))),
+    CONSTRAINT ck_v13_official_control_images_v13oci_size CHECK (((size_bytes > 0) AND (size_bytes <= '8589934592'::bigint))),
+    CONSTRAINT ck_v13_official_control_images_v13oci_verified_pair CHECK (((verified_at IS NULL) = (verified_storage_key IS NULL)))
 );
 
 
@@ -6674,6 +7770,7 @@ CREATE TABLE public.validator_retry_recoveries (
     ticket_snapshot jsonb NOT NULL,
     granted_validator_hotkeys jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    target_validator_hotkey text,
     CONSTRAINT validator_retry_recoveries_actor_length CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT validator_retry_recoveries_bench_version_positive CHECK ((bench_version > 0)),
     CONSTRAINT validator_retry_recoveries_reason_length CHECK ((length(TRIM(BOTH FROM reason)) >= 3)),
@@ -6755,13 +7852,15 @@ CREATE TABLE public.validator_tickets (
     container_log_tail_attempt integer,
     provider_outage_epoch uuid,
     provider_outage_attempted_epoch uuid,
+    dueling_season_id uuid,
+    slice_sha256 text,
     CONSTRAINT ck_validator_tickets_validator_tickets_failure_reason CHECK (((failure_reason IS NULL) OR (failure_reason = ANY (ARRAY['infrastructure'::text, 'scoring_error'::text, 'sandbox_oom'::text])))),
     CONSTRAINT ck_validator_tickets_validator_tickets_infra_retry_gran_aa85 CHECK ((infra_retry_grants >= 0)),
     CONSTRAINT ck_validator_tickets_validator_tickets_purpose_revision_df08 CHECK ((purpose_revision >= 0)),
-    CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text, 'benchmark_canary'::text]))),
+    CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text, 'benchmark_canary'::text, 'generator_round'::text]))),
     CONSTRAINT ck_validator_tickets_validator_tickets_seed_nonnegative CHECK (((seed IS NULL) OR (seed >= 0))),
     CONSTRAINT ck_validator_tickets_validator_tickets_slot_id CHECK ((slot_id = ANY (ARRAY['slot-0'::text, 'slot-1'::text, 'slot-2'::text, 'slot-3'::text, 'slot-4'::text, 'slot-5'::text, 'slot-6'::text, 'slot-7'::text]))),
-    CONSTRAINT validator_tickets_attempt_count_positive CHECK ((attempt_count > 0)),
+    CONSTRAINT validator_tickets_attempt_count_nonnegative CHECK ((attempt_count >= 0)),
     CONSTRAINT validator_tickets_bench_version_positive CHECK ((bench_version > 0)),
     CONSTRAINT validator_tickets_manual_retry_grants_nonnegative CHECK ((manual_retry_grants >= 0))
 );
@@ -6889,10 +7988,45 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions ALTER COLUMN revisio
 
 
 --
+-- Name: emission_allocation_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions ALTER COLUMN revision SET DEFAULT nextval('public.emission_allocation_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: emission_eligibility_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.emission_eligibility_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.emission_eligibility_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: generator_competition_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_competition_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.generator_competition_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: generator_operator_actions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_operator_actions ALTER COLUMN id SET DEFAULT nextval('public.generator_operator_actions_id_seq'::regclass);
+
+
+--
+-- Name: generator_probe_epochs epoch; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_epochs ALTER COLUMN epoch SET DEFAULT nextval('public.generator_probe_epochs_epoch_seq'::regclass);
+
+
+--
+-- Name: generator_rounds round_index; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_rounds ALTER COLUMN round_index SET DEFAULT nextval('public.generator_rounds_round_index_seq'::regclass);
 
 
 --
@@ -6987,6 +8121,13 @@ ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET 
 
 
 --
+-- Name: track_share_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.track_share_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: transcript_mirror_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -7012,6 +8153,13 @@ ALTER TABLE ONLY public.treasury_runtime_revisions ALTER COLUMN revision SET DEF
 --
 
 ALTER TABLE ONLY public.treasury_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.treasury_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: unreleased_copy_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.unreleased_copy_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -7069,11 +8217,11 @@ ALTER TABLE ONLY public.artifact_release_settings_revisions
 
 
 --
--- Name: ath_copy_court_recommendations ath_copy_court_recommendations_review_revision_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: ath_copy_court_recommendations ath_copy_court_recommendations_review_triage_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ath_copy_court_recommendations
-    ADD CONSTRAINT ath_copy_court_recommendations_review_revision_key UNIQUE (review_id, settings_revision);
+    ADD CONSTRAINT ath_copy_court_recommendations_review_triage_key UNIQUE (review_id, settings_revision, triage_revision);
 
 
 --
@@ -7138,6 +8286,14 @@ ALTER TABLE public.benchmark_rollouts
 
 ALTER TABLE ONLY public.burn_settings_revisions
     ADD CONSTRAINT burn_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
+-- Name: scores ck_scores_scores_dueling_bench_floor; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scores
+    ADD CONSTRAINT ck_scores_scores_dueling_bench_floor CHECK ((((dueling_season_id IS NULL) AND (dueling IS NULL)) OR (bench_version >= 16))) NOT VALID;
 
 
 --
@@ -7709,6 +8865,14 @@ ALTER TABLE ONLY public.confirmation_retest_authorizations
 
 
 --
+-- Name: confirmation_score_voids confirmation_score_voids_sample_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_score_voids
+    ADD CONSTRAINT confirmation_score_voids_sample_key UNIQUE (agent_id, bench_version, validator_hotkey, seed, void_generation);
+
+
+--
 -- Name: confirmation_scores confirmation_scores_bench_version_floor; Type: CHECK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7721,7 +8885,7 @@ ALTER TABLE public.confirmation_scores
 --
 
 ALTER TABLE ONLY public.confirmation_scores
-    ADD CONSTRAINT confirmation_scores_pkey PRIMARY KEY (agent_id, bench_version, validator_hotkey, seed);
+    ADD CONSTRAINT confirmation_scores_pkey PRIMARY KEY (agent_id, bench_version, validator_hotkey, seed, void_generation);
 
 
 --
@@ -7821,6 +8985,22 @@ ALTER TABLE ONLY public.core_qualification_policy_revisions
 
 
 --
+-- Name: dueling_seasons dueling_seasons_index_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_seasons
+    ADD CONSTRAINT dueling_seasons_index_key UNIQUE (bench_version, season_index);
+
+
+--
+-- Name: dueling_slice_preparations dueling_slice_preparations_seed_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_slice_preparations
+    ADD CONSTRAINT dueling_slice_preparations_seed_key UNIQUE (season_id, run_seed);
+
+
+--
 -- Name: efficiency_bonus_settings_revisions efficiency_bonus_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7850,6 +9030,14 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 ALTER TABLE ONLY public.efficiency_cohort_snapshots
     ADD CONSTRAINT efficiency_cohort_snapshots_epoch_key UNIQUE (bench_version, run_size, epoch_index);
+
+
+--
+-- Name: emission_allocation_revisions emission_allocation_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions
+    ADD CONSTRAINT emission_allocation_parent_key UNIQUE (parent_revision);
 
 
 --
@@ -7890,6 +9078,38 @@ ALTER TABLE ONLY public.evaluation_payments
 
 ALTER TABLE ONLY public.feedback_track_contributions
     ADD CONSTRAINT feedback_track_dedupe_key UNIQUE (source, external_ref, kind);
+
+
+--
+-- Name: generator_competition_settings_revisions generator_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_competition_settings_revisions
+    ADD CONSTRAINT generator_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_pkey PRIMARY KEY (block_hash, extrinsic_index);
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_submission_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_submission_key UNIQUE (submission_id);
+
+
+--
+-- Name: generator_submissions generator_submissions_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submissions
+    ADD CONSTRAINT generator_submissions_sha256_key UNIQUE (source_sha256);
 
 
 --
@@ -8093,6 +9313,14 @@ ALTER TABLE ONLY public.owner_attestations
 
 
 --
+-- Name: owner_submission_cooldown_revisions owner_submission_cooldown_revisions_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.owner_submission_cooldown_revisions
+    ADD CONSTRAINT owner_submission_cooldown_revisions_key UNIQUE (scope, owner_key, revision);
+
+
+--
 -- Name: admin_activity pk_admin_activity; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8114,6 +9342,14 @@ ALTER TABLE ONLY public.admin_activity_outcomes
 
 ALTER TABLE ONLY public.agent_cla_bindings
     ADD CONSTRAINT pk_agent_cla_bindings PRIMARY KEY (agent_id);
+
+
+--
+-- Name: agent_distinctive_items pk_agent_distinctive_items; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_distinctive_items
+    ADD CONSTRAINT pk_agent_distinctive_items PRIMARY KEY (agent_id);
 
 
 --
@@ -8242,6 +9478,22 @@ ALTER TABLE ONLY public.bounty_claims
 
 ALTER TABLE ONLY public.bounty_delivery_facts
     ADD CONSTRAINT pk_bounty_delivery_facts PRIMARY KEY (fact_id);
+
+
+--
+-- Name: bounty_evaluation_decisions pk_bounty_evaluation_decisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_evaluation_decisions
+    ADD CONSTRAINT pk_bounty_evaluation_decisions PRIMARY KEY (decision_id);
+
+
+--
+-- Name: bounty_evaluation_entries pk_bounty_evaluation_entries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_evaluation_entries
+    ADD CONSTRAINT pk_bounty_evaluation_entries PRIMARY KEY (entry_id);
 
 
 --
@@ -8517,6 +9769,30 @@ ALTER TABLE ONLY public.coding_hosted_terminal_reservations
 
 
 --
+-- Name: competition_improvement_daily pk_competition_improvement_daily; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_improvement_daily
+    ADD CONSTRAINT pk_competition_improvement_daily PRIMARY KEY (bench_version, day);
+
+
+--
+-- Name: competition_release_forks pk_competition_release_forks; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_release_forks
+    ADD CONSTRAINT pk_competition_release_forks PRIMARY KEY (base_agent_id, fork_agent_id);
+
+
+--
+-- Name: competition_source_releases pk_competition_source_releases; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_source_releases
+    ADD CONSTRAINT pk_competition_source_releases PRIMARY KEY (agent_id);
+
+
+--
 -- Name: confirmation_budget_days pk_confirmation_budget_days; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8581,6 +9857,14 @@ ALTER TABLE ONLY public.confirmation_retest_authorizations
 
 
 --
+-- Name: confirmation_score_voids pk_confirmation_score_voids; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_score_voids
+    ADD CONSTRAINT pk_confirmation_score_voids PRIMARY KEY (void_id);
+
+
+--
 -- Name: continual_retest_settings_revisions pk_continual_retest_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8629,6 +9913,30 @@ ALTER TABLE ONLY public.core_qualification_policy_revisions
 
 
 --
+-- Name: dueling_season_batteries pk_dueling_season_batteries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_season_batteries
+    ADD CONSTRAINT pk_dueling_season_batteries PRIMARY KEY (season_id, submission_id);
+
+
+--
+-- Name: dueling_seasons pk_dueling_seasons; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_seasons
+    ADD CONSTRAINT pk_dueling_seasons PRIMARY KEY (id);
+
+
+--
+-- Name: dueling_slice_preparations pk_dueling_slice_preparations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_slice_preparations
+    ADD CONSTRAINT pk_dueling_slice_preparations PRIMARY KEY (id);
+
+
+--
 -- Name: efficiency_bonus_settings_revisions pk_efficiency_bonus_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8642,6 +9950,14 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions
 
 ALTER TABLE ONLY public.efficiency_cohort_snapshots
     ADD CONSTRAINT pk_efficiency_cohort_snapshots PRIMARY KEY (snapshot_id);
+
+
+--
+-- Name: emission_allocation_revisions pk_emission_allocation_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions
+    ADD CONSTRAINT pk_emission_allocation_revisions PRIMARY KEY (revision);
 
 
 --
@@ -8666,6 +9982,110 @@ ALTER TABLE ONLY public.emission_eligibility_shadow_records
 
 ALTER TABLE ONLY public.feedback_track_contributions
     ADD CONSTRAINT pk_feedback_track_contributions PRIMARY KEY (contribution_id);
+
+
+--
+-- Name: generator_case_verdicts pk_generator_case_verdicts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_case_verdicts
+    ADD CONSTRAINT pk_generator_case_verdicts PRIMARY KEY (run_id, seed_index, case_id);
+
+
+--
+-- Name: generator_competition_settings_revisions pk_generator_competition_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_competition_settings_revisions
+    ADD CONSTRAINT pk_generator_competition_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: generator_operator_actions pk_generator_operator_actions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_operator_actions
+    ADD CONSTRAINT pk_generator_operator_actions PRIMARY KEY (id);
+
+
+--
+-- Name: generator_probe_epochs pk_generator_probe_epochs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_epochs
+    ADD CONSTRAINT pk_generator_probe_epochs PRIMARY KEY (epoch);
+
+
+--
+-- Name: generator_probe_results pk_generator_probe_results; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_results
+    ADD CONSTRAINT pk_generator_probe_results PRIMARY KEY (submission_id, epoch);
+
+
+--
+-- Name: generator_round_attempts pk_generator_round_attempts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_attempts
+    ADD CONSTRAINT pk_generator_round_attempts PRIMARY KEY (round_index, agent_id, validator_hotkey, ticket_deadline);
+
+
+--
+-- Name: generator_round_case_verdicts pk_generator_round_case_verdicts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_case_verdicts
+    ADD CONSTRAINT pk_generator_round_case_verdicts PRIMARY KEY (round_index, column_id, case_id);
+
+
+--
+-- Name: generator_round_commitment_publications pk_generator_round_commitment_publications; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_commitment_publications
+    ADD CONSTRAINT pk_generator_round_commitment_publications PRIMARY KEY (round_index, validator_hotkey);
+
+
+--
+-- Name: generator_round_results pk_generator_round_results; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_results
+    ADD CONSTRAINT pk_generator_round_results PRIMARY KEY (round_index, agent_id);
+
+
+--
+-- Name: generator_rounds pk_generator_rounds; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_rounds
+    ADD CONSTRAINT pk_generator_rounds PRIMARY KEY (round_index);
+
+
+--
+-- Name: generator_runs pk_generator_runs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_runs
+    ADD CONSTRAINT pk_generator_runs PRIMARY KEY (run_id);
+
+
+--
+-- Name: generator_scorer_heartbeats pk_generator_scorer_heartbeats; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_scorer_heartbeats
+    ADD CONSTRAINT pk_generator_scorer_heartbeats PRIMARY KEY (scorer_id);
+
+
+--
+-- Name: generator_submissions pk_generator_submissions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submissions
+    ADD CONSTRAINT pk_generator_submissions PRIMARY KEY (submission_id);
 
 
 --
@@ -8778,6 +10198,22 @@ ALTER TABLE ONLY public.miner_github_links
 
 ALTER TABLE ONLY public.miner_github_operator_revocations
     ADD CONSTRAINT pk_miner_github_operator_revocations PRIMARY KEY (link_id);
+
+
+--
+-- Name: outage_sweep_runs pk_outage_sweep_runs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.outage_sweep_runs
+    ADD CONSTRAINT pk_outage_sweep_runs PRIMARY KEY (sweep_id);
+
+
+--
+-- Name: owner_submission_cooldown_revisions pk_owner_submission_cooldown_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.owner_submission_cooldown_revisions
+    ADD CONSTRAINT pk_owner_submission_cooldown_revisions PRIMARY KEY (revision_id);
 
 
 --
@@ -8901,6 +10337,14 @@ ALTER TABLE ONLY public.screener_policy_activations
 
 
 --
+-- Name: screener_probe_batteries pk_screener_probe_batteries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_probe_batteries
+    ADD CONSTRAINT pk_screener_probe_batteries PRIMARY KEY (attempt_id);
+
+
+--
 -- Name: screener_provider_settings_revisions pk_screener_provider_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8962,6 +10406,14 @@ ALTER TABLE ONLY public.screening_review_deadline_activations
 
 ALTER TABLE ONLY public.screening_review_events
     ADD CONSTRAINT pk_screening_review_events PRIMARY KEY (event_id);
+
+
+--
+-- Name: screening_review_usage pk_screening_review_usage; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_usage
+    ADD CONSTRAINT pk_screening_review_usage PRIMARY KEY (attempt_id);
 
 
 --
@@ -9085,11 +10537,27 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 
 --
+-- Name: track_share_settings_revisions pk_track_share_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions
+    ADD CONSTRAINT pk_track_share_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: transcript_mirror_settings_revisions pk_transcript_mirror_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.transcript_mirror_settings_revisions
     ADD CONSTRAINT pk_transcript_mirror_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: treasury_funding_reconciliations pk_treasury_funding_reconciliations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_funding_reconciliations
+    ADD CONSTRAINT pk_treasury_funding_reconciliations PRIMARY KEY (purchase_id);
 
 
 --
@@ -9157,6 +10625,22 @@ ALTER TABLE ONLY public.trusted_image_builds
 
 
 --
+-- Name: unreleased_copy_settings_revisions pk_unreleased_copy_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_settings_revisions
+    ADD CONSTRAINT pk_unreleased_copy_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: unreleased_copy_signals pk_unreleased_copy_signals; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_signals
+    ADD CONSTRAINT pk_unreleased_copy_signals PRIMARY KEY (agent_id, signal_version);
+
+
+--
 -- Name: upload_admission_reservations pk_upload_admission_reservations; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9178,6 +10662,22 @@ ALTER TABLE ONLY public.v13_group_package_registrations
 
 ALTER TABLE ONLY public.v13_known_benign_control_approvals
     ADD CONSTRAINT pk_v13_known_benign_control_approvals PRIMARY KEY (approval_id);
+
+
+--
+-- Name: v13_official_control_approvals pk_v13_official_control_approvals; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_approvals
+    ADD CONSTRAINT pk_v13_official_control_approvals PRIMARY KEY (approval_id);
+
+
+--
+-- Name: v13_official_control_images pk_v13_official_control_images; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_images
+    ADD CONSTRAINT pk_v13_official_control_images PRIMARY KEY (control_id);
 
 
 --
@@ -9573,6 +11073,14 @@ ALTER TABLE ONLY public.screening_verification_replays
 
 
 --
+-- Name: track_share_settings_revisions track_share_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions
+    ADD CONSTRAINT track_share_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
 -- Name: transcript_mirror_settings_revisions transcript_mirror_settings_parent_revision_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9634,6 +11142,14 @@ ALTER TABLE ONLY public.treasury_verified_receipts
 
 ALTER TABLE ONLY public.trusted_image_builds
     ADD CONSTRAINT trusted_image_builds_source_key UNIQUE (environment, component, source_sha);
+
+
+--
+-- Name: unreleased_copy_settings_revisions unreleased_copy_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_settings_revisions
+    ADD CONSTRAINT unreleased_copy_settings_parent_key UNIQUE (parent_revision);
 
 
 --
@@ -9981,6 +11497,14 @@ ALTER TABLE ONLY public.screener_nodes
 
 
 --
+-- Name: treasury_funding_reconciliations uq_treasury_funding_reconciliations_payment_reference; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_funding_reconciliations
+    ADD CONSTRAINT uq_treasury_funding_reconciliations_payment_reference UNIQUE (payment_reference);
+
+
+--
 -- Name: upload_admission_reservations uq_upload_admission_reservations_token; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9994,6 +11518,22 @@ ALTER TABLE ONLY public.upload_admission_reservations
 
 ALTER TABLE ONLY public.v13_known_benign_control_approvals
     ADD CONSTRAINT uq_v13_known_benign_control_approvals_attempt_id UNIQUE (attempt_id, profile_sha256);
+
+
+--
+-- Name: v13_official_control_approvals uq_v13_official_control_approvals_control_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_approvals
+    ADD CONSTRAINT uq_v13_official_control_approvals_control_id UNIQUE (control_id, profile_sha256);
+
+
+--
+-- Name: v13_official_control_images uq_v13_official_control_images_request_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_images
+    ADD CONSTRAINT uq_v13_official_control_images_request_id UNIQUE (request_id);
 
 
 --
@@ -10228,6 +11768,20 @@ CREATE INDEX bounty_claims_bounty_idx ON public.bounty_claims USING btree (bount
 --
 
 CREATE INDEX bounty_claims_slot_idx ON public.bounty_claims USING btree (slot_id);
+
+
+--
+-- Name: bounty_evaluation_decisions_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_evaluation_decisions_bounty_idx ON public.bounty_evaluation_decisions USING btree (bounty_id, decision_id);
+
+
+--
+-- Name: bounty_evaluation_entries_bounty_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX bounty_evaluation_entries_bounty_idx ON public.bounty_evaluation_entries USING btree (bounty_id, kind, metric, entry_id);
 
 
 --
@@ -10469,6 +12023,13 @@ CREATE INDEX coding_shadow_tickets_validator_deadline_idx ON public.coding_shado
 
 
 --
+-- Name: competition_release_forks_fork_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX competition_release_forks_fork_idx ON public.competition_release_forks USING btree (fork_agent_id);
+
+
+--
 -- Name: confirmation_bundles_state_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -10504,10 +12065,31 @@ CREATE UNIQUE INDEX confirmation_reservations_one_open_bundle_idx ON public.conf
 
 
 --
+-- Name: confirmation_score_voids_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_score_voids_agent_idx ON public.confirmation_score_voids USING btree (agent_id, bench_version);
+
+
+--
+-- Name: confirmation_score_voids_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_score_voids_created_idx ON public.confirmation_score_voids USING btree (created_at);
+
+
+--
 -- Name: confirmation_scores_agent_version_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX confirmation_scores_agent_version_idx ON public.confirmation_scores USING btree (agent_id, bench_version);
+
+
+--
+-- Name: confirmation_scores_version_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_scores_version_created_idx ON public.confirmation_scores USING btree (bench_version, created_at);
 
 
 --
@@ -10588,6 +12170,41 @@ CREATE UNIQUE INDEX core_qualification_policy_bench_revision_idx ON public.core_
 
 
 --
+-- Name: dueling_season_batteries_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX dueling_season_batteries_status_idx ON public.dueling_season_batteries USING btree (status, season_id);
+
+
+--
+-- Name: dueling_seasons_one_committed_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX dueling_seasons_one_committed_idx ON public.dueling_seasons USING btree (bench_version) WHERE (status = 'committed'::text);
+
+
+--
+-- Name: dueling_seasons_one_open_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX dueling_seasons_one_open_idx ON public.dueling_seasons USING btree (bench_version) WHERE (status = 'open'::text);
+
+
+--
+-- Name: dueling_seasons_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX dueling_seasons_status_idx ON public.dueling_seasons USING btree (status, season_index);
+
+
+--
+-- Name: dueling_slice_preparations_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX dueling_slice_preparations_status_idx ON public.dueling_slice_preparations USING btree (status, created_at);
+
+
+--
 -- Name: efficiency_bonus_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -10662,6 +12279,118 @@ CREATE INDEX evaluation_payments_miner_hotkey_idx ON public.evaluation_payments 
 --
 
 CREATE INDEX feedback_track_user_idx ON public.feedback_track_contributions USING btree (ditto_user_id, recorded_at);
+
+
+--
+-- Name: generator_case_verdicts_fingerprint_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_case_verdicts_fingerprint_idx ON public.generator_case_verdicts USING btree (fingerprint);
+
+
+--
+-- Name: generator_operator_actions_subject_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_operator_actions_subject_idx ON public.generator_operator_actions USING btree (subject, created_at);
+
+
+--
+-- Name: generator_probe_epochs_current_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX generator_probe_epochs_current_key ON public.generator_probe_epochs USING btree (((retired_at IS NULL))) WHERE (retired_at IS NULL);
+
+
+--
+-- Name: generator_probe_results_epoch_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_probe_results_epoch_idx ON public.generator_probe_results USING btree (epoch);
+
+
+--
+-- Name: generator_round_attempts_round_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_round_attempts_round_idx ON public.generator_round_attempts USING btree (round_index, agent_id);
+
+
+--
+-- Name: generator_round_case_verdicts_fingerprint_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_round_case_verdicts_fingerprint_idx ON public.generator_round_case_verdicts USING btree (fingerprint);
+
+
+--
+-- Name: generator_round_case_verdicts_submission_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_round_case_verdicts_submission_idx ON public.generator_round_case_verdicts USING btree (submission_id, round_index);
+
+
+--
+-- Name: generator_rounds_dataset_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_rounds_dataset_idx ON public.generator_rounds USING btree (dataset_sha256) WHERE (dataset_sha256 IS NOT NULL);
+
+
+--
+-- Name: generator_rounds_first_epoch_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_rounds_first_epoch_idx ON public.generator_rounds USING btree (first_epoch_index);
+
+
+--
+-- Name: generator_runs_scored_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_runs_scored_idx ON public.generator_runs USING btree (finished_at) WHERE (status = 'scored'::text);
+
+
+--
+-- Name: generator_runs_submission_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_runs_submission_idx ON public.generator_runs USING btree (submission_id, leased_at DESC);
+
+
+--
+-- Name: generator_submission_payments_miner_coldkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submission_payments_miner_coldkey_idx ON public.generator_submission_payments USING btree (miner_coldkey);
+
+
+--
+-- Name: generator_submissions_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submissions_hotkey_idx ON public.generator_submissions USING btree (miner_hotkey, submitted_at DESC);
+
+
+--
+-- Name: generator_submissions_public_default_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX generator_submissions_public_default_key ON public.generator_submissions USING btree (public_default) WHERE (public_default AND (status = 'active'::text));
+
+
+--
+-- Name: generator_submissions_runnable_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submissions_runnable_idx ON public.generator_submissions USING btree (next_run_at) WHERE (status = 'active'::text);
+
+
+--
+-- Name: generator_submissions_tree_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submissions_tree_idx ON public.generator_submissions USING btree (tree_sha256);
 
 
 --
@@ -10861,6 +12590,20 @@ CREATE INDEX name_claims_status_idx ON public.name_claims USING btree (netuid, s
 
 
 --
+-- Name: outage_sweep_runs_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX outage_sweep_runs_started_idx ON public.outage_sweep_runs USING btree (started_at);
+
+
+--
+-- Name: outage_sweep_runs_version_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX outage_sweep_runs_version_started_idx ON public.outage_sweep_runs USING btree (bench_version, started_at);
+
+
+--
 -- Name: owner_attestations_active_pair_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -11043,6 +12786,20 @@ CREATE INDEX screener_nodes_provider_status_idx ON public.screener_nodes USING b
 
 
 --
+-- Name: screener_probe_batteries_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screener_probe_batteries_agent_idx ON public.screener_probe_batteries USING btree (agent_id, created_at);
+
+
+--
+-- Name: screener_probe_batteries_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screener_probe_batteries_created_idx ON public.screener_probe_batteries USING btree (created_at);
+
+
+--
 -- Name: screener_provider_settings_environment_revision_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -11081,7 +12838,7 @@ CREATE INDEX screening_attempts_agent_started_idx ON public.screening_attempts U
 -- Name: screening_attempts_infra_failed_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text, 'source-review-adjudicator-key-unavailable'::text])));
+CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text, 'source-review-adjudicator-key-unavailable'::text, 'image-upload-platform-unavailable'::text, 'l2-late-result'::text])));
 
 
 --
@@ -11131,6 +12888,13 @@ CREATE UNIQUE INDEX screening_quarantines_one_active_agent_idx ON public.screeni
 --
 
 CREATE INDEX screening_retry_overrides_agent_created_idx ON public.screening_retry_overrides USING btree (agent_id, created_at, override_id);
+
+
+--
+-- Name: screening_review_usage_recorded_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screening_review_usage_recorded_idx ON public.screening_review_usage USING btree (recorded_at);
 
 
 --
@@ -11260,6 +13024,13 @@ CREATE UNIQUE INDEX svrso_replay_check_idx ON public.screening_verification_repl
 
 
 --
+-- Name: track_share_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX track_share_settings_scope_revision_idx ON public.track_share_settings_revisions USING btree (scope, revision);
+
+
+--
 -- Name: treasury_manual_unfinished; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -11285,6 +13056,13 @@ CREATE INDEX treasury_verified_distribution_source ON public.treasury_verified_r
 --
 
 CREATE INDEX trusted_image_builds_queue_idx ON public.trusted_image_builds USING btree (environment, status, created_at);
+
+
+--
+-- Name: unreleased_copy_signals_flagged_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX unreleased_copy_signals_flagged_idx ON public.unreleased_copy_signals USING btree (signal_version, flagged, top_score);
 
 
 --
@@ -11516,6 +13294,34 @@ CREATE TRIGGER bounty_delivery_facts_immutable BEFORE DELETE OR UPDATE ON public
 --
 
 CREATE TRIGGER bounty_delivery_facts_no_truncate BEFORE TRUNCATE ON public.bounty_delivery_facts FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_evaluation_decisions bounty_evaluation_decisions_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_evaluation_decisions_immutable BEFORE DELETE OR UPDATE ON public.bounty_evaluation_decisions FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_evaluation_decisions bounty_evaluation_decisions_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_evaluation_decisions_no_truncate BEFORE TRUNCATE ON public.bounty_evaluation_decisions FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_evaluation_entries bounty_evaluation_entries_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_evaluation_entries_immutable BEFORE DELETE OR UPDATE ON public.bounty_evaluation_entries FOR EACH ROW EXECUTE FUNCTION public.bounty_history_immutable();
+
+
+--
+-- Name: bounty_evaluation_entries bounty_evaluation_entries_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER bounty_evaluation_entries_no_truncate BEFORE TRUNCATE ON public.bounty_evaluation_entries FOR EACH STATEMENT EXECUTE FUNCTION public.bounty_history_immutable();
 
 
 --
@@ -12163,6 +13969,20 @@ CREATE TRIGGER screening_verification_replay_private_receipts_immutable BEFORE D
 
 
 --
+-- Name: treasury_funding_reconciliations treasury_funding_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_funding_immutable BEFORE DELETE OR UPDATE ON public.treasury_funding_reconciliations FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_funding_mutation();
+
+
+--
+-- Name: treasury_funding_reconciliations treasury_funding_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_funding_no_truncate BEFORE TRUNCATE ON public.treasury_funding_reconciliations FOR EACH STATEMENT EXECUTE FUNCTION public.reject_treasury_funding_mutation();
+
+
+--
 -- Name: treasury_public_events treasury_public_events_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -12216,6 +14036,20 @@ CREATE TRIGGER v13_group_package_registrations_immutable BEFORE DELETE OR UPDATE
 --
 
 CREATE TRIGGER v13_known_benign_control_approvals_immutable BEFORE DELETE OR UPDATE ON public.v13_known_benign_control_approvals FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: v13_official_control_approvals v13_official_control_approval_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_official_control_approval_immutable BEFORE DELETE OR UPDATE ON public.v13_official_control_approvals FOR EACH ROW EXECUTE FUNCTION public.protect_v13_official_control_approval();
+
+
+--
+-- Name: v13_official_control_images v13_official_control_image_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_official_control_image_immutable BEFORE DELETE OR UPDATE ON public.v13_official_control_images FOR EACH ROW EXECUTE FUNCTION public.protect_v13_official_control_image();
 
 
 --
@@ -12625,6 +14459,14 @@ ALTER TABLE ONLY public.confirmation_retest_authorizations
 
 
 --
+-- Name: confirmation_score_voids confirmation_score_voids_sample_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_score_voids
+    ADD CONSTRAINT confirmation_score_voids_sample_fkey FOREIGN KEY (agent_id, bench_version, validator_hotkey, seed, void_generation) REFERENCES public.confirmation_scores(agent_id, bench_version, validator_hotkey, seed, void_generation) ON DELETE CASCADE;
+
+
+--
 -- Name: confirmation_scores confirmation_scores_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12750,6 +14592,14 @@ ALTER TABLE ONLY public.agent_cla_bindings
 
 ALTER TABLE ONLY public.agent_cla_bindings
     ADD CONSTRAINT fk_agent_cla_bindings_signature_id_cla_signatures FOREIGN KEY (signature_id) REFERENCES public.cla_signatures(signature_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: agent_distinctive_items fk_agent_distinctive_items_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_distinctive_items
+    ADD CONSTRAINT fk_agent_distinctive_items_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --
@@ -12926,6 +14776,22 @@ ALTER TABLE ONLY public.bounty_claims
 
 ALTER TABLE ONLY public.bounty_delivery_facts
     ADD CONSTRAINT fk_bounty_delivery_facts_claim_id_bounty_claims FOREIGN KEY (claim_id) REFERENCES public.bounty_claims(claim_id);
+
+
+--
+-- Name: bounty_evaluation_decisions fk_bounty_evaluation_decisions_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_evaluation_decisions
+    ADD CONSTRAINT fk_bounty_evaluation_decisions_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
+
+
+--
+-- Name: bounty_evaluation_entries fk_bounty_evaluation_entries_bounty_id_bounties; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bounty_evaluation_entries
+    ADD CONSTRAINT fk_bounty_evaluation_entries_bounty_id_bounties FOREIGN KEY (bounty_id) REFERENCES public.bounties(bounty_id);
 
 
 --
@@ -13321,6 +15187,30 @@ ALTER TABLE ONLY public.coding_hosted_terminal_reservations
 
 
 --
+-- Name: competition_release_forks fk_competition_release_forks_base_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_release_forks
+    ADD CONSTRAINT fk_competition_release_forks_base_agent_id_agents FOREIGN KEY (base_agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: competition_release_forks fk_competition_release_forks_fork_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_release_forks
+    ADD CONSTRAINT fk_competition_release_forks_fork_agent_id_agents FOREIGN KEY (fork_agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: competition_source_releases fk_competition_source_releases_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_source_releases
+    ADD CONSTRAINT fk_competition_source_releases_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
 -- Name: confirmation_inference_requests fk_confirmation_inference_requests_grant_id_confirmatio_7cd5; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -13337,11 +15227,107 @@ ALTER TABLE ONLY public.conversation_assessments
 
 
 --
+-- Name: dueling_season_batteries fk_dueling_season_batteries_season_id_dueling_seasons; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_season_batteries
+    ADD CONSTRAINT fk_dueling_season_batteries_season_id_dueling_seasons FOREIGN KEY (season_id) REFERENCES public.dueling_seasons(id) ON DELETE CASCADE;
+
+
+--
+-- Name: dueling_slice_preparations fk_dueling_slice_preparations_season_id_dueling_seasons; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_slice_preparations
+    ADD CONSTRAINT fk_dueling_slice_preparations_season_id_dueling_seasons FOREIGN KEY (season_id) REFERENCES public.dueling_seasons(id) ON DELETE CASCADE;
+
+
+--
 -- Name: emission_eligibility_shadow_records fk_emission_eligibility_shadow_records_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.emission_eligibility_shadow_records
     ADD CONSTRAINT fk_emission_eligibility_shadow_records_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_case_verdicts fk_generator_case_verdicts_run_id_generator_runs; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_case_verdicts
+    ADD CONSTRAINT fk_generator_case_verdicts_run_id_generator_runs FOREIGN KEY (run_id) REFERENCES public.generator_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_probe_results fk_generator_probe_results_epoch_generator_probe_epochs; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_results
+    ADD CONSTRAINT fk_generator_probe_results_epoch_generator_probe_epochs FOREIGN KEY (epoch) REFERENCES public.generator_probe_epochs(epoch);
+
+
+--
+-- Name: generator_probe_results fk_generator_probe_results_run_id_generator_runs; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_results
+    ADD CONSTRAINT fk_generator_probe_results_run_id_generator_runs FOREIGN KEY (run_id) REFERENCES public.generator_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_probe_results fk_generator_probe_results_submission_id_generator_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_probe_results
+    ADD CONSTRAINT fk_generator_probe_results_submission_id_generator_submissions FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_round_attempts fk_generator_round_attempts_round_index_generator_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_attempts
+    ADD CONSTRAINT fk_generator_round_attempts_round_index_generator_rounds FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_round_case_verdicts fk_generator_round_case_verdicts_round_index_generator_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_case_verdicts
+    ADD CONSTRAINT fk_generator_round_case_verdicts_round_index_generator_rounds FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_round_commitment_publications fk_generator_round_commitment_publications_round_index__ea4c; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_commitment_publications
+    ADD CONSTRAINT fk_generator_round_commitment_publications_round_index__ea4c FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_round_results fk_generator_round_results_round_index_generator_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_results
+    ADD CONSTRAINT fk_generator_round_results_round_index_generator_rounds FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_runs fk_generator_runs_probe_epoch_generator_probe_epochs; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_runs
+    ADD CONSTRAINT fk_generator_runs_probe_epoch_generator_probe_epochs FOREIGN KEY (probe_epoch) REFERENCES public.generator_probe_epochs(epoch);
+
+
+--
+-- Name: generator_runs fk_generator_runs_submission_id_generator_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_runs
+    ADD CONSTRAINT fk_generator_runs_submission_id_generator_submissions FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE CASCADE;
 
 
 --
@@ -13649,6 +15635,14 @@ ALTER TABLE ONLY public.treasury_verified_receipts
 
 
 --
+-- Name: unreleased_copy_signals fk_unreleased_copy_signals_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_signals
+    ADD CONSTRAINT fk_unreleased_copy_signals_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
 -- Name: v13_group_package_registrations fk_v13_group_package_registrations_group_id_v13_private_cf73; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -13670,6 +15664,22 @@ ALTER TABLE ONLY public.v13_known_benign_control_approvals
 
 ALTER TABLE ONLY public.v13_known_benign_control_approvals
     ADD CONSTRAINT fk_v13_known_benign_control_approvals_attempt_id_screen_70b4 FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_official_control_approvals fk_v13_official_control_approvals_control_id_v13_offici_028d; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_approvals
+    ADD CONSTRAINT fk_v13_official_control_approvals_control_id_v13_offici_028d FOREIGN KEY (control_id) REFERENCES public.v13_official_control_images(control_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_official_control_images fk_v13_official_control_images_fixture_id_screener_l2_r_4a8c; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_official_control_images
+    ADD CONSTRAINT fk_v13_official_control_images_fixture_id_screener_l2_r_4a8c FOREIGN KEY (fixture_id) REFERENCES public.screener_l2_report_canaries(canary_id) ON DELETE RESTRICT;
 
 
 --
@@ -13766,6 +15776,14 @@ ALTER TABLE ONLY public.v13_replay_private_generation_groups
 
 ALTER TABLE ONLY public.v13_replay_private_generation_groups
     ADD CONSTRAINT fk_v13_replay_private_generation_groups_target_attempt__08f4 FOREIGN KEY (target_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_submission_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_submission_fkey FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE RESTRICT;
 
 
 --
@@ -13929,6 +15947,30 @@ ALTER TABLE ONLY public.screener_node_channel_settings_revisions
 
 
 --
+-- Name: screener_probe_batteries screener_probe_batteries_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_probe_batteries
+    ADD CONSTRAINT screener_probe_batteries_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screener_probe_batteries screener_probe_batteries_attempt_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_probe_batteries
+    ADD CONSTRAINT screener_probe_batteries_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screener_probe_batteries screener_probe_batteries_settings_revision_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_probe_batteries
+    ADD CONSTRAINT screener_probe_batteries_settings_revision_fkey FOREIGN KEY (settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
 -- Name: screener_shadow_reviews screener_shadow_reviews_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -13966,6 +16008,14 @@ ALTER TABLE ONLY public.screening_attempts
 
 ALTER TABLE ONLY public.screening_attempts
     ADD CONSTRAINT screening_attempts_duplicate_of_fkey FOREIGN KEY (duplicate_of) REFERENCES public.agents(agent_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screening_attempts screening_attempts_lineage_parent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_attempts
+    ADD CONSTRAINT screening_attempts_lineage_parent_fkey FOREIGN KEY (lineage_parent_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
 
 
 --
@@ -14030,6 +16080,22 @@ ALTER TABLE ONLY public.screening_retry_overrides
 
 ALTER TABLE ONLY public.screening_retry_overrides
     ADD CONSTRAINT screening_retry_overrides_review_settings_revision_fkey FOREIGN KEY (review_settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: screening_review_usage screening_review_usage_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_usage
+    ADD CONSTRAINT screening_review_usage_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_review_usage screening_review_usage_attempt_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_usage
+    ADD CONSTRAINT screening_review_usage_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
 
 
 --

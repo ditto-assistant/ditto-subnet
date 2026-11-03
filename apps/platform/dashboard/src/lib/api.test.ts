@@ -114,6 +114,22 @@ describe("getJSON", () => {
     expect((error as DOMException).name).toBe("AbortError");
   });
 
+  it.each(["/generator/board", "/generator/rounds/7"])(
+    "gives the public generator read %s the 30s deadline",
+    async (path) => {
+      vi.useFakeTimers();
+      stubFetch(
+        () =>
+          new Promise<Response>((resolve) => {
+            setTimeout(() => resolve(jsonResponse({ entries: [] })), 12_000);
+          }),
+      );
+      const pending = getJSON<{ entries: string[] }>(path);
+      await vi.advanceTimersByTimeAsync(12_000);
+      await expect(pending).resolves.toEqual({ entries: [] });
+    },
+  );
+
   it("returns a public data response that arrives after 8s", async () => {
     vi.useFakeTimers();
     stubFetch(

@@ -30,11 +30,13 @@ docker compose version >/dev/null
 cp "$ROOT_DIR/.env.example" "$ENV_FILE"
 
 # Exercise the updater process itself, including the cooperative busy ->
-# drained handoff and complete-stack replacement. External registry/signature
-# boundaries remain deterministic fakes in this process-level suite.
+# drained handoff, complete-stack replacement, and the bounded rollback when a
+# candidate `compose up` or container exec never returns. External
+# registry/signature boundaries remain deterministic fakes in this
+# process-level suite.
 uv run pytest \
   ditto/tests/test_validator_stack_auto_update.py \
-  -k 'success_replaces_and_commits_the_complete_stack or waits_for_busy_validator_before_replacing_stack'
+  -k 'success_replaces_and_commits_the_complete_stack or waits_for_busy_validator_before_replacing_stack or hung_candidate_docker_call_times_out_and_rolls_back'
 
 # Boot the exact scorer bootstrap in Docker with the same read-only root,
 # capabilities, uid transition, and writable updater mount rendered into a

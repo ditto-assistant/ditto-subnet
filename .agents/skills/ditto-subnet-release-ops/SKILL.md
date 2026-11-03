@@ -35,6 +35,32 @@ Read [`references/release-ops-index.md`](references/release-ops-index.md), then 
 - Never place cloud, GitHub, Platform, or provider credentials in untrusted build/runtime environments.
 - Do not create service accounts or IAM bindings out of band merely to bypass an unapplied Terraform bootstrap.
 
+## Hetzner screener host logs
+
+Read Backroom first for production queue, policy, attempt and capacity state.
+For supporting journals on `subnet-screener-1`, use the bounded read-only helper:
+
+```bash
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --since 15m --lines 200
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --worker 12 --json --lines 20
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --service updater --since 1d
+```
+
+It always authenticates as `logs@100.79.84.29` over the omniaura.ai tailnet with
+committed host-key pins. `DITTOBOX_SSH_IDENTITY` selects one readable approved key
+(default `~/.ssh/id_ed25519`); missing or empty keys fail before connecting.
+Ambient SSH config is ignored. There is no public-host, privileged-user or
+GCE fallback. The account reads journals without sudo and cannot use Docker or
+control services. Deployment, enrollment and host changes keep their separately
+authorized operator identity. JSON output is native journal JSON (`MESSAGE`
+contains the worker event), not a provider transcript. Avoid exposing raw
+prompt, credential or artifact content from journals in reports.
+
+Use `--service worker|agent|updater|enroll|egress`, `--worker N`, `--since [-]N[s|m|h|d]`,
+`--lines 1..10000`, `--json` or an explicitly requested `--follow`.
+The default is all workers, last hour, newest 200 records. A successful read is
+not proof of worker readiness or an active lease; corroborate with Backroom.
+
 ## Platform app VM disk
 
 `deploy_platform` `No space left on device` during `git fetch` is a full boot
@@ -69,6 +95,29 @@ It falls back to the whole-fleet drain (`stop_fleet` plus the lease-bound hold f
 - the analyzer build inputs differ from any live worker's release.
 
 The journal says `draining every worker before activation: <reason>`. Inspect `/var/lib/ditto-screener-fleet/updater/drain-status.env` (`PHASE=rolling|active|rolled_back|draining|held|aborted`) and `held-workers` for workers still finishing on the previous release. Mixed worker `release` values in Backroom during a roll are expected; a target-revision field is not yet published. Details: `docs/hetzner-screener-fleet.md` § Rolling activation.
+
+## Generator scorer releases and bench activations
+
+`publish-generator-scorer` ships a signed native `challenge-scorer` bundle that the generator
+scorer VM pulls and activates itself (`scripts/generator-scorer-auto-update.sh`;
+`docs/MONOREPO-RELEASES.md` "Generator scorer pull updates";
+`services/dittobench-api/docs/challenge-scorer.md`). A merged or released scorer change is not
+live until Backroom `get_generator_scorer` shows the new `scorer_version`, `build_revision` and
+case bounds on its last poll.
+
+- **Verify the deployed build before relying on it.** Before raising generator `cases_per_seed`
+  or activating a bench version, confirm `get_generator_scorer` accepts the setting and the new
+  version. On 2026-10-27 a stale scorer capped at 64 cases voided a round and wrongly rejected
+  six generators; the fix was redeploy, then `reinstate_generator_submission` (blocked when the
+  hotkey has a newer upload; see `reinstate_blockers` on `get_generator_submission`).
+- The generator scorer will advertise its supported pack policies explicitly (being
+  implemented). A scorer that advertises none is treated as v13-only.
+- A bench version activation is two competitions moving together. The release-side
+  checks (Platform round contracts, generator scorer version, validators forwarding
+  `generator_round_bench_versions`) are step 1 of "Activate (both competitions)" in
+  `$ditto-subnet-bench-version-bump`; the runbook is
+  `research/dittobench-datagen/docs/tandem-upgrades.md`. Never call `start_benchmark_rollout`
+  without explicit operator approval.
 
 ## Capacity invariants
 

@@ -23,7 +23,7 @@
 # proposes digest and tag updates for review.
 
 # --- stage 1: fetch the weights with the HF CLI (not present in the TEI image) ---
-FROM python:3.11-slim@sha256:0dd364ba7e10242f07755449e3a3d0e35f9efd987952737b90def6709ab0c5ce AS fetch
+FROM python:3.11-slim@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377 AS fetch
 
 ARG MODEL_ID=jinaai/jina-embeddings-v2-base-code
 ARG MODEL_REVISION=main
@@ -39,6 +39,7 @@ RUN huggingface-cli download "$MODEL_ID" \
 
 # --- stage 2: the TEI runtime with the model already on disk ---
 FROM ghcr.io/huggingface/text-embeddings-inference:cpu-1.9.3@sha256:ad950d30878eceb72aaf32024d26fa2b1d04a75304fa0b4776b49aa1941fea07
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY --from=fetch /model /model
 

@@ -1,0 +1,58 @@
+---
+# Controller-only test for roles/base/tasks/go_version_fact.yml: evaluates the
+# real detection task against stubbed `go version` results under the pinned
+# ansible-core. No host, package or file changes.
+- name: Verify Go version detection in the base role
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    go_version_cases:
+      - name: release build
+        result: {rc: 0, stdout: "go version go1.27.3 linux/amd64"}
+        expected: "1.27.3"
+      - name: trailing newline and extra spacing
+        result: {rc: 0, stdout: "  go version   go1.26.10 linux/arm64\n"}
+        expected: "1.26.10"
+      - name: missing binary (non-zero rc)
+        result: {rc: 2, stdout: ""}
+        expected: ""
+      - name: non-zero rc ignores parseable output
+        result: {rc: 1, stdout: "go version go1.27.3 linux/amd64"}
+        expected: ""
+      - name: garbage output
+        result: {rc: 0, stdout: "bash: go: command not found"}
+        expected: ""
+      - name: empty output
+        result: {rc: 0, stdout: ""}
+        expected: ""
+      - name: result without stdout or rc
+        result: {}
+        expected: ""
+  tasks:
+    - name: Evaluate each stubbed go version result
+      ansible.builtin.include_tasks: base-go-version-case.yml
+      loop: "{{ go_version_cases }}"
+      loop_control:
+        loop_var: go_case
+        label: "{{ go_case.name }}"
+
+    - name: Load the role's pinned Go release
+      ansible.builtin.include_vars:
+        file: ../roles/base/defaults/main.yml
+        name: base_role_defaults
+
+    - name: The converged version matches the pinned base_go_version (no reinstall)
+      ansible.builtin.include_role:
+        name: base
+        tasks_from: go_version_fact
+      vars:
+        go_version_check:
+          rc: 0
+          stdout: "go version go{{ base_role_defaults.base_go_version }} linux/amd64"
+
+    - name: Assert the pinned version round-trips
+      ansible.builtin.assert:
+        that:
+          - current_go_version == base_role_defaults.base_go_version
+        fail_msg: "pinned base_go_version did not round-trip: {{ current_go_version | to_json }}"

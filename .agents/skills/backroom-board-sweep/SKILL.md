@@ -35,7 +35,20 @@ front-load artifact downloads.
 4. **Precedents first.** `search_ath_precedents` with the full hotkey or agent
    name. Results routinely overflow the tool output; parse the saved JSON with
    `python3 -c` instead of paging it. Find the latest ruled sibling and its
-   charged mechanism.
+   charged mechanism. Also check the existing local precedent store and
+   Peyton's relevant miner DMs under
+   [miner-communication precedents](../backroom-review/references/miner-communication-precedents.md).
+   Reconcile the exact assurance, clarification or reversal before ruling;
+   record verified additions in the existing store, without publishing private
+   conversations or unresolved findings.
+   Check recent withdrawals before challenging a prior CLEAR. Read its exact
+   reason and the current decisive bytes; unchanged inherited code does not
+   erase an assurance. Under the
+   [October 25 recovery holding](../backroom-review/references/precedents/october-25-fallback-recovery-withdrawal.md),
+   incidental loss from retrieval, summaries, compaction, checkpoints, retries
+   or fresh fallback alone is quality/reliability, even after a model consumed
+   a receipt. A reject needs a separate prohibited mechanism and material
+   consequence, never unread code or an unproven hypothetical failure.
 5. **Diff against the ruled sibling.** `get_lineage_source_diff` (add `path` for
    one file). If the diff removes exactly the charged mechanism and the other
    files are byte-identical to an artifact whose other paths were already read,
@@ -84,6 +97,14 @@ front-load artifact downloads.
     don't share them with contributors who mine. Never put Jira keys in code,
     commits or PR bodies.
 
+## Infra failure triage
+
+A board row or miner report whose low score or retest looks like
+infrastructure is not a ruling. Hand it to
+[`$scoring-infra-triage`](../scoring-infra-triage/SKILL.md): pin every low
+sample, prove ours or the agent's, fix ours before any retry, and pick the
+retry tool. Never reject or clear a row because of a score drop alone.
+
 ## Gotchas
 
 - **Clean rows are attested, not held.** `clear` on an unheld `scored` or
@@ -108,18 +129,47 @@ front-load artifact downloads.
   a bare `open` still needs scored or live.
 - **Same name is not same miner.** Precedents mentioning a "delta v5" or
   "delta v7" can belong to a different hotkey. Match by UUID.
-- **Safe harbors stay narrow.** A model-authorized repeat gate (a separate
+- **Apply current safe harbors.** A model-authorized repeat gate (a separate
   model decides, or the deciding model re-issues the call) is permitted. A
   blanket or phrase-gated success memo is I7 (Artemis v8 `2758f7a7`, test-v13 v3
-  `eb13f315`). Timestamps kept with no recency recipe is the lets_637 clear
-  (`8b3f0b57`); hidden timestamps plus an order disclaimer plus a change-wins
-  recipe is I5 (Harry v14 `30d854e5`).
+  `eb13f315`). The case-file currency rule, including its date disclaimer,
+  change cues and scoped timestamp omission, is permitted alone; combining
+  those elements is not an independent second factor. Harry v14 `30d854e5`
+  was restored. Read the [currency reversal](../backroom-review/references/precedents/october-23-case-file-currency.md)
+  before using an older chronology holding. A truthful 6000-character
+  tool-result cap is also benign alone; read the [cap reversal](../backroom-review/references/precedents/october-23-benign-tool-result-cap.md).
+  The [recovery withdrawal](../backroom-review/references/precedents/october-25-fallback-recovery-withdrawal.md)
+  also covers later receipt/history loss; multiple quality defects do not
+  supply a separate prohibited mechanism.
 - **Ported constructs cross hotkeys and languages.** Once a mechanism is
   charged, grep its prompt text (not identifiers) with `search_screening_source`
-  across every ranked and evaluating row. On 2026-10-19 one
-  preliminary-reader I2 stage turned up in Python, Rust, C++ and a renamed
-  Python port on five hotkeys. Building on a publicly released king is allowed;
-  shipping its charged stage is not.
+  across every ranked and evaluating row. A stage can be ported into Python,
+  Rust, C++ or renamed copies across several hotkeys. Building on a publicly
+  released king is allowed; shipping a proven charged stage is not.
+- **Before charging I2, check the request the agent actually receives.**
+  Quote the exact instruction from the served request and show it applies
+  (`workers/screener/docs/policy-v13.md`, I2 clarification). Every scored v13
+  `/run` carries only the validator's tool-discipline system prompt, and
+  `/seed` carries none. A preliminary model stage without the system prompt is
+  a lead, not a finding. On 2026-10-19 ten I2 rejects charged that shape
+  without naming an applicable instruction. They were withdrawn as precedent
+  and reversed (reopen, then clear), so check the proof bar before porting a
+  charge across a lineage. `search_ath_precedents` still lists their original
+  rejects, so never cite one of these UUIDs as I2 precedent:
+  - dan0l v19 `3e9fe610-9759-44bb-b6ec-6f221d9d58dc`
+  - dan0l v18 `55c69c6f-b0e2-4b92-a9bb-9aa3cddbef00`
+  - dan0l v16 `f169e0d7-87a0-41e7-9cf6-2073e31619f0`
+  - lucas-v91 `39d6abd4-bd10-4602-8c16-f2d553040276`
+  - blinkrazor v2 `dc2a8f4f-a877-4ea0-ae44-a1dd6118666a`
+  - Omar-miner v48 `ca7133c8-f328-4124-bdd8-b8f30b85f382`
+  - Harry v20 `1ea576ea-d317-4da2-9f4b-ce86a5ca4541`
+  - T v4 `3f53b09d-25a1-48ce-9b91-09da6e9f2cd0`
+  - T v5 `bfd1d558-30a8-4162-ac5f-9e3c32b923fc`
+  - King v8 `4a431bd8-4819-4dd4-b419-aa8c69a09e6e`
+- **Reward reality-bearing innovation.** The subnet wants harness ideas that
+  would work for any real user: model-written notes at `/seed`, memory graphs,
+  deliberation and auditable tools. Reject only what the policy proves.
+  Novelty, complexity and departing from the starter kit are never grounds.
 
 ## Report
 

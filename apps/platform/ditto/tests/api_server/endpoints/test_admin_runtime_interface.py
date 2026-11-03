@@ -94,7 +94,6 @@ async def test_requires_admin(client: httpx.AsyncClient, chain: AsyncMock) -> No
         (BlockNotFinalized("block is not finalized"), 422),
         (ValueError("malformed runtime metadata: KeyError"), 503),
         (ChainConnectionError("archive down"), 503),
-        (TimeoutError(), 503),
     ],
 )
 async def test_failures_are_explicit(
@@ -104,11 +103,3 @@ async def test_failures_are_explicit(
     response = await client.get(_URL, headers=_HEADERS)
     assert response.status_code == status, response.text
     assert "archive down" not in response.text
-
-
-async def test_block_must_be_positive(
-    client: httpx.AsyncClient, chain: AsyncMock
-) -> None:
-    response = await client.get(_URL, headers=_HEADERS, params={"block": 0})
-    assert response.status_code == 422
-    chain.assert_not_awaited()

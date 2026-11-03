@@ -107,14 +107,40 @@ def render(snapshot: dict[str, Any], hotkey: str | None) -> None:
 
     treasury = snapshot.get("treasury") or {}
     miner_share = treasury.get("forecast_miner_share")
+    split = treasury.get("emission_split") or []
     print("== Emission split of the miner pool (public forecast)")
-    print(
-        f"  Gamma (service) {pct(treasury.get('forecast_service_share'))}"
-        f"  burn {pct(treasury.get('forecast_burn_share'))}"
-        f"  miners {pct(miner_share)}"
-        f"  [policy revision {treasury.get('policy_revision', '?')},"
-        f" routing {treasury.get('routing_status', '?')}]"
-    )
+    if split:
+        # One row per destination, from the same derivation as the operator's
+        # emission allocation: burn, each competition track, each Gamma bucket.
+        parts = []
+        for share in split:
+            name = share.get("id") or share.get("kind")
+            if share.get("kind") == "gamma":
+                name = f"Gamma {name}"
+            elif share.get("kind") == "track":
+                name = f"{name} track"
+            parts.append(f"{name} {pct(share.get('share'))}")
+            if share.get("kind") == "track" and share.get("id") == "memory":
+                # KOTH pays the memory track only.
+                miner_share = share.get("share")
+        print("  " + "  ".join(parts))
+        revision = treasury.get("emission_allocation_revision", 0)
+        epoch = treasury.get("emission_split_epoch")
+        source = treasury.get("emission_split_source", "?")
+        print(
+            f"  [in force from {source}"
+            + (f" epoch {epoch}" if epoch is not None else "")
+            + f", allocation revision {revision},"
+            f" routing {treasury.get('routing_status', '?')}]"
+        )
+    else:
+        print(
+            f"  Gamma (service) {pct(treasury.get('forecast_service_share'))}"
+            f"  burn {pct(treasury.get('forecast_burn_share'))}"
+            f"  miners {pct(miner_share)}"
+            f"  [policy revision {treasury.get('policy_revision', '?')},"
+            f" routing {treasury.get('routing_status', '?')}]"
+        )
 
     board = snapshot.get("leaderboard") or {}
     emissions = board.get("emissions") or {}

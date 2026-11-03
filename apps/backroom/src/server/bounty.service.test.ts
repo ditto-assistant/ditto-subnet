@@ -10,6 +10,8 @@ import {
   publishBountyRevision,
   reassignBountyReviewer,
   reconcileBountyTransfer,
+  recordBountyEvaluationDecision,
+  recordBountyEvaluationEntry,
   recordBountyFact,
   reviewBountySubmission,
   setBountyClaimsPaused,
@@ -86,6 +88,22 @@ type Case = {
 }
 
 const reason = 'fixture operator reason'
+const reasons = 'fixture: cheaper than an internal build'
+const entry = (entryId: number, over: Record<string, unknown> = {}) => ({
+  entry_id: entryId, kind: 'actual', metric: 'build_hours', value: 52.5, note: null, reason, actor: ACTOR,
+  recorded_at: '2026-10-16T00:00:00Z', ...over,
+})
+const decision = (decisionId: number, over: Record<string, unknown> = {}) => ({
+  decision_id: decisionId, decision: 'expand', integration_status: 'integrated', reasons, actor: ACTOR,
+  recorded_at: '2026-10-16T00:00:00Z', ...over,
+})
+const evaluation = (entries: unknown[], decisions: unknown[] = []) => operator({ evaluation: { entries, decisions } })
+// The estimate this actual's predecessor, entry 4, belongs to another operator.
+const earlier = entry(4, { value: 40, actor: 'other@example.com' })
+const recordActual = () => recordBountyEvaluationEntry(ACTOR, {
+  bountyId: BOUNTY, kind: 'actual', metric: 'build_hours', value: 52.5, expectedEntryId: 4, reason,
+  confirmation: `RECORD BOUNTY ACTUAL BUILD_HOURS ${REPO}#2942`,
+})
 const cases: Case[] = [
   {
     name: 'publish_bounty_revision',
@@ -261,6 +279,30 @@ const cases: Case[] = [
     applied: [Response.json(claim({ facts: [{ kind: 'deployed', reference: 'v1' }, { kind: 'merged', reference: 'a'.repeat(40) }] }))],
     absent: [Response.json(claim())],
     superseded: [Response.json(claim({ facts: [{ kind: 'merged', reference: 'b'.repeat(40) }] }))],
+  },
+  {
+    name: 'record_bounty_evaluation',
+    run: recordActual,
+    path: `/api/v1/admin/bounties/${BOUNTY}/evaluation/entries`,
+    body: { kind: 'actual', metric: 'build_hours', value: 52.5, expected_entry_id: 4, note: null, reason },
+    committed: entry(5),
+    applied: [Response.json(evaluation([earlier, entry(5)]))],
+    absent: [Response.json(evaluation([earlier]))],
+    // Another operator's entry already superseded entry 4.
+    superseded: [Response.json(evaluation([earlier, entry(5, { value: 60, actor: 'other@example.com' })]))],
+  },
+  {
+    name: 'decide_bounty_evaluation',
+    run: () => recordBountyEvaluationDecision(ACTOR, {
+      bountyId: BOUNTY, decision: 'expand', integrationStatus: 'integrated', expectedDecisionId: 0, reasons,
+      confirmation: `DECIDE BOUNTY EVALUATION ${REPO}#2942 EXPAND`,
+    }),
+    path: `/api/v1/admin/bounties/${BOUNTY}/evaluation/decisions`,
+    body: { decision: 'expand', integration_status: 'integrated', expected_decision_id: 0, reasons },
+    committed: decision(1),
+    applied: [Response.json(evaluation([], [decision(1)]))],
+    absent: [Response.json(evaluation([]))],
+    superseded: [Response.json(evaluation([], [decision(1, { decision: 'stop', actor: 'other@example.com' })]))],
   },
 ]
 
@@ -527,6 +569,20 @@ describe('bounty read-backs find this write, not the latest state', () => {
     await expect(cancel()).resolves.toMatchObject({ bounty_id: BOUNTY })
   })
 
+  it("keeps Platform's appeal-window refusal of a reopen", async () => {
+    const refusal = 'the claimant can appeal this rejected outcome until 2026-10-19T00:00:00+00:00: ' +
+      'reopen after the 3-day appeal window, or once an appeal of it is decided'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(envelope(refusal, 409))
+      .mockResolvedValueOnce(Response.json(operator())))
+    const error = await controlBountySlot(ACTOR, {
+      bountyId: BOUNTY, slotId: SLOT, action: 'reopen', reason, confirmation: `REOPEN BOUNTY SLOT ${REPO}#2942 ROUND 1 SLOT 1`,
+    }).catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(PlatformAdminError)
+    expect((error as PlatformAdminError).status).toBe(409)
+    expect((error as Error).message).toContain('3-day appeal window')
+  })
+
   it('never reads an earlier cancel of another kind as a refused cancel applied', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(envelope('a cancelled slot cannot be cancelled', 409))
@@ -554,6 +610,45 @@ describe('bounty read-backs find this write, not the latest state', () => {
       expectedRevision: 0, singleApproverMaxAlphaRao: 5, dualApproverMaxAlphaRao: 50, reason, confirmation: 'SET BOUNTY PAYOUT POLICY 1',
     })).resolves.toMatchObject({ revision: 1, actor: ACTOR })
     expect(sent(fetchMock, 1).url.endsWith('/api/v1/admin/bounties/payout-policy?revision=1')).toBe(true)
+  })
+})
+
+describe('bounty evaluation read-backs find the record this write makes', () => {
+  it.each([
+    ['later entries follow it', [earlier, entry(5), entry(6, { value: 70, actor: 'other@example.com' })]],
+    ['other metrics interleave', [entry(3, { metric: 'operator_hours' }), earlier, entry(7, { metric: 'operator_hours' }), entry(9)]],
+  ])('reads an entry back when %s', async (_name, entries) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(evaluation(entries))))
+    await expect(recordActual()).resolves.toMatchObject({ actor: ACTOR, value: 52.5 })
+  })
+
+  it('reads an operator view from a Platform without evaluation records as absent', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(operator())))
+    await expect(recordActual()).rejects.toThrow('may have committed')
+  })
+
+  it('reads a decision back as the one after the decision it names', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(outage()).mockResolvedValueOnce(Response.json(evaluation([], [
+      decision(1, { decision: 'revise', actor: 'other@example.com' }), decision(2, { decision: 'stop' }), decision(3),
+    ]))))
+    await expect(recordBountyEvaluationDecision(ACTOR, {
+      bountyId: BOUNTY, decision: 'stop', integrationStatus: 'integrated', expectedDecisionId: 1, reasons,
+      confirmation: `DECIDE BOUNTY EVALUATION ${REPO}#2942 STOP`,
+    })).resolves.toMatchObject({ decision_id: 2, decision: 'stop' })
+  })
+
+  it.each([
+    ['a negative value', { value: -1 }],
+    ['an unknown metric', { metric: 'lines_of_code' }],
+    ['a blank-length reason', { reason: 'short' }],
+  ])('refuses %s before any request', async (_name, over) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(recordBountyEvaluationEntry(ACTOR, {
+      bountyId: BOUNTY, kind: 'actual', metric: 'build_hours', value: 1, expectedEntryId: 0, reason,
+      confirmation: 'x', ...over,
+    })).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
@@ -585,6 +680,8 @@ describe('bounty inputs are canonical before any request', () => {
   it.each([
     [{ queue: 'reviews', state: 'uncertain' }],
     [{ queue: 'settlement', overdueOnly: true }],
+    [{ queue: 'appeals', state: 'uncertain' }],
+    [{ queue: 'appeals', overdueOnly: true }],
   ])('refuses a filter queue %o cannot apply', async (input) => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -610,6 +707,7 @@ describe('bounty reads', () => {
     [{ queue: 'reviews', overdueOnly: true }, '/api/v1/admin/bounties/queue/reviews?overdue_only=true'],
     [{ queue: 'settlement', state: 'uncertain' }, '/api/v1/admin/bounties/queue/settlement?state=uncertain'],
     [{ queue: 'settlement' }, '/api/v1/admin/bounties/queue/settlement'],
+    [{ queue: 'appeals' }, '/api/v1/admin/bounties/queue/appeals'],
   ])('routes queue %o', async (input, path) => {
     const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ items: [], total: 0 }))
     vi.stubGlobal('fetch', fetchMock)

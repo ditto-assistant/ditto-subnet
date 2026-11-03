@@ -259,10 +259,13 @@ func TestWorldTripQuestionsUseExactNumberGrading(t *testing.T) {
 	}
 }
 
+// The best fixed guess sits near 10% at 40, 60 and 200 seeds alike, so 60
+// seeds (originally 200) keep the 15% ceiling's margin.
 func TestWorldTripFixedGuessCeiling(t *testing.T) {
+	t.Parallel()
 	counts := map[string]int{}
 	total := 0
-	for seed := int64(1); seed <= 200; seed++ {
+	for seed := int64(1); seed <= 60; seed++ {
 		plans, err := Generate(seed, 3).QuestionPlans(150)
 		if err != nil {
 			t.Fatal(err)
@@ -374,13 +377,14 @@ func TestWorldProjectLeadQuestionsRequireTheProjectOwnershipEdge(t *testing.T) {
 }
 
 func TestWorldProjectContextIsTheOnlySeededOwnershipEdge(t *testing.T) {
+	t.Parallel()
 	normalize := func(value string) string {
 		words := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
 			return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 		})
 		return " " + strings.Join(words, " ") + " "
 	}
-	for seed := int64(1); seed <= 100; seed++ {
+	for seed := int64(1); seed <= 40; seed++ { // frozen v8 world; originally 100
 		w := Generate(seed, 3)
 		for _, project := range w.Projects {
 			lead := w.People[project.Lead]

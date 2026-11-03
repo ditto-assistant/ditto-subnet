@@ -21,11 +21,14 @@ from ditto.api_models.confirmation_bundles import ConfirmationBundleSettings
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.copy_court_settings import CopyCourtSettings
 from ditto.api_models.efficiency_settings import EfficiencyBonusSettings
+from ditto.api_models.emission_allocation import EmissionAllocation
+from ditto.api_models.generator import GeneratorCompetitionSettings
 from ditto.api_models.inference_concurrency_settings import InferenceConcurrencySettings
 from ditto.api_models.queue_policy_settings import QueuePolicySettings
 from ditto.api_models.scoring_lease_settings import ScoringLeaseSettings
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.track_share_settings import TrackShareSettings
 from ditto.api_models.treasury_settings import TreasurySettings, public_wallet_address
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.db.models import AdminActivity, AdminActivityOutcome
@@ -95,12 +98,14 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "chat_per_validator_requests_per_minute",
                 "chat_request_budget",
                 "chat_token_budget",
+                "decision_lane",
                 "embedding_global_concurrency",
                 "embedding_global_requests_per_minute",
                 "embedding_per_ticket_concurrency",
                 "embedding_per_ticket_requests_per_minute",
                 "embedding_per_validator_concurrency",
                 "embedding_per_validator_requests_per_minute",
+                "scored_provider_routing",
             )
         ),
     ),
@@ -110,17 +115,31 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
             (
                 "cpu_percent_ceiling",
                 "disk_percent_ceiling",
+                "generator_round_reserved_slots",
                 "max_concurrent_slots",
                 "memory_percent_ceiling",
                 "paused_validator_hotkeys",
+                "per_validator",
                 "resource_block_percent_ceiling",
             )
         ),
     ),
     "burn-settings": (BurnSettings, frozenset(("burn_share",))),
+    "track-share-settings": (
+        TrackShareSettings,
+        frozenset(("track_shares_bps",)),
+    ),
+    # Every entry is a public destination and its bps; no wallet or account.
+    "emission-allocation": (EmissionAllocation, frozenset(("entries",))),
     "scoring-lease-settings": (
         ScoringLeaseSettings,
         frozenset(("scoring_ticket_ttl_minutes",)),
+    ),
+    # The whole generator policy is operational, not private: no field names a
+    # wallet, account, or credential.
+    "generator-competition/settings": (
+        GeneratorCompetitionSettings,
+        frozenset(GeneratorCompetitionSettings.model_fields),
     ),
     "treasury-settings": (
         TreasurySettings,
@@ -172,6 +191,9 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "rollout_standdown",
                 "tie_weighting_mode",
                 "statistical_band_mode",
+                "crown_gate_mode",
+                "min_dethrone_confirmations",
+                "champion_standing_rank",
                 "wave_membership",
             )
         ),
@@ -246,6 +268,20 @@ _NESTED_FIELDS: dict[str, tuple[str, ...]] = {
         "relay_delay_fingerprint_mode",
         "relay_delay_fingerprint_min_ms",
         "relay_delay_fingerprint_max_ms",
+        "sandbox_memory_limit_mib",
+    ),
+    "decision_lane": (
+        "enabled",
+        "model",
+        "input_microusd_per_mtok",
+        "request_budget",
+        "token_budget",
+        "per_ticket_concurrency",
+        "per_validator_concurrency",
+        "global_concurrency",
+        "per_ticket_requests_per_minute",
+        "per_validator_requests_per_minute",
+        "global_requests_per_minute",
     ),
     "similarity_budget": (
         "enabled",

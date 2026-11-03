@@ -367,7 +367,72 @@ def _chat(state: WorkbenchState, body: dict[str, Any]) -> dict[str, Any]:
 INDEX_HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ditto Submission Workbench</title><style>
-:root{color-scheme:dark;--ink:#e9e6db;--muted:#969a94;--line:#333a38;--panel:#171b1a;--base:#0d100f;--acid:#c8f169;--orange:#ff7a45;--danger:#ff8877;font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--base);color:var(--ink);min-height:100vh;background-image:linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.022) 1px,transparent 1px);background-size:28px 28px}button,input,textarea{font:inherit}button{cursor:pointer}.top{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:rgba(13,16,15,.94);position:sticky;top:0;z-index:5}.brand{font:700 13px/1 ui-monospace,SFMono-Regular,monospace;letter-spacing:.12em;text-transform:uppercase}.live{display:flex;gap:8px;align-items:center;color:var(--muted);font:12px ui-monospace,monospace}.dot{width:7px;height:7px;border-radius:50%;background:var(--acid);box-shadow:0 0 14px var(--acid)}main{max-width:1180px;margin:auto;padding:48px 28px 90px}.eyebrow{color:var(--acid);font:700 12px ui-monospace,monospace;letter-spacing:.15em;text-transform:uppercase}h1{font:500 clamp(38px,6vw,72px)/.98 Georgia,"Times New Roman",serif;letter-spacing:-.045em;margin:14px 0 18px;max-width:850px}.lede{max-width:680px;color:#b8bcb6;font-size:17px;margin:0 0 38px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.drop{min-height:180px;border:1px dashed #4e5753;background:rgba(23,27,26,.92);padding:24px;display:flex;flex-direction:column;justify-content:space-between;transition:.18s}.drop:hover,.drop.over{border-color:var(--acid);background:#1c211e;transform:translateY(-2px)}.drop input{display:none}.step{display:flex;justify-content:space-between;color:var(--muted);font:11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.1em}.drop strong{display:block;font:500 22px Georgia,serif;margin:18px 0 4px}.drop small{color:var(--muted)}.file{color:var(--acid);font:12px ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:12px}.controls{margin-top:14px;border:1px solid var(--line);background:var(--panel);padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:22px}.label{font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);margin-bottom:10px}.choices{display:flex;flex-wrap:wrap;gap:8px}.choice input{position:absolute;opacity:0}.choice span{display:block;border:1px solid #3b4340;padding:8px 12px;font:12px ui-monospace,monospace;color:#aeb4ae}.choice input:checked+span{border-color:var(--acid);color:var(--acid);background:#20281d}.choice input:disabled+span{opacity:.35;text-decoration:line-through}.scope-note{color:var(--muted);font-size:12px;margin-top:8px}.ack{display:flex;gap:10px;align-items:flex-start;color:#bfc3bd;font-size:13px;margin:18px 0}.ack input{accent-color:var(--acid);margin-top:4px}.launch{width:100%;border:0;background:var(--acid);color:#12160d;padding:15px 18px;font-weight:800;letter-spacing:.02em}.launch:disabled{cursor:not-allowed;background:#303632;color:#7f8781}.progress{display:none;margin-top:24px;border:1px solid var(--line);background:var(--panel);padding:22px}.progress.show{display:block}.progress-head{display:flex;justify-content:space-between;gap:15px;margin-bottom:18px}.progress-title{font:500 22px Georgia,serif}.progress-detail{color:var(--muted);font-size:13px;text-align:right}.track{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.phase{border-top:3px solid #313735;padding-top:8px;color:#6f7772;font:10px ui-monospace,monospace;text-transform:uppercase}.phase.done{border-color:var(--acid);color:#b6cb86}.phase.active{border-color:var(--orange);color:var(--orange)}.error{color:var(--danger)}.chat{display:none;margin-top:24px;border:1px solid var(--line);background:#101412;min-height:620px}.chat.show{display:grid;grid-template-rows:auto 1fr auto}.chat-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line)}.chat-title{font:500 20px Georgia,serif}.reset{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 10px}.messages{padding:24px;display:flex;flex-direction:column;gap:12px;overflow:auto;max-height:560px}.message{white-space:pre-wrap;max-width:78%;padding:12px 14px}.message.user{align-self:flex-end;background:#283321}.message.assistant{align-self:flex-start;border-left:2px solid var(--acid);background:#171c1a}.trace{font:11px/1.45 ui-monospace,monospace;color:#8ea079;margin-top:10px}.composer{display:flex;gap:10px;border-top:1px solid var(--line);padding:14px}.composer textarea{flex:1;resize:none;min-height:54px;background:#171b1a;color:var(--ink);border:1px solid #39413d;padding:13px}.send{border:0;background:var(--acid);color:#11150d;padding:0 22px;font-weight:800}.chat-status{color:var(--muted);font:11px ui-monospace,monospace;padding:0 14px 12px}.digest{font:11px ui-monospace,monospace;color:#7f8781;overflow-wrap:anywhere}@media(max-width:720px){.top{padding:0 16px}main{padding:32px 16px 60px}.grid,.controls{grid-template-columns:1fr}.track{grid-template-columns:1fr}.phase{border-top:0;border-left:3px solid #313735;padding:5px 0 5px 10px}.chat{min-height:540px}.message{max-width:90%}}
+:root{color-scheme:dark;--ink:#e9e6db;--muted:#969a94;--line:#333a38;--panel:#171b1a;--base:#0d100f;--acid:#c8f169;--orange:#ff7a45;--danger:#ff8877;font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:var(--base);color:var(--ink);min-height:100vh;background-image:linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.022) 1px,transparent 1px);background-size:28px 28px}
+button,input,textarea{font:inherit}
+button{cursor:pointer}
+.top{height:58px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:rgba(13,16,15,.94);position:sticky;top:0;z-index:5}
+.brand{font:700 13px/1 ui-monospace,SFMono-Regular,monospace;letter-spacing:.12em;text-transform:uppercase}
+.live{display:flex;gap:8px;align-items:center;color:var(--muted);font:12px ui-monospace,monospace}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--acid);box-shadow:0 0 14px var(--acid)}
+main{max-width:1180px;margin:auto;padding:48px 28px 90px}
+.eyebrow{color:var(--acid);font:700 12px ui-monospace,monospace;letter-spacing:.15em;text-transform:uppercase}
+h1{font:500 clamp(38px,6vw,72px)/.98 Georgia,"Times New Roman",serif;letter-spacing:-.045em;margin:14px 0 18px;max-width:850px}
+.lede{max-width:680px;color:#b8bcb6;font-size:17px;margin:0 0 38px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.drop{min-height:180px;border:1px dashed #4e5753;background:rgba(23,27,26,.92);padding:24px;display:flex;flex-direction:column;justify-content:space-between;transition:.18s}
+.drop:hover,.drop.over{border-color:var(--acid);background:#1c211e;transform:translateY(-2px)}
+.drop input{display:none}
+.step{display:flex;justify-content:space-between;color:var(--muted);font:11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.1em}
+.drop strong{display:block;font:500 22px Georgia,serif;margin:18px 0 4px}
+.drop small{color:var(--muted)}
+.file{color:var(--acid);font:12px ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:12px}
+.controls{margin-top:14px;border:1px solid var(--line);background:var(--panel);padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.label{font:700 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);margin-bottom:10px}
+.choices{display:flex;flex-wrap:wrap;gap:8px}
+.choice input{position:absolute;opacity:0}
+.choice span{display:block;border:1px solid #3b4340;padding:8px 12px;font:12px ui-monospace,monospace;color:#aeb4ae}
+.choice input:checked+span{border-color:var(--acid);color:var(--acid);background:#20281d}
+.choice input:disabled+span{opacity:.35;text-decoration:line-through}
+.scope-note{color:var(--muted);font-size:12px;margin-top:8px}
+.ack{display:flex;gap:10px;align-items:flex-start;color:#bfc3bd;font-size:13px;margin:18px 0}
+.ack input{accent-color:var(--acid);margin-top:4px}
+.launch{width:100%;border:0;background:var(--acid);color:#12160d;padding:15px 18px;font-weight:800;letter-spacing:.02em}
+.launch:disabled{cursor:not-allowed;background:#303632;color:#7f8781}
+.progress{display:none;margin-top:24px;border:1px solid var(--line);background:var(--panel);padding:22px}
+.progress.show{display:block}
+.progress-head{display:flex;justify-content:space-between;gap:15px;margin-bottom:18px}
+.progress-title{font:500 22px Georgia,serif}
+.progress-detail{color:var(--muted);font-size:13px;text-align:right}
+.track{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.phase{border-top:3px solid #313735;padding-top:8px;color:#6f7772;font:10px ui-monospace,monospace;text-transform:uppercase}
+.phase.done{border-color:var(--acid);color:#b6cb86}
+.phase.active{border-color:var(--orange);color:var(--orange)}
+.error{color:var(--danger)}
+.chat{display:none;margin-top:24px;border:1px solid var(--line);background:#101412;min-height:620px}
+.chat.show{display:grid;grid-template-rows:auto 1fr auto}
+.chat-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line)}
+.chat-title{font:500 20px Georgia,serif}
+.reset{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 10px}
+.messages{padding:24px;display:flex;flex-direction:column;gap:12px;overflow:auto;max-height:560px}
+.message{white-space:pre-wrap;max-width:78%;padding:12px 14px}
+.message.user{align-self:flex-end;background:#283321}
+.message.assistant{align-self:flex-start;border-left:2px solid var(--acid);background:#171c1a}
+.trace{font:11px/1.45 ui-monospace,monospace;color:#8ea079;margin-top:10px}
+.composer{display:flex;gap:10px;border-top:1px solid var(--line);padding:14px}
+.composer textarea{flex:1;resize:none;min-height:54px;background:#171b1a;color:var(--ink);border:1px solid #39413d;padding:13px}
+.send{border:0;background:var(--acid);color:#11150d;padding:0 22px;font-weight:800}
+.chat-status{color:var(--muted);font:11px ui-monospace,monospace;padding:0 14px 12px}
+.digest{font:11px ui-monospace,monospace;color:#7f8781;overflow-wrap:anywhere}
+@media(max-width:720px){.top{padding:0 16px}
+main{padding:32px 16px 60px}
+.grid,.controls{grid-template-columns:1fr}
+.track{grid-template-columns:1fr}
+.phase{border-top:0;border-left:3px solid #313735;padding:5px 0 5px 10px}
+.chat{min-height:540px}
+.message{max-width:90%}
+}
 </style></head><body><header class="top"><div class="brand">Ditto / Review Operations</div><div class="live"><span class="dot"></span>LOCAL ONLY</div></header><main>
 <div class="eyebrow">Submission Workbench 01</div><h1>Drop a harness.<br>Start talking.</h1><p class="lede">One tarball gets you a blank-memory chat. Add an optional Passport to test the harness against real Ditto memories.</p>
 <section id="setup"><div class="grid">

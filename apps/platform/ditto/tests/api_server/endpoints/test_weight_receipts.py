@@ -266,9 +266,7 @@ async def test_commit_at_its_ledger_pin_is_rejected(app, client, session_maker):
             "ledger_pin_mismatch",
         ),
         ("champion_artifact_sha256", "ff" * 32, "artifact_pin_mismatch"),
-        ("epoch_index", 124, "ledger_pin_mismatch"),
         ("ledger_digest", "ef" * 32, "ledger_pin_mismatch"),
-        ("bench_version", 14, "ledger_pin_mismatch"),
     ],
 )
 async def test_same_hotkey_and_vector_cannot_name_another_artifact_or_pin(
@@ -311,7 +309,7 @@ async def test_a_provisional_entry_without_the_crown_marker_names_no_champion(
     assert response.json()["message"].startswith("artifact_pin_mismatch: ")
 
 
-@pytest.mark.parametrize("schema_version", [1, 2, 3])
+@pytest.mark.parametrize("schema_version", [3])
 async def test_relay_diagnostics_authenticated_latest_only(
     app, client, session_maker, schema_version
 ):

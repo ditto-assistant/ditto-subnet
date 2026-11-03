@@ -31,10 +31,14 @@ from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.screener_node_identity import (
     is_enrolled_node_heartbeat_instance,
 )
-from ditto.api_server.shadow_review import shadow_review_observation
+from ditto.api_server.shadow_review import (
+    probe_battery_observation,
+    shadow_review_observation,
+)
 from ditto.db.models import (
     ScreenerHeartbeat,
     ScreenerNode,
+    ScreenerProbeBattery,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
 )
@@ -214,12 +218,22 @@ async def get_settings(
             .limit(100)
         )
     )
+    battery_rows = list(
+        await session.scalars(
+            select(ScreenerProbeBattery)
+            .order_by(ScreenerProbeBattery.created_at.desc())
+            .limit(100)
+        )
+    )
     return AdminScreenerReviewSettingsResponse(
         current=[_revision(row) for row in current_by_scope.values()],
         history=[_revision(row) for row in rows[:200]],
         known_instances=instances,
         applied_instances=sorted(applied, key=lambda item: item.instance_id),
         shadow_observations=[shadow_review_observation(row) for row in shadow_rows],
+        probe_battery_observations=[
+            probe_battery_observation(row) for row in battery_rows
+        ],
         policy_manifests=[_policy_manifest(row) for row in rows[:200]],
     )
 

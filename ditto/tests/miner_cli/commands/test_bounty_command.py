@@ -12,6 +12,7 @@ import bittensor
 import pytest
 
 from ditto.api_models.bounty import (
+    BountyAppealView,
     BountyBoardPage,
     BountyClaimView,
     BountyDetail,
@@ -21,6 +22,7 @@ from ditto.api_models.bounty import (
     BountyRefundView,
     BountyRevisionView,
     BountySlotCounts,
+    BountySubmissionView,
     BountySummary,
     BountyTerms,
     bounty_appeal_message,
@@ -650,6 +652,78 @@ def test_actions_refuse_another_wallets_claim_and_a_foreign_coldkey(capsys):
     )
     assert "payee of record" in capsys.readouterr().err
     client.withdraw_bounty_claim.assert_not_called()
+
+
+def test_status_shows_each_submission_decision_and_appeal(capsys):
+    client = api()
+    view = claim_view("claimed")
+    submissions = [
+        BountySubmissionView(
+            submission_id=uuid4(),
+            pr_number=7,
+            head_sha="ab" * 20,
+            submitted_at=NOW,
+            review_due_at=NOW + timedelta(days=7),
+            decision="changes_requested",
+            decision_reason="Add the missing tests.",
+            attribution=None,
+            rework_deadline_at=NOW + timedelta(days=3),
+            decided_at=NOW,
+        ),
+        BountySubmissionView(
+            submission_id=uuid4(),
+            pr_number=7,
+            head_sha=SHA,
+            submitted_at=NOW,
+            review_due_at=NOW + timedelta(days=7),
+            decision="accept",
+            decision_reason="Meets the acceptance evidence.",
+            attribution="Alice; the idea came from issue #2045",
+            rework_deadline_at=None,
+            decided_at=NOW,
+        ),
+        BountySubmissionView(
+            submission_id=uuid4(),
+            pr_number=8,
+            head_sha="cd" * 20,
+            submitted_at=NOW,
+            review_due_at=NOW + timedelta(days=7),
+            decision=None,
+            decision_reason=None,
+            attribution=None,
+            rework_deadline_at=None,
+            decided_at=None,
+        ),
+    ]
+    appeals = [
+        BountyAppealView(
+            appeal_id=uuid4(),
+            subject_event_id=event,
+            reason_digest="ef" * 32,
+            filed_at=NOW,
+            upheld=upheld,
+            decided_at=None if upheld is None else NOW,
+        )
+        for event, upheld in ((11, False), (12, True), (13, None))
+    ]
+    client.get_bounty_claim.return_value = view.model_copy(
+        update={"submissions": submissions, "appeals": appeals}
+    )
+    assert run(["status", str(view.claim_id)], client) == 0
+    out = capsys.readouterr().out.splitlines()
+    due = (NOW + timedelta(days=7)).isoformat()
+    assert [
+        line for line in out if line.startswith(("Submission", "  ", "Appeal"))
+    ] == [
+        f"Submission PR #7 {'ab' * 20}: changes requested — Add the missing tests.",
+        f"  Rework deadline: {(NOW + timedelta(days=3)).isoformat()}",
+        f"Submission PR #7 {SHA}: accept — Meets the acceptance evidence.",
+        "  Credit: Alice; the idea came from issue #2045",
+        f"Submission PR #8 {'cd' * 20}: awaiting review, due {due}",
+        "Appeal of event 11: denied",
+        "Appeal of event 12: upheld",
+        "Appeal of event 13: pending",
+    ]
 
 
 def test_status_shows_awards_refunds_and_their_settlement(capsys):

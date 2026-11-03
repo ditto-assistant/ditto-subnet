@@ -34,6 +34,11 @@ every other payload is verbatim.
 | `bounty-board.json` | `/public/bounties` (recorded from a test lifecycle, below) |
 | `bounty-detail.json` | `/public/bounties/<first bounty id>` |
 | `bounty-claims.json` | `/bounties/claims/<claim id>` for every claim the detail names, keyed by claim id |
+| `generator-board.json` | `/generator/board` (captured 2026-10-27 01:29Z, enforce mode, six eligible generators; predates the name/avatar/recent fields, which tests add explicitly) |
+| `generator-rounds.json` | `/generator/rounds` (same capture) |
+| `generator-round-25967.json` | `/generator/rounds/25967`, the newest scored round in that capture |
+| `generator-upload-terms.json` | `/generator/upload-terms` (same capture) |
+| `treasury-allocation.json` | `/public/treasury-allocation` (same capture; predates the SN-350 `emission_split` fields) |
 
 The three `bounty-*.json` files are not production captures: build bounties
 start in rehearsal. Platform's

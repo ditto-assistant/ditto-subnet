@@ -2,6 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { setResponseHeader } from '@tanstack/react-start/server'
 
+import { athRulingsReadbackFailureSchema } from '../lib/admin.schemas'
 import { parseJsonPreservingLargeIntegers } from '../lib/json-large-integers'
 
 /**
@@ -159,6 +160,10 @@ function connectionError(path: string, error: unknown) {
     : new PlatformAdminError('transport', `The platform API connection failed during ${path}: ${detail}`)
 }
 
+export function operatorProofConfigured(): boolean {
+  return (process.env.BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET?.length ?? 0) >= 32
+}
+
 export async function platformAdminRequest(
   path: string,
   options: {
@@ -193,12 +198,12 @@ export async function platformAdminRequest(
   let operatorProof: string | undefined
   if (options.operatorProof) {
     const secret = process.env.BACKROOM_PLATFORM_OPERATOR_PROOF_SECRET
-    if (!secret || secret.length < 32 || !actor || !body) {
+    if (!secret || secret.length < 32 || !actor || (method !== 'GET' && !body)) {
       throw new Error('Backroom fixture operator proof is not configured')
     }
     const timestamp = Math.floor(Date.now() / 1000)
     const bytes = new TextEncoder()
-    const digest = await crypto.subtle.digest('SHA-256', bytes.encode(body))
+    const digest = await crypto.subtle.digest('SHA-256', bytes.encode(body ?? ''))
     const hex = (value: ArrayBuffer) =>
       Array.from(new Uint8Array(value), (byte) => byte.toString(16).padStart(2, '0')).join('')
     const message = `${timestamp}\n${actor}\n${method}\n${path}\n${hex(digest)}`
@@ -234,9 +239,9 @@ export async function platformAdminRequest(
         method,
         headers,
         body,
-        // A write must not follow a redirect: fetch would replay a POST as a
-        // bodyless GET and report that answer as the write's.
-        redirect: method === 'GET' ? 'follow' : 'manual',
+        // Proofs bind the original path. Writes also must not redirect: fetch
+        // could replay a POST as a bodyless GET and report it as the write.
+        redirect: operatorProof || method !== 'GET' ? 'manual' : 'follow',
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
@@ -298,7 +303,14 @@ export async function platformAdminRequest(
     const payload = decodeResponseBody(text)
     if (response.ok) return payload
     if (response.status >= 500 && attempt++ < retries) continue
-    const message = errorMessage(payload, response.status)
+    let message = errorMessage(payload, response.status)
+    if (method === 'POST' && path === '/api/v1/admin/ath-rulings/batch-execute' && response.status === 503) {
+      const detail = payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : null
+      const retained = athRulingsReadbackFailureSchema.safeParse(detail)
+      if (retained.success) {
+        message = `Board read failed after ruling processing; inspect all item outcomes before any retry. Retained outcomes: ${JSON.stringify(retained.data)}`
+      }
+    }
     if (response.status === 401 || response.status === 403) {
       throw new PlatformAdminError('auth', message, response.status)
     }

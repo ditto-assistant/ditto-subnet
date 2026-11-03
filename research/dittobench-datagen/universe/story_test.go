@@ -182,6 +182,7 @@ func TestStoryQuestionsRequireThreeLongMemoriesAcrossDomains(t *testing.T) {
 }
 
 func TestStoryQuestionQuotaIsStableAcrossSeeds(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		scale int
 		count int

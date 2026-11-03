@@ -60,6 +60,7 @@ from ditto.db.models import (
     Score,
 )
 from ditto.db.queries.agents import get_agent_by_id
+from ditto.db.queries.confirmation_scores import not_voided
 from ditto.db.queries.inference import LeaseModelUsage
 from ditto.score_order import (
     owner_family_order_terms,
@@ -463,6 +464,12 @@ class LedgerRow:
         charging a miner its seniority for iterating.
         """
         return self.crown_first_seen or self.first_seen
+
+    dueling_season_id: UUID | None = None
+    """Bench v16+: the season of the representative score (the evidence the
+    fold reads). A v16 row without it never ranks or pays."""
+    dueling: dict | None = None
+    """Bench v16+: the representative score's signed ``details.dueling``."""
 
 
 @dataclass(frozen=True)
@@ -914,6 +921,8 @@ async def upsert_score(
     details: dict | None = None,
     model_usage: LeaseModelUsage | None = None,
     gate_evidence: dict | None = None,
+    dueling_season_id: UUID | None = None,
+    dueling: dict | None = None,
 ) -> None:
     """Insert or update the score for ``(agent_id, validator_hotkey)``.
 
@@ -932,6 +941,10 @@ async def upsert_score(
     model columns it is overwritten on every report, ``None`` included: it
     describes *this* run, and a re-score that carries no evidence must not
     keep showing the previous run's verdict.
+
+    ``dueling_season_id`` and ``dueling`` (bench v16+) are the season and the
+    signed ``details.dueling`` aggregates of *this* run, overwritten on every
+    report like ``gate_evidence``.
 
     Raises:
         DbIntegrityError: Any constraint violation on ``scores`` (the FK to
@@ -958,6 +971,8 @@ async def upsert_score(
                 signature=signature,
                 details=details,
                 gate_evidence=gate_evidence,
+                dueling_season_id=dueling_season_id,
+                dueling=dueling,
                 model_calls=None if model_usage is None else model_usage.chat_calls,
                 model_prompt_tokens=(
                     None if model_usage is None else model_usage.prompt_tokens
@@ -979,6 +994,8 @@ async def upsert_score(
         existing.signature = signature
         existing.details = details
         existing.gate_evidence = gate_evidence
+        existing.dueling_season_id = dueling_season_id
+        existing.dueling = dueling
         if model_usage is not None:
             existing.model_calls = model_usage.chat_calls
             existing.model_prompt_tokens = model_usage.prompt_tokens
@@ -1751,8 +1768,15 @@ async def list_eligible_ledger(
     apply_v9_confirmation_policy: bool = True,
     dedupe_owners: bool = True,
     active_version: int | None = None,
+    diagnostic_scored_agent_ids: frozenset[UUID] = frozenset(),
+    diagnostic_excluded_agent_ids: frozenset[UUID] = frozenset(),
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
+
+    ``diagnostic_*`` membership overrides are for the read-only ATH court
+    projection only. They change no stored status. Authority callers leave
+    both empty; the canonical quorum, shadow and confirmation gates still
+    apply to every hypothetical member.
 
     "Best" breaks an exact tie toward the *newest* generation
     (:func:`~ditto.score_order.owner_family_order_terms`), because a saturated
@@ -1808,8 +1832,10 @@ async def list_eligible_ledger(
        move it. It keeps the whole **row** (not a per-column ``MEDIAN``), so
        ``composite`` / ``seed`` / ``run_id`` / ``validator_hotkey`` /
        ``signature`` all come from the same physical row and the exposed
-       signature still verifies against the exposed composite. An agent with a
-       single score is its own median, so pre-quorum agents degrade cleanly.
+       signature still verifies against the exposed composite. Authority
+       reads serve only rows backed by a full :data:`SCORING_QUORUM`, because
+       the validator rejects the whole ledger when any row lacks one; an
+       explicit ``bench_version`` view still returns a pre-quorum median.
     2. join to ``agents`` filtered to ``scored``.
     3. after the canonical rows are materialized, rank them by the requested
        owner score and keep each attested payment owner root's first agent.
@@ -1944,7 +1970,12 @@ async def list_eligible_ledger(
             EvaluationPayment.miner_coldkey.label("miner_coldkey"),
             _emission_owner_key().label("emission_owner"),
             Agent.created_at.label("first_seen"),
-            Agent.status.label("status"),
+            case(
+                (Agent.agent_id.in_(diagnostic_scored_agent_ids), AgentStatus.SCORED),
+                else_=Agent.status,
+            ).label("status")
+            if diagnostic_scored_agent_ids
+            else Agent.status.label("status"),
             agent_best.c.composite,
             agent_best.c.ranking_composite,
             agent_best.c.n,
@@ -1968,7 +1999,19 @@ async def list_eligible_ledger(
         # 2m == cnt (even) or 2m == cnt+1 (odd). A lone score picks itself; a
         # quorum of 3 picks the 2nd (true median).
         .where(
-            Agent.status == AgentStatus.SCORED,
+            (
+                or_(
+                    Agent.status == AgentStatus.SCORED,
+                    Agent.agent_id.in_(diagnostic_scored_agent_ids),
+                )
+                if diagnostic_scored_agent_ids
+                else Agent.status == AgentStatus.SCORED
+            ),
+            (
+                Agent.agent_id.not_in(diagnostic_excluded_agent_ids)
+                if diagnostic_excluded_agent_ids
+                else literal(True)
+            ),
             or_(
                 agent_best.c.srn * 2 == agent_best.c.cnt,
                 agent_best.c.srn * 2 == agent_best.c.cnt + 1,
@@ -1994,8 +2037,21 @@ async def list_eligible_ledger(
     # and an explicit ``bench_version`` request stays a historical single-version
     # view (``desired_version`` is None for those, so this whole block is skipped).
     authority_filter: ColumnElement[bool] | None = None
+    # Every authority row must carry a full quorum of signed receipts at the
+    # version it is served on. The validator verifies each served row
+    # (``ditto.validator.signing.verify_ledger_entry`` needs SCORING_QUORUM
+    # distinct proofs) and rejects the WHOLE ledger on one failure, so a single
+    # sub-quorum row freezes every validator's weights. An activation closes
+    # the rollout and drops leftover cohort rescoring, which can strand a
+    # ``scored`` agent with fewer than SCORING_QUORUM desired-version scores;
+    # the collecting ledger already excluded it (``desired_at_quorum``) and the
+    # settled ledger must keep doing so. An explicit ``bench_version`` request
+    # stays a historical view and is not filtered.
+    authority_quorum = per_agent.c.cnt >= SCORING_QUORUM
     if desired_version is None:
         version_priority: ColumnElement[Any] = per_agent.c.bench_version
+        if bench_version is None:
+            authority_filter = authority_quorum
     else:
         assert rollout is not None
         # Quorum SIZE only. Never add an eligibility or ``composite > 0`` term
@@ -2026,7 +2082,7 @@ async def list_eligible_ledger(
             # rollout progress, not leaderboard authority. Excluding them
             # prevents a mixed v8/v9 ledger while the public rollout still
             # says v8 is active.
-            authority_filter = on_canonical
+            authority_filter = and_(on_canonical, authority_quorum)
             version_priority = per_agent.c.bench_version
     selected_version_stmt = select(
         per_agent,
@@ -2119,6 +2175,7 @@ async def list_eligible_ledger(
                         == ConfirmationScore.bench_version,
                     ),
                 )
+                .where(not_voided())
                 .subquery()
             )
             # ``statistics.median`` averages the two middle values for an even
@@ -2618,7 +2675,7 @@ async def list_eligible_ledger(
             Agent.size_bytes,
             *sketch_columns,
             Agent.created_at.label("first_seen"),
-            Agent.status,
+            winners.c.status,
             Score.composite,
             Score.tool_mean,
             Score.memory_mean,
@@ -2632,6 +2689,8 @@ async def list_eligible_ledger(
             Score.validator_hotkey,
             Score.signature,
             Score.bench_version,
+            Score.dueling_season_id,
+            Score.dueling,
             winners.c.crown_first_seen,
             *receipt_columns,
         )
@@ -2820,6 +2879,8 @@ async def list_eligible_ledger(
                 family_members=family_members,
                 crown_first_seen=row.crown_first_seen,
                 v9_confirmation=v9_confirmation,
+                dueling_season_id=row.dueling_season_id,
+                dueling=row.dueling,
             )
         )
     return ledger

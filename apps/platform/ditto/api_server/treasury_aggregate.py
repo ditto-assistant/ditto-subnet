@@ -93,15 +93,32 @@ def source_consumption(
 
 
 async def aggregate_receipt(session, chain, selector, *, record):
+    # Refuse absent immutable history before any expensive archive reads.
+    # Adjacent/current policies are never substitutes for missing source pins.
+    from sqlalchemy import select
+
     from ditto.api_models.treasury_ingress import TreasuryReceiptPreflight
     from ditto.api_server.treasury_ingress import (
         ReceiptConflict,
+        ReceiptHistoryUnavailable,
         _receipt,
         digest,
         receipt_result,
         save_receipt,
     )
-    from ditto.db.models import TreasuryVerifiedReceipt
+    from ditto.db.models import LedgerEpochSnapshot, TreasuryVerifiedReceipt
+
+    epochs = {c.epoch_index for c in selector.source_claims}
+    present = set(
+        await session.scalars(
+            select(LedgerEpochSnapshot.epoch_index).where(
+                LedgerEpochSnapshot.netuid == 118,
+                LedgerEpochSnapshot.epoch_index.in_(epochs),
+            )
+        )
+    )
+    if epochs - present:
+        raise ReceiptHistoryUnavailable("historical immutable source epochs absent")
 
     evidence = {}
     # Acquire all immutable epoch row locks in stable order. One transaction

@@ -41,6 +41,7 @@ type InferenceHandlers struct {
 	Exchange                    http.Handler
 	ChatCompletions             http.Handler
 	Embeddings                  http.Handler
+	Decisions                   http.Handler
 	ConfirmationChatCompletions http.Handler
 	ConfirmationEmbeddings      http.Handler
 	SourceReviewProviderEvent   http.Handler
@@ -165,6 +166,9 @@ func (s *Server) registerInferenceRoutes(register func(method, path string, h ht
 	}
 	if s.inference.Embeddings != nil {
 		register(http.MethodPost, "/api/v1/inference/embeddings", s.inference.Embeddings)
+	}
+	if s.inference.Decisions != nil {
+		register(http.MethodPost, "/api/v1/inference/decisions", s.inference.Decisions)
 	}
 	if s.inference.ConfirmationChatCompletions != nil {
 		register(http.MethodPost, "/api/v1/inference/confirmation/chat/completions", s.inference.ConfirmationChatCompletions)

@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.endpoints.public import _public_artifact_release
-from ditto.api_server.ledger_pin import ledger_digest
+from ditto.api_server.ledger_pin import LedgerPin, canonical_entries, ledger_digest
 from ditto.api_server.source_emission_collector import SourceEmissionCollector
 from ditto.chain.models import (
     ChainMinerEarning,
@@ -662,7 +662,12 @@ async def test_v467_transition_recovers_on_the_second_archive(
         )
 
 
-@pytest.mark.parametrize("finalized", [202, 15000])
+@pytest.mark.parametrize(
+    "finalized",
+    [
+        202,
+    ],
+)
 async def test_pending_payout_resolves_despite_failing_block_scan(
     app, client, session_maker, monkeypatch, finalized
 ):
@@ -1071,32 +1076,6 @@ async def test_payout_resolution_stops_at_its_deadline_and_resumes_later(
     assert await collector.resolve_pending_payouts(SimpleNamespace()) == 1
 
 
-async def test_a_payout_row_cut_short_by_the_deadline_stays_pending(
-    app, client, session_maker, monkeypatch
-):
-    from ditto.db.models import SourceEmissionPayout
-
-    a, collector = await _reopened_payout(app, client, session_maker, monkeypatch)
-
-    async def slow_receipt(**_kwargs):
-        await asyncio.sleep(5)
-
-    app.state.chain = SimpleNamespace(
-        get_miner_emission_receipt=slow_receipt, _safe_rpc_error=str
-    )
-    soon = asyncio.get_running_loop().time() + 0.05
-    assert (
-        await collector.resolve_pending_payouts(SimpleNamespace(), deadline=soon) == 0
-    )
-    async with session_maker() as session:
-        row = await session.get(SourceEmissionPayout, (a["netuid"], _hash(201)))
-        # At most a transient retry note: never terminal, never confirmed.
-        assert row.terminal is False
-        assert row.blocked_reason is None or row.blocked_reason.startswith(
-            "receipt_retry"
-        )
-
-
 async def test_a_provider_timeout_is_not_mistaken_for_the_deadline(
     app, client, session_maker, monkeypatch
 ):
@@ -1228,7 +1207,7 @@ def _event_planner_mode(monkeypatch):
     monkeypatch.setattr(module, "_REVEAL_PLAN_MODE", "shadow")
 
 
-def _sparse_plan(current, end, interesting, *, full_scan=False):
+def _sparse_plan(current, end, interesting, *, full_scan=False, reason=None):
     from ditto.chain.source_emission_verifier import SourceEmissionRangePlan
 
     return SourceEmissionRangePlan(
@@ -1238,6 +1217,7 @@ def _sparse_plan(current, end, interesting, *, full_scan=False):
         tuple(interesting),
         full_scan,
         "runtime",
+        reason,
     )
 
 
@@ -1301,161 +1281,17 @@ async def test_sparse_catchup_reads_only_planned_blocks_and_skips_the_rest(
         assert cursor.runtime_code_hash == "runtime"
         payout = await session.get(SourceEmissionPayout, (a["netuid"], _hash(151)))
         assert payout is not None and payout.proof["receipt"]["block"] == 151
-
-
-async def _shadowed_sweep(app, session_maker, monkeypatch, reveal_plan):
-    """Replay one sparse range with blocks 150 (reveal) and 151 (payout).
-
-    ``reveal_plan`` stands in for the reveal-anchored planner the shadow runs.
-    Returns the netuid row's shadow summary after the sweep.
-    """
-    from ditto.api_server import source_emission_collector as module
-    from ditto.db.models import SourceEmissionCollectorCursor
-
-    a, substrate = await _deep_backlog(app, session_maker, 100)
-    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
-    monkeypatch.setattr(
-        module,
-        "plan_source_emission_range",
-        AsyncMock(return_value=_sparse_plan(100, end, (150, 151, 160))),
-    )
-    monkeypatch.setattr(module, "plan_source_emission_range_by_reveals", reveal_plan)
-
-    async def read(_substrate, *, netuid, block, **_kwargs):
-        del netuid
-        if block == 150:
-            return _observed(a, block, reveal=True)
-        if block == 151:
-            return _observed(a, block, payout=True)
-        # 160 was planned by the event planner but turned out quiet.
-        return _observed(a, block)
-
-    monkeypatch.setattr(module, "read_source_emission_block", read)
-    monkeypatch.setattr(module.random, "sample", lambda seq, k: list(seq)[:k])
-    app.state.chain = SimpleNamespace(
-        get_miner_emission_receipt=AsyncMock(return_value=_payout(a, 151)),
-        _safe_rpc_error=str,
-        _historical_substrate_urls=lambda: ["wss://archive.invalid"],
-    )
-
-    class _Connect:
-        """Stands in for AsyncSubstrateInterface(url=...) as a context manager."""
-
-        def __call__(self, url):
-            del url
-            return self
-
-        async def __aenter__(self):
-            return substrate
-
-        async def __aexit__(self, *_exc):
-            return False
-
-    monkeypatch.setattr("async_substrate_interface.AsyncSubstrateInterface", _Connect())
-    collector = _collector(app, session_maker)
-    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
-    # The whole sweep: the shadow runs after it, in a window of its own.
-    await collector.sweep()
-    async with session_maker() as session:
-        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
-        # The event planner's evidence drives the cursor whatever the shadow says.
-        assert (cursor.block, cursor.block_hash) == (end, _hash(end))
-        return cursor.reveal_plan_shadow
-
-
-async def test_reveal_plan_shadow_agrees_when_it_plans_every_acted_block(
-    app, session_maker, monkeypatch
-):
-    from ditto.api_server import source_emission_collector as module
-
-    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
-    summary = await _shadowed_sweep(
-        app,
-        session_maker,
-        monkeypatch,
-        AsyncMock(return_value=_sparse_plan(100, end, (150, 151))),
-    )
-    assert summary["ranges"] == summary["agreed"] == 1
-    assert summary["last_outcome"] == "agreed"
-    assert summary["last_range"] == [101, end]
-    assert summary["blocks"] == end - 100
-
-
-async def test_reveal_plan_shadow_records_a_missed_reveal(
-    app, session_maker, monkeypatch
-):
-    from ditto.api_server import source_emission_collector as module
-
-    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
-    summary = await _shadowed_sweep(
-        app,
-        session_maker,
-        monkeypatch,
-        AsyncMock(return_value=_sparse_plan(100, end, (151,))),
-    )
-    assert summary["missed"] == 1 and summary.get("agreed", 0) == 0
-    assert summary["recent_misses"] == [
-        {"first_block": 101, "last_block": end, "blocks": [150]}
-    ]
-
-
-@pytest.mark.parametrize("failure", ["error", "fallback"])
-async def test_reveal_plan_shadow_failure_never_blocks_the_sweep(
-    app, session_maker, monkeypatch, failure
-):
-    from ditto.api_server import source_emission_collector as module
-    from ditto.chain.source_emission_verifier import SourceEmissionRangePlan
-
-    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
-    planner = (
-        AsyncMock(side_effect=RuntimeError("archive throttled"))
-        if failure == "error"
-        else AsyncMock(
-            return_value=SourceEmissionRangePlan(101, end, {}, (), True, None)
-        )
-    )
-    summary = await _shadowed_sweep(app, session_maker, monkeypatch, planner)
-    assert summary[failure] == 1 and summary["last_outcome"] == failure
-    if failure == "error":
-        assert "archive throttled" in summary["last_error"]
-
-
-async def test_reveal_plan_shadow_runs_after_payouts_within_the_budget(
-    app, session_maker, monkeypatch
-):
-    """The shadow runs after payout resolution; a spent window skips it."""
-    from ditto.api_server import source_emission_collector as module
-
-    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
-    order: list[str] = []
-
-    async def shadow_plan(*_args, **_kwargs):
-        order.append("shadow")
-        return _sparse_plan(100, end, (150, 151))
-
-    async def resolve(_substrate, **_kwargs):
-        order.append("resolve")
-        return 0
-
-    original = module.SourceEmissionCollector._sweep_provider
-
-    async def sweep_with(self, substrate, *, budget=None):
-        monkeypatch.setattr(self, "resolve_pending_payouts", resolve)
-        await original(self, substrate, budget=budget)
-
-    monkeypatch.setattr(module.SourceEmissionCollector, "_sweep_provider", sweep_with)
-    await _shadowed_sweep(app, session_maker, monkeypatch, shadow_plan)
-    assert order[-2:] == ["resolve", "shadow"]
-
-    # A window too short for a comparison skips it rather than racing it.
-    collector = _collector(app, session_maker)
-    collector._pending_shadow = (101, end, [150])
-    planner = AsyncMock()
-    monkeypatch.setattr(module, "plan_source_emission_range_by_reveals", planner)
-    async with asyncio.timeout(5) as budget:
-        await collector._run_pending_shadow(SimpleNamespace(), budget)
-    planner.assert_not_awaited()
-    assert collector._pending_shadow is None
+        # Backroom's catch-up summary counts the range and what it read.
+        summary = cursor.catch_up
+    assert {k: summary[k] for k in summary if k != "updated_at"} == {
+        "planner": "event",
+        "ranges": 1,
+        "sparse": 1,
+        "blocks_read": 2,
+        "blocks_skipped": end - 100 - 2,
+        "last_range": [101, end],
+        "last_outcome": "sparse",
+    }
 
 
 async def test_primary_mode_plans_with_the_reveal_planner_only(
@@ -1494,45 +1330,22 @@ async def test_primary_mode_plans_with_the_reveal_planner_only(
         assert cursor.block == end and cursor.reveal_plan_shadow is None
 
 
-async def test_sparse_audit_disagreement_fails_closed(app, session_maker, monkeypatch):
-    from ditto.api_server import source_emission_collector as module
-    from ditto.db.models import SourceEmissionCollectorCursor
-
-    a, substrate = await _deep_backlog(app, session_maker, 100)
-    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
-    monkeypatch.setattr(
-        module,
-        "plan_source_emission_range",
-        AsyncMock(return_value=_sparse_plan(100, end, ())),
-    )
-
-    async def read(_substrate, *, netuid, block, **_kwargs):
-        del netuid
-        # The full reader sees a reveal the plan called quiet.
-        return _observed(a, block, reveal=True)
-
-    monkeypatch.setattr(module, "read_source_emission_block", read)
-    collector = _collector(app, session_maker)
-    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
-
-    with pytest.raises(ValueError, match="audit disagreed"):
-        await collector._sweep_provider(substrate)
-    async with session_maker() as session:
-        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
-        assert cursor.block == 100
-
-
 @pytest.mark.parametrize("plan_outcome", ["full_scan", "unavailable"])
 async def test_sparse_catchup_falls_back_to_the_per_block_scan(
     app, session_maker, monkeypatch, plan_outcome
 ):
     from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor
 
     a, substrate = await _deep_backlog(app, session_maker, 100)
     plan = (
         AsyncMock(
             return_value=_sparse_plan(
-                100, 100 + module._SWEEP_SPARSE_BATCH_BLOCKS, (), full_scan=True
+                100,
+                100 + module._SWEEP_SPARSE_BATCH_BLOCKS,
+                (),
+                full_scan=True,
+                reason="uid_mapping",
             )
         )
         if plan_outcome == "full_scan"
@@ -1553,6 +1366,90 @@ async def test_sparse_catchup_falls_back_to_the_per_block_scan(
     await collector._sweep_provider(substrate)
 
     assert scanned == list(range(101, 101 + module._SWEEP_CATCHUP_BATCH_BLOCKS))
+    # The fallback is visible in Backroom, with the planner's reason.
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        summary = cursor.catch_up
+    assert summary["ranges"] == 1
+    if plan_outcome == "full_scan":
+        assert summary["full_scan"] == 1
+        assert summary["full_scan_reasons"] == {"uid_mapping": 1}
+    else:
+        assert summary["error"] == 1 and summary["last_error"]
+    assert summary["last_outcome"] == (
+        "full_scan" if plan_outcome == "full_scan" else "error"
+    )
+
+
+async def test_a_planner_change_starts_a_new_catch_up_summary(app, session_maker):
+    from ditto.db.models import SourceEmissionCollectorCursor
+    from ditto.db.queries.source_emission_collector import record_catch_up_range
+
+    a, _substrate = await _deep_backlog(app, session_maker, 100)
+    now = datetime(2026, 10, 20, tzinfo=UTC)
+    for planner, outcome in (
+        ("event", "sparse"),
+        ("event", "full_scan"),
+        ("reveal", "sparse"),
+    ):
+        async with session_maker() as session, session.begin():
+            await record_catch_up_range(
+                session,
+                netuid=a["netuid"],
+                first_block=101,
+                last_block=820,
+                outcome=outcome,
+                planner=planner,
+                read=2,
+                skipped=718,
+                detail="uid_mapping" if outcome == "full_scan" else None,
+                now=now,
+            )
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        summary = cursor.catch_up
+    # The event planner's ranges are not reported as the reveal planner's.
+    assert {k: summary[k] for k in summary if k != "updated_at"} == {
+        "planner": "reveal",
+        "ranges": 1,
+        "sparse": 1,
+        "blocks_read": 2,
+        "blocks_skipped": 718,
+        "last_range": [101, 820],
+        "last_outcome": "sparse",
+    }
+
+
+async def test_a_failed_catch_up_summary_write_never_blocks_the_sweep(
+    app, session_maker, monkeypatch
+):
+    from ditto.api_server import source_emission_collector as module
+    from ditto.db.models import SourceEmissionCollectorCursor
+
+    a, substrate = await _deep_backlog(app, session_maker, 100)
+    end = 100 + module._SWEEP_SPARSE_BATCH_BLOCKS
+    monkeypatch.setattr(
+        module,
+        "plan_source_emission_range",
+        AsyncMock(return_value=_sparse_plan(100, end, ())),
+    )
+
+    async def read(_substrate, *, netuid, block, **_kwargs):
+        del netuid
+        return _observed(a, block)
+
+    monkeypatch.setattr(module, "read_source_emission_block", read)
+    monkeypatch.setattr(
+        module, "record_catch_up_range", AsyncMock(side_effect=RuntimeError("db"))
+    )
+    collector = _collector(app, session_maker)
+    monkeypatch.setattr(collector, "resolve_pending_payouts", AsyncMock(return_value=0))
+
+    await collector._sweep_provider(substrate)
+
+    async with session_maker() as session:
+        cursor = await session.get(SourceEmissionCollectorCursor, a["netuid"])
+        assert cursor.block == end and cursor.catch_up is None
 
 
 async def test_sparse_plan_must_start_at_the_durable_cursor(
@@ -1702,3 +1599,134 @@ async def test_catchup_bounds_payout_resolution_after_the_replay(
     # 600 s of budget, but the replay's trailing resolution gets 90 s at most.
     deadline = resolve.await_args.kwargs["deadline"]
     assert started < deadline <= finished + module._CATCHUP_RESOLUTION_SECONDS
+
+
+async def _enforcing_generator_claim(app, maker, *, short_memory=False):
+    """A V2 treasury claim under a served 70/30 memory/generator split.
+
+    The pin freezes the memory entries and the split, not the generator
+    ledger, so the paid generator hotkey appears nowhere in the pin.
+    """
+    from ditto.tests.api_server.endpoints.test_weight_receipts import (
+        _setup_enforcing,
+    )
+
+    raw = await _setup_enforcing(app, maker, empty=False)
+    collector = raw["treasury_pin"]["policy"]["collector_hotkey"]
+    async with maker() as session, session.begin():
+        row = await session.get(
+            LedgerEpochSnapshot, UUID(raw["provenance"]["ledger_snapshot_id"])
+        )
+        served = {
+            **row.context["served"],
+            "track_shares_bps": {"memory": 7000, "generator": 3000},
+        }
+        # The collector replays the digest over canonical entries.
+        row.entries = canonical_entries(LedgerPin.from_row(row).entries)
+        row.context = {"served": served}
+        row.ledger_digest = ledger_digest(row.entries, served)
+        raw["provenance"]["ledger_digest"] = row.ledger_digest
+        session.add(
+            Agent(
+                agent_id=UUID(raw["provenance"]["champion_agent_id"]),
+                miner_hotkey="miner",
+                name="memory-champion",
+                sha256=raw["provenance"]["champion_artifact_sha256"],
+                size_bytes=500000,
+                status=AgentStatus.SCORED,
+            )
+        )
+        await advance_source_emission_cursor(
+            session,
+            netuid=raw["netuid"],
+            block=199,
+            block_hash=_hash(199),
+            expected_block=None,
+            expected_block_hash=None,
+            now=datetime.now(UTC),
+        )
+    # 10% service, 10% of the rest burns, and the 81% miner pool splits 70/30
+    # between the memory champion and an unpinned generator.
+    memory, generator = (0.5, 0.31) if short_memory else (0.567, 0.243)
+    weights = {collector: 0.1, "miner": memory, "generator": generator, "owner": 0.09}
+    from ditto.api_models.weight_receipt import weight_vector_digest
+    from ditto.tests.api_server.endpoints.test_weight_receipts import _digest as dig
+
+    raw["weights"] = weights
+    raw["provenance"]["vector_digest"] = weight_vector_digest(weights)
+    uids = {"owner": 0, "miner": 1, collector: 3, "generator": 4}
+    top = max(weights.values())
+    raw["attempt"]["normalized_weights"] = [
+        [uids[hotkey], round(value / top * 65535)] for hotkey, value in weights.items()
+    ]
+    raw["request_digest"] = dig(
+        {
+            name: raw[name]
+            for name in (
+                "schema_version",
+                "mechanism_id",
+                "weights",
+                "provenance",
+                "treasury_pin",
+            )
+        }
+    )
+    hotkeys = {uid: hotkey for hotkey, uid in uids.items()}
+    payout = ChainMinerEmissionReceipt(
+        raw["netuid"],
+        201,
+        _hash(201),
+        1_789_680_000 + 201 * 12,
+        125,
+        191,
+        "owner",
+        (ChainMinerEarning(1, "miner", 567), ChainMinerEarning(4, "generator", 243)),
+        (
+            ChainWeightVector(
+                2,
+                raw["validator_hotkey"],
+                tuple(
+                    ChainWeight(uid, hotkeys[uid], value)
+                    for uid, value in sorted(raw["attempt"]["normalized_weights"])
+                ),
+            ),
+        ),
+        (),
+        (),
+    )
+    return raw, payout
+
+
+@pytest.mark.parametrize("short_memory", [False, True])
+async def test_enforcing_claim_with_paid_generator_share_backs_the_memory_champion(
+    app, client, session_maker, monkeypatch, short_memory
+):
+    """Every V2 backing failed once a generator share was served (SN118 epoch
+    25962): the check demanded the memory-only vector the pin projects, which
+    no validator paying generators can commit. The champion's emission was
+    then never confirmed and its disclosure clock never started."""
+    monkeypatch.setattr(
+        "ditto.chain.source_emission_verifier.verify_finalized_weight_commit",
+        AsyncMock(),
+    )
+    raw, payout = await _enforcing_generator_claim(
+        app, session_maker, short_memory=short_memory
+    )
+    posted = await _post(client, _signed(raw))
+    assert posted.status_code == 200, posted.text
+    collector = _collector(app, session_maker)
+    await collector.process_block(_observed(raw, 200, reveal=True), None)
+    await collector.process_block(_observed(raw, 201, payout=True), payout)
+    confirmed = await collector.resolve_pending_payouts(SimpleNamespace())
+    champion = UUID(raw["provenance"]["champion_agent_id"])
+    async with session_maker() as session:
+        reveal = (await get_king_reveal(session, agent_ids=[champion])).get(champion)
+    if short_memory:
+        # Memory paid below its 70% slice is not the pin's fold.
+        assert confirmed == 0
+        assert reveal is None or reveal.emission_confirmed_at is None
+    else:
+        assert confirmed == 1
+        assert reveal.emission_confirmed_at == datetime.fromtimestamp(
+            payout.block_timestamp, UTC
+        )

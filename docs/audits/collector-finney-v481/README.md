@@ -70,3 +70,25 @@ restore, new key, recurring timer, weight change or test payment is authorized.
 Old signed operations must retain their history and reconcile their original
 bytes. Backroom's usable fresh readiness, sufficient proved aggregate earnings
 and final user transfer confirmation are separate post-signature gates.
+
+## Historical v475 upgrade metadata boundary (SN-273)
+
+The retained audit cursor reaches block9233781, hash
+`0x69df2a41585dba58729cd694aabc0476f040db684dadea6908e7b2aaa241b48c`.
+Its post-state is the audited v475 hash while block9233780 is v473. The
+pinned SDK deliberately selects parent/execution metadata, which has no
+`SubnetEpochConsensus` map at this first v475 state. Block9233782 selects
+v475 metadata and reads Yuma normally. The missing definition halted
+background catch-up and prevented the manual worker reaching its mailbox.
+
+The historical-only fallback is restricted to exactly that reviewed
+v473-to-v475 code transition. It requires a finalized child with this exact
+parent and unchanged v475 code. That child's execution metadata is the
+upgrade block's post-state metadata. It derives the consensus storage key
+and decoder there, but reads raw storage at the original upgrade hash.
+Metadata default/modifier handling is the SDK's own decoder; no Yuma value
+is manufactured. Null/unknown consensus, missing/malformed RPC evidence,
+unknown or reverse boundaries and unfinalized children refuse. Event
+decoding keeps the original execution metadata, current signing never
+uses this fallback, and exact native-filter validation remains mandatory.
+No cursor reset, historical block skip, threshold or custody authority change.

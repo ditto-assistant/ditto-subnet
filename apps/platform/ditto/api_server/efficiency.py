@@ -792,18 +792,6 @@ def bonus_for_submission(
     )
 
 
-def effective_composite(composite: float, bonus: float) -> float:
-    """The legacy v1/v2 ranking score: ``composite * (1 + bonus)``.
-
-    Multiplicative, matching the spec's ``bonus_multiplier`` form: the fold
-    compares composites, so a scale factor preserves ordering semantics and a
-    zero composite can never buy weight from cheapness alone. Bounded by
-    ``1 + cap`` (<= 1.10). Curve v3 does not use this helper: it multiplies
-    downside and applies upside only to remaining quality headroom. The
-    validator's composite is never modified."""
-    return composite * (1.0 + bonus)
-
-
 def epoch_index_for(now: datetime, epoch_hours: int) -> int:
     """The platform efficiency epoch a wall-clock instant falls in.
 
@@ -1270,6 +1258,59 @@ async def ensure_efficiency_state(
             await _materialize_epoch(session, config, now=now)
 
 
+async def audited_efficiency_candidates(
+    session: AsyncSession,
+    rows: Sequence[LedgerRow],
+    *,
+    curve_version: int,
+) -> list[EfficiencyCandidate]:
+    """Use the same accepted cost roots for persisted and diagnostic assignments."""
+    from ditto.db.queries.scores import quorum_score_rows
+
+    if not rows:
+        return []
+    bench_version = rows[0].bench_version
+    if any(row.bench_version != bench_version for row in rows):
+        raise ValueError("efficiency candidates require one benchmark version")
+    agent_ids = [row.agent_id for row in rows]
+    versions = dict.fromkeys(agent_ids, bench_version)
+    # Both token-cost curves read only these keys out of each score's details
+    # (legacy: token_usage; factor curves: the signature-bound v9 base root),
+    # so the quorum read projects the blob down to exactly that superset
+    # instead of shipping the full per-case audit document.
+    score_rows = await quorum_score_rows(
+        session,
+        agent_ids,
+        bench_versions=versions,
+        details_keys=("token_usage", "v9_base", "base_evidence_sha256"),
+    )
+    if is_factor_curve(curve_version):
+        from ditto.db.queries.confirmation_scores import (
+            ConfirmationEfficiencyCosts,
+            confirmation_efficiency_costs_by_agent,
+        )
+
+        continual_costs = await confirmation_efficiency_costs_by_agent(
+            session, agent_ids=agent_ids, bench_version=bench_version
+        )
+        token_totals = {}
+        for agent_id in agent_ids:
+            retests = continual_costs.get(agent_id, ConfirmationEfficiencyCosts())
+            token_totals[agent_id] = audited_v9_token_total(
+                [score.details for score in score_rows.get(agent_id, [])],
+                continual_seed_token_totals=retests.seed_token_totals,
+                continual_cost_evidence_valid=retests.evidence_valid,
+            )
+    else:
+        token_totals = {
+            agent_id: audited_token_total(
+                [score.details for score in score_rows.get(agent_id, [])]
+            )
+            for agent_id in agent_ids
+        }
+    return _candidates_from_rows(rows, token_totals, curve_version=curve_version)
+
+
 async def _materialize_epoch(
     session: AsyncSession,
     config: EfficiencyBonusConfig,
@@ -1285,7 +1326,6 @@ async def _materialize_epoch(
         latest_snapshot,
         promote_v3_compatibility_placeholder,
     )
-    from ditto.db.queries.scores import quorum_score_rows
 
     rows = await _finalized_ranked_rows(session)
     rows = [row for row in rows if row.bench_version >= MIN_BONUS_BENCH_VERSION]
@@ -1338,41 +1378,9 @@ async def _materialize_epoch(
         agent_ids = [row.agent_id for row in rows]
         versions = dict.fromkeys(agent_ids, bench_version)
 
-    # Both token-cost curves read only these keys out of each score's details
-    # (legacy: token_usage; factor curves: the signature-bound v9 base root),
-    # so the quorum read projects the blob down to exactly that superset
-    # instead of shipping the full per-case audit document.
-    score_rows = await quorum_score_rows(
-        session,
-        agent_ids,
-        bench_versions=versions,
-        details_keys=("token_usage", "v9_base", "base_evidence_sha256"),
+    candidates = await audited_efficiency_candidates(
+        session, rows, curve_version=curve_version
     )
-    if is_factor_curve(curve_version):
-        from ditto.db.queries.confirmation_scores import (
-            ConfirmationEfficiencyCosts,
-            confirmation_efficiency_costs_by_agent,
-        )
-
-        continual_costs = await confirmation_efficiency_costs_by_agent(
-            session, agent_ids=agent_ids, bench_version=bench_version
-        )
-        token_totals = {}
-        for agent_id in agent_ids:
-            retests = continual_costs.get(agent_id, ConfirmationEfficiencyCosts())
-            token_totals[agent_id] = audited_v9_token_total(
-                [score.details for score in score_rows.get(agent_id, [])],
-                continual_seed_token_totals=retests.seed_token_totals,
-                continual_cost_evidence_valid=retests.evidence_valid,
-            )
-    else:
-        token_totals = {
-            agent_id: audited_token_total(
-                [score.details for score in score_rows.get(agent_id, [])]
-            )
-            for agent_id in agent_ids
-        }
-    candidates = _candidates_from_rows(rows, token_totals, curve_version=curve_version)
 
     if snapshot is None:
         previous = await latest_snapshot(

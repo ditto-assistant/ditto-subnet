@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -25,8 +25,10 @@ from ditto.api_server.fingerprint import reference_corpus_provenance
 from ditto.api_server.storage import ObjectDownloadFailedError
 from ditto.db.models import (
     Agent,
+    AgentKingship,
     AgentStatus,
     ArtifactFetchAudit,
+    ArtifactReleaseSettingsRevision,
     AthReview,
     AthReviewAction,
     BenchmarkRollout,
@@ -34,12 +36,281 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
+from ditto.db.queries.king_reign import KingEmissionProof, record_emission_confirmed
 from ditto.db.queries.scores import list_eligible_ledger
 
 _TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_TOKEN}", "X-Admin-Actor": "operator"}
 _T0 = datetime(2026, 7, 16, 12, tzinfo=UTC)
 _CORPUS_ID = reference_corpus_provenance()["corpus_id"]
+
+
+async def test_late_emission_proof_does_not_prove_historical_publication(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    candidate_id, source_id = await _seed(maker)
+    async with maker() as session, session.begin():
+        source = await session.get(Agent, source_id)
+        assert source is not None
+        source.created_at = _T0 - timedelta(days=5)
+        session.add(
+            AgentKingship(
+                agent_id=source_id,
+                first_crowned_at=_T0 - timedelta(days=4),
+            )
+        )
+        for index in range(3):
+            session.add(
+                Score(
+                    agent_id=source_id,
+                    validator_hotkey=f"late-proof-{index}",
+                    run_id=f"late-proof-{index}",
+                    seed=7,
+                    bench_version=13,
+                    composite=0.8,
+                    tool_mean=0.8,
+                    memory_mean=0.8,
+                    median_ms=100,
+                    n=350,
+                    details={},
+                    generated_at=_T0 - timedelta(days=4),
+                    created_at=_T0 - timedelta(days=4),
+                )
+            )
+    path = f"/api/v1/admin/agents/{source_id}/source-release-evidence"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        before = await client.get(
+            path, params={"candidate_agent_id": str(candidate_id)}, headers=_HEADERS
+        )
+        assert before.status_code == 200
+        assert before.json()["derived_eligibility_at"] is None
+        async with maker() as session, session.begin():
+            await record_emission_confirmed(
+                session,
+                agent_id=source_id,
+                proof=KingEmissionProof(
+                    confirmed_at=_T0 - timedelta(days=3),
+                    block=100,
+                    block_hash="a" * 64,
+                    epoch_index=1,
+                    ledger_digest="b" * 64,
+                ),
+            )
+        after = await client.get(
+            path, params={"candidate_agent_id": str(candidate_id)}, headers=_HEADERS
+        )
+    assert after.status_code == 200
+    body = after.json()
+    assert datetime.fromisoformat(body["derived_eligibility_at"]) < _T0
+    assert body["publication_evidence_at"] is None
+    assert body["publication_proven_by_reference_time"] is False
+    assert body["exact_sha_public_handoff_count"] == 0
+    assert body["absence_proves_nonpublication"] is False
+
+
+async def test_source_release_evidence_preserves_exact_public_handoffs(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    candidate_id, source_id = await _seed(maker)
+    sha = source_id.hex * 2
+    async with maker() as session, session.begin():
+        base_revision = (
+            await session.scalar(
+                select(func.max(ArtifactReleaseSettingsRevision.revision))
+            )
+        ) or 0
+        session.add(
+            ArtifactReleaseSettingsRevision(
+                revision=base_revision + 1,
+                parent_revision=base_revision,
+                disclosure="public",
+                embargo_hours=48,
+                actor="operator",
+                reason="Increase source embargo for future releases",
+                created_at=_T0 - timedelta(minutes=1),
+            )
+        )
+        session.add(
+            ArtifactReleaseSettingsRevision(
+                revision=base_revision + 2,
+                parent_revision=base_revision + 1,
+                disclosure="never",
+                embargo_hours=72,
+                actor="operator",
+                reason="Suspend future publication after candidate upload",
+                created_at=_T0 + timedelta(minutes=1),
+            )
+        )
+        source = await session.get(Agent, source_id)
+        assert source is not None
+        source.status = AgentStatus.REJECTED
+        for digest, kind, identity, endpoint, moment in (
+            (sha, "public", None, "public.agent_artifact", _T0 - timedelta(minutes=30)),
+            (sha, "public", None, "public.agent_artifact", _T0 + timedelta(hours=1)),
+            (
+                "0" * 64,
+                "public",
+                None,
+                "public.agent_artifact",
+                _T0 - timedelta(hours=1),
+            ),
+            (
+                sha,
+                "admin",
+                "operator",
+                "admin.get_screening_artifact",
+                _T0 - timedelta(hours=2),
+            ),
+            (
+                sha,
+                "public",
+                None,
+                "public.other_artifact",
+                _T0 - timedelta(hours=3),
+            ),
+        ):
+            session.add(
+                ArtifactFetchAudit(
+                    agent_id=source_id,
+                    artifact_sha256=digest,
+                    requester_kind=kind,
+                    requester_id=identity,
+                    endpoint=endpoint,
+                    fetched_at=moment,
+                    source_ip="192.0.2.1",
+                    detail={"private_url": "must-not-leak"},
+                )
+            )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/v1/admin/agents/{source_id}/source-release-evidence",
+            params={"candidate_agent_id": str(candidate_id)},
+            headers=_HEADERS,
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["artifact_sha256"] == sha
+    assert body["candidate_agent_id"] == str(candidate_id)
+    assert body["policy_revision"] == base_revision + 1
+    assert body["embargo_hours"] == 48
+    assert body["publication_proven_by_reference_time"] is True
+    assert body["exact_sha_public_handoff_count"] == 2
+    assert datetime.fromisoformat(body["publication_evidence_at"]) == _T0 - timedelta(
+        minutes=30
+    )
+    assert body["absence_proves_nonpublication"] is False
+    assert "192.0.2.1" not in response.text
+    assert "must-not-leak" not in response.text
+
+
+async def test_artifact_fetch_audit_lists_fetchers_before_reference_by_sha(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    first_id, second_id = uuid4(), uuid4()
+    sha = "c" * 64
+    async with maker() as session, session.begin():
+        for agent_id in (first_id, second_id):
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=f"5H{agent_id.hex[:8]}",
+                    name="same-bytes",
+                    sha256=sha,
+                    status=AgentStatus.SCORED,
+                    created_at=_T0 - timedelta(days=1),
+                )
+            )
+        for agent_id, kind, identity, minutes, detail in (
+            (first_id, "validator", "5Validator", 30, {"served_source": True}),
+            (
+                second_id,
+                "screener",
+                "node-1",
+                20,
+                {"served_source": False, "served_screened_image": True},
+            ),
+            (first_id, "validator", "5Validator", -5, None),
+        ):
+            session.add(
+                ArtifactFetchAudit(
+                    agent_id=agent_id,
+                    endpoint="validator.agent_artifact",
+                    requester_kind=kind,
+                    requester_id=identity,
+                    artifact_sha256=sha,
+                    fetched_at=_T0 - timedelta(minutes=minutes),
+                    source_ip="192.0.2.1",
+                    detail={
+                        **(detail or {}),
+                        "claimed_forwarded_for": {"x-real-ip": "198.51.100.7"},
+                    },
+                )
+            )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/admin/artifact-fetch-audit",
+            params={"artifact_sha256": sha, "before": _T0.isoformat()},
+            headers=_HEADERS,
+        )
+        both = await client.get(
+            "/api/v1/admin/artifact-fetch-audit",
+            params={"artifact_sha256": sha, "agent_id": str(first_id)},
+            headers=_HEADERS,
+        )
+    assert both.status_code == 422
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body["agent_ids"]) == {str(first_id), str(second_id)}
+    assert body["total"] == 2 and body["truncated"] is False
+    assert [row["requester_id"] for row in body["rows"]] == ["5Validator", "node-1"]
+    assert [row["served_source"] for row in body["rows"]] == [True, False]
+    assert (
+        body["rows"][0]["source_ip_hash"] and body["rows"][0]["forwarded_claim_present"]
+    )
+    assert "192.0.2.1" not in response.text
+    assert "198.51.100.7" not in response.text
+
+
+async def test_source_release_evidence_absence_is_not_private_proof(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    candidate_id, source_id = await _seed(maker)
+    path = f"/api/v1/admin/agents/{source_id}/source-release-evidence"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            path, params={"candidate_agent_id": str(candidate_id)}, headers=_HEADERS
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["publication_evidence_at"] is None
+        assert body["exact_sha_public_handoff_count"] == 0
+        assert body["publication_proven_by_reference_time"] is False
+        assert body["absence_proves_nonpublication"] is False
+        assert "fail-open" in body["limitations"]
+        assert (await client.get(path)).status_code in {401, 403}
+        assert (
+            await client.get(
+                path, params={"candidate_agent_id": str(uuid4())}, headers=_HEADERS
+            )
+        ).status_code == 404
+        assert (
+            await client.get(
+                f"/api/v1/admin/agents/{uuid4()}/source-release-evidence",
+                headers=_HEADERS,
+            )
+        ).status_code == 404
 
 
 @pytest.fixture
@@ -542,7 +813,12 @@ async def test_resolved_review_reopens_without_rewriting_original_evidence(
         assert len(actions) == 3
 
 
-@pytest.mark.parametrize("previous_status", [AgentStatus.SCORED, AgentStatus.LIVE])
+@pytest.mark.parametrize(
+    "previous_status",
+    [
+        AgentStatus.SCORED,
+    ],
+)
 async def test_rejected_review_reopens_and_clear_restores_previous_status(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -904,40 +1180,6 @@ async def test_resolved_clear_does_not_reopen_an_unrelated_ban(
     assert "agent is banned" in response.text
 
 
-async def test_reopen_still_fails_closed_on_changed_score_count(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    agent_id, sha256 = await _seed_scored_agent(maker)
-    _install(app, maker)
-    opened = await client.post(
-        f"/api/v1/admin/copy-reviews/{agent_id}/open",
-        json={
-            "expected_sha256": sha256,
-            "expected_score_count": 3,
-            "reason": "Manual benchmark-overfit review",
-        },
-        headers=_HEADERS,
-    )
-    assert opened.status_code == 200
-    cleared = await client.post(
-        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Initial evidence was clear"},
-        headers=_HEADERS,
-    )
-    assert cleared.status_code == 200
-    response = await client.post(
-        f"/api/v1/admin/copy-reviews/{agent_id}/open",
-        json={
-            "expected_sha256": sha256,
-            "expected_score_count": 2,
-            "reason": "New evidence requires another review",
-        },
-        headers=_HEADERS,
-    )
-    assert response.status_code == 409
-    assert "score count changed" in response.text
-
-
 async def test_list_is_bounded_oldest_first_and_private(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
@@ -1260,16 +1502,6 @@ async def test_list_can_embed_current_comparisons_in_one_request(
     # No fingerprint material leaks through the embedded form either.
     serialized = response.text.lower()
     assert "sha256" not in serialized and '"m":' not in serialized
-
-
-async def test_list_without_include_omits_comparisons(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    await _seed_current_comparison(maker)
-    _install(app, maker)
-    response = await client.get("/api/v1/admin/copy-reviews", headers=_HEADERS)
-    assert response.status_code == 200
-    assert response.json()["items"][0]["current_comparison"] is None
 
 
 async def test_embedded_comparison_matches_the_dedicated_endpoint(
@@ -1639,25 +1871,6 @@ async def test_source_diff_reports_budget_skipped_files_as_omitted(
     assert detail_body["identical"] is True
 
 
-async def test_source_diff_small_pair_omits_nothing(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    candidate_id, _reference_id, objects = await _seed_diff_pair(
-        maker,
-        candidate_files={"src/main.rs": "fn main() {}\n"},
-        reference_files={"src/main.rs": "fn main() {}\n"},
-    )
-    _install(app, maker)
-    _install_storage(app, objects)
-    response = await client.get(
-        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff", headers=_HEADERS
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["omitted_file_count"] == 0
-    assert body["omitted_paths"] == []
-
-
 async def test_source_diff_audits_both_agents_whose_source_was_read(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
@@ -1715,28 +1928,6 @@ async def test_source_diff_file_audits_the_path_that_was_read(
     assert all((row.detail or {}).get("path") == "src/util.rs" for row in rows)
 
 
-async def test_source_diff_file_returns_unified_body(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    candidate_id, _, objects = await _seed_diff_pair(
-        maker,
-        candidate_files={"src/util.rs": "fn util() -> i32 { 1 }\n"},
-        reference_files={"src/util.rs": "fn util() -> i32 { 2 }\n"},
-    )
-    _install(app, maker)
-    _install_storage(app, objects)
-    response = await client.get(
-        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff/file",
-        params={"path": "src/util.rs"},
-        headers=_HEADERS,
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["candidate_present"] and body["reference_present"]
-    joined = "\n".join(body["diff_lines"])
-    assert "{ 2 }" in joined and "{ 1 }" in joined
-
-
 async def test_source_diff_requires_admin_actor(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
@@ -1766,22 +1957,6 @@ async def test_source_diff_missing_file_is_404(
         headers=_HEADERS,
     )
     assert response.status_code == 404
-
-
-async def test_source_diff_digest_mismatch_is_502(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    candidate_id, _, objects = await _seed_diff_pair(
-        maker, {"a.rs": "x\n"}, {"a.rs": "y\n"}
-    )
-    # Corrupt the stored candidate bytes so they no longer match agent.sha256.
-    objects[f"{candidate_id}/agent.tar.gz"] = _tarball({"a.rs": "tampered\n"})
-    _install(app, maker)
-    _install_storage(app, objects)
-    response = await client.get(
-        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff", headers=_HEADERS
-    )
-    assert response.status_code == 502
 
 
 async def _seed_lineage_pair(

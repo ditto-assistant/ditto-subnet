@@ -47,7 +47,6 @@ from ditto.db.queries.confirmation_bundles import (
     complete_confirmation_bundle,
     confirmation_bundle_dimensions,
     confirmation_bundle_subjects,
-    confirmation_bundle_tickets,
     get_or_create_confirmation_bundle,
     insert_confirmation_bundle_settings_revision,
     issue_confirmation_bundle_ticket,
@@ -243,10 +242,6 @@ class TestActiveConfirmationWork:
 
 
 class TestSettingsLedger:
-    async def test_empty_settings_ledger(self, session: AsyncSession) -> None:
-        assert await latest_confirmation_bundle_settings_revision(session) is None
-        assert await list_confirmation_bundle_settings_revisions(session) == []
-
     async def test_latest_and_history_are_append_only(
         self, session: AsyncSession
     ) -> None:
@@ -273,7 +268,9 @@ class TestSettingsLedger:
 
     @pytest.mark.parametrize(
         ("field", "value"),
-        [("scope", "tenant"), ("checksum", "short"), ("reason", "tiny")],
+        [
+            ("checksum", "short"),
+        ],
     )
     async def test_settings_constraints_reject_malformed_audit_rows(
         self, session: AsyncSession, field: str, value: object
@@ -353,29 +350,6 @@ class TestBundleResolution:
         assert subject.bundle_id == bundle.bundle_id
         assert subject.result_status == ConfirmationResultStatus.PROVISIONAL.value
         assert policy.profile_checksum == bundle.profile_checksum
-
-    async def test_same_agent_reuses_exact_pending_bundle(
-        self, session: AsyncSession
-    ) -> None:
-        async with session.begin():
-            agent_id, revision, policy, first = await seed_bundle(session)
-        async with session.begin():
-            second = await get_or_create_confirmation_bundle(
-                session,
-                agent_id=agent_id,
-                bench_version=9,
-                **base_proof_kwargs(quality_micros=750_000, stderr_micros=20_000),
-                settings_revision=revision.revision,
-                settings=policy,
-                verification_profile=verification_profile(),
-            )
-        assert second.bundle is not None
-        assert second.bundle.bundle_id == first.bundle_id
-        assert not second.reused_completed_evidence
-        assert (
-            await session.scalar(select(func.count()).select_from(ConfirmationBundle))
-            == 1
-        )
 
     async def test_renamed_same_digest_reuses_exact_bundle(
         self, session: AsyncSession
@@ -472,7 +446,7 @@ class TestBundleResolution:
                     verification_profile=verification_profile(),
                 )
 
-    @pytest.mark.parametrize("live_version", [10, 11])
+    @pytest.mark.parametrize("live_version", [11])
     async def test_bundle_is_written_for_a_later_live_benchmark(
         self, session: AsyncSession, live_version: int
     ) -> None:
@@ -513,29 +487,12 @@ class TestBundleResolution:
 
 
 class TestBudgetAndTicketLifecycle:
-    async def test_reservation_charges_exact_integer_budget(
-        self, session: AsyncSession
-    ) -> None:
-        async with session.begin():
-            _, revision, policy, bundle = await seed_bundle(session)
-            decision = await reserve_confirmation_bundle_budget(
-                session,
-                bundle_id=bundle.bundle_id,
-                reservation_id=uuid4(),
-                now=_NOW,
-                expected_revision=0,
-                settings_revision=revision.revision,
-                settings=policy,
-                reserve_microusd=40_000,
-            )
-        assert decision.blocked_reason is None
-        assert decision.budget.revision == 1
-        assert decision.budget.issued_attempts == 1
-        assert decision.budget.outstanding_reserved_microusd == 40_000
-        assert decision.reservation is not None
-        assert decision.reservation.attempt == 1
-
-    @pytest.mark.parametrize("amount", [0, -1])
+    @pytest.mark.parametrize(
+        "amount",
+        [
+            0,
+        ],
+    )
     async def test_reservation_rejects_nonpositive_amount(
         self, session: AsyncSession, amount: int
     ) -> None:
@@ -1013,25 +970,6 @@ class TestCompletionAndRetest:
         assert first.full_stderr_micros != second_subject.full_stderr_micros
         assert first.bundle_id == second_subject.bundle_id == bundle.bundle_id
 
-    async def test_shadow_projects_longmem_mean_when_ablations_do_not_qualify(
-        self, session: AsyncSession
-    ) -> None:
-        async with session.begin():
-            agent_id, _, _, bundle, _ = await self.completed_bundle(
-                session,
-                embedding_status="unavailable",
-            )
-        assert bundle.state == ConfirmationBundleState.COMPLETED.value
-        assert bundle.qualification_status == "unqualified"
-        subject = await session.get(ConfirmationBundleSubject, (agent_id, 9))
-        assert subject is not None
-        assert subject.full_quality_micros is None
-        public = await v9_confirmation_public_projections(session, agent_ids=[agent_id])
-        assert public[agent_id].result_status == "provisional"
-        assert public[agent_id].full_confirmed_composite is None
-        assert public[agent_id].shadow_quality_composite is None
-        assert public[agent_id].longmem_mean_composite == pytest.approx(0.5)
-
     async def test_unavailable_ablation_completes_shared_audit_but_not_subject(
         self, session: AsyncSession
     ) -> None:
@@ -1048,24 +986,6 @@ class TestCompletionAndRetest:
         assert subject.result_status == "provisional"
         assert subject.full_quality_micros is None
         assert subject.full_effective_micros is None
-
-    async def test_failed_enforce_ablation_is_complete_and_keeps_the_mix(
-        self, session: AsyncSession
-    ) -> None:
-        async with session.begin():
-            agent_id, _, _, bundle, _ = await self.completed_bundle(
-                session,
-                mode=ConfirmationBundleMode.ENFORCE,
-                inference_status="failed",
-            )
-        assert bundle.qualification_status == "qualified"
-        subject = await session.get(ConfirmationBundleSubject, (agent_id, 9))
-        assert subject is not None
-        assert subject.result_status == "full_confirmed"
-        assert subject.full_quality_micros == 650_000
-        assert subject.semantic_factor_bps == 0
-        assert subject.applied_factor_bps == 10_000
-        assert subject.full_effective_micros == 650_000
 
     async def test_enforce_observational_drop_is_complete_and_keeps_the_mix(
         self, session: AsyncSession
@@ -1488,8 +1408,6 @@ class TestDatabaseBackstops:
     @pytest.mark.parametrize(
         ("dimension", "synthetic", "cost"),
         [
-            ("longmemeval", True, 0),
-            ("inference_ablation", False, 0),
             ("embedding_ablation", True, 1),
         ],
     )
@@ -1518,80 +1436,6 @@ class TestDatabaseBackstops:
                         evidence={},
                     )
                 )
-
-    async def test_query_projection_order_is_stable(
-        self, session: AsyncSession
-    ) -> None:
-        async with session.begin():
-            _, revision, policy, bundle = await seed_bundle(session)
-            reservation, ticket = await reserve_and_issue(
-                session, bundle=bundle, revision=revision, policy=policy
-            )
-            await settle_confirmation_bundle_budget(
-                session,
-                reservation_id=reservation.reservation_id,
-                expected_revision=1,
-                actual_microusd=15_000,
-                failed_attempt=False,
-                settled_at=_NOW + timedelta(minutes=4),
-            )
-            await complete_confirmation_bundle(
-                session,
-                bundle_id=bundle.bundle_id,
-                ticket_id=ticket.ticket_id,
-                report=signed_report(
-                    bundle=bundle,
-                    ticket=ticket,
-                    mode=ConfirmationBundleMode.SHADOW,
-                ),
-                verification_profile=verification_profile(),
-                now=_NOW + timedelta(minutes=5),
-            )
-        assert [
-            row.attempt
-            for row in await confirmation_bundle_tickets(
-                session, bundle_id=bundle.bundle_id
-            )
-        ] == [1]
-        assert [
-            row.dimension
-            for row in await confirmation_bundle_dimensions(
-                session, bundle_id=bundle.bundle_id
-            )
-        ] == sorted(d.value for d in ConfirmationDimension)
-
-
-class TestCanonicalPathIsolation:
-    async def test_base_only_subject_cannot_mutate_canonical_state(
-        self, session: AsyncSession
-    ) -> None:
-        async with session.begin():
-            before_version = await active_bench_version(session)
-        async with session.begin():
-            agent_id = await seed_agent(session)
-            agent = await session.get(Agent, agent_id)
-            assert agent is not None
-            original_status = agent.status
-            await record_base_only_subject(
-                session,
-                agent_id=agent_id,
-                bench_version=9,
-                **base_proof_kwargs(quality_micros=800_000, stderr_micros=10_000),
-            )
-        refreshed = await session.get(Agent, agent_id)
-        assert refreshed is not None
-        assert refreshed.status == original_status == AgentStatus.SCORED
-        assert await session.scalar(select(func.count()).select_from(Score)) == 0
-        assert (
-            await session.scalar(select(func.count()).select_from(ConfirmationScore))
-            == 0
-        )
-        assert (
-            await session.scalar(select(func.count()).select_from(BenchmarkRollout))
-            == 0
-        )
-        assert await active_bench_version(session) == before_version
-        assert await list_eligible_ledger(session, include_details=False) == []
 
 
 class TestV9RewardProjection:

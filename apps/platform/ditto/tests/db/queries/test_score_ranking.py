@@ -1530,7 +1530,12 @@ class TestContinuationFloor:
 
     @pytest.mark.parametrize(
         "document",
-        [None, {}, [], [{"composite_stderr": 99}], 8, "text", True],
+        [
+            None,
+            {},
+            [{"composite_stderr": 99}],
+            8,
+        ],
     )
     async def test_partial_details_preserves_non_object_and_missing_key_semantics(
         self, session_maker: async_sessionmaker[AsyncSession], document

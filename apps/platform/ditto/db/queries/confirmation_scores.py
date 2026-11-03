@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -29,12 +29,31 @@ from ditto.api_models.continual_retest_settings import (
     DEFAULT_WAVE_MEMBERSHIP,
     WaveMembership,
 )
-from ditto.db.models import ConfirmationScore
+from ditto.db.models import ConfirmationScore, ConfirmationScoreVoid
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.sql.elements import ColumnElement
+
+
+def not_voided() -> ColumnElement[bool]:
+    """``ConfirmationScore`` rows no infrastructure void has set aside.
+
+    Every fold read applies this one predicate -- official composite, owner
+    representative, retest cohort, crown, efficiency and the validator ledger --
+    so a voided sample cannot count anywhere while its row stays in the table.
+    A voided seed therefore reads as not yet scored, which is what reopens it
+    for the agent's next continual retest.
+    """
+    return ~exists().where(
+        ConfirmationScoreVoid.agent_id == ConfirmationScore.agent_id,
+        ConfirmationScoreVoid.bench_version == ConfirmationScore.bench_version,
+        ConfirmationScoreVoid.validator_hotkey == ConfirmationScore.validator_hotkey,
+        ConfirmationScoreVoid.seed == ConfirmationScore.seed,
+        ConfirmationScoreVoid.void_generation == ConfirmationScore.void_generation,
+    )
 
 
 @dataclass(frozen=True)
@@ -52,6 +71,10 @@ class ConfirmationSeedScore:
     v9_efficiency_cost_eligible: bool | None = None
     """``True`` for valid cost evidence, ``False`` for an explicit integrity
     failure, and ``None`` for historical/non-v9 rows without cost authority."""
+    dueling_season_id: UUID | None = None
+    """Bench v16+: the dueling season this seed ran in."""
+    dueling: dict | None = None
+    """Bench v16+: this seed's signed ``details.dueling`` aggregates."""
 
 
 @dataclass(frozen=True)
@@ -81,6 +104,8 @@ class ConfirmationHistoryRow:
     validator_hotkey: str
     bench_version: int
     signature: str | None
+    dueling: dict | None = None
+    """Bench v16+: this seed's signed ``details.dueling`` aggregates."""
 
 
 def completed_confirmation_wave_seeds(
@@ -209,6 +234,7 @@ async def lane_seed_universe(
         .where(
             ConfirmationScore.agent_id.in_(ids),
             ConfirmationScore.bench_version == bench_version,
+            not_voided(),
         )
         .distinct()
     )
@@ -357,40 +383,93 @@ async def append_confirmation_scores(
     rows: Sequence[ConfirmationSeedScore],
     bench_version: int,
     created_at: datetime,
+    rerun_seeds: frozenset[int] = frozenset(),
 ) -> int:
     """Append confirmation rows idempotently; return the count actually inserted.
 
-    ``ON CONFLICT DO NOTHING`` on the ``(agent_id, bench_version,
-    validator_hotkey, seed)`` key: a re-submitted seed (the validator resends the
-    whole champion-anchored union each round) is a no-op, and the first-written
-    composite for a ``(validator, seed)`` is immutable. Because dittobench is
-    deterministic per ``(agent, seed)`` a re-score would produce the identical
-    composite, so idempotency is consensus-safe.
+    ``ON CONFLICT DO NOTHING`` on the full key: a re-submitted seed (the
+    validator resends the whole champion-anchored union each round) is a no-op,
+    and the first-written composite for a ``(validator, seed, generation)`` is
+    immutable. Because dittobench is deterministic per ``(agent, seed)`` a
+    re-score would produce the identical composite, so idempotency is
+    consensus-safe.
+
+    The generation is the number of infrastructure voids already recorded on
+    ``(agent, version, validator, seed)``: 0 for a first result, ``n`` for the
+    re-run after ``n`` voids. A voided run id is never accepted again, so a
+    resent stale result cannot bring a voided sample back under a new
+    generation. Before voids existed this dropped every re-run silently.
+
+    A re-run is accepted only for a seed in ``rerun_seeds``: the caller passes
+    the one seed a fresh single-seed lease was issued for. A multi-seed legacy
+    bundle report can resend cached composites under a new run id, so it never
+    re-opens a voided key.
     """
     if not rows:
         return 0
+    voided: dict[tuple[UUID, str, int], tuple[int, frozenset[str]]] = {}
+    agent_ids = sorted({row.agent_id for row in rows})
+    for agent_id, validator_hotkey, seed, count, run_ids in await session.execute(
+        select(
+            ConfirmationScoreVoid.agent_id,
+            ConfirmationScoreVoid.validator_hotkey,
+            ConfirmationScoreVoid.seed,
+            func.count(),
+            func.array_agg(ConfirmationScoreVoid.run_id),
+        )
+        .where(
+            ConfirmationScoreVoid.agent_id.in_(agent_ids),
+            ConfirmationScoreVoid.bench_version == bench_version,
+        )
+        .group_by(
+            ConfirmationScoreVoid.agent_id,
+            ConfirmationScoreVoid.validator_hotkey,
+            ConfirmationScoreVoid.seed,
+        )
+    ):
+        voided[(agent_id, validator_hotkey, int(seed))] = (
+            int(count),
+            frozenset(run_ids or ()),
+        )
     dialect = session.get_bind().dialect.name
-    values = [
-        {
-            "agent_id": row.agent_id,
-            "validator_hotkey": row.validator_hotkey,
-            "bench_version": bench_version,
-            "seed": row.seed,
-            "composite": row.composite,
-            "run_id": row.run_id,
-            "signature": row.signature,
-            "v9_efficiency_token_total": row.v9_efficiency_token_total,
-            "v9_efficiency_cost_eligible": row.v9_efficiency_cost_eligible,
-            "created_at": created_at,
-        }
-        for row in rows
-    ]
+    values = []
+    for row in rows:
+        generation, voided_runs = voided.get(
+            (row.agent_id, row.validator_hotkey, row.seed), (0, frozenset())
+        )
+        if generation and (row.run_id in voided_runs or row.seed not in rerun_seeds):
+            continue
+        values.append(
+            {
+                "agent_id": row.agent_id,
+                "validator_hotkey": row.validator_hotkey,
+                "bench_version": bench_version,
+                "seed": row.seed,
+                "void_generation": generation,
+                "composite": row.composite,
+                "run_id": row.run_id,
+                "signature": row.signature,
+                "v9_efficiency_token_total": row.v9_efficiency_token_total,
+                "v9_efficiency_cost_eligible": row.v9_efficiency_cost_eligible,
+                "dueling_season_id": row.dueling_season_id,
+                "dueling": row.dueling,
+                "created_at": created_at,
+            }
+        )
+    if not values:
+        return 0
     insert = pg_insert if dialect == "postgresql" else sqlite_insert
     statement: Any = (
         insert(ConfirmationScore)
         .values(values)
         .on_conflict_do_nothing(
-            index_elements=["agent_id", "bench_version", "validator_hotkey", "seed"]
+            index_elements=[
+                "agent_id",
+                "bench_version",
+                "validator_hotkey",
+                "seed",
+                "void_generation",
+            ]
         )
     )
     result = await session.execute(statement)
@@ -430,6 +509,7 @@ async def confirmation_efficiency_costs_by_agent(
         .where(
             ConfirmationScore.agent_id.in_(ids),
             ConfirmationScore.bench_version == bench_version,
+            not_voided(),
         )
         .order_by(
             ConfirmationScore.agent_id,
@@ -481,6 +561,7 @@ async def confirmation_composites_by_seed(
         ).where(
             ConfirmationScore.agent_id.in_(ids),
             ConfirmationScore.bench_version == bench_version,
+            not_voided(),
         )
     )
     grouped: dict[UUID, dict[int, list[float]]] = {}
@@ -517,15 +598,25 @@ async def confirmation_history_by_agent(
             ConfirmationScore.validator_hotkey,
             ConfirmationScore.bench_version,
             ConfirmationScore.signature,
+            ConfirmationScore.dueling,
         )
         .where(
             ConfirmationScore.agent_id.in_(ids),
             ConfirmationScore.bench_version == bench_version,
+            not_voided(),
         )
         .order_by(ConfirmationScore.seed, ConfirmationScore.validator_hotkey)
     )
     history: dict[UUID, list[ConfirmationHistoryRow]] = {}
-    for agent_id, seed, composite, validator_hotkey, version, signature in rows:
+    for (
+        agent_id,
+        seed,
+        composite,
+        validator_hotkey,
+        version,
+        signature,
+        dueling,
+    ) in rows:
         history.setdefault(agent_id, []).append(
             ConfirmationHistoryRow(
                 agent_id=agent_id,
@@ -534,6 +625,7 @@ async def confirmation_history_by_agent(
                 validator_hotkey=validator_hotkey,
                 bench_version=version,
                 signature=signature,
+                dueling=dueling,
             )
         )
     return history
@@ -561,6 +653,7 @@ async def confirmation_depths(
         .where(
             ConfirmationScore.agent_id.in_(ids),
             ConfirmationScore.bench_version == bench_version,
+            not_voided(),
         )
         .group_by(ConfirmationScore.agent_id)
     )

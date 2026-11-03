@@ -6,13 +6,6 @@ boot; a platform error aborts the current attempt without killing the daemon.
 
 from __future__ import annotations
 
-import functools
-from collections.abc import Callable
-from typing import ParamSpec, TypeVar
-
-_P = ParamSpec("_P")
-_R = TypeVar("_R")
-
 
 class ScreenerConfigError(Exception):
     """Raised at boot when the env-driven config is missing/invalid.
@@ -43,6 +36,18 @@ class PlatformRejected(PlatformError):
         super().__init__(f"verdict rejected ({status_code}): {self.body}")
 
 
+class ScreenedImageUploadUnavailable(PlatformError):
+    """Platform or its object store could not take the screened image.
+
+    Raised only after the bounded transient retries are spent, and only for a
+    transport failure or a 5xx on a step whose work does not depend on the
+    submission: initiating the multipart session, minting a part URL, or
+    storing a fixed-size part. A 4xx (an oversized or mismatched image, an
+    expired lease) and any failure of the completion step, which hashes the
+    whole stored image, stay plain :class:`PlatformError`.
+    """
+
+
 class PlatformAuthUnavailable(PlatformError):
     """Permanent local authentication failure that retries cannot repair."""
 
@@ -52,31 +57,3 @@ class PlatformAuthOnlyFailure(PlatformError):
 
     def __init__(self, detail: str) -> None:
         super().__init__(f"{detail}; no verdict request was sent")
-
-
-def model_output_contract(
-    message: str,
-) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
-    """Report a reviewer value of the wrong type as an ordinary contract miss.
-
-    Reviewer tool schemas are not strict, so a model can send a list or dict
-    where a string is expected. A membership test against a set then raises
-    ``TypeError: unhashable type``, which the review paths do not treat as a
-    malformed reply: it escaped to the gate's catch-all and parked the review
-    as ``unexpected-infrastructure``, losing its notes (ditto-subnet#2987).
-    Applied only to functions that parse model output, so the ``ValueError``
-    takes the same repair-turn and contract-miss paths as any other invalid
-    field.
-    """
-
-    def decorate(parse: Callable[_P, _R]) -> Callable[_P, _R]:
-        @functools.wraps(parse)
-        def checked(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-            try:
-                return parse(*args, **kwargs)
-            except TypeError as error:
-                raise ValueError(message) from error
-
-        return checked
-
-    return decorate

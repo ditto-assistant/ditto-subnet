@@ -140,7 +140,28 @@ from ditto import __version__
 # disk, and architecture, probed once per boot (the screener v6 block). Like the
 # weights fold, it changes the signed bytes only when present, so a failed probe
 # signs the v23/v27 domain. Platform must accept v32 before validators adopt it.
-HEARTBEAT_PROTOCOL_VERSION = 32
+# v33 folds the ``generator`` track as a paying track. A governed
+# ``LedgerResponse.track_shares_bps`` such as ``{memory: 9000, generator: 1000}``
+# pays generator ledger entries Platform marked ``weight_eligible``; a generator
+# share with no eligible entry falls back to memory instead of burning. A v32
+# validator folds the generator track in shadow, so it would burn that share
+# instead: Platform must withhold a map naming a nonzero generator share until
+# every recently-live weight setter reports v33+ (``TRACK_SHARES_PROTOCOL`` in
+# apps/platform/ditto/api_models/track_share_settings.py; the scoring ledger
+# serves ``track_shares_bps`` only to a fully-v33 fleet and refuses a sub-33
+# requester while a split is served or pinned). Until that Platform setting
+# exists and is written, no split is served and v33 folds exactly as v32.
+# Heartbeat signing bytes are unchanged.
+# v34 consumes ``LedgerResponse.crown_gate``: a challenger dethrones only on the
+# paired shared-seed statistic with at least ``min_dethrone_confirmations``
+# seeds shared with the champion, and only an entry inside the top
+# ``champion_standing_rank`` official places may hold or take the crown (an
+# incumbent that falls out hands it to the best-qualified standing entry). A
+# v33 validator ignores the additive marker and keeps the ungated walk -- a
+# different champion, and so a different weight vector -- so Platform must
+# withhold it until every recently-live weight setter reports v34+. Heartbeat
+# signing bytes are unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 34
 
 
 @dataclass(frozen=True)

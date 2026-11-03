@@ -211,7 +211,11 @@ class AdminAthRulingExecuteItem(BaseModel):
     agent_id: UUID
     status: Literal["applied", "already_applied", "failed"]
     agent_status: str | None = None
-    would_change_crown: bool
+    # None when a current-board preview could not be obtained.
+    would_change_crown: bool | None
+    # A writer may commit before a follow-up read raises. Inspect the current
+    # agent/review before retrying such an item, even when status is failed.
+    write_outcome_unknown: bool = False
     steps_applied: list[AthRulingStep] = Field(default_factory=list)
     # False on an applied row means the ruling landed but the batch_id /
     # evidence_references annotation on its audit rows did not; the ruling is

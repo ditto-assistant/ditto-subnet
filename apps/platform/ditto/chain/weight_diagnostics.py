@@ -145,7 +145,7 @@ async def read_weight_diagnostics(
             # A separate read connection still uses the matrix's exact hash.
             # Never combine latest vTrust with an older cached weight matrix.
             async with AsyncSubstrateInterface(
-                url=client._substrate_url()
+                url=client._live_substrate_urls()[0]
             ) as substrate:
 
                 async def read(name: str):
