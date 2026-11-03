@@ -230,9 +230,9 @@ func DecodeSliceDataset(raw []byte, expectedSHA string) (SliceDataset, []SliceCo
 		if col.ColumnID != SliceColumnID(i) {
 			return fail("columns must be exactly c0..c" + strconv.Itoa(protocol.DuelingSliceColumns-1) + " in order")
 		}
-		compact, digest, err := CompactPack(col.Pack)
-		if err != nil || digest != col.PackSHA256 || !bytes.Equal(compact, col.Pack) {
-			return fail("column " + col.ColumnID + " pack digest mismatch")
+		compact, err := checkSliceColumnPackBytes(col)
+		if err != nil {
+			return fail("column " + col.ColumnID + " " + err.Error())
 		}
 		p, err := checkSliceColumn(ds.BenchVersion, col, compact)
 		if err != nil {
@@ -241,6 +241,24 @@ func DecodeSliceDataset(raw []byte, expectedSHA string) (SliceDataset, []SliceCo
 		out = append(out, SliceColumnPack{Column: col, Pack: p})
 	}
 	return ds, out, nil
+}
+
+// checkSliceColumnPackBytes binds a column's pack bytes to its recorded
+// digest. Each failure has its own reason, so a pack that cannot be compacted
+// or is not in compact form is never reported as a digest mismatch: only a
+// compact pack whose SHA-256 differs from pack_sha256 is a mismatch.
+func checkSliceColumnPackBytes(col SliceDatasetColumn) ([]byte, error) {
+	compact, digest, err := CompactPack(col.Pack)
+	if err != nil {
+		return nil, fmt.Errorf("pack compaction failed: %w", err)
+	}
+	if !bytes.Equal(compact, col.Pack) {
+		return nil, errors.New("pack is not in compact form")
+	}
+	if digest != col.PackSHA256 {
+		return nil, errors.New("pack digest mismatch")
+	}
+	return compact, nil
 }
 
 // VerifySliceSeeds checks every column's slice_seed against the revealed
