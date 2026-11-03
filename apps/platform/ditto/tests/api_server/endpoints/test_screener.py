@@ -13524,6 +13524,108 @@ class TestQuarantineReviewContext:
         )
         assert blocked.status_code == 409
 
+    async def test_amend_reason_with_no_recorded_reason_after_a_rescreen(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # A reject that recorded no reason is amendable with an empty guard,
+        # history gains the decision being amended even though an earlier
+        # rescreen row exists, and a replay never reports a non-reject reason.
+        agent_id, ctx = await self._quarantine(app, client, session_maker)
+        assert ctx["response"].status_code == 200
+        corrected = "I4: app/short.py:83-90 and :251 route benchmark answers"
+        resolved_at = datetime.now(UTC) - timedelta(minutes=5)
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.agent_id == agent_id
+                )
+            )
+            assert agent is not None and quarantine is not None
+            attempt = await session.get(ScreeningAttempt, quarantine.attempt_id)
+            assert attempt is not None
+            session.add(
+                ScreeningQuarantineResolution(
+                    resolution_id=uuid4(),
+                    quarantine_id=quarantine.quarantine_id,
+                    resolution="rescreen",
+                    reason="Earlier operator rescreen under current policy",
+                    actor="backroom:other-user",
+                    created_at=resolved_at - timedelta(minutes=5),
+                )
+            )
+            quarantine.status, quarantine.resolution = "resolved", "reject"
+            quarantine.resolution_reason = None
+            quarantine.resolved_by = "platform:v13-confirmed-violation"
+            quarantine.resolved_at = resolved_at
+            attempt.status, attempt.public_reason = "rejected", None
+            agent.status, agent.screening_reason = AgentStatus.REJECTED, None
+            quarantine_id = quarantine.quarantine_id
+            body = {
+                "expected_agent_id": str(agent_id),
+                "expected_artifact_sha256": agent.sha256,
+                "expected_attempt_id": str(attempt.attempt_id),
+                "expected_reason": "",
+                "reason": corrected,
+                "confirmation": "AMEND PUBLIC REJECT REASON",
+            }
+        url = f"/api/v1/admin/screening-quarantines/{quarantine_id}/amend-reason"
+
+        amended = await client.post(url, headers=_ADMIN_HEADERS, json=body)
+        assert amended.status_code == 200, amended.text
+        assert amended.json()["previous_reason"] == ""
+
+        # An out-of-band non-reject row recorded after the amendment.
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningQuarantineResolution(
+                    resolution_id=uuid4(),
+                    quarantine_id=quarantine_id,
+                    resolution="release",
+                    reason="Stray release event that is not this reject",
+                    actor="backroom:other-user",
+                    created_at=datetime.now(UTC) + timedelta(seconds=1),
+                )
+            )
+        replay = await client.post(url, headers=_ADMIN_HEADERS, json=body)
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["idempotent"] is True
+        assert replay.json()["previous_reason"] == ""
+
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            quarantine = await session.get(ScreeningQuarantine, quarantine_id)
+            assert agent is not None and quarantine is not None
+            attempt = await session.get(ScreeningAttempt, quarantine.attempt_id)
+            assert attempt is not None
+            assert quarantine.resolution_reason == corrected
+            assert attempt.public_reason == corrected
+            assert agent.screening_reason == corrected
+            history = (
+                await session.scalars(
+                    select(ScreeningQuarantineResolution)
+                    .where(ScreeningQuarantineResolution.quarantine_id == quarantine_id)
+                    .order_by(ScreeningQuarantineResolution.created_at)
+                )
+            ).all()
+            assert [(row.resolution, row.actor, row.reason) for row in history] == [
+                (
+                    "rescreen",
+                    "backroom:other-user",
+                    "Earlier operator rescreen under current policy",
+                ),
+                ("reject", "platform:v13-confirmed-violation", ""),
+                ("reject", "backroom:test-user", corrected),
+                (
+                    "release",
+                    "backroom:other-user",
+                    "Stray release event that is not this reject",
+                ),
+            ]
+
     async def test_batch_execute_is_idempotent_and_reports_partial_failures(
         self,
         app: FastAPI,

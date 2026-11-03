@@ -795,8 +795,9 @@ class AdminQuarantineReasonAmendRequest(BaseModel):
     expected_agent_id: UUID
     expected_artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     expected_attempt_id: UUID
-    expected_reason: Annotated[str, Field(min_length=1)]
-    """The public reason being replaced, exactly as currently recorded."""
+    expected_reason: str
+    """The public reason being replaced, exactly as currently recorded; empty
+    when the reject recorded none."""
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
     confirmation: Literal["AMEND PUBLIC REJECT REASON"]
 

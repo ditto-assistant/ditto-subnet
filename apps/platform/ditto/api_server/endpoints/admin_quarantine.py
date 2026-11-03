@@ -4232,7 +4232,7 @@ async def amend_quarantine_reject_reason(
             replaced = [
                 event.reason
                 for event in history.get(quarantine.quarantine_id, [])
-                if event.reason != payload.reason
+                if event.resolution == "reject" and event.reason != payload.reason
             ]
             return _amended(replaced[-1] if replaced else current, idempotent=True)
         if current != payload.expected_reason:
@@ -4247,12 +4247,15 @@ async def amend_quarantine_reject_reason(
         )
         if attempt is None:
             raise HTTPException(status_code=409, detail="screening attempt changed")
-        seeded = await session.scalar(
-            select(ScreeningQuarantineResolution.resolution_id)
+        latest = await session.scalar(
+            select(ScreeningQuarantineResolution)
             .where(ScreeningQuarantineResolution.quarantine_id == quarantine_id)
+            .order_by(ScreeningQuarantineResolution.created_at.desc())
             .limit(1)
         )
-        if seeded is None:
+        # Seed the decision being amended unless history already ends with it:
+        # an automated reject writes no row, including one after a rescreen.
+        if latest is None or latest.resolution != "reject" or latest.reason != current:
             session.add(
                 ScreeningQuarantineResolution(
                     resolution_id=uuid4(),
@@ -4276,9 +4279,9 @@ async def amend_quarantine_reject_reason(
             )
         )
         quarantine.resolution_reason = payload.reason
-        if attempt.public_reason == current:
+        if (attempt.public_reason or "") == current:
             attempt.public_reason = payload.reason
-        if agent.screening_reason == current:
+        if (agent.screening_reason or "") == current:
             agent.screening_reason = payload.reason
     logger.info(
         "admin_actor=%s amended reject reason quarantine_id=%s agent_id=%s "

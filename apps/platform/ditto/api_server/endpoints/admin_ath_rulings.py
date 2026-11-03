@@ -645,7 +645,7 @@ async def _preview_ruling(
     terminal_closed = (
         review is not None
         and review.status == "resolved"
-        and "terminal_close" in review.algorithm_provenance
+        and "terminal_close" in (review.algorithm_provenance or {})
         and agent.status in TERMINAL_QUARANTINE_AGENT_STATUSES
     )
     if (
@@ -697,7 +697,7 @@ async def _preview_ruling(
         resolved_as == "reject"
         and agent.status == AgentStatus.BANNED
         and review is not None
-        and "terminal_close" not in review.algorithm_provenance
+        and "terminal_close" not in (review.algorithm_provenance or {})
     )
     steps: list[AthRulingStep]
     if ruling.action == "open":
@@ -1048,68 +1048,70 @@ async def close_terminal_review(
     agent -- appending one ``reject`` action. The agent row, its scores and
     the board are untouched; the original hold evidence is retained.
     """
-    async with session.begin():
-        agent = await session.scalar(
-            select(Agent)
-            .where(Agent.agent_id == agent_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+    agent = await session.scalar(
+        select(Agent)
+        .where(Agent.agent_id == agent_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    review = await session.scalar(
+        select(AthReview)
+        .where(AthReview.agent_id == agent_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if review is None or review.status != "pending":
+        raise HTTPException(status_code=409, detail="review is not pending")
+    if agent.status not in TERMINAL_QUARANTINE_AGENT_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"agent is {agent.status.value}, not terminal",
         )
-        if agent is None:
-            raise HTTPException(status_code=404, detail="agent not found")
-        review = await session.scalar(
-            select(AthReview)
-            .where(AthReview.agent_id == agent_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+    if agent.sha256 != expected_sha256:
+        raise HTTPException(status_code=409, detail="artifact sha256 changed")
+    score_count = int(
+        await session.scalar(
+            select(func.count()).select_from(Score).where(Score.agent_id == agent_id)
         )
-        if review is None or review.status != "pending":
-            raise HTTPException(status_code=409, detail="review is not pending")
-        if agent.status not in TERMINAL_QUARANTINE_AGENT_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail=f"agent is {agent.status.value}, not terminal",
-            )
-        if agent.sha256 != expected_sha256:
-            raise HTTPException(status_code=409, detail="artifact sha256 changed")
-        score_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(Score)
-                .where(Score.agent_id == agent_id)
-            )
-            or 0
+        or 0
+    )
+    if score_count != expected_score_count:
+        raise HTTPException(status_code=409, detail="score count changed")
+    now = datetime.now(UTC)
+    # A JSON null decodes to None; the column itself is NOT NULL.
+    provenance = review.algorithm_provenance or {}
+    evidence = {
+        "terminal_close": True,
+        "agent_status": agent.status.value,
+        "artifact_sha256": agent.sha256,
+        "score_count": score_count,
+        "review_kind": provenance.get("review_kind"),
+    }
+    review.status = "resolved"
+    review.resolution = "reject"
+    review.resolution_reason = reason
+    review.resolved_by = actor
+    review.resolved_at = now
+    review.algorithm_provenance = {
+        **provenance,
+        "terminal_close": evidence,
+    }
+    session.add(
+        AthReviewAction(
+            action_id=uuid4(),
+            review_id=review.review_id,
+            action="reject",
+            reason=reason,
+            actor=actor,
+            evidence=evidence,
+            created_at=now,
         )
-        if score_count != expected_score_count:
-            raise HTTPException(status_code=409, detail="score count changed")
-        now = datetime.now(UTC)
-        evidence = {
-            "terminal_close": True,
-            "agent_status": agent.status.value,
-            "artifact_sha256": agent.sha256,
-            "score_count": score_count,
-            "review_kind": review.algorithm_provenance.get("review_kind"),
-        }
-        review.status = "resolved"
-        review.resolution = "reject"
-        review.resolution_reason = reason
-        review.resolved_by = actor
-        review.resolved_at = now
-        review.algorithm_provenance = {
-            **review.algorithm_provenance,
-            "terminal_close": evidence,
-        }
-        session.add(
-            AthReviewAction(
-                action_id=uuid4(),
-                review_id=review.review_id,
-                action="reject",
-                reason=reason,
-                actor=actor,
-                evidence=evidence,
-                created_at=now,
-            )
-        )
+    )
+    # The execute loop has already ended the preview's autobegin, but commit
+    # rather than begin() so this writer does not depend on that.
+    await session.commit()
 
 
 async def _apply_step(

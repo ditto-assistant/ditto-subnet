@@ -2166,6 +2166,55 @@ async def test_reject_closes_a_review_stranded_behind_a_terminal_agent(
     assert reopen.json()["items"][0]["disposition"] == "conflict"
 
 
+async def test_close_terminal_commits_inside_an_autobegun_session_with_null_provenance(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The close writer commits its own write even when an earlier read has
+    already autobegun a transaction, and a JSON-null provenance is tolerated
+    by both the preview and the close."""
+    await _activate(maker)
+    agent_id, sha256 = await _seed_held(
+        maker, hotkey="5StrandedNull", composite=0.9, created_at=_T0
+    )
+    async with maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        review = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == agent_id)
+        )
+        assert agent is not None and review is not None
+        agent.status = AgentStatus.REJECTED
+        review.algorithm_provenance = None  # type: ignore[assignment]
+    _install(app, maker)
+    reason = "Closing a stranded hold: the agent was already rejected"
+    close = _ruling("reject", agent_id, sha256, reason=reason, refs=())
+    preview = await client.post(_PREVIEW, json={"rulings": [close]}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["items"][0]["steps"] == ["close_terminal"]
+
+    async with maker() as session:
+        await session.scalar(select(func.count()).select_from(Score))
+        assert session.in_transaction()
+        await rulings_mod.close_terminal_review(
+            session,
+            agent_id=agent_id,
+            expected_sha256=sha256,
+            expected_score_count=3,
+            reason=reason,
+            actor=_ACTOR,
+        )
+        assert not session.in_transaction()
+
+    review, actions = await _review(maker, agent_id)
+    assert review is not None
+    assert (review.status, review.resolution) == ("resolved", "reject")
+    assert review.algorithm_provenance["terminal_close"]["review_kind"] is None
+    assert [action.action for action in actions] == ["reject"]
+    replay = await client.post(_PREVIEW, json={"rulings": [close]}, headers=_HEADERS)
+    assert replay.json()["items"][0]["disposition"] == "already_applied"
+
+
 @pytest.mark.parametrize("fail_on", ["post_commit", "final_read"])
 async def test_court_preserves_committed_ruling_outcomes_when_board_read_fails(
     app: FastAPI,

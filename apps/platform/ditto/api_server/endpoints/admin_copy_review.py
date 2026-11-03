@@ -1135,7 +1135,7 @@ async def open_review(
             reconsidering_rejection = (
                 existing.resolution == "reject"
                 and agent.status == AgentStatus.BANNED
-                and "terminal_close" not in existing.algorithm_provenance
+                and "terminal_close" not in (existing.algorithm_provenance or {})
             )
             if agent.status not in openable and not reconsidering_rejection:
                 raise HTTPException(

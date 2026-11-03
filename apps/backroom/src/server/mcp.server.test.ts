@@ -1000,9 +1000,9 @@ describe('Backroom MCP tools', () => {
     // The generator source release read (status, uuid, limit, offset; one-line
     // summary, detail in tool help) measures 233,483 bytes; keep about 0.5 KB.
     // The guarded reject-reason amendment (SN-439: four guards, reason and
-    // confirmation; one-line summary, detail in tool help) measures MEASURE
+    // confirmation; one-line summary, detail in tool help) measures 234,130
     // bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(1)
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(234_600)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

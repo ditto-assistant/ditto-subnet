@@ -6628,7 +6628,7 @@ export const amendQuarantineRejectReasonInputSchema = z.object({
   expectedAgentId: z.string().uuid(),
   expectedArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
   expectedAttemptId: z.string().uuid(),
-  expectedReason: z.string().min(1),
+  expectedReason: z.string(),
   reason: auditReasonSchema(8),
   confirmation: z.literal(AMEND_REJECT_REASON_CONFIRMATION),
 })
