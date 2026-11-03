@@ -193,8 +193,10 @@ def test_report_is_strict() -> None:
     dup[1] = {**dup[1], "column_id": "c0"}
     with pytest.raises(ValidationError):
         DuelingReport.model_validate(_report(columns=dup))
-    with pytest.raises(ValidationError):
-        DuelingReport.model_validate(_report(extra=1))
+    # Additive fields are ignored, not refused (rolling upgrades).
+    assert DuelingReport.model_validate(
+        _report(extra=1)
+    ) == DuelingReport.model_validate(_report())
     with pytest.raises(ValidationError):
         DuelingReport.model_validate(_report(datagen_raw=float("nan")))
     with pytest.raises(ValidationError):

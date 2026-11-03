@@ -147,7 +147,7 @@ class DuelingColumnAggregate(BaseModel):
     generator, including a substituted column, and is never masked.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(extra="ignore", frozen=True, allow_inf_nan=False)
 
     column_id: Annotated[str, Field(pattern=_COLUMN_ID_PATTERN)]
     owner_key: Annotated[str, Field(max_length=_MAX_OWNER_KEY)]
@@ -243,7 +243,7 @@ class DuelingReport(BaseModel):
     :meth:`self_composite` (the agent's own columns masked).
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(extra="ignore", frozen=True, allow_inf_nan=False)
 
     season_id: Annotated[str, Field(pattern=_IDENT_PATTERN)]
     season_index: Annotated[int, Field(ge=0, le=_U64_MAX)]
@@ -288,7 +288,7 @@ class DuelingColumnPin(BaseModel):
     other column names its owner so self- and pair-masks can drop it.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     column_id: Annotated[str, Field(pattern=_COLUMN_ID_PATTERN)]
     submission_id: Annotated[str, Field(pattern=_IDENT_PATTERN)]
