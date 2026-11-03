@@ -1931,6 +1931,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/dueling/source-releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Generator Source Releases
+         * @description Every pinned generator's source release: due time and status.
+         */
+        get: operations["admin_generator_source_releases_api_v1_admin_generator_competition_dueling_source_releases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/probe": {
         parameters: {
             query?: never;
@@ -7551,6 +7571,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/dueling/generator-sources/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Generator Source */
+        get: operations["public_generator_source_api_v1_public_dueling_generator_sources__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/dueling/generator-sources/{submission_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Generator Source Archive
+         * @description The exact pinned archive (``source_sha256``) once it is released.
+         *
+         *     403 while the live source release policy withholds source, 425 before
+         *     ``release_at``. The policy is re-read here, never trusted from the
+         *     release row.
+         */
+        get: operations["public_generator_source_archive_api_v1_public_dueling_generator_sources__submission_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/dueling/seasons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Dueling Seasons
+         * @description Revealed seasons, newest first; ``before_index`` pages backwards.
+         */
+        get: operations["public_dueling_seasons_api_v1_public_dueling_seasons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/dueling/seasons/{season_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Dueling Season */
+        get: operations["public_dueling_season_api_v1_public_dueling_seasons__season_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/dueling/seasons/{season_id}/slices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Dueling Slices
+         * @description Every slice of a revealed season that has a digest, by run seed.
+         */
+        get: operations["public_dueling_slices_api_v1_public_dueling_seasons__season_id__slices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/efficiency/snapshots/{snapshot_id}": {
         parameters: {
             query?: never;
@@ -12792,6 +12910,15 @@ export interface components {
             effective: components["schemas"]["EffectiveGeneratorSettings"];
             /** History */
             history: components["schemas"]["GeneratorSettingsRevision"][];
+        };
+        /** AdminGeneratorSourceReleasesResponse */
+        AdminGeneratorSourceReleasesResponse: {
+            /** Counts */
+            counts?: {
+                [key: string]: number;
+            };
+            /** Items */
+            items: components["schemas"]["GeneratorSourceReleaseView"][];
         };
         /**
          * AdminGeneratorSubmissionActionRequest
@@ -25750,6 +25877,60 @@ export interface components {
              */
             settings_valid: boolean;
         };
+        /** GeneratorSourceReleaseView */
+        GeneratorSourceReleaseView: {
+            /** Bench Version */
+            bench_version: number;
+            /** Disclosure */
+            disclosure: string;
+            /** Embargo Hours */
+            embargo_hours: number;
+            /** First Closed At */
+            first_closed_at: string | null;
+            /**
+             * First Season Id
+             * Format: uuid
+             */
+            first_season_id: string;
+            /** Last Revealed At */
+            last_revealed_at: string | null;
+            /**
+             * Last Season Id
+             * Format: uuid
+             */
+            last_season_id: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Release At */
+            release_at: string | null;
+            /** Released At */
+            released_at: string | null;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /** Seasons */
+            seasons: number;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "waiting_close" | "waiting_reveal" | "embargoed" | "withheld" | "released";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** GeneratorSubmissionListResponse */
         GeneratorSubmissionListResponse: {
             /** Submissions */
@@ -32368,6 +32549,121 @@ export interface components {
             statistical_lead?: number | null;
         };
         /**
+         * PublicDuelingPin
+         * @description One column pin, exactly as ``challenge-scorer reproduce-slice -pins``
+         *     reads it.
+         */
+        PublicDuelingPin: {
+            /** Column Id */
+            column_id: string;
+            /** Grading Bench Version */
+            grading_bench_version: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Public Default */
+            public_default: boolean;
+            /** Slice Seed */
+            slice_seed?: string | null;
+            /** Submission Id */
+            submission_id: string;
+            /** Substituted */
+            substituted: boolean;
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
+        /**
+         * PublicDuelingPins
+         * @description The ``reproduce-slice -pins`` file: save it as JSON and pass it.
+         */
+        PublicDuelingPins: {
+            /** Columns */
+            columns: components["schemas"]["PublicDuelingPin"][];
+            /** Season Id */
+            season_id: string;
+        };
+        /**
+         * PublicDuelingSeason
+         * @description A revealed season: everything a slice reproduction needs but the run
+         *     seed and the generator sources.
+         */
+        PublicDuelingSeason: {
+            /** Anchor Block */
+            anchor_block: number | null;
+            /** Anchor Block Hash */
+            anchor_block_hash: string | null;
+            /** Bench Version */
+            bench_version: number;
+            /** Closed At */
+            closed_at: string | null;
+            /** Commitment */
+            commitment: string;
+            /** Fallback */
+            fallback: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Opened At */
+            opened_at: string | null;
+            pins: components["schemas"]["PublicDuelingPins"];
+            /** Revealed At */
+            revealed_at: string | null;
+            /** Season Index */
+            season_index: number;
+            /** Season Seed */
+            season_seed: string;
+            /** Secret Hex */
+            secret_hex: string;
+            /** Shadow */
+            shadow: boolean;
+            /**
+             * Slices
+             * @default 0
+             */
+            slices: number;
+            /** Sources */
+            sources?: components["schemas"]["PublicGeneratorSource"][];
+        };
+        /** PublicDuelingSeasonList */
+        PublicDuelingSeasonList: {
+            /** Seasons */
+            seasons: components["schemas"]["PublicDuelingSeason"][];
+        };
+        /**
+         * PublicDuelingSlice
+         * @description One revealed slice: ``-run-seed``, ``-expect-sha256`` and ``-pins``.
+         */
+        PublicDuelingSlice: {
+            pins: components["schemas"]["PublicDuelingPins"];
+            /** Ready At */
+            ready_at: string | null;
+            /** Run Seed */
+            run_seed: number;
+            /** Slice Sha256 */
+            slice_sha256: string;
+        };
+        /** PublicDuelingSlicePage */
+        PublicDuelingSlicePage: {
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Slices */
+            slices: components["schemas"]["PublicDuelingSlice"][];
+            /** Total */
+            total: number;
+        };
+        /**
          * PublicEfficiencyCohortMember
          * @description One frozen cohort entry, public-safe (no raw lineage digests).
          */
@@ -32794,6 +33090,37 @@ export interface components {
              * @default 0
              */
             window_days: number;
+        };
+        /**
+         * PublicGeneratorSource
+         * @description Where one pinned generator's exact source stands.
+         */
+        PublicGeneratorSource: {
+            /** Archive Path */
+            archive_path: string;
+            /** Available */
+            available: boolean;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Public Default */
+            public_default: boolean;
+            /** Release At */
+            release_at?: string | null;
+            /** Released At */
+            released_at?: string | null;
+            /** Scorer Version */
+            scorer_version?: string | null;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256: string;
         };
         /**
          * PublicGeneratorSubmissionDetail
@@ -50055,6 +50382,42 @@ export interface operations {
             };
         };
     };
+    admin_generator_source_releases_api_v1_admin_generator_competition_dueling_source_releases_get: {
+        parameters: {
+            query?: {
+                status?: ("waiting_close" | "waiting_reveal" | "embargoed" | "withheld" | "released") | null;
+                submission_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSourceReleasesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_probe_api_v1_admin_generator_competition_probe_get: {
         parameters: {
             query?: never;
@@ -60619,6 +60982,166 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_generator_source_api_v1_public_dueling_generator_sources__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicGeneratorSource"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_generator_source_archive_api_v1_public_dueling_generator_sources__submission_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_dueling_seasons_api_v1_public_dueling_seasons_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                before_index?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDuelingSeasonList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_dueling_season_api_v1_public_dueling_seasons__season_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                season_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDuelingSeason"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_dueling_slices_api_v1_public_dueling_seasons__season_id__slices_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                run_seed?: number | null;
+            };
+            header?: never;
+            path: {
+                season_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicDuelingSlicePage"];
                 };
             };
             /** @description Validation Error */

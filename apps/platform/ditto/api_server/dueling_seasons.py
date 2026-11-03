@@ -35,7 +35,11 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
    as its bench version is neither active nor rolling out. Disabling dueling
    commits no new season but lets the open one finish.
 5. **Reveal.** ``privacy_window_rounds`` subnet epochs after it closes, the
-   secret and season seed become readable.
+   secret and season seed become readable, publicly
+   (``/public/dueling/seasons``), with the pins ``reproduce-slice`` needs.
+6. **Release.** Each pinned generator's exact source is published at
+   ``max(last pinning season's reveal, first pinning season's close +
+   embargo_hours)`` (:mod:`ditto.api_server.generator_source_releases`).
 
 Seasons only open while ``dueling_enabled``, a contract ``>= 16`` is active
 (an authoritative season) or is the desired version of an open rollout (a
@@ -73,6 +77,9 @@ from ditto.api_models.dueling import (
 )
 from ditto.api_models.generator_round_validator import accepted_grading_versions
 from ditto.api_models.source_disclosure import SourceDisclosure
+from ditto.api_server.generator_source_releases import (
+    sync_generator_source_releases,
+)
 from ditto.db.models import (
     DuelingSeason,
     DuelingSeasonBattery,
@@ -844,6 +851,12 @@ async def advance_seasons(
                     f"season {committed.season_index}: {queued} battery candidate(s)"
                 )
     await session.flush()
+    # 5. Publish pinned generator sources whose embargo and reveal have passed.
+    try:
+        async with session.begin_nested():
+            notes.extend(await sync_generator_source_releases(session, now=now))
+    except Exception:  # noqa: BLE001 - a release sync never blocks seasons
+        logger.exception("dueling seasons: generator source release sync failed")
     for note in notes:
         logger.info("dueling seasons: %s", note)
     return notes

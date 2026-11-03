@@ -4590,6 +4590,35 @@ CREATE TABLE public.generator_scorer_heartbeats (
 
 
 --
+-- Name: generator_source_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_source_releases (
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    owner_key text NOT NULL,
+    tree_sha256 text NOT NULL,
+    source_sha256 text NOT NULL,
+    bench_version integer NOT NULL,
+    first_season_id uuid NOT NULL,
+    last_season_id uuid NOT NULL,
+    seasons integer NOT NULL,
+    first_closed_at timestamp with time zone,
+    last_revealed_at timestamp with time zone,
+    embargo_hours integer NOT NULL,
+    disclosure text NOT NULL,
+    release_at timestamp with time zone,
+    released_at timestamp with time zone,
+    scorer_version text,
+    updated_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_source_releases_generator_source_releases__2ae6 CHECK ((bench_version >= 16)),
+    CONSTRAINT ck_generator_source_releases_generator_source_releases__507b CHECK (((seasons >= 1) AND (embargo_hours >= 0))),
+    CONSTRAINT ck_generator_source_releases_generator_source_releases__5544 CHECK (((released_at IS NULL) OR (release_at IS NOT NULL)))
+);
+
+
+--
 -- Name: generator_submission_payments; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -10088,6 +10117,14 @@ ALTER TABLE ONLY public.generator_scorer_heartbeats
 
 
 --
+-- Name: generator_source_releases pk_generator_source_releases; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_source_releases
+    ADD CONSTRAINT pk_generator_source_releases PRIMARY KEY (submission_id);
+
+
+--
 -- Name: generator_submissions pk_generator_submissions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12363,6 +12400,13 @@ CREATE INDEX generator_runs_scored_idx ON public.generator_runs USING btree (fin
 --
 
 CREATE INDEX generator_runs_submission_idx ON public.generator_runs USING btree (submission_id, leased_at DESC);
+
+
+--
+-- Name: generator_source_releases_release_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_source_releases_release_idx ON public.generator_source_releases USING btree (released_at, release_at);
 
 
 --
@@ -15335,6 +15379,14 @@ ALTER TABLE ONLY public.generator_runs
 
 ALTER TABLE ONLY public.generator_runs
     ADD CONSTRAINT fk_generator_runs_submission_id_generator_submissions FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_source_releases fk_generator_source_releases_submission_id_generator_su_797e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_source_releases
+    ADD CONSTRAINT fk_generator_source_releases_submission_id_generator_su_797e FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE CASCADE;
 
 
 --

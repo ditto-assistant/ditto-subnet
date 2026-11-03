@@ -2,8 +2,10 @@ import {
   duelingSeasonSchema,
   duelingSeasonsSchema,
   duelingSlicesSchema,
+  generatorSourceReleasesSchema,
   getDuelingSeasonInputSchema,
   listDuelingSlicesInputSchema,
+  listGeneratorSourceReleasesInputSchema,
   retryDuelingSliceInputSchema,
   rotateDuelingSeasonInputSchema,
 } from '../lib/dueling.schemas'
@@ -33,6 +35,21 @@ export async function listDuelingSlices(rawInput: unknown) {
   if (input.preparationId) params.set('preparation_id', input.preparationId)
   if (input.status) params.set('status', input.status)
   return duelingSlicesSchema.parse(await platformAdminRequest(`${BASE}/slices?${params}`))
+}
+
+// Every pinned generator's source release: due time, status and the policy
+// snapshot it was computed under.
+export async function listGeneratorSourceReleases(rawInput: unknown) {
+  const input = listGeneratorSourceReleasesInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  if (input.status) params.set('status', input.status)
+  if (input.submissionId) params.set('submission_id', input.submissionId)
+  return generatorSourceReleasesSchema.parse(
+    await platformAdminRequest(`${BASE}/source-releases?${params}`),
+  )
 }
 
 export async function rotateDuelingSeason(rawInput: unknown, actor: string) {

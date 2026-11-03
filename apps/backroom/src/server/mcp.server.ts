@@ -56,6 +56,7 @@ import {
 import {
   fetchDuelingSeason,
   listDuelingSlices,
+  listGeneratorSourceReleases,
   retryDuelingSlicePreparation,
   rotateDuelingSeason,
 } from './dueling.service'
@@ -89,6 +90,7 @@ import {
 import {
   getDuelingSeasonInputSchema,
   listDuelingSlicesInputSchema,
+  listGeneratorSourceReleasesInputSchema,
   retryDuelingSliceInputSchema,
   rotateDuelingSeasonInputSchema,
 } from '../lib/dueling.schemas'
@@ -846,6 +848,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_generator_scorer: 'Read generator scorers\' version, case bounds, grading versions and last poll.',
   get_dueling_season: 'Read dueling seasons: target, current, next, by id; columns, batteries, column means, rotation re-tests.',
   list_dueling_slices: 'List dueling slice preparations: status, attempts, latency, digests.',
+  list_generator_source_releases: 'List pinned dueling generators\' source releases: due time, status.',
   rotate_dueling_season: 'Rotate the open dueling season with ROTATE DUELING SEASON; audited. Write.',
   retry_dueling_slice_preparation: 'Re-queue one failed dueling slice; RETRY DUELING SLICE {id}. Write.',
   tick_generator_rounds: 'Run one idempotent round-driver tick now.',
@@ -1898,6 +1901,12 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Dueling slice preparations, newest first: one per (season, run_seed), reserved when a bench v16+ lease finds no ready slice (the lease answers 503 with Retry-After meanwhile) and built by the trusted generator scorer. Each row has status (pending, leased, ready, failed), attempts, error, scorer version, slice_sha256 and size (never the bytes; bytes_pruned once retention dropped them), per-column results (substituted when a pinned generator failed on that seed and the public default filled it), and latency from reservation to ready or failed; latency_p50/p95 summarize the page and counts covers the whole filter. For a failed preparation it also shows retries, the last retry actor, time and reason, retryable and retry_refusal (see retry_dueling_slice_preparation). Filter by seasonId, status, or one preparationId. Requires backroom:read.',
     inputSchema: listDuelingSlicesInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await listDuelingSlices(input)))
+
+  registerTool('list_generator_source_releases', {
+    title: 'List generator source releases',
+    description: 'Pinned dueling generators\' source releases (bench v16+), one per submission: tree/source SHA-256, first and last pinning season, release_at = max(last pinning season reveal, first pinning season close + embargo_hours), released_at, embargo, disclosure, scorer revision. status: waiting_close, waiting_reveal, embargoed, withheld (due but policy does not publish), released (public archive). counts covers every row. Requires backroom:read.',
+    inputSchema: listGeneratorSourceReleasesInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listGeneratorSourceReleases(input)))
 
   registerTool('retry_dueling_slice_preparation', {
     title: 'Retry dueling slice preparation',

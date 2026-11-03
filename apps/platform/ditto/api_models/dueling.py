@@ -353,3 +353,128 @@ class AdminDuelingSliceRetryRequest(BaseModel):
     """Retry a failure the scorer refused as an unsupported request (a digest
     mismatch on the pinned source), which normally needs a rotation. The
     reason is recorded with the force."""
+
+
+# --- public reveal and generator source release -----------------------------
+
+GeneratorSourceReleaseStatus = Literal[
+    "waiting_close", "waiting_reveal", "embargoed", "withheld", "released"
+]
+
+
+class PublicDuelingPin(DuelingModel):
+    """One column pin, exactly as ``challenge-scorer reproduce-slice -pins``
+    reads it."""
+
+    column_id: str
+    submission_id: str
+    owner_key: str
+    miner_hotkey: str
+    tree_sha256: str
+    grading_bench_version: int
+    public_default: bool
+    substituted: bool
+    slice_seed: str | None = None
+    """Set on a slice's pins: ``slice_seed(season_seed, run_seed, column)``."""
+
+
+class PublicDuelingPins(DuelingModel):
+    """The ``reproduce-slice -pins`` file: save it as JSON and pass it."""
+
+    season_id: str
+    columns: list[PublicDuelingPin]
+
+
+class PublicGeneratorSource(DuelingModel):
+    """Where one pinned generator's exact source stands."""
+
+    submission_id: UUID
+    miner_hotkey: str
+    owner_key: str
+    tree_sha256: str
+    source_sha256: str
+    public_default: bool
+    release_at: datetime | None = None
+    """``max(last pinning season's reveal, first pinning season's close +
+    embargo_hours)``; null while a pinning season is still open or unrevealed."""
+    released_at: datetime | None = None
+    available: bool
+    """Whether ``archive_path`` serves the archive now."""
+    archive_path: str
+    scorer_version: str | None = None
+    """The challenge-scorer revision that built it for its first season."""
+
+
+class PublicDuelingSeason(DuelingModel):
+    """A revealed season: everything a slice reproduction needs but the run
+    seed and the generator sources."""
+
+    id: UUID
+    bench_version: int
+    season_index: int
+    shadow: bool
+    commitment: str
+    secret_hex: str
+    anchor_block: int | None
+    anchor_block_hash: str | None
+    season_seed: str
+    opened_at: datetime | None
+    closed_at: datetime | None
+    revealed_at: datetime | None
+    pins: PublicDuelingPins
+    """The frozen columns; a slice's own pins add substitution and seeds."""
+    fallback: dict | None
+    """The public default generator that fills a column its pinned generator
+    failed on: ``submission_id``, ``miner_hotkey``, ``tree_sha256``,
+    ``grading_bench_version``."""
+    sources: list[PublicGeneratorSource] = Field(default_factory=list)
+    slices: int = 0
+    """Slices with a published digest (``.../slices`` lists them)."""
+
+
+class PublicDuelingSeasonList(DuelingModel):
+    seasons: list[PublicDuelingSeason]
+
+
+class PublicDuelingSlice(DuelingModel):
+    """One revealed slice: ``-run-seed``, ``-expect-sha256`` and ``-pins``."""
+
+    run_seed: int
+    slice_sha256: str
+    ready_at: datetime | None
+    pins: PublicDuelingPins
+
+
+class PublicDuelingSlicePage(DuelingModel):
+    season_id: UUID
+    total: int
+    offset: int
+    limit: int
+    slices: list[PublicDuelingSlice]
+
+
+class GeneratorSourceReleaseView(DuelingModel):
+    submission_id: UUID
+    miner_hotkey: str
+    owner_key: str
+    tree_sha256: str
+    source_sha256: str
+    bench_version: int
+    first_season_id: UUID
+    last_season_id: UUID
+    seasons: int
+    first_closed_at: datetime | None
+    last_revealed_at: datetime | None
+    embargo_hours: int
+    disclosure: str
+    release_at: datetime | None
+    released_at: datetime | None
+    scorer_version: str | None
+    status: GeneratorSourceReleaseStatus
+    updated_at: datetime
+
+
+class AdminGeneratorSourceReleasesResponse(DuelingModel):
+    items: list[GeneratorSourceReleaseView]
+    counts: dict[str, int] = Field(default_factory=dict)
+    """Rows by status across the whole table."""
