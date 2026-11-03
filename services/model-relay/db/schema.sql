@@ -5352,7 +5352,7 @@ CREATE TABLE public.owner_submission_cooldown_revisions (
     CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_c083 CHECK ((scope = ANY (ARRAY['coldkey'::text, 'hotkey'::text]))),
     CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_c5ce CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_d375 CHECK ((revision >= 1)),
-    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_f6d9 CHECK (((length(TRIM(BOTH FROM reason)) >= 8) AND (length(TRIM(BOTH FROM reason)) <= 500)))
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_f6d9 CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
 );
 
 

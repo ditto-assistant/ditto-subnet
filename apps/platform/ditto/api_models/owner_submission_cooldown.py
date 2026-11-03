@@ -92,7 +92,7 @@ class AdminSetOwnerCooldownRequest(BaseModel):
     expires_in_days: OwnerCooldownDays
     expected_revision: Annotated[int, Field(ge=0)]
     """The identity's current revision (0 when it has none): compare-and-set."""
-    reason: Annotated[str, Field(min_length=8, max_length=500)]
+    reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
 
@@ -103,6 +103,6 @@ class AdminRevokeOwnerCooldownRequest(BaseModel):
     scope: OwnerScope
     owner_key: OwnerKey
     expected_revision: Annotated[int, Field(ge=1)]
-    reason: Annotated[str, Field(min_length=8, max_length=500)]
+    reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str

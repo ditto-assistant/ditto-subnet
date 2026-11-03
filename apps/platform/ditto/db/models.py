@@ -7079,7 +7079,7 @@ class OwnerSubmissionCooldownRevision(Base):
             name="owner_submission_cooldown_action_check",
         ),
         CheckConstraint(
-            "length(trim(reason)) BETWEEN 8 AND 500",
+            "length(trim(reason)) >= 8",
             name="owner_submission_cooldown_reason_check",
         ),
         CheckConstraint(
