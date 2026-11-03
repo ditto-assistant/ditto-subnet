@@ -12,7 +12,7 @@ on:
         description: Terraform state root
         required: true
         type: choice
-        options: [gcp-platform, gcp-preview, cloudflare-dittobench, gcp-collector-custody, gcp-gamma-custody, gcp-subnet-recovery]
+        options: [gcp-platform, gcp-preview, cloudflare-dittobench, gcp-collector-custody, gcp-gamma-custody, gcp-subnet-recovery, aws-generator-scorer]
       plan_sha:
         description: Exact main commit used by the plan (required for apply)
         required: false
@@ -131,9 +131,26 @@ jobs:
                 echo 'PLAN_BUCKET=sn118-gamma-custody-tfstate' >> "$GITHUB_ENV"
               fi
               ;;
+            aws-generator-scorer)
+              test -z "$TF_TARGETS"
+              test "$HOTKEY_ADMIN_PHASE" = absent
+              test -z "$HOTKEY_ADMIN_REVISION"
+              test "$SCREENER_DEV_HOST_ENABLED" = false
+              root=infra/terraform/stacks/aws-generator-scorer
+              ;;
             *) exit 2 ;;
           esac
           echo "path=$root" >> "$GITHUB_OUTPUT"
+
+      - name: Assume the AWS plan role
+        if: startsWith(inputs.root, 'aws-')
+        # GitHub OIDC -> the role owned by infra/terraform/stacks/aws-bootstrap.
+        # GCP auth above still seals the plan in the private GCS prefix.
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::339713011188:role/ditto-subnet-infra-plan
+          role-session-name: infra-plan-${{ github.run_id }}
+          aws-region: us-east-1
 
       - name: Initialize
         run: terraform -chdir=${{ steps.root.outputs.path }} init
@@ -192,7 +209,7 @@ jobs:
           echo "TF_VAR_validator_hotkey_admin_revision=$revision" >> "$GITHUB_ENV"
 
       - name: Create exact private plan
-        if: inputs.root != 'gcp-collector-custody' && inputs.root != 'gcp-gamma-custody' && inputs.root != 'gcp-subnet-recovery'
+        if: inputs.root != 'gcp-collector-custody' && inputs.root != 'gcp-gamma-custody' && inputs.root != 'gcp-subnet-recovery' && !startsWith(inputs.root, 'aws-')
         env:
           TF_VAR_db_password: ${{ secrets.PLATFORM_DB_PASSWORD }}
           TF_VAR_pylon_open_access_token: ${{ secrets.PLATFORM_PYLON_OPEN_ACCESS_TOKEN_JSON }}
@@ -243,6 +260,12 @@ jobs:
             extra+=(-var-file="$RUNNER_TEMP/manual-mailbox.json")
           fi
           terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan "${extra[@]}"
+
+      # Deliberately separate step: no Platform, Cloudflare, fleet or hotkey
+      # input reaches an AWS root.
+      - name: Create AWS plan without app credentials
+        if: startsWith(inputs.root, 'aws-')
+        run: terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan
 
       - name: Create dedicated subnet recovery plan without app credentials
         if: inputs.root == 'gcp-subnet-recovery'
@@ -391,9 +414,26 @@ jobs:
                 echo 'PLAN_BUCKET=sn118-gamma-custody-tfstate' >> "$GITHUB_ENV"
               fi
               ;;
+            aws-generator-scorer)
+              test -z "$TF_TARGETS"
+              test "$HOTKEY_ADMIN_PHASE" = absent
+              test -z "$HOTKEY_ADMIN_REVISION"
+              test "$SCREENER_DEV_HOST_ENABLED" = false
+              root=infra/terraform/stacks/aws-generator-scorer
+              ;;
             *) exit 2 ;;
           esac
           echo "path=$root" >> "$GITHUB_OUTPUT"
+
+      - name: Assume the AWS apply role
+        if: startsWith(inputs.root, 'aws-')
+        # GitHub OIDC -> the role owned by infra/terraform/stacks/aws-bootstrap.
+        # GCP auth above still fetches the sealed plan from GCS.
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::339713011188:role/ditto-subnet-infra-apply
+          role-session-name: infra-apply-${{ github.run_id }}
+          aws-region: us-east-1
 
       - name: Initialize
         run: terraform -chdir=${{ steps.root.outputs.path }} init
@@ -426,9 +466,13 @@ jobs:
           python3 infra/scripts/check-postgres-snapshot-plan.py --when-changed "$plan_json"
 
       - name: Apply the reviewed binary plan
-        if: inputs.root != 'gcp-collector-custody' && inputs.root != 'gcp-gamma-custody' && inputs.root != 'gcp-subnet-recovery'
+        if: inputs.root != 'gcp-collector-custody' && inputs.root != 'gcp-gamma-custody' && inputs.root != 'gcp-subnet-recovery' && !startsWith(inputs.root, 'aws-')
         env:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: terraform -chdir=${{ steps.root.outputs.path }} apply tfplan
+
+      - name: Apply the reviewed AWS binary plan without app credentials
+        if: startsWith(inputs.root, 'aws-')
         run: terraform -chdir=${{ steps.root.outputs.path }} apply tfplan
 
       - name: Verify isolated custody apply scope
