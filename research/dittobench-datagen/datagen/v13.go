@@ -427,8 +427,14 @@ func v13ConversionOrder(seed int64, cases []protocol.ToolCase) []int {
 // recognised in the world it actually seeds.
 func v13ConversionOrderForVersion(seed int64, benchVersion int, cases []protocol.ToolCase) []int {
 	scale := ToolWorldScale(len(cases), benchVersion)
+	// Through v15 the carrier set is read from the v13 world, byte for byte as
+	// those contracts shipped. From v16 it is read from the run's own world.
+	pairVersion := protocol.BenchVersionV13
+	if benchVersion >= protocol.BenchVersionV16 {
+		pairVersion = benchVersion
+	}
 	worldPairs := map[string]bool{}
-	for _, pair := range universe.GenerateForVersion(seed, scale, protocol.BenchVersionV13).Pairs {
+	for _, pair := range universe.GenerateForVersion(seed, scale, pairVersion).Pairs {
 		worldPairs[pair.PairID] = true
 	}
 	counts := map[string]int{}

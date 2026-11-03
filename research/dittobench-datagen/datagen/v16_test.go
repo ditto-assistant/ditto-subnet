@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 // The published v16 connector quota installs in full on every swept full and
@@ -95,5 +96,41 @@ func TestV16ToolCasesAreDeterministic(t *testing.T) {
 	b, _ := GenerateForVersion(42, 50, protocol.BenchVersionV16)
 	if !reflect.DeepEqual(a, b) {
 		t.Fatal("v16 tool generation is not deterministic")
+	}
+}
+
+// From v16 the conversion order recognises world carriers in the run's own
+// world: no case carrying a pair of the v16 world is ever offered for
+// conversion.
+func TestV16ConversionOrderProtectsCarriersOfTheRunWorld(t *testing.T) {
+	for _, seed := range []int64{1, 7, 42} {
+		ds, err := GenerateForVersion(seed, 50, protocol.BenchVersionV16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		world := universe.GenerateForVersion(seed, ToolWorldScale(50, protocol.BenchVersionV16), protocol.BenchVersionV16)
+		pairs := map[string]bool{}
+		for _, pair := range world.Pairs {
+			pairs[pair.PairID] = true
+		}
+		carriers := 0
+		for _, c := range ds.ToolCases {
+			for _, p := range c.PrerequisitePairs {
+				if pairs[p.PairID] {
+					carriers++
+					break
+				}
+			}
+		}
+		if carriers == 0 {
+			t.Fatalf("seed %d: no case carries the v16 world", seed)
+		}
+		for _, i := range v13ConversionOrderForVersion(seed, protocol.BenchVersionV16, ds.ToolCases) {
+			for _, p := range ds.ToolCases[i].PrerequisitePairs {
+				if pairs[p.PairID] {
+					t.Fatalf("seed %d: carrier case %s offered for conversion", seed, ds.ToolCases[i].ID)
+				}
+			}
+		}
 	}
 }
