@@ -19,6 +19,7 @@ The season secret and seed are served only once a season is revealed.
 
 from __future__ import annotations
 
+import math
 import statistics
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -566,7 +567,9 @@ async def admin_dueling_slices(
     p95 = None
     if latencies:
         ordered = sorted(latencies)
-        p95 = ordered[min(len(ordered) - 1, int(0.95 * (len(ordered) - 1) + 0.5))]
+        # Nearest rank: the smallest latency with at least 95% of the page at
+        # or below it, so the reported p95 is always an observed latency.
+        p95 = ordered[math.ceil(0.95 * len(ordered)) - 1]
     return AdminDuelingSlicesResponse(
         slices=views,
         counts=counts,
