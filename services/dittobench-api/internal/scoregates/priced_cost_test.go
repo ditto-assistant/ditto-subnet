@@ -178,10 +178,26 @@ func TestValidatePricedCostRoundTrip(t *testing.T) {
 		if err := ValidatePricedCost(v.BenchVersion, *v.Summary); err != nil {
 			t.Fatalf("%s: %v", v.Name, err)
 		}
-		tampered := *v.Summary
-		tampered.AppliedFactorBPS = BasisPointScale + 1
-		if err := ValidatePricedCost(v.BenchVersion, tampered); err == nil {
-			t.Fatalf("%s: tampered factor accepted", v.Name)
+		mutations := map[string]func(*protocol.PricedCostSummary){
+			"applied_factor": func(s *protocol.PricedCostSummary) { s.AppliedFactorBPS = BasisPointScale + 1 },
+			"contract_id":    func(s *protocol.PricedCostSummary) { s.ContractID = "priced-cost-v0" },
+			"window":         func(s *protocol.PricedCostSummary) { s.Window = "datagen_half" },
+			"prices":         func(s *protocol.PricedCostSummary) { s.Prices.PromptToken = 1 },
+			"reference":      func(s *protocol.PricedCostSummary) { s.ReferenceNanoUSD *= 2 },
+			"normalization":  func(s *protocol.PricedCostSummary) { s.NormalizationCases++ },
+			"floor":          func(s *protocol.PricedCostSummary) { s.FloorBPS = 0 },
+			"prompt_cost":    func(s *protocol.PricedCostSummary) { s.PromptCostNanoUSD++ },
+			"decision_cost":  func(s *protocol.PricedCostSummary) { s.DecisionCostNanoUSD++ },
+			"curve_point":    func(s *protocol.PricedCostSummary) { s.Curve[1].FactorBPS = 9_000 },
+			"curve_length":   func(s *protocol.PricedCostSummary) { s.Curve = s.Curve[:2] },
+		}
+		for name, mutate := range mutations {
+			tampered := *v.Summary
+			tampered.Curve = append([]protocol.PricedCostCurvePoint(nil), v.Summary.Curve...)
+			mutate(&tampered)
+			if err := ValidatePricedCost(v.BenchVersion, tampered); err == nil {
+				t.Fatalf("%s: tampered %s accepted", v.Name, name)
+			}
 		}
 	}
 }

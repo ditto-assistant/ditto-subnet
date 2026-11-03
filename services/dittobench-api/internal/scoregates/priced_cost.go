@@ -271,7 +271,16 @@ func ValidatePricedCost(benchVersion int, s protocol.PricedCostSummary) error {
 	if want == nil {
 		return invalid("priced cost reported below bench %d", protocol.PricedCostMinBenchVersion)
 	}
-	if s.Posture != want.Posture || s.FactorBPS != want.FactorBPS || s.AppliedFactorBPS != want.AppliedFactorBPS ||
+	curveMatches := len(s.Curve) == len(want.Curve)
+	for i := 0; curveMatches && i < len(s.Curve); i++ {
+		curveMatches = s.Curve[i] == want.Curve[i]
+	}
+	if !curveMatches || s.ContractID != want.ContractID || s.Result != want.Result || s.Posture != want.Posture ||
+		s.Window != want.Window || s.Prices != want.Prices || s.NormalizationCases != want.NormalizationCases ||
+		s.ReferenceNanoUSD != want.ReferenceNanoUSD || s.FloorBPS != want.FloorBPS ||
+		s.PromptCostNanoUSD != want.PromptCostNanoUSD || s.CompletionCostNanoUSD != want.CompletionCostNanoUSD ||
+		s.EmbeddingCostNanoUSD != want.EmbeddingCostNanoUSD || s.DecisionCostNanoUSD != want.DecisionCostNanoUSD ||
+		s.FactorBPS != want.FactorBPS || s.AppliedFactorBPS != want.AppliedFactorBPS ||
 		s.CostNanoUSD != want.CostNanoUSD || s.NormalizedCostNanoUSD != want.NormalizedCostNanoUSD ||
 		s.RatioBPS != want.RatioBPS || s.Applied != want.Applied {
 		return invalid("priced cost block does not match the published rule")

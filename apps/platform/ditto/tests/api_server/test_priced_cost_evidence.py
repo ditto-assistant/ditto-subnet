@@ -100,3 +100,11 @@ def test_pre_v16_reports_carry_no_priced_cost() -> None:
     stored = build_gate_evidence(_report_with(None), bench_version=15)
     assert stored is not None
     assert stored["priced_cost"] is None
+    # A block on a v13-v15 report is outside its contract and never projected.
+    block = _vector("v15_full_catalog")["summary"]
+    for version in (13, 14, 15):
+        stored = build_gate_evidence(_report_with(block), bench_version=version)
+        assert stored is not None
+        assert stored["priced_cost"] is None
+        public = public_gate_evidence(stored)
+        assert public is not None and public.priced_cost is None

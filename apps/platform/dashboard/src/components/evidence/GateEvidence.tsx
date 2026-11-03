@@ -158,7 +158,9 @@ export function gateSummaryRows(
     const parts: string[] = [];
     if (priced.result === "priced") {
       if (typeof priced.normalized_cost_usd === "number") {
-        parts.push(`$${priced.normalized_cost_usd.toFixed(3)} per 350 cases`);
+        parts.push(
+          `$${priced.normalized_cost_usd.toFixed(3)} per ${priced.normalization_cases || 350} cases`,
+        );
       }
       if (typeof priced.factor_bps === "number") {
         parts.push(`factor ${(priced.factor_bps / 10_000).toFixed(4)}`);

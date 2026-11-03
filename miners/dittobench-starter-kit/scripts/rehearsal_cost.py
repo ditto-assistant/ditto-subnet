@@ -285,7 +285,13 @@ def estimate(meter: CostMeter | None, report: dict[str, Any]) -> dict[str, Any] 
     if meter is None:
         return None
     cases = int(report.get("n") or 0)
-    totals = meter.totals
+    with meter._lock:
+        totals = MeterTotals(
+            completions=meter.totals.completions,
+            usage_missing=meter.totals.usage_missing,
+            prompt_tokens=meter.totals.prompt_tokens,
+            completion_tokens=meter.totals.completion_tokens,
+        )
     out: dict[str, Any] = {
         "source": "local_meter",
         "cases": cases,

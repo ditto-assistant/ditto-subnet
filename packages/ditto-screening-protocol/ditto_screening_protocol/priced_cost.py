@@ -246,6 +246,9 @@ class PricedCostReport(BaseModel):
             return False
         return (
             self.contract_id == want["contract_id"]
+            and self.window == want["window"]
+            and self.reference_nano_usd == want["reference_nano_usd"]
+            and self.floor_bps == want["floor_bps"]
             and self.factor_bps == want["factor_bps"]
             and self.applied_factor_bps == want["applied_factor_bps"]
             and self.applied == want["applied"]

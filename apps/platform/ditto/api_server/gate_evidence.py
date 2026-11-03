@@ -53,7 +53,10 @@ from ditto.api_models.gate_evidence import (
     TwinPostPassSummary,
 )
 from ditto.api_models.validator import CaseScore, ScoreReport
-from ditto_screening_protocol.priced_cost import PricedCostReport
+from ditto_screening_protocol.priced_cost import (
+    PricedCostReport,
+    is_priced_cost_bench_version,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,11 +188,17 @@ def _run_summaries(
         except ValidationError as exc:
             logger.warning("dropping malformed details.%s: %s", key, exc)
             out[key] = None
+    # ``priced_cost`` is a bench 16+ term: a block on an earlier report is not
+    # part of its contract and never reaches a projection.
     priced = out.get("priced_cost")
-    if isinstance(priced, PricedCostSummary):
+    if is_priced_cost_bench_version(bench_version) and isinstance(
+        priced, PricedCostSummary
+    ):
         out["priced_cost"] = _with_priced_cost_check(
             priced, details.get("priced_cost"), bench_version
         )
+    else:
+        out["priced_cost"] = None
     return out
 
 
