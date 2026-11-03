@@ -14,17 +14,50 @@ type PlatformResponseShape<Response extends object> = {
 // so an omitted field is not "leave it alone": it is a write of the read-compat
 // default over the live value. Reads keep their defaults so Backroom still
 // renders against an older Platform; whole-policy writes drop every one.
+type WithoutDefault<Schema> = Schema extends z.ZodDefault<infer Inner> ? WithoutDefault<Inner> : Schema
+
 type WithoutDefaults<Shape extends z.ZodRawShape> = {
-  [Field in keyof Shape]: Shape[Field] extends z.ZodDefault<infer Inner> ? Inner : Shape[Field]
+  [Field in keyof Shape]: WithoutDefault<Shape[Field]>
 }
 
-function withoutDefaults<Shape extends z.ZodRawShape>(shape: Shape): WithoutDefaults<Shape> {
+// Every stacked default comes off: one left behind would quietly answer an
+// omitted field again.
+function withoutDefault(schema: z.core.$ZodType): z.core.$ZodType {
+  let inner = schema
+  while (inner instanceof z.ZodDefault) inner = inner.removeDefault()
+  return inner
+}
+
+export function withoutDefaults<Shape extends z.ZodRawShape>(shape: Shape): WithoutDefaults<Shape> {
   return Object.fromEntries(
-    Object.entries(shape).map(([field, schema]) => [
-      field,
-      schema instanceof z.ZodDefault ? schema.unwrap() : schema,
-    ]),
+    Object.entries(shape).map(([field, schema]) => [field, withoutDefault(schema)]),
   ) as WithoutDefaults<Shape>
+}
+
+/** The live revision's settings: as Platform sent them, and as Backroom parsed them. */
+export type LiveSettings = { reported: unknown; parsed: Record<string, unknown> }
+
+/**
+ * A whole-policy write without the values Backroom's own read made up.
+ *
+ * A read fills each field the live revision did not report with a read-compat
+ * default, so writing that read back would store a value nobody chose over
+ * whatever Platform resolves for the field. Such a field stays off the wire
+ * while it still holds the filled-in value, and Platform keeps resolving it as
+ * before. A field the operator changed is sent.
+ */
+export function withoutUnreportedDefaults<Settings extends Record<string, unknown>>(
+  settings: Settings,
+  live: LiveSettings | undefined,
+): Partial<Settings> {
+  const reported = live?.reported
+  if (!live || typeof reported !== 'object' || reported === null) return { ...settings }
+  return Object.fromEntries(
+    Object.entries(settings).filter(
+      ([field, value]) =>
+        field in reported || JSON.stringify(value) !== JSON.stringify(live.parsed[field]),
+    ),
+  ) as Partial<Settings>
 }
 
 type GeneratedDecisionLaneUsageWindow =

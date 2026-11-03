@@ -520,6 +520,7 @@ import {
   hotkeyUnbanResponseSchema,
   unbanHotkeyInputSchema,
   screenerReviewControlSchema,
+  withoutUnreportedDefaults,
   screenerReviewRevisionSchema,
   screenerFanoutShadowInputSchema,
   screenerFanoutShadowResponseSchema,
@@ -864,6 +865,34 @@ export async function selectActiveBenchmark(actor: string, rawInput: unknown) {
     },
   )
   return fetchBenchmarkRolloutControl()
+}
+
+// The settings object of one revision exactly as Platform sent it, before any
+// read default fills a field in.
+function reportedSettings(payload: unknown, revision: (control: Record<string, unknown>) => unknown) {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const selected = revision(payload as Record<string, unknown>)
+  if (typeof selected !== 'object' || selected === null) return undefined
+  return (selected as { settings?: unknown }).settings
+}
+
+// The current revision for `scope`, parsed, plus what Platform reported for it.
+async function liveScreenerReviewRevision(scope: string) {
+  const payload = await platformAdminRequest('/api/v1/admin/screener-review-settings')
+  const current = screenerReviewControlSchema
+    .parse(payload)
+    .current.find((revision) => revision.scope === scope)
+  const reported = reportedSettings(payload, (control) =>
+    Array.isArray(control.current)
+      ? control.current.find(
+          (revision: unknown) =>
+            typeof revision === 'object' &&
+            revision !== null &&
+            (revision as { scope?: unknown }).scope === scope,
+        )
+      : undefined,
+  )
+  return { current, live: current && { reported, parsed: current.settings } }
 }
 
 export async function fetchScreenerReviewControl() {
@@ -1247,13 +1276,20 @@ export async function retryTrustedImageBuild(rawInput: unknown, actor: string) {
 
 export async function updateScreenerProviderSettings(actor: string, rawInput: unknown) {
   const input = setScreenerProviderSettingsInputSchema.parse(rawInput)
+  // Read first so a round-tripped read cannot store Backroom's read defaults;
+  // `expected_revision` still guards the write.
+  const live = await platformAdminRequest('/api/v1/admin/screener-provider-settings')
+  const liveSettings = {
+    reported: reportedSettings(live, (control) => control.current),
+    parsed: screenerProviderSettingsControlSchema.parse(live).current.settings,
+  }
   await platformAdminRequest('/api/v1/admin/screener-provider-settings', {
     method: 'POST',
     actor,
     body: {
       environment: 'prod',
       expected_revision: input.expectedRevision,
-      settings: input.settings,
+      settings: withoutUnreportedDefaults(input.settings, liveSettings),
       reason: input.reason,
       actor,
       confirmation: input.confirmation,
@@ -1538,13 +1574,16 @@ export async function unbanHotkey(rawInput: unknown, actor: string) {
 
 export async function applyScreenerReviewSettings(actor: string, rawInput: unknown) {
   const input = applyScreenerReviewSettingsInputSchema.parse(rawInput)
+  // Read first so a round-tripped read cannot store Backroom's read defaults;
+  // `expected_revision` still guards the write.
+  const { live } = await liveScreenerReviewRevision(input.scope)
   const payload = await platformAdminRequest('/api/v1/admin/screener-review-settings', {
     method: 'POST',
     actor,
     body: {
       scope: input.scope,
       expected_revision: input.expectedRevision,
-      settings: input.settings,
+      settings: withoutUnreportedDefaults(input.settings, live),
       reason: input.reason,
       actor,
       confirmation: input.confirmation,
@@ -1555,8 +1594,7 @@ export async function applyScreenerReviewSettings(actor: string, rawInput: unkno
 
 export async function rotateScreenerPolicyManifest(actor: string, rawInput: unknown) {
   const input = rotateScreenerPolicyManifestInputSchema.parse(rawInput)
-  const control = await fetchScreenerReviewControl()
-  const current = control.current.find((revision) => revision.scope === input.scope)
+  const { current, live } = await liveScreenerReviewRevision(input.scope)
   if (!current) {
     throw new Error(`No screener review settings revision exists for scope ${input.scope}; create one before rotating its policy manifest.`)
   }
@@ -1566,8 +1604,9 @@ export async function rotateScreenerPolicyManifest(actor: string, rawInput: unkn
     body: {
       scope: input.scope,
       expected_revision: input.expectedRevision,
+      // The rotation names both manifest fields; the rest stays as Platform has it.
       settings: {
-        ...current.settings,
+        ...withoutUnreportedDefaults(current.settings, live),
         policy_manifest_profile: input.profile,
         policy_manifest_rotation_id: input.rotationId,
       },

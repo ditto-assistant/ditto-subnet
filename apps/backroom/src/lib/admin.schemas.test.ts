@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, expectTypeOf, it } from 'vitest'
+import { z } from 'zod'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
@@ -53,6 +54,9 @@ import {
   validatorAssignmentListSchema,
   screenerReviewControlSchema,
   screenerReviewSettingsSchema,
+  screenerReviewSettingsWriteSchema,
+  screenerProviderSettingsWriteSchema,
+  withoutDefaults,
   l2ReportCanaryViewSchema,
   screenReviewAuditSchema,
   screeningFailureDiagnosticSchema,
@@ -2588,6 +2592,24 @@ describe('screener settings write contracts', () => {
     expect(reviewerAlone.success).toBe(false)
     expect(reviewerAlone.error?.issues.map((issue) => issue.path.join('.'))).toContain('settings.probe_review_mode')
     expect(write({ ...complete, probe_review_mode: 'shadow', probe_battery_mode: 'shadow' }).success).toBe(true)
+  })
+
+  it('strips stacked defaults, so an omitted write field never falls back to one', () => {
+    const write = z.object(withoutDefaults({ budget: z.number().default(1).default(2) }))
+    expect(write.safeParse({}).success).toBe(false)
+    expect(write.parse({ budget: 5 })).toEqual({ budget: 5 })
+  })
+
+  it('leaves no default anywhere in a whole-policy write schema', () => {
+    for (const [name, schema] of Object.entries({
+      screenerReviewSettingsWriteSchema,
+      screenerProviderSettingsWriteSchema,
+      continualRetestSettingsWriteSchema,
+    })) {
+      expect(JSON.stringify(z.toJSONSchema(schema, { io: 'input' })), name).not.toContain(
+        '"default"',
+      )
+    }
   })
 
   it('refuses a provider write missing any field', () => {

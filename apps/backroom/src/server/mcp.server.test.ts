@@ -3889,8 +3889,10 @@ describe('Backroom MCP tools', () => {
       },
       history: [],
     }
+    // Read the live revision, write, then refresh.
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(Response.json(control))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(Response.json(control))
     vi.stubGlobal('fetch', fetchMock)
@@ -3910,7 +3912,7 @@ describe('Backroom MCP tools', () => {
       current: { revision: 1, settings, actor: 'peyton@omniaura.ai' },
     })
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
     expect(url).toBe(
       'https://platform-api.heyditto.ai/api/v1/admin/screener-provider-settings',
     )
