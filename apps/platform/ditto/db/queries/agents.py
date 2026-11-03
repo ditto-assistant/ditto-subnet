@@ -31,6 +31,11 @@ from ditto.db.queries.benchmark_admission import (
     benchmark_admission_predicate,
     validator_queue_admission_predicate,
 )
+from ditto.db.queries.owner_submission_cooldown import (
+    OwnerCooldownNotice,
+    lock_owner_cooldown_hotkey,
+    owner_override_retry_at,
+)
 from ditto.db.queries.screening_retry import failed_screening_retry_authorized
 from ditto.screener_policy_state import effective_screening_policy_version
 
@@ -41,11 +46,35 @@ if TYPE_CHECKING:
 
 
 class SubmissionCooldownError(Exception):
-    """A miner coldkey submitted again before its cooldown expired."""
+    """A miner owner submitted again before its cooldown expired.
 
-    def __init__(self, retry_at: datetime) -> None:
+    ``owner_override`` is set when an operator per-owner override, not the
+    global coldkey cooldown, decides ``retry_at``; the miner-facing message
+    says so (without the operator's internal reason).
+    """
+
+    def __init__(
+        self,
+        retry_at: datetime,
+        *,
+        owner_override: OwnerCooldownNotice | None = None,
+    ) -> None:
         self.retry_at = retry_at
+        self.owner_override = owner_override
         super().__init__(f"submission cooldown active until {retry_at.isoformat()}")
+
+
+@dataclass(frozen=True)
+class SubmissionCooldownDecision:
+    """The binding cooldown for one upload: global, or an owner override."""
+
+    retry_at: datetime
+    owner_override: OwnerCooldownNotice | None = None
+
+    def error(self) -> SubmissionCooldownError:
+        return SubmissionCooldownError(
+            self.retry_at, owner_override=self.owner_override
+        )
 
 
 # Avoid importing ``queries.scores`` back into the agents module it already
@@ -80,11 +109,44 @@ async def get_submission_retry_at(
     return retry_at if retry_at > current else None
 
 
+async def submission_cooldown_decision(
+    session: AsyncSession,
+    *,
+    miner_coldkey: str,
+    miner_hotkey: str | None,
+    cooldown: timedelta,
+    now: datetime | None = None,
+) -> SubmissionCooldownDecision | None:
+    """The later of the global coldkey cooldown and any owner override.
+
+    ``None`` when the owner may submit now. An operator override (see
+    :mod:`ditto.db.queries.owner_submission_cooldown`) can only lengthen the
+    wait, never shorten the global one.
+    """
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    global_retry = await get_submission_retry_at(
+        session, miner_coldkey=miner_coldkey, cooldown=cooldown, now=current
+    )
+    override = await owner_override_retry_at(
+        session, miner_coldkey=miner_coldkey, miner_hotkey=miner_hotkey, now=current
+    )
+    if override is not None and (global_retry is None or override[0] > global_retry):
+        return SubmissionCooldownDecision(
+            retry_at=override[0], owner_override=override[1]
+        )
+    if global_retry is not None:
+        return SubmissionCooldownDecision(retry_at=global_retry)
+    return None
+
+
 async def enforce_submission_cooldown(
     session: AsyncSession,
     *,
     miner_coldkey: str,
     cooldown: timedelta,
+    miner_hotkey: str | None = None,
 ) -> None:
     """Atomically reserve a coldkey's next submission slot on PostgreSQL.
 
@@ -97,13 +159,16 @@ async def enforce_submission_cooldown(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:coldkey, 0))"),
             {"coldkey": miner_coldkey},
         )
-    retry_at = await get_submission_retry_at(
+    if miner_hotkey is not None:
+        await lock_owner_cooldown_hotkey(session, miner_hotkey)
+    decision = await submission_cooldown_decision(
         session,
         miner_coldkey=miner_coldkey,
+        miner_hotkey=miner_hotkey,
         cooldown=cooldown,
     )
-    if retry_at is not None:
-        raise SubmissionCooldownError(retry_at)
+    if decision is not None:
+        raise decision.error()
 
 
 async def insert_agent(

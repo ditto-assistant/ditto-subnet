@@ -258,6 +258,11 @@ import {
   strandedPreviousEraInputSchema,
 } from '../lib/benchmark-era-stranded.schemas'
 import {
+  ownerCooldownsInputSchema,
+  revokeOwnerCooldownInputSchema,
+  setOwnerCooldownInputSchema,
+} from '../lib/owner-submission-cooldown.schemas'
+import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
   fetchLineageSourceDiff,
@@ -316,6 +321,9 @@ import {
   fetchStrandedPreviousEra,
   fetchStrandedAdmissions,
   admitStrandedSubmission,
+  fetchOwnerCooldowns,
+  setOwnerCooldown,
+  revokeOwnerCooldown,
   fetchBenchmarkContractMigration,
   migrateBenchmarkContract,
   refreshBenchmarkContract,
@@ -984,6 +992,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read coldkey cooldown, default fee, per-competition fee overrides and each lane\'s effective fee; optional history, default 0.',
   set_submission_cooldown:
     'Set cooldown, default fee and optional per-competition fees with CAS and exact phrase; see help.',
+  get_owner_submission_cooldowns: 'Per-owner cooldown overrides; one key adds history.',
+  set_owner_submission_cooldown: 'Set one owner cooldown override; CAS, exact phrase.',
+  revoke_owner_submission_cooldown: 'Revoke one owner cooldown override; CAS, phrase.',
   get_competition_submission_terms:
     'Read every competition\'s submission terms: artifact contract and limits (with source), cooldown, and own fee.',
   list_hotkey_bans: 'Hotkey bans.',
@@ -2558,6 +2569,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_owner_submission_cooldowns',
+    {
+      title: 'Get per-owner submission cooldown overrides',
+      description:
+        'Read operator per-owner submission cooldown overrides: each overridden identity (scope coldkey = payment coldkey, hotkey = uploading hotkey) with its current revision, cooldown_seconds (minimum interval between that owner\'s submissions), expires_at, reason, actor and state (active, expired, revoked). Active only unless includeInactive. With scope and ownerKey, lookup adds that identity\'s full revision history, the global cooldown, its newest submission (under this identity or any identity a payment record links to it) and next_allowed_at under the override; current=null means never overridden, so the first set uses expectedRevision 0. Enforcement takes the longer of the global coldkey cooldown and every active override naming the uploading hotkey or payment coldkey, measured from the owner\'s newest submission under either identity and never past the override\'s expiry; the miner sees the interval and expiry, never the reason. Requires backroom:read and changes nothing.',
+      inputSchema: ownerCooldownsInputSchema.shape,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchOwnerCooldowns(input)),
+  )
+
+  registerTool(
     'get_competition_submission_terms',
     {
       title: 'Get competition submission terms',
@@ -4107,6 +4130,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => updateSubmissionSettings(props.session.email, input)),
+  )
+
+  registerTool(
+    'set_owner_submission_cooldown',
+    {
+      title: 'Set one owner submission cooldown override',
+      description:
+        'Append one revision installing or replacing a per-owner submission cooldown override: scope coldkey (a payment coldkey) or hotkey (an uploading hotkey), ownerKey (SS58), cooldownSeconds (60..2592000, the minimum interval between that owner\'s submissions), expiresInDays (1..90, from now), expectedRevision (get_owner_submission_cooldowns lookup.current.revision, or 0 when current is null), an operator reason (at least 8 characters, never shown to the miner) and the exact confirmation "SET OWNER SUBMISSION COOLDOWN <SCOPE> <ownerKey> <cooldownSeconds> SECONDS FOR <expiresInDays> DAYS", e.g. "SET OWNER SUBMISSION COOLDOWN HOTKEY 5Abc... 86400 SECONDS FOR 14 DAYS". One identity per call; to cover an owner who pays from several coldkeys, set the hotkey and each coldkey. Upload check, slot reservation and legacy upload all enforce the longer of the global cooldown and the override; an admission already reserved before the write is honored. The override only lengthens the wait and lapses at its expiry. Returns the identity lookup. Requires backroom:write.',
+      inputSchema: setOwnerCooldownInputSchema.shape,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => setOwnerCooldown(props.session.email, input)),
+  )
+
+  registerTool(
+    'revoke_owner_submission_cooldown',
+    {
+      title: 'Revoke one owner submission cooldown override',
+      description:
+        'Append a revoke revision ending one active per-owner submission cooldown override early. Supply scope, ownerKey, expectedRevision (get_owner_submission_cooldowns lookup.current.revision), an operator reason and the exact confirmation "REVOKE OWNER SUBMISSION COOLDOWN <SCOPE> <ownerKey>". Refused when the identity has no active override. History is kept. Returns the identity lookup. Requires backroom:write.',
+      inputSchema: revokeOwnerCooldownInputSchema.shape,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => revokeOwnerCooldown(props.session.email, input)),
   )
 
   registerTool(
