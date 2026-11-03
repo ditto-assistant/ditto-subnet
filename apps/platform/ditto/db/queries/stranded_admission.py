@@ -186,6 +186,27 @@ async def resolve_stranded_admission(
     return StrandedAdmissionTarget(rollout=rollout, agent=agent, stranded=stranded)
 
 
+async def lock_stranded_admission(
+    session: AsyncSession, *, rollout_id: UUID, agent_id: UUID
+) -> None:
+    """Serialize one admission with concurrent issuance and queue withdrawal.
+
+    Takes the rollout row lock and then the agent row lock, in the order every
+    other issuer takes them (rollout -> agent). Queue withdrawal, eviction and
+    reinstatement all lock the agent row first, so re-resolving the guards
+    after this call sees any withdrawal that committed after the first read,
+    and none can commit between that re-check and the append.
+    """
+    await session.execute(
+        select(BenchmarkRollout.rollout_id)
+        .where(BenchmarkRollout.rollout_id == rollout_id)
+        .with_for_update()
+    )
+    await session.execute(
+        select(Agent.agent_id).where(Agent.agent_id == agent_id).with_for_update()
+    )
+
+
 async def append_stranded_admission(
     session: AsyncSession,
     *,
@@ -501,6 +522,7 @@ __all__ = [
     "StrandedAdmissionsReport",
     "StrandedAgentNotFoundError",
     "append_stranded_admission",
+    "lock_stranded_admission",
     "resolve_stranded_admission",
     "stranded_admission_confirmation",
     "stranded_admissions",

@@ -48,6 +48,7 @@ from ditto.db.queries.benchmark_rollout import (
 from ditto.db.queries.stranded_admission import (
     StrandedAdmissionTarget,
     append_stranded_admission,
+    lock_stranded_admission,
     resolve_stranded_admission,
 )
 
@@ -843,6 +844,9 @@ async def admit_stranded_previous_era_agent(
     )
 
     async with session.begin():
+        await lock_stranded_admission(
+            session, rollout_id=target.rollout.rollout_id, agent_id=agent_id
+        )
         current = await resolve()
         if current.rollout.rollout_id != target.rollout.rollout_id:
             raise RolloutConflictError(

@@ -817,7 +817,7 @@ async def admit_stranded_previous_era(
             now=datetime.now(UTC),
             agent_id=agent_id,
             expected_active_version=payload.expected_active_version,
-            expected_sha256=payload.expected_sha256,
+            expected_sha256=payload.expected_sha256.lower(),
             expected_previous_score_count=payload.expected_previous_score_count,
             actor=payload.actor,
             reason=payload.reason,

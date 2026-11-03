@@ -200,7 +200,9 @@ async def test_admits_one_stranded_agent_pins_dataset_and_audits(
         )
 
     response = await client.post(
-        _admit_path(stranded), headers=_HEADERS, json=_payload(stranded)
+        _admit_path(stranded),
+        headers=_HEADERS,
+        json=_payload(stranded, expected_sha256=_sha("stranded").upper()),
     )
 
     assert response.status_code == 200, response.text
@@ -391,3 +393,42 @@ async def test_effect_read_reports_the_first_active_era_lease(
     assert everything.json()["total"] == 1
     other = await client.get(path, headers=_HEADERS, params={"agent_id": str(uuid4())})
     assert other.json()["total"] == 0
+
+
+async def test_withdrawal_committed_while_rendering_refuses_the_admission(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    generator: _StubGenerator,
+) -> None:
+    """The guards are re-read under the rollout and agent row locks."""
+    from ditto.db.models import ValidatorQueueWithdrawal
+
+    _rollout_id, _member, stranded = await _seed(session_maker)
+    render = generator.generate
+
+    async def _withdraw_then_render(seed: int, bench_version: int = 2) -> str:
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorQueueWithdrawal(
+                    withdrawal_id=uuid4(),
+                    agent_id=stranded,
+                    bench_version=_ACTIVE,
+                    actor="operator",
+                    reason="withdrawn while the admission rendered",
+                    expected_snapshot="snapshot",
+                    score_count=0,
+                    ticket_snapshot=[],
+                    created_at=datetime.now(UTC),
+                )
+            )
+        return await render(seed, bench_version)
+
+    generator.generate = _withdraw_then_render  # type: ignore[method-assign]
+    response = await client.post(
+        _admit_path(stranded), headers=_HEADERS, json=_payload(stranded)
+    )
+
+    assert response.status_code == 409, response.text
+    assert "withdrawn" in response.text
+    async with session_maker() as session, session.begin():
+        assert await session.get(BenchmarkDataset, (stranded, _ACTIVE)) is None
