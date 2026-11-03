@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.432.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: List scored previous-era submissions the active bench never admits
+  ([#3327](https://github.com/ditto-assistant/ditto-subnet/pull/3327),
+  [`22f8d4c`](https://github.com/ditto-assistant/ditto-subnet/commit/22f8d4ca20e4227cd35f0fab0ff8dc74195f1705))
+
+
 ## v0.431.3 (2026-11-02)
 
 ### Documentation
