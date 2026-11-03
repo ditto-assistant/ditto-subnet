@@ -165,7 +165,13 @@ func applyV13ToolSemantics(seed int64, benchVersion int, cases []protocol.ToolCa
 		return
 	}
 	scale := ToolWorldScale(len(cases), benchVersion)
-	world := universe.GenerateForVersion(seed, scale, protocol.BenchVersionV13)
+	// Through v15 the pass reads the v13 world, byte for byte as those
+	// contracts shipped; from v16 it reads the run's own world.
+	worldVersion := protocol.BenchVersionV13
+	if benchVersion >= protocol.BenchVersionV16 {
+		worldVersion = benchVersion
+	}
+	world := universe.GenerateForVersion(seed, scale, worldVersion)
 	worldCarrier := v13WorldCarrier(world, cases)
 	applyV13RestraintGroups(seed, world, worldCarrier, cases)
 	applyV13MutationsAndEffectReads(seed, world, worldCarrier, cases)
