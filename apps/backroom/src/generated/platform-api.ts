@@ -22297,6 +22297,8 @@ export interface components {
              * Format: uuid
              */
             submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256?: string | null;
         };
         /**
          * DuelingSliceFallback
@@ -22314,6 +22316,8 @@ export interface components {
              * Format: uuid
              */
             submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256?: string | null;
         };
         /** DuelingSliceResult */
         DuelingSliceResult: {
@@ -24984,12 +24988,16 @@ export interface components {
              * Format: uuid
              */
             lease_id: string;
+            /** Preparation Id */
+            preparation_id?: string | null;
             /** Round Index */
             round_index?: number | null;
             /** Run Id */
             run_id?: string | null;
             /** Scorer Version */
             scorer_version: string;
+            /** Season Id */
+            season_id?: string | null;
             /** Submission Id */
             submission_id?: string | null;
             /**
