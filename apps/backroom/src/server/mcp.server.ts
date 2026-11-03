@@ -252,6 +252,7 @@ import {
   screeningSubmissionFiltersSchema,
 } from '../lib/admin.schemas'
 import { competitionImprovementMetricsInputSchema } from '../lib/competition-improvement.schemas'
+import { strandedPreviousEraInputSchema } from '../lib/benchmark-era-stranded.schemas'
 import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
@@ -308,6 +309,7 @@ import {
   batchRetryValidation,
   fetchAgentScoringReadiness,
   fetchBenchmarkContractRefresh,
+  fetchStrandedPreviousEra,
   fetchBenchmarkContractMigration,
   migrateBenchmarkContract,
   refreshBenchmarkContract,
@@ -992,6 +994,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read one complete confirmation root, signature, typed evidence, tickets, and subject projections.',
   get_benchmark_rollout_control:
     'Read rollout control: versions, start_ready, cohort, targets. Starts nothing.',
+  list_stranded_previous_era_submissions:
+    'Scored prior-bench agents the active era never admits. Read-only.',
   start_benchmark_rollout:
     'Start a forward-only rollout. Confirmation: START BENCHMARK V{n}.',
   list_benchmark_canaries: 'Page isolated benchmark canaries. No score or rollout authority.',
@@ -4307,6 +4311,23 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => expandBenchmarkRollout(props.session.email, input)),
+  )
+
+  registerTool(
+    'list_stranded_previous_era_submissions',
+    {
+      title: 'List stranded previous-era submissions',
+      description:
+        'List every scored or live submission that holds accepted scores on the previous benchmark (the admission rollout from_version) but has no active-version score and no admission path into the active era: not a frozen rollout cohort member, not adopted carryover, not first queued after the rollout opened, and no audited contract refresh. By design the active era pins no dataset and issues no tickets for these rows, so they are absent from the active leaderboard; get_benchmark_contract_refresh reports "benchmark dataset is missing" and agent_scoring_readiness reports "historical submission is not admitted". Each row carries the previous-era score count and median, previous_finalized, has_active_dataset, queue_withdrawn, cohort_sibling_agent_id with reason owner_in_cohort (the owner is already on the active board through a frozen sibling) or owner_outside_cohort, and owner_best_stranded (the owner\'s highest-median stranded row). ownerBestOnly keeps one row per owner. Also returns the admission rollout and whether prev_gen_carryover is enabled. Rows are ordered best previous-era median first. Read-only: changes no admission, dataset, ticket or score. Requires backroom:read.',
+      inputSchema: strandedPreviousEraInputSchema.shape,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      result(
+        compacted(await fetchStrandedPreviousEra(input), {
+          items: { pin: ['agent_id'] },
+        }),
+      ),
   )
 
   registerTool(

@@ -58,3 +58,15 @@ packs declaring 14 or 15; v13 packs keep working in v14 rounds.
 
 Rollback before activation is cancelling the rollout; v14 stays active
 throughout.
+
+## Previous-era scored work after activation
+
+Activation admits only the frozen rescore cohort (top 15 owners by distinct
+hotkey), new-era uploads, work first queued after the rollout opened,
+carryover rows (`prev_gen_carryover`, off by default) and audited contract
+refreshes. A submission that finished its v14 quorum outside the cohort gets
+no v15 dataset and no v15 ticket, and is missing from the v15 board. This
+includes a newer sibling of a cohort member and work that reached quorum
+while the rollout was open. The v13→v14 bump behaved the same way (#3237).
+Backroom `list_stranded_previous_era_submissions` lists this population. Any
+backfill policy is an operator decision; the read does not admit anything.

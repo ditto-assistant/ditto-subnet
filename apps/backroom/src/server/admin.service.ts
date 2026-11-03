@@ -623,6 +623,10 @@ import {
   competitionImprovementMetricsInputSchema,
   competitionImprovementMetricsSchema,
 } from '../lib/competition-improvement.schemas'
+import {
+  strandedPreviousEraInputSchema,
+  strandedPreviousEraSchema,
+} from '../lib/benchmark-era-stranded.schemas'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
 import {
   submissionDepositAddressControlSchema,
@@ -3572,6 +3576,19 @@ export async function releaseValidatorScoreRetest(rawInput: unknown, actor: stri
     },
   )
   return releaseValidatorScoreRetestResponseSchema.parse(payload)
+}
+
+export async function fetchStrandedPreviousEra(rawInput: unknown) {
+  const input = strandedPreviousEraInputSchema.parse(rawInput ?? {})
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+    owner_best_only: String(input.ownerBestOnly),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/benchmark-rollout/stranded-previous-era?${params.toString()}`,
+  )
+  return strandedPreviousEraSchema.parse(payload)
 }
 
 export async function fetchBenchmarkContractRefresh(rawInput: unknown) {

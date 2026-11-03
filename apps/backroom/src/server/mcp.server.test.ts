@@ -574,6 +574,7 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_contract_migration',
         'get_benchmark_rollout_control',
         'get_benchmark_rollout_qualification',
+        'list_stranded_previous_era_submissions',
         'get_burn_settings',
         'get_track_share_settings',
         'get_emission_allocation',
@@ -970,7 +971,9 @@ describe('Backroom MCP tools', () => {
     // about 0.5 KB.
     // Tempo-aligned wave pacing (two bounded integers on the continual retest
     // write) measures 224,063 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(224_550)
+    // The stranded previous-era read (three bounded paging inputs, one-line
+    // summary, detail in tool help) measures 224,683 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(225_200)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -2738,6 +2741,79 @@ describe('Backroom MCP tools', () => {
       expect.objectContaining({
         method: 'GET',
       }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('lists stranded previous-era submissions read-only', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '22222222-2222-4222-8222-222222222222'
+    const siblingId = '33333333-3333-4333-8333-333333333333'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        active_bench_version: 15,
+        previous_bench_version: 14,
+        rollout: {
+          rollout_id: '11111111-1111-4111-8111-111111111111',
+          from_version: 14,
+          desired_version: 15,
+          status: 'activated',
+          created_at: '2026-11-03T03:27:00Z',
+          activated_at: '2026-11-03T04:42:00Z',
+          cohort_size: 15,
+        },
+        prev_gen_carryover_enabled: false,
+        total: 1,
+        owner_count: 1,
+        finalized_count: 1,
+        owner_in_cohort_count: 1,
+        owner_outside_cohort_count: 0,
+        truncated: false,
+        limit: 50,
+        offset: 0,
+        items: [
+          {
+            agent_id: agentId,
+            agent_name: 'sibling',
+            agent_version: 1,
+            miner_hotkey: '5Sibling',
+            owner_key: 'coldkey:5Owner',
+            status: 'scored',
+            submitted_at: '2026-11-02T22:04:46Z',
+            first_screening_pass_at: '2026-11-02T22:32:02Z',
+            previous_score_count: 3,
+            previous_median_composite: 0.957,
+            previous_finalized: true,
+            has_active_dataset: false,
+            queue_withdrawn: false,
+            cohort_sibling_agent_id: siblingId,
+            owner_best_stranded: true,
+            reason: 'owner_in_cohort',
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'list_stranded_previous_era_submissions',
+      arguments: { limit: 50, ownerBestOnly: true },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(JSON.stringify(readJsonResult(response))).toContain(siblingId)
+    expect(readJsonResult(response)).toMatchObject({
+      active_bench_version: 15,
+      previous_bench_version: 14,
+      total: 1,
+      prev_gen_carryover_enabled: false,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout/stranded-previous-era?limit=50&offset=0&owner_best_only=true',
+      expect.objectContaining({ method: 'GET' }),
     )
 
     await client.close()
