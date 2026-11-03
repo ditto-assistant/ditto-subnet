@@ -40,6 +40,10 @@ MIN_PACK_CASES = 8
 # v13 run. A validator runs a round only when its scorer advertises at least
 # the round's column size (see ``generator_round_validator``).
 MAX_CASES_PER_SEED = 80
+# The shortest safe dueling season, in subnet epochs (dueling-bench.md
+# section 3): with an epoch-pinned ledger, a one-epoch season would put every
+# fold mid-rotation.
+MIN_DUELING_SEASON_EPOCHS = 2
 SOURCE_SIGNATURE_DOMAIN = "ditto-generator-v1"
 
 GeneratorMode = Literal["off", "shadow", "enforce"]
@@ -193,6 +197,20 @@ class GeneratorCompetitionSettings(BaseModel):
     instead of this switch. Off by default, and a revision written before
     this field existed reads as off."""
 
+    dueling_enabled: bool = False
+    """Open dueling seasons (bench v16+, ``dueling-bench.md``): freeze up to
+    five eligible generators per season and serve their slices to every
+    bench v16+ agent run. Seasons open only while this is set and a v16+
+    contract is active or is the desired version of an open rollout (a shadow
+    season), and never while the source release policy has ``disclosure =
+    never``. Off by default, and a revision written before this field existed
+    reads as off."""
+    rounds_per_season: Annotated[int, Field(ge=1, le=48)] = 1
+    """Generator rounds per dueling season (one 4-epoch round, about 4.8 h,
+    by default). A season is at least 2 epochs: a write that enables dueling
+    with ``rounds_per_season x epochs_per_round < 2`` is refused. A revision
+    written before this field existed reads as 1."""
+
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
         if self.min_solver_owners > self.min_panel:
@@ -204,6 +222,20 @@ class GeneratorCompetitionSettings(BaseModel):
         if self.counted_columns + self.challenger_columns > 8:
             raise ValueError("a round holds at most 8 columns")
         return self
+
+    def dueling_season_refusal(self) -> str | None:
+        """Why this policy cannot run dueling seasons, or None.
+
+        Checked on write, not on read, so a stored revision never turns
+        invalid (and closes the lane) because of it."""
+        epochs = self.rounds_per_season * self.epochs_per_round
+        if self.dueling_enabled and epochs < MIN_DUELING_SEASON_EPOCHS:
+            return (
+                f"a dueling season must span at least {MIN_DUELING_SEASON_EPOCHS} "
+                f"epochs: rounds_per_season ({self.rounds_per_season}) x "
+                f"epochs_per_round ({self.epochs_per_round}) = {epochs}"
+            )
+        return None
 
     def score_params(self) -> dict[str, float | int]:
         """The ``challenge.ScoreParams`` view of this policy."""

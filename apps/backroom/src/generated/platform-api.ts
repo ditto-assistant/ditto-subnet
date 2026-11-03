@@ -23491,6 +23491,11 @@ export interface components {
              */
             counted_columns: number;
             /**
+             * Dueling Enabled
+             * @default false
+             */
+            dueling_enabled: boolean;
+            /**
              * Epochs Per Round
              * @default 4
              */
@@ -23548,6 +23553,11 @@ export interface components {
              * @default 3600
              */
             retry_backoff_seconds: number;
+            /**
+             * Rounds Per Season
+             * @default 1
+             */
+            rounds_per_season: number;
             /**
              * Seeds Per Run
              * @default 2

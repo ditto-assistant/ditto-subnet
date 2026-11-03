@@ -213,6 +213,9 @@ async def create_settings_revision(
             status_code=409,
             detail=f"confirmation must be exactly {expected_confirmation}",
         )
+    season_refused = payload.settings.dueling_season_refusal()
+    if season_refused is not None:
+        raise HTTPException(status_code=422, detail=season_refused)
     latest = await latest_generator_settings_revision(session)
     actual = latest.revision if latest is not None else 0
     if payload.expected_revision != actual:
