@@ -339,7 +339,7 @@ def test_scorer_features_advertise_dueling_versions_both_sides_run() -> None:
     assert scorer_dueling_slice_bench_versions(None, (16,)) is None
 
 
-_SLICE = b'{"slice":"fixture"}\n'
+_SLICE = json.dumps({"season_id": _SEASON, "slice": "fixture"}).encode() + b"\n"
 _SLICE_SHA = hashlib.sha256(_SLICE).hexdigest()
 
 
@@ -377,6 +377,14 @@ def test_a_complete_dueling_lease_decodes_and_verifies() -> None:
         ({"dueling_season_id": None}, "dueling_slice_missing"),
         ({"dueling_slice_bytes": "not base64!"}, "dueling_slice_undecodable"),
         ({"expected_slice_sha256": "0" * 64}, "dueling_slice_digest_mismatch"),
+        ({"dueling_season_id": "s16-other"}, "dueling_slice_season_mismatch"),
+        (
+            {
+                "dueling_slice_bytes": base64.b64encode(b"[]").decode(),
+                "expected_slice_sha256": hashlib.sha256(b"[]").hexdigest(),
+            },
+            "dueling_slice_undecodable",
+        ),
     ],
 )
 def test_an_incomplete_or_tampered_dueling_lease_is_refused(

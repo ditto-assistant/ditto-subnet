@@ -1453,6 +1453,10 @@ def verified_scorer_for_version(
     # its own packet; a v14 packet cannot qualify a v15 rollout.
     if version == 15 and scorer.v15_scored_runtime_env is None:
         return None
+    # v16 injects the v15 keys, but its packet is version-bound like the
+    # others, so a v15 packet cannot qualify a v16 rollout.
+    if version == 16 and scorer.v16_scored_runtime_env is None:
+        return None
     if version >= 9 and not _scorer_meets_version_floor(
         heartbeat,
         scorer=scorer,

@@ -216,6 +216,17 @@ class V15ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
     bench_version: Literal[15]
 
 
+class V16ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
+    """Keys reported by a descriptor-verified scorer for its v16 sandbox.
+
+    v16 (the dueling bench) injects the v15 key set, but the packet is bound to
+    its version like every earlier one, so a v15 packet can never qualify a
+    v16 rollout.
+    """
+
+    bench_version: Literal[16]
+
+
 class ScorerBenchmarkCapability(BaseModel):
     """Identity-bound benchmark support observed from the scorer sidecar."""
 
@@ -233,6 +244,9 @@ class ScorerBenchmarkCapability(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     v15_scored_runtime_env: V15ScoredRuntimeEnvEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    v16_scored_runtime_env: V16ScoredRuntimeEnvEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     v7_calibration: V7InferenceCalibration | None = None
@@ -322,6 +336,12 @@ class ScorerBenchmarkCapability(BaseModel):
             or self.source_revision != self.v15_scored_runtime_env.source_revision
         ):
             raise ValueError("v15 runtime environment requires verified v15 identity")
+        if self.v16_scored_runtime_env is not None and (
+            self.status != "fresh_verified"
+            or 16 not in versions
+            or self.source_revision != self.v16_scored_runtime_env.source_revision
+        ):
+            raise ValueError("v16 runtime environment requires verified v16 identity")
         if self.deterministic_v13_datasets and (
             self.status != "fresh_verified" or 13 not in versions
         ):

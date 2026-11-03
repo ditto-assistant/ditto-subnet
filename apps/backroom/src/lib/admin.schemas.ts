@@ -5454,6 +5454,17 @@ export const validatorFleetObservabilityMemberSchema = z
             software_version: z.string().nullish().catch(null),
             source_revision: z.string().nullish().catch(null),
             supported_bench_versions: z.array(z.number().int()).catch([]),
+            // Bench versions the scorer runs generator rounds at, and runs with
+            // a dueling-slice-v1 generator slice (bench 16+). Platform leases a
+            // v16+ ticket only to a validator forwarding the version here.
+            generator_round_bench_versions: z
+              .array(z.number().int())
+              .nullish()
+              .catch(null),
+            dueling_slice_bench_versions: z
+              .array(z.number().int())
+              .nullish()
+              .catch(null),
           })
           .nullish()
           .catch(null),

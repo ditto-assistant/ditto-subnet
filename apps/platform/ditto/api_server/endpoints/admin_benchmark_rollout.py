@@ -18,6 +18,7 @@ from ditto.api_models.benchmark_contract import (
     benchmark_contract,
     benchmark_contracts,
 )
+from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.benchmark_rollout import (
     admit_stranded_previous_era_agent,
     expand_rolling_qualification,
@@ -29,6 +30,7 @@ from ditto.api_server.config import InferenceProxyConfig
 from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.dependencies import get_dataset_generator, get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.inference_concurrency_settings import settings_from_row
 from ditto.api_server.inference_routing import (
     AGGREGATE_CALIBRATION_SAMPLES,
@@ -46,6 +48,7 @@ from ditto.db.models import (
     InferenceRoutingPolicy,
     ValidatorHeartbeat,
 )
+from ditto.db.queries.artifact_release_settings import artifact_release_policy
 from ditto.db.queries.benchmark_era_stranded import stranded_previous_era_agents
 from ditto.db.queries.benchmark_rollout import (
     MIN_SCOREABLE_BENCH_VERSION,
@@ -73,6 +76,7 @@ from ditto.db.queries.stranded_admission import (
     stranded_admission_confirmation,
     stranded_admissions,
 )
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 router = APIRouter(prefix="/admin/benchmark-rollout", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -384,6 +388,41 @@ async def _decision_lane_start_blocker(
     return None
 
 
+async def _dueling_start_blocker(
+    session: AsyncSession,
+    desired_version: int,
+    inference_config: InferenceProxyConfig | None = None,
+) -> str | None:
+    """A v16+ (dueling) rollout needs a dueling season to be able to open.
+
+    Every v16+ ticket leases only with a ready slice from an open dueling
+    season, and a season opens only while ``dueling_enabled`` is on, the
+    competition is not off, and the source release policy is not
+    ``disclosure = never`` (``dueling_seasons.dueling_target``). Opening the
+    rollout without them would admit a cohort whose every lease answers 503,
+    so the start is refused. Unlike the proxy and decision-lane blockers this
+    is not about inference, so it applies on every call path.
+    """
+    del inference_config  # Same call shape as the other config blockers.
+    if not is_dueling_bench_version(desired_version):
+        return None
+    settings = (await load_settings(session)).settings
+    if settings.mode == "off" or not settings.dueling_enabled:
+        return (
+            f"benchmark v{desired_version} rollout requires dueling_enabled with "
+            "the generator competition on (set_generator_competition_settings); "
+            "its tickets lease only with a ready dueling slice"
+        )
+    policy = await artifact_release_policy(session)
+    if policy.disclosure is SourceDisclosure.NEVER:
+        return (
+            f"benchmark v{desired_version} rollout requires a source release "
+            "policy other than disclosure = never; a dueling season cannot open "
+            "without releasing every pinned generator's source"
+        )
+    return None
+
+
 def _require_confirmation(actual: str, *, action: str, version: int) -> None:
     expected = f"{action} BENCHMARK V{version}"
     if actual != expected:
@@ -462,6 +501,10 @@ async def get_rollout_control(
                 )
                 if config_blocker is None:
                     config_blocker = await _decision_lane_start_blocker(
+                        session, version, inference_config
+                    )
+                if config_blocker is None:
+                    config_blocker = await _dueling_start_blocker(
                         session, version, inference_config
                     )
                 if config_blocker is not None:
@@ -1071,6 +1114,8 @@ async def start_rollout(
         config_blocker = await _decision_lane_start_blocker(
             session, target, inference_config
         )
+    if config_blocker is None:
+        config_blocker = await _dueling_start_blocker(session, target, inference_config)
     if config_blocker is not None:
         raise HTTPException(status_code=409, detail=config_blocker)
     await _require_rollout_start_capacity(

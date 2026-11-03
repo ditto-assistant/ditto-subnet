@@ -929,7 +929,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_validator_slot_settings:
     'Read slot/disk policy, per-validator overrides, round reservation, per-validator fleet sizing and history (default 0). A validator advertising above cap is not an underutilized host.',
   get_validator_fleet:
-    'Read validator heartbeats, stack identity, and version histogram.',
+    'Read validator heartbeats, stack identity, scorer round/dueling-slice versions, and version histograms.',
   get_scoring_lease_settings:
     'Read the scoring ticket TTL for new leases, bounds, and history.',
   set_scoring_lease_settings:

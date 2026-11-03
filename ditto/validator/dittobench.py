@@ -15,6 +15,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import json
 import logging
 import re
 import time
@@ -50,6 +51,7 @@ from ditto.api_models.validator_capabilities import (
     ScorerProbeReason,
     V14ScoredRuntimeEnvEvidence,
     V15ScoredRuntimeEnvEvidence,
+    V16ScoredRuntimeEnvEvidence,
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
@@ -270,6 +272,27 @@ def dueling_slice_from_lease(job: JobResponse) -> DuelingSlice | None:
             f"dueling slice for agent {job.agent_id} does not hash to "
             f"{job.expected_slice_sha256}",
             code="dueling_slice_digest_mismatch",
+        )
+    # The slice names its own season; a lease that pins another one would only
+    # be caught after a full scoring run (verify_dueling_report), so refuse it
+    # before anything runs.
+    try:
+        header = json.loads(slice_bytes)
+    except ValueError as exc:  # includes UnicodeDecodeError
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is not valid JSON",
+            code="dueling_slice_undecodable",
+        ) from exc
+    if not isinstance(header, dict):
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} is not a JSON object",
+            code="dueling_slice_undecodable",
+        )
+    if header.get("season_id") != job.dueling_season_id:
+        raise DuelingSliceError(
+            f"dueling slice for agent {job.agent_id} does not match its lease "
+            f"season {job.dueling_season_id}",
+            code="dueling_slice_season_mismatch",
         )
     return DuelingSlice(
         slice_bytes=slice_bytes,
@@ -1478,6 +1501,19 @@ class DittobenchClient:
                     v15_scored_runtime_env = v15_candidate
             except ValueError:
                 pass
+        v16_scored_runtime_env = None
+        if (
+            16 in observed_versions
+            and payload.get("v16_scored_runtime_env") is not None
+        ):
+            try:
+                v16_candidate = V16ScoredRuntimeEnvEvidence.model_validate(
+                    payload["v16_scored_runtime_env"]
+                )
+                if v16_candidate.source_revision == source_revision:
+                    v16_scored_runtime_env = v16_candidate
+            except ValueError:
+                pass
         try:
             generator_rounds = (
                 13 in observed_versions
@@ -1524,6 +1560,7 @@ class DittobenchClient:
                 scored_runtime_env=scored_runtime_env,
                 v14_scored_runtime_env=v14_scored_runtime_env,
                 v15_scored_runtime_env=v15_scored_runtime_env,
+                v16_scored_runtime_env=v16_scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,
