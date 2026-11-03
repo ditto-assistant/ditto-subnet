@@ -28,7 +28,7 @@ type DuelingColumnAggregate struct {
 // CheckDuelingColumns validates a run's column aggregates at the report
 // boundary, before DuelingComposite or DuelingCompositeStderr scores them:
 // exactly protocol.DuelingSliceColumns columns with the unique ids c0..c4,
-// non-negative counts and finite sums. The composite functions themselves take
+// non-negative counts and finite sums (zero sums when a column has no cases). The composite functions themselves take
 // any slice (a subset is how masks and tests exercise them), so every consumer
 // of a signed report calls this first; an overlong slice would otherwise give
 // the datagen half a negative weight.
@@ -50,7 +50,7 @@ func CheckDuelingColumns(columns []DuelingColumnAggregate) error {
 			return errors.New("dueling report column " + c.ColumnID + " is substituted but names an owner")
 		}
 		finite := !math.IsNaN(c.Sum) && !math.IsInf(c.Sum, 0) && !math.IsNaN(c.SumSq) && !math.IsInf(c.SumSq, 0)
-		if c.N < 0 || !finite || c.SumSq < 0 {
+		if c.N < 0 || !finite || c.SumSq < 0 || (c.N == 0 && (c.Sum != 0 || c.SumSq != 0)) {
 			return errors.New("dueling report column " + c.ColumnID + " has invalid statistics")
 		}
 	}

@@ -90,6 +90,26 @@ def test_season_seed_refuses_a_bad_anchor(block: str) -> None:
         season_seed(1, b"\x01" * 32, block)
 
 
+@pytest.mark.parametrize("bad", [26119.0, True, "26119"])
+def test_season_and_run_seed_must_be_real_ints(bad: object) -> None:
+    with pytest.raises(ValueError):
+        season_commitment(bad, b"\x01" * 32)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        season_seed(bad, b"\x01" * 32, "0x" + "ab" * 32)  # type: ignore[arg-type]
+    seed = season_seed(1, b"\x01" * 32, "0x" + "ab" * 32)
+    with pytest.raises(ValueError):
+        slice_seed(seed, bad, "c0")  # type: ignore[arg-type]
+
+
+def test_column_with_no_cases_has_zero_sums() -> None:
+    with pytest.raises(ValidationError):
+        DuelingColumnAggregate(column_id="c0", owner_key="", n=0, sum=1.0, sum_sq=0.0)
+    with pytest.raises(ValidationError):
+        DuelingColumnAggregate(column_id="c0", owner_key="", n=0, sum=0.0, sum_sq=1.0)
+    empty = DuelingColumnAggregate(column_id="c0", owner_key="", n=0, sum=0, sum_sq=0)
+    assert empty.mean() == 0
+
+
 def test_season_index_must_be_u64() -> None:
     with pytest.raises(ValueError):
         season_commitment(-1, b"\x01" * 32)

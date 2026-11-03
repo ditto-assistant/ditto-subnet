@@ -81,7 +81,7 @@ def _u64be(value: int) -> bytes:
 
 
 def _check_season(season_index: int, secret: bytes) -> None:
-    if isinstance(season_index, bool) or not 0 <= season_index <= _U64_MAX:
+    if type(season_index) is not int or not 0 <= season_index <= _U64_MAX:
         raise ValueError("season index must be a u64")
     if len(secret) != SEASON_SECRET_BYTES:
         raise ValueError("season secret must be 32 bytes")
@@ -124,7 +124,7 @@ def slice_seed(season_seed_hex: str, run_seed: int, column_id: str) -> str:
     """
     if not _SHA256_RE.fullmatch(season_seed_hex):
         raise ValueError("season seed must be 64 lowercase hex characters")
-    if isinstance(run_seed, bool) or not 0 <= run_seed <= _I64_MAX:
+    if type(run_seed) is not int or not 0 <= run_seed <= _I64_MAX:
         raise ValueError("slice run seed must be a non-negative int64")
     if not column_id:
         raise ValueError("slice column id must be non-empty")
@@ -166,6 +166,8 @@ class DuelingColumnAggregate(BaseModel):
             raise ValueError(
                 "a substituted column carries the public default and has no owner"
             )
+        if self.n == 0 and (self.sum != 0 or self.sum_sq != 0):
+            raise ValueError("a column with no cases has zero sums")
         return self
 
     def mean(self) -> float:

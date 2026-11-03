@@ -232,6 +232,11 @@ func TestCheckDuelingColumns(t *testing.T) {
 	if CheckDuelingColumns(owned) == nil {
 		t.Fatal("a substituted column that names an owner must be refused")
 	}
+	phantom := duelingSlice()
+	phantom[3].N = 0
+	if CheckDuelingColumns(phantom) == nil {
+		t.Fatal("a column with no cases but nonzero sums must be refused")
+	}
 	neg := duelingSlice()
 	neg[2].N = -1
 	if CheckDuelingColumns(neg) == nil {
