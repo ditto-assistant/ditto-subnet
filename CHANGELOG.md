@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v0.433.0 (2026-11-03)
+
+### Bug Fixes
+
+- **screener,platform,backroom**: Auto-retry l2-late-result once
+  ([#3336](https://github.com/ditto-assistant/ditto-subnet/pull/3336),
+  [`81d290c`](https://github.com/ditto-assistant/ditto-subnet/commit/81d290cf7369a85acfbb53b58ae5fd40921defc8))
+
+### Chores
+
+- **bench**: Record v15 activation and bump the offline rehearsal fallback to 15
+  ([#3330](https://github.com/ditto-assistant/ditto-subnet/pull/3330),
+  [`4d40951`](https://github.com/ditto-assistant/ditto-subnet/commit/4d409519895077e51926726e2ecdcf838a05137d))
+
+### Documentation
+
+- **bench**: Retarget the dueling bench to v16 and pin its implementation contract
+  ([#3329](https://github.com/ditto-assistant/ditto-subnet/pull/3329),
+  [`c470a93`](https://github.com/ditto-assistant/ditto-subnet/commit/c470a9363cec5572bb6c19b497e20e53fbe97a94))
+
+### Features
+
+- **platform,backroom**: Add dueling season and slice preparation tables
+  ([#3335](https://github.com/ditto-assistant/ditto-subnet/pull/3335),
+  [`f4f31e5`](https://github.com/ditto-assistant/ditto-subnet/commit/f4f31e5156a6347a33c01997e8bbe4593e33f3f7))
+
+- **platform,backroom**: Admit stranded prior-era agents one at a time
+  ([#3333](https://github.com/ditto-assistant/ditto-subnet/pull/3333),
+  [`03c7971`](https://github.com/ditto-assistant/ditto-subnet/commit/03c7971efbab7da1d60af509fdc91124b08878d7))
+
+- **screener**: Allow connector and app-wording tool filters under W4
+  ([#3332](https://github.com/ditto-assistant/ditto-subnet/pull/3332),
+  [`103b797`](https://github.com/ditto-assistant/ditto-subnet/commit/103b797cf808f0859e6ff10f187dfe3ff327f949))
+
+- **screener,platform,backroom**: Allow gpt-6.1-terra and 3600s review
+  ([#3331](https://github.com/ditto-assistant/ditto-subnet/pull/3331),
+  [`8ba817e`](https://github.com/ditto-assistant/ditto-subnet/commit/8ba817e0ed36dea776dd79457835b919845134f4))
+
+
 ## v0.432.1 (2026-11-03)
 
 ### Bug Fixes
