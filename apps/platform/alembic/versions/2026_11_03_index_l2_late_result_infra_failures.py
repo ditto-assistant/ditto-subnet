@@ -1,7 +1,7 @@
 """cover a late L2 deep review in the infra-failure index
 
 Revision ID: 3f7c1d9a5b24
-Revises: 6ae1bd48a278
+Revises: 05e61b757387
 Create Date: 2026-11-03
 
 ``INFRA_AUTO_RETRY_REASON_CODES`` now also retries ``l2-late-result`` once: the
@@ -40,7 +40,7 @@ from alembic import op
 from ditto.db.migration_lock import MAX_ATTEMPTS, backoff_delay, is_retryable, sqlstate
 
 revision: str = "3f7c1d9a5b24"
-down_revision: str | Sequence[str] | None = "6ae1bd48a278"
+down_revision: str | Sequence[str] | None = "05e61b757387"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
