@@ -193,11 +193,14 @@ _IMAGE_UPLOAD_RECOVERY_CODES = frozenset(
     {reason_codes.IMAGE_UPLOAD_PLATFORM_UNAVAILABLE}
 )
 # Signatures whose fault was the deep review not finishing in time. A build
-# proof says nothing about the review provider, so they close on a probe on the
-# signature's provider that reached a verdict (passed, rejected or quarantined):
-# its review finished inside the budget.
-_VERDICT_RECOVERY_CODES = frozenset({reason_codes.L2_LATE_RESULT})
-_VERDICT_STATUSES = frozenset({"passed", "rejected", "quarantined"})
+# proof alone says nothing about the review provider, so they close on a probe
+# on the signature's provider whose screen provably ran source review to its
+# end: a ``passed`` verdict with a verified screened image (the full screen,
+# review included, finished), or a reject the L2/L3 review itself confirmed.
+# A quarantine is never proof: the static preflight can quarantine before any
+# build or review starts.
+_REVIEW_RECOVERY_CODES = frozenset({reason_codes.L2_LATE_RESULT})
+_REVIEW_RECOVERY_REJECT_REASON = reason_codes.SOURCE_REVIEW_CONFIRMED_VIOLATION
 
 # Beyond this the doubling is already clamped; it only keeps the shift small.
 _MAX_DOUBLINGS = 16
@@ -398,11 +401,17 @@ class _Row:
                 and self.has_verified_image
                 and (signature.provider is None or provider == signature.provider)
             )
-        if signature.reason_code in _VERDICT_RECOVERY_CODES:
+        if signature.reason_code in _REVIEW_RECOVERY_CODES:
             provider = self.provider or self.placement_provider
+            completed_review = (
+                self.status == "passed" and self.has_verified_image
+            ) or (
+                self.status == "rejected"
+                and self.reason_code == _REVIEW_RECOVERY_REJECT_REASON
+            )
             return (
                 self.finished_at is not None
-                and self.status in _VERDICT_STATUSES
+                and completed_review
                 and (signature.provider is None or provider == signature.provider)
             )
         return self.is_recovery and self.exercises(signature)
