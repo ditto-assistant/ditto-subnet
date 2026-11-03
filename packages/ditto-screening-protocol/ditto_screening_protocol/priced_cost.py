@@ -215,9 +215,16 @@ class PricedCostReport(BaseModel):
     decision_calls: _Count = 0
     decision_input_tokens: _Count = 0
     decision_output_tokens: _Count = 0
+    prices: dict[str, Any] | None = None
+    prompt_cost_nano_usd: _Count = 0
+    completion_cost_nano_usd: _Count = 0
+    embedding_cost_nano_usd: _Count = 0
+    decision_cost_nano_usd: _Count = 0
     cost_nano_usd: _Count = 0
+    normalization_cases: _Count = PRICED_COST_NORMALIZATION_CASES
     normalized_cost_nano_usd: _Count = 0
     reference_nano_usd: _Count = PRICED_COST_REFERENCE_NANO_USD
+    curve: list[dict[str, int]] | None = None
     ratio_bps: Annotated[int, Field(ge=0, le=PRICED_COST_MAX_RATIO_BPS)] = 0
     floor_bps: _BPS = PRICED_COST_FLOOR_BPS
     factor_bps: _BPS
@@ -247,8 +254,15 @@ class PricedCostReport(BaseModel):
         return (
             self.contract_id == want["contract_id"]
             and self.window == want["window"]
+            and self.prices == want["prices"]
+            and self.curve == want["curve"]
+            and self.normalization_cases == want["normalization_cases"]
             and self.reference_nano_usd == want["reference_nano_usd"]
             and self.floor_bps == want["floor_bps"]
+            and self.prompt_cost_nano_usd == want["prompt_cost_nano_usd"]
+            and self.completion_cost_nano_usd == want["completion_cost_nano_usd"]
+            and self.embedding_cost_nano_usd == want["embedding_cost_nano_usd"]
+            and self.decision_cost_nano_usd == want["decision_cost_nano_usd"]
             and self.factor_bps == want["factor_bps"]
             and self.applied_factor_bps == want["applied_factor_bps"]
             and self.applied == want["applied"]

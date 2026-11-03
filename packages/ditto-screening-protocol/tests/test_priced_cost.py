@@ -75,7 +75,25 @@ def test_version_floor() -> None:
     )
 
 
-def test_tampered_factor_is_detected() -> None:
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"applied_factor_bps": 10_000, "factor_bps": 10_000},
+        {"contract_id": "priced-cost-v0"},
+        {"window": "datagen_half"},
+        {"normalization_cases": 351},
+        {"reference_nano_usd": 2_000_000_000},
+        {"floor_bps": 0},
+        {"prompt_cost_nano_usd": 1},
+        {"completion_cost_nano_usd": 1},
+        {"embedding_cost_nano_usd": 1},
+        {"decision_cost_nano_usd": 1},
+        {"prices": {"prompt_token": 1}},
+        {"curve": [{"ratio_bps": 10_000, "factor_bps": 10_000}]},
+    ],
+    ids=lambda change: "+".join(change),
+)
+def test_tampered_terms_are_detected(change: dict[str, Any]) -> None:
     vector = next(v for v in _vectors()["vectors"] if v["name"] == "v15_full_catalog")
-    tampered = dict(vector["summary"], applied_factor_bps=10_000, factor_bps=10_000)
+    tampered = dict(vector["summary"], **change)
     assert not PricedCostReport.model_validate(tampered).matches_published_rule(16)
