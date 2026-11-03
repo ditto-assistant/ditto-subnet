@@ -5951,6 +5951,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/generator-scorer/dueling-battery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Dueling Battery
+         * @description Record a season battery for the current battery lease.
+         */
+        post: operations["post_dueling_battery_api_v1_generator_scorer_dueling_battery_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/dueling-slice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Dueling Slice
+         * @description Pin a generator slice for the current slice lease.
+         */
+        post: operations["post_dueling_slice_api_v1_generator_scorer_dueling_slice_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/dueling-work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lease Dueling
+         * @description Lease a dueling slice preparation (first) or season battery, if any.
+         */
+        get: operations["lease_dueling_api_v1_generator_scorer_dueling_work_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/generator-scorer/fault": {
         parameters: {
             query?: never;
@@ -22231,6 +22291,211 @@ export interface components {
             /** Unhealthy Containers */
             unhealthy_containers: number;
         };
+        /** DuelingBatteryAck */
+        DuelingBatteryAck: {
+            /** Failed */
+            failed: string[];
+            /** Passed */
+            passed: string[];
+            /** Released */
+            released: string[];
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+        };
+        /** DuelingBatteryCandidate */
+        DuelingBatteryCandidate: {
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** DuelingBatteryCandidateResult */
+        DuelingBatteryCandidateResult: {
+            /** Error */
+            error?: string | null;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** DuelingBatteryResult */
+        DuelingBatteryResult: {
+            /** Candidates */
+            candidates: components["schemas"]["DuelingBatteryCandidateResult"][];
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+        };
+        /** DuelingSliceAck */
+        DuelingSliceAck: {
+            /**
+             * Preparation Id
+             * Format: uuid
+             */
+            preparation_id: string;
+            /** Slice Sha256 */
+            slice_sha256?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "leased" | "ready" | "failed";
+        };
+        /** DuelingSliceColumnResult */
+        DuelingSliceColumnResult: {
+            /** Column Id */
+            column_id: string;
+            /** Error */
+            error?: string | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Substituted
+             * @default false
+             */
+            substituted: boolean;
+        };
+        /** DuelingSliceColumnWork */
+        DuelingSliceColumnWork: {
+            /** Column Id */
+            column_id: string;
+            /** Grading Bench Version */
+            grading_bench_version: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Public Default */
+            public_default: boolean;
+            /** Slice Seed */
+            slice_seed: string;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256?: string | null;
+        };
+        /**
+         * DuelingSliceFallback
+         * @description The public default generator a failed column is regenerated with.
+         */
+        DuelingSliceFallback: {
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256?: string | null;
+        };
+        /** DuelingSliceResult */
+        DuelingSliceResult: {
+            /** Columns */
+            columns: components["schemas"]["DuelingSliceColumnResult"][];
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Preparation Id
+             * Format: uuid
+             */
+            preparation_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+            /** Slice Base64 */
+            slice_base64?: string | null;
+            /** Slice Sha256 */
+            slice_sha256?: string | null;
+        };
+        /**
+         * DuelingWork
+         * @description One leased dueling work item (``kind`` names which fields are set).
+         */
+        DuelingWork: {
+            /** Bench Version */
+            bench_version: number;
+            /** Candidates */
+            candidates?: components["schemas"]["DuelingBatteryCandidate"][] | null;
+            /** Cases */
+            cases?: number | null;
+            /** Cases Per Column */
+            cases_per_column?: number | null;
+            /** Columns */
+            columns?: components["schemas"]["DuelingSliceColumnWork"][] | null;
+            fallback?: components["schemas"]["DuelingSliceFallback"] | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "battery" | "slice";
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Preparation Id */
+            preparation_id?: string | null;
+            /** Run Seed */
+            run_seed?: number | null;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index?: number | null;
+            /** Seeds */
+            seeds?: string[] | null;
+        };
+        /** DuelingWorkResponse */
+        DuelingWorkResponse: {
+            work?: components["schemas"]["DuelingWork"] | null;
+        };
         /** EffectiveBurnSettings */
         EffectiveBurnSettings: {
             /** Checksum */
@@ -24830,19 +25095,23 @@ export interface components {
              * Format: uuid
              */
             lease_id: string;
+            /** Preparation Id */
+            preparation_id?: string | null;
             /** Round Index */
             round_index?: number | null;
             /** Run Id */
             run_id?: string | null;
             /** Scorer Version */
             scorer_version: string;
+            /** Season Id */
+            season_id?: string | null;
             /** Submission Id */
             submission_id?: string | null;
             /**
              * Work
              * @enum {string}
              */
-            work: "qualification" | "round";
+            work: "qualification" | "round" | "dueling";
         };
         /** GeneratorScorerFaultAck */
         GeneratorScorerFaultAck: {
@@ -24859,7 +25128,7 @@ export interface components {
              * Work
              * @enum {string}
              */
-            work: "qualification" | "round";
+            work: "qualification" | "round" | "dueling";
         };
         /**
          * GeneratorScorerHeartbeatView
@@ -24868,6 +25137,8 @@ export interface components {
         GeneratorScorerHeartbeatView: {
             /** Build Revision */
             build_revision: string | null;
+            /** Dueling Work Kinds */
+            dueling_work_kinds?: string[] | null;
             /** Effective Grading Bench Versions */
             effective_grading_bench_versions: number[];
             /**
@@ -56949,6 +57220,116 @@ export interface operations {
             };
         };
     };
+    post_dueling_battery_api_v1_generator_scorer_dueling_battery_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingBatteryResult"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingBatteryAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_dueling_slice_api_v1_generator_scorer_dueling_slice_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingSliceResult"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSliceAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lease_dueling_api_v1_generator_scorer_dueling_work_get: {
+        parameters: {
+            query?: {
+                scorer_id?: string | null;
+                scorer_version?: string | null;
+                min_cases?: number | null;
+                max_cases?: number | null;
+                sandbox?: string | null;
+                build_revision?: string | null;
+                grading_bench_versions?: string | null;
+                dueling_work_kinds?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingWorkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_fault_api_v1_generator_scorer_fault_post: {
         parameters: {
             query?: never;
@@ -57099,6 +57480,7 @@ export interface operations {
                 sandbox?: string | null;
                 build_revision?: string | null;
                 grading_bench_versions?: string | null;
+                dueling_work_kinds?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -57138,6 +57520,7 @@ export interface operations {
                 sandbox?: string | null;
                 build_revision?: string | null;
                 grading_bench_versions?: string | null;
+                dueling_work_kinds?: string | null;
             };
             header?: {
                 authorization?: string | null;

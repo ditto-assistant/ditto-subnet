@@ -322,6 +322,9 @@ class GeneratorScorerHeartbeatView(GeneratorModel):
     effective_grading_bench_versions: list[int]
     """What Platform matches rounds and qualifications against: the advertised
     list, or v13 only when none was advertised."""
+    dueling_work_kinds: list[str] | None = None
+    """Dueling work kinds (``slice``, ``battery``) the scorer advertised on its
+    ``dueling-work`` poll; None when it never polled for dueling work."""
 
 
 class AdminGeneratorScorerStatus(GeneratorModel):
@@ -611,18 +614,22 @@ class GeneratorScorerFault(GeneratorModel):
     is voided (unsupported request) or re-leased (sandbox).
     """
 
-    work: Literal["qualification", "round"]
+    work: Literal["qualification", "round", "dueling"]
     lease_id: UUID
     run_id: UUID | None = None
     submission_id: UUID | None = None
     round_index: int | None = None
+    season_id: UUID | None = None
+    """``work: "dueling"``: the season of the faulted lease, if any."""
+    preparation_id: UUID | None = None
+    """``work: "dueling"``: the slice preparation of the faulted lease."""
     error_kind: ScorerFaultKind
     detail: Annotated[str, Field(max_length=4000)] = ""
     scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
 
 
 class GeneratorScorerFaultAck(GeneratorModel):
-    work: Literal["qualification", "round"]
+    work: Literal["qualification", "round", "dueling"]
     action: Literal["backed_off", "voided", "released"]
     submission_status: SubmissionStatus | None = None
     round_status: str | None = None

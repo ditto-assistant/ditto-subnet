@@ -302,6 +302,7 @@ async def get_scorer_status(
                 live=is_live(row, now=now),
                 grading_bench_versions=row.grading_bench_versions,
                 effective_grading_bench_versions=list(grading_versions(row)),
+                dueling_work_kinds=row.dueling_work_kinds,
             )
             for row in rows
         ],
