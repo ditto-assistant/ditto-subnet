@@ -140,17 +140,24 @@ async def stranded_previous_era_agents(session: AsyncSession) -> StrandedEraRepo
         .correlate(Agent)
         .exists()
     )
+    payment = aliased(EvaluationPayment)
+    owner_key = emission_owner_key(agent=Agent, payment=payment)
+    # A cohort sibling is any frozen member with the same emission owner (the
+    # payment-time coldkey, hotkey fallback), the same identity the rows are
+    # grouped by, so an owner with several hotkeys is still seen as on board.
     sibling = aliased(Agent)
+    sibling_payment = aliased(EvaluationPayment)
     cohort_sibling = (
         select(BenchmarkRolloutMember.agent_id)
         .join(sibling, sibling.agent_id == BenchmarkRolloutMember.agent_id)
+        .outerjoin(sibling_payment, sibling_payment.agent_id == sibling.agent_id)
         .where(
             BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
-            sibling.miner_hotkey == Agent.miner_hotkey,
+            emission_owner_key(agent=sibling, payment=sibling_payment) == owner_key,
         )
         .order_by(BenchmarkRolloutMember.position)
         .limit(1)
-        .correlate(Agent)
+        .correlate(Agent, payment)
         .scalar_subquery()
     )
     first_pass = (
@@ -163,8 +170,6 @@ async def stranded_previous_era_agents(session: AsyncSession) -> StrandedEraRepo
         .correlate(Agent)
         .scalar_subquery()
     )
-    payment = aliased(EvaluationPayment)
-    owner_key = emission_owner_key(agent=Agent, payment=payment)
     statement = (
         select(
             Agent.agent_id,

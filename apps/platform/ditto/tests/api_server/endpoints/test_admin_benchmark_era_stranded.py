@@ -25,6 +25,7 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutCarryover,
     BenchmarkRolloutMember,
+    EvaluationPayment,
     Score,
     ScreeningAttempt,
 )
@@ -253,6 +254,50 @@ class TestStrandedPreviousEraRead:
         assert by_id[outsider_best].cohort_sibling_agent_id is None
         assert by_id[outsider_best].owner_best_stranded is True
         assert by_id[outsider_old].owner_best_stranded is False
+
+    async def test_cohort_sibling_matches_the_payment_coldkey_across_hotkeys(
+        self, session: AsyncSession
+    ) -> None:
+        async with session.begin():
+            rollout = await _rollout(session)
+            member = await _agent(session, name="hot-a", hotkey="5HotA")
+            await _scores(session, member, bench_version=_FROM, composites=(0.9,) * 3)
+            session.add(
+                BenchmarkRolloutMember(
+                    rollout_id=rollout.rollout_id,
+                    agent_id=member,
+                    position=1,
+                    frozen_miner_hotkey="5HotA",
+                    frozen_composite=0.9,
+                )
+            )
+            other = await _agent(session, name="hot-b", hotkey="5HotB")
+            await _scores(session, other, bench_version=_FROM, composites=(0.8,) * 3)
+            for index, (agent_id, hotkey) in enumerate(
+                ((member, "5HotA"), (other, "5HotB"))
+            ):
+                session.add(
+                    EvaluationPayment(
+                        block_hash=f"0xblock{index}",
+                        extrinsic_index=index,
+                        agent_id=agent_id,
+                        miner_hotkey=hotkey,
+                        miner_coldkey="5SharedCold",
+                        amount_rao=1,
+                        dest_address="5Dest",
+                        timestamp=_BEFORE,
+                        created_at=_BEFORE,
+                    )
+                )
+            await session.flush()
+
+        async with session.begin():
+            report = await stranded_previous_era_agents(session)
+        (row,) = report.items
+        assert row.agent_id == other
+        assert row.owner_key == "coldkey:5SharedCold"
+        assert row.reason == REASON_OWNER_IN_COHORT
+        assert row.cohort_sibling_agent_id == member
 
     async def test_empty_without_an_activated_rollout(
         self, session: AsyncSession
