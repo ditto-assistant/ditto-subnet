@@ -21,6 +21,7 @@ const session = {
 
 const original = process.env.DITTO_ADMIN_API_TOKEN
 const SEASON = '5f0c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b'
+const PREP = '6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
 
 async function connect(scopes: Array<string>) {
   const props: McpGrantProps = { session, scopes, clientName: 'Test client' }
@@ -57,6 +58,16 @@ describe('dueling season tools', () => {
   it('reads seasons and slices and guards the rotation', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes('/dueling/slices/') && url.endsWith('/retry') && init?.method === 'POST') {
+        return Response.json({
+          id: PREP, season_id: SEASON, season_index: 26119, bench_version: 16, run_seed: '7',
+          status: 'pending', attempts: 3, slice_sha256: null, size_bytes: null, bytes_pruned: false,
+          columns: null, error: null, scorer_version: null, created_at: '2026-11-03T00:00:00Z',
+          first_leased_at: null, ready_at: null, failed_at: null, latency_seconds: null,
+          retries: 1, last_retry_at: '2026-11-03T03:00:00Z', last_retry_actor: session.email,
+          last_retry_reason: 'builder host replaced', retryable: false, retry_refusal: null,
+        })
+      }
       if (url.includes('/dueling/seasons')) {
         return Response.json(url.endsWith('/seasons') ? {
           target: { bench_version: 16, shadow: true, blocked: null, live_versions: [16] },
@@ -103,6 +114,32 @@ describe('dueling season tools', () => {
       expect(JSON.parse(String(init.body))).toEqual({
         immediate: false, reason: 'column under the floor', actor: session.email,
         confirmation: 'ROTATE DUELING SEASON',
+      })
+
+      fetchMock.mockClear()
+      const badRetry = await client.callTool({
+        name: 'retry_dueling_slice_preparation',
+        arguments: {
+          preparationId: PREP, expectedStatus: 'failed', expectedError: 'c0: build failed',
+          reason: 'builder host replaced', confirmation: 'RETRY DUELING SLICE',
+        },
+      })
+      expect(badRetry.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const retried = json(await client.callTool({
+        name: 'retry_dueling_slice_preparation',
+        arguments: {
+          preparationId: PREP, expectedStatus: 'failed', expectedError: 'c0: build failed',
+          reason: 'builder host replaced', confirmation: `RETRY DUELING SLICE ${PREP}`,
+        },
+      })) as { status: string, retries: number }
+      expect(retried).toMatchObject({ status: 'pending', retries: 1 })
+      const [retryUrl, retryInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(retryUrl).toContain(`/dueling/slices/${PREP}/retry`)
+      expect(JSON.parse(String(retryInit.body))).toEqual({
+        expected_status: 'failed', expected_error: 'c0: build failed',
+        reason: 'builder host replaced', actor: session.email,
+        confirmation: `RETRY DUELING SLICE ${PREP}`, force: false,
       })
     } finally {
       await client.close()

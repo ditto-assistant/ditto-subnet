@@ -14797,10 +14797,20 @@ class DuelingSlicePreparation(Base):
     ready_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     failed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     bytes_pruned_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    retries: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    """Operator re-queues of a failed preparation; each restarts the lease's
+    attempt cap while ``attempts`` keeps the whole history."""
+    last_retry_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    last_retry_actor: Mapped[str | None] = mapped_column(Text)
+    last_retry_reason: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         UniqueConstraint(
             "season_id", "run_seed", name="dueling_slice_preparations_seed_key"
+        ),
+        CheckConstraint(
+            "retries >= 0 AND (retries = 0) = (last_retry_at IS NULL)",
+            name="dueling_slice_preparations_retries_check",
         ),
         ForeignKeyConstraint(["season_id"], ["dueling_seasons.id"], ondelete="CASCADE"),
         CheckConstraint("run_seed >= 0", name="dueling_slice_preparations_seed_check"),

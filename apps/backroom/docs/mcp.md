@@ -290,6 +290,13 @@ opens, once it is scored or void.
     the open dueling season at the next round boundary, or on the next
     round-driver tick with `immediate: true`; the next season opens at the
     following boundary on a fresh battery. Columns are never swapped in place.
+  - `retry_dueling_slice_preparation` (`RETRY DUELING SLICE {id}`, audited
+    reason, `expectedStatus: failed` plus the exact `expectedError`) re-queues
+    one failed slice preparation of an open season (attempts kept, error
+    cleared). A scorer-refused request (`infra: unsupported_request`, such as
+    a digest mismatch on the pinned source) needs a rotation instead unless
+    `force: true`. `list_dueling_slices` shows `retryable`, `retry_refusal`
+    and the last retry.
   - `set_generator_competition_settings` also carries `dueling_enabled`
     (ships `false`) and `rounds_per_season` (default 1); Platform refuses to
     enable dueling with `rounds_per_season x epochs_per_round < 2`.

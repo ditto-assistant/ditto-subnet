@@ -114,6 +114,12 @@ export const duelingSlicesSchema = z.object({
     ready_at: nullableString,
     failed_at: nullableString,
     latency_seconds: z.number().nullable(),
+    retries: z.number().int().default(0),
+    last_retry_at: nullableString.optional().default(null),
+    last_retry_actor: nullableString.optional().default(null),
+    last_retry_reason: nullableString.optional().default(null),
+    retryable: z.boolean().default(false),
+    retry_refusal: nullableString.optional().default(null),
   })),
   counts: z.record(z.string(), z.number().int()),
   latency_p50_seconds: z.number().nullable(),
@@ -126,6 +132,7 @@ export const getDuelingSeasonInputSchema = z.object({
 
 export const listDuelingSlicesInputSchema = z.object({
   seasonId: uuid.nullish(),
+  preparationId: uuid.nullish(),
   status: duelingSliceStatus.optional(),
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).max(100_000).default(0),
@@ -143,6 +150,32 @@ export const rotateDuelingSeasonInputSchema = z
       context.addIssue({
         code: 'custom',
         message: `confirmation must be exactly ${ROTATE_DUELING_SEASON_CONFIRMATION}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export function retryDuelingSliceConfirmation(preparationId: string) {
+  // Platform builds the phrase from the canonical (lowercase) UUID.
+  return `RETRY DUELING SLICE ${preparationId.toLowerCase()}`
+}
+
+export const retryDuelingSliceInputSchema = z
+  .object({
+    preparationId: uuid,
+    expectedStatus: z.literal('failed'),
+    // The preparation's error exactly as list_dueling_slices shows it.
+    expectedError: z.string().nullable(),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+    force: z.boolean().default(false),
+  })
+  .superRefine((input, context) => {
+    const expected = retryDuelingSliceConfirmation(input.preparationId)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
         path: ['confirmation'],
       })
     }
