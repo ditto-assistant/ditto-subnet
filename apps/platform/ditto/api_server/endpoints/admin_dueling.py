@@ -13,6 +13,9 @@
 - ``POST /admin/generator-competition/dueling/rotate``: close the open season
   at the next round boundary, or now with ``immediate``, under the
   confirmation ``ROTATE DUELING SEASON`` and an audited reason.
+- ``POST /admin/generator-competition/dueling/seasons/{season_id}/
+  republish-commitment``: re-elect validators to publish a committed season's
+  ``dds1`` commitment, under ``REPUBLISH DUELING SEASON COMMITMENT``.
 
 The season secret and seed are served only once a season is revealed.
 """
@@ -26,14 +29,16 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Float, func, select, true
+from sqlalchemy import Float, delete, func, select, true
 from sqlalchemy import column as sa_column
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.dueling import (
     DUELING_COLUMN_FLOOR,
+    REPUBLISH_DUELING_COMMITMENT_CONFIRMATION,
     ROTATE_DUELING_SEASON_CONFIRMATION,
+    AdminDuelingCommitmentRepublishRequest,
     AdminDuelingRotateRequest,
     AdminDuelingSeasonsResponse,
     AdminDuelingSliceRetryRequest,
@@ -50,8 +55,14 @@ from ditto.api_models.dueling import (
     GeneratorSourceReleaseView,
     retry_dueling_slice_confirmation,
 )
+from ditto.api_models.generator_rounds import GeneratorRoundCommitmentPublicationView
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.dueling_season_commitments import (
+    elected_season_publishers,
+    season_publications,
+    season_publisher_order,
+)
 from ditto.api_server.dueling_seasons import (
     dueling_target,
     open_season,
@@ -64,6 +75,7 @@ from ditto.db.models import (
     ConfirmationScore,
     DuelingSeason,
     DuelingSeasonBattery,
+    DuelingSeasonCommitmentPublication,
     DuelingSlicePreparation,
     GeneratorSourceRelease,
     Score,
@@ -248,6 +260,46 @@ async def _rotation(
     )
 
 
+async def _commitment_publications(
+    session: AsyncSession, season: DuelingSeason
+) -> tuple[list[GeneratorRoundCommitmentPublicationView], list[str]]:
+    """Every validator publication of ``season``'s commitment, in its
+    publisher order, plus who is elected right now."""
+    now = datetime.now(UTC)
+    publications = await season_publications(session, season.id)
+    order = {
+        hotkey: rank
+        for rank, hotkey in enumerate(
+            season_publisher_order(
+                season.season_index, (p.validator_hotkey for p in publications)
+            )
+        )
+    }
+    views = [
+        GeneratorRoundCommitmentPublicationView(
+            validator_hotkey=p.validator_hotkey,
+            status=(
+                "expired"
+                if p.status == "claimed" and _aware(p.claim_expires_at) <= now
+                else p.status  # type: ignore[arg-type]
+            ),
+            claimed_at=p.claimed_at,
+            claim_expires_at=p.claim_expires_at,
+            reported_at=p.reported_at,
+            block_number=p.block_number,
+            extrinsic_hash=p.extrinsic_hash,
+            detail=p.detail,
+        )
+        for p in sorted(publications, key=lambda p: order[p.validator_hotkey])
+    ]
+    elected = await elected_season_publishers(session, season, publications, now=now)
+    return views, elected
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
 async def _view(
     session: AsyncSession, season: DuelingSeason, *, full: bool
 ) -> DuelingSeasonView:
@@ -285,6 +337,11 @@ async def _view(
         or None,
         "secret_hex": season.secret.hex() if revealed else None,
         "season_seed": season.season_seed if revealed else None,
+        "commitment_publication": season.commitment_publication,
+        "commitment_published_at": season.commitment_published_at,
+        "commitment_block": season.commitment_block,
+        "commitment_extrinsic_hash": season.commitment_extrinsic_hash,
+        "commitment_error": season.commitment_error,
     }
     if full:
         view["batteries"] = [
@@ -308,6 +365,10 @@ async def _view(
                 .order_by(DuelingSeasonBattery.rank)
             )
         ]
+        (
+            view["commitment_publications"],
+            view["commitment_publishers_elected"],
+        ) = await _commitment_publications(session, season)
         view["column_means"] = await _column_means(session, season)
         view["rotation"] = await _rotation(session, season)
         view["slices"] = {
@@ -651,6 +712,77 @@ async def admin_rotate_dueling_season(
             "immediate": payload.immediate,
         },
     )
+    await session.commit()
+    await session.refresh(season)
+    return await _view(session, season, full=True)
+
+
+@router.post(
+    "/seasons/{season_id}/republish-commitment", response_model=DuelingSeasonView
+)
+async def admin_republish_dueling_season_commitment(
+    season_id: UUID,
+    payload: AdminDuelingCommitmentRepublishRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> DuelingSeasonView:
+    """Ask elected validators to publish a committed season's commitment again.
+
+    Platform never publishes a commitment itself. This reopens publication
+    (``pending``) and forgets every failed or unconfirmed validator claim, so
+    the season's publisher order elects again from the validators fresh now.
+    Confirmed publications are kept and still count toward the target.
+    """
+    if payload.confirmation != REPUBLISH_DUELING_COMMITMENT_CONFIRMATION:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "confirmation must be exactly "
+                f"{REPUBLISH_DUELING_COMMITMENT_CONFIRMATION}"
+            ),
+        )
+    reason = payload.reason.strip()
+    actor = payload.actor.strip()
+    if len(reason) < 8 or not actor:
+        raise HTTPException(
+            status_code=422, detail="a republish needs a reason (8+ chars) and an actor"
+        )
+    season = await session.scalar(
+        select(DuelingSeason).where(DuelingSeason.id == season_id).with_for_update()
+    )
+    if season is None:
+        raise HTTPException(status_code=404, detail="unknown dueling season")
+    if season.status != "committed":
+        raise HTTPException(
+            status_code=409,
+            detail="a commitment published after the season opened proves nothing",
+        )
+    if season.commitment_publication == "published":
+        raise HTTPException(
+            status_code=409,
+            detail="commitment publication already reached its validator target",
+        )
+    cleared = await session.execute(
+        delete(DuelingSeasonCommitmentPublication).where(
+            DuelingSeasonCommitmentPublication.season_id == season.id,
+            DuelingSeasonCommitmentPublication.status != "confirmed",
+        )
+    )
+    record_operator_action(
+        session,
+        action="republish_dueling_season_commitment",
+        subject=f"dueling_season:{season.id}",
+        actor=actor,
+        reason=reason,
+        detail={
+            "season_index": season.season_index,
+            "bench_version": season.bench_version,
+            "previous": season.commitment_publication,
+            "cleared_claims": int(cleared.rowcount or 0),  # type: ignore[attr-defined]
+        },
+    )
+    season.commitment_publication = "pending"
+    season.commitment_error = None
     await session.commit()
     await session.refresh(season)
     return await _view(session, season, full=True)

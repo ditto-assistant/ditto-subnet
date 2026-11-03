@@ -22,6 +22,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ditto.api_models.generator_rounds import GeneratorRoundCommitmentPublicationView
+
 DuelingWorkKind = Literal["battery", "slice"]
 DuelingSeasonStatus = Literal["committed", "open", "closed", "revealed", "void"]
 DuelingBatteryStatus = Literal["pending", "leased", "passed", "failed"]
@@ -142,6 +144,8 @@ class DuelingSliceAck(DuelingModel):
 # --- admin ------------------------------------------------------------------
 
 ROTATE_DUELING_SEASON_CONFIRMATION = "ROTATE DUELING SEASON"
+REPUBLISH_DUELING_COMMITMENT_CONFIRMATION = "REPUBLISH DUELING SEASON COMMITMENT"
+DuelingCommitmentPublication = Literal["pending", "published", "failed", "disabled"]
 DUELING_COLUMN_FLOOR = 0.15
 """A column whose in-season mean falls below this is flagged for an early
 rotation (``dueling-bench.md`` section 3, solvability layer 4)."""
@@ -258,6 +262,24 @@ class DuelingSeasonView(DuelingModel):
     """Slice preparations by status."""
     rotation: DuelingRotationView | None = None
     """Season-open re-scoring of the champion and cohort (full views only)."""
+    commitment_publication: DuelingCommitmentPublication = "disabled"
+    """On-chain ``dds1:{season_index}:{commitment}`` publication by elected
+    validators: ``pending`` while committed with ``onchain_commitment`` on,
+    then ``published``, ``failed`` (none confirmed before the season left
+    committed) or ``disabled``."""
+    commitment_published_at: datetime | None = None
+    commitment_block: int | None = None
+    """The earliest block a validator confirmed the commitment on chain at."""
+    commitment_extrinsic_hash: str | None = None
+    """That publication's extrinsic, when the validator reported one."""
+    commitment_error: str | None = None
+    commitment_publications: list[GeneratorRoundCommitmentPublicationView] = Field(
+        default_factory=list
+    )
+    """Every validator claim and report, in the season's publisher order
+    (full views only)."""
+    commitment_publishers_elected: list[str] = Field(default_factory=list)
+    """Validators elected to publish right now (full views only)."""
 
 
 class AdminDuelingSeasonsResponse(DuelingModel):
@@ -328,6 +350,16 @@ class AdminDuelingRotateRequest(BaseModel):
     immediate: bool = False
     """Close now instead of at the next round boundary. No season serves
     slices until the next season opens at the following round boundary."""
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+
+
+class AdminDuelingCommitmentRepublishRequest(BaseModel):
+    """Re-elect validators to publish a committed season's commitment."""
+
+    model_config = ConfigDict(extra="ignore")
+
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str

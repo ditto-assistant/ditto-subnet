@@ -8756,6 +8756,10 @@
           "screened_images": {
             "type": "boolean"
           },
+          "season_commitments": {
+            "default": false,
+            "type": "boolean"
+          },
           "signed_score_quorum": {
             "default": false,
             "type": "boolean"

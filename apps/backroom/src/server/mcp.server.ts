@@ -57,6 +57,7 @@ import {
   fetchDuelingSeason,
   listDuelingSlices,
   listGeneratorSourceReleases,
+  republishDuelingSeasonCommitment,
   retryDuelingSlicePreparation,
   rotateDuelingSeason,
 } from './dueling.service'
@@ -91,6 +92,7 @@ import {
   getDuelingSeasonInputSchema,
   listDuelingSlicesInputSchema,
   listGeneratorSourceReleasesInputSchema,
+  republishDuelingCommitmentInputSchema,
   retryDuelingSliceInputSchema,
   rotateDuelingSeasonInputSchema,
 } from '../lib/dueling.schemas'
@@ -850,6 +852,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_dueling_slices: 'List dueling slice preparations: status, attempts, latency, digests.',
   list_generator_source_releases: 'List pinned dueling generators\' source releases: due time, status.',
   rotate_dueling_season: 'Rotate the open dueling season with ROTATE DUELING SEASON; audited. Write.',
+  republish_dueling_season_commitment: 'Re-elect validators to publish a committed season\'s dds1 commitment. Write.',
   retry_dueling_slice_preparation: 'Re-queue one failed dueling slice; RETRY DUELING SLICE {id}. Write.',
   tick_generator_rounds: 'Run one idempotent round-driver tick now.',
   get_generator_round_dataset: 'Download a closed round\'s exact dataset to reproduce it. Artifact scope.',
@@ -1892,7 +1895,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_dueling_season', {
     title: 'Get dueling season',
-    description: 'Dueling bench (bench v16+) seasons: the frozen generator set every v16+ agent run is scored on. Without seasonId: target (bench_version seasons run at, shadow=true while it is only the desired version of an open rollout, blocked naming why no season can open: generator competition off, dueling_enabled false, no v16+ contract active or rolling out, or source release disclosure never), current (the open season), next (the committed season waiting for its opening round) and recent (closed, revealed, void). With seasonId: that season. Each season shows its commitment (published before its anchor block existed), anchor block and hash (the opening round\'s open block), columns (c0..c4: submission, hotkey, owner_key, tree and source SHA-256, grading_bench_version, public_default; the public default has an empty owner_key and is never masked), fallback, close and reveal schedule (closes_at_round, reveal_at_epoch), rotation (who, why, immediate), detail (close reason, skipped candidates with why, substituted generators that sit out the next season), batteries (each candidate\'s 32-seed season battery: rank by ledger score with evidence, status, declared grading policy, error), column_means (each column\'s mean case score across in-season scores, default_gap to the public default columns, below_floor under 0.15: consider rotate_dueling_season) slice counts by status, and rotation (the season-open mini-rollout: standing current, provisional for one season, or expired from the authoritative ledger; the cohort re-scored on the new set, champion rank 0 first, from the continual cohort or the rollout members; rotation re-tests queued, pending, running and closed; cohort scores and full quorums already in the season); scores_without_dueling and confirmation_scores_without_dueling count bench v16+ rows with no season or aggregates (they never rank or pay; nonzero is a bug). secret_hex and season_seed stay null until the season is revealed. Requires backroom:read.',
+    description: 'Dueling bench (bench v16+) seasons: the frozen generator set every v16+ agent run is scored on. Without seasonId: target (bench_version seasons run at, shadow=true while it is only the desired version of an open rollout, blocked naming why no season can open: generator competition off, dueling_enabled false, no v16+ contract active or rolling out, or source release disclosure never), current (the open season), next (the committed season waiting for its opening round) and recent (closed, revealed, void). With seasonId: that season. Each season shows its commitment (published before its anchor block existed), anchor block and hash (the opening round\'s open block), columns (c0..c4: submission, hotkey, owner_key, tree and source SHA-256, grading_bench_version, public_default; the public default has an empty owner_key and is never masked), fallback, close and reveal schedule (closes_at_round, reveal_at_epoch), rotation (who, why, immediate), detail (close reason, skipped candidates with why, substituted generators that sit out the next season), batteries (each candidate\'s 32-seed season battery: rank by ledger score with evidence, status, declared grading policy, error), column_means (each column\'s mean case score across in-season scores, default_gap to the public default columns, below_floor under 0.15: consider rotate_dueling_season) slice counts by status, and rotation (the season-open mini-rollout: standing current, provisional for one season, or expired from the authoritative ledger; the cohort re-scored on the new set, champion rank 0 first, from the continual cohort or the rollout members; rotation re-tests queued, pending, running and closed; cohort scores and full quorums already in the season); scores_without_dueling and confirmation_scores_without_dueling count bench v16+ rows with no season or aggregates (they never rank or pay; nonzero is a bug). secret_hex and season_seed stay null until the season is revealed. On-chain commitment: commitment_publication (pending while committed with onchain_commitment on, then published, failed when no validator confirmed it before the season opened, or disabled), commitment_block and commitment_extrinsic_hash (the earliest validator-confirmed dds1:{season_index}:{commitment} publication), commitment_error, and with seasonId every validator claim (commitment_publications) plus who is elected now (commitment_publishers_elected); see republish_dueling_season_commitment. Requires backroom:read.',
     inputSchema: getDuelingSeasonInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchDuelingSeason(input)))
 
@@ -1919,6 +1922,12 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Rotate the open dueling season early, for example when a column\'s in-season mean falls below the 0.15 floor, its default-relative gap is an outlier, or a pinned generator was banned or ruled a copy. Columns are never swapped in place: the season closes at the next round boundary (or on the next round-driver tick with immediate=true; no season serves slices until the next one opens at the following round boundary, so v16+ leases wait) and the next season opens on a fresh battery. seasonId defaults to the open season of the dueling target version. Refused when no season is open or it was already rotated (a pending boundary rotation may still be escalated to immediate). Confirmation: ROTATE DUELING SEASON. The reason is audited. Requires backroom:write.',
     inputSchema: rotateDuelingSeasonInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => rotateDuelingSeason(input, props.session.email)))
+
+  registerTool('republish_dueling_season_commitment', {
+    title: 'Republish dueling season commitment',
+    description: 'Reopen on-chain publication of a committed dueling season\'s seed commitment (payload dds1:{season_index}:{commitment}; shadow seasons publish too). Platform never publishes it itself: it elects up to three fresh validators advertising season_commitments, in a stable per-season order, to call Commitments set_commitment from their own Pylon identity. This sets publication back to pending and forgets every failed or unconfirmed validator claim so the election starts over; confirmed validators still count. Refused once the season reached its validator target or left committed (a commitment published after its anchor proves nothing). Confirmation: REPUBLISH DUELING SEASON COMMITMENT. The reason is audited. Requires backroom:write.',
+    inputSchema: republishDuelingCommitmentInputSchema, annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => republishDuelingSeasonCommitment(input, props.session.email)))
 
   registerTool('void_generator_round', {
     title: 'Void generator round',

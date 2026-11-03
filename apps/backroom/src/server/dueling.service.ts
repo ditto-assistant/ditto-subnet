@@ -6,6 +6,7 @@ import {
   getDuelingSeasonInputSchema,
   listDuelingSlicesInputSchema,
   listGeneratorSourceReleasesInputSchema,
+  republishDuelingCommitmentInputSchema,
   retryDuelingSliceInputSchema,
   rotateDuelingSeasonInputSchema,
 } from '../lib/dueling.schemas'
@@ -73,6 +74,32 @@ export async function rotateDuelingSeason(rawInput: unknown, actor: string) {
       throw new Error(
         `Nothing was rotated: ${cause.message}. Re-read get_dueling_season and retry only `
         + 'against an open season that has not already been rotated.',
+      )
+    }
+    throw cause
+  }
+}
+
+// Re-elect validators to publish a committed season's dds1 commitment
+// (audited); returns the season in full.
+export async function republishDuelingSeasonCommitment(rawInput: unknown, actor: string) {
+  const input = republishDuelingCommitmentInputSchema.parse(rawInput)
+  try {
+    return duelingSeasonSchema.parse(
+      await platformAdminRequest(
+        `${BASE}/seasons/${encodeURIComponent(input.seasonId)}/republish-commitment`,
+        {
+          method: 'POST',
+          actor,
+          body: { reason: input.reason, actor, confirmation: input.confirmation },
+        },
+      ),
+    )
+  } catch (cause) {
+    if (cause instanceof PlatformAdminError && cause.status === 409) {
+      throw new Error(
+        `Nothing was republished: ${cause.message}. Re-read get_dueling_season (seasonId); `
+        + 'republish only a committed season whose publication has not reached its target.',
       )
     }
     throw cause
