@@ -511,3 +511,24 @@ def test_a_report_must_echo_the_forwarded_slice() -> None:
         with pytest.raises(ValidatorInfrastructureError) as mismatch:
             verify_dueling_report(_score_report(report), dueling)
         assert mismatch.value.code == "dueling_report_mismatch"
+
+
+async def test_unleased_crn_rescore_never_runs_a_dueling_version() -> None:
+    """The P4/contested lanes carry no season slice, so they skip v16."""
+    config = _config()
+    config.dittobench_mock = False
+    dittobench = MagicMock()
+    platform = _platform_with_ledger(jobs=[], ledger=[])
+    worker = ValidatorWorker(
+        config=config,
+        platform=platform,
+        dittobench=dittobench,
+        chain=MagicMock(),
+        keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+    )
+    submitted = await worker._confirm_and_submit(
+        UUID(int=1), "ab" * 32, "5MinerA" + "x" * 41, bench_version=16, seeds=[1, 2]
+    )
+    assert submitted is None
+    dittobench.score_tarball.assert_not_called()
+    platform.get_artifact.assert_not_called()

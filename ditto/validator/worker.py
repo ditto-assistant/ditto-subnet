@@ -181,6 +181,7 @@ from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
     CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 from ditto_screening_protocol.runtime_envelope import runtime_envelope
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_approval import (
@@ -5228,7 +5229,21 @@ class ValidatorWorker:
         must replicate across seeds and not ride one lucky common-seed draw, with
         no per-seed rows on the platform. Seeds that fail to score are skipped;
         with one survivor this degrades to the plain single-seed submission and
-        with none returns ``None`` (the caller keeps the stale ledger score)."""
+        with none returns ``None`` (the caller keeps the stale ledger score).
+
+        A bench >= 16 run needs its season slice, which only a Platform lease
+        carries (:func:`dueling_slice_from_lease`). This unleased lane has no
+        slice, so it does not run a dueling version at all: the re-score is
+        left to the leased continual lane instead of submitting runs the
+        scorer would refuse."""
+        if is_dueling_bench_version(bench_version):
+            logger.info(
+                "skipping unleased CRN re-score of agent %s at bench_version %d: "
+                "a dueling run needs a leased season slice",
+                agent_id,
+                bench_version,
+            )
+            return None
         reports: list[ScoreReport] = []
         for s in seeds:
             try:
