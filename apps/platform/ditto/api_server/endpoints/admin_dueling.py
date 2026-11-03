@@ -508,7 +508,10 @@ async def admin_retry_dueling_slice(
                 "list_dueling_slices and retry against what it shows"
             ),
         )
-    season = await session.get(DuelingSeason, row.season_id)
+    # Locked so a season closing concurrently cannot race the open check.
+    season = await session.scalar(
+        select(DuelingSeason).where(DuelingSeason.id == row.season_id).with_for_update()
+    )
     refused = slice_retry_refusal(row, season, force=payload.force)
     if refused is not None:
         raise HTTPException(status_code=409, detail=refused)

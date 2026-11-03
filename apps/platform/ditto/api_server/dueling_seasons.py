@@ -916,6 +916,8 @@ def retry_slice(
     row.status = "pending"
     row.error = None
     row.failed_at = None
+    row.columns = None
+    row.scorer_version = None
     row.lease_id = None
     row.lease_expires_at = None
     row.retries = (row.retries or 0) + 1

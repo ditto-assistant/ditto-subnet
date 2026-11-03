@@ -156,7 +156,8 @@ export const rotateDuelingSeasonInputSchema = z
   })
 
 export function retryDuelingSliceConfirmation(preparationId: string) {
-  return `RETRY DUELING SLICE ${preparationId}`
+  // Platform builds the phrase from the canonical (lowercase) UUID.
+  return `RETRY DUELING SLICE ${preparationId.toLowerCase()}`
 }
 
 export const retryDuelingSliceInputSchema = z

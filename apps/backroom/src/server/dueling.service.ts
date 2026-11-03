@@ -87,7 +87,8 @@ export async function retryDuelingSlicePreparation(rawInput: unknown, actor: str
     if (cause instanceof PlatformAdminError && cause.status === 409) {
       throw new Error(
         `Nothing was retried: ${cause.message}. Re-read list_dueling_slices `
-        + '(preparationId) and retry against the status and error it shows.',
+        + '(preparationId); retry only while the row is retryable and its status and '
+        + 'error match, otherwise follow its retry_refusal (for example rotate_dueling_season).',
       )
     }
     throw cause
