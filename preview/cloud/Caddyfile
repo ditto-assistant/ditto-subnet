@@ -44,5 +44,11 @@ platform.{$PREVIEW_BASE_DOMAIN} {
 }
 
 backroom.{$PREVIEW_BASE_DOMAIN} {
-  reverse_proxy backroom:3000
+  reverse_proxy https://backroom:3000 {
+    header_up Host {hostport}
+    transport http {
+      tls_trust_pool file /run/preview-backroom-cert/cert.pem
+      tls_server_name backroom
+    }
+  }
 }

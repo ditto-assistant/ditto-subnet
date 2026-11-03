@@ -170,7 +170,21 @@ def test_stack_preview_controller_is_dispatch_only_and_caps_slots() -> None:
     backroom_config = (ROOT / "preview/cloud/backroom.wrangler.jsonc").read_text()
     backroom_entrypoint = (ROOT / "preview/cloud/backroom-entrypoint.sh").read_text()
     assert "backroom: {condition: service_healthy}" in compose
-    assert "AbortSignal.timeout(5000)" in compose
+    assert "--max-time, '5', --cacert, /run/preview-backroom-cert/cert.pem" in compose
+    assert "https://backroom:3000/" in compose
+    services = yaml.safe_load(compose)["services"]
+    assert (
+        "preview-backroom-cert:/run/preview-backroom-cert:ro"
+        in services["gateway"]["volumes"]
+    )
+    assert [
+        name
+        for name, service in services.items()
+        if any(
+            volume.startswith("preview-backroom-key:")
+            for volume in service.get("volumes", [])
+        )
+    ] == ["backroom"]
     assert "docker compose -f preview/cloud/compose.yml logs" in runtime
     assert '"main": "./dist/server/index.js"' in backroom_config
     assert '"directory": "./dist/client"' in backroom_config

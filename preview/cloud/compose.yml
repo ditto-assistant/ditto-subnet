@@ -95,6 +95,9 @@ services:
       context: ../..
       dockerfile: preview/cloud/backroom.Dockerfile
     restart: unless-stopped
+    volumes:
+      - preview-backroom-key:/run/preview-backroom-key
+      - preview-backroom-cert:/run/preview-backroom-cert
     environment:
       DITTO_PLATFORM_API_BASE_URL: http://platform:8000
       DITTO_ADMIN_API_TOKEN: ${PREVIEW_ADMIN_TOKEN}
@@ -104,7 +107,7 @@ services:
     depends_on:
       platform: {condition: service_healthy}
     healthcheck:
-      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/', {signal: AbortSignal.timeout(5000)}).then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      test: [CMD, curl, --fail, --silent, --output, /dev/null, --max-time, '5', --cacert, /run/preview-backroom-cert/cert.pem, 'https://backroom:3000/']
       interval: 10s
       timeout: 8s
       retries: 30
@@ -165,8 +168,11 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - preview-caddy-data:/data
+      - preview-backroom-cert:/run/preview-backroom-cert:ro
 
 volumes:
   preview-postgres:
   preview-minio:
+  preview-backroom-key:
+  preview-backroom-cert:
   preview-caddy-data:
