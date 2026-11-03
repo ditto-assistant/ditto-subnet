@@ -7877,6 +7877,16 @@ def test_gpt6_sol_cost_fallback_uses_its_own_conservative_rates() -> None:
     ) == pytest.approx(0.528)
 
 
+def test_gpt61_terra_cost_fallback_uses_its_own_conservative_rates() -> None:
+    assert _cost(80_000, 8_000, model="openai/gpt-6.1-terra") == pytest.approx(0.24)
+    assert _cost(
+        272_000,
+        8_000,
+        cached_input_tokens=200_000,
+        model="openai/gpt-6.1-terra-20261028",
+    ) == pytest.approx(0.244)
+
+
 def test_exact_reported_cost_precedes_conservative_fallback(
     tmp_path: Path,
 ) -> None:

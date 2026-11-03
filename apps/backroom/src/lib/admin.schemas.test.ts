@@ -2367,6 +2367,20 @@ describe('screener review settings schemas', () => {
     expect(parsed.l3_model).toBe('openai/gpt-6-sol')
   })
 
+  it('accepts GPT-6.1 Terra deep review with a deep-review budget up to an hour', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings,
+      l2_model: 'openai/gpt-6.1-terra',
+      l2_fallback_models: ['openai/gpt-6-sol', 'z-ai/glm-5.2'],
+      l3_model: 'openai/gpt-6.1-terra',
+      timeout_seconds: 2_700,
+    })
+    expect(parsed.l2_model).toBe('openai/gpt-6.1-terra')
+    expect(parsed.l3_model).toBe('openai/gpt-6.1-terra')
+    expect(parsed.timeout_seconds).toBe(2_700)
+    expect(() => screenerReviewSettingsSchema.parse({ ...settings, timeout_seconds: 3_601 })).toThrow()
+  })
+
   it('parses current, history, and signed worker application status', () => {
     const parsed = screenerReviewControlSchema.parse({
       current: [],
@@ -2436,7 +2450,7 @@ describe('screener review settings schemas', () => {
   })
 
   it('accepts Platform L2 budgets and preserves the upper bounds', () => {
-    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [1800, 256]]) {
+    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [3600, 256]]) {
       const parsed = screenerReviewSettingsSchema.parse({
         ...settings, timeout_seconds, max_steps, max_input_tokens: 5_000_000,
         max_output_tokens: 1_000_000,
@@ -2450,7 +2464,7 @@ describe('screener review settings schemas', () => {
       expect(parsed.max_cost_usd).toBe(25)
     }
     expect(() => screenerReviewSettingsSchema.parse({
-      ...settings, timeout_seconds: 1801,
+      ...settings, timeout_seconds: 3601,
     })).toThrow()
     expect(() => screenerReviewSettingsSchema.parse({
       ...settings, max_steps: 257,

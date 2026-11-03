@@ -609,11 +609,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if config.l2_review_model not in {
         "openai/gpt-5.6-terra",
         "openai/gpt-6-sol",
+        "openai/gpt-6.1-terra",
         "moonshotai/kimi-k3",
     }:
         raise ScreenerConfigError(
             "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra, "
-            "openai/gpt-6-sol, or moonshotai/kimi-k3"
+            "openai/gpt-6-sol, openai/gpt-6.1-terra, or moonshotai/kimi-k3"
         )
     if config.review_inference_provider not in REVIEW_INFERENCE_PROVIDERS:
         raise ScreenerConfigError(
@@ -631,9 +632,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2, optionally "
             "followed by openai/gpt-5.6-sol for legacy revisions"
         )
-    if config.l3_review_model not in {"openai/gpt-5.6-sol", "openai/gpt-6-sol"}:
+    if config.l3_review_model not in {
+        "openai/gpt-5.6-sol",
+        "openai/gpt-6-sol",
+        "openai/gpt-6.1-terra",
+    }:
         raise ScreenerConfigError(
-            "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol or openai/gpt-6-sol"
+            "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol, "
+            "openai/gpt-6-sol, or openai/gpt-6.1-terra"
         )
     if config.l3_review_provider != config.review_inference_provider:
         raise ScreenerConfigError(
@@ -656,9 +662,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError("SCREENER_L2_WORKSPACE_ROOT must be absolute")
     if not 1 <= config.l2_max_steps <= 256:
         raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 256")
-    if not 30 <= config.l2_timeout_seconds <= 1_800:
+    if not 30 <= config.l2_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
-            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 1800"
+            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 3600"
         )
     if not 1 <= config.l2_max_output_tokens <= 1_000_000:
         raise ScreenerConfigError(

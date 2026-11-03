@@ -83,7 +83,7 @@ the VM:
   OpenAI-compatible gateway: `/chat/completions` for L1 and L4, `/responses`
   for L2 and L3. `ditto` is Ditto Inference
   (https://developer.heyditto.ai/endpoints): create one endpoint, add model
-  routes for `openai/gpt-6-luna`, `openai/gpt-6-sol`,
+  routes for `openai/gpt-6-luna`, `openai/gpt-6-sol`, `openai/gpt-6.1-terra`,
   `z-ai/glm-5.2`, and `z-ai/glm-5.3-flash` (requested ids stay as the signed
   review evidence records them), and store its `ditto_inf_` key in the key
   file below. `SCREENER_SOURCE_REVIEW_BASE_URL` overrides the provider default
@@ -102,7 +102,11 @@ the VM:
   the validators' shared OpenRouter secret is never rotated for the screener. The default reviewer model is
   `openai/gpt-6-luna`; every request enforces ZDR and denies data collection.
   Optional escalation uses `openai/gpt-6-sol` for L2 and the independent L3
-  clearance critic. L2 retains a GLM model fallback for upstream routing failures and all
+  clearance critic; Platform review-settings revisions may select
+  `openai/gpt-6.1-terra` for either layer (supports tools and reasoning on
+  OpenRouter, $1/$5 per million tokens as of 2026-11-03). The L2/L3
+  `timeout_seconds` stage budget accepts up to 3600 s; the attempt's hard
+  lease lifetime grows with it (L1 + L2/L3 [+ court] budgets + 45 min). L2 retains a GLM model fallback for upstream routing failures and all
   layers allow OpenRouter provider failover, sorted for throughput. They reuse
   the same protected key file.
 
