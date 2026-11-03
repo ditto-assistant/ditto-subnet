@@ -7938,6 +7938,18 @@ def _cost(
     cached_input_tokens: int = 0,
     model: str | None = None,
 ) -> float:
+    if model == "openai/gpt-6.1-terra" or (model or "").startswith(
+        "openai/gpt-6.1-terra-"
+    ):
+        # OpenRouter 2026-11-03: standard Terra 6.1 is $1/$5 per million with
+        # $0.05 cached input; use a 2x ceiling (as for Sol6 below) when exact
+        # reported cost is absent.
+        uncached = max(0, input_tokens - cached_input_tokens)
+        return (
+            uncached * 2.0 / 1_000_000
+            + cached_input_tokens * 0.1 / 1_000_000
+            + output_tokens * 10.0 / 1_000_000
+        )
     if model == "openai/gpt-6-sol" or (model or "").startswith("openai/gpt-6-sol-"):
         # OpenRouter 2026-09-25: standard Sol6 is $2/$10 per million;
         # use the $4/$20 OpenAI Fast ceiling when exact reported cost is absent.

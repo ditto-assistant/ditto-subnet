@@ -624,6 +624,7 @@ export function ScreenerReviewControlPanel({
                 >
                   <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
                   <option value="openai/gpt-6-sol">GPT-6 Sol</option>
+                  <option value="openai/gpt-6.1-terra">GPT-6.1 Terra</option>
                   <option value="moonshotai/kimi-k3">Kimi K3</option>
                   <option value="z-ai/glm-5.2">GLM 5.2</option>
                   <option value="openai/gpt-5.6-sol">GPT-5.6 SOL</option>
@@ -643,6 +644,7 @@ export function ScreenerReviewControlPanel({
                   >
                     <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
                     <option value="openai/gpt-6-sol">GPT-6 Sol</option>
+                    <option value="openai/gpt-6.1-terra">GPT-6.1 Terra</option>
                     <option value="moonshotai/kimi-k3">Kimi K3</option>
                     <option value="z-ai/glm-5.2">GLM 5.2</option>
                     <option value="openai/gpt-5.6-sol">GPT-5.6 SOL</option>
@@ -798,6 +800,7 @@ export function ScreenerReviewControlPanel({
                 >
                   <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
                   <option value="openai/gpt-6-sol">GPT-6 Sol</option>
+                  <option value="openai/gpt-6.1-terra">GPT-6.1 Terra</option>
                 </select>
               </label>
               <button
