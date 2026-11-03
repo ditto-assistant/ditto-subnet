@@ -10,7 +10,7 @@ byte-for-byte aligned with the subnet implementation.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Container, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal
@@ -1250,23 +1250,50 @@ def ledger_row_dueling_fields(row: object) -> dict[str, Any]:
     Database-sourced projections carry the representative score's season and
     signed ``details.dueling`` so a v16 row stays in the pool (the fold drops
     one without them). A stored report that no longer validates is withheld,
-    which the fold reads as no dueling evidence. Per-seed records come only
-    from the served ledger (:func:`koth_entries_from_ledger`).
+    which the fold reads as no dueling evidence. Per-seed records come from
+    :func:`dueling_seed_records`.
     """
     season = getattr(row, "dueling_season_id", None)
-    raw = getattr(row, "dueling", None)
-    report: DuelingReport | None = None
-    if isinstance(raw, DuelingReport):
-        report = raw
-    elif isinstance(raw, dict):
-        try:
-            report = DuelingReport.model_validate(raw)
-        except ValidationError:
-            report = None
     return {
         "dueling_season_id": None if season is None else str(season),
-        "dueling": report,
+        "dueling": _stored_dueling_report(getattr(row, "dueling", None)),
     }
+
+
+def _stored_dueling_report(raw: object) -> DuelingReport | None:
+    """A stored ``details.dueling`` as its model; ``None`` when it does not
+    validate (the fold then reads no dueling evidence for it)."""
+    if isinstance(raw, DuelingReport):
+        return raw
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return DuelingReport.model_validate(raw)
+    except ValidationError:
+        return None
+
+
+def dueling_seed_records(
+    rows: Iterable[object], *, seeds: Container[int]
+) -> tuple[DuelingSeedRecord, ...] | None:
+    """Per-seed ``DuelingSeedRecord`` from stored confirmation rows.
+
+    ``rows`` are ``ConfirmationHistoryRow``-shaped (``seed``,
+    ``bench_version``, ``dueling``); only seeds the projection admits are kept,
+    the database analogue of the served ledger's active confirmation window.
+    A database-sourced v16 projection then pairs exactly as the pinned fold
+    does over the same records.
+    """
+    records = tuple(
+        DuelingSeedRecord(
+            seed=seed,
+            bench_version=int(getattr(row, "bench_version", 0)),
+            report=_stored_dueling_report(getattr(row, "dueling", None)),
+        )
+        for row in rows
+        if isinstance(seed := getattr(row, "seed", None), int) and seed in seeds
+    )
+    return records or None
 
 
 def _record_masked_composite(
