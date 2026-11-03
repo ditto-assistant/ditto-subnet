@@ -51,12 +51,14 @@ const settings = {
   epochs_per_round: 4, counted_columns: 5, challenger_columns: 1, reference_agent_ids: [],
   privacy_window_rounds: 6, onchain_commitment: true, validator_rounds_enabled: false, min_round_validators: 3,
   upload_fee_required: false, dueling_enabled: false, rounds_per_season: 1,
+  dueling_shadow_bench_version: null,
 }
 // What a Platform that predates the generator upload fee (and the round
 // switch quorum, and dueling seasons) returns.
 const {
   upload_fee_required: _absent, min_round_validators: _noQuorum,
-  dueling_enabled: _noDueling, rounds_per_season: _noSeasons, ...olderSettings
+  dueling_enabled: _noDueling, rounds_per_season: _noSeasons,
+  dueling_shadow_bench_version: _noShadow, ...olderSettings
 } = settings
 const runSummary = {
   run_id: RUN, attempt: 1, status: 'qualified', outcome: 'qualified', score: null,

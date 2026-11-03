@@ -24331,6 +24331,8 @@ export interface components {
              * @default false
              */
             dueling_enabled: boolean;
+            /** Dueling Shadow Bench Version */
+            dueling_shadow_bench_version?: number | null;
             /**
              * Epochs Per Round
              * @default 4

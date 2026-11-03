@@ -154,6 +154,13 @@ async def dueling_target(
         version = active
     elif desired is not None and is_dueling_bench_version(desired):
         version, shadow = desired, True
+    elif settings.dueling_shadow_bench_version is not None and is_dueling_bench_version(
+        settings.dueling_shadow_bench_version
+    ):
+        # A canary target: shadow seasons, never authoritative, so a canary at
+        # this version can lease a slice before any rollout opens.
+        version, shadow = settings.dueling_shadow_bench_version, True
+        live = live | {version}
     blocked: str | None = None
     if settings.mode == "off":
         blocked = "generator competition mode is off"

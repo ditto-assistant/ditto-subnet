@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.dueling_seasons as dueling_mod
+from ditto.api_models.generator import generator_settings_confirmation
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.dueling_seasons import (
     DuelingEvidenceRejected,
@@ -49,11 +50,13 @@ from ditto.tests.api_server.endpoints.test_generator_competition import (
     _archive,
     _install,
     _open_lane,
+    _settings,
 )
 from ditto.tests.api_server.endpoints.test_generator_rounds import _seed_agent
 from ditto_screening_protocol.dueling import season_commitment, season_seed, slice_seed
 
 _WORK = "/api/v1/generator-scorer/dueling-work"
+_SETTINGS_URL = "/api/v1/admin/generator-competition/settings"
 _POLL = {"scorer_version": "challenge-scorer/9", "dueling_work_kinds": "slice,battery"}
 _ROUND = 10
 _EPOCHS = 4
@@ -842,3 +845,115 @@ class TestDuelingLease:
                     slice_sha256=digest,
                     owner_key="coldkey:a",
                 )
+
+
+class TestShadowCanarySeasons:
+    async def test_a_canary_version_gets_shadow_seasons_and_slices(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With 16 neither active nor rolling out, an operator-named shadow
+        version commits and opens shadow seasons, so a canary lease at 16 can
+        get a slice before start_benchmark_rollout."""
+        import ditto.api_server.endpoints.admin_generator_competition as admin_mod
+
+        _install(app, session_maker)
+        _active(monkeypatch, 15)
+        current = (await client.get(_SETTINGS_URL, headers=_ADMIN)).json()
+        body = {
+            "expected_revision": current["effective"]["revision"],
+            "settings": _settings(
+                epochs_per_round=_EPOCHS,
+                dueling_enabled=True,
+                dueling_shadow_bench_version=99,
+            ),
+            "reason": "shadow dueling seasons for the v16 canary",
+            "confirmation": generator_settings_confirmation("shadow"),
+        }
+        refused = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        assert refused.status_code == 422
+        assert "not a shipped bench contract" in refused.text
+        monkeypatch.setattr(admin_mod, "benchmark_contract", lambda version: version)
+        body["settings"] = {**body["settings"], "dueling_shadow_bench_version": 16}
+        ok = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        assert ok.status_code == 200, ok.text
+
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:a", salt="a"
+        )
+        await _scored_round(session_maker, [(miner, 0.4, 0.1)])
+
+        notes = await _tick(session_maker, _ROUND * _EPOCHS + 1)
+        assert any("season 11 v16: committed (shadow)" in n for n in notes)
+        work = (await client.get(_WORK, headers=_SCORER, params=_POLL)).json()["work"]
+        assert work["kind"] == "battery" and work["bench_version"] == 16
+        posted = await client.post(
+            "/api/v1/generator-scorer/dueling-battery",
+            headers=_SCORER,
+            json={
+                "lease_id": work["lease_id"],
+                "season_id": work["season_id"],
+                "scorer_version": "challenge-scorer/9",
+                "candidates": [
+                    {
+                        "submission_id": c["submission_id"],
+                        "ok": True,
+                        "grading_bench_version": 15,
+                    }
+                    for c in work["candidates"]
+                ],
+            },
+        )
+        assert posted.status_code == 200, posted.text
+        await _tick(session_maker, 11 * _EPOCHS)
+        [opened] = [s for s in await _seasons(session_maker) if s.status == "open"]
+        assert (opened.season_index, opened.shadow) == (11, True)
+        assert str(default.submission_id) in {
+            c["submission_id"] for c in opened.columns or ()
+        }
+
+        now = datetime.now(UTC)
+        with pytest.raises(DuelingSliceUnavailable):
+            await resolve_dueling_slice(
+                session_maker,
+                bench_version=16,
+                run_seed=42,
+                pinned_season_id=None,
+                pinned_slice_sha256=None,
+                now=now,
+            )
+        async with session_maker() as session, session.begin():
+            [row] = list(await session.scalars(select(DuelingSlicePreparation)))
+            raw = b'{"canary":1}'
+            row.status = "ready"
+            row.slice_bytes = raw
+            row.slice_sha256 = hashlib.sha256(raw).hexdigest()
+        served = await resolve_dueling_slice(
+            session_maker,
+            bench_version=16,
+            run_seed=42,
+            pinned_season_id=None,
+            pinned_slice_sha256=None,
+            now=now,
+        )
+        assert served.season_id == opened.id and served.slice_bytes == raw
+
+        # Clearing the shadow version closes the season on the next tick.
+        body["expected_revision"] = ok.json()["revision"]
+        body["settings"] = {**body["settings"], "dueling_shadow_bench_version": None}
+        assert (
+            await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        ).status_code == 200
+        await _tick(session_maker, 11 * _EPOCHS + 1)
+        closed = next(s for s in await _seasons(session_maker) if s.id == opened.id)
+        assert closed.status == "closed"
