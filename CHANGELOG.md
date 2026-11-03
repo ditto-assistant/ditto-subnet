@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.435.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: Add operator per-owner submission cooldown overrides
+  ([#3334](https://github.com/ditto-assistant/ditto-subnet/pull/3334),
+  [`39ce17f`](https://github.com/ditto-assistant/ditto-subnet/commit/39ce17f541af334c46b283eaa7d424fcdec985d3))
+
+- **platform,backroom**: Open dueling seasons and serve generator-scorer dueling work
+  ([#3338](https://github.com/ditto-assistant/ditto-subnet/pull/3338),
+  [`8af8c6e`](https://github.com/ditto-assistant/ditto-subnet/commit/8af8c6ef5f02df5b3f6ba5b9686b064653c80dd1))
+
+
 ## v0.434.0 (2026-11-03)
 
 ### Features
