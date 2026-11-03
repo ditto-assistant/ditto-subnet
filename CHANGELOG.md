@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.443.0 (2026-11-03)
+
+### Bug Fixes
+
+- **miner-cli**: Retire a saved payment proof that already funded an upload
+  ([#3078](https://github.com/ditto-assistant/ditto-subnet/pull/3078),
+  [`48db910`](https://github.com/ditto-assistant/ditto-subnet/commit/48db910cdbd6432ed626ba5ad9cfef5e44a557b8))
+
+### Features
+
+- **validator,platform,backroom**: Publish dueling season commitments on chain
+  ([#3366](https://github.com/ditto-assistant/ditto-subnet/pull/3366),
+  [`42940c5`](https://github.com/ditto-assistant/ditto-subnet/commit/42940c59bd146b69e0e94ff8bfef23a5bacabaab))
+
+
 ## v0.442.0 (2026-11-03)
 
 ### Features
