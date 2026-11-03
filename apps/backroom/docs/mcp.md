@@ -767,6 +767,55 @@ keeps one row per owner. The payload also names the admission rollout and
 whether `prev_gen_carryover` is enabled. The tool changes nothing and needs
 `backroom:read`.
 
+### Admitting one stranded submission
+
+`admit_stranded_submission(agentId, expectedActiveVersion, expectedSha256,
+expectedPreviousScoreCount, reason, confirmation)` is the guarded operator
+backfill for one row of that list, after activation. It renders and pins the
+agent's active-version dataset, appends the agent to the activated rollout
+after the frozen cohort, and writes a `stranded_admitted` rollout audit event
+with the actor, reason, artifact SHA and previous-era evidence, all in one
+transaction under the rollout row lock. The cohort size and activation gates
+do not move. The agent stays `scored` or `live`, and its previous-era scores
+and status history are not changed. Membership is an existing admission
+disjunct, and the post-activation top-up lane (`issue_rollout_topup_ticket`)
+leases activated-rollout members below the active-version quorum straight out
+of `scored`. That lane keeps its rails: distinct validators, retry budget,
+queue withdrawal and retirement.
+
+Each guard is checked before the dataset is rendered and again before
+commit:
+
+- `expectedActiveVersion` is the active bench, and no rollout is open;
+- `expectedSha256` is the agent's exact artifact SHA;
+- the agent is in the stranded list. That means `scored` or `live`, with
+  previous-era scores, no active-version score and no admission path. Banned
+  and rejected agents are never in it;
+- `expectedPreviousScoreCount` equals its previous-era score count;
+- it is not withdrawn from the active queue;
+- its screened image and screening policy satisfy the active contract.
+
+The confirmation is `ADMIT STRANDED {agentId} TO BENCHMARK
+V{expectedActiveVersion}`, with the lowercase UUID. Each call admits one
+agent. A second call for the same agent returns 409 because the agent is no
+longer stranded. The tool needs `backroom:write`.
+
+`get_stranded_admissions(agentId?)` reads each audited admission and its live
+effect:
+
+- `admitted` is the live admission predicate. It turns false if the agent is
+  later withdrawn;
+- `is_member`, actor, reason, the previous-era score count and median, and the
+  pinned dataset SHA;
+- active-version score count and median;
+- `first_lease_at`, the earliest active-version lease, and `live_lease_count`;
+- `ticket_state`: `awaiting_first_lease`, `leased`, `awaiting_next_lease` or
+  `quorum_complete`;
+- every active-version ticket.
+
+It changes nothing and needs `backroom:read`. `agent_scoring_readiness` also
+reports an admitted agent as a cohort-lane member.
+
 ## Diffing two submissions
 
 `get_copy_review_source_diff` pairs a held agent only with the reference its
