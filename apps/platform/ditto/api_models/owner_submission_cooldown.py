@@ -79,6 +79,8 @@ class AdminOwnerCooldownsResponse(BaseModel):
     """The current revision of every overridden identity, newest first.
     Expired and revoked identities are included only with
     ``include_inactive``."""
+    truncated: bool = False
+    """More identities matched than ``limit``; raise it to see them."""
     lookup: OwnerCooldownLookup | None = None
     """Present when ``scope`` and ``owner_key`` name one identity."""
 

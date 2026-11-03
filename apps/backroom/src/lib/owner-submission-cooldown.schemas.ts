@@ -51,6 +51,7 @@ export const ownerCooldownLookupSchema = z.object({
 export const ownerCooldownsSchema = z.object({
   active_count: z.number().int(),
   items: z.array(ownerCooldownRevisionSchema),
+  truncated: z.boolean().default(false),
   lookup: ownerCooldownLookupSchema.nullable().default(null),
 } satisfies PlatformResponseShape<Schemas['AdminOwnerCooldownsResponse']>)
 
@@ -58,6 +59,7 @@ export const ownerCooldownsInputSchema = z.object({
   scope: ownerScopeSchema.optional(),
   ownerKey: ownerKeySchema.optional(),
   includeInactive: z.boolean().default(false),
+  limit: z.number().int().min(1).max(500).default(200),
 })
 
 export const setOwnerCooldownInputSchema = z.object({

@@ -98,11 +98,8 @@ async def override_history(
     )
 
 
-async def latest_overrides(
-    session: AsyncSession,
-) -> list[OwnerSubmissionCooldownRevision]:
-    """The current revision of every owner identity ever overridden."""
-    newest = (
+def _newest_revisions():  # type: ignore[no-untyped-def]
+    return (
         select(
             OwnerSubmissionCooldownRevision.scope,
             OwnerSubmissionCooldownRevision.owner_key,
@@ -114,17 +111,57 @@ async def latest_overrides(
         )
         .subquery()
     )
-    return list(
-        await session.scalars(
-            select(OwnerSubmissionCooldownRevision)
+
+
+def _active_predicate(now: datetime):  # type: ignore[no-untyped-def]
+    return (OwnerSubmissionCooldownRevision.action == "set") & (
+        OwnerSubmissionCooldownRevision.expires_at > now
+    )
+
+
+async def latest_overrides(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    active_only: bool,
+    limit: int,
+) -> list[OwnerSubmissionCooldownRevision]:
+    """The current revision of overridden identities, newest first, bounded."""
+    newest = _newest_revisions()
+    statement = (
+        select(OwnerSubmissionCooldownRevision)
+        .join(
+            newest,
+            (newest.c.scope == OwnerSubmissionCooldownRevision.scope)
+            & (newest.c.owner_key == OwnerSubmissionCooldownRevision.owner_key)
+            & (newest.c.revision == OwnerSubmissionCooldownRevision.revision),
+        )
+        .order_by(
+            OwnerSubmissionCooldownRevision.created_at.desc(),
+            OwnerSubmissionCooldownRevision.revision_id.desc(),
+        )
+        .limit(limit)
+    )
+    if active_only:
+        statement = statement.where(_active_predicate(now))
+    return list(await session.scalars(statement))
+
+
+async def count_active_overrides(session: AsyncSession, *, now: datetime) -> int:
+    newest = _newest_revisions()
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(OwnerSubmissionCooldownRevision)
             .join(
                 newest,
                 (newest.c.scope == OwnerSubmissionCooldownRevision.scope)
                 & (newest.c.owner_key == OwnerSubmissionCooldownRevision.owner_key)
                 & (newest.c.revision == OwnerSubmissionCooldownRevision.revision),
             )
-            .order_by(OwnerSubmissionCooldownRevision.created_at.desc())
+            .where(_active_predicate(now))
         )
+        or 0
     )
 
 
@@ -190,7 +227,7 @@ async def owner_latest_submission_at(
 
 
 async def identity_latest_submission_at(
-    session: AsyncSession, *, scope: OwnerScope, owner_key: str
+    session: AsyncSession, *, scope: OwnerScope, owner_key: str, now: datetime
 ) -> datetime | None:
     """The newest submission an override on this one identity can be measured from.
 
@@ -237,7 +274,7 @@ async def identity_latest_submission_at(
         reserved = await session.scalar(
             select(func.max(UploadAdmissionReservation.created_at)).where(
                 UploadAdmissionReservation.miner_hotkey == owner_key,
-                UploadAdmissionReservation.expires_at > func.now(),
+                UploadAdmissionReservation.expires_at > now,
             )
         )
         if reserved is not None and (latest is None or _utc(reserved) > latest):
@@ -320,6 +357,7 @@ __all__ = [
     "OwnerCooldownNotice",
     "OwnerScope",
     "active_overrides_for",
+    "count_active_overrides",
     "current_override",
     "identity_latest_submission_at",
     "lock_owner_cooldown_hotkey",

@@ -44,6 +44,7 @@ from ditto.db.models import (
     SubmissionSettingsRevision,
 )
 from ditto.db.queries.owner_submission_cooldown import (
+    count_active_overrides,
     current_override,
     identity_latest_submission_at,
     latest_overrides,
@@ -239,7 +240,7 @@ async def _owner_lookup(
     history = await override_history(session, scope=scope, owner_key=owner_key)
     current = history[0] if history else None
     latest_submission = await identity_latest_submission_at(
-        session, scope=scope, owner_key=owner_key
+        session, scope=scope, owner_key=owner_key, now=now
     )
     next_allowed_at = None
     if (
@@ -275,6 +276,7 @@ async def get_owner_cooldowns(
     scope: OwnerScope | None = None,
     owner_key: Annotated[str | None, Query(max_length=128)] = None,
     include_inactive: bool = False,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> AdminOwnerCooldownsResponse:
     """List operator per-owner submission cooldown overrides.
 
@@ -287,16 +289,19 @@ async def get_owner_cooldowns(
             status_code=422, detail="scope and owner_key must be given together"
         )
     now = datetime.now(UTC)
-    rows = [_owner_revision(row, now=now) for row in await latest_overrides(session)]
-    active = [row for row in rows if row.state == "active"]
+    fetched = await latest_overrides(
+        session, now=now, active_only=not include_inactive, limit=limit + 1
+    )
+    rows = [_owner_revision(row, now=now) for row in fetched[:limit]]
     lookup = None
     if scope is not None and owner_key is not None:
         lookup = await _owner_lookup(
             session, scope=scope, owner_key=owner_key.strip(), now=now
         )
     return AdminOwnerCooldownsResponse(
-        active_count=len(active),
-        items=rows if include_inactive else active,
+        active_count=await count_active_overrides(session, now=now),
+        items=rows,
+        truncated=len(fetched) > limit,
         lookup=lookup,
     )
 

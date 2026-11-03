@@ -2804,7 +2804,7 @@ describe('Backroom MCP tools', () => {
     expect(read.isError).not.toBe(true)
     expect(readJsonResult(read)).toMatchObject({ active_count: 1, lookup: { next_allowed_at: '2026-11-04T11:00:00Z' } })
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      `https://platform-api.heyditto.ai/api/v1/admin/submission-settings/owner-cooldowns?include_inactive=false&scope=hotkey&owner_key=${ownerKey}`,
+      `https://platform-api.heyditto.ai/api/v1/admin/submission-settings/owner-cooldowns?include_inactive=false&limit=200&scope=hotkey&owner_key=${ownerKey}`,
     )
 
     const set = await client.callTool({

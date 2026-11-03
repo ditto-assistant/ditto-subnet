@@ -17,8 +17,10 @@ def _interval(seconds: int) -> str:
     if seconds % 3600 == 0:
         hours = seconds // 3600
         return f"{hours} hour" if hours == 1 else f"{hours} hours"
-    minutes = ceil(seconds / 60)
-    return f"{minutes} minute" if minutes == 1 else f"{minutes} minutes"
+    if seconds % 60 == 0:
+        minutes = seconds // 60
+        return f"{minutes} minute" if minutes == 1 else f"{minutes} minutes"
+    return f"{seconds} seconds"
 
 
 def submission_cooldown_message(

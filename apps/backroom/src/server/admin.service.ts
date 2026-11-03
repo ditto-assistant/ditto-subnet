@@ -1443,7 +1443,10 @@ export async function fetchOwnerCooldowns(rawInput: unknown) {
   if ((input.scope === undefined) !== (input.ownerKey === undefined)) {
     throw new Error('scope and ownerKey must be given together')
   }
-  const params = new URLSearchParams({ include_inactive: String(input.includeInactive) })
+  const params = new URLSearchParams({
+    include_inactive: String(input.includeInactive),
+    limit: String(input.limit),
+  })
   if (input.scope !== undefined && input.ownerKey !== undefined) {
     params.set('scope', input.scope)
     params.set('owner_key', input.ownerKey)

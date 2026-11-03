@@ -28,6 +28,7 @@ from ditto.db.queries.agents import (
     SubmissionCooldownError,
     submission_cooldown_decision,
 )
+from ditto.db.queries.owner_submission_cooldown import OwnerCooldownNotice
 from ditto.db.queries.submission_settings import (
     EffectiveSubmissionSettings,
     consume_or_enforce_upload_admission,
@@ -521,3 +522,52 @@ async def test_lookup_counts_a_live_reservation_on_the_hotkey(
     assert abs(latest - now) < timedelta(seconds=1)
     next_allowed = datetime.fromisoformat(created.json()["next_allowed_at"])
     assert next_allowed > now + timedelta(hours=23)
+
+
+async def test_listing_is_bounded_and_filters_active_in_the_query(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    await _add_override(
+        session, scope="hotkey", key=_HOTKEY, expires_at=now + timedelta(days=1)
+    )
+    await _add_override(
+        session, scope="hotkey", key=_OTHER_HOTKEY, expires_at=now + timedelta(days=1)
+    )
+    await _add_override(
+        session,
+        scope="coldkey",
+        key=_COLDKEY,
+        expires_at=now - timedelta(minutes=1),
+        created_at=now - timedelta(days=2),
+    )
+    page = await client.get(_URL, headers=_HEADERS, params={"limit": 1})
+    assert page.status_code == 200, page.text
+    assert page.json()["active_count"] == 2
+    assert len(page.json()["items"]) == 1
+    assert page.json()["truncated"] is True
+    everything = await client.get(
+        _URL, headers=_HEADERS, params={"include_inactive": "true"}
+    )
+    assert sorted(row["state"] for row in everything.json()["items"]) == [
+        "active",
+        "active",
+        "expired",
+    ]
+    assert everything.json()["truncated"] is False
+
+
+async def test_override_message_reports_unaligned_intervals_exactly() -> None:
+    now = datetime(2026, 11, 3, tzinfo=UTC)
+    message = submission_cooldown_message(
+        now + timedelta(seconds=90),
+        now=now,
+        owner_override=OwnerCooldownNotice(
+            cooldown_seconds=90, expires_at=now + timedelta(days=1)
+        ),
+    )
+    assert "one submission per 90 seconds until" in message

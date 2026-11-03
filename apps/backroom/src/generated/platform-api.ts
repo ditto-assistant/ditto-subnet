@@ -13140,6 +13140,11 @@ export interface components {
             /** Items */
             items: components["schemas"]["OwnerCooldownRevision"][];
             lookup?: components["schemas"]["OwnerCooldownLookup"] | null;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
         };
         /**
          * AdminOwnerFootprint
@@ -53967,6 +53972,7 @@ export interface operations {
                 scope?: ("coldkey" | "hotkey") | null;
                 owner_key?: string | null;
                 include_inactive?: boolean;
+                limit?: number;
             };
             header?: {
                 authorization?: string | null;
