@@ -145,9 +145,10 @@ async def record_heartbeat(
         "last_poll": poll,
         "last_seen_at": now,
     }
-    if capability.dueling_work_kinds is not None:
-        # Only the dueling poll advertises these; other polls keep them.
-        values["dueling_work_kinds"] = list(capability.dueling_work_kinds) or None
+    if poll == "dueling" or capability.dueling_work_kinds is not None:
+        # A dueling poll always restates its kinds (none clears them); the
+        # qualification and round polls keep what the last dueling poll said.
+        values["dueling_work_kinds"] = list(capability.dueling_work_kinds or ()) or None
     statement = insert(GeneratorScorerHeartbeat).values(
         scorer_id=capability.scorer_id, first_seen_at=now, **values
     )
