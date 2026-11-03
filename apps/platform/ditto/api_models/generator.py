@@ -211,6 +211,15 @@ class GeneratorCompetitionSettings(BaseModel):
     with ``rounds_per_season x epochs_per_round < 2`` is refused. A revision
     written before this field existed reads as 1."""
 
+    dueling_shadow_bench_version: Annotated[int, Field(ge=16)] | None = None
+    """A bench version (16+) to run non-authoritative shadow dueling seasons
+    at while no dueling version is active or rolling out, so
+    ``issue_benchmark_canary`` at that version can lease a slice before
+    ``start_benchmark_rollout``. Ignored while a dueling version is active or
+    rolling out. Seasons opened for it are ``shadow`` and never
+    authoritative. Must name a shipped bench contract. Null by default, and a
+    revision written before this field existed reads as null."""
+
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
         if self.min_solver_owners > self.min_panel:
@@ -228,6 +237,8 @@ class GeneratorCompetitionSettings(BaseModel):
 
         Checked on write, not on read, so a stored revision never turns
         invalid (and closes the lane) because of it."""
+        if self.dueling_shadow_bench_version is not None and not self.dueling_enabled:
+            return "dueling_shadow_bench_version needs dueling_enabled"
         epochs = self.rounds_per_season * self.epochs_per_round
         if self.dueling_enabled and epochs < MIN_DUELING_SEASON_EPOCHS:
             return (

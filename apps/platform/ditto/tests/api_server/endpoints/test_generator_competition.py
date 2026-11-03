@@ -92,6 +92,7 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "upload_fee_required": False,
         "dueling_enabled": False,
         "rounds_per_season": 1,
+        "dueling_shadow_bench_version": None,
     }
     base.update(overrides)
     return base

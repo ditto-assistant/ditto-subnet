@@ -81,6 +81,10 @@ export const generatorCompetitionSettingsSchema = z.object({
   // Generator rounds per dueling season (default 1). Platform refuses to
   // enable dueling with rounds_per_season x epochs_per_round < 2.
   rounds_per_season: z.number().int().min(1).max(48),
+  // A shipped bench version (16+) to run shadow dueling seasons at while no
+  // dueling version is active or rolling out, so a canary at it can lease a
+  // slice before start_benchmark_rollout. Null by default; needs dueling_enabled.
+  dueling_shadow_bench_version: z.number().int().min(16).nullable(),
 })
 
 // The shortest safe dueling season in subnet epochs (dueling-bench.md
@@ -100,6 +104,7 @@ const generatorSettingsReadSchema = generatorCompetitionSettingsSchema.extend({
   // per season.
   dueling_enabled: z.boolean().default(false),
   rounds_per_season: z.number().int().min(1).max(48).default(1),
+  dueling_shadow_bench_version: z.number().int().min(16).nullable().default(null),
 })
 
 export const generatorSettingsRevisionSchema = z.object({
