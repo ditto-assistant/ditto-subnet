@@ -122,14 +122,14 @@ export const listDuelingSlicesInputSchema = z.object({
   seasonId: uuid.optional(),
   status: duelingSliceStatus.optional(),
   limit: z.number().int().min(1).max(200).default(50),
-  offset: z.number().int().min(0).default(0),
+  offset: z.number().int().min(0).max(100_000).default(0),
 })
 
 export const rotateDuelingSeasonInputSchema = z
   .object({
     seasonId: uuid.optional(),
     immediate: z.boolean().default(false),
-    reason: auditReasonSchema(8),
+    reason: auditReasonSchema(8).max(2000),
     confirmation: z.string(),
   })
   .superRefine((input, context) => {

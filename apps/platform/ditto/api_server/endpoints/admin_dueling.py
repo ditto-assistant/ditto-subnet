@@ -23,7 +23,9 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import Float, func, select, true
+from sqlalchemy import column as sa_column
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.dueling import (
@@ -68,18 +70,31 @@ async def _column_means(
     totals: dict[str, list[float]] = {
         column["column_id"]: [0, 0.0, 0] for column in season.columns
     }
-    for dueling in await session.scalars(
-        select(Score.dueling).where(
-            Score.dueling_season_id == season.id, Score.dueling.is_not(None)
+    # Aggregated in PostgreSQL: one row per column, whatever the season's
+    # score count.
+    element = (
+        func.jsonb_array_elements(Score.dueling["columns"])
+        .table_valued(sa_column("value", JSONB))
+        .alias("element")
+    )
+    column_id_label = element.c.value["column_id"].astext.label("column_id")
+    for column_id, cases, total, scores in await session.execute(
+        select(
+            column_id_label,
+            func.sum(element.c.value["n"].astext.cast(Float)),
+            func.sum(element.c.value["sum"].astext.cast(Float)),
+            func.count(),
         )
+        .select_from(Score)
+        .join(element, true())
+        .where(Score.dueling_season_id == season.id, Score.dueling.is_not(None))
+        .group_by(column_id_label)
     ):
-        for column in (dueling or {}).get("columns", ()):
-            bucket = totals.get(str(column.get("column_id")))
-            if bucket is None:
-                continue
-            bucket[0] += float(column.get("n") or 0)
-            bucket[1] += float(column.get("sum") or 0.0)
-            bucket[2] += 1
+        bucket = totals.get(str(column_id))
+        if bucket is not None:
+            bucket[0] = float(cases or 0)
+            bucket[1] = float(total or 0.0)
+            bucket[2] = int(scores or 0)
     means = {
         cid: (bucket[1] / bucket[0]) if bucket[0] else None
         for cid, bucket in totals.items()
