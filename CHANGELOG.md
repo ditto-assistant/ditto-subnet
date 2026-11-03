@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.434.0 (2026-11-03)
+
+### Features
+
+- **datagen,protocol**: Add dueling season, slice and composite math
+  ([#3337](https://github.com/ditto-assistant/ditto-subnet/pull/3337),
+  [`90d4fa6`](https://github.com/ditto-assistant/ditto-subnet/commit/90d4fa62e9413bf02c46098e85a2f2c150844275))
+
+
 ## v0.433.0 (2026-11-03)
 
 ### Bug Fixes
