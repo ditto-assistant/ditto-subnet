@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +45,7 @@ from ditto.db.models import (
     InferenceRoutingPolicy,
     ValidatorHeartbeat,
 )
+from ditto.db.queries.benchmark_era_stranded import stranded_previous_era_agents
 from ditto.db.queries.benchmark_rollout import (
     MIN_SCOREABLE_BENCH_VERSION,
     PRIORITY_COHORT_SIZE,
@@ -548,6 +551,112 @@ async def rollout_retry_diagnostics(session: AsyncSession) -> list[dict[str, obj
         if (retry := states.get(agent.agent_id)) is not None
         and retry.bench_version == rollout.desired_version
     ]
+
+
+class StrandedEraAgentRow(BaseModel):
+    """One scored previous-era submission the active era does not admit."""
+
+    agent_id: UUID
+    agent_name: str
+    agent_version: int | None
+    miner_hotkey: str
+    owner_key: str
+    status: str
+    submitted_at: datetime
+    first_screening_pass_at: datetime | None
+    previous_score_count: int
+    previous_median_composite: float | None
+    previous_finalized: bool
+    has_active_dataset: bool
+    queue_withdrawn: bool
+    cohort_sibling_agent_id: UUID | None
+    owner_best_stranded: bool
+    reason: Literal["owner_in_cohort", "owner_outside_cohort"]
+
+
+class StrandedEraRolloutSummary(BaseModel):
+    rollout_id: UUID
+    from_version: int
+    desired_version: int
+    status: str
+    created_at: datetime
+    activated_at: datetime | None
+    cohort_size: int
+
+
+class StrandedEraResponse(BaseModel):
+    """Scored previous-era work with no admission path into the active era."""
+
+    active_bench_version: int
+    previous_bench_version: int | None
+    rollout: StrandedEraRolloutSummary | None
+    prev_gen_carryover_enabled: bool
+    total: int
+    owner_count: int
+    finalized_count: int
+    owner_in_cohort_count: int
+    owner_outside_cohort_count: int
+    truncated: bool
+    limit: int
+    offset: int
+    items: list[StrandedEraAgentRow]
+
+
+@router.get("/stranded-previous-era", response_model=StrandedEraResponse)
+async def get_stranded_previous_era(
+    _: AdminDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    owner_best_only: bool = False,
+) -> StrandedEraResponse:
+    """List scored previous-era submissions the active benchmark era excludes.
+
+    Read-only. These are ``scored``/``live`` submissions with accepted scores
+    on the admission rollout's ``from_version``, no active-version score, and
+    no admission disjunct (not a frozen cohort member, not carryover, not
+    first queued in the new era, no audited contract refresh). By design no
+    active-version dataset is pinned for them and no validator leases them, so
+    they are absent from the active leaderboard. Registered before
+    ``/{desired_version}`` so the literal path wins.
+    """
+
+    report = await stranded_previous_era_agents(session)
+    settings = await resolve_queue_policy_settings(session)
+    items = [
+        item for item in report.items if item.owner_best_stranded or not owner_best_only
+    ]
+    rollout = report.rollout
+    return StrandedEraResponse(
+        active_bench_version=report.active_bench_version,
+        previous_bench_version=rollout.from_version if rollout is not None else None,
+        rollout=(
+            StrandedEraRolloutSummary(
+                rollout_id=rollout.rollout_id,
+                from_version=rollout.from_version,
+                desired_version=rollout.desired_version,
+                status=rollout.status,
+                created_at=rollout.created_at,
+                activated_at=rollout.activated_at,
+                cohort_size=rollout.cohort_size,
+            )
+            if rollout is not None
+            else None
+        ),
+        prev_gen_carryover_enabled=settings.prev_gen_carryover.enabled,
+        total=len(items),
+        owner_count=report.owner_count,
+        finalized_count=report.finalized_count,
+        owner_in_cohort_count=report.owner_in_cohort_count,
+        owner_outside_cohort_count=report.owner_outside_cohort_count,
+        truncated=report.truncated,
+        limit=limit,
+        offset=offset,
+        items=[
+            StrandedEraAgentRow(**asdict(item))
+            for item in items[offset : offset + limit]
+        ],
+    )
 
 
 @router.get("/{desired_version}")

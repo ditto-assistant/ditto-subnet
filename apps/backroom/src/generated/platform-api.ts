@@ -493,6 +493,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/benchmark-rollout/stranded-previous-era": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stranded Previous Era
+         * @description List scored previous-era submissions the active benchmark era excludes.
+         *
+         *     Read-only. These are ``scored``/``live`` submissions with accepted scores
+         *     on the admission rollout's ``from_version``, no active-version score, and
+         *     no admission disjunct (not a frozen cohort member, not carryover, not
+         *     first queued in the new era, no audited contract refresh). By design no
+         *     active-version dataset is pinned for them and no validator leases them, so
+         *     they are absent from the active leaderboard. Registered before
+         *     ``/{desired_version}`` so the literal path wins.
+         */
+        get: operations["get_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/benchmark-rollout/{desired_version}": {
         parameters: {
             query?: never;
@@ -39698,6 +39726,107 @@ export interface components {
             /** Status */
             status: string;
         };
+        /**
+         * StrandedEraAgentRow
+         * @description One scored previous-era submission the active era does not admit.
+         */
+        StrandedEraAgentRow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Version */
+            agent_version: number | null;
+            /** Cohort Sibling Agent Id */
+            cohort_sibling_agent_id: string | null;
+            /** First Screening Pass At */
+            first_screening_pass_at: string | null;
+            /** Has Active Dataset */
+            has_active_dataset: boolean;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Best Stranded */
+            owner_best_stranded: boolean;
+            /** Owner Key */
+            owner_key: string;
+            /** Previous Finalized */
+            previous_finalized: boolean;
+            /** Previous Median Composite */
+            previous_median_composite: number | null;
+            /** Previous Score Count */
+            previous_score_count: number;
+            /** Queue Withdrawn */
+            queue_withdrawn: boolean;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "owner_in_cohort" | "owner_outside_cohort";
+            /** Status */
+            status: string;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+        };
+        /**
+         * StrandedEraResponse
+         * @description Scored previous-era work with no admission path into the active era.
+         */
+        StrandedEraResponse: {
+            /** Active Bench Version */
+            active_bench_version: number;
+            /** Finalized Count */
+            finalized_count: number;
+            /** Items */
+            items: components["schemas"]["StrandedEraAgentRow"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Owner Count */
+            owner_count: number;
+            /** Owner In Cohort Count */
+            owner_in_cohort_count: number;
+            /** Owner Outside Cohort Count */
+            owner_outside_cohort_count: number;
+            /** Prev Gen Carryover Enabled */
+            prev_gen_carryover_enabled: boolean;
+            /** Previous Bench Version */
+            previous_bench_version: number | null;
+            rollout: components["schemas"]["StrandedEraRolloutSummary"] | null;
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** StrandedEraRolloutSummary */
+        StrandedEraRolloutSummary: {
+            /** Activated At */
+            activated_at: string | null;
+            /** Cohort Size */
+            cohort_size: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Desired Version */
+            desired_version: number;
+            /** From Version */
+            from_version: number;
+            /**
+             * Rollout Id
+             * Format: uuid
+             */
+            rollout_id: string;
+            /** Status */
+            status: string;
+        };
         /** SubmissionCooldownTerms */
         SubmissionCooldownTerms: {
             /** Reference */
@@ -44919,6 +45048,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                owner_best_only?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrandedEraResponse"];
                 };
             };
             /** @description Validation Error */

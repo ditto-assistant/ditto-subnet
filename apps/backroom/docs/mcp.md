@@ -737,6 +737,28 @@ bench's top 10. Closed days are frozen as recorded. It changes nothing and
 needs `backroom:read`. Definitions and thresholds come back in the payload;
 the design lives in `apps/platform/docs/competition-improvement-metrics.md`.
 
+## Stranded previous-era submissions
+
+`list_stranded_previous_era_submissions(limit?, offset?, ownerBestOnly?)`
+lists every `scored` or `live` submission that has accepted scores on the
+previous benchmark (the admission rollout's `from_version`), no active-version
+score, and no admission path into the active era: it is not a frozen cohort
+member, not adopted carryover, not first queued after the rollout opened, and
+has no audited contract refresh. This is the designed era boundary. The
+active era pins no dataset and issues no ticket for these rows, so they are
+missing from the active leaderboard. For one agent,
+`get_benchmark_contract_refresh` reports `benchmark dataset is missing` and
+`agent_scoring_readiness` reports `historical submission is not admitted`.
+
+Each row carries the previous-era score count and median, `previous_finalized`,
+`has_active_dataset`, `queue_withdrawn`, `cohort_sibling_agent_id`, and
+`owner_best_stranded`, the owner's highest-median stranded row. The `reason`
+field is `owner_in_cohort` when a frozen sibling already represents the owner
+on the active board, and `owner_outside_cohort` otherwise. `ownerBestOnly`
+keeps one row per owner. The payload also names the admission rollout and
+whether `prev_gen_carryover` is enabled. The tool changes nothing and needs
+`backroom:read`.
+
 ## Diffing two submissions
 
 `get_copy_review_source_diff` pairs a held agent only with the reference its
