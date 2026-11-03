@@ -32,6 +32,15 @@ describe('bounded MCP pre-parser', () => {
     const original = new Request('https://backroom.example/mcp')
     expect(await boundMcpRequest(original)).toBe(original)
   })
+  it.each(['GET', 'HEAD'])('rejects an incoming %s body before reading it', async (method) => {
+    const incoming = request(['body'])
+    // Fetch constructors reject these bodies; incoming Workers may expose one.
+    Object.defineProperty(incoming, 'method', { value: method })
+    const response = await boundMcpRequest(incoming)
+    expect((response as Response).status).toBe(400)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(incoming.bodyUsed).toBe(false)
+  })
   it('returns a private client error when the request stream fails', async () => {
     const failed = new Request('https://backroom.example/mcp', {
       method: 'POST',

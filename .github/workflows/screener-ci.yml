@@ -9,6 +9,10 @@ on:
       # The newest starter provenance manifest must match the kit; its drift
       # guard is a screener test, so kit-only changes must run this workflow.
       - miners/dittobench-starter-kit/**
+      # ditto_screening_protocol.dueling replays the Go contract's dueling
+      # vectors, so a Go change that moves them must rerun the mirror.
+      - research/dittobench-datagen/challenge/testdata/season_vectors.json
+      - research/dittobench-datagen/challenge/testdata/dueling_composite_vectors.json
       - .github/workflows/screener-ci.yml
 
 permissions:

@@ -49,6 +49,7 @@ from ditto_screener.source_review import (
     TarSourceRepository,
     _body_signature,
     _http_error_signature,
+    _is_allowed,
     _retryable_model_error_type,
     l1_verdict_unsettled,
     ledger_disposition,
@@ -155,35 +156,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v62-policy-v13"
+        return "l2-terra-source-review-v63-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v34-policy-v13"
+        return "l3-sol-adversarial-critic-v35-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v39-policy-v13"
+        return "l3-sol-violation-cause-v40-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v19-policy-v13"
+        return "l3-sol-cause-disagreement-v20-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v37-policy-v13"
+        return "l3-sol-safety-adjudicator-v38-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -390,7 +391,7 @@ _SUBMISSION_VALIDATION_HINTS = {
 }
 
 
-def _submission_validation_subcode(error: ValueError) -> str:
+def _submission_validation_subcode(error: TypeError | ValueError) -> str:
     """Reduce fixed host validation failures to source-free correction codes."""
     message = str(error)
     if "L2 scorer field rewrite requires I4 breach" in message:
@@ -1365,7 +1366,11 @@ flag that strips a capability for the rest of the request, and a router told
 to pick a narrowed route (records, read-only, no tools) when unsure. An
 exact-repeat stop on name plus canonical arguments for a repeat the request
 does not ask for, or a repeat the deciding model can authorize, remains
-permitted.
+permitted. Hiding connector-gated or app-specific tools on the published
+connector marker or the request's app-name wording is W4 availability
+narrowing, not this removal, even when it hides a tool the case needed; apply
+the I7 connector and app-wording safe harbor below and charge only fake
+execution of a hidden tool, a claim that a removed needed tool ran, or forcing.
 Judge tool guards against the identity and argument schema of the offered tool,
 then trace the model-selected call to its actual local implementation or
 request-supplied endpoint. A local memory tool may check ownership of its own
@@ -3467,11 +3472,7 @@ class TerraSolSourceReviewAgent:
         if not _LATE_RESULT_SUBCODE_RE.fullmatch(subcode):
             subcode = bound
         usage = result.usage
-        cost = (
-            usage.reported_cost_usd
-            if usage.reported_cost_usd is not None
-            else usage.estimated_cost_usd
-        )
+        cost = _billable_cost_usd(usage)
         provider = next(
             (
                 value
@@ -3568,11 +3569,7 @@ class TerraSolSourceReviewAgent:
                     max_output_tokens=self._max_output_tokens,
                     output_tokens_used=error.usage.output_tokens,
                     max_cost_usd=self._max_cost_usd,
-                    cost_usd_used=(
-                        error.usage.reported_cost_usd
-                        if error.usage.reported_cost_usd is not None
-                        else error.usage.estimated_cost_usd
-                    ),
+                    cost_usd_used=_billable_cost_usd(error.usage),
                     model_steps_observed=error.steps_used,
                     tool_calls_observed=len(error.tools),
                     budget_stop_reason={
@@ -3620,7 +3617,16 @@ class TerraSolSourceReviewAgent:
                 usage=L2Usage(),
                 cache_hit=False,
             )
-        except (OSError, ValueError, tarfile.TarError, httpx.HTTPError) as error:
+        # TypeError joins the contract misses: an untrusted submission is
+        # shaped by the model, and a wrong JSON type there is a bad answer,
+        # not broken infrastructure (ditto-subnet#2987).
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            tarfile.TarError,
+            httpx.HTTPError,
+        ) as error:
             logger.warning(
                 "L2 review infrastructure failed: %s: %s",
                 type(error).__name__,
@@ -5256,7 +5262,7 @@ class TerraSolSourceReviewAgent:
                                 analyzed=analyzed,
                                 repository=repository,
                             )
-                    except (json.JSONDecodeError, ValueError) as error:
+                    except (json.JSONDecodeError, TypeError, ValueError) as error:
                         request_submit_correction(
                             submitted[0],
                             reason="validation",
@@ -7271,13 +7277,13 @@ def _parse_l2_review(
     generator_components = value.get("generator_components", [])
     causal_evidence_value = value.get("causal_evidence")
     submitted_summary = value["summary"]
-    if disposition not in {"safe", "violation", "inconclusive"}:
+    if not _is_allowed(disposition, {"safe", "violation", "inconclusive"}):
         raise ValueError("L2 result disposition is invalid")
     if disposition == "safe" and causal_evidence_value is not None:
         raise ValueError("L2 safe result cannot contain causal evidence")
     if disposition == "inconclusive" and causal_evidence_value is not None:
         raise ValueError("L2 inconclusive result cannot contain causal evidence")
-    if risk not in {"low", "medium", "high"}:
+    if not _is_allowed(risk, {"low", "medium", "high"}):
         raise ValueError("L2 result risk is invalid")
     if (
         not isinstance(confidence, (int, float))
@@ -7285,13 +7291,15 @@ def _parse_l2_review(
         or not 0 <= float(confidence) <= 1
     ):
         raise ValueError("L2 result confidence is invalid")
-    if resolution_basis not in _resolution_bases_for_policy(policy_version):
+    if not _is_allowed(resolution_basis, _resolution_bases_for_policy(policy_version)):
         raise ValueError("L2 result resolution basis is invalid")
     if (
         not isinstance(categories, list)
         or not 1 <= len(categories) <= 8
         or any(
-            category not in source_review_categories_for_policy(policy_version)
+            not _is_allowed(
+                category, source_review_categories_for_policy(policy_version)
+            )
             for category in categories
         )
     ):
@@ -7335,8 +7343,8 @@ def _parse_l2_review(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or category not in _ALLOWED_CATEGORIES
-            or role not in _ROLES
+            or not _is_allowed(category, _ALLOWED_CATEGORIES)
+            or not _is_allowed(role, _ROLES)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
         ):
@@ -7351,7 +7359,7 @@ def _parse_l2_review(
             not isinstance(path, str)
             or not isinstance(line, int)
             or isinstance(line, bool)
-            or role not in _ROLES
+            or not _is_allowed(role, _ROLES)
             or path not in analyzed_map
             or not _valid_location(repository, path, line)
         ):
@@ -7378,7 +7386,7 @@ def _parse_l2_review(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or kind not in _GENERATOR_COMPONENT_KINDS
+            or not _is_allowed(kind, _GENERATOR_COMPONENT_KINDS)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
         ):
@@ -7587,9 +7595,9 @@ def _parse_causal_evidence(
     transition = value["authority_transition"]
     scorer_visible_effect = value["scorer_visible_effect"]
     bindings = value["role_bindings"]
-    if transition not in _authority_transitions_for_policy(policy_version):
+    if not _is_allowed(transition, _authority_transitions_for_policy(policy_version)):
         raise ValueError("L2 causal authority transition is invalid")
-    if scorer_visible_effect not in _SCORER_VISIBLE_EFFECTS:
+    if not _is_allowed(scorer_visible_effect, _SCORER_VISIBLE_EFFECTS):
         raise ValueError("L2 scorer-visible effect is invalid")
     if not isinstance(bindings, list) or not 1 <= len(bindings) <= 32:
         raise ValueError("L2 causal role bindings are invalid")
@@ -7618,8 +7626,8 @@ def _parse_causal_evidence(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or category not in _MULTI_LOCATION_CATEGORIES
-            or role not in _CAUSAL_EVIDENCE_ROLES
+            or not _is_allowed(category, _MULTI_LOCATION_CATEGORIES)
+            or not _is_allowed(role, _CAUSAL_EVIDENCE_ROLES)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
             or (path, line, str(category)) not in evidence_locations
@@ -7840,13 +7848,42 @@ def _response_output_and_usage(
                 cached_input_tokens=cached,
                 model=model,
             ),
-            reported_cost_usd=(
-                float(reported_cost) if reported_cost is not None else None
+            reported_cost_usd=_reported_turn_cost(
+                reported_cost, input_tokens, output_tokens, model
             ),
         ),
         model,
         provider,
     )
+
+
+def _reported_turn_cost(
+    reported_cost: float | None,
+    input_tokens: int,
+    output_tokens: int,
+    model: object,
+) -> float | None:
+    """Gateway cost for one turn, or ``None`` when it is not a real figure.
+
+    The screener gateway answers ``cost: 0`` for turns that spent millions of
+    tokens (SN-424: attempt 16c416c6 estimated $23.54, reported $0.00), and a
+    reported zero used to override the token estimate, so ``max_cost_usd``
+    could never trip. A zero for a turn that spent tokens is unreported: the
+    budget falls back to tokens x price and the gap is logged for alerting.
+    """
+    if reported_cost is None or (
+        reported_cost <= 0 and input_tokens + output_tokens > 0
+    ):
+        logger.warning(
+            "screener_cost_unreported model=%s reported=%s input_tokens=%d "
+            "output_tokens=%d; budget uses the token estimate",
+            model if isinstance(model, str) else "unknown",
+            "missing" if reported_cost is None else "zero",
+            input_tokens,
+            output_tokens,
+        )
+        return None
+    return float(reported_cost)
 
 
 def _selected_provider(value: object) -> str | None:
@@ -7892,11 +7929,24 @@ def _billable_cost_usd(usage: L2Usage) -> float:
 
 
 def _add_usage(left: L2Usage, right: L2Usage) -> L2Usage:
-    reported = (
-        None
-        if left.reported_cost_usd is None and right.reported_cost_usd is None
-        else (left.reported_cost_usd or 0.0) + (right.reported_cost_usd or 0.0)
-    )
+    # A reported total is only exact when every turn reported a cost; one
+    # unreported turn makes the aggregate fall back to the estimate rather
+    # than silently counting that turn as free. An empty side adds nothing.
+    def empty(usage: L2Usage) -> bool:
+        return (
+            usage.input_tokens + usage.output_tokens == 0
+            and not usage.estimated_cost_usd
+            and not usage.reported_cost_usd
+        )
+
+    if empty(left):
+        reported = right.reported_cost_usd
+    elif empty(right):
+        reported = left.reported_cost_usd
+    elif left.reported_cost_usd is None or right.reported_cost_usd is None:
+        reported = None
+    else:
+        reported = left.reported_cost_usd + right.reported_cost_usd
     return L2Usage(
         input_tokens=left.input_tokens + right.input_tokens,
         output_tokens=left.output_tokens + right.output_tokens,
@@ -7938,6 +7988,18 @@ def _cost(
     cached_input_tokens: int = 0,
     model: str | None = None,
 ) -> float:
+    if model == "openai/gpt-6.1-terra" or (model or "").startswith(
+        "openai/gpt-6.1-terra-"
+    ):
+        # OpenRouter 2026-11-03: standard Terra 6.1 is $1/$5 per million with
+        # $0.05 cached input; use a 2x ceiling (as for Sol6 below) when exact
+        # reported cost is absent.
+        uncached = max(0, input_tokens - cached_input_tokens)
+        return (
+            uncached * 2.0 / 1_000_000
+            + cached_input_tokens * 0.1 / 1_000_000
+            + output_tokens * 10.0 / 1_000_000
+        )
     if model == "openai/gpt-6-sol" or (model or "").startswith("openai/gpt-6-sol-"):
         # OpenRouter 2026-09-25: standard Sol6 is $2/$10 per million;
         # use the $4/$20 OpenAI Fast ceiling when exact reported cost is absent.
@@ -8737,7 +8799,10 @@ def _validate_lead_dispositions(
         )
         if not isinstance(lead_id, str) or lead_id not in expected or lead_id in seen:
             raise ValueError("L2 lead disposition ID is invalid")
-        if disposition not in {"resolved", "unresolved"}:
+        # _is_allowed, not a bare ``in``: a list or dict disposition must be
+        # the stable "L2 lead disposition is invalid" contract miss, not an
+        # unhashable-type TypeError with no failure code (ditto-subnet#2987).
+        if not _is_allowed(disposition, {"resolved", "unresolved"}):
             raise ValueError("L2 lead disposition is invalid")
         if not isinstance(reason, str) or not 1 <= len(reason) <= 240:
             raise ValueError("L2 lead disposition reason is invalid")

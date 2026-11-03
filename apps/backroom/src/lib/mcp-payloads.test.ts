@@ -618,6 +618,35 @@ describe('compactValidatorFleet', () => {
     expect(malformed.host_specs).toBeNull()
   })
 
+  it('keeps the scorer round and dueling capability and buckets dueling support', () => {
+    const scorer = (dueling?: number[]) => ({
+      status: 'fresh_verified',
+      software_version: '0.440.0',
+      source_revision: 'a'.repeat(40),
+      supported_bench_versions: [8, 9, 10, 11, 12, 13, 14, 15, 16],
+      generator_round_bench_versions: [13, 14, 15, 16],
+      ...(dueling ? { dueling_slice_bench_versions: dueling } : {}),
+    })
+    const payload = validatorFleetObservabilitySchema.parse({
+      generated_at: '2026-11-03T17:00:00Z',
+      validators: [
+        { validator_hotkey: '5' + 'A'.repeat(47), online: true, bench_serviceability: 'serving', capabilities: { scorer_benchmarks: scorer([16]) } },
+        { validator_hotkey: '5' + 'B'.repeat(47), online: true, bench_serviceability: 'serving', capabilities: { scorer_benchmarks: scorer() } },
+        { validator_hotkey: '5' + 'C'.repeat(47), online: false, bench_serviceability: 'serving', capabilities: { scorer_benchmarks: scorer([]) } },
+      ],
+    })
+    const compact = compactValidatorFleet(payload)
+    expect(compact.validators[0].scorer?.dueling_slice_bench_versions).toEqual([16])
+    expect(compact.validators[0].scorer?.generator_round_bench_versions).toEqual([13, 14, 15, 16])
+    expect(compact.validators[1].scorer?.dueling_slice_bench_versions ?? null).toBeNull()
+    // Omitted (null) and empty ('') are separate buckets.
+    expect(compact.rollout.dueling_slice_bench_versions).toEqual([
+      { value: null, count: 1, online_count: 1, serving_count: 1 },
+      { value: '', count: 1, online_count: 0, serving_count: 1 },
+      { value: '16', count: 1, online_count: 1, serving_count: 1 },
+    ])
+  })
+
   it('preserves legacy counts and rejects unbound or malformed progress', () => {
     const payload = validatorFleetObservabilitySchema.parse({
       generated_at: '2026-09-21T16:20:00Z',

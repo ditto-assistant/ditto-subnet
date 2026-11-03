@@ -225,6 +225,80 @@ the run). The validator forwards the set as
 `scorer_benchmarks.generator_round_bench_versions`; a scorer without the
 features is treated as running only v13 rounds.
 
+### Dueling slices (`dueling-slice-v1`, bench_version >= 16)
+
+From bench_version 16 a canonical run is a **datagen half** plus a **generator
+slice** (`research/dittobench-datagen/docs/dueling-bench.md` section 7.5). The
+scorer advertises `dueling-slice-v1` plus one `dueling-slice-bench-<n>` for
+every bench version `>= 16` it runs (derived from `supported_bench_versions`),
+only in trusted screened-image mode. The validator forwards the set as
+`scorer_benchmarks.dueling_slice_bench_versions`.
+
+`/v2/score` fields:
+
+| Field | Meaning |
+|---|---|
+| `dueling_slice_mode` | `"dueling-slice-v1"` |
+| `dueling_slice_bytes` | base64 of the Platform-pinned slice (`challenge.EncodeSliceDataset`, at most `challenge.MaxRoundDatasetBytes` decoded) |
+| `expected_slice_sha256` | SHA-256 of the decoded bytes (64 lowercase hex) |
+| `dueling_owner_key` | the scored agent's owner key; `""` masks nothing |
+
+A `bench_version >= 16` canonical request without all four is refused
+(`dueling slice required`); a `< 16` request, a generator round, or a practice
+submission carrying any of them is refused. The datagen half is never sent: it
+is regenerated from the public seed and checked against `dataset_sha256`
+exactly as before. The slice must hash to its pin, decode under
+`challenge.DecodeSliceDataset` (every pack re-validated, echoing its
+`slice_seed`, pinned hotkey and pinned `grading_bench_version`), carry the
+request's `bench_version`, and carry `run_seed == seed`: a run (canonical,
+retest or confirmation seed) has exactly one seed and one slice.
+
+Execution: the slice runs after every datagen wave, on the same harness, ticket
+inference session, tool catalog and observed tool endpoint, column by column
+through `internal/challengerun` with the run's case concurrency. Each column is
+projected to opaque case, pair, session and user IDs keyed by
+`sha256("dittobench-dueling-slice-projection/v1" || 0x00 || slice_seed)`, so
+reruns are byte-identical and every column answers from its own memory graph.
+`challenge.SliceExecutionCases` drops a case whose fingerprint an earlier column
+already claimed. Each case is graded by `scorer.GradeMemory` at its column's
+`grading_bench_version`, the generator-round grader. A failed `/run` scores 0.
+
+Scoring: gates, efficiency, outlier and canary inputs, metamorphic and twin
+post-passes, v13 shadow telemetry, token accounting and the signed v9 base
+evidence all read the **datagen half only** (relay usage is read at the
+datagen/slice boundary; the whole run still decides relay health). The
+composite is
+
+```
+composite = gate x ((1 - w x |U|) x datagen_raw + w x sum_{c in U} col_c)
+```
+
+with `w = 0.1`, `U` the columns not owned by `dueling_owner_key`, and `gate`
+the composite gate times the applied v9 score-gate factor
+(`challenge.DuelingComposite`), quantized to micros like every v9+ composite.
+The report adds:
+
+```jsonc
+"details": {
+  "dueling": {
+    "season_id": "<uuid>", "season_index": 26119,
+    "slice_sha256": "<hex>", "owner_key": "coldkey:...",
+    "datagen_raw": 0.81, "datagen_gate": 0.96, "column_weight": 0.1,
+    "columns": [{"column_id": "c0", "owner_key": "coldkey:...", "submission_id": "<uuid|default>",
+                 "grading_bench_version": 16, "n": 35, "sum": 30.0, "sum_sq": 29.5,
+                 "substituted": false}],
+    "composite_stderr": 0.012
+  }
+}
+```
+
+`composite_stderr` is the stratified standard error
+(`challenge.DuelingCompositeStderr`). Slice cases appear in `per_case` as
+score-only rows (`category: "dueling_slice"`, `case_id: "<column_id>/<case_id>"`,
+`kind: "memory"`); no slice question, answer, grader note or transcript leaves
+the scorer, and `per_category`, `tool_mean`, `memory_mean` and the transcript
+artifact describe the datagen half. `n` counts both halves.
+
 ### Private V13 control-plane transport (default off)
 
 `DITTOBENCH_ALLOW_PRIVATE_DATASETS=1` enables the `platform-private-v1`

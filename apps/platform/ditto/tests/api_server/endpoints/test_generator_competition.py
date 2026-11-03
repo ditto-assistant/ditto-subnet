@@ -90,6 +90,9 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "validator_rounds_enabled": False,
         "min_round_validators": 3,
         "upload_fee_required": False,
+        "dueling_enabled": False,
+        "rounds_per_season": 1,
+        "dueling_shadow_bench_version": None,
     }
     base.update(overrides)
     return base
@@ -345,6 +348,46 @@ class TestSettings:
         assert (
             await client.post(_SETTINGS_URL, headers=_ADMIN, json=incoherent)
         ).status_code == 422
+
+    async def test_dueling_ships_off_and_refuses_a_season_below_two_epochs(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Dueling is off by default and a revision written before the fields
+        existed reads as off with one round per season; enabling it needs a
+        season of at least two epochs."""
+        _install(app, session_maker)
+        older = _settings()
+        older.pop("dueling_enabled")
+        older.pop("rounds_per_season")
+        legacy = GeneratorCompetitionSettings.model_validate(older)
+        assert (legacy.dueling_enabled, legacy.rounds_per_season) == (False, 1)
+        board = (await client.get(_SETTINGS_URL, headers=_ADMIN)).json()
+        assert board["effective"]["settings"]["dueling_enabled"] is False
+        assert board["effective"]["settings"]["rounds_per_season"] == 1
+
+        body = {
+            "expected_revision": 0,
+            "settings": _settings(
+                epochs_per_round=1, rounds_per_season=1, dueling_enabled=True
+            ),
+            "reason": "turn the dueling seasons on",
+            "confirmation": generator_settings_confirmation("shadow"),
+        }
+        short = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        assert short.status_code == 422
+        assert "at least 2 epochs" in short.text
+        # One-epoch rounds are still fine without dueling, and two of them
+        # make a safe season.
+        body["settings"] = _settings(
+            epochs_per_round=1, rounds_per_season=2, dueling_enabled=True
+        )
+        ok = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        assert ok.status_code == 200, ok.text
+        stored = ok.json()["settings"]
+        assert (stored["dueling_enabled"], stored["rounds_per_season"]) == (True, 2)
 
     async def test_enforce_needs_its_own_confirmation(
         self,

@@ -1,5 +1,5 @@
 import '@tanstack/react-start/server-only'
-import { observerGrant, observerRequestAllowed } from './treasury-observer-access.server'
+import { MAX_OBSERVER_BODY_BYTES, observerGrant, observerRequestAllowed } from './treasury-observer-access.server'
 import { boundMcpRequest, MAX_MCP_BODY_BYTES } from './mcp-request-limits.server'
 
 import { WorkerEntrypoint } from 'cloudflare:workers'
@@ -81,7 +81,7 @@ export class BackroomMcpHandler extends WorkerEntrypoint<
     if (!observer && !hasReadAccess(props)) {
       return insufficientScopeResponse(request, BACKROOM_READ_SCOPE)
     }
-    const bounded = await boundMcpRequest(request)
+    const bounded = await boundMcpRequest(request, observer ? MAX_OBSERVER_BODY_BYTES : MAX_MCP_BODY_BYTES)
     if (bounded instanceof Response) return bounded
     request = bounded
     if (observer && !await observerRequestAllowed(request)) {

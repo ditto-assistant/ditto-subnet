@@ -699,5 +699,5 @@ operator ruling.
      leaves weights byte-identical to the memory-only fold.
    - A new bench version draws its memory cases from the round matrix, so the
      agent competition is judged on the generators' cases.
-     The design is [dueling-bench.md](dueling-bench.md): bench_version 15
+     The design is [dueling-bench.md](dueling-bench.md): bench_version 16
      mixes the top generators' cases into every canonical agent run.

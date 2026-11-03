@@ -65,6 +65,9 @@ func advertisement(scorerID string, sb genrun.Sandbox) url.Values {
 	// scorer listing N. A scorer that predates this list is treated as
 	// v13-only.
 	q.Set("grading_bench_versions", gradingVersionsParam(challenge.SupportedGradingBenchVersions()))
+	// The dueling work kinds this build serves (dueling-bench.md 7.4).
+	// Platform leases dueling work only to a scorer listing the kind.
+	q.Set("dueling_work_kinds", duelingWorkKinds)
 	if sb != nil {
 		q.Set("sandbox", sb.Name())
 	}

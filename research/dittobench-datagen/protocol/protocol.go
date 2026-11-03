@@ -1403,6 +1403,11 @@ type RunDetails struct {
 	// applied. Shadow only in v13.0 -- Applied is always false. nil for every
 	// earlier contract.
 	InferenceCost *InferenceCostSummary `json:"inference_cost,omitempty"`
+	// Dueling (bench_version >= DuelingMinBenchVersion) is the generator
+	// slice's aggregates: the datagen half before and after its gates, and each
+	// column's case statistics, so the validator fold can recompute the
+	// composite under any owner mask. nil for every earlier contract.
+	Dueling *DuelingDetails `json:"dueling,omitempty"`
 }
 
 // TokenUsage is validator-observed model consumption for one isolated run.

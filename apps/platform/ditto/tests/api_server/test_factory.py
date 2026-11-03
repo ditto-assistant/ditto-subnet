@@ -11,12 +11,25 @@ from fastapi import FastAPI
 
 from ditto.api_server import create_api_server
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
+from ditto.api_server.factory import (
+    BountyDeadlineSweeper,
+    CompetitionImprovementJob,
+    CopyHoldCourt,
+    GeneratorRoundLoop,
+    LedgerPinLoop,
+    OutageVoidSweeper,
+    SourceEmissionCollector,
+    UnreleasedCopySentinel,
+    ValidatorNonceJanitor,
+)
 from ditto.api_server.middleware import (
     PublicCacheMiddleware,
     PublicRateLimitMiddleware,
     RequestIDMiddleware,
 )
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_RATE_LIMITED
+from ditto.api_server.treasury_ledger import TreasuryLedgerSampler
+from ditto.api_server.treasury_manual_loop import TreasuryManualLoop
 from ditto.tests.api_server.conftest import make_api_server_config
 
 
@@ -240,6 +253,7 @@ class TestRouteDiscoveryIsSingleton:
         ):
             app = create_api_server(make_api_server_config())
             app.state.validator_names.start = AsyncMock()
+            app.state.validator_names.hydrate = AsyncMock()
             app.state.validator_names.aclose = AsyncMock()
             async with app.router.lifespan_context(app):
                 # Opened by a public GitHub lookup; shutdown must close it.
@@ -248,12 +262,14 @@ class TestRouteDiscoveryIsSingleton:
                 sweeping = sweeper._task is not None
                 outage_sweeper = app.state.outage_void_sweeper
                 outage_sweeping = outage_sweeper._task is not None
+                validator_names = app.state.validator_names
         return refresher, SimpleNamespace(
             github_pool=github_pool,
             bounty_sweeping=sweeping,
             bounty_sweeper_closed=sweeper._task is None,
             outage_sweeping=outage_sweeping,
             outage_sweeper_closed=outage_sweeper._task is None,
+            validator_names=validator_names,
         )
 
     @pytest.mark.parametrize(
@@ -305,6 +321,61 @@ class TestRouteDiscoveryIsSingleton:
         # Still constructed and still registered for cleanup, so shutdown is
         # symmetric with the platform role.
         refresher.aclose.assert_awaited_once()
+
+    @staticmethod
+    def _singleton_loop_starts(monkeypatch) -> dict[str, AsyncMock]:
+        """Replace each singleton loop's ``start`` so a test can count them."""
+        starts: dict[str, AsyncMock] = {}
+        for loop in (
+            ValidatorNonceJanitor,
+            BountyDeadlineSweeper,
+            OutageVoidSweeper,
+            CopyHoldCourt,
+            UnreleasedCopySentinel,
+            CompetitionImprovementJob,
+            LedgerPinLoop,
+            GeneratorRoundLoop,
+            SourceEmissionCollector,
+            TreasuryLedgerSampler,
+            TreasuryManualLoop,
+        ):
+            starts[loop.__name__] = AsyncMock()
+            monkeypatch.setattr(loop, "start", starts[loop.__name__])
+        return starts
+
+    async def test_primary_starts_every_singleton_loop(self, monkeypatch) -> None:
+        monkeypatch.setenv("DITTO_PLATFORM_BACKGROUND_TASKS", "true")
+        loops = self._singleton_loop_starts(monkeypatch)
+        await self._refresher_for_role("platform", monkeypatch)
+        for name, start in loops.items():
+            assert start.await_count == 1, name
+
+    async def test_standby_keeps_platform_access_without_singleton_loops(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("DITTO_PLATFORM_BACKGROUND_TASKS", "false")
+        janitor = MagicMock()
+        janitor.start = AsyncMock()
+        janitor.aclose = AsyncMock()
+        loops = self._singleton_loop_starts(monkeypatch)
+        refresher, observed = await self._refresher_for_role(
+            "platform", monkeypatch, capacity_event_janitor=janitor
+        )
+        refresher.start.assert_not_awaited()
+        janitor.start.assert_not_awaited()
+        refresher.aclose.assert_awaited_once()
+        janitor.aclose.assert_awaited_once()
+        for name, start in loops.items():
+            assert not start.await_count, name
+        observed.validator_names.hydrate.assert_awaited_once()
+        observed.validator_names.start.assert_not_awaited()
+
+        # The standby is an identical HTTP server, including admin routes.
+        app = create_api_server(make_api_server_config())
+        assert any(
+            getattr(route, "path", None) == "/api/v1/upload/agent"
+            for route in app.routes
+        )
 
     @pytest.mark.parametrize("role", [None, "platform"])
     async def test_platform_role_still_starts_route_discovery(

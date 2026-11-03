@@ -215,6 +215,35 @@ def test_deterministic_v13_capability_preserves_old_signatures_and_is_strict() -
         )
 
 
+def test_dueling_slice_capability_is_additive_and_bounded() -> None:
+    legacy = {
+        "status": "fresh_verified",
+        "supported_bench_versions": (15, 16),
+        "observed_at": 1,
+        "software_version": "1.2.3",
+        "source_revision": _REVISION,
+    }
+    baseline = ScorerBenchmarkCapability.model_validate(legacy)
+    # Absent unless advertised: an older validator signs the exact same bytes.
+    assert "dueling_slice_bench_versions" not in baseline.model_dump(mode="json")
+    dueling = ScorerBenchmarkCapability.model_validate(
+        legacy | {"dueling_slice_bench_versions": [16]}
+    )
+    assert dueling.dueling_slice_bench_versions == (16,)
+    for invalid in (
+        legacy | {"dueling_slice_bench_versions": [15]},  # below the floor
+        legacy | {"dueling_slice_bench_versions": [17]},  # not run by the scorer
+        legacy
+        | {
+            "status": "unreachable",
+            "supported_bench_versions": (),
+            "dueling_slice_bench_versions": [],
+        },
+    ):
+        with pytest.raises(ValidationError):
+            ScorerBenchmarkCapability.model_validate(invalid)
+
+
 def _runtime_env_packet(version: int) -> dict[str, object]:
     keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
     material = f"scored-runtime-env-v1\n{version}\n{_REVISION}\n" + "\n".join(keys)

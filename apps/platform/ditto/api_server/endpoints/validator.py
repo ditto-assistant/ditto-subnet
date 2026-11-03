@@ -37,6 +37,7 @@ Lifecycle + scope decisions (documented so they're easy to revisit):
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
@@ -185,6 +186,13 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.dueling_seasons import (
+    DuelingEvidenceRejected,
+    DuelingSliceUnavailable,
+    agent_owner_key,
+    dueling_score_evidence,
+    resolve_dueling_slice,
+)
 from ditto.api_server.efficiency import (
     audited_v9_run_token_total,
     ensure_current_efficiency_state,
@@ -202,8 +210,10 @@ from ditto.api_server.koth import (
     KothEntry,
     KothProjection,
     continual_composite,
+    dueling_seed_records,
     effective_composite,
     emission_set,
+    ledger_row_dueling_fields,
     project_koth,
     retest_cohort,
     top5_round_is_due,
@@ -329,6 +339,7 @@ from ditto.db.queries.confirmation_scores import (
     completed_confirmation_wave_seeds,
     confirmation_catchup_seeds,
     confirmation_composites_by_seed,
+    confirmation_history_by_agent,
     fold_eligible_seeds_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import desired_era_work_outstanding
@@ -372,6 +383,7 @@ from ditto.db.queries.score_ranking import (
     resolve_efficiency_adjustments,
 )
 from ditto.db.queries.score_retests import (
+    DUELING_ROTATION_RETEST_BASIS,
     V9_CONTRACT_RETEST_BASIS,
     activate_next_score_retest,
 )
@@ -421,6 +433,10 @@ from ditto.metrics import (
 )
 from ditto.score_order import rank_submissions
 from ditto.screener_policy_state import effective_screening_policy_version
+from ditto_screening_protocol.dueling import (
+    DUELING_SLICE_MODE,
+    is_dueling_bench_version,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -2506,6 +2522,114 @@ def _reported_v9_base_evidence(report: ScoreReport) -> V9BaseEvidence | None:
     return V9BaseEvidence.model_validate(raw)
 
 
+async def _dueling_lease_fields(
+    request: Request,
+    session: AsyncSession,
+    *,
+    ticket: ValidatorTicket,
+    agent: Agent,
+    run_seed: int | None,
+    now: datetime,
+) -> dict[str, Any]:
+    """The generator slice a bench v16+ lease carries, pinned on the ticket.
+
+    Empty below the dueling floor, so pre-16 leases serialize exactly as
+    before. A missing slice reserves its preparation in an independent
+    transaction and answers 503 with ``Retry-After``; this lease rolls back.
+    """
+    if not is_dueling_bench_version(ticket.bench_version):
+        return {}
+    sessions = getattr(request.app.state, "session_maker", None)
+    if sessions is None or run_seed is None:
+        raise HTTPException(
+            503,
+            "dueling slice preparation is unavailable",
+            headers={"Retry-After": "60", "Cache-Control": "no-store"},
+        )
+    try:
+        lease = await resolve_dueling_slice(
+            sessions,
+            bench_version=ticket.bench_version,
+            run_seed=int(run_seed),
+            pinned_season_id=ticket.dueling_season_id,
+            pinned_slice_sha256=ticket.slice_sha256,
+            now=now,
+        )
+    except DuelingSliceUnavailable as exc:
+        raise HTTPException(
+            503,
+            exc.detail,
+            headers={"Retry-After": str(exc.retry_after), "Cache-Control": "no-store"},
+        ) from None
+    ticket.dueling_season_id = lease.season_id
+    ticket.slice_sha256 = lease.slice_sha256
+    return {
+        "dueling_slice_mode": DUELING_SLICE_MODE,
+        "dueling_slice_bytes": base64.b64encode(lease.slice_bytes).decode("ascii"),
+        "expected_slice_sha256": lease.slice_sha256,
+        "dueling_owner_key": await agent_owner_key(session, agent),
+        "dueling_season_id": str(lease.season_id),
+    }
+
+
+async def _activate_dueling_rotation_retest(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    heartbeat: ValidatorHeartbeat | None,
+    bench_version: int,
+    now: datetime,
+    validator_running_benchmark: bool,
+    slot_id: str,
+    ttl: timedelta,
+) -> ValidatorTicket | None:
+    """Promote this validator's next dueling season rotation re-test, if any.
+
+    Only at ``bench_version`` and only on a slot whose heartbeat serves it
+    (which, at v16+, includes forwarding the version's dueling slices). Runs
+    beside ordinary work on free slots, like activation-critical contract
+    repair: rotation is the season's mini-rollout.
+    """
+    return await activate_next_score_retest(
+        session,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        supports_version=lambda version: (
+            heartbeat is not None
+            and version == bench_version
+            and heartbeat_supports_version(heartbeat, now=now, version=version)
+        ),
+        validator_running_benchmark=validator_running_benchmark,
+        slot_id=slot_id,
+        required_basis=DUELING_ROTATION_RETEST_BASIS,
+        allow_parallel_ordinary=True,
+        allow_parallel_contract_retests=True,
+        ttl=ttl,
+    )
+
+
+async def _dueling_evidence(
+    session: AsyncSession, report: ScoreReport, ticket: ValidatorTicket, agent: Agent
+) -> tuple[UUID | None, dict[str, Any] | None]:
+    """Season and aggregates to store with a v16+ score; 409 on a mismatch,
+    including a report self-masking another owner than the scored agent's."""
+    owner = (
+        await agent_owner_key(session, agent)
+        if is_dueling_bench_version(ticket.bench_version)
+        else None
+    )
+    try:
+        return dueling_score_evidence(
+            report.details,
+            bench_version=ticket.bench_version,
+            season_id=ticket.dueling_season_id,
+            slice_sha256=ticket.slice_sha256,
+            owner_key=owner,
+        )
+    except DuelingEvidenceRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+
 def _score_details(
     report: ScoreReport, *, ticket_deadline: datetime, bench_version: int
 ) -> dict[str, Any]:
@@ -4077,7 +4201,16 @@ async def request_job(
             if grant is None:
                 raise HTTPException(409, "canary inference capability is unavailable")
             contract = benchmark_contract(canary.bench_version)
+            dueling_fields = await _dueling_lease_fields(
+                request,
+                session,
+                ticket=canary_ticket,
+                agent=agent,
+                run_seed=canary.seed,
+                now=now,
+            )
             return JobResponse(
+                **dueling_fields,
                 agent_id=canary.agent_id,
                 miner_hotkey=agent.miner_hotkey,
                 slot_id=canary.slot_id,
@@ -4132,6 +4265,23 @@ async def request_job(
                 if target_benchmark_ready
                 else None
             )
+            if (
+                ticket is None
+                and target_benchmark_ready
+                and is_dueling_bench_version(rollout.desired_version)
+            ):
+                # A shadow dueling season rotation re-scores the frozen cohort
+                # on the new generator set before any other desired-era work.
+                ticket = await _activate_dueling_rotation_retest(
+                    session,
+                    validator_hotkey=payload.validator_hotkey,
+                    heartbeat=heartbeat,
+                    bench_version=rollout.desired_version,
+                    now=now,
+                    validator_running_benchmark=slot_running_benchmark,
+                    slot_id=slot_id,
+                    ttl=ticket_ttl,
+                )
             # The activation boundary waits for every frozen member, not just
             # the first-five authority subset.  Give that bounded cohort first
             # refusal on every capable slot while the rollout is open.  The
@@ -4390,6 +4540,23 @@ async def request_job(
                         validator_running_benchmark=slot_running_benchmark,
                         slot_id=slot_id,
                     )
+                if (
+                    not gated
+                    and ticket is None
+                    and is_dueling_bench_version(canonical_version)
+                ):
+                    # A dueling season rotation re-scores the champion, then
+                    # the retest cohort by rank, ahead of ordinary quorum work.
+                    ticket = await _activate_dueling_rotation_retest(
+                        session,
+                        validator_hotkey=payload.validator_hotkey,
+                        heartbeat=heartbeat,
+                        bench_version=canonical_version,
+                        now=now,
+                        validator_running_benchmark=slot_running_benchmark,
+                        slot_id=slot_id,
+                        ttl=ticket_ttl,
+                    )
                 ticket = (
                     ticket
                     if gated or ticket is not None
@@ -4598,7 +4765,20 @@ async def request_job(
                     status_code=503,
                     detail="ticket inference capability is unavailable",
                 )
+            dueling_fields = await _dueling_lease_fields(
+                request,
+                session,
+                ticket=ticket,
+                agent=agent,
+                run_seed=(
+                    ticket.seed
+                    if ticket.seed is not None
+                    else (dataset.seed if dataset is not None else agent.dataset_seed)
+                ),
+                now=now,
+            )
             job = JobResponse(
+                **dueling_fields,
                 agent_id=agent.agent_id,
                 private_dataset_mode=await _private_dataset_mode(
                     session, ticket.dataset_sha256, heartbeat
@@ -4751,6 +4931,18 @@ async def _current_koth_entries(
         agent_ids=[row.agent_id for row in rows],
         bench_version=canonical_version,
     )
+    # Bench v16+: the raw per-validator records with their signed
+    # ``details.dueling``, so this projection pair-masks exactly as the pinned
+    # fold does. Not read below v16, where it would be unused.
+    dueling_history = (
+        await confirmation_history_by_agent(
+            session,
+            agent_ids=[row.agent_id for row in rows],
+            bench_version=canonical_version,
+        )
+        if is_dueling_bench_version(canonical_version)
+        else {}
+    )
     (
         efficiency_bonuses,
         efficiency_factors,
@@ -4796,6 +4988,7 @@ async def _current_koth_entries(
             efficiency_bonus=efficiency_bonuses.get(row.agent_id),
             efficiency_factor=efficiency_factors.get(row.agent_id),
             efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
+            **ledger_row_dueling_fields(row),
         )
         for rank, row in enumerate(raw_rows, start=1)
     ]
@@ -4898,6 +5091,14 @@ async def _current_koth_entries(
                 efficiency_bonus=efficiency_bonuses.get(row.agent_id),
                 efficiency_factor=efficiency_factors.get(row.agent_id),
                 efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
+                **ledger_row_dueling_fields(row),
+                dueling_records=(
+                    None
+                    if v9_confirmed
+                    else dueling_seed_records(
+                        dueling_history.get(row.agent_id, ()), seeds=merged.keys()
+                    )
+                ),
             )
         )
     quality_primary = any(entry.efficiency_factor is not None for entry in entries)
@@ -5240,6 +5441,7 @@ async def _champion_anchored_seed_set(
         session,
         agent_ids=tuple(member.agent_id for member in members),
         bench_version=canonical_version,
+        planning=True,
     )
     block_hash, allow_fresh_seeds = await reign_seed_planning(
         session,
@@ -5306,6 +5508,7 @@ async def _top5_confirmation_seed_plan(
         session,
         agent_ids=tuple(dict.fromkeys((*cohort_ids, member_agent_id))),
         bench_version=canonical_version,
+        planning=True,
     )
     wave_history = {agent_id: history.get(agent_id, {}) for agent_id in wave_member_ids}
     if seed_planning is None:
@@ -5457,7 +5660,7 @@ async def _unserved_catchup_members(
     if len(wave_members) < 2:
         return frozenset()
     history = await confirmation_composites_by_seed(
-        session, agent_ids=members, bench_version=canonical_version
+        session, agent_ids=members, bench_version=canonical_version, planning=True
     )
     block_hash, allow_fresh_seeds = await reign_seed_planning(
         session, champion_agent_id=champion_agent_id, bench_version=canonical_version
@@ -5720,6 +5923,7 @@ async def _top5_member_is_least_covered(
         session,
         agent_ids=member_ids,
         bench_version=canonical_version,
+        planning=True,
     )
     eligible: list[UUID] = []
     for member_id in member_ids:
@@ -6694,7 +6898,20 @@ async def _issue_continual_retest_job(
             status_code=503,
             detail="ticket inference capability is unavailable",
         )
+    dueling_fields = await _dueling_lease_fields(
+        request,
+        session,
+        ticket=ticket,
+        agent=agent,
+        run_seed=(
+            ticket.seed
+            if ticket.seed is not None
+            else (dataset.seed if dataset is not None else agent.dataset_seed)
+        ),
+        now=now,
+    )
     job = JobResponse(
+        **dueling_fields,
         agent_id=agent.agent_id,
         slot_id=ticket.slot_id,
         miner_hotkey=agent.miner_hotkey,
@@ -6922,6 +7139,14 @@ async def submit_top5_confirmation_score(
                 base_evidence_sha256=report.base_evidence_sha256,
             )
             v9_efficiency_cost_eligible = v9_efficiency_token_total is not None
+        confirmation_season_id, confirmation_dueling = await _dueling_evidence(
+            session, report, ticket, agent
+        )
+        if confirmation_dueling is not None and len(seeds) != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="a bench v16+ confirmation report must carry exactly one seed",
+            )
         await append_confirmation_scores(
             session,
             rows=[
@@ -6934,6 +7159,8 @@ async def submit_top5_confirmation_score(
                     signature=payload.signature,
                     v9_efficiency_token_total=v9_efficiency_token_total,
                     v9_efficiency_cost_eligible=v9_efficiency_cost_eligible,
+                    dueling_season_id=confirmation_season_id,
+                    dueling=confirmation_dueling,
                 )
                 for seed, composite in zip(seeds, composites, strict=True)
             ],
@@ -7878,6 +8105,9 @@ async def submit_score(
         # the v13 floor and for a v13+ scorer that emitted none, so v<=12 rows
         # are byte-identical.
         gate_evidence = build_gate_evidence(report, bench_version=ticket.bench_version)
+        dueling_season_id, dueling = await _dueling_evidence(
+            session, report, ticket, agent
+        )
         await upsert_score(
             session,
             agent_id=agent_id,
@@ -7895,6 +8125,8 @@ async def submit_score(
             details=score_details or None,
             model_usage=model_usage,
             gate_evidence=gate_evidence,
+            dueling_season_id=dueling_season_id,
+            dueling=dueling,
         )
         await record_ticket_route_quality(
             session,

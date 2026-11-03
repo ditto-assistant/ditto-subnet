@@ -4455,6 +4455,30 @@ class TestRunOnce:
         assert platform.report_ticket_failed.await_args.args[1] == "infrastructure"
         assert "slot-0" not in worker._healthy_slots
 
+    async def test_artifact_fetch_502_is_not_charged_to_the_miner(self) -> None:
+        # SN-426: an artifact-fetch 502 while Platform restarted for a deploy
+        # was handed back as scoring_error and spent the miner's attempt.
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[job], ledger=[])
+        platform.get_artifact = AsyncMock(
+            side_effect=PlatformInfrastructureError("artifact unavailable (502): ")
+        )
+        dittobench = MagicMock(score_tarball=AsyncMock())
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(put_weights=AsyncMock()),
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        platform.get_artifact.assert_awaited_once()
+        dittobench.score_tarball.assert_not_awaited()
+        platform.report_ticket_failed.assert_awaited_once()
+        assert platform.report_ticket_failed.await_args.args[1] == "infrastructure"
+
     async def test_derived_seed_ticket_is_scored(self) -> None:
         # The companion arm: a ticket whose seed DOES re-derive proceeds.
         agent_id = uuid4()

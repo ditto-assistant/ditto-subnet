@@ -230,6 +230,7 @@ def test_ledger_entry_exposes_append_only_confirmation_history() -> None:
         "validator_hotkey",
         "bench_version",
         "signature",
+        "dueling",
     }
     # Optional list of records (absent -> fold falls back to legacy arrays).
     assert prop["default"] is None

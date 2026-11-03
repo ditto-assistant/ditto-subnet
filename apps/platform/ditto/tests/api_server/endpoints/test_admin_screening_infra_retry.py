@@ -126,6 +126,15 @@ async def test_requires_the_admin_token(
     assert (await client.get(_URL, headers=wrong)).status_code == 401
 
 
+async def test_policy_shows_the_once_only_late_result_retry(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    policy = (await _get(client))["policy"]
+    assert "l2-late-result" in policy["auto_retry_reason_codes"]
+    assert policy["auto_retry_max_retries_by_code"] == {"l2-late-result": 1}
+
+
 async def test_mixed_queue_reports_every_state_and_breaker(
     app: FastAPI,
     client: httpx.AsyncClient,

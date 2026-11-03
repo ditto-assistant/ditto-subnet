@@ -3007,6 +3007,8 @@ def _post_v7_capabilities(now: datetime) -> tuple[dict, dict]:
     scorer.pop("deterministic_v13_datasets", None)
     scorer.pop("v14_scored_runtime_env", None)
     scorer.pop("v15_scored_runtime_env", None)
+    scorer.pop("dueling_slice_bench_versions", None)
+    scorer.pop("v16_scored_runtime_env", None)
     scorer.pop("v7_calibration")
     return capabilities, stack
 
@@ -3165,6 +3167,22 @@ def _heartbeat(
         capabilities["scorer_benchmarks"].pop("v14_scored_runtime_env", None)
     if 15 not in versions:
         capabilities["scorer_benchmarks"].pop("v15_scored_runtime_env", None)
+    if 16 in versions:
+        # A v16 (dueling) scorer carries its version-bound packet and forwards
+        # its slice versions; Platform leases 16+ only with both.
+        revision = capabilities["scorer_benchmarks"]["source_revision"]
+        keys = ["DITTOBENCH_DB", "DITTOBENCH_DECISIONS_URL", "DITTOBENCH_MODEL"]
+        material = f"scored-runtime-env-v1\n16\n{revision}\n" + "\n".join(keys)
+        capabilities["scorer_benchmarks"]["v16_scored_runtime_env"] = {
+            "bench_version": 16,
+            "scope": "scorer-injected-env-only",
+            "source_revision": revision,
+            "injected_keys": keys,
+            "sha256": hashlib.sha256(material.encode()).hexdigest(),
+        }
+        capabilities["scorer_benchmarks"]["dueling_slice_bench_versions"] = [
+            v for v in versions if v >= 16
+        ]
     if 7 not in versions:
         capabilities["scorer_benchmarks"].pop("v7_calibration", None)
         capabilities["ticket_inference"] = False
@@ -3405,6 +3423,22 @@ async def test_v8_requires_an_isolated_executor_but_v7_remains_compatible(
     assert heartbeat_supports_version(heartbeat, now=now, version=8) is supports_v8
 
 
+def test_v16_needs_its_own_runtime_env_packet_and_slice_versions() -> None:
+    """A v16 scorer qualifies only with the v16 packet (a v15 packet never
+    does) and with 16 in ``dueling_slice_bench_versions``."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    versions = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    heartbeat = _heartbeat("v16", now, versions=versions, protocol_version=18)
+    assert verified_scorer_for_version(heartbeat, version=16) is not None
+    scorer = heartbeat.capabilities["scorer_benchmarks"]  # type: ignore[index]
+    packet = scorer.pop("v16_scored_runtime_env")
+    assert verified_scorer_for_version(heartbeat, version=16) is None
+    assert verified_scorer_for_version(heartbeat, version=15) is not None
+    scorer["v16_scored_runtime_env"] = packet
+    scorer.pop("dueling_slice_bench_versions")
+    assert verified_scorer_for_version(heartbeat, version=16) is None
+
+
 async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
     """The v0.44 capability shape can receive v8 work without v7 metadata."""
 
@@ -3416,6 +3450,8 @@ async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
     scorer["supported_bench_versions"] = [8]
     scorer.pop("v14_scored_runtime_env", None)
     scorer.pop("v15_scored_runtime_env", None)
+    scorer.pop("dueling_slice_bench_versions", None)
+    scorer.pop("v16_scored_runtime_env", None)
     scorer.pop("v7_calibration")
 
     assert heartbeat_supports_version(heartbeat, now=now, version=8)
@@ -5173,3 +5209,127 @@ async def test_rollout_ticket_skips_a_member_live_at_the_source_version(
             ttl=timedelta(minutes=90),
         )
         assert other is not None and other.agent_id == agent_ids[0]
+
+
+async def test_stranded_admission_is_leased_by_the_activated_topup_lane(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """An operator-admitted stranded agent is served out of ``scored``.
+
+    It joins the activated era's top-up lane after the frozen tail, ahead of
+    it only on occupancy, and never re-gates or resizes the frozen cohort.
+    """
+    from ditto.db.queries.benchmark_admission import agent_is_admitted
+    from ditto.db.queries.stranded_admission import (
+        append_stranded_admission,
+        resolve_stranded_admission,
+    )
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _inherited_era_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        tail_id = await _activate_with_short_tail(
+            session, rollout=rollout, agent_ids=agent_ids, now=now
+        )
+        version = rollout.desired_version
+        stranded = uuid4()
+        session.add(
+            Agent(
+                agent_id=stranded,
+                miner_hotkey="miner-stranded",
+                name="agent-stranded",
+                sha256="f" * 64,
+                status=AgentStatus.SCORED,
+                screening_policy_version=9,
+                screened_image_sha256="f" * 64,
+                screened_image_size_bytes=1024,
+                screened_image_id="sha256:" + "f" * 64,
+                screened_image_ref=f"ditto-screen/{stranded}:latest",
+                screened_image_upload_id=uuid4(),
+                screened_image_verified_at=now,
+                created_at=now - timedelta(days=1),
+            )
+        )
+        await session.flush()
+        for validator in range(3):
+            session.add(
+                Score(
+                    agent_id=stranded,
+                    bench_version=rollout.from_version,
+                    validator_hotkey=f"legacy-{validator}",
+                    run_id=f"stranded-{validator}",
+                    signature="aa",
+                    seed=11,
+                    composite=0.7,
+                    tool_mean=0.7,
+                    memory_mean=0.7,
+                    median_ms=1,
+                    n=114,
+                    details={"bench_version": rollout.from_version},
+                    generated_at=now,
+                )
+            )
+        await session.flush()
+        assert not await agent_is_admitted(
+            session, bench_version=version, agent_id=stranded
+        )
+        ttl = timedelta(minutes=90)
+        target = await resolve_stranded_admission(
+            session,
+            agent_id=stranded,
+            expected_active_version=version,
+            expected_sha256="F" * 64,
+            expected_previous_score_count=3,
+        )
+        member = await append_stranded_admission(
+            session,
+            target=target,
+            dataset=DatasetPin(seed=11, sha256="d" * 64, run_size="full"),
+            seed_source="source_scores_canonical_min",
+            actor="operator",
+            reason="backfill one stranded agent",
+            now=now,
+        )
+        assert member.position == len(agent_ids) + 1
+        assert await agent_is_admitted(
+            session, bench_version=version, agent_id=stranded
+        )
+        assert rollout.cohort_size == len(agent_ids)
+        assert await open_rollout(session) is None
+        assert await active_bench_version(session) == version
+
+        # Validator a already scored the tail: its only top-up is the admitted
+        # agent, leased straight out of ``scored`` on the pinned dataset.
+        ticket = await issue_rollout_topup_ticket(
+            session,
+            active_version=version,
+            validator_hotkey="validator-a",
+            now=now,
+            ttl=ttl,
+        )
+        assert ticket is not None
+        assert ticket.agent_id == stranded
+        assert ticket.bench_version == version
+        assert ticket.purpose == TicketPurpose.CANONICAL_QUORUM
+        # Validator c still finishes the frozen tail on its own slot.
+        tail_ticket = await issue_rollout_topup_ticket(
+            session,
+            active_version=version,
+            validator_hotkey="validator-c",
+            now=now,
+            ttl=ttl,
+        )
+        assert tail_ticket is not None
+        assert tail_ticket.agent_id in {tail_id, stranded}
+
+        with pytest.raises(RolloutConflictError, match="not a stranded"):
+            await resolve_stranded_admission(
+                session,
+                agent_id=stranded,
+                expected_active_version=version,
+                expected_sha256="f" * 64,
+                expected_previous_score_count=3,
+            )

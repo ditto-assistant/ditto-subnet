@@ -1,7 +1,7 @@
 // Command mixaudit is the deterministic memory-mix histogram behind the Bench
 // v13 monetary-exposure cap (issues #1529 / #1830 / #1848). For every seed it
 // generates the dataset, classifies each memory case (gen.AuditMix), evaluates
-// the #1529 gate (gen.MixGateV13), and prints one row per seed plus an
+// the #1529 gate (gen.MixGateForVersion: MixGateV13, MixGateV16 from v16), and prints one row per seed plus an
 // aggregate, as a markdown table (default) or JSON.
 //
 // Usage:
@@ -36,13 +36,19 @@ func main() {
 	gate := flag.Bool("gate", false, "exit 1 when any seed violates the v13 gate")
 	flag.Parse()
 
-	if !protocol.SupportedBenchVersion(*benchVersion) {
+	if !protocol.GeneratableBenchVersion(*benchVersion) {
 		fmt.Fprintf(os.Stderr, "unsupported bench version %d\n", *benchVersion)
 		os.Exit(2)
 	}
 	profile, ok := gen.ProfileForVersion(*runSize, *benchVersion)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "run size: must be small, medium, or full")
+		os.Exit(2)
+	}
+	if *gate && *benchVersion >= protocol.BenchVersionV16 && *runSize != "full" {
+		// MixGateV16 is calibrated on the full dueling table (its abstention
+		// target is the scale-2 share); smaller tables have no gate.
+		fmt.Fprintln(os.Stderr, "-gate is only defined for the full run size from bench_version 16")
 		os.Exit(2)
 	}
 
@@ -65,7 +71,7 @@ func main() {
 		}
 		interim = audit.InterimSlots
 		interimGenerators = audit.InterimGenerators
-		summary := audit.Summarize(gen.MixGateV13)
+		summary := audit.Summarize(gen.MixGateForVersion(*benchVersion))
 		if len(summary.Violations) > 0 {
 			violating++
 		}
