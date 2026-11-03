@@ -2380,9 +2380,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// endpoint. Everything the datagen half's gates, efficiency and shadow
 	// telemetry read from the session is captured first, at the boundary, so
 	// slice cases never reach them.
-	var datagenToolProvenanceTotals, datagenCatalogTotals bool
-	var toolProvenanceTotals *sessionToolProvenanceTotals
-	var catalogTotals *sessionCatalogTotals
+	var sessionTotals datagenSessionTotals
 	var datagenRelay *relayDatagenInterval
 	var sliceResult duelingSliceResult
 	if slice != nil {
@@ -2393,8 +2391,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			}
 			datagenRelay = &relayDatagenInterval{usage: usage, execution: execution}
 		}
-		toolProvenanceTotals, datagenToolProvenanceTotals = s.readSessionToolProvenanceTotals(req.BenchVersion, inferenceSessionID)
-		catalogTotals, datagenCatalogTotals = s.readSessionCatalogTotals(req.BenchVersion, inferenceSessionID)
+		sessionTotals = s.captureDatagenSessionTotals(req.BenchVersion, inferenceSessionID)
 		datagenCases := len(perCase)
 		s.store.SetStage(runID, store.StatusRunning, datagenCases, total)
 		var sliceErr error
@@ -2499,8 +2496,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		datagenHalf = scorer.DatagenHalfForVersion(perCase, req.BenchVersion)
 		composite, stderr, err := duelingOrdinaryScore(datagenHalf, sliceResult.columns, slice.ownerKey)
 		if err != nil {
-			s.store.Fail(runID, "dueling slice aggregates are invalid")
-			log.Printf("run %s: %v", runID, err)
+			// CheckDuelingColumns names only column ids and statistics, never
+			// case text, so the cause is safe to persist.
+			s.store.Fail(runID, "dueling slice aggregates are invalid: "+err.Error())
 			return
 		}
 		report.Composite = composite
@@ -2513,15 +2511,13 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	injections := injectionAttemptCount(perCase)
 	// Session-scoped tool provenance cannot attribute an unexecuted model
 	// emission to one case; the run summary carries the session-wide totals.
-	// A dueling run read both at the datagen/slice boundary.
-	if !datagenToolProvenanceTotals {
-		toolProvenanceTotals, _ = s.readSessionToolProvenanceTotals(req.BenchVersion, inferenceSessionID)
-	}
-	// Bench v13 catalog capture run totals (completions attributed / not) for
-	// the catalog_gate summary and its published catalog_suppression_rate.
-	if !datagenCatalogTotals {
-		catalogTotals, _ = s.readSessionCatalogTotals(req.BenchVersion, inferenceSessionID)
-	}
+	// Bench v13 catalog capture run totals (completions attributed / not) feed
+	// the catalog_gate summary and its published catalog_suppression_rate. A
+	// dueling run captured both at the datagen/slice boundary and never
+	// re-reads them here: totals the boundary could not read stay unavailable
+	// rather than picking up slice completions.
+	sessionTotals = s.datagenSessionTotalsAtScoring(slice != nil, sessionTotals, req.BenchVersion, inferenceSessionID)
+	toolProvenanceTotals, catalogTotals := sessionTotals.toolProvenance, sessionTotals.catalog
 	catalogGateSummary := summarizeV13CatalogGate(req.BenchVersion, v13CatalogGatePosture, perCase, catalogTotals)
 	logV13CatalogCoverageGap(runID, catalogGateSummary)
 	report.Details = &protocol.RunDetails{
@@ -2586,7 +2582,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// inference cost summary. Both are nil before v13, so earlier details keep
 	// their exact shape.
 	report.Details.TwinPostPass = twinSummary
-	report.Details.InferenceCost = s.summarizeV13InferenceCost(req.BenchVersion, inferenceSessionID, perCase)
+	report.Details.InferenceCost = summarizeV13InferenceCostFrom(req.BenchVersion, perCase, sessionTotals.unattributedCost)
 	report = applyTokenContract(report, req.BenchVersion, req.RunSize, tokenUsage)
 	if injections > 0 {
 		log.Printf("run %s: %d injection-compliance case(s) flagged", runID, injections)
@@ -2654,7 +2650,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	s.dispatchRouterShadow(ctx, harnessURL, req, runStart)
 
 	if slice != nil {
-		report.Details.Dueling = duelingReportDetails(slice, datagenHalf, report.Details.V9Base, sliceResult.columns)
+		report.Details.Dueling = duelingReportDetails(slice, datagenHalf, report.Details.TokenEfficiency, report.Details.V9Base, sliceResult.columns)
 		log.Printf("run %s: dueling slice %s season=%s cases=%d datagen_raw=%.4f datagen_gate=%.4f",
 			runID, slice.sha256, slice.dataset.SeasonID, len(sliceResult.rows), datagenHalf.Raw, report.Details.Dueling.DatagenGate)
 	}

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -565,7 +566,7 @@ func TestDuelingCompositeMasksOnlyTheOwnerAndKeepsGatesOnDatagen(t *testing.T) {
 	// the datagen gate in the report so the fold reproduces the composite.
 	slice := &duelingSlice{dataset: challenge.SliceDataset{SeasonID: sliceTestSeason, SeasonIndex: 3}, sha256: strings.Repeat("c", 64), ownerKey: sliceTestOwner}
 	v9 := &protocol.V9BaseDetails{AppliedGateFactorBPS: 5000}
-	details := duelingReportDetails(slice, half, v9, cols)
+	details := duelingReportDetails(slice, half, nil, v9, cols)
 	if details.DatagenGate != half.Gate*0.5 || details.DatagenRaw != half.Raw || details.ColumnWeight != protocol.DuelingColumnWeight {
 		t.Fatalf("details = %+v", details)
 	}
@@ -576,6 +577,11 @@ func TestDuelingCompositeMasksOnlyTheOwnerAndKeepsGatesOnDatagen(t *testing.T) {
 	}
 	if math.Abs(details.CompositeStderr-stderr*0.5) > 1e-6 {
 		t.Fatalf("details stderr %v vs reported %v", details.CompositeStderr, stderr*0.5)
+	}
+	// A token-efficiency multiplier joins the gate the same way.
+	scaled := duelingReportDetails(slice, half, &protocol.TokenEfficiency{Multiplier: 0.8}, v9, cols)
+	if scaled.DatagenGate != half.Gate*0.8*0.5 {
+		t.Fatalf("token-efficiency multiplier not carried: %v", scaled.DatagenGate)
 	}
 	if _, _, err := duelingOrdinaryScore(half, cols[:4], sliceTestOwner); err == nil {
 		t.Fatal("a report with four columns was scored")
@@ -592,7 +598,7 @@ func TestDuelingReportGolden(t *testing.T) {
 		dataset: challenge.SliceDataset{SeasonID: sliceTestSeason, SeasonIndex: 26119},
 		sha256:  "3b1f4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70819", ownerKey: sliceTestOwner,
 	}
-	details := duelingReportDetails(slice, half, &protocol.V9BaseDetails{AppliedGateFactorBPS: 10000}, cols)
+	details := duelingReportDetails(slice, half, &protocol.TokenEfficiency{Multiplier: 1}, &protocol.V9BaseDetails{AppliedGateFactorBPS: 10000}, cols)
 	aggs := duelingAggregates(cols)
 	golden := struct {
 		Details         *protocol.DuelingDetails `json:"details"`
@@ -764,5 +770,47 @@ func TestRunSizeJobRunsTheSliceAfterTheDatagenHalf(t *testing.T) {
 	// No slice case reaches the transcript.
 	if job.Transcript != nil && strings.Contains(string(job.Transcript), "code-update-") {
 		t.Fatal("a slice case reached the transcript artifact")
+	}
+}
+
+// The datagen gates' session totals (catalog_gate, catalog_suppression_rate,
+// the tool-provenance summary) are captured once at the datagen/slice
+// boundary. Slice completions booked afterwards never reach them, and a
+// boundary capture that found nothing stays unavailable instead of falling
+// back to a post-slice read.
+func TestDuelingSessionTotalsNeverSeeSliceCompletions(t *testing.T) {
+	broker, sessionID, stop := newCatalogCaptureBroker(t, protocol.DuelingMinBenchVersion, emitSetThemeCompletion)
+	defer stop()
+	s := &server{broker: broker}
+	v := protocol.DuelingMinBenchVersion
+
+	postCatalogChat(t, broker, openAICatalogRequest) // a datagen completion
+	boundary := s.captureDatagenSessionTotals(v, sessionID)
+	if boundary.catalog == nil || boundary.catalog.Completions != 1 || boundary.toolProvenance == nil {
+		t.Fatalf("boundary totals = %+v", boundary)
+	}
+	postCatalogChat(t, broker, openAICatalogRequest) // slice completions
+	postCatalogChat(t, broker, openAICatalogRequest)
+
+	got := s.datagenSessionTotalsAtScoring(true, boundary, v, sessionID)
+	if got.catalog.Completions != 1 || *got.toolProvenance != *boundary.toolProvenance ||
+		!reflect.DeepEqual(got.unattributedCost, boundary.unattributedCost) {
+		t.Fatalf("dueling gates read post-slice totals: %+v / %+v / %+v", *got.catalog, *got.toolProvenance, got.unattributedCost)
+	}
+	if live := s.captureDatagenSessionTotals(v, sessionID); reflect.DeepEqual(live.unattributedCost, boundary.unattributedCost) {
+		t.Fatalf("the slice completions booked no unattributed cost, so the test proves nothing: %+v", live.unattributedCost)
+	}
+	// A failed boundary capture (here: an unknown session) is not repaired by
+	// a post-slice read of the live session.
+	failed := s.captureDatagenSessionTotals(v, "no-such-session")
+	if failed.catalog != nil || failed.toolProvenance != nil {
+		t.Fatalf("unknown session produced totals: %+v", failed)
+	}
+	if got := s.datagenSessionTotalsAtScoring(true, failed, v, sessionID); got.catalog != nil || got.toolProvenance != nil {
+		t.Fatalf("a failed boundary capture fell back to post-slice totals: %+v", got)
+	}
+	// Without a slice the read happens at scoring, exactly as before.
+	if got := s.datagenSessionTotalsAtScoring(false, datagenSessionTotals{}, v, sessionID); got.catalog == nil || got.catalog.Completions != 3 {
+		t.Fatalf("non-dueling totals = %+v", got.catalog)
 	}
 }

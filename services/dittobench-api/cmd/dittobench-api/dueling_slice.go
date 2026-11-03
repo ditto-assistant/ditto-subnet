@@ -292,12 +292,17 @@ func duelingOrdinaryScore(half scorer.DatagenHalf, columns []protocol.DuelingCol
 }
 
 // duelingReportDetails is the details.dueling block. datagenGate is the
-// product of every gate factor applied to the run: the composite gate and,
-// from v9, the applied score-gate factor of the signed base evidence. With it
+// product of every factor applied to the run's composite: the composite gate,
+// the token-efficiency multiplier (always 1 under the v7+ quality-only
+// contract, carried so the identity holds by construction) and, from v9, the
+// applied score-gate factor of the signed base evidence. With it
 // the validator fold recomputes the composite under any owner mask; under the
 // self mask it reproduces the reported composite to within its micro rounding.
-func duelingReportDetails(slice *duelingSlice, half scorer.DatagenHalf, v9 *protocol.V9BaseDetails, columns []protocol.DuelingColumnDetails) *protocol.DuelingDetails {
+func duelingReportDetails(slice *duelingSlice, half scorer.DatagenHalf, efficiency *protocol.TokenEfficiency, v9 *protocol.V9BaseDetails, columns []protocol.DuelingColumnDetails) *protocol.DuelingDetails {
 	gate := half.Gate
+	if efficiency != nil {
+		gate = gate * efficiency.Multiplier
+	}
 	if v9 != nil {
 		gate = gate * (float64(v9.AppliedGateFactorBPS) / float64(scoregates.BasisPointScale))
 	}
@@ -322,23 +327,50 @@ type relayDatagenInterval struct {
 	execution relayExecutionSummary
 }
 
-// readSessionToolProvenanceTotals reads the session-wide v10+ tool provenance
-// totals; the bool reports that the read happened (whatever it found).
-func (s *server) readSessionToolProvenanceTotals(benchVersion int, sessionID string) (*sessionToolProvenanceTotals, bool) {
-	if benchVersion >= protocol.BenchVersionV10 && sessionID != "" && s.broker != nil {
-		if totals, ok := s.broker.sessionToolProvenanceTotals(sessionID); ok {
-			return &totals, true
-		}
-	}
-	return nil, true
+// datagenSessionTotals are the session-wide totals the datagen half's gates
+// and shadow summaries read: v10+ tool provenance, v13+ catalog capture and
+// the v13+ unattributed inference cost (the inference_cost summary).
+// nil means unavailable, which each consumer already treats as "no totals"
+// (never as zero). A dueling run reads them exactly once, at the datagen/slice
+// boundary, so no slice completion can reach catalog_gate,
+// catalog_suppression_rate or the tool-provenance summary.
+type datagenSessionTotals struct {
+	toolProvenance *sessionToolProvenanceTotals
+	catalog        *sessionCatalogTotals
+	// unattributedCost is the session's completions no case claimed; the zero
+	// record when there is no session, as summarizeV13InferenceCost reads it.
+	unattributedCost scoregates.InferenceCostRecord
 }
 
-// readSessionCatalogTotals reads the session-wide v13+ catalog capture totals.
-func (s *server) readSessionCatalogTotals(benchVersion int, sessionID string) (*sessionCatalogTotals, bool) {
-	if benchVersion >= scorer.CatalogGateBenchVersion && sessionID != "" && s.broker != nil {
-		if totals, ok := s.broker.sessionCatalogTotals(sessionID); ok {
-			return &totals, true
+// captureDatagenSessionTotals reads both totals from the ticket session.
+func (s *server) captureDatagenSessionTotals(benchVersion int, sessionID string) datagenSessionTotals {
+	var totals datagenSessionTotals
+	if sessionID == "" || s.broker == nil {
+		return totals
+	}
+	if benchVersion >= protocol.BenchVersionV10 {
+		if t, ok := s.broker.sessionToolProvenanceTotals(sessionID); ok {
+			totals.toolProvenance = &t
 		}
 	}
-	return nil, true
+	if benchVersion >= scorer.CatalogGateBenchVersion {
+		if t, ok := s.broker.sessionCatalogTotals(sessionID); ok {
+			totals.catalog = &t
+		}
+	}
+	if benchVersion >= protocol.BenchVersionV13 {
+		totals.unattributedCost = s.broker.sessionUnattributedInferenceCost(sessionID)
+	}
+	return totals
+}
+
+// datagenSessionTotalsAtScoring is what the datagen gates read at scoring
+// time. A run without a slice reads the session now, exactly as before. A
+// dueling run returns its boundary capture unchanged, including a capture
+// that found nothing: it never falls back to a post-slice read.
+func (s *server) datagenSessionTotalsAtScoring(dueling bool, boundary datagenSessionTotals, benchVersion int, sessionID string) datagenSessionTotals {
+	if dueling {
+		return boundary
+	}
+	return s.captureDatagenSessionTotals(benchVersion, sessionID)
 }
