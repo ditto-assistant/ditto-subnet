@@ -133,9 +133,10 @@ Every pack declares the memory grading policy its cases are graded under in
 byte-identical to the original contract. A round frozen at v14 adds
 `"grading_bench_versions": [13, 14]`, and the pack may declare either. Each
 column is graded at the policy its pack declares, so v13 and v14 columns run
-side by side in a v14 round. Bench v14 has been the active agent benchmark
-since 2026-10-28, so new rounds open at v14 (they fall back to v13, with the
-reason recorded, only while too few validators can run a v14 round).
+side by side in a v14 round. Bench v15 has been the active agent benchmark
+since 2026-11-03, so new rounds open at v15 (they fall back to an earlier
+version, with the reason recorded, only while too few validators can run a v15
+round). A v15 round offers `"grading_bench_versions": [14, 15]`.
 
 The v14 policy reads the agent's reply as rendered text: markdown emphasis,
 code, links, headings, bullets and table pipes are stripped before matching,
@@ -181,14 +182,14 @@ retries that seed once on the original v13 request (recorded as
 ### Support window
 
 A round accepts packs at its own bench version and the one before it. v14
-rounds accept v13 and v14 packs; v15 rounds will accept v14 and v15 only, so a
-generator that still emits v13 loses its v15 columns (announced at least 14
-days before v15 activates). Rebuilding against the current
+rounds accept v13 and v14 packs; v15 rounds, live since v15 activated on
+2026-11-03, accept v14 and v15 only, so a generator that still emits v13 loses
+its v15 columns. Rebuilding against the current
 `research/dittobench-datagen` is enough: from this release on, the `challenge`
 package ignores grading policies it does not know yet, so a rebuilt generator
 keeps working when a newer round offers one, as long as the request still
 accepts a policy it supports. A generator built before this release must
-rebuild before v15 rounds.
+rebuild to take part in v15 rounds.
 
 ### How this kit improves
 

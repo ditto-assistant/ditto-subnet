@@ -31,6 +31,12 @@
 //   - rounds (round.go): generate a round's columns on their seeds and encode
 //     the round dataset validators run the agent panel on, then score the
 //     finished agent x generator matrix with challenge.ScoreRound.
+//   - dueling (dueling.go, bench v16+): run a season's qualification battery
+//     on candidate generators, and generate one agent run's generator slice
+//     from the season's pinned columns. Builds are cached by source digest.
+//
+// reproduce-slice (reproduce.go) rebuilds a revealed dueling slice byte for
+// byte and prints its SHA-256, for the miner kit and public audit.
 //
 // No agent runs here: validators execute round datasets on screened agent
 // images through the ordinary ticket and inference path. A sandbox failure is
@@ -65,8 +71,9 @@ import (
 
 // ScorerVersion is reported with every result so Platform can audit which
 // executor produced it. /6 advertises its grading policies explicitly
-// (grading_bench_versions); Platform reads the list, never this string.
-const ScorerVersion = "challenge-scorer/6"
+// (grading_bench_versions); /7 adds the dueling slice and battery work
+// (dueling_work_kinds). Platform reads the lists, never this string.
+const ScorerVersion = "challenge-scorer/7"
 
 var releaseRevision = "development"
 
@@ -86,11 +93,14 @@ func main() {
 			"revision": releaseRevision, "update_protocol": 1,
 			"scorer_version": ScorerVersion, "max_cases": challenge.MaxCases,
 			"builder_image": genrun.BuilderImage, "runner_image": genrun.RunnerImage,
+			"dueling_work_kinds": strings.Split(duelingWorkKinds, ","),
 		})
 	case "run":
 		err = runLocal(ctx, os.Args[2:])
 	case "serve":
 		err = serve(ctx, os.Args[2:])
+	case "reproduce-slice":
+		err = reproduceSlice(ctx, os.Args[2:], os.Stdout)
 	default:
 		usage()
 		os.Exit(2)
@@ -101,7 +111,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: challenge-scorer run|serve [flags]")
+	fmt.Fprintln(os.Stderr, "usage: challenge-scorer run|serve|reproduce-slice|version [flags]")
 }
 
 // agentFlag is one -agent id=url[,owner=key][,champion] value.
@@ -406,12 +416,14 @@ type resultRequest struct {
 // fault of the generator. Mirrors GeneratorScorerFault in
 // apps/platform/ditto/api_models/generator.py.
 type faultReport struct {
-	Work          string `json:"work"` // "qualification" | "round"
+	Work          string `json:"work"` // "qualification" | "round" | "dueling"
 	LeaseID       string `json:"lease_id"`
 	RunID         string `json:"run_id,omitempty"`
 	SubmissionID  string `json:"submission_id,omitempty"`
 	RoundIndex    *int64 `json:"round_index,omitempty"`
-	ErrorKind     string `json:"error_kind"` // "unsupported_request" | "sandbox"
+	SeasonID      string `json:"season_id,omitempty"`      // dueling
+	PreparationID string `json:"preparation_id,omitempty"` // dueling slice
+	ErrorKind     string `json:"error_kind"`               // "unsupported_request" | "sandbox"
 	Detail        string `json:"detail"`
 	ScorerVersion string `json:"scorer_version"`
 }
@@ -488,12 +500,22 @@ func (c *platformClient) do(ctx context.Context, method, path string, body, out 
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s: HTTP %d", method, path, resp.StatusCode)
+		return &httpStatusError{Method: method, Path: path, Status: resp.StatusCode}
 	}
 	if out != nil {
 		return json.Unmarshal(payload, out)
 	}
 	return nil
+}
+
+// httpStatusError is a non-2xx Platform answer.
+type httpStatusError struct {
+	Method, Path string
+	Status       int
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("%s %s: HTTP %d", e.Method, e.Path, e.Status)
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -530,15 +552,26 @@ func serveWithDrain(ctx, drain context.Context, args []string) error {
 	log.Printf("scorer started revision=%s max_cases=%d", releaseRevision, challenge.MaxCases)
 	client := &platformClient{base: strings.TrimRight(*platform, "/"), token: token, http: &http.Client{Timeout: 120 * time.Second}}
 	client.advertise = advertisement(*scorerID, sb)
+	cache := newBuildCache(sb, buildCacheSize)
+	defer cache.Close()
 	for {
 		if drain.Err() != nil {
 			return nil
 		}
 		// Rounds first: a round's dataset gates every validator panel run, and
-		// its scoring gates the ledger. Qualification can wait a cycle.
+		// its scoring gates the ledger. Dueling slices gate v16+ agent leases
+		// (Platform answers 503 until the slice is ready), so they come next.
+		// Qualification can wait a cycle.
 		roundBusy, roundErr := processRound(ctx, client, sb)
 		if roundErr != nil {
 			log.Printf("round cycle failed: %v", roundErr)
+		}
+		if drain.Err() != nil {
+			return nil
+		}
+		duelBusy, duelErr := processDueling(ctx, client, cache)
+		if duelErr != nil {
+			log.Printf("dueling cycle failed: %v", duelErr)
 		}
 		if drain.Err() != nil {
 			return nil
@@ -552,9 +585,9 @@ func serveWithDrain(ctx, drain context.Context, args []string) error {
 		}
 		if *once {
 			// One-shot automation must see a failed cycle as a failure.
-			return errors.Join(roundErr, qualErr)
+			return errors.Join(roundErr, duelErr, qualErr)
 		}
-		if (roundBusy && roundErr == nil) || (qualBusy && qualErr == nil) {
+		if (roundBusy && roundErr == nil) || (duelBusy && duelErr == nil) || (qualBusy && qualErr == nil) {
 			continue
 		}
 		select {

@@ -273,7 +273,7 @@ The command requires Rust and Go, plus the same local provider setup as
 `serve`: Ollama `embeddinggemma` is required for memory, and chat uses the
 provider selected in `.env`. It builds both binaries, uses an isolated temporary
 database, selects free loopback ports, submits a run on the live scoring bench
-(read from the public rollout endpoint at start; currently 14, with the
+(read from the public rollout endpoint at start; currently 15, with the
 script's `LIVE_SCORING_BENCH_VERSION` as the offline fallback),
 displays progress and the final score/provenance counts, and cleans up on exit.
 `--run-size small` is a smoke profile. `--run-size full` is the on-chain-shaped
@@ -755,12 +755,23 @@ produces a container serving that protocol on :8080.
 > Status: the hosted practice validator, on-chain submission path (`ditto upload`,
 > eval fee, scoring, weights), and the [SN118 leaderboard](https://platform-api.heyditto.ai/)
 > are live today.
-> Benchmark v14 is the active scoring contract. It keeps the v13 surface and
-> gates (see *Bench v13: how to stay inside the gates* below) and adds
-> action-scoped declarative over-call scoring; `GET /api/v1/public/bench/rollout`
-> (`active_version`) is authoritative for what is active. Every
+> Benchmark v15 is the active scoring contract (activated 2026-11-03). It keeps
+> the v14 grader and the v13 gates (see *Bench v13: how to stay inside the
+> gates* below); `GET /api/v1/public/bench/rollout` (`active_version`) is
+> authoritative for what is active. Every
 > contract uses locked `openai/gpt-oss-20b` inference and validator-observed
 > tool execution, and reaches your harness as wire version 9.
+>
+> **Bench v15 (active since 2026-11-03)** adds two things your harness sees.
+> The tool catalog becomes production-sized: about 235 tools per run, 200 of
+> them third-party connector tools the workspace has not linked (a call returns
+> "not connected" and costs an extra call). Picking the right tool from that
+> menu is now part of the score, and sending the whole catalog to the model on
+> every turn is expensive. The sandbox also gets `DITTOBENCH_DECISIONS_URL`:
+> POST a System One body (`{"state": ..., "questions": {...}}`) there to ask the
+> locked decision model (TypeSafe Jev) choice or score questions, for example
+> which tools to offer the chat model. Use it however you like; it is metered
+> like chat. This kit accepts `bench_version` 15 on `/run`.
 
 1. Registration. You need a hotkey registered on subnet netuid 118 and TAO for
 the registration cost plus per-submission eval fees. `ditto upload` offers to
@@ -995,9 +1006,10 @@ Everything below is `bench_version >= 13`; v12 and earlier are unchanged.
 The wire stays at version 9 — no `protocol.rs` change is required to *parse*
 v13 traffic, only `MAX_SUPPORTED_BENCH_VERSION` moves to 13 with the v13
 wiring sweep (#1519) so `/run` accepts the new number when a validator
-rehearses it. Bench 14, which keeps this v13 surface and these gates, is now
-the live scoring contract; `local-rehearsal.py` defaults to the live version
-and falls back to `LIVE_SCORING_BENCH_VERSION` 14 offline.
+rehearses it. Bench 15, which keeps this v13 surface and these gates and adds
+the production-scale catalog and decision lane, is now the live scoring
+contract; `local-rehearsal.py` defaults to the live version and falls back to
+`LIVE_SCORING_BENCH_VERSION` 15 offline.
 
 - **Tool catalog is per seed** (#1843, #1842, #1580, #1840): paraphrased
   descriptions, `enum` on `set_theme`/`set_reasoning_effort`,

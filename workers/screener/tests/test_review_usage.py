@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
+from ditto_screener import l2_review
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.policy import ScreeningOutcome
 from ditto_screener.review_usage import (
@@ -20,6 +21,7 @@ from ditto_screener.review_usage import (
 )
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from tests.test_l2_review import _FakeHarness, _response, _sol_agent
 from tests.test_worker import _decision, _FakeGate, _FakePlatform, _item, _worker
 
 
@@ -158,6 +160,50 @@ async def test_l1_turns_record_provider_usage_into_the_attempt_collector() -> No
     assert entry.reported_cost_usd == pytest.approx(0.093)
 
 
+async def test_l3_budget_trip_records_the_tripped_limit_and_stage_wall_time(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+
+    async def post(*_args: object, **_kwargs: object) -> httpx.Response:
+        # 60k uncached + 300k cached at 10% = 90k billable > the 80k budget.
+        return _response([], input_tokens=360_000, cached_tokens=300_000, cost=0.0)
+
+    monkeypatch.setattr(agent, "_post", post)
+    with collect_review_usage() as usage:
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(l2_review.L2TrajectoryError, match="total-budget"):
+                await agent._run_trajectory(
+                    client,
+                    "test-key",
+                    tmp_path,
+                    None,  # type: ignore[arg-type]
+                    artifact_sha256="d" * 64,
+                    dossier={"source": "x"},
+                    role="adjudicator",
+                    reasoning_effort="model_default",
+                    model="openai/gpt-6-sol",
+                    fallback_models=(),
+                    provider="azure",
+                    usage_before=l2_review.L2Usage(input_tokens=1_000),
+                    deadline=None,
+                    dossier_complete=True,
+                )
+    stop = usage.budget_stop
+    assert stop is not None
+    assert (stop.stage, stop.code, stop.tripped) == (
+        "l3_adjudicator",
+        "model-total-budget",
+        ["input"],
+    )
+    # Aggregate across roles at the stop, with the limits the worker applied.
+    assert stop.raw_input_tokens == 361_000
+    assert stop.effective_input_tokens == 91_000
+    assert (stop.max_input_tokens, stop.max_cost_usd) == (80_000, 1.5)
+    [entry] = usage.entries()
+    assert entry.stage == "l3_adjudicator" and entry.wall_ms is not None
+
+
 class _UsageGate(_FakeGate):
     async def screen(self, **kwargs: Any) -> Any:  # type: ignore[override]
         record_usage(
@@ -248,3 +294,30 @@ async def test_no_model_spend_posts_nothing(
 
     assert platform.review_usage == []
     assert len(platform.verdicts) == 1
+
+
+def test_gateway_zero_cost_for_spent_tokens_is_not_a_reported_cost() -> None:
+    """SN-424: a stage the gateway billed at $0 reports its token estimate."""
+    with collect_review_usage() as usage:
+        for _ in range(3):
+            record_usage(
+                "l2_analyst",
+                model="openai/gpt-6-sol",
+                input_tokens=180_000,
+                output_tokens=6_000,
+                cached_input_tokens=150_000,
+                estimated_cost_usd=0.30,
+                reported_cost_usd=0.0,
+            )
+        record_usage(
+            "l3_adjudicator",
+            model="openai/gpt-6-sol",
+            input_tokens=0,
+            output_tokens=0,
+            reported_cost_usd=0.0,
+        )
+    entries = {e.stage: e for e in usage.entries()}
+    assert entries["l2_analyst"].reported_cost_usd is None
+    assert entries["l2_analyst"].cost_usd == pytest.approx(0.90)
+    # A request that spent nothing can honestly cost nothing.
+    assert entries["l3_adjudicator"].reported_cost_usd == 0.0

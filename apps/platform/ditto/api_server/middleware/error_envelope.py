@@ -289,7 +289,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         return envelope_response(
             429,
             ERROR_CODE_SUBMISSION_COOLDOWN,
-            submission_cooldown_message(exc.retry_at),
+            submission_cooldown_message(
+                exc.retry_at, owner_override=exc.owner_override
+            ),
             headers={"Retry-After": str(retry_after)},
         )
 

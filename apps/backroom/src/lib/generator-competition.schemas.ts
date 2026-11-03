@@ -73,7 +73,23 @@ export const generatorCompetitionSettingsSchema = z.object({
   // A competitionFees generator fee_required override decides instead when
   // set. Ships off.
   upload_fee_required: z.boolean(),
+  // Dueling bench (v16+): open seasons that pin up to five eligible
+  // generators into every bench v16+ agent run. Ships off; seasons open only
+  // while a v16+ contract is active or rolling out (shadow seasons) and the
+  // source release policy discloses.
+  dueling_enabled: z.boolean(),
+  // Generator rounds per dueling season (default 1). Platform refuses to
+  // enable dueling with rounds_per_season x epochs_per_round < 2.
+  rounds_per_season: z.number().int().min(1).max(48),
+  // A shipped bench version (16+) to run shadow dueling seasons at while no
+  // dueling version is active or rolling out, so a canary at it can lease a
+  // slice before start_benchmark_rollout. Null by default; needs dueling_enabled.
+  dueling_shadow_bench_version: z.number().int().min(16).nullable(),
 })
+
+// The shortest safe dueling season in subnet epochs (dueling-bench.md
+// section 3), mirrored from Platform MIN_DUELING_SEASON_EPOCHS.
+export const MIN_DUELING_SEASON_EPOCHS = 2
 
 // Reads tolerate a Platform that predates a field: an older Platform never
 // charged generator uploads, so a missing upload_fee_required reads as off.
@@ -84,6 +100,11 @@ const generatorSettingsReadSchema = generatorCompetitionSettingsSchema.extend({
   // A revision written before the field reads as the shipped 3, as Platform
   // reads it.
   min_round_validators: z.number().int().min(1).max(32).default(3),
+  // A Platform or revision that predates dueling reads as off, one round
+  // per season.
+  dueling_enabled: z.boolean().default(false),
+  rounds_per_season: z.number().int().min(1).max(48).default(1),
+  dueling_shadow_bench_version: z.number().int().min(16).nullable().default(null),
 })
 
 export const generatorSettingsRevisionSchema = z.object({
@@ -126,6 +147,15 @@ export const setGeneratorSettingsInputSchema = z
         code: 'custom',
         message: `confirmation must be exactly ${expected}, naming the mode this revision applies`,
         path: ['confirmation'],
+      })
+    }
+    const seasonEpochs = input.settings.rounds_per_season * input.settings.epochs_per_round
+    if (input.settings.dueling_enabled && seasonEpochs < MIN_DUELING_SEASON_EPOCHS) {
+      context.addIssue({
+        code: 'custom',
+        message: `a dueling season must span at least ${MIN_DUELING_SEASON_EPOCHS} epochs: `
+          + `rounds_per_season x epochs_per_round = ${seasonEpochs}`,
+        path: ['settings', 'rounds_per_season'],
       })
     }
   })
@@ -563,6 +593,9 @@ const generatorScorerHeartbeatSchema = z.object({
   grading_bench_versions: z.array(z.number().int()).nullable().optional().default(null),
   // What Platform matches against: the advertised list, else v13 only.
   effective_grading_bench_versions: z.array(z.number().int()).optional(),
+  // Dueling-bench work kinds (slice, battery) advertised on the dueling-work
+  // poll; null when the scorer never polled for dueling work.
+  dueling_work_kinds: z.array(z.string()).nullable().optional().default(null),
 })
 
 export const generatorScorerStatusSchema = z.object({

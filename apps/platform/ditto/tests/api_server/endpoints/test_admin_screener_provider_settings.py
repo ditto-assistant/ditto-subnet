@@ -9,7 +9,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import event, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.screener_node_settings import (
@@ -1134,3 +1134,196 @@ async def test_hetzner_job_claim_does_not_preclaim_signed_worker_attempt(
     assert signed_claim.status_code == 200, signed_claim.text
     assert len(signed_claim.json()["items"]) == 1
     assert signed_claim.json()["items"][0]["agent_id"] == str(agent_id)
+
+
+_NODE_CLAIM_PATHS = (
+    "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
+    "/api/v1/screener/nodes/jobs/submission-runtime-smokes/claim",
+    "/api/v1/screener/nodes/jobs/submission-source-reviews/claim",
+)
+
+
+def _node_row_locks(statements: list[str]) -> list[str]:
+    """Statements that take the shared ``screener_nodes`` row lock."""
+    return [
+        stmt
+        for stmt in statements
+        if "screener_nodes" in stmt and "FOR UPDATE" in stmt.upper()
+    ]
+
+
+class _CaptureSql:
+    """Record every SQL statement the app emits while the block runs."""
+
+    def __init__(self, session_maker: async_sessionmaker[AsyncSession]) -> None:
+        self._engine = session_maker.kw["bind"].sync_engine
+        self.statements: list[str] = []
+
+    def _record(self, *args: object, **_kwargs: object) -> None:
+        # before_cursor_execute(conn, cursor, statement, params, context, many)
+        self.statements.append(str(args[2]))
+
+    def __enter__(self) -> "_CaptureSql":
+        event.listen(self._engine, "before_cursor_execute", self._record)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        event.remove(self._engine, "before_cursor_execute", self._record)
+
+
+async def _enroll_hetzner_claim_node(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> dict[str, str]:
+    """Enroll an active Hetzner node that every node-job lane routes to first."""
+    from ditto.tests.api_server.endpoints.test_screener import _SCREENER_HOTKEY
+
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id="subnet-screener-1",
+                provider="hetzner",
+                provider_resource_id="robot-2984021",
+                screener_hotkey=_SCREENER_HOTKEY,
+                token_hash=hashlib.sha256(_NODE_TOKEN.encode()).hexdigest(),
+                token_expires_at=now + timedelta(hours=6),
+                status="active",
+                capacity=1,
+            )
+        )
+    provider = await client.post(
+        _PATH,
+        headers=_HEADERS,
+        json=_payload(
+            expected_revision=0,
+            screening=["hetzner", "gcp"],
+            builds=["hetzner", "gcp"],
+        ),
+    )
+    assert provider.status_code == 200, provider.text
+    return {
+        "Authorization": f"Bearer {_NODE_TOKEN}",
+        "X-Screener-Hotkey": _SCREENER_HOTKEY,
+    }
+
+
+async def test_node_claims_lock_the_node_row_but_job_updates_do_not(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Capacity accounting serializes on the node row; job updates must not.
+
+    On 2026-09-07 the shared node row was production's hottest lock (12 s
+    waits) because every job status update took it as well as every claim.
+    """
+    from ditto.tests.api_server.endpoints.test_screener import (
+        _install_chain,
+        _install_db,
+        _install_storage,
+    )
+
+    _install(app, session_maker)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    _install_storage(app)
+    node_headers = await _enroll_hetzner_claim_node(client, session_maker)
+
+    for path in _NODE_CLAIM_PATHS:
+        with _CaptureSql(session_maker) as claim_sql:
+            claimed = await client.post(
+                path, headers=node_headers, json={"environment": "prod"}
+            )
+        assert claimed.status_code == 200, (path, claimed.text)
+        assert _node_row_locks(claim_sql.statements), path
+
+    missing = uuid4()
+    updates = (
+        (
+            "put",
+            f"/api/v1/screener/nodes/jobs/submission-image-builds/{missing}",
+            {"status": "running", "provider_resource_id": "ditto-build-test"},
+        ),
+        (
+            "put",
+            f"/api/v1/screener/nodes/jobs/submission-source-reviews/{missing}",
+            {"status": "running", "provider_resource_id": "ditto-review-test"},
+        ),
+        (
+            "post",
+            f"/api/v1/screener/nodes/jobs/submission-runtime-smokes/{missing}/result",
+            {"status": "succeeded", "provider_resource_id": "ditto-runtime-test"},
+        ),
+    )
+    for method, path, body in updates:
+        with _CaptureSql(session_maker) as update_sql:
+            response = await client.request(
+                method, path, headers=node_headers, json=body
+            )
+        assert response.status_code == 404, (path, response.text)
+        # The node read ran (the 404 is from the job-row lookup after it) ...
+        assert any("screener_nodes" in stmt for stmt in update_sql.statements), path
+        # ... but it took no node row lock.
+        assert _node_row_locks(update_sql.statements) == [], path
+
+
+@pytest.mark.parametrize("claim_path", _NODE_CLAIM_PATHS)
+@pytest.mark.parametrize("new_status", ["draining", "revoked"])
+async def test_node_claim_rechecks_status_changed_before_the_row_lock(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    claim_path: str,
+    new_status: str,
+) -> None:
+    """A node drained between the unlocked read and the row lock cannot claim.
+
+    The claim reads the node unlocked, resolves settings, then re-reads it
+    under ``FOR UPDATE``. That re-read must refresh the instance the first read
+    left in the identity map, or the status check sees the pre-lock snapshot.
+    """
+    from ditto.api_server.endpoints import screener as screener_endpoints
+    from ditto.tests.api_server.endpoints.test_screener import (
+        _install_chain,
+        _install_db,
+        _install_storage,
+    )
+
+    _install(app, session_maker)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    _install_storage(app)
+    node_headers = await _enroll_hetzner_claim_node(client, session_maker)
+
+    original = screener_endpoints.resolve_screener_node_channel_settings
+    changed: list[str] = []
+
+    async def _operator_changes_node_mid_claim(
+        session: AsyncSession, *, node_id: str
+    ) -> object:
+        result = await original(session, node_id=node_id)
+        # An operator commits a status change from another connection after
+        # the claim's unlocked read and before it takes the node row lock.
+        async with session_maker() as operator, operator.begin():
+            await operator.execute(
+                update(ScreenerNode)
+                .where(ScreenerNode.node_id == node_id)
+                .values(status=new_status)
+            )
+        changed.append(node_id)
+        return result
+
+    monkeypatch.setattr(
+        screener_endpoints,
+        "resolve_screener_node_channel_settings",
+        _operator_changes_node_mid_claim,
+    )
+
+    claimed = await client.post(
+        claim_path, headers=node_headers, json={"environment": "prod"}
+    )
+    assert changed == ["subnet-screener-1"], "the race window was not exercised"
+    assert claimed.status_code == 409, claimed.text

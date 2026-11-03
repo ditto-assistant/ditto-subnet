@@ -167,13 +167,16 @@ from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.continual_retest_settings import (
+    CROWN_GATE_PROTOCOL,
+    DEFAULT_CHAMPION_STANDING_RANK,
+    DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+    ContinualRetestSettings,
+)
+from ditto.api_models.continual_retest_settings import (
     CROWN_INCUMBENT_PROTOCOL as _CROWN_INCUMBENT_PROTOCOL,
 )
 from ditto.api_models.continual_retest_settings import (
     PROVISIONAL_INCUMBENT_PROTOCOL as _PROVISIONAL_INCUMBENT_PROTOCOL,
-)
-from ditto.api_models.continual_retest_settings import (
-    ContinualRetestSettings,
 )
 from ditto.api_models.model_use import ModelUseVerdict
 from ditto.api_models.public import (
@@ -181,6 +184,9 @@ from ditto.api_models.public import (
     FleetAvailability,
     FleetHealth,
     PublicAdmissionLane,
+    PublicCrownChallenger,
+    PublicCrownKing,
+    PublicCrownRules,
     PublicDeferredReviewTrigger,
     PublicReviewConclusion,
     PublicScreeningInvariantAssessment,
@@ -227,6 +233,7 @@ from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retir
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
+    crown_gate_for,
     crown_incumbent_is_active,
     statistical_band_cap_is_active,
     tie_weighting_is_active,
@@ -282,9 +289,12 @@ from ditto.api_server.koth import (
     KOTH_MARGIN,
     KOTH_RANK_SHARES,
     KOTH_TAIL_SIZE,
+    ChallengerStanding,
+    CrownGate,
     KothEntry,
     bounded_efficiency_adjusted_quality,
     champion_defense,
+    crown_standings,
     emission_allocation,
     koth_entries_from_ledger,
     project_koth,
@@ -294,6 +304,7 @@ from ditto.api_server.ledger_pin import (
     pin_expected_shares,
     pin_generator_fraction,
     pin_provisional_incumbent,
+    served_crown_gate,
     served_rank_shares,
 )
 from ditto.api_server.miner_avatar import public_avatar_path
@@ -370,6 +381,10 @@ from ditto.db.queries.confirmation_bundles import (
     ActiveConfirmationWork,
     list_active_confirmation_work,
 )
+from ditto.db.queries.confirmation_score_voids import (
+    confirmation_key,
+    voided_confirmation_keys,
+)
 from ditto.db.queries.confirmation_scores import (
     DEFAULT_WAVE_MEMBERSHIP,
     WaveMembership,
@@ -392,6 +407,11 @@ from ditto.db.queries.heartbeats import (
     live_weight_setter_fleet_supports_protocol,
 )
 from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
+from ditto.db.queries.inference_observability import (
+    LeaseInferenceActivity,
+    LeaseSlotKey,
+    load_live_lease_inference_activity,
+)
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
 from ditto.db.queries.ledger_epochs import latest_pin, list_pins
 from ditto.db.queries.miner_avatars import get_miner_avatar, list_miner_avatars
@@ -1323,6 +1343,7 @@ def _benchmark_stalled(
     now: datetime,
     *,
     completed: int | None = None,
+    inference_activity_at: datetime | None = None,
 ) -> bool:
     """Flag a run that has taken far longer than its own reported progress allows.
 
@@ -1352,7 +1373,21 @@ def _benchmark_stalled(
     ``heartbeat_stale`` by :func:`_fleet_classification`. Conflating the two is
     what makes an operator distrust the whole view, so they stay separate
     signals.
+
+    **Inference activity.** ``inference_activity_at`` is when the lease's own
+    hosted-inference grant last served a request. A harness calling the relay
+    is executing cases, whatever stage its heartbeat last signed, so a request
+    inside the startup grace window clears either rule above. Without it a
+    generator-round run from a validator that never forwarded scorer progress
+    sat at ``preparing`` for its whole panel run and read as stalled after 15
+    minutes, while it was answering cases. A grant that goes quiet for the same
+    window lets the clock rules decide again, so a genuine wedge still trips.
     """
+    if (
+        inference_activity_at is not None
+        and now - inference_activity_at < _BENCHMARK_STALL_AFTER
+    ):
+        return False
     if stage in _BENCHMARK_STALL_EARLY_STAGES:
         return now - started_at >= _BENCHMARK_STALL_AFTER
     if stage != "running_benchmark" or completed is None:
@@ -1402,8 +1437,16 @@ def _public_benchmark_progress(
     owner_root: str | None = None,
     handle_claims: dict[str, Any] | None = None,
     strike: bool = True,
+    inference_activity_at: datetime | None = None,
 ) -> PublicBenchmarkProgress:
-    """Project private signed counts onto the fixed public allowlist."""
+    """Project private signed counts onto the fixed public allowlist.
+
+    ``inference_activity_at`` feeds only the ``stalled`` judgement; the time
+    itself is never published. It defaults to the activity the work item
+    carries from :func:`list_active_validator_work`.
+    """
+    if inference_activity_at is None:
+        inference_activity_at = work.inference_activity_at
     progress = work.progress
     started_at = cast(datetime, _aware(work.ticket.issued_at))
     agent_name = (
@@ -1462,7 +1505,11 @@ def _public_benchmark_progress(
         total_checks=total_checks,
         percent=percent,
         stalled=_benchmark_stalled(
-            progress.stage, started_at, now, completed=progress.completed
+            progress.stage,
+            started_at,
+            now,
+            completed=progress.completed,
+            inference_activity_at=inference_activity_at,
         ),
         purpose=_ticket_purpose(work.ticket),
     )
@@ -2867,6 +2914,41 @@ def _public_leaderboard_family(
     return PublicLeaderboardFamily(members=children) if children else None
 
 
+def _public_challenger(
+    standing: ChallengerStanding, rules: CrownGate
+) -> PublicCrownChallenger:
+    """One challenger's duel with the King, in the board's words."""
+    decision = standing.decision
+    paired = decision.method == "paired"
+    if not standing.within_standing:
+        status: Literal[
+            "outside_standing", "needs_confirmations", "dueling", "would_dethrone"
+        ] = "outside_standing"
+    elif standing.shared_seeds < rules.min_shared_seeds or not paired:
+        status = "needs_confirmations"
+    elif decision.dethrones:
+        status = "would_dethrone"
+    else:
+        status = "dueling"
+    return PublicCrownChallenger(
+        agent_id=standing.entry.agent_id,
+        miner_hotkey=standing.entry.miner_hotkey,
+        official_rank=standing.official_rank,
+        official_score=standing.official_score,
+        shared_seed_confirmations=standing.shared_seeds,
+        required_confirmations=rules.min_shared_seeds,
+        within_standing=standing.within_standing,
+        paired_lead=decision.challenger_lead if paired else None,
+        required_lead=decision.required_lead if paired else None,
+        lead_needed=(
+            max(0.0, decision.required_lead - decision.challenger_lead)
+            if paired
+            else None
+        ),
+        status=status,
+    )
+
+
 def _public_koth_emissions(
     rows: list[LedgerRow],
     *,
@@ -2889,6 +2971,8 @@ def _public_koth_emissions(
     incumbent_agent_id: UUID | None = None,
     provisional_incumbent: LedgerRow | None = None,
     rank_shares: Sequence[float] | None = None,
+    crown_gate: CrownGate | None = None,
+    crown_rules: CrownGate | None = None,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool.
 
@@ -2993,6 +3077,7 @@ def _public_koth_emissions(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_id,
+        crown_gate=crown_gate,
     )
     if projection is None:
         return None
@@ -3041,6 +3126,26 @@ def _public_koth_emissions(
     defense = champion_defense(
         fold_entries,
         projection,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
+        crown_gate=crown_gate,
+    )
+    # The King and challenger standings always explain the operator's
+    # configured rules (``crown_rules``); ``crown_rules.active`` says whether
+    # the fleet folds them yet. Before any rules are configured they explain
+    # the shipped defaults.
+    rules = (
+        crown_rules
+        or crown_gate
+        or CrownGate(
+            min_shared_seeds=DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+            standing_rank=DEFAULT_CHAMPION_STANDING_RANK,
+        )
+    )
+    standings = crown_standings(
+        fold_entries,
+        projection,
+        crown_gate=rules,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
     )
@@ -3113,6 +3218,27 @@ def _public_koth_emissions(
             else None
         ),
         recipients=recipients,
+        crown_rules=PublicCrownRules(
+            active=crown_gate is not None,
+            required_protocol=CROWN_GATE_PROTOCOL,
+            min_dethrone_confirmations=rules.min_shared_seeds,
+            champion_standing_rank=rules.standing_rank,
+        ),
+        king=(
+            PublicCrownKing(
+                agent_id=projection.champion.agent_id,
+                miner_hotkey=projection.champion.miner_hotkey,
+                official_rank=standings.king_official_rank,
+                official_score=standings.king_official_score,
+                shared_seed_confirmations=depths.get(projection.champion.agent_id, 0),
+            )
+            if standings is not None
+            else None
+        ),
+        challengers=[
+            _public_challenger(standing, rules)
+            for standing in (standings.challengers if standings is not None else ())
+        ],
         ledger_pin=ledger_pin,
         crown_incumbent_active=crown_incumbent_active,
         crown_incumbent_required_protocol=_CROWN_INCUMBENT_PROTOCOL,
@@ -3572,6 +3698,26 @@ async def build_public_leaderboard(
                 freshness=_VALIDATOR_STALE_WINDOW,
             ),
         )
+    )
+    # The protocol-34 crown rules: configured by the operator, folded only
+    # once every recently-live weight setter reports v34 -- the same gate the
+    # validator ledger applies, so the board's King is the fleet's King.
+    crown_rules = CrownGate(
+        min_shared_seeds=continual_settings.min_dethrone_confirmations,
+        standing_rank=continual_settings.champion_standing_rank,
+    )
+    crown_gate_active_rules = (
+        crown_gate_for(
+            continual_settings,
+            fleet_protocol_ready=await live_weight_setter_fleet_supports_protocol(
+                session,
+                minimum_protocol=CROWN_GATE_PROTOCOL,
+                now=now,
+                freshness=_VALIDATOR_STALE_WINDOW,
+            ),
+        )
+        if bench_version is None
+        else None
     )
     # The operator payout curve, projected exactly when the ledger serves it:
     # set in burn settings and withheld until the weight setters report v31.
@@ -4391,6 +4537,8 @@ async def build_public_leaderboard(
                 incumbent_agent_id=emission_incumbent_id,
                 provisional_incumbent=provisional_incumbent,
                 rank_shares=board_rank_shares,
+                crown_gate=crown_gate_active_rules,
+                crown_rules=crown_rules,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
@@ -4546,6 +4694,7 @@ async def ledger_epochs(
                 if served.get("crown_mode") == "incumbent"
                 else None
             ),
+            crown_gate=served_crown_gate(served),
         )
         allocation = (
             emission_allocation(
@@ -4982,6 +5131,8 @@ def _validator_heartbeats_response(
     active_bench_version: int,
     slot_settings: ValidatorSlotSettings,
     round_reservation_active: bool = False,
+    lease_inference_activity: Mapping[LeaseSlotKey, LeaseInferenceActivity]
+    | None = None,
 ) -> PublicValidatorHeartbeatsResponse:
     """Reconcile platform leases and signed heartbeat claims without conflating them.
 
@@ -5131,26 +5282,46 @@ def _validator_heartbeats_response(
                 # lease with no issue time), still not on the assigned agent: a
                 # real job/assignment mismatch.
                 assignment_state = "assignment_mismatch"
+
+        def _fleet_progress(work: ActiveValidatorWork) -> PublicBenchmarkProgress:
+            # The lease's own grant activity, so a run whose harness is calling
+            # the relay is never published as a stalled benchmark.
+            activity = (
+                lease_inference_activity.get(
+                    (
+                        work.ticket.validator_hotkey,
+                        work.ticket.slot_id,
+                        work.agent.agent_id,
+                    )
+                )
+                if lease_inference_activity is not None
+                else None
+            )
+            return _public_benchmark_progress(
+                work,
+                now,
+                inference_activity_at=(
+                    activity.last_activity_at if activity is not None else None
+                ),
+            )
+
         active_benchmark = (
-            _public_benchmark_progress(synchronized_work, now)
+            _fleet_progress(synchronized_work)
             if synchronized_work is not None
             else None
         )
-        active_benchmarks = [
-            _public_benchmark_progress(work, now) for work in synchronized_works
-        ]
+        active_benchmarks = [_fleet_progress(work) for work in synchronized_works]
         active_benchmarks.sort(key=lambda progress: progress.slot_id)
         active_by_slot = {work.ticket.slot_id: work for work in synchronized_works}
         assigned_benchmarks = [
-            _public_benchmark_progress(
+            _fleet_progress(
                 active_by_slot.get(item.ticket.slot_id)
                 or ActiveValidatorWork(
                     heartbeat=row,
                     ticket=item.ticket,
                     agent=item.agent,
                     progress=None,
-                ),
-                now,
+                )
             )
             for item in validator_assignments
         ]
@@ -5221,6 +5392,7 @@ def _validator_heartbeats_response(
                     rounds_active=(
                         round_reservation_active and validator_advertises_rounds(row)
                     ),
+                    healthy_slots=(len(capacity.healthy_slots) if capacity else None),
                 ),
                 healthy_slots=(capacity.healthy_slots if capacity else ["slot-0"]),
                 admission=(capacity.admission if capacity else "accepting"),
@@ -5311,15 +5483,32 @@ def _validator_heartbeats_response(
 
 
 async def load_validator_fleet(
-    session: AsyncSession, app_state: Any, *, now: datetime
+    session: AsyncSession,
+    app_state: Any,
+    *,
+    now: datetime,
+    lease_inference_activity: Mapping[LeaseSlotKey, LeaseInferenceActivity]
+    | None = None,
 ) -> PublicValidatorHeartbeatsResponse:
-    """Signed reports reconciled with the platform's current assignment truth."""
+    """Signed reports reconciled with the platform's current assignment truth.
+
+    ``lease_inference_activity`` lets a caller that already read the live
+    grants (the Backroom capacity view) share that read; otherwise it is loaded
+    here, so every fleet consumer judges ``stalled`` the same way.
+    """
+    if lease_inference_activity is None:
+        lease_inference_activity = await load_live_lease_inference_activity(
+            session, now=now
+        )
     assignments = await list_active_validator_assignments(session, now=now)
     return _validator_heartbeats_response(
         rows=await list_validator_heartbeats(session),
         assignments=assignments,
         active_work=await list_active_validator_work(
-            session, now=now, cutoff=now - _VALIDATOR_ONLINE_WINDOW
+            session,
+            now=now,
+            cutoff=now - _VALIDATOR_ONLINE_WINDOW,
+            lease_inference_activity=lease_inference_activity,
         ),
         confirmation_work=await list_active_confirmation_work(session, now=now),
         orphaned_leases=await list_orphaned_leases(
@@ -5329,6 +5518,7 @@ async def load_validator_fleet(
         active_bench_version=await active_bench_version(session),
         slot_settings=await resolve_slot_settings(app_state),
         round_reservation_active=await round_reservation_active(app_state, session),
+        lease_inference_activity=lease_inference_activity,
     )
 
 
@@ -8227,9 +8417,12 @@ async def agent_pipeline(
     # public pipeline still has accepted retests. Keep the display's per-seed
     # medians available without publishing the reusable seed identifiers or
     # relying on the leaderboard projection.
+    voided_keys = await voided_confirmation_keys(session, agent_id=agent_id)
     confirmation_by_seed: dict[int, list[float]] = {}
     for score in confirmation_scores:
-        if score.bench_version == canonical_version:
+        if score.bench_version == canonical_version and (
+            confirmation_key(score) not in voided_keys
+        ):
             confirmation_by_seed.setdefault(score.seed, []).append(score.composite)
     confirmation_sample_composites = sorted(
         statistics.median(values) for values in confirmation_by_seed.values()
@@ -8448,6 +8641,7 @@ async def agent_pipeline(
                 validator_hotkey=score.validator_hotkey,
                 bench_version=score.bench_version,
                 accepted_at=score.created_at,
+                voided_as_infrastructure=confirmation_key(score) in voided_keys,
             )
             for score in confirmation_scores
         ],

@@ -81,6 +81,11 @@ screening attempt names its `lineage_parent_agent_id`; read
 `get_screening_review_lineage(attemptId)` for the exact diff, rulings and
 prior findings its reviewer was scoped by. Use
 `get_screening_baseline_diff` for starter-kit comparisons.
+For a suspected copy of another owner's unreleased agent, including a port to
+another language, read `get_unreleased_copy_signal` (shadow; shared items as
+`path:line` on both sides with each matched agent's release state) and page
+leads with `list_unreleased_copy_signals`. A flag is a lead: confirm the cited
+lines in source before ruling.
 Search terms and class labels live in
 [references/techniques.md](references/techniques.md).
 

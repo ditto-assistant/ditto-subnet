@@ -36,6 +36,7 @@ from ditto.validator.coding_supervisor import (
 from ditto.validator.coding_worker import CodingShadowWorker
 from ditto.validator.config import ValidatorConfig, parse_validator_config_from_env
 from ditto.validator.dittobench import DittobenchClient
+from ditto.validator.liveness import LivenessWatchdog, install_task_dump_signal
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import load_validator_keypair, sign_coding_certification
 from ditto.validator.stack_health import StackHealthCollector
@@ -80,6 +81,8 @@ def _install_signal_handlers(
             drain_requested.clear()
 
         loop.add_signal_handler(signal.SIGUSR2, resume)
+    # USR1/USR2 belong to the updater, so the live task dump uses SIGQUIT.
+    install_task_dump_signal(loop)
 
 
 async def _amain() -> int:
@@ -216,16 +219,25 @@ async def _amain() -> int:
                     _apply_ditto_logging()  # re-assert: bittensor has initialised
 
                     async def run_ordinary_worker() -> None:
-                        await worker.run_forever(
-                            stop,
-                            drain_requested=drain_requested,
-                            bootstrap_resume=(
-                                mark_bootstrap_resumed
-                                if bootstrap_drain_pending
-                                else None
-                            ),
-                            extra_busy=_extra_busy(coding_worker, coding_canary),
+                        watchdog = LivenessWatchdog(
+                            loop=asyncio.get_running_loop(),
+                            age_seconds=worker.heartbeat_attempt_age_seconds,
+                            timeout_seconds=config.liveness_watchdog_seconds,
                         )
+                        watchdog.start()
+                        try:
+                            await worker.run_forever(
+                                stop,
+                                drain_requested=drain_requested,
+                                bootstrap_resume=(
+                                    mark_bootstrap_resumed
+                                    if bootstrap_drain_pending
+                                    else None
+                                ),
+                                extra_busy=_extra_busy(coding_worker, coding_canary),
+                            )
+                        finally:
+                            watchdog.stop()
 
                     extras: list[tuple[str, _ExtraWorker]] = []
                     if coding_worker is not None:

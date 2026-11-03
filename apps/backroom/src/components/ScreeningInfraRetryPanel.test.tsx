@@ -27,7 +27,8 @@ function view(overrides: Partial<ScreeningInfraRetryView> = {}): ScreeningInfraR
     policy: {
       auto_retry_reason_codes: ['docker-build-infrastructure'],
       base_backoff_seconds: 600, max_backoff_seconds: 3600, jitter_fraction: 0.2,
-      auto_retry_max_age_seconds: 86400, auto_retry_max_streak: 8, plan_max_claimable: 500,
+      auto_retry_max_age_seconds: 86400, auto_retry_max_streak: 8,
+      auto_retry_max_retries_by_code: { 'l2-late-result': 1 }, plan_max_claimable: 500,
       breaker_distinct_agents: 3, breaker_window_seconds: 300, breaker_open_seconds: 600,
       breaker_probe_interval_seconds: 300, breaker_history_lookback_seconds: 172800,
     },
@@ -85,6 +86,8 @@ describe('ScreeningInfraRetryPanel', () => {
     expect(screen.getByText(/wait for an operator retry/i)).toBeTruthy()
     expect(screen.getByText(/10 min doubling to 1 h, ±20% jitter/)).toBeTruthy()
     expect(screen.getByText(/3 distinct agents within 5 min/)).toBeTruthy()
+    expect(screen.getByText('Retries for l2-late-result')).toBeTruthy()
+    expect(screen.getByText('1 automatic, then operator')).toBeTruthy()
     expect(screen.getByText('Open: holding retries')).toBeTruthy()
     expect(screen.getByText('Half-open: probing')).toBeTruthy()
     expect(screen.getByText(/4 aged out/)).toBeTruthy()

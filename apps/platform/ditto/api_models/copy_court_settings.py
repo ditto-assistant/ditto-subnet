@@ -9,6 +9,11 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ditto.api_models.unreleased_copy import (
+    AdminUnreleasedCopyOverview,
+    AdminUnreleasedCopySignal,
+)
+
 CourtMode = Literal["off", "shadow", "enforce"]
 
 
@@ -117,6 +122,9 @@ class AdminCopyCourtSettingsResponse(BaseModel):
     current: CopyCourtSettingsRevision | None
     history: list[CopyCourtSettingsRevision]
     runtime: AdminCopyCourtRuntime | None = None
+    unreleased_copy: AdminUnreleasedCopyOverview | None = None
+    """Posture, coverage and flag list of the unreleased-copy signal, whose
+    enforce-mode holds this court escalates to an operator."""
 
 
 class AdminCopyCourtTriagePreview(BaseModel):
@@ -141,7 +149,7 @@ class AdminCopyCourtRecommendation(BaseModel):
 
     recommendation_id: str
     # Which engine produced the verdict: ``rules-v1`` for the resubmission
-    # classes, ``family-diff-v2`` for the near-duplicate attribution triage.
+    # classes, ``family-diff-v3`` for the near-duplicate attribution triage.
     triage_revision: str = "rules-v1"
     # Set when the court acted on (or declined to act on) the recommendation
     # in enforce mode: ``{"status": "applied"|"skipped", "detail", ...}``.
@@ -167,6 +175,8 @@ class AdminCopyCourtRecommendationList(BaseModel):
     count: int
     limit: int
     offset: int
+    unreleased_copy: AdminUnreleasedCopySignal | None = None
+    """With ``agent_id``: that agent's unreleased-copy signal, recorded and live."""
 
 
 def copy_court_checksum(settings: CopyCourtSettings) -> str:

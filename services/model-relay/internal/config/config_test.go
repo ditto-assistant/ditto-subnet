@@ -395,6 +395,7 @@ func TestProviderURLsArePinnedCredentialBoundaries(t *testing.T) {
 		{name: "embedding wrong host", key: "DITTO_EMBEDDING_UPSTREAM_URL", value: "https://example.com/api/v1/embeddings"},
 		{name: "fallback wrong host", key: "DITTO_EMBEDDING_FALLBACK_URL", value: "https://example.com/v1/embeddings"},
 		{name: "fallback wrong path", key: "DITTO_EMBEDDING_FALLBACK_URL", value: "https://api.perplexity.ai/api/v1/embeddings"},
+		{name: "decision wrong host", key: "DITTO_DECISION_UPSTREAM_URL", value: "https://api.typesafe.ai/v1/systemone"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

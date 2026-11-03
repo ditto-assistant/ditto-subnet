@@ -2,6 +2,9 @@ package astfp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -305,5 +308,41 @@ class Queue:
 `}))
 	if j := jaccard(a, b); j > 0.5 {
 		t.Fatalf("distinct generic programs should differ, jaccard=%v", j)
+	}
+}
+
+// parityFixture is mirrored byte-for-byte in Platform's
+// test_structural_fingerprint.py. Platform computes this sketch at upload, so
+// the two implementations must agree; change both or neither.
+var parityFixture = map[string]string{
+	"src/main.rs": "use std::io;\nfn main() {\n    let r#type = \"q\\\"s\";\n    match r#type.len() { 0 => println!(\"empty\"), n => println!(\"{}\", n + 1) }\n}\n" +
+		"struct Pair<T> { a: T, b: T }\nimpl<T: Copy> Pair<T> { fn swap(&self) -> Self { Pair { a: self.b, b: self.a } } }\n",
+	"agent/run.py": "# comment\nimport os\n\ndef run(x):\n    return x == 1 and 'a' or \"b\" \xff İd ٣٤ ?? :: \x1c\n",
+	"web/app.ts":   "const a = `t ${x}`; let b = a?.c ?? 1_000.5e3; /* open",
+	"tool.sh":      "#!/bin/sh\necho 'x'\n",
+	"README.md":    "not source",
+	"Dockerfile":   "FROM scratch\n",
+}
+
+const parityFixtureDigest = "f965993f10fcb6c650a7bd23c1e71382113f6034d51d77b8bab15e64acaf593b"
+
+func TestFromDirMatchesPlatformParityFixture(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range parityFixture {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fp := FromDir(context.Background(), dir)
+	if fp == nil {
+		t.Fatal("parity fixture produced no fingerprint")
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%d:%s", fp.V, fp.K, fp.Card, strings.Join(fp.M, ","))))
+	if got := hex.EncodeToString(sum[:]); got != parityFixtureDigest {
+		t.Fatalf("parity digest = %s (card %d), want %s", got, fp.Card, parityFixtureDigest)
 	}
 }

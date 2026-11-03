@@ -444,6 +444,19 @@ class ScreenerQueueItem(BaseModel):
             )
         ),
     ] = None
+    sandbox_memory_limit_mib: Annotated[
+        int | None,
+        Field(
+            ge=512,
+            le=32_768,
+            description=(
+                "The live harness memory cap validators apply to scored leases, "
+                "stamped at claim time so the runtime probe runs at the same "
+                "cap. Null from an older Platform; the worker then uses the "
+                "published runtime envelope value."
+            ),
+        ),
+    ] = None
 
     @model_validator(mode="after")
     def validate_precheck(self) -> ScreenerQueueItem:

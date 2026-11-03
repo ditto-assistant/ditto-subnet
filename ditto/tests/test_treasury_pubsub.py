@@ -200,3 +200,23 @@ def test_auth_failure_invalidates_token_without_in_call_retry():
     fail[0] = False
     mailbox.ack("second")
     assert len(calls) == 4
+
+
+@pytest.mark.parametrize("response", [b"", b"{}"])
+def test_release_returns_message_with_zero_ack_deadline(response):
+    replies = iter([b'{"access_token":"fixture-token"}', response])
+    calls = []
+
+    def open_request(request, *, timeout):
+        assert timeout == 30
+        calls.append((request.full_url, request.data and json.loads(request.data)))
+        return BytesIO(next(replies))
+
+    mailbox = TreasuryMailbox(
+        project="fixture-project", topic="manual-topic", subscription="manual-results"
+    )
+    mailbox.opener = SimpleNamespace(open=open_request)
+    mailbox.release("fixture-ack")
+    url, body = calls[-1]
+    assert url.endswith("subscriptions/manual-results:modifyAckDeadline")
+    assert body == {"ackIds": ["fixture-ack"], "ackDeadlineSeconds": 0}

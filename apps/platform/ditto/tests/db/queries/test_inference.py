@@ -7,6 +7,7 @@ from prometheus_client import REGISTRY
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.inference_concurrency_settings import (
+    DecisionLaneSettings,
     InferenceConcurrencySettings,
 )
 from ditto.api_models.ticket_status import TicketStatus
@@ -898,6 +899,70 @@ async def test_the_operator_budget_is_stamped_onto_the_new_grant(
     # boot-time-only until now, which is why raising the request budget from
     # backroom did not save the runs it was meant to save.
     assert grant.token_budget == 7_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "bench_version"),
+    [(False, 15), (True, 15), (True, 14), (True, _BENCH_VERSION)],
+)
+async def test_the_decision_lane_is_stamped_only_while_the_operator_pins_it(
+    session: AsyncSession, enabled: bool, bench_version: int
+) -> None:
+    """Lane off mints the pre-lane grant exactly; lane on stamps pin and walls.
+
+    Only v15+ leases carry the lane: a v14-or-earlier lease minted while the
+    board is on is byte-identical to a pre-lane grant.
+    """
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="miner",
+        name="decision-stamp",
+        sha256="de" * 32,
+        status=AgentStatus.EVALUATING,
+        created_at=now,
+    )
+    ticket = ValidatorTicket(
+        agent_id=agent.agent_id,
+        validator_hotkey="validator",
+        slot_id="slot-0",
+        status=TicketStatus.ISSUED,
+        issued_at=now,
+        deadline=now + timedelta(minutes=20),
+        bench_version=bench_version,
+        attempt_count=1,
+    )
+    session.add_all([agent, ticket])
+    await _seed_calibrated_route(session, now)
+    await session.flush()
+    lane = (
+        DecisionLaneSettings(
+            enabled=True,
+            model="typesafe/jev-1.14",
+            request_budget=9,
+            token_budget=9_000,
+        )
+        if enabled
+        else DecisionLaneSettings(model="typesafe/jev-1.14")
+    )
+    board = apply_settings(_config(), InferenceConcurrencySettings(decision_lane=lane))
+    grant = await ensure_inference_grant(session, ticket=ticket, config=board)
+    assert grant is not None
+    await session.refresh(grant)
+    stamps = (
+        grant.decision_model,
+        grant.decision_input_microusd_per_mtok,
+        grant.decision_request_budget,
+        grant.decision_token_budget,
+    )
+    expected = (
+        ("typesafe/jev-1.14", 42_000, 9, 9_000)
+        if enabled and bench_version >= 15
+        else (None, 0, 0, 0)
+    )
+    assert stamps == expected
+    assert (grant.decision_tokens, grant.decision_cost_microusd) == (0, 0)
 
 
 def _token_budget_config(token_budget: int) -> InferenceProxyConfig:

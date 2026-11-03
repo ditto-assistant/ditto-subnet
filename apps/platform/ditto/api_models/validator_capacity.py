@@ -58,6 +58,46 @@ class ValidatorCapacityAssignment(BaseModel):
             ),
         ),
     ]
+    inference_chat_requests: Annotated[
+        int | None,
+        Field(
+            ge=0,
+            description=(
+                "Chat requests this lease's live hosted-inference grant has "
+                "served so far. Null when the lease has no live grant."
+            ),
+        ),
+    ] = None
+    inference_embedding_requests: Annotated[
+        int | None,
+        Field(
+            ge=0,
+            description=(
+                "Embedding requests this lease's live grant has served so far. "
+                "Null when the lease has no live grant."
+            ),
+        ),
+    ] = None
+    inference_last_activity_at: Annotated[
+        datetime | None,
+        Field(
+            description=(
+                "When this lease's grant last began or finished a request. A "
+                "recent time means the harness is executing whatever `stage` "
+                "says; `stalled` is false while it is inside the 15-minute "
+                "grace. Null before the first request or without a live grant."
+            ),
+        ),
+    ] = None
+    inference_idle_seconds: Annotated[
+        int | None,
+        Field(
+            ge=0,
+            description=(
+                "Seconds since `inference_last_activity_at`, as of this read."
+            ),
+        ),
+    ] = None
 
 
 class ValidatorCapacityEntry(BaseModel):
@@ -113,7 +153,7 @@ class RelayLaneSaturation(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    request_kind: Literal["chat", "embedding"]
+    request_kind: Literal["chat", "embedding", "decision"]
     active_requests: Annotated[int, Field(ge=0)]
     global_limit: Annotated[int, Field(ge=1)]
     saturation: Annotated[

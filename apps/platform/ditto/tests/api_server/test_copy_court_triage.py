@@ -302,6 +302,48 @@ async def test_unreleased_distinctive_code_recommends_reject_never_applies(
     assert rec.application is None
 
 
+async def test_unmodified_fork_of_released_base_recommends_reject_never_applies(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """hfull-h3 v3 shape: released base runtime bytes plus prose only."""
+    storage = _Storage()
+    held_id, _matched, review_id = await _seed(
+        session_maker,
+        storage,
+        held_files={
+            **_BASE_FILES,
+            "DECLARATION.md": "Fork of base v25 with attribution.\n",
+        },
+        settings={"mode": "enforce", "near_duplicate_mode": "enforce"},
+    )
+
+    async def _never(*_args: object, **_kwargs: object) -> dict:
+        raise AssertionError("a reject must never reach the apply path")
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_ath_rulings.apply_court_clear", _never
+    )
+    counters = await CopyHoldCourt(session_maker=session_maker, storage=storage).tick()
+    assert counters["recommended"] == 1 and counters["errors"] == 0
+    [rec] = await _recommendations(session_maker)
+    assert rec.verdict == "reject"
+    evidence = rec.evidence
+    assert evidence["basis"] == "unmodified_fork_of_released_base"
+    assert evidence["attribution"]["unexplained"] == []
+    assert evidence["attribution"]["distinctive_present_count"] == 0
+    delta = evidence["attribution"]["held_delta"]
+    assert delta["runtime_changed_count"] == 0
+    assert delta["added_count"] == 2  # DECLARATION.md and BASE.md, both prose
+    assert evidence["auto_clear_eligible"] is False
+    assert rec.application is None
+    async with session_maker() as session:
+        held = await session.get(Agent, held_id)
+        review = await session.get(AthReview, review_id)
+        assert held is not None and held.status == AgentStatus.ATH_PENDING_REVIEW
+        assert review is not None and review.status == "pending"
+
+
 async def test_unproven_base_escalates(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:

@@ -11,8 +11,12 @@ import (
 
 const privateDatasetMode = "platform-private-v1"
 
+// sourceFreeScreenedImageFeature tells the validator this scorer runs a
+// screened image without the source tarball, so Platform may withhold it.
+const sourceFreeScreenedImageFeature = "screened-image-source-free-v1"
+
 func (s *server) datasetFeatures() []string {
-	features := []string{"git_subdir", universe.V13EnterpriseRevision}
+	features := []string{"git_subdir", universe.V13EnterpriseRevision, sourceFreeScreenedImageFeature}
 	if s.allowPrivateDatasets {
 		features = append(features, privateDatasetMode)
 	}

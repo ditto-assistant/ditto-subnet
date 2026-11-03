@@ -24,6 +24,7 @@ from ditto.api_server.bounty_claims import SimulatedBountyFeeVerifier
 from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
 from ditto.api_server.bounty_settlement import SimulatedTransferExecutor
 from ditto.api_server.burn_settings import BurnSettingsResolver
+from ditto.api_server.competition_improvement_job import CompetitionImprovementJob
 from ditto.api_server.config import (
     ApiServerConfig,
     parse_api_server_config_from_env,
@@ -64,12 +65,15 @@ from ditto.api_server.endpoints import (
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
     admin_claim_provenance_router,
+    admin_competition_improvement_router,
     admin_confirmation_bundles_router,
+    admin_confirmation_score_voids_router,
     admin_confirmation_seed_anchors_router,
     admin_continual_retest_settings_router,
     admin_copy_court_router,
     admin_copy_review_router,
     admin_database_backup_router,
+    admin_dueling_router,
     admin_efficiency_bonus_settings_router,
     admin_emission_allocation_router,
     admin_emission_eligibility_router,
@@ -86,6 +90,7 @@ from ditto.api_server.endpoints import (
     admin_miner_fees_router,
     admin_outlier_escalation_router,
     admin_owner_router,
+    admin_provider_outages_router,
     admin_quarantine_router,
     admin_queue_policy_settings_router,
     admin_retirement_router,
@@ -106,6 +111,7 @@ from ditto.api_server.endpoints import (
     admin_treasury_quote_router,
     admin_treasury_receipts_router,
     admin_treasury_settings_router,
+    admin_unreleased_copy_router,
     admin_v13_private_generation_router,
     admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
@@ -152,6 +158,9 @@ from ditto.api_server.endpoints.admin_benchmark_canary import (
 from ditto.api_server.endpoints.admin_conversation import (
     router as admin_conversation_router,
 )
+from ditto.api_server.endpoints.admin_operator_diagnostic import (
+    router as admin_operator_diagnostic_router,
+)
 from ditto.api_server.endpoints.screener_conversation import (
     router as screener_conversation_router,
 )
@@ -186,6 +195,7 @@ from ditto.api_server.middleware import (
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
 from ditto.api_server.miner_avatar import MAX_AVATAR_BYTES
 from ditto.api_server.no_store import NoStoreMiddleware
+from ditto.api_server.outage_sweep import OutageVoidSweeper
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
@@ -200,6 +210,7 @@ from ditto.api_server.screener_policy_activation import (
 from ditto.api_server.source_emission_collector import SourceEmissionCollector
 from ditto.api_server.storage import create_storage_client
 from ditto.api_server.track_share_settings import TrackShareSettingsResolver
+from ditto.api_server.unreleased_copy_sentinel import UnreleasedCopySentinel
 from ditto.api_server.validator_names import create_validator_names
 from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
 from ditto.api_server.validator_slot_settings import ValidatorSlotSettingsResolver
@@ -465,6 +476,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await bounty_deadlines.start()
             app.state.bounty_deadline_sweeper = bounty_deadlines
 
+            # Voids continual-retest samples whose serving grant shows a
+            # provider outage (credit refusal, backpressure) after the circuit
+            # has already closed. Singleton: one sweep per deployment, with an
+            # advisory lock underneath.
+            outage_void_sweeper = OutageVoidSweeper(
+                session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(outage_void_sweeper.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await outage_void_sweeper.start()
+            app.state.outage_void_sweeper = outage_void_sweeper
+
             capacity_event_janitor = ScreenerCapacityEventJanitor(
                 session_maker=app.state.session_maker,
                 retention_days=config.screener_auth.capacity_event_retention_days,
@@ -486,6 +509,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await copy_court.start()
             app.state.copy_hold_court = copy_court
+            # Unreleased-copy signal, shadow mode: indexes artifacts and records
+            # a score per agent; never holds, rejects or changes status.
+            unreleased_copy = UnreleasedCopySentinel(
+                session_maker=app.state.session_maker,
+                storage=getattr(app.state, "storage", None),
+            )
+            stack.push_async_callback(unreleased_copy.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await unreleased_copy.start()
+            app.state.unreleased_copy_sentinel = unreleased_copy
+            # Competition improvement metrics: measurement only. Reads every
+            # source table and writes only its own competition_* tables.
+            improvement = CompetitionImprovementJob(
+                session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(improvement.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await improvement.start()
+            app.state.competition_improvement_job = improvement
             # The epoch pin must land at the chain boundary even when no
             # validator is reading; the request path pins on demand as well and
             # the table's unique key makes the race harmless. Singleton for the
@@ -753,6 +795,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_attestation_router, prefix="/api/v1")
     app.include_router(admin_benchmark_rollout_router, prefix="/api/v1")
     app.include_router(admin_benchmark_canary_router, prefix="/api/v1")
+    app.include_router(admin_operator_diagnostic_router, prefix="/api/v1")
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
     app.include_router(admin_v13_private_generation_router, prefix="/api/v1")
@@ -763,6 +806,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_scoring_lease_settings_router, prefix="/api/v1")
     app.include_router(admin_generator_competition_router, prefix="/api/v1")
     app.include_router(admin_generator_rounds_router, prefix="/api/v1")
+    app.include_router(admin_dueling_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")
@@ -774,6 +818,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_owner_router, prefix="/api/v1")
     app.include_router(admin_quarantine_router, prefix="/api/v1")
     app.include_router(admin_validation_retry_router, prefix="/api/v1")
+    app.include_router(admin_confirmation_score_voids_router, prefix="/api/v1")
+    app.include_router(admin_provider_outages_router, prefix="/api/v1")
     app.include_router(admin_retirement_router, prefix="/api/v1")
     app.include_router(admin_validator_slot_settings_router, prefix="/api/v1")
     app.include_router(admin_validator_capacity_router, prefix="/api/v1")
@@ -793,6 +839,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_copy_review_router, prefix="/api/v1")
     app.include_router(admin_ath_rulings_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
+    app.include_router(admin_unreleased_copy_router, prefix="/api/v1")
+    app.include_router(admin_competition_improvement_router, prefix="/api/v1")
     app.include_router(admin_screening_review_cost_router, prefix="/api/v1")
     app.include_router(admin_confirmation_seed_anchors_router, prefix="/api/v1")
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")

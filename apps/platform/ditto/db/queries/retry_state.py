@@ -55,8 +55,14 @@ AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
         "inference_allowance_exhausted",
         "inference_request_rejected",
         "model_inference_required",
+        # OOM kill at the harness's own published cap on a host with headroom.
+        "harness_oom",
     }
 )
+# A SIGKILL with no OOM flag is no-fault on its first validator: retry once.
+# The same kill on a second validator is the harness's own crash.
+HARNESS_KILLED_137_DETAIL = "harness_killed_137"
+HARNESS_KILLED_137_AGENT_REPEATS = 2
 _ADMISSION_DETAIL_PREFIX = "inference_request_rejected:"
 _AGENT_ADMISSION_DETAIL_CODES = frozenset(
     {
@@ -214,8 +220,14 @@ def is_agent_attributable_exhaustion(
     if any(ticket.status == TicketStatus.ISSUED for ticket in tickets):
         return False
     details = [current_failure_detail(ticket) for ticket in remaining]
+    repeated_kill = (
+        sum(detail == HARNESS_KILLED_137_DETAIL for detail in details)
+        >= HARNESS_KILLED_137_AGENT_REPEATS
+    )
     return bool(details) and all(
-        is_agent_attributable_failure_detail(detail) for detail in details
+        is_agent_attributable_failure_detail(detail)
+        or (repeated_kill and detail == HARNESS_KILLED_137_DETAIL)
+        for detail in details
     )
 
 

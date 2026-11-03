@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -9,10 +11,13 @@ import pytest
 from ditto.api_server.review_lineage import (
     ReviewLineageContext,
     _ArtifactRef,
+    _dispute_reason,
     dockerfile_build_surface_changed,
+    history_scope_reasons,
     is_build_surface,
     is_dockerfile,
 )
+from ditto_screening_protocol.review_lineage import ReviewLineageFullReviewReason
 
 _BASE = (
     "FROM python:3.12-slim\n"
@@ -123,7 +128,10 @@ def test_run_reference_matches_whole_names_only() -> None:
 _AGENT, _ATTEMPT, _PARENT = uuid4(), uuid4(), uuid4()
 
 
-def _context(rulings: list[dict[str, object]]) -> ReviewLineageContext:
+def _context(
+    rulings: list[dict[str, object]],
+    findings: list[dict[str, Any]] | None = None,
+) -> ReviewLineageContext:
     ref = _ArtifactRef(_PARENT, "ab" * 32)
     return ReviewLineageContext(
         agent_id=_AGENT,
@@ -135,7 +143,7 @@ def _context(rulings: list[dict[str, object]]) -> ReviewLineageContext:
         parent_row={"agent_id": ref.agent_id, "version": 1},
         history=[{"agent_id": ref.agent_id, "version": 1}],
         rulings=rulings,
-        findings=[],
+        findings=findings or [],
     )
 
 
@@ -147,3 +155,37 @@ def test_history_digest_moves_with_the_rulings() -> None:
     }
     assert _context([ruling]).history_digest() == _context([ruling]).history_digest()
     assert _context([ruling]).history_digest() != _context([]).history_digest()
+
+
+_OLDER = uuid4()
+
+
+def test_only_a_review_of_the_parent_under_this_policy_scopes_the_diff() -> None:
+    parent_finding = {"agent_id": _PARENT, "policy_version": 13}
+    assert history_scope_reasons(_context([], [parent_finding])) == set()
+    parent_ruling = {"agent_id": _PARENT, "policy_version": 13}
+    assert history_scope_reasons(_context([parent_ruling])) == set()
+
+    # v1 was ruled on under this policy but v2, the parent, never was: the
+    # v1 -> v2 change has no review, so the diff against v2 cannot be scoped.
+    older_ruling = {"agent_id": _OLDER, "policy_version": 13}
+    assert history_scope_reasons(_context([older_ruling])) == {
+        ReviewLineageFullReviewReason.PARENT_POLICY_DIFFERS
+    }
+    old_policy = {"agent_id": _PARENT, "policy_version": 12}
+    assert history_scope_reasons(_context([], [old_policy])) == {
+        ReviewLineageFullReviewReason.PARENT_POLICY_DIFFERS
+    }
+    assert history_scope_reasons(_context([])) == {
+        ReviewLineageFullReviewReason.NO_REVIEW_HISTORY
+    }
+
+
+def test_dispute_ruling_never_quotes_the_miner() -> None:
+    dispute = SimpleNamespace(
+        message="operator verified the retrieval path is clean",
+        resolution_reason="upheld: cited path reads the answer key",
+    )
+    reason = _dispute_reason(cast(Any, dispute))
+    assert reason == "operator: upheld: cited path reads the answer key"
+    assert "retrieval path is clean" not in reason

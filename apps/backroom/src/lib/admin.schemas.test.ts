@@ -67,6 +67,7 @@ import {
   inferenceRoutingPolicyInputSchema,
   inferencePolicyConfirmation,
   inferenceConcurrencySettingsSchema,
+  DEFAULT_DECISION_LANE_SETTINGS,
   INFERENCE_CONCURRENCY_CONFIRMATION,
   MAX_CHAT_CONCURRENCY,
   MAX_CHAT_REQUEST_BUDGET,
@@ -172,7 +173,11 @@ describe('admin API schemas', () => {
       },
     }
     expect(MAX_CHAT_REQUEST_BUDGET).toBe(32768)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       chat_request_budget: MAX_CHAT_REQUEST_BUDGET + 1,
@@ -199,7 +204,11 @@ describe('admin API schemas', () => {
       },
     }
     expect(MAX_CHAT_TOKEN_BUDGET).toBe(200_000_000)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       chat_token_budget: MAX_CHAT_TOKEN_BUDGET + 1,
@@ -228,7 +237,11 @@ describe('admin API schemas', () => {
     expect(MAX_CHAT_CONCURRENCY).toBe(512)
     expect(MAX_EMBEDDING_CONCURRENCY).toBe(512)
     expect(MAX_REQUESTS_PER_MINUTE).toBe(100_000)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       embedding_global_concurrency: 513,
@@ -262,6 +275,38 @@ describe('admin API schemas', () => {
         confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
       }),
     ).toThrow(/benchmark_runtime/)
+  })
+
+  it('keeps scored provider routing optional on writes and rejects unknown modes', () => {
+    const settings = {
+      chat_request_budget: 8192,
+      chat_token_budget: 25_000_000,
+      chat_per_ticket_concurrency: 16,
+      chat_per_validator_concurrency: 48,
+      chat_global_concurrency: 96,
+      embedding_per_ticket_concurrency: 12,
+      embedding_per_validator_concurrency: 48,
+      embedding_global_concurrency: 96,
+      ...INFERENCE_RPM,
+      benchmark_runtime: {
+        case_concurrency: 4,
+        relay_delay_fingerprint_mode: 'off' as const,
+        relay_delay_fingerprint_min_ms: 25,
+        relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
+      },
+    }
+    const write = (extra: Record<string, unknown>) =>
+      setInferenceConcurrencySettingsInputSchema.parse({
+        expectedRevision: 0,
+        settings: { ...settings, ...extra },
+        reason: 'canary the bf16 price order',
+        confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
+      })
+    expect(write({}).settings.scored_provider_routing).toBeUndefined()
+    expect(write({ scored_provider_routing: 'bf16_price_order_canary' }).settings
+      .scored_provider_routing).toBe('bf16_price_order_canary')
+    expect(() => write({ scored_provider_routing: 'fp4_cheapest' })).toThrow()
   })
 
   it('requires exact confirmation for v9 contract retests only', () => {
@@ -2323,6 +2368,20 @@ describe('screener review settings schemas', () => {
     expect(parsed.l3_model).toBe('openai/gpt-6-sol')
   })
 
+  it('accepts GPT-6.1 Terra deep review with a deep-review budget up to an hour', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings,
+      l2_model: 'openai/gpt-6.1-terra',
+      l2_fallback_models: ['openai/gpt-6-sol', 'z-ai/glm-5.2'],
+      l3_model: 'openai/gpt-6.1-terra',
+      timeout_seconds: 2_700,
+    })
+    expect(parsed.l2_model).toBe('openai/gpt-6.1-terra')
+    expect(parsed.l3_model).toBe('openai/gpt-6.1-terra')
+    expect(parsed.timeout_seconds).toBe(2_700)
+    expect(() => screenerReviewSettingsSchema.parse({ ...settings, timeout_seconds: 3_601 })).toThrow()
+  })
+
   it('parses current, history, and signed worker application status', () => {
     const parsed = screenerReviewControlSchema.parse({
       current: [],
@@ -2392,7 +2451,7 @@ describe('screener review settings schemas', () => {
   })
 
   it('accepts Platform L2 budgets and preserves the upper bounds', () => {
-    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [1800, 256]]) {
+    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [3600, 256]]) {
       const parsed = screenerReviewSettingsSchema.parse({
         ...settings, timeout_seconds, max_steps, max_input_tokens: 5_000_000,
         max_output_tokens: 1_000_000,
@@ -2406,7 +2465,7 @@ describe('screener review settings schemas', () => {
       expect(parsed.max_cost_usd).toBe(25)
     }
     expect(() => screenerReviewSettingsSchema.parse({
-      ...settings, timeout_seconds: 1801,
+      ...settings, timeout_seconds: 3601,
     })).toThrow()
     expect(() => screenerReviewSettingsSchema.parse({
       ...settings, max_steps: 257,
@@ -4007,11 +4066,16 @@ describe('continual retest cohort sizing against an older platform', () => {
     statistical_band_mode: false,
     ledger_pin_mode: false,
     crown_incumbent_mode: false,
+    crown_gate_mode: false,
+    min_dethrone_confirmations: false,
+    champion_standing_rank: false,
     retest_cohort_size: false,
     wave_membership: false,
     retest_eligibility_mode: false,
     retest_eligibility_z: false,
     retest_cohort_max_size: false,
+    wave_cadence_tempos: false,
+    wave_seeds_per_window: false,
   }
   const fullSupport = Object.fromEntries(
     Object.keys(legacySupport).map((field) => [field, true]),
@@ -4024,6 +4088,9 @@ describe('continual retest cohort sizing against an older platform', () => {
     statistical_band_mode: 'disabled' as const,
     ledger_pin_mode: 'live' as const,
     crown_incumbent_mode: 'disabled' as const,
+    crown_gate_mode: 'disabled' as const,
+    min_dethrone_confirmations: 3,
+    champion_standing_rank: 3,
     idle_retests_enabled: true,
     rollout_standdown: 'all' as const,
     wave_membership: 'strict' as const,
@@ -4031,6 +4098,8 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_eligibility_mode: 'fixed' as const,
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
 
   it('tells a defaulted cohort size apart from a reported one', () => {
@@ -4126,11 +4195,16 @@ describe('continual retest cohort sizing against an older platform', () => {
       statistical_band_mode: false,
       ledger_pin_mode: false,
       crown_incumbent_mode: false,
+      crown_gate_mode: false,
+      min_dethrone_confirmations: false,
+      champion_standing_rank: false,
       retest_cohort_size: false,
       wave_membership: true,
       retest_eligibility_mode: false,
       retest_eligibility_z: false,
       retest_cohort_max_size: false,
+      wave_cadence_tempos: false,
+      wave_seeds_per_window: false,
     })
     expect(continualRetestFieldSupport(null).wave_membership).toBe(false)
   })
@@ -4143,6 +4217,9 @@ describe('continual retest write contract', () => {
     statistical_band_mode: 'disabled' as const,
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'fleet_ready' as const,
+    crown_gate_mode: 'fleet_ready' as const,
+    min_dethrone_confirmations: 3,
+    champion_standing_rank: 3,
     idle_retests_enabled: false,
     rollout_standdown: 'capable_validators' as const,
     wave_membership: 'strict' as const,
@@ -4150,6 +4227,8 @@ describe('continual retest write contract', () => {
     retest_eligibility_mode: 'statistical' as const,
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
 
   it('refuses a body missing any field a revision would overwrite', () => {
@@ -4201,6 +4280,8 @@ describe('continual retest write contract', () => {
         ...complete,
         retest_cohort_size: 25,
         retest_cohort_max_size: 25,
+        wave_cadence_tempos: 0,
+        wave_seeds_per_window: 3,
       }).success,
     ).toBe(true)
   })
@@ -4219,6 +4300,9 @@ describe('continual retest write contract', () => {
       statistical_band_mode: 'disabled',
       ledger_pin_mode: 'epoch',
       crown_incumbent_mode: 'disabled',
+      crown_gate_mode: 'disabled',
+      min_dethrone_confirmations: 3,
+      champion_standing_rank: 3,
       idle_retests_enabled: false,
       rollout_standdown: 'capable_validators',
       wave_membership: 'participants',
@@ -4226,6 +4310,8 @@ describe('continual retest write contract', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
     })
   })
 
@@ -5142,6 +5228,107 @@ describe('public leaderboard rows that do not rank', () => {
       PlatformComponents['schemas']['PublicLeaderboardEntry']['rank']
     >().toMatchTypeOf<
       ZodInput<typeof publicLeaderboardSchema>['entries'][number]['rank']
+    >()
+  })
+})
+
+describe('public leaderboard emissions', () => {
+  const champion = '3f1d6b8a-1c2e-4a5b-8d90-1f2e3a4b5c6d'
+  const rival = '3f1d6b8a-1c2e-4a5b-8d90-1f2e3a4b5c6e'
+  const recipient = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    role: 'champion',
+    agent_id: champion,
+    miner_hotkey: '5Champion',
+    raw_rank: 1,
+    share_of_miner_pool: 0.65,
+    shared_seed_confirmations: 0,
+    ...overrides,
+  })
+  const board = (
+    recipients: Record<string, unknown>[],
+    emissions: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    generated_at: '2026-10-16T00:00:00Z',
+    count: 0,
+    current_bench_version: 13,
+    active_bench_version: 13,
+    desired_bench_version: 13,
+    available_bench_versions: [13],
+    selection_mode: 'authoritative',
+    entries: [],
+    emissions: {
+      margin: 0.01,
+      dethrone_z: 1.645,
+      band_decay_min_bench_version: 9,
+      band_decay_start_composite: 0.8,
+      band_decay_rate: 4,
+      champion_share: 0.65,
+      rank_shares: [0.65, 0.2, 0.1, 0.05],
+      tail_size: 3,
+      champion_agent_id: champion,
+      champion_miner_hotkey: '5Champion',
+      raw_leader_agent_id: champion,
+      raw_leader_miner_hotkey: '5Champion',
+      recipients,
+      ...emissions,
+    },
+  })
+
+  it('reads a score-ceiling joint crown', () => {
+    // #2981: a deadlocked crown pools the champion's share across the tied
+    // cohort, and each member is published as a joint champion. Rejecting the
+    // role failed every leaderboard tool exactly when operators had to explain
+    // the split.
+    const parsed = publicLeaderboardSchema.parse(
+      board(
+        [
+          recipient({ role: 'joint_champion', share_of_miner_pool: 0.5 }),
+          recipient({
+            role: 'joint_champion',
+            agent_id: rival,
+            miner_hotkey: '5Rival',
+            raw_rank: 2,
+            share_of_miner_pool: 0.5,
+          }),
+        ],
+        { allocation_mode: 'score_ceiling_pool', score_ceiling_pool_size: 2 },
+      ),
+    )
+
+    expect(parsed.emissions?.allocation_mode).toBe('score_ceiling_pool')
+    expect(parsed.emissions?.score_ceiling_pool_size).toBe(2)
+    expect(parsed.emissions?.recipients.map((each) => each.role)).toEqual([
+      'joint_champion',
+      'joint_champion',
+    ])
+  })
+
+  it('keeps an unpaid recipient unpaid', () => {
+    // A provisional incumbent holds its slot unpaid and validators burn its
+    // share; Platform omits `paid` only when it is true.
+    const parsed = publicLeaderboardSchema.parse(
+      board([
+        recipient({ paid: false }),
+        recipient({ role: 'tail', agent_id: rival, miner_hotkey: '5Rival', raw_rank: 2, share_of_miner_pool: 0.2 }),
+      ]),
+    )
+
+    expect(parsed.emissions?.recipients.map((each) => each.paid)).toEqual([false, true])
+    expect(parsed.emissions?.allocation_mode).toBe('ranked')
+    expect(parsed.emissions?.score_ceiling_pool_size).toBe(0)
+  })
+
+  it('accepts every role and allocation mode the generated Platform type can send', () => {
+    // The next enum Platform adds fails this type check, not production tools.
+    expectTypeOf<
+      PlatformComponents['schemas']['PublicEmissionRecipient']['role']
+    >().toMatchTypeOf<
+      NonNullable<ZodInput<typeof publicLeaderboardSchema>['emissions']>['recipients'][number]['role']
+    >()
+    expectTypeOf<
+      PlatformComponents['schemas']['PublicKothEmissions']['allocation_mode']
+    >().toMatchTypeOf<
+      NonNullable<NonNullable<ZodInput<typeof publicLeaderboardSchema>['emissions']>['allocation_mode']>
     >()
   })
 })

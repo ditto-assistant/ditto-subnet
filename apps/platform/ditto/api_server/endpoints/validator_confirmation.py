@@ -37,6 +37,7 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationSubmitRequest,
     V9ConfirmationSubmitResponse,
 )
+from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import verify_signature
 from ditto.api_server.confirmation_candidate_reconciliation import (
     reconcile_confirmation_candidates,
@@ -66,6 +67,7 @@ from ditto.api_server.endpoints.validator import (
     _artifact_key,
     _assert_validator_permitted,
     _screened_image_key,
+    _validator_scores_source_free,
 )
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.validator_slot_settings import (
@@ -80,6 +82,10 @@ from ditto.db.models import (
     ConfirmationBundleSettingsRevision,
     ConfirmationBundleSubject,
     ConfirmationBundleTicket,
+)
+from ditto.db.queries.artifact_fetch_audit import (
+    ENDPOINT_VALIDATOR_CONFIRMATION_ARTIFACT,
+    record_artifact_fetch,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_attempt_lock import lock_confirmation_attempt
@@ -828,16 +834,43 @@ async def get_v9_confirmation_artifact(
                 status_code=409,
                 detail="confirmation artifact does not match its base subject",
             )
-    url = await storage.presigned_get_url(
-        key=_artifact_key(agent.agent_id),
-        expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
-    )
+        source_free = await _validator_scores_source_free(
+            session, validator_hotkey=x_validator_hotkey
+        )
+        ticket_id = ticket.ticket_id
     image_url = None
     if agent.screened_image_sha256 and agent.screened_image_upload_id:
         image_url = await storage.presigned_get_url(
             key=_screened_image_key(agent.agent_id, agent.screened_image_upload_id),
             expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
         )
+    # Confirmation runs only the screened image; the source URL is provenance
+    # that source-free scorers no longer need.
+    url = (
+        None
+        if source_free and image_url is not None
+        else await storage.presigned_get_url(
+            key=_artifact_key(agent.agent_id),
+            expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
+        )
+    )
+    await record_artifact_fetch(
+        session,
+        agent_id=agent.agent_id,
+        endpoint=ENDPOINT_VALIDATOR_CONFIRMATION_ARTIFACT,
+        requester_kind="validator",
+        requester_id=x_validator_hotkey,
+        lease_id=ticket_id,
+        bench_version=bundle.bench_version,
+        artifact_sha256=agent.sha256,
+        source_ip=client_ip(request),
+        detail=request_detail(
+            request,
+            served_source=url is not None,
+            served_screened_image=image_url is not None,
+            bundle_id=str(bundle_id),
+        ),
+    )
     return ArtifactResponse(
         agent_id=agent.agent_id,
         sha256=agent.sha256,

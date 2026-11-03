@@ -228,6 +228,25 @@ type PanelView =
   | { tenant: "agent"; key: string; entry: AgentEvidenceEntry }
   | { tenant: "agent-state"; key: string; id: string; message: string; state: "loading" | "error" };
 
+/** The stems a /h/{handle} route can name, as handle links normalize them. */
+function handleStems(id: string): string[] {
+  return [id.toLowerCase(), id.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()];
+}
+
+/** The board row a miner route names by itself: its hotkey, or a handle on
+ * the row that reserves it. An upheld claim keeps the stem on the struck row
+ * as "disputed", and a pending claim marks every row that shares it, so
+ * neither identifies the handle's owner (#2982). */
+function minerRouteEntry(rows: RankedEntry[], id: string): RankedEntry | undefined {
+  const stems = handleStems(id);
+  return (
+    rows.find((item) => item.miner_hotkey === id) ??
+    rows.find(
+      (item) => item.name_handle?.status === "reserved" && stems.includes(item.name_handle.stem),
+    )
+  );
+}
+
 function samePanelView(a: PanelView | null, b: PanelView | null): boolean {
   if (a === b) return true;
   if (!a || !b || a.tenant !== b.tenant || a.key !== b.key) return false;
@@ -273,6 +292,26 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
   let lastFocused: Element | null = null;
 
   const isOpen = () => view() !== null;
+
+  // A miner route no board row answers by itself resolves through the public
+  // profile, which names the handle's claimant.
+  const minerProfileId = () => {
+    const route = entityRoute();
+    if (route?.kind !== "miner" || !route.id) return undefined;
+    return minerRouteEntry(props.entries(), route.id) ? undefined : route.id;
+  };
+  const [minerProfile] = createResource(minerProfileId, (id) =>
+    getJSON<PublicMinerProfile>("/public/miners/" + encodeURIComponent(id)),
+  );
+  // The claimant's own board row, once the profile for this route is read.
+  const claimantEntry = (rows: RankedEntry[], id: string): RankedEntry | undefined => {
+    if (minerProfileId() !== id || minerProfile.state !== "ready") return undefined;
+    const loaded = minerProfile();
+    if (!loaded) return undefined;
+    const named =
+      loaded.miner_hotkey === id || handleStems(id).includes(loaded.name_handle?.stem ?? "");
+    return named ? rows.find((item) => item.miner_hotkey === loaded.miner_hotkey) : undefined;
+  };
   const settled = () => (props.settledView ? props.settledView() : false);
 
   const agentId = (): string => {
@@ -402,14 +441,8 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
       return;
     }
     if (route.kind === "miner") {
-      const entry = props
-        .entries()
-        .find(
-          (item) =>
-            item.miner_hotkey === route.id ||
-            item.name_handle?.stem === route.id.toLowerCase() ||
-            item.name_handle?.stem === route.id.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase(),
-        );
+      const rows = props.entries();
+      const entry = minerRouteEntry(rows, route.id) ?? claimantEntry(rows, route.id);
       if (entry) setView({ tenant: "miner", key: route.key, entry });
       else setView({ tenant: "miner-profile", key: route.key, id: route.id });
       return;
@@ -504,14 +537,6 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     return kind ? entityActions(kind, actionId()) : null;
   };
 
-  const minerProfileId = () => {
-    const current = view();
-    return current?.tenant === "miner-profile" ? current.id : undefined;
-  };
-  const [minerProfile] = createResource(minerProfileId, (id) =>
-    getJSON<PublicMinerProfile>("/public/miners/" + encodeURIComponent(id)),
-  );
-
   interface HeaderState {
     title: string;
     handle?: NameHandle | null;
@@ -548,10 +573,11 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     if (current.tenant === "miner") {
       const e = current.entry;
       // The panel is the miner's profile, so the title is the miner — the
-      // reserved handle when one exists, the elided hotkey otherwise. The
-      // board standing that used to be the title becomes the chip.
+      // reserved handle when this row holds one, the elided hotkey otherwise
+      // (a disputed stem is the name the board struck). The board standing
+      // that used to be the title becomes the chip.
       return {
-        title: e.name_handle?.stem || shortKey(e.miner_hotkey),
+        title: e.name_handle?.status === "reserved" ? e.name_handle.stem : shortKey(e.miner_hotkey),
         handle: e.name_handle,
         avatarUrl: e.avatar_url,
         chip: minerStandingChip(e),
@@ -750,9 +776,9 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
             {(id) => (
               <MinerProfileCard
                 id={id()}
-                profile={view()?.tenant === "miner-profile" ? minerProfile() : undefined}
-                error={view()?.tenant === "miner-profile" ? minerProfile.error : undefined}
-                loading={view()?.tenant === "miner-profile" ? minerProfile.loading : false}
+                profile={minerProfileId() ? minerProfile() : undefined}
+                error={minerProfileId() ? minerProfile.error : undefined}
+                loading={minerProfileId() ? minerProfile.loading : false}
               />
             )}
           </Show>

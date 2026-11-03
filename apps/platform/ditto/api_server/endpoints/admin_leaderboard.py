@@ -20,7 +20,9 @@ from ditto.api_models.continual_retest_diagnostic import (
     AdminContinualRetestDiagnostic,
     RetestClaimability,
     RetestCutoffComparison,
+    RetestFailureCode,
     RetestFamilyMember,
+    RetestSampleInference,
 )
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.public import PublicLeaderboardResponse
@@ -44,6 +46,7 @@ from ditto.api_server.endpoints.validator import (
     _top5_confirmation_seed_plan,
     _top5_member_is_least_covered,
     _unserved_catchup_members,
+    _void_rerun_debts,
 )
 from ditto.api_server.koth import (
     KothEntry,
@@ -52,12 +55,27 @@ from ditto.api_server.koth import (
     tie_band_comparison,
     top5_round_is_due,
 )
+from ditto.api_server.retest_wave_window import (
+    current_wave_window,
+    first_retest_issue_by_seed,
+    seeds_opened_in_window,
+)
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.chain import ChainClient
 from ditto.db.models import Agent, ConfirmationScore, ValidatorTicket
 from ditto.db.queries.benchmark_rollout import active_bench_version
-from ditto.db.queries.confirmation_scores import confirmation_composites_by_seed
+from ditto.db.queries.confirmation_score_voids import voided_confirmation_keys
+from ditto.db.queries.confirmation_scores import (
+    confirmation_composites_by_seed,
+    not_voided,
+)
+from ditto.db.queries.provider_outages import (
+    provider_gate_closed,
+    provider_outage_active,
+    read_provider_circuit,
+)
 from ditto.db.queries.queue_order import miner_has_newer_canonical_work
+from ditto.db.queries.retest_sample_inference import retest_sample_inference
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +126,7 @@ _ClaimDecision = Literal[
     "no_pending_seeds",
     "all_pending_seeds_leased",
     "another_member_less_covered",
+    "provider_outage",
 ]
 _AdmissionReason = Literal[
     "in_cohort",
@@ -124,7 +143,9 @@ _RepresentativeSelection = Literal[
     "agent_id_tiebreak",
     "none",
 ]
-_RoutePriority = Literal["champion", "catchup", "emission", "extended", "not_routed"]
+_RoutePriority = Literal[
+    "champion", "void_rerun", "catchup", "emission", "extended", "not_routed"
+]
 
 
 def _claim_decision(
@@ -139,6 +160,10 @@ def _claim_decision(
     claimable_seed_available: bool,
     newer_canonical_work_pending: bool,
     least_covered_admitted: bool | None,
+    void_rerun_seed_count: int = 0,
+    void_rerun_claimable: bool = False,
+    provider_outage: bool = False,
+    provider_gate_closed: bool = False,
 ) -> _ClaimDecision:
     """The first reason the issuance lane would decline this exact agent.
 
@@ -146,9 +171,23 @@ def _claim_decision(
     polling right now would actually hit rather than a list of everything that
     happens to be false. ``scheduled_round`` is ``None`` only when the chain
     read failed, which leaves every cadence gate below it unresolved.
+
+    The provider-outage gate comes first after the lane switch: while it admits
+    nothing, the lane issues nothing on any route.
+
+    Void re-run debt is checked ahead of the cohort: the lane issues it to any
+    ledger-eligible generation, so an agent outside the cohort with an unleased
+    voided seed is claimable. A cohort member whose debt is blocked still falls
+    through to its ordinary cohort gates.
     """
     if not lane_enabled:
         return "lane_disabled"
+    if provider_gate_closed:
+        return "provider_outage"
+    if void_rerun_claimable:
+        return "claimable"
+    if not in_cohort and void_rerun_seed_count > 0:
+        return "provider_outage" if provider_outage else "all_pending_seeds_leased"
     if not in_cohort:
         return "not_in_cohort"
     if scheduled_round is None:
@@ -247,6 +286,7 @@ async def _claimability(
     cohort: tuple[KothEntry, ...],
     challenger_ids: frozenset[UUID],
     in_cohort: bool,
+    ledger_agent_ids: frozenset[UUID] = frozenset(),
 ) -> RetestClaimability:
     """Project the issuance lane's gates onto one agent without claiming work.
 
@@ -323,6 +363,12 @@ async def _claimability(
         if champion_agent_id is not None
         else frozenset()
     )
+    wave_window = await current_wave_window(
+        session,
+        cadence_tempos=settings.wave_cadence_tempos,
+        seeds_per_window=settings.wave_seeds_per_window,
+        netuid=getattr(getattr(config, "chain", None), "netuid", None),
+    )
     plan = (
         await _top5_confirmation_seed_plan(
             session,
@@ -331,10 +377,18 @@ async def _claimability(
             wave_member_ids=wave_member_ids,
             cohort_member_ids=member_ids,
             canonical_version=version,
+            wave_window=wave_window,
         )
         if champion_agent_id is not None
         else ()
     )
+    opened_in_window: int | None = None
+    if wave_window.paced and champion_agent_id is not None:
+        assert wave_window.window_start is not None  # paced implies a start
+        first_issue = await first_retest_issue_by_seed(
+            session, bench_version=version, since=wave_window.window_start
+        )
+        opened_in_window = len(seeds_opened_in_window(wave_window, first_issue))
     leases = (
         await _live_retest_leases(
             session,
@@ -367,6 +421,22 @@ async def _claimability(
         if in_cohort and claimable is not None
         else None
     )
+    # Void re-run debt, fleet-wide: the lane hands it out right behind the crown
+    # and ahead of every cohort source, regardless of cohort membership.
+    debts = await _void_rerun_debts(
+        session, canonical_version=version, ledger_agent_ids=ledger_agent_ids
+    )
+    debt_agent_ids = tuple(dict.fromkeys(debt.agent_id for debt in debts))
+    own_debts = [debt for debt in debts if debt.agent_id == agent_id]
+    unleased_debts = [
+        debt
+        for debt in own_debts
+        if not any(seed is None or seed == debt.seed for seed in leases.values())
+    ]
+    circuit = await read_provider_circuit(session)
+    provider_outage = provider_outage_active(circuit, now=now)
+    gate_closed = provider_gate_closed(circuit, now=now)
+    void_rerun_claimable = lane_enabled and bool(unleased_debts) and not provider_outage
     candidate_ids: tuple[UUID, ...] = ()
     if champion_agent_id is not None:
         rest_ids = tuple(
@@ -386,9 +456,18 @@ async def _claimability(
                 if member_id not in emission_member_ids and member_id not in catchup_ids
             ),
         )
+    candidate_ids = tuple(
+        dict.fromkeys(
+            (*candidate_ids[:1], *debt_agent_ids, *candidate_ids[1:])
+            if candidate_ids
+            else debt_agent_ids
+        )
+    )
     route_priority: _RoutePriority = (
         "champion"
         if agent_id == champion_agent_id
+        else "void_rerun"
+        if own_debts
         else "catchup"
         if agent_id in catchup_ids
         else "emission"
@@ -417,6 +496,24 @@ async def _claimability(
         live_lease_count=len(leases),
         newer_canonical_work_pending=newer_canonical_work_pending,
         least_covered_admitted=least_covered,
+        void_rerun_seed_count=len(own_debts),
+        void_rerun_claimable=void_rerun_claimable,
+        provider_outage_active=provider_outage,
+        provider_gate_closed=gate_closed,
+        wave_cadence_tempos=wave_window.cadence_tempos,
+        wave_seeds_per_window=(
+            wave_window.seeds_per_window if wave_window.cadence_tempos else None
+        ),
+        wave_window_epoch=wave_window.window_epoch if wave_window.paced else None,
+        wave_next_window_epoch=(
+            wave_window.next_window_epoch if wave_window.paced else None
+        ),
+        wave_window_start=wave_window.window_start if wave_window.paced else None,
+        wave_window_opened_seed_count=opened_in_window,
+        wave_growth_paused=(
+            opened_in_window is not None
+            and opened_in_window >= wave_window.seeds_per_window
+        ),
         decision=_claim_decision(
             lane_enabled=lane_enabled,
             in_cohort=in_cohort,
@@ -428,6 +525,10 @@ async def _claimability(
             claimable_seed_available=claimable is not None,
             newer_canonical_work_pending=newer_canonical_work_pending,
             least_covered_admitted=least_covered,
+            void_rerun_seed_count=len(own_debts),
+            void_rerun_claimable=void_rerun_claimable,
+            provider_outage=provider_outage,
+            provider_gate_closed=gate_closed,
         ),
     )
 
@@ -564,6 +665,7 @@ async def continual_retest_diagnostic(
                 .where(
                     ConfirmationScore.agent_id == agent_id,
                     ConfirmationScore.bench_version == version,
+                    not_voided(),
                 )
                 .order_by(ConfirmationScore.created_at.desc())
                 .limit(1)
@@ -571,6 +673,10 @@ async def continual_retest_diagnostic(
         ),
         None,
     )
+    samples = await retest_sample_inference(
+        session, agent_id=agent_id, bench_version=version
+    )
+    voided_keys = await voided_confirmation_keys(session, agent_id=agent_id)
     anchor_champion_id = wave[0].agent_id if wave else None
     anchor = (
         await read_reign_seed_anchor(
@@ -617,6 +723,7 @@ async def continual_retest_diagnostic(
         cohort=cohort,
         challenger_ids=challenger_ids,
         in_cohort=in_cohort,
+        ledger_agent_ids=frozenset(snapshot.official_scores),
     )
     return AdminContinualRetestDiagnostic(
         generated_at=now,
@@ -725,4 +832,30 @@ async def continual_retest_diagnostic(
         latest_confirmation_recorded_at=(
             _as_utc(latest_confirmation[1]) if latest_confirmation is not None else None
         ),
+        retest_samples=[
+            RetestSampleInference(
+                validator_hotkey=sample.validator_hotkey,
+                seed=str(sample.seed),
+                composite=sample.composite,
+                run_id=sample.run_id,
+                accepted_at=_as_utc(sample.accepted_at) or sample.accepted_at,
+                grant_id=sample.grant_id,
+                chat_requests=sample.chat_requests,
+                failed_requests=sample.failed_requests,
+                failure_codes=[
+                    RetestFailureCode(terminal_error_code=code, count=count)
+                    for code, count in sample.failure_codes
+                ],
+                void_generation=sample.void_generation,
+                voided=(
+                    agent_id,
+                    version,
+                    sample.validator_hotkey,
+                    sample.seed,
+                    sample.void_generation,
+                )
+                in voided_keys,
+            )
+            for sample in samples
+        ],
     )

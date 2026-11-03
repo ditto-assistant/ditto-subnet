@@ -284,3 +284,100 @@ async def test_a_still_started_request_is_in_flight_and_not_settled(
     # duration_ms is NULL until a request completes; the group COALESCEs that
     # to 0, which is only readable because `status` sits beside it.
     assert int(judge_groups[0]["max_duration_ms"]) == 0
+
+
+async def test_failed_calls_are_split_by_the_relays_failure_detail(
+    session: AsyncSession,
+) -> None:
+    """A 5xx, a timeout and an unexplained failure must be separate groups.
+
+    Before the relay persisted these fields every failed confirmation call read
+    "failed, no provider, no cost", and seven days of reader failures could not
+    be told apart. The detail is written by the Go relay in production; it is
+    set directly here because this test is about the aggregation, not the write
+    (the relay's own settle test covers that).
+    """
+    now = _FIXTURE_NOW
+    _, revision, settings, bundle = await seed_bundle(session)
+    _, ticket = await reserve_and_issue(
+        session, bundle=bundle, revision=revision, policy=settings
+    )
+    offers = await ensure_confirmation_inference_grants(
+        session,
+        ticket=ticket,
+        broker_public_key="A" * 43,
+        profile=verification_profile(),
+        now=now,
+    )
+    reader_grant, reader_bearer = {g.lane: (g, b) for g, b in offers}["reader"]
+    for _ in range(4):
+        await _one_call(
+            session,
+            grant=reader_grant,
+            bearer=reader_bearer,
+            now=now,
+            status="failed",
+            upstream_provider=None,
+            cost_microusd=0,
+        )
+    nonces = (
+        (
+            await session.execute(
+                text(
+                    "SELECT nonce FROM confirmation_inference_requests "
+                    "WHERE grant_id = :grant ORDER BY nonce"
+                ),
+                {"grant": reader_grant.grant_id},
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(nonces) == 4
+    details = [
+        ("upstream_status", 502, 1, True),
+        ("upstream_status", 502, 1, True),
+        ("transport_timeout", None, 1, True),
+        # The fourth keeps every field NULL: a failure settled before the
+        # relay recorded detail. It must stay visible, as unexplained.
+    ]
+    for nonce, (kind, status, attempts, receipt_free) in zip(
+        nonces, details, strict=False
+    ):
+        await session.execute(
+            text(
+                "UPDATE confirmation_inference_requests "
+                "SET failure_kind = :kind, upstream_http_status = :status, "
+                "    upstream_attempts = :attempts, receipt_free = :receipt_free "
+                "WHERE grant_id = :grant AND nonce = :nonce"
+            ),
+            {
+                "kind": kind,
+                "status": status,
+                "attempts": attempts,
+                "receipt_free": receipt_free,
+                "grant": reader_grant.grant_id,
+                "nonce": nonce,
+            },
+        )
+    await _move_requests_into_window(session)
+    await session.commit()
+
+    _lanes, groups = await load_confirmation_failure_taxonomy_rows(session)
+    hour = [
+        g
+        for g in groups
+        if g["window_seconds"] == CONFIRMATION_FAILURE_WINDOWS_SECONDS[0]
+        and g["lane"] == "reader"
+        and g["status"] == "failed"
+    ]
+    by_detail = {
+        (g["failure_kind"], g["upstream_http_status"], g["receipt_free"]): g["calls"]
+        for g in hour
+    }
+    assert by_detail == {
+        ("upstream_status", 502, True): 2,
+        ("transport_timeout", None, True): 1,
+        (None, None, None): 1,
+    }
+    assert {g["max_upstream_attempts"] for g in hour} == {0, 1}

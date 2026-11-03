@@ -40,9 +40,14 @@ func TestValidateScreenedImage(t *testing.T) {
 			}
 		})
 	}
+	// Source-free validators send the image and the artifact digest only.
 	valid.TarballURL = ""
+	if msg := validateScreenedImage(valid); msg != "" {
+		t.Fatalf("source-free screened image rejected: %s", msg)
+	}
+	valid.GitURL = "https://example.com/repo.git"
 	if msg := validateScreenedImage(valid); msg == "" {
-		t.Fatal("screened image without source tarball was accepted")
+		t.Fatal("screened image combined with git_url was accepted")
 	}
 }
 

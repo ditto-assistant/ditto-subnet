@@ -16,7 +16,11 @@ work present? That is computable without a model:
    wrote them). Each such line found in the held agent is a present
    distinctive line.
 3. **Held delta.** The held agent's own changes from its primary base: the
-   unit an I1-I8/S1-S3 read has to cover.
+   unit an I1-I8/S1-S3 read has to cover. A fork of released source is
+   eligible only with its own code changes (operator ruling 2026-10-29): a
+   held agent whose runtime files are byte-identical to its released primary
+   base, with only declaration or attribution prose changed, is an exact
+   duplicate with no contribution and never gets a CLEAR.
 
 Everything here is pure: callers load the artifacts, publication proofs and
 screening evidence, and this module turns them into facts and one verdict.
@@ -35,7 +39,7 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any
 
-TRIAGE_REVISION = "family-diff-v2"
+TRIAGE_REVISION = "family-diff-v3"
 STARTER_KIT_BASE = "starter-kit"
 HELD_OWNER_PRIOR = "held-owner-prior"
 
@@ -62,7 +66,7 @@ MAX_EVIDENCE_ROWS = 64
 
 _METADATA_DOC = re.compile(
     r"(?i)(^|/)(declaration|base|attribution|readme|notice|credits|lineage|"
-    r"changelog|license)[^/]*\.(md|txt|rst)$"
+    r"changelog|changes|upstream|fork|provenance|license)[^/]*\.(md|txt|rst)$"
 )
 _SHA256 = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 _UUID = re.compile(
@@ -89,6 +93,13 @@ _GENERATED_LOCKFILES = frozenset(
 def is_metadata_doc(path: str) -> bool:
     """Declaration / attribution / readme prose: provenance, not code."""
     return _METADATA_DOC.search(path) is not None
+
+
+def is_runtime_file(path: str) -> bool:
+    """A member that can change what the agent does: not prose, not a lockfile."""
+    return not is_metadata_doc(path) and PurePosixPath(path).name not in (
+        _GENERATED_LOCKFILES
+    )
 
 
 def declared_references(texts: Mapping[str, str]) -> tuple[set[str], set[str]]:
@@ -263,13 +274,39 @@ def _all_keys(views: Iterable[ArtifactView]) -> set[str]:
     return keys
 
 
+def _whitespace_only(before: str | None, after: str | None) -> bool:
+    """True when two texts differ only in whitespace or blank lines."""
+    if before is None or after is None:
+        return False
+    keys = [
+        [key for key in (line_key(raw) for raw in text.splitlines()) if key]
+        for text in (before, after)
+    ]
+    return keys[0] == keys[1]
+
+
 def _held_delta(held: ArtifactView, base: ArtifactView | None) -> dict[str, Any]:
-    """The held agent's own changes from its primary base, by path."""
+    """The held agent's own changes from its primary base, by path.
+
+    ``runtime_changed_count`` counts added or content-modified runtime files
+    (not declaration prose, lockfiles or whitespace-only edits): the held
+    agent's own contribution. ``runtime_removed_count`` counts runtime files
+    the base has and the held agent dropped.
+    """
     if base is None:
-        return {"base": None, "added": [], "modified": [], "removed": []}
+        return {
+            "base": None,
+            "added": [],
+            "modified": [],
+            "removed": [],
+            "runtime_changed": [],
+            "runtime_changed_count": None,
+            "runtime_removed_count": None,
+        }
     added: list[dict[str, Any]] = []
     modified: list[dict[str, Any]] = []
     removed = sorted(set(base.digests) - set(held.digests))
+    runtime_changed: list[str] = []
     identical = 0
     for path in sorted(held.digests):
         if path not in base.digests:
@@ -280,8 +317,12 @@ def _held_delta(held: ArtifactView, base: ArtifactView | None) -> dict[str, Any]
                     "lines": len(text.splitlines()) if text is not None else None,
                 }
             )
+            if is_runtime_file(path):
+                runtime_changed.append(path)
         elif held.digests[path] != base.digests[path]:
             before, after = base.texts.get(path), held.texts.get(path)
+            if is_runtime_file(path) and not _whitespace_only(before, after):
+                runtime_changed.append(path)
             plus = minus = None
             if before is not None and after is not None:
                 plus = minus = 0
@@ -305,6 +346,9 @@ def _held_delta(held: ArtifactView, base: ArtifactView | None) -> dict[str, Any]
         "added_count": len(added),
         "modified_count": len(modified),
         "removed_count": len(removed),
+        "runtime_changed": runtime_changed[:MAX_EVIDENCE_ROWS],
+        "runtime_changed_count": len(runtime_changed),
+        "runtime_removed_count": sum(1 for path in removed if is_runtime_file(path)),
     }
 
 
@@ -556,11 +600,90 @@ def _base_summary(facts: FamilyFacts, labels: Mapping[str, str]) -> str:
     return ", ".join(parts) or "none"
 
 
+def _own_delta_gate(
+    context: FamilyContext,
+    facts: FamilyFacts,
+    labels: Mapping[str, str],
+    delta_text: str,
+    screening_text: str,
+) -> FamilyVerdict | None:
+    """Downgrade a released-base CLEAR that carries no own runtime change.
+
+    Operator ruling 2026-10-29: a fork of a publicly released agent is eligible
+    only with its own code changes. Returns ``None`` when the held agent has a
+    non-empty runtime delta from its primary base (the CLEAR may stand).
+    """
+    held = context.held
+    delta = facts.held_delta
+    changed = delta.get("runtime_changed_count")
+    removed = delta.get("runtime_removed_count") or 0
+    if changed:
+        return None
+    base_id = delta.get("base")
+    base_label = (
+        f"{labels.get(base_id, base_id[:8])} ({base_id[:8]})"
+        if base_id
+        else "no primary base"
+    )
+    if base_id is None or changed is None:
+        return FamilyVerdict(
+            verdict="escalate",
+            basis="own_delta_unknown",
+            reason=(
+                f"HOLD for operator review: the overlap with released source is "
+                f"explained, but {_label(held)} has no primary base to measure its "
+                "own runtime changes against. A fork of released source is "
+                "eligible only with its own code changes. "
+                f"{delta_text}. {screening_text}."
+            ),
+            citations=[],
+            unresolved=["held agent's own runtime delta could not be measured"],
+            auto_clear_blockers=["escalations are never applied"],
+        )
+    if removed:
+        return FamilyVerdict(
+            verdict="escalate",
+            basis="own_delta_removal_only",
+            reason=(
+                f"HOLD for operator review: {_label(held)} adds or changes no "
+                f"runtime file relative to its released primary base {base_label}; "
+                f"it only removes {removed} runtime file(s). A fork of released "
+                "source is eligible only with its own code changes; decide whether "
+                f"the removal is a contribution. {delta_text}. {screening_text}."
+            ),
+            citations=list(context.reject_precedents[:1]),
+            unresolved=[
+                f"only {removed} runtime file removal(s) from the released base; "
+                "no added or modified runtime file"
+            ],
+            auto_clear_blockers=["escalations are never applied"],
+        )
+    return FamilyVerdict(
+        verdict="reject",
+        basis="unmodified_fork_of_released_base",
+        reason=(
+            f"Recommend REJECT for operator confirmation: every runtime file of "
+            f"{_label(held)} is byte-identical to its released primary base "
+            f"{base_label} ({delta.get('identical_count', 0)} identical file(s)); "
+            "only declaration or attribution prose differs. A fork of a publicly "
+            "released agent is eligible only with its own code changes; an "
+            "unmodified fork is an exact duplicate with no contribution "
+            f"(operator ruling 2026-10-29). {delta_text}. {screening_text}. "
+            "The court never applies a reject."
+        ),
+        citations=list(context.reject_precedents),
+        unresolved=["no own runtime change from the released primary base"],
+        auto_clear_blockers=["reject is never applied automatically"],
+    )
+
+
 def family_verdict(context: FamilyContext, facts: FamilyFacts) -> FamilyVerdict:
     """Map attribution facts onto the published copy-hold rule.
 
-    CLEAR when the overlap is fully explained by proven-public bases and none
-    of the unreleased matched agent's distinctive lines are present. REJECT
+    CLEAR when the overlap is fully explained by proven-public bases, none
+    of the unreleased matched agent's distinctive lines are present, and the
+    held agent changes at least one runtime file of its primary base. A fork
+    with no own runtime change is a REJECT recommendation. REJECT
     (recommendation only, never applied automatically) when the unreleased
     matched agent's distinctive code is present. Otherwise ESCALATE with the
     exact unresolved checks.
@@ -698,6 +821,9 @@ def family_verdict(context: FamilyContext, facts: FamilyFacts) -> FamilyVerdict:
 
     fully_explained = not facts.unexplained and facts.distinctive_present_count == 0
     if fully_explained and (proven or context.matched_public) and not facts.incomplete:
+        own_delta = _own_delta_gate(context, facts, labels, delta_text, screening_text)
+        if own_delta is not None:
+            return own_delta
         base_note = (
             "the matched agent itself was public before this upload"
             if context.matched_public
@@ -784,6 +910,7 @@ __all__ = [
     "declared_references",
     "family_verdict",
     "is_metadata_doc",
+    "is_runtime_file",
     "line_digest",
     "line_key",
 ]

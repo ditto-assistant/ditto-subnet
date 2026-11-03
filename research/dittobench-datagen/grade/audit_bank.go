@@ -116,10 +116,15 @@ func GradingPolicyFloor(v int) int {
 // grading policy, ascending. The audit floor (BenchVersionV9) and everything
 // above it must own an audit bank.
 func GradingPolicyFloors() []int {
-	floors := []int{protocol.BenchVersionV2, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV12, protocol.BenchVersionV13, protocol.BenchVersionV14}
+	floors := []int{protocol.BenchVersionV2, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV12, protocol.BenchVersionV13, protocol.BenchVersionV14, PolicyFloorV15}
 	sort.Ints(floors)
 	return floors
 }
+
+// PolicyFloorV15 is the v15 grading-policy floor. It shipped ahead of the v15
+// generation contract as a grader-only floor; the contract has landed, so it
+// is now the protocol constant under its historical grader name.
+const PolicyFloorV15 = protocol.BenchVersionV15
 
 // AuditBankFloor is the first bench version with a public grader audit bank.
 const AuditBankFloor = protocol.BenchVersionV9

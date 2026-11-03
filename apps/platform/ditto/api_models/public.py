@@ -1647,6 +1647,144 @@ class PublicDethroneDecision(BaseModel):
     ] = None
 
 
+class PublicCrownRules(BaseModel):
+    """The operator's crown rules and whether validators enforce them yet."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    active: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether validators fold these rules now. False while the "
+                "operator has them off or until every recently-live weight "
+                "setter reports required_protocol; the King and challenger "
+                "standings below always explain the configured rules."
+            ),
+        ),
+    ]
+    required_protocol: Annotated[int, Field(ge=1)] = 34
+    min_dethrone_confirmations: Annotated[
+        int,
+        Field(
+            ge=2,
+            description=(
+                "Shared-seed confirmations a challenger must hold against the "
+                "King before the paired comparison may move the crown."
+            ),
+        ),
+    ]
+    champion_standing_rank: Annotated[
+        int,
+        Field(
+            ge=1,
+            description=(
+                "Official places (the board's rank) the King must stay within. "
+                "A King that drops below hands the crown to the best-qualified "
+                "challenger inside them."
+            ),
+        ),
+    ]
+
+
+class PublicCrownKing(BaseModel):
+    """The single reigning King of the emission fold."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    official_rank: Annotated[
+        int, Field(ge=1, description="Position in the board's official order.")
+    ]
+    official_score: Annotated[
+        float,
+        Field(
+            description=(
+                "The score the crown comparison uses: the continual mean of the "
+                "quorum and completed retest waves (the board's "
+                "official_composite)."
+            ),
+        ),
+    ]
+    shared_seed_confirmations: Annotated[
+        int,
+        Field(ge=0, description="Champion-anchored confirmation seeds it holds."),
+    ] = 0
+
+
+class PublicCrownChallenger(BaseModel):
+    """One challenger dueling the King for the crown."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    official_rank: Annotated[int, Field(ge=1)]
+    official_score: float
+    shared_seed_confirmations: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Confirmation seeds this challenger and the King have both been "
+                "scored on. The crown can move only once this reaches "
+                "required_confirmations."
+            ),
+        ),
+    ]
+    required_confirmations: Annotated[int, Field(ge=2)]
+    within_standing: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether it sits inside the official places that may hold the "
+                "crown (crown_rules.champion_standing_rank)."
+            ),
+        ),
+    ]
+    paired_lead: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Mean per-seed score lead over the King on their shared seeds "
+                "(negative is a deficit). Null until they share two seeds."
+            ),
+        ),
+    ] = None
+    required_lead: Annotated[
+        float | None,
+        Field(
+            ge=0.0,
+            description=(
+                "The paired lead it must strictly exceed to dethrone. Null "
+                "until they share two seeds."
+            ),
+        ),
+    ] = None
+    lead_needed: Annotated[
+        float | None,
+        Field(
+            ge=0.0,
+            description=(
+                "How much more paired lead it needs (zero once it is ahead "
+                "enough). Null until they share two seeds."
+            ),
+        ),
+    ] = None
+    status: Annotated[
+        Literal["outside_standing", "needs_confirmations", "dueling", "would_dethrone"],
+        Field(
+            description=(
+                "outside_standing: below the official places that may hold the "
+                "crown. needs_confirmations: too few shared seeds for the duel "
+                "to count. dueling: enough evidence, not enough lead. "
+                "would_dethrone: clears the King under the crown rules."
+            ),
+        ),
+    ]
+
+
 class PublicKothEmissions(BaseModel):
     """Current read-only projection of the validator's KOTH weight fold."""
 
@@ -1806,6 +1944,31 @@ class PublicKothEmissions(BaseModel):
         ),
     ] = None
     recipients: list[PublicEmissionRecipient] = Field(default_factory=list)
+    crown_rules: Annotated[
+        PublicCrownRules | None,
+        Field(
+            default=None,
+            description=(
+                "The crown rules: shared-seed confirmations needed to dethrone "
+                "and the official standing the King must keep."
+            ),
+        ),
+    ] = None
+    king: Annotated[
+        PublicCrownKing | None,
+        Field(default=None, description="The reigning King of the fold."),
+    ] = None
+    challengers: Annotated[
+        list[PublicCrownChallenger],
+        Field(
+            default_factory=list,
+            description=(
+                "The next distinct miners in official order, each dueling the "
+                "King: shared-seed confirmations, paired lead or deficit, and "
+                "what it still needs to take the crown."
+            ),
+        ),
+    ]
     crown_incumbent_active: Annotated[
         bool,
         Field(
@@ -3790,8 +3953,10 @@ class PublicAdmissionRetry(BaseModel):
     Failed cost-bearing attempts never retry automatically, except a Ditto-owned
     failure that never judged the artifact: a Docker build infrastructure
     failure, a claim the worker released before starting it, missing scorer
-    runtime evidence, or a screening node whose source-review court could not
-    start. ``parked`` names a source-review/provider failure (including OpenRouter
+    runtime evidence, a screening node whose source-review court could not
+    start, Platform briefly unavailable while the screened image was being
+    stored, or (once) a private deep review that ran out of time. ``parked``
+    names a source-review/provider failure (including OpenRouter
     throttling), while ``stuck`` names another Ditto-owned infrastructure
     failure. Both require a guarded Backroom retry.
     ``retry_queued`` means a retry is waiting for a screener slot: either that
@@ -3954,6 +4119,9 @@ PublicValidationFailureCode = Literal[
     "provider_failure",
     "provider_outage_parked",
     "seed_deadline_exceeded",
+    "harness_oom",
+    "host_memory_pressure",
+    "harness_killed_137",
 ]
 
 _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
@@ -3961,6 +4129,9 @@ _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
         "inference_allowance_exhausted",
         "inference_request_rejected",
         "model_inference_required",
+        # OOM kill at the harness's own published memory cap while the host
+        # kept headroom (docs/RUNTIME-ENVELOPE.md).
+        "harness_oom",
     }
 )
 _ADMISSION_PUBLIC_CODES: frozenset[str] = frozenset(
@@ -3988,6 +4159,9 @@ _PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
         # reading it learns why a run stopped without learning anything the
         # platform keeps private.
         "provider_outage_parked",
+        # An OOM kill the scorer could not pin on the harness's own cap: the
+        # host ran short, or the cgroup never reached its limit.
+        "host_memory_pressure",
     }
 )
 
@@ -3997,7 +4171,12 @@ _PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
 # overloaded validator host and by a slow harness (ditto-subnet#2921). The code
 # says only which stage stopped the run, which reveals nothing about the
 # submission, so the dashboard keeps its neutral "unattributed" hold copy.
-_PUBLIC_UNATTRIBUTED_CODES: frozenset[str] = frozenset({"seed_deadline_exceeded"})
+#
+# ``harness_killed_137`` is the same shape: a SIGKILL with no OOM flag names the
+# stage, not the sender.
+_PUBLIC_UNATTRIBUTED_CODES: frozenset[str] = frozenset(
+    {"seed_deadline_exceeded", "harness_killed_137"}
+)
 
 
 def public_validation_failure_code(
@@ -4096,6 +4275,10 @@ class PublicConfirmationScore(BaseModel):
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     bench_version: Annotated[int, Field(ge=1)]
     accepted_at: datetime
+    voided_as_infrastructure: bool = False
+    """The platform set this sample aside because its run measured an
+    inference outage, not the agent. It stays listed for audit, counts toward
+    nothing, and its seed is re-run."""
 
 
 class PublicProvisionalScore(BaseModel):

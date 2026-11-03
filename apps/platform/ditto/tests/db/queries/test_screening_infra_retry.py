@@ -46,6 +46,7 @@ from ditto.db.queries.screening_infra_retry import (
     BREAKER_PROBE_INTERVAL,
     BREAKER_WINDOW,
     INFRA_AUTO_RETRY_MAX_AGE,
+    INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE,
     INFRA_AUTO_RETRY_MAX_STREAK,
     INFRA_AUTO_RETRY_REASON_CODES,
     INFRA_PLAN_MAX_CLAIMABLE,
@@ -61,6 +62,9 @@ from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 _SCREENER = "5GScreenerHotkeyForInfraRetryTests00000000000000000"
 _CODE = INFRA_AUTO_RETRY_REASON_CODES[0]
 _KEY_CODE = "source-review-adjudicator-key-unavailable"
+_UPLOAD_CODE = "image-upload-platform-unavailable"
+# Retried automatically, but only once (INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE).
+_LATE_CODE = "l2-late-result"
 _SECOND = timedelta(seconds=1)
 _PROVIDER = "gcp"
 _LANE = "buildkit"
@@ -76,7 +80,6 @@ _LANE = "buildkit"
 # the archive and a screen whose source reviewer never started both produce it;
 # only the node key failure has its own automatic code.
 _MANUAL_RETRY_CODES = (
-    "l2-late-result",
     "lease-budget-exhausted",
     "worker-verdict-rejected",
     "worker-result-processing-failed",
@@ -90,6 +93,10 @@ _MANUAL_RETRY_CODES = (
     "l2-cache-lock-timeout",
     "source-review-model-timeout",
     "source-review-unavailable",
+    # A 4xx (an oversized or mismatched image) or a failed completion, whose
+    # cost scales with the image; only a submission-independent upload outage
+    # has its own automatic code.
+    "image-upload-failed",
 )
 
 
@@ -389,6 +396,63 @@ async def test_infra_failure_is_held_for_its_backoff_then_retried(
     assert await _running(session_maker) == [agent_id]
 
 
+async def test_late_result_retries_once_then_parks_for_the_operator(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Our deep-review timeout never needs a manual retry the first time.
+
+    A second consecutive late result is ``capped``: an artifact that makes the
+    review slow can cost at most one extra screen.
+    """
+    assert INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE == {_LATE_CODE: 1}
+    now = datetime.now(UTC)
+    first = uuid4()
+    failed_at = now - timedelta(hours=2)
+    agent_id = await _failing_agent(
+        session_maker,
+        finished_at=failed_at,
+        attempt_id=first,
+        reason_code=_LATE_CODE,
+        lane="screening",
+    )
+    decision = (await _plan(session_maker, now=now)).decisions[agent_id]
+    assert decision.streak == 1
+    assert decision.state == "due"
+    assert await _claim(session_maker, now=now) == [agent_id]
+
+    await _settle_probe(
+        session_maker,
+        agent_id,
+        status="failed",
+        at=now + timedelta(minutes=40),
+        reason_code=_LATE_CODE,
+    )
+    later = now + timedelta(hours=3)
+    decision = (await _plan(session_maker, now=later)).decisions[agent_id]
+    assert decision.streak == 2
+    assert decision.state == "capped"
+    assert await _claim(session_maker, now=later) == []
+
+
+async def test_late_result_cap_counts_only_late_results_in_the_run(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """An earlier build-infrastructure failure does not spend the late retry."""
+    now = datetime.now(UTC)
+    agent_id = await _seed_agent(session_maker)
+    await _infra_failure(session_maker, agent_id, finished_at=now - timedelta(hours=3))
+    await _infra_failure(
+        session_maker,
+        agent_id,
+        finished_at=now - timedelta(hours=2),
+        reason_code=_LATE_CODE,
+        lane="screening",
+    )
+    decision = (await _plan(session_maker, now=now)).decisions[agent_id]
+    assert decision.streak == 2
+    assert decision.state == "due"
+
+
 async def test_inconclusive_runtime_evidence_hold_stays_parked(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -675,6 +739,141 @@ async def test_court_key_breaker_on_the_screening_lane_drains_without_recovery(
     assert not any(breaker.open for breaker in plan.breakers.values())
 
 
+async def test_image_upload_breaker_closes_on_a_verified_upload(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A Platform deploy that fails several uploads at once must not stall.
+
+    The upload signature is recorded on the ``screening`` lane, which a build
+    proof never matches, so it closes on the proof of its own fault instead: a
+    probe on its provider that finished with a verified screened-image upload.
+    """
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_UPLOAD_CODE
+    )
+    probe_at = _opened_at(t0) + BREAKER_OPEN_DURATION + _SECOND
+    (probe,) = await _claim(session_maker, now=probe_at)
+    await _settle_probe(
+        session_maker, probe, status="passed", at=probe_at + timedelta(minutes=1)
+    )
+
+    after = probe_at + timedelta(minutes=2)
+    (breaker,) = (await _plan(session_maker, now=after)).breakers.values()
+    assert breaker.signature == (_UPLOAD_CODE, _PROVIDER, "screening")
+    assert not breaker.open
+    remaining = sorted(set(agents) - {probe})
+    assert sorted(await _claim(session_maker, now=after)) == remaining
+
+
+async def test_late_result_breaker_closes_on_a_review_confirmed_reject(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A review-provider outage that makes several reviews late must not stall.
+
+    A build proof says nothing about the review provider, so the late-result
+    signature closes on a probe on its provider whose review finished.
+    """
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_LATE_CODE
+    )
+    probe_at = _opened_at(t0) + BREAKER_OPEN_DURATION + _SECOND
+    (probe,) = await _claim(session_maker, now=probe_at)
+    await _settle_probe(
+        session_maker,
+        probe,
+        status="rejected",
+        at=probe_at + timedelta(minutes=1),
+        reason_code="source-review-confirmed-violation",
+    )
+
+    after = probe_at + timedelta(minutes=2)
+    (breaker,) = (await _plan(session_maker, now=after)).breakers.values()
+    assert breaker.signature == (_LATE_CODE, _PROVIDER, "screening")
+    assert not breaker.open
+    remaining = sorted(set(agents) - {probe})
+    assert sorted(await _claim(session_maker, now=after)) == remaining
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        # The static preflight can quarantine before any build or review.
+        {"status": "quarantined", "reason_code": "static-preflight-hold"},
+        # A pass that stored no screened image did not finish the screen.
+        {"status": "passed", "with_image": False},
+        # A build rejection never reached source review.
+        {"status": "rejected", "reason_code": "docker-build", "with_image": False},
+    ],
+)
+async def test_late_result_breaker_needs_a_finished_review_to_close(
+    session_maker: async_sessionmaker[AsyncSession], outcome: dict
+) -> None:
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_LATE_CODE
+    )
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker, agents[0], at=opened + _SECOND, hotkey=_SCREENER, **outcome
+    )
+    state = await _probe_state(
+        session_maker,
+        now=opened + BREAKER_OPEN_DURATION,
+        signature=(_LATE_CODE, _PROVIDER, "screening"),
+    )
+    assert state.open
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        # The build ran but no image was stored: says nothing about uploads.
+        {"status": "rejected", "reason_code": "docker-build", "with_image": False},
+        {"status": "passed", "with_image": False},
+    ],
+)
+async def test_image_upload_breaker_needs_an_upload_to_close(
+    session_maker: async_sessionmaker[AsyncSession], outcome: dict
+) -> None:
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_UPLOAD_CODE
+    )
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker, agents[0], at=opened + _SECOND, hotkey=_SCREENER, **outcome
+    )
+    state = await _probe_state(
+        session_maker,
+        now=opened + BREAKER_OPEN_DURATION,
+        signature=(_UPLOAD_CODE, _PROVIDER, "screening"),
+    )
+    assert state.open
+
+
+async def test_image_upload_breaker_ignores_an_upload_on_another_provider(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    other = "5GOtherProviderScreenerHotkey000000000000000000000"
+    await _enroll_node(session_maker, hotkey=other, provider="hetzner")
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_UPLOAD_CODE
+    )
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker, agents[0], status="passed", at=opened + _SECOND, hotkey=other
+    )
+    state = await _probe_state(
+        session_maker,
+        now=opened + BREAKER_OPEN_DURATION,
+        signature=(_UPLOAD_CODE, _PROVIDER, "screening"),
+    )
+    assert state.open
+
+
 async def test_concurrent_claimers_select_exactly_one_probe(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -728,7 +927,7 @@ async def test_breaker_does_not_merge_unknown_or_different_lanes(
     assert len({d.signature for d in plan.decisions.values()}) == 3
 
 
-@pytest.mark.parametrize("reason_code", ["source-review-adjudicator-key-unavailable"])
+@pytest.mark.parametrize("reason_code", [_KEY_CODE, _UPLOAD_CODE])
 async def test_breaker_keys_on_reason_code_alone_without_metadata(
     session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:

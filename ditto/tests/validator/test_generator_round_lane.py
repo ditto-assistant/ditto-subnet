@@ -373,3 +373,49 @@ async def test_round_run_keeps_the_validator_heartbeat_fresh(
     assert states.count("running_benchmark") >= 2
     assert states[-1] == "polling"
     assert worker._active_agent_id is None
+
+
+async def test_round_run_publishes_scorer_progress_past_preparing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A panel run reports the scorer's stage and case counts on its slot.
+
+    Without the callback the slot stayed at ``preparing`` for the whole run,
+    and Platform's early-stage rule flagged every round run longer than 15
+    minutes as a stalled benchmark while the harness was answering cases.
+    """
+    from ditto.validator.dittobench import DittobenchProgressSnapshot
+
+    job = _job(case_count=420)
+    dittobench = MagicMock()
+    seen: list[tuple[str, int | None, int | None]] = []
+
+    async def round_with_progress(**kwargs: object):
+        callback = kwargs["progress_callback"]
+        assert callable(callback)
+        await callback(
+            DittobenchProgressSnapshot(
+                stage="running_benchmark",
+                completed=70,
+                total=420,
+                run_token="0123456789abcdef",
+            )
+        )
+        progress = worker._benchmark_progress
+        assert progress is not None
+        seen.append((progress.stage, progress.completed, progress.total))
+        return ("run-1", [{"case_id": "c0/a", "score": 1.0}])
+
+    dittobench.run_generator_round = AsyncMock(side_effect=round_with_progress)
+    worker, platform = _worker(job, dittobench)
+
+    async def no_heartbeat(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    monkeypatch.setattr(worker, "_report_heartbeat", no_heartbeat)
+
+    assert await worker._run_generator_round_lane() is True
+
+    assert seen == [("running_benchmark", 70, 420)]
+    platform.submit_generator_round_score.assert_awaited_once()
+    assert worker._slots["slot-0"].active_agent_id is None

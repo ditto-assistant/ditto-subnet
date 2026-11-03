@@ -64,6 +64,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'reinstate_generator_submission',
   'tick_generator_rounds',
   'void_generator_round',
+  'rotate_dueling_season',
   'close_generator_round',
   'republish_generator_round_commitment',
   'release_generator_round_lease',
@@ -108,15 +109,18 @@ export const WRITE_TOOL_NAMES = new Set([
   'reinstate_evicted_submission_to_queue',
   'batch_retry_validator_evaluation',
   'replace_validator_score',
+  'void_infra_scores',
   'queue_validator_score_retests',
   'refresh_benchmark_contract',
   'rebuild_screened_image',
   'migrate_zero_score_benchmark_contract',
   'qualify_scored_benchmark_rollout',
   'expand_benchmark_rollout_cohort',
+  'admit_stranded_submission',
   'start_benchmark_rollout',
   'issue_benchmark_canary',
   'cancel_benchmark_canary',
+  'isolate_operator_diagnostic',
   'set_efficiency_bonus_settings',
   'set_continual_retest_settings',
   'set_queue_policy_settings',
@@ -131,9 +135,12 @@ export const WRITE_TOOL_NAMES = new Set([
   'activate_v13_scorer_cohort',
   'rotate_v13_scorer_cohort',
   'apply_copy_court_settings',
+  'apply_unreleased_copy_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
   'set_submission_cooldown',
+  'set_owner_submission_cooldown',
+  'revoke_owner_submission_cooldown',
   'set_conversation_settings',
   'authorize_conversation_retry',
   'unban_hotkey',
@@ -164,6 +171,7 @@ export const WRITE_TOOL_NAMES = new Set([
 
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ['get_agent_source_release_evidence', BACKROOM_READ_SCOPE],
+  ['get_artifact_fetch_audit', BACKROOM_READ_SCOPE],
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
   // A closed round's dataset is every column's generated cases: private
@@ -195,6 +203,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // The court's dry-run triage reads both submissions' source server-side
   // (audited) and returns file paths and line locations, so it gates the same.
   ['preview_copy_court_triage', BACKROOM_ARTIFACT_SCOPE],
+  // The unreleased-copy evidence quotes normalized source text and path:line
+  // locations from two submissions, so it gates the same.
+  ['get_unreleased_copy_signal', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_review_lineage', BACKROOM_ARTIFACT_SCOPE],
   // Baseline diffs render miner source against the starter kit, so they gate on
   // the same dedicated artifact scope.

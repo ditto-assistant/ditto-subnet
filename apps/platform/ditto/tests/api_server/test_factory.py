@@ -246,10 +246,14 @@ class TestRouteDiscoveryIsSingleton:
                 github_pool = app.state.github_link._public_client()
                 sweeper = app.state.bounty_deadline_sweeper
                 sweeping = sweeper._task is not None
+                outage_sweeper = app.state.outage_void_sweeper
+                outage_sweeping = outage_sweeper._task is not None
         return refresher, SimpleNamespace(
             github_pool=github_pool,
             bounty_sweeping=sweeping,
             bounty_sweeper_closed=sweeper._task is None,
+            outage_sweeping=outage_sweeping,
+            outage_sweeper_closed=outage_sweeper._task is None,
         )
 
     @pytest.mark.parametrize(
@@ -278,6 +282,17 @@ class TestRouteDiscoveryIsSingleton:
         *_, evidence = await self._refresher_for_role(role, monkeypatch)
         assert evidence.bounty_sweeping is sweeps
         assert evidence.bounty_sweeper_closed
+
+    @pytest.mark.parametrize(
+        "role,sweeps", [("relay", False), ("platform", True), (None, True)]
+    )
+    async def test_only_platform_role_starts_the_outage_void_sweep(
+        self, monkeypatch, role, sweeps
+    ):
+        *_, evidence = await self._refresher_for_role(role, monkeypatch)
+        assert evidence.outage_sweeping is sweeps
+        # Registered for cleanup on every role, so shutdown stays symmetric.
+        assert evidence.outage_sweeper_closed
 
     @pytest.mark.parametrize("role", ["relay", "platform"])
     async def test_shutdown_closes_the_github_lookup_pool(self, monkeypatch, role):

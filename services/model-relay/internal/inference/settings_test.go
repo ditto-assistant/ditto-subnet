@@ -275,3 +275,43 @@ func TestParseConcurrencySettingsRejectsInvalidRequestsPerMinute(t *testing.T) {
 		}
 	}
 }
+
+func TestParseConcurrencySettingsScoredProviderRouting(t *testing.T) {
+	for payload, want := range map[string]string{
+		`{}`: config.ScoredProviderRoutingThroughput,
+		`{"scored_provider_routing":"throughput"}`:              config.ScoredProviderRoutingThroughput,
+		`{"scored_provider_routing":"bf16_price_order"}`:        config.ScoredProviderRoutingBF16PriceOrder,
+		`{"scored_provider_routing":"bf16_price_order_canary"}`: config.ScoredProviderRoutingBF16Canary,
+		// A mode from a newer Platform keeps the historical route instead
+		// of freezing the whole board.
+		`{"scored_provider_routing":"future_mode"}`: config.ScoredProviderRoutingThroughput,
+	} {
+		settings, err := parseConcurrencySettings([]byte(payload))
+		if err != nil {
+			t.Fatalf("%s: %v", payload, err)
+		}
+		if got := applySettings(config.InferenceProxyConfig{}, settings).ScoredProviderRouting; got != want {
+			t.Fatalf("%s: routing = %q, want %q", payload, got, want)
+		}
+	}
+	if _, err := parseConcurrencySettings([]byte(`{"scored_provider_routing":1}`)); err == nil {
+		t.Fatal("a non-string routing mode must be rejected")
+	}
+}
+
+func TestEffectiveScoredProviderRoutingScopesCanaryToCanaryTickets(t *testing.T) {
+	for _, tc := range []struct {
+		routing, purpose, want string
+	}{
+		{config.ScoredProviderRoutingThroughput, ticketPurposeBenchmarkCanary, config.ScoredProviderRoutingThroughput},
+		{config.ScoredProviderRoutingBF16Canary, ticketPurposeBenchmarkCanary, config.ScoredProviderRoutingBF16PriceOrder},
+		{config.ScoredProviderRoutingBF16Canary, "continual_retest", config.ScoredProviderRoutingThroughput},
+		{config.ScoredProviderRoutingBF16Canary, "", config.ScoredProviderRoutingThroughput},
+		{config.ScoredProviderRoutingBF16PriceOrder, "canonical_quorum", config.ScoredProviderRoutingBF16PriceOrder},
+		{"", "canonical_quorum", config.ScoredProviderRoutingThroughput},
+	} {
+		if got := effectiveScoredProviderRouting(tc.routing, tc.purpose); got != tc.want {
+			t.Fatalf("%q/%q = %q, want %q", tc.routing, tc.purpose, got, tc.want)
+		}
+	}
+}

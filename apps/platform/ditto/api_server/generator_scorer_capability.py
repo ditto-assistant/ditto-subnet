@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -47,7 +47,7 @@ from ditto.db.models import GeneratorScorerHeartbeat
 # qualification can hold the scorer for many minutes.
 SCORER_CAPABILITY_TTL = timedelta(hours=6)
 
-Poll = Literal["qualification", "round"]
+Poll = Literal["qualification", "round", "dueling"]
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,9 @@ class ScorerCapability:
     build_revision: str | None = None
     grading_bench_versions: tuple[int, ...] | None = None
     """Ascending pack grading policies; ``None`` when not advertised."""
+    dueling_work_kinds: tuple[str, ...] | None = None
+    """Dueling work kinds (``slice``, ``battery``) the scorer runs; ``None``
+    when not advertised (it runs none)."""
 
     @property
     def known(self) -> bool:
@@ -128,7 +131,7 @@ async def record_heartbeat(
     session: AsyncSession, capability: ScorerCapability, *, poll: Poll, now: datetime
 ) -> None:
     """Upsert the scorer's latest advertisement (caller commits)."""
-    values = {
+    values: dict[str, Any] = {
         "scorer_version": capability.scorer_version,
         "min_cases": capability.min_cases,
         "max_cases": capability.max_cases,
@@ -142,6 +145,10 @@ async def record_heartbeat(
         "last_poll": poll,
         "last_seen_at": now,
     }
+    if poll == "dueling":
+        # A dueling poll always restates its kinds (none clears them); the
+        # qualification and round polls keep what the last dueling poll said.
+        values["dueling_work_kinds"] = list(capability.dueling_work_kinds or ()) or None
     statement = insert(GeneratorScorerHeartbeat).values(
         scorer_id=capability.scorer_id, first_seen_at=now, **values
     )

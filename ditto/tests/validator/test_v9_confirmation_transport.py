@@ -67,6 +67,8 @@ from ditto.validator.signing import (
 from ditto.validator.worker import ValidatorWorker
 from ditto_screening_protocol.confirmation import canonical_json, evidence_digest
 from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
     CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
     CONFIRMATION_FAILURE_CLASS_VALUES,
     CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
@@ -2401,6 +2403,64 @@ def test_executor_classes_are_admitted_with_zero_status_only() -> None:
         dittobench_module._CONFIRMATION_RESPONSE_READ_FAILURES,
     ):
         assert not (set(CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES) & bearing)
+
+
+def test_execution_and_dimension_classes_are_admitted_with_zero_status_only() -> None:
+    """Every scorer-pipeline class must be reportable, and only with status 0.
+
+    A class the shared contract allows but this gate rejects is silently
+    unreportable -- the exact blindness these classes exist to remove.
+    """
+    accepted = dittobench_module._CONFIRMATION_ZERO_STATUS_FAILURES
+    pipeline = set(CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES) | set(
+        CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES
+    )
+    assert pipeline
+    assert pipeline <= accepted
+    assert pipeline <= set(CONFIRMATION_FAILURE_CLASS_VALUES)
+    for bearing in (
+        dittobench_module._CONFIRMATION_HTTP_STATUS_FAILURES,
+        dittobench_module._CONFIRMATION_MALFORMED_STATUS_FAILURES,
+        dittobench_module._CONFIRMATION_RESPONSE_READ_FAILURES,
+    ):
+        assert not (pipeline & bearing)
+
+
+@pytest.mark.asyncio
+async def test_execution_class_reaches_the_signed_hand_back() -> None:
+    """The finest class the scorer can name must survive to the hand-back."""
+    job = _job().model_copy(update={"deadline": datetime.now(UTC) + timedelta(hours=1)})
+    artifact = ArtifactResponse.model_validate(_artifact_payload())
+    slug = "longmem_eval_accounting_run_receipt_uncommitted"
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={"error": "confirmation execution failed at dimension_execution"},
+            headers={
+                "X-Ditto-Confirmation-Failure-Class": slug,
+                "X-Ditto-Confirmation-Failure-Status": "0",
+            },
+        )
+
+    config = cast(
+        Any,
+        SimpleNamespace(
+            dittobench_api_url="http://dittobench.test",
+            dittobench_control_token="control-token",
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)
+        with pytest.raises(ConfirmationScorerError) as raised:
+            await client.execute_v9_confirmation(
+                job=job,
+                artifact=artifact,
+                inference_session_id=_CONFIRMATION_SESSION.session_id,
+            )
+
+    assert worker_module.confirmation_failure_class(raised.value) == slug
+    assert worker_module.confirmation_failure_status(raised.value) == 0
 
 
 def test_scorer_failure_classes_match_the_headers_the_validator_accepts() -> None:

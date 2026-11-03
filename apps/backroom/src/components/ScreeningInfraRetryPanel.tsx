@@ -107,6 +107,9 @@ export function ScreeningInfraRetryPanel({
     ? [
         ['Backoff', `${formatSeconds(policy.base_backoff_seconds)} doubling to ${formatSeconds(policy.max_backoff_seconds)}, ±${Math.round(policy.jitter_fraction * 100)}% jitter`],
         ['Stops after', `${policy.auto_retry_max_streak} consecutive failures or ${formatSeconds(policy.auto_retry_max_age_seconds)} since the last failure`],
+        ...Object.entries(policy.auto_retry_max_retries_by_code ?? {}).map(
+          ([code, retries]): [string, string] => [`Retries for ${code}`, `${retries} automatic, then operator`],
+        ),
         ['Breaker trips at', `${policy.breaker_distinct_agents} distinct agents within ${formatSeconds(policy.breaker_window_seconds)}`],
         ['Breaker open / probe', `open ${formatSeconds(policy.breaker_open_seconds)}, then one probe per ${formatSeconds(policy.breaker_probe_interval_seconds)}`],
         ['History read', formatSeconds(policy.breaker_history_lookback_seconds)],

@@ -41,6 +41,20 @@ class TestKothConfig:
         assert cfg.epoch_seconds == 3600
         assert cfg.dittobench_timeout_seconds == 9900
 
+    def test_liveness_watchdog_stays_under_treasury_freshness(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_LIVENESS_WATCHDOG_SECONDS", raising=False)
+        assert parse_validator_config_from_env().liveness_watchdog_seconds == 600
+        monkeypatch.setenv("VALIDATOR_LIVENESS_WATCHDOG_SECONDS", "0")
+        assert parse_validator_config_from_env().liveness_watchdog_seconds == 0
+        # 15 minutes would let Platform's treasury gate fire before the restart.
+        for invalid in ("900", "60", "nan"):
+            monkeypatch.setenv("VALIDATOR_LIVENESS_WATCHDOG_SECONDS", invalid)
+            with pytest.raises(ValidatorConfigError, match="LIVENESS_WATCHDOG"):
+                parse_validator_config_from_env()
+
     def test_crn_block_binding_posture_defaults_to_observe(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

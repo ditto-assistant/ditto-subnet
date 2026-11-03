@@ -34,6 +34,13 @@ from ditto.api_models.admin_copy_review import (
     AdminSourceDiffFileDetail,
     AdminSourceDiffManifest,
 )
+from ditto.api_models.artifact_fetch_audit import (
+    ArtifactFetchAudit as ArtifactFetchAuditView,
+)
+from ditto.api_models.artifact_fetch_audit import (
+    ArtifactFetchAuditRow,
+    ArtifactFetchRequesterSummary,
+)
 from ditto.api_models.source_release_evidence import SourceReleaseEvidence
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.anti_copy_comparison import compare_anti_copy_pair
@@ -175,6 +182,125 @@ async def get_agent_source_release_evidence(
         ),
         exact_sha_public_handoff_count=count,
         earliest_exact_sha_public_handoff_at=earliest,
+    )
+
+
+_FETCH_AUDIT_IP_DOMAIN = b"ditto-artifact-fetch-audit-ip:v1:"
+_SHA256_HEX = r"^[0-9a-f]{64}$"
+
+
+def _hashed_ip(address: str | None) -> str | None:
+    if not address:
+        return None
+    return hashlib.sha256(_FETCH_AUDIT_IP_DOMAIN + address.encode()).hexdigest()[:16]
+
+
+@router.get("/artifact-fetch-audit", response_model=ArtifactFetchAuditView)
+async def get_artifact_fetch_audit(
+    _admin: AdminDep,
+    session: SessionDep,
+    agent_id: UUID | None = None,
+    artifact_sha256: Annotated[str | None, Query(pattern=_SHA256_HEX)] = None,
+    before: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> ArtifactFetchAuditView:
+    """List who was served an artifact's source or image before ``before``.
+
+    Exactly one of ``agent_id`` or ``artifact_sha256`` selects the artifact; a
+    SHA covers every agent row that uploaded those exact bytes. Network
+    addresses are returned only as a truncated hash, and the forwarding claim
+    is reduced to a presence flag.
+    """
+    if (agent_id is None) == (artifact_sha256 is None):
+        raise HTTPException(
+            status_code=422, detail="supply exactly one of agent_id or artifact_sha256"
+        )
+    reference = before or datetime.now(UTC)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=UTC)
+    if agent_id is not None:
+        agent = await session.get(Agent, agent_id)
+        agent_ids = [agent_id]
+        sha = agent.sha256 if agent is not None else None
+    else:
+        sha = artifact_sha256
+        agent_ids = list(
+            await session.scalars(
+                select(Agent.agent_id)
+                .where(Agent.sha256 == artifact_sha256)
+                .order_by(Agent.created_at)
+            )
+        )
+    scope = (
+        ArtifactFetchAudit.agent_id.in_(agent_ids),
+        ArtifactFetchAudit.fetched_at < reference,
+    )
+    total = 0
+    records: list[ArtifactFetchAudit] = []
+    if agent_ids:
+        total = int(
+            await session.scalar(
+                select(func.count()).select_from(ArtifactFetchAudit).where(*scope)
+            )
+            or 0
+        )
+        records = list(
+            await session.scalars(
+                select(ArtifactFetchAudit)
+                .where(*scope)
+                .order_by(ArtifactFetchAudit.fetched_at, ArtifactFetchAudit.seq)
+                .limit(limit)
+            )
+        )
+    rows: list[ArtifactFetchAuditRow] = []
+    summaries: dict[tuple[str, str | None], ArtifactFetchRequesterSummary] = {}
+    for record in records:
+        detail = record.detail if isinstance(record.detail, dict) else {}
+        served_source = detail.get("served_source", True) is not False
+        image = detail.get("served_screened_image")
+        fetched_at = record.fetched_at
+        if fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=UTC)
+        rows.append(
+            ArtifactFetchAuditRow(
+                fetched_at=fetched_at,
+                agent_id=record.agent_id,
+                artifact_sha256=record.artifact_sha256,
+                endpoint=record.endpoint,
+                requester_kind=record.requester_kind,
+                requester_id=record.requester_id,
+                requester_instance_id=record.requester_instance_id,
+                lease_id=record.lease_id,
+                bench_version=record.bench_version,
+                served_source=served_source,
+                served_screened_image=image if isinstance(image, bool) else None,
+                source_ip_hash=_hashed_ip(record.source_ip),
+                forwarded_claim_present=bool(detail.get("claimed_forwarded_for")),
+            )
+        )
+        key = (record.requester_kind, record.requester_id)
+        summary = summaries.get(key)
+        if summary is None:
+            summaries[key] = ArtifactFetchRequesterSummary(
+                requester_kind=record.requester_kind,
+                requester_id=record.requester_id,
+                fetch_count=1,
+                source_fetch_count=int(served_source),
+                first_fetched_at=fetched_at,
+                last_fetched_at=fetched_at,
+            )
+        else:
+            summary.fetch_count += 1
+            summary.source_fetch_count += int(served_source)
+            summary.last_fetched_at = fetched_at
+    return ArtifactFetchAuditView(
+        agent_ids=agent_ids,
+        artifact_sha256=sha,
+        before=reference,
+        total=total,
+        truncated=total > len(rows),
+        requesters=sorted(summaries.values(), key=lambda s: s.first_fetched_at),
+        rows=rows,
     )
 
 

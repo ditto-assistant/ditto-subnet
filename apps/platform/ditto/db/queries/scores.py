@@ -60,6 +60,7 @@ from ditto.db.models import (
     Score,
 )
 from ditto.db.queries.agents import get_agent_by_id
+from ditto.db.queries.confirmation_scores import not_voided
 from ditto.db.queries.inference import LeaseModelUsage
 from ditto.score_order import (
     owner_family_order_terms,
@@ -463,6 +464,12 @@ class LedgerRow:
         charging a miner its seniority for iterating.
         """
         return self.crown_first_seen or self.first_seen
+
+    dueling_season_id: UUID | None = None
+    """Bench v16+: the season of the representative score (the evidence the
+    fold reads). A v16 row without it never ranks or pays."""
+    dueling: dict | None = None
+    """Bench v16+: the representative score's signed ``details.dueling``."""
 
 
 @dataclass(frozen=True)
@@ -914,6 +921,8 @@ async def upsert_score(
     details: dict | None = None,
     model_usage: LeaseModelUsage | None = None,
     gate_evidence: dict | None = None,
+    dueling_season_id: UUID | None = None,
+    dueling: dict | None = None,
 ) -> None:
     """Insert or update the score for ``(agent_id, validator_hotkey)``.
 
@@ -932,6 +941,10 @@ async def upsert_score(
     model columns it is overwritten on every report, ``None`` included: it
     describes *this* run, and a re-score that carries no evidence must not
     keep showing the previous run's verdict.
+
+    ``dueling_season_id`` and ``dueling`` (bench v16+) are the season and the
+    signed ``details.dueling`` aggregates of *this* run, overwritten on every
+    report like ``gate_evidence``.
 
     Raises:
         DbIntegrityError: Any constraint violation on ``scores`` (the FK to
@@ -958,6 +971,8 @@ async def upsert_score(
                 signature=signature,
                 details=details,
                 gate_evidence=gate_evidence,
+                dueling_season_id=dueling_season_id,
+                dueling=dueling,
                 model_calls=None if model_usage is None else model_usage.chat_calls,
                 model_prompt_tokens=(
                     None if model_usage is None else model_usage.prompt_tokens
@@ -979,6 +994,8 @@ async def upsert_score(
         existing.signature = signature
         existing.details = details
         existing.gate_evidence = gate_evidence
+        existing.dueling_season_id = dueling_season_id
+        existing.dueling = dueling
         if model_usage is not None:
             existing.model_calls = model_usage.chat_calls
             existing.model_prompt_tokens = model_usage.prompt_tokens
@@ -2158,6 +2175,7 @@ async def list_eligible_ledger(
                         == ConfirmationScore.bench_version,
                     ),
                 )
+                .where(not_voided())
                 .subquery()
             )
             # ``statistics.median`` averages the two middle values for an even
@@ -2671,6 +2689,8 @@ async def list_eligible_ledger(
             Score.validator_hotkey,
             Score.signature,
             Score.bench_version,
+            Score.dueling_season_id,
+            Score.dueling,
             winners.c.crown_first_seen,
             *receipt_columns,
         )
@@ -2859,6 +2879,8 @@ async def list_eligible_ledger(
                 family_members=family_members,
                 crown_first_seen=row.crown_first_seen,
                 v9_confirmation=v9_confirmation,
+                dueling_season_id=row.dueling_season_id,
+                dueling=row.dueling,
             )
         )
     return ledger

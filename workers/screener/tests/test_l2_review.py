@@ -51,9 +51,13 @@ from ditto_screener.l2_review import (
     L2Usage,
     LayeredSourceReviewAgent,
     SolL2SourceReviewAgent,
+    _add_usage,
+    _billable_cost_usd,
     _cost,
+    _effective_input_tokens,
     _enforce_causal_authority,
     _extract_readonly_workspace,
+    _failure,
     _finalize_without_l3,
     _has_mixed_causal_families,
     _l1_lead_packet,
@@ -101,6 +105,8 @@ from scripts.generate_starter_provenance import (
     newest_manifest,
     starter_files,
 )
+
+from .markers import non_root_only as _non_root_only
 
 SYSTEM_PROMPT = _l2_review_system_prompt(SCREENING_POLICY_VERSION)
 
@@ -459,9 +465,9 @@ def test_v13_external_tool_ids_are_not_local_memory_ids() -> None:
     assert "blocks the call before endpoint dispatch" in v13
     assert "external tool's actual name and argument schema" in v13
     assert "hypothetically use the same field name" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v61-policy-v13"
-    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v33-policy-v13"
-    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v36-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v63-policy-v13"
+    assert l2_critic_prompt_revision(13) == "l3-sol-adversarial-critic-v35-policy-v13"
+    assert l2_safety_prompt_revision(13) == "l3-sol-safety-adjudicator-v38-policy-v13"
     assert "Use at most four targeted analyzer" in _SAFETY_ADJUDICATOR_TASK
     assert "Use at most four targeted analyzer" not in (
         l2_review._V13_SAFETY_ADJUDICATOR_TASK
@@ -546,7 +552,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "validator mints `inference_base_url`" in v13
     assert "A URL derived from user text" in v13
     assert "validator mints `inference_base_url`" not in _l2_review_system_prompt(12)
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v61-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v63-policy-v13"
     assert "v13" not in _benchmark_contract_capsule(12)
     assert _benchmark_contract_capsule(12)["supported_versions"] == [3, 4, 5, 6]
     assert (
@@ -3136,16 +3142,6 @@ async def test_inprocess_starter_diff_reads_only_runtime_manifests(
 async def test_inprocess_harness_rejects_unknown_command(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="non-allowlisted"):
         await InProcessAnalyzerHarness().run(tmp_path, "rm_rf", {})
-
-
-# IsolatedCodingHarness refuses uid 0 on its first line, so every test that
-# reaches its run() has to have a non-root worker. Containerised development
-# usually runs as root; skipping there reports the precondition instead of
-# failing on it, and CI runners are non-root so the coverage is unchanged.
-_non_root_only = pytest.mark.skipif(
-    os.getuid() == 0,
-    reason="the L2 analyzer harness refuses to run from a root worker",
-)
 
 
 @_non_root_only
@@ -6200,6 +6196,105 @@ async def test_late_l2_result_is_not_accepted(tmp_path: Path) -> None:
     assert result.observation.error_code == "l2-late-result"
     assert result.observation.failure_disposition == "retryable_infra"
     assert not list((tmp_path / "cache").glob("*.json"))
+    # The lease, not the layer's own timeout, was the earlier bound here, and
+    # the masked trajectory outcome stays visible behind the late code.
+    assert result.failure_subcode is not None
+    assert result.failure_subcode.startswith("lease_deadline:")
+    assert result.observation.failure_subcode == result.failure_subcode
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.stage == "l2"
+    assert audit.reason_code == "l2-late-result"
+    assert audit.budget_stop_reason == "time"
+    assert audit.max_elapsed_ms is not None and audit.elapsed_ms is not None
+
+
+async def test_late_l2_result_names_the_stage_timeout_and_masked_outcome(
+    tmp_path: Path,
+) -> None:
+    """hfull-h3 v9: the L2 timeout fired with ten minutes of lease left.
+
+    The late code used to replace the trajectory outcome with nothing, so the
+    attempt read as a lease miss and Backroom showed no L2 diagnostic.
+    """
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _r: httpx.Response(500))
+    agent._timeout_seconds = 0.05  # type: ignore[attr-defined]
+
+    async def slow_review(*_args: object, **_kwargs: object) -> L2RunResult:
+        await asyncio.sleep(0.1)
+        return L2RunResult(
+            observation=_failure("l3-critic-timeouterror", "retryable_infra"),
+            analyzed_files=(),
+            causal_path=(),
+            tools=("read", "search", "read"),
+            usage=L2Usage(input_tokens=1_000, output_tokens=200),
+            cache_hit=False,
+            critic_disposition="retryable_infra",
+            response_models=("openai/gpt-6-sol", "openai/gpt-5.6-sol"),
+            response_providers=("OpenAI", "bad provider\nname"),
+        )
+
+    agent._review_uncached = slow_review  # type: ignore[method-assign]
+    lease = asyncio.get_running_loop().time() + 600.0
+
+    result = await agent.review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=lease,
+        policy_version=13,
+    )
+
+    assert result.observation.error_code == "l2-late-result"
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert result.failure_subcode == "stage_timeout:l3-critic-timeouterror"
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.final_stage == "critic"
+    assert audit.budget_stop_reason == "time"
+    assert audit.model_steps_observed == 2
+    assert audit.tool_calls_observed == 3
+    assert audit.input_tokens_used == 1_000
+    assert audit.response_provider == "OpenAI"
+    assert audit.prompt_revision.endswith("-policy-v13")
+    assert audit.elapsed_ms is not None and audit.max_elapsed_ms is not None
+    assert audit.elapsed_ms >= audit.max_elapsed_ms
+    # The audit is wire-safe: it signs and round-trips like every L2 audit.
+    assert len(audit.canonical_digest()) == 64
+
+
+async def test_late_l2_result_keeps_its_audit_when_carried_as_a_hold() -> None:
+    """An L1 lead turns the late fault into a v13 hold that ships the audit."""
+    audit = ScreenReviewAudit(
+        stage="l2",
+        reason_code="l2-late-result",
+        prompt_revision="l2-terra-source-review-v62-policy-v13",
+        max_steps=256,
+        steps_used=40,
+        budget_stop_reason="time",
+        final_stage="analyst",
+        max_elapsed_ms=1_800_000,
+        elapsed_ms=1_800_250,
+    )
+    late = replace(
+        _failure("l2-late-result", "retryable_infra"),
+        review_audit=audit.model_dump(mode="json"),
+        failure_subcode="stage_timeout:l2-timeouterror",
+    )
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(_l1("medium")),
+        l2=_FakeL2(_model_result(late)),
+        mode="enforce",
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, policy_version=13
+    )
+
+    assert result.error_code == "l2-late-result"
+    assert result.failure_disposition == "inconclusive"
+    assert result.failure_subcode == "stage_timeout:l2-timeouterror"
+    assert result.review_audit == audit.model_dump(mode="json")
 
 
 async def test_http_failure_is_single_shot_before_deadline(
@@ -7775,6 +7870,16 @@ def test_gpt6_sol_cost_fallback_uses_its_own_conservative_rates() -> None:
         cached_input_tokens=200_000,
         model="openai/gpt-6-sol-20260922",
     ) == pytest.approx(0.528)
+
+
+def test_gpt61_terra_cost_fallback_uses_its_own_conservative_rates() -> None:
+    assert _cost(80_000, 8_000, model="openai/gpt-6.1-terra") == pytest.approx(0.24)
+    assert _cost(
+        272_000,
+        8_000,
+        cached_input_tokens=200_000,
+        model="openai/gpt-6.1-terra-20261028",
+    ) == pytest.approx(0.244)
 
 
 def test_exact_reported_cost_precedes_conservative_fallback(
@@ -9681,3 +9786,65 @@ def test_policy_v13_prompt_revisions_carry_one_policy_suffix(revision) -> None:
     value = revision(13)
     assert value.endswith("-policy-v13")
     assert value.count("-policy-v") == 1
+
+
+def _zero_cost_turn() -> dict[str, object]:
+    # One realistic L2 turn on Sol6 as the screener gateway returns it: 180k
+    # prompt tokens with a 150k cached prefix, 6k output, and ``cost: 0.0``.
+    return {
+        "model": "openai/gpt-6-sol",
+        "output": [],
+        "usage": {
+            "input_tokens": 180_000,
+            "output_tokens": 6_000,
+            "input_tokens_details": {"cached_tokens": 150_000},
+            "output_tokens_details": {"reasoning_tokens": 2_000},
+            "cost": 0.0,
+        },
+    }
+
+
+def test_gateway_zero_cost_is_unreported_and_the_cost_cap_trips(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """SN-424: a gateway ``cost: 0`` must not disable ``max_cost_usd``.
+
+    Sol6 estimate ceiling (``_cost``): $4/M uncached input, $0.40/M cached
+    input, $20/M output. Each turn is 30k*4 + 150k*0.4 + 6k*20 per million =
+    $0.30 and 45k billable-equivalent input, so the $25 cap trips on turn 84
+    (3.78M effective input) well before the 5M input budget would.
+    """
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+    agent._max_input_tokens = 5_000_000
+    agent._max_output_tokens = 1_000_000
+    agent._max_cost_usd = 25
+    caplog.set_level(logging.WARNING, logger="ditto_screener.l2_review")
+    usage = L2Usage()
+    tripped_at = None
+    for turn in range(1, 112):
+        _, turn_usage, _, _ = _response_output_and_usage(_zero_cost_turn())
+        assert turn_usage.reported_cost_usd is None
+        assert turn_usage.estimated_cost_usd == pytest.approx(0.30)
+        usage = _add_usage(usage, turn_usage)
+        if agent._exceeded_budget(usage):
+            tripped_at = turn
+            break
+    assert tripped_at == 84
+    assert agent._exceeded_budget(usage) == ["cost"]
+    assert _effective_input_tokens(usage) == 84 * 45_000
+    with pytest.raises(ValueError, match="token or cost budget"):
+        agent._require_budget(usage)
+    assert "screener_cost_unreported" in caplog.text
+    assert "reported=zero" in caplog.text
+
+
+def test_one_unreported_turn_makes_the_aggregate_cost_an_estimate() -> None:
+    reported = L2Usage(
+        input_tokens=10, output_tokens=1, estimated_cost_usd=2.0, reported_cost_usd=1.0
+    )
+    unreported = L2Usage(input_tokens=10, output_tokens=1, estimated_cost_usd=2.0)
+    assert _add_usage(L2Usage(), reported).reported_cost_usd == 1.0
+    assert _add_usage(reported, reported).reported_cost_usd == 2.0
+    mixed = _add_usage(reported, unreported)
+    assert mixed.reported_cost_usd is None
+    assert _billable_cost_usd(mixed) == pytest.approx(4.0)

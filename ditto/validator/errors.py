@@ -116,12 +116,15 @@ class LeaseRevokedError(ValidatorError):
 
 
 class SandboxOomError(DittobenchError):
-    """The miner sandbox exceeded its bounded memory allowance.
+    """The harness reached its own published memory cap on a healthy host.
 
-    This is an artifact-specific terminal attempt outcome, not evidence that
-    the validator's shared infrastructure is unhealthy. The worker hands the
-    lease back as ``sandbox_oom`` and continues with another harness without
-    disabling the execution slot.
+    Raised only for the scorer's ``harness_oom`` verdict (OOM kill, cgroup peak
+    at the cap, host MemAvailable above the published floor). An artifact-
+    specific terminal outcome, not evidence that the validator's shared
+    infrastructure is unhealthy: the worker hands the lease back as
+    ``sandbox_oom`` with detail ``harness_oom`` and continues with another
+    harness without disabling the execution slot. Every other OOM kill is a
+    :class:`ValidatorInfrastructureError`.
     """
 
 

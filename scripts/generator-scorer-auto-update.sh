@@ -16,6 +16,10 @@ cosign verify --certificate-identity 'https://github.com/ditto-assistant/ditto-s
 revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")"
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
 test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.generator-scorer.update-protocol" }}' "$exact")" = 1
+if [ -f "$ROOT/failed-candidate" ] && [ "$(cat "$ROOT/failed-candidate")" = "$exact" ] && [ -n "$(find "$ROOT/failed-candidate" -mmin -1440 -print -quit)" ]; then
+  echo "generator-scorer-auto-update: failed candidate suppressed: $exact"
+  exit 0
+fi
 destination="$ROOT/releases/$revision"
 staging="$(mktemp -d "$ROOT/releases/.staging.XXXXXX")"
 container=''
@@ -56,6 +60,7 @@ if [ "$previous" = "$destination" ] && [ "$(running_binary || true)" = "$destina
   exit 0
 fi
 activate() { rm -f "$ROOT/current.next"; ln -s "$1" "$ROOT/current.next"; mv -Tf "$ROOT/current.next" "$ROOT/current"; }
+initial_pid="$(systemctl show "$UNIT" --property MainPID --value)"
 activate "$destination"
 # SIGUSR1 stops claiming, completes the current lease and exits. Restart=always
 # starts the new binary through current. The old bootstrap binary needs one
@@ -71,11 +76,18 @@ else
   systemctl start "$UNIT" || true
 fi
 adopted=false
+startup_deadline=-1
 for ((attempt=0; attempt<${GENERATOR_SCORER_ADOPTION_POLLS:-840}; attempt++)); do
   if systemctl is-active --quiet "$UNIT" && [ "$(running_binary || true)" = "$destination/challenge-scorer" ]; then
     adopted_pid="$(systemctl show "$UNIT" --property MainPID --value)"
     sleep 10
     if [ "$adopted_pid" = "$(systemctl show "$UNIT" --property MainPID --value)" ] && systemctl is-active --quiet "$UNIT" && [ "$(running_binary || true)" = "$destination/challenge-scorer" ]; then adopted=true; break; fi
+  fi
+  # The long budget is only for the old process to finish its lease. Once
+  # it exits, a crash loop gets one minute, not the entire drain deadline.
+  if [ "$(systemctl show "$UNIT" --property MainPID --value)" != "$initial_pid" ] || ! systemctl is-active --quiet "$UNIT"; then
+    if [ "$startup_deadline" -lt 0 ]; then startup_deadline=$((SECONDS + ${GENERATOR_SCORER_STARTUP_SECONDS:-60})); fi
+    if [ "$SECONDS" -ge "$startup_deadline" ]; then break; fi
   fi
   sleep 5
 done
@@ -85,7 +97,12 @@ if [ "$adopted" != true ]; then
     systemctl kill --kill-whom=main --signal=SIGUSR1 "$UNIT" || true
     systemctl start "$UNIT" || true
   fi
-  echo 'generator-scorer-auto-update: activation failed; restored previous release' >&2
+  # Recording diagnostics must never prevent recovery (for example when the
+  # marker path is unwritable or the filesystem is full).
+  if ! { printf '%s\n' "$exact" >"$ROOT/failed-candidate.next" && mv -f "$ROOT/failed-candidate.next" "$ROOT/failed-candidate"; }; then
+    echo 'generator-scorer-auto-update: could not record failed candidate' >&2
+  fi
+  echo 'generator-scorer-auto-update: activation failed; rollback requested' >&2
   exit 1
 fi
 # Preserve the previous version for recovery; self-refresh only after adoption.
@@ -95,5 +112,6 @@ mv -f "$updater_path.next" "$updater_path"
 rm -f "$ROOT/last-good.next"
 ln -s "$destination" "$ROOT/last-good.next"
 mv -Tf "$ROOT/last-good.next" "$ROOT/last-good"
+rm -f "$ROOT/failed-candidate"
 printf '%s\n' "$exact" >"$ROOT/active-descriptor"
 echo "generator-scorer-auto-update: active revision=$revision descriptor=$exact"

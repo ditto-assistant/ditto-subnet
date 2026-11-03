@@ -2,6 +2,511 @@
 
 <!-- version list -->
 
+## v0.435.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: Add operator per-owner submission cooldown overrides
+  ([#3334](https://github.com/ditto-assistant/ditto-subnet/pull/3334),
+  [`39ce17f`](https://github.com/ditto-assistant/ditto-subnet/commit/39ce17f541af334c46b283eaa7d424fcdec985d3))
+
+- **platform,backroom**: Open dueling seasons and serve generator-scorer dueling work
+  ([#3338](https://github.com/ditto-assistant/ditto-subnet/pull/3338),
+  [`8af8c6e`](https://github.com/ditto-assistant/ditto-subnet/commit/8af8c6ef5f02df5b3f6ba5b9686b064653c80dd1))
+
+
+## v0.434.0 (2026-11-03)
+
+### Features
+
+- **datagen,protocol**: Add dueling season, slice and composite math
+  ([#3337](https://github.com/ditto-assistant/ditto-subnet/pull/3337),
+  [`90d4fa6`](https://github.com/ditto-assistant/ditto-subnet/commit/90d4fa62e9413bf02c46098e85a2f2c150844275))
+
+
+## v0.433.0 (2026-11-03)
+
+### Bug Fixes
+
+- **screener,platform,backroom**: Auto-retry l2-late-result once
+  ([#3336](https://github.com/ditto-assistant/ditto-subnet/pull/3336),
+  [`81d290c`](https://github.com/ditto-assistant/ditto-subnet/commit/81d290cf7369a85acfbb53b58ae5fd40921defc8))
+
+### Chores
+
+- **bench**: Record v15 activation and bump the offline rehearsal fallback to 15
+  ([#3330](https://github.com/ditto-assistant/ditto-subnet/pull/3330),
+  [`4d40951`](https://github.com/ditto-assistant/ditto-subnet/commit/4d409519895077e51926726e2ecdcf838a05137d))
+
+### Documentation
+
+- **bench**: Retarget the dueling bench to v16 and pin its implementation contract
+  ([#3329](https://github.com/ditto-assistant/ditto-subnet/pull/3329),
+  [`c470a93`](https://github.com/ditto-assistant/ditto-subnet/commit/c470a9363cec5572bb6c19b497e20e53fbe97a94))
+
+### Features
+
+- **platform,backroom**: Add dueling season and slice preparation tables
+  ([#3335](https://github.com/ditto-assistant/ditto-subnet/pull/3335),
+  [`f4f31e5`](https://github.com/ditto-assistant/ditto-subnet/commit/f4f31e5156a6347a33c01997e8bbe4593e33f3f7))
+
+- **platform,backroom**: Admit stranded prior-era agents one at a time
+  ([#3333](https://github.com/ditto-assistant/ditto-subnet/pull/3333),
+  [`03c7971`](https://github.com/ditto-assistant/ditto-subnet/commit/03c7971efbab7da1d60af509fdc91124b08878d7))
+
+- **screener**: Allow connector and app-wording tool filters under W4
+  ([#3332](https://github.com/ditto-assistant/ditto-subnet/pull/3332),
+  [`103b797`](https://github.com/ditto-assistant/ditto-subnet/commit/103b797cf808f0859e6ff10f187dfe3ff327f949))
+
+- **screener,platform,backroom**: Allow gpt-6.1-terra and 3600s review
+  ([#3331](https://github.com/ditto-assistant/ditto-subnet/pull/3331),
+  [`8ba817e`](https://github.com/ditto-assistant/ditto-subnet/commit/8ba817e0ed36dea776dd79457835b919845134f4))
+
+
+## v0.432.1 (2026-11-03)
+
+### Bug Fixes
+
+- **validator,platform,backroom**: Report generator-round progress and stop flagging live round runs
+  as stalled ([#3328](https://github.com/ditto-assistant/ditto-subnet/pull/3328),
+  [`795254b`](https://github.com/ditto-assistant/ditto-subnet/commit/795254b3356ce7f50ba3c6d04c78ae0f4bb11db7))
+
+
+## v0.432.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: List scored previous-era submissions the active bench never admits
+  ([#3327](https://github.com/ditto-assistant/ditto-subnet/pull/3327),
+  [`22f8d4c`](https://github.com/ditto-assistant/ditto-subnet/commit/22f8d4ca20e4227cd35f0fab0ff8dc74195f1705))
+
+
+## v0.431.3 (2026-11-02)
+
+### Documentation
+
+- **longmemeval**: Clause-conformance probe suite for judge substitution
+  ([#3144](https://github.com/ditto-assistant/ditto-subnet/pull/3144),
+  [`7cdd48b`](https://github.com/ditto-assistant/ditto-subnet/commit/7cdd48b542bca6c251a6679dce48e2f20c0967d4))
+
+### Performance Improvements
+
+- **platform**: Narrow the screener node row lock and defer score details
+  ([#1748](https://github.com/ditto-assistant/ditto-subnet/pull/1748),
+  [`9ad8eb9`](https://github.com/ditto-assistant/ditto-subnet/commit/9ad8eb9f49a004e36be7bada15883436ed9a3c12))
+
+
+## v0.431.2 (2026-11-02)
+
+### Bug Fixes
+
+- Let confirmation backpressure back off past a short Retry-After
+  ([#3298](https://github.com/ditto-assistant/ditto-subnet/pull/3298),
+  [`9803a26`](https://github.com/ditto-assistant/ditto-subnet/commit/9803a26cb0120e3cd4ce90434fff8afa04767d49))
+
+- **release**: Promptly roll back failed scorer starts
+  ([#3205](https://github.com/ditto-assistant/ditto-subnet/pull/3205),
+  [`dd9dd4e`](https://github.com/ditto-assistant/ditto-subnet/commit/dd9dd4eaaef04072f5025b53e5714bd79fb6eacf))
+
+### Documentation
+
+- Record source slices production delivery and next memory experiment
+  ([#1912](https://github.com/ditto-assistant/ditto-subnet/pull/1912),
+  [`aeeccbb`](https://github.com/ditto-assistant/ditto-subnet/commit/aeeccbb619c4529437745e01aa5a2b8c19cfdda2))
+
+- **backroom-review**: Record Optimistic v5 partial-carryover provenance holding
+  ([#3170](https://github.com/ditto-assistant/ditto-subnet/pull/3170),
+  [`f92947a`](https://github.com/ditto-assistant/ditto-subnet/commit/f92947a384351d5cfb5ccba2e9d74e7bf371d459))
+
+
+## v0.431.1 (2026-11-02)
+
+### Bug Fixes
+
+- **screener**: Auto-retry screened-image uploads that hit a Platform outage
+  ([#3322](https://github.com/ditto-assistant/ditto-subnet/pull/3322),
+  [`15faf2c`](https://github.com/ditto-assistant/ditto-subnet/commit/15faf2c9f6f28d8adb5d18ccc28360a8ce369a4b))
+
+
+## v0.431.0 (2026-11-02)
+
+### Features
+
+- **platform,backroom**: Align continual retest waves to chain tempos
+  ([#3319](https://github.com/ditto-assistant/ditto-subnet/pull/3319),
+  [`5a8daab`](https://github.com/ditto-assistant/ditto-subnet/commit/5a8daab780c5d22f3638b1ff3be81c408c6724ed))
+
+
+## v0.430.1 (2026-11-02)
+
+### Bug Fixes
+
+- **screener**: Name the bound and masked outcome behind l2-late-result
+  ([#3320](https://github.com/ditto-assistant/ditto-subnet/pull/3320),
+  [`bb2a060`](https://github.com/ditto-assistant/ditto-subnet/commit/bb2a060c473aeff906681a537c7fa4f2dd736d1b))
+
+
+## v0.430.0 (2026-11-02)
+
+### Features
+
+- **bench**: Add the bench v15 contract with a production-scale tool catalog and the scored decision
+  lane ([#3318](https://github.com/ditto-assistant/ditto-subnet/pull/3318),
+  [`a131ed2`](https://github.com/ditto-assistant/ditto-subnet/commit/a131ed260b551d515fc71dd72d7f33fac53c2bf2))
+
+
+## v0.429.0 (2026-11-01)
+
+### Features
+
+- **platform**: Switch the unreleased-copy signal to enforce at threshold 100
+  ([#3310](https://github.com/ditto-assistant/ditto-subnet/pull/3310),
+  [`73b737d`](https://github.com/ditto-assistant/ditto-subnet/commit/73b737dc50c26e6790f4a3b63098cd0487c7b3f5))
+
+
+## v0.428.1 (2026-11-01)
+
+### Bug Fixes
+
+- **platform**: Correct unreleased-copy overlap fallback, owner-name hint, and worker warm-up
+  ([#3317](https://github.com/ditto-assistant/ditto-subnet/pull/3317),
+  [`aec6b9c`](https://github.com/ditto-assistant/ditto-subnet/commit/aec6b9c14fb8967d225887eb7a3b885960c5e137))
+
+
+## v0.428.0 (2026-11-01)
+
+### Features
+
+- **platform**: Show which released agents explain an unreleased-copy exclusion
+  ([#3316](https://github.com/ditto-assistant/ditto-subnet/pull/3316),
+  [`be27d68`](https://github.com/ditto-assistant/ditto-subnet/commit/be27d682775fd12c53c10195cd9a18e59cd7cd62))
+
+
+## v0.427.0 (2026-11-01)
+
+### Features
+
+- **platform**: Expose unreleased-copy near misses and per-agent signal in copy-court reads
+  ([#3315](https://github.com/ditto-assistant/ditto-subnet/pull/3315),
+  [`266e8b5`](https://github.com/ditto-assistant/ditto-subnet/commit/266e8b5e4d1d036a499f4d72a57273f18500c29e))
+
+
+## v0.426.3 (2026-11-01)
+
+### Performance Improvements
+
+- **platform**: Compute unreleased-copy overlaps in the worker, not Postgres
+  ([#3314](https://github.com/ditto-assistant/ditto-subnet/pull/3314),
+  [`f26320f`](https://github.com/ditto-assistant/ditto-subnet/commit/f26320f9ed7ae408d4f76565bf83cdbbe9b095fd))
+
+
+## v0.426.2 (2026-11-01)
+
+### Bug Fixes
+
+- **platform**: Bound unreleased-copy work in the API process and speed the backfill
+  ([#3313](https://github.com/ditto-assistant/ditto-subnet/pull/3313),
+  [`b8c3eba`](https://github.com/ditto-assistant/ditto-subnet/commit/b8c3eba5eff59507c9bdc8a7291aa1e0c61cbe37))
+
+
+## v0.426.1 (2026-11-01)
+
+### Bug Fixes
+
+- **platform**: Keep unreleased-copy scoring off the API event loop
+  ([#3312](https://github.com/ditto-assistant/ditto-subnet/pull/3312),
+  [`72d93ca`](https://github.com/ditto-assistant/ditto-subnet/commit/72d93ca6cf0405608fa236ab30f9c28a92083d04))
+
+
+## v0.426.0 (2026-11-01)
+
+### Chores
+
+- **infra**: Let the Hetzner screener take private source-marker patterns
+  ([#3304](https://github.com/ditto-assistant/ditto-subnet/pull/3304),
+  [`74fc8c6`](https://github.com/ditto-assistant/ditto-subnet/commit/74fc8c66e32e2d1e5ca678c37c19fdc80e35716e))
+
+### Features
+
+- **platform**: Re-run every voided retest seed regardless of cohort
+  ([#3311](https://github.com/ditto-assistant/ditto-subnet/pull/3311),
+  [`f5a8f4d`](https://github.com/ditto-assistant/ditto-subnet/commit/f5a8f4d41c3e28dc50b4adcc474d2701408c33f2))
+
+
+## v0.425.0 (2026-11-01)
+
+### Features
+
+- **platform**: Route unreleased-copy flags to operator copy holds behind an audited mode
+  ([#3306](https://github.com/ditto-assistant/ditto-subnet/pull/3306),
+  [`68275e9`](https://github.com/ditto-assistant/ditto-subnet/commit/68275e9862f9f914c2c257c24156357e406bceac))
+
+
+## v0.424.0 (2026-11-01)
+
+### Features
+
+- **platform**: Measure competition improvement rate for embargo decisions
+  ([#3308](https://github.com/ditto-assistant/ditto-subnet/pull/3308),
+  [`91ba2bc`](https://github.com/ditto-assistant/ditto-subnet/commit/91ba2bca61d8d3edfb4e5c5598a65942669e1d24))
+
+
+## v0.423.0 (2026-11-01)
+
+### Features
+
+- **platform**: Void outage-tainted retests automatically after an outage
+  ([#3307](https://github.com/ditto-assistant/ditto-subnet/pull/3307),
+  [`686f3fa`](https://github.com/ditto-assistant/ditto-subnet/commit/686f3fa2bf0d477f0268f79af090121040b479c7))
+
+
+## v0.422.0 (2026-11-01)
+
+### Features
+
+- **validator,platform**: Gate the KOTH crown on shared-seed confirmations and show the King and
+  challengers ([#3290](https://github.com/ditto-assistant/ditto-subnet/pull/3290),
+  [`0078007`](https://github.com/ditto-assistant/ditto-subnet/commit/0078007b8d4cf15e6485ec3eede85586261061b0))
+
+
+## v0.421.0 (2026-11-01)
+
+### Features
+
+- **platform**: Void infrastructure-tainted retest samples and re-run them
+  ([#3305](https://github.com/ditto-assistant/ditto-subnet/pull/3305),
+  [`84a80f9`](https://github.com/ditto-assistant/ditto-subnet/commit/84a80f902a11a24e60aa631061d23052b2f265f6))
+
+
+## v0.420.0 (2026-11-01)
+
+### Features
+
+- **platform**: Add operator diagnostic leases for operator-owned shadow agents
+  ([#3299](https://github.com/ditto-assistant/ditto-subnet/pull/3299),
+  [`ff7e3ab`](https://github.com/ditto-assistant/ditto-subnet/commit/ff7e3ab7356e76f7785ce1f32933a3cf7cf88cf7))
+
+
+## v0.419.0 (2026-11-01)
+
+### Documentation
+
+- **skills**: Add scoring-infra-triage for infra failures and retries
+  ([#3302](https://github.com/ditto-assistant/ditto-subnet/pull/3302),
+  [`f8e9c55`](https://github.com/ditto-assistant/ditto-subnet/commit/f8e9c552e0d71ec95fac7f6defc717b3ffba3193))
+
+### Features
+
+- **platform**: Flag unreleased-agent copying across languages in shadow mode
+  ([#3303](https://github.com/ditto-assistant/ditto-subnet/pull/3303),
+  [`6d8e681`](https://github.com/ditto-assistant/ditto-subnet/commit/6d8e681a31677d6dd31fc563f64a3b7c58945efb))
+
+
+## v0.418.0 (2026-11-01)
+
+### Features
+
+- **platform**: Show each retest sample's grant failures in the diagnostic
+  ([#3301](https://github.com/ditto-assistant/ditto-subnet/pull/3301),
+  [`5948707`](https://github.com/ditto-assistant/ditto-subnet/commit/59487070f83407beffd949e5847bd5eca63f97d4))
+
+
+## v0.417.1 (2026-11-01)
+
+### Bug Fixes
+
+- **relay**: Open the provider circuit on gateway credit exhaustion
+  ([#3300](https://github.com/ditto-assistant/ditto-subnet/pull/3300),
+  [`03a0831`](https://github.com/ditto-assistant/ditto-subnet/commit/03a0831f3d024f1af1f962eb125a6e9189d77229))
+
+
+## v0.417.0 (2026-11-01)
+
+### Features
+
+- **screener**: Add a configurable source-marker scan to screening
+  ([#3297](https://github.com/ditto-assistant/ditto-subnet/pull/3297),
+  [`775a18c`](https://github.com/ditto-assistant/ditto-subnet/commit/775a18cf5ee930c0b679600e97aade1345b127c3))
+
+
+## v0.416.4 (2026-10-31)
+
+### Bug Fixes
+
+- Keep every one-harness host in the canonical quorum
+  ([#3296](https://github.com/ditto-assistant/ditto-subnet/pull/3296),
+  [`fce76d5`](https://github.com/ditto-assistant/ditto-subnet/commit/fce76d527e66b4f12f52507e2a4d9806e79cfe74))
+
+
+## v0.416.3 (2026-10-31)
+
+### Bug Fixes
+
+- Stop distributing source tarballs to validators
+  ([#3295](https://github.com/ditto-assistant/ditto-subnet/pull/3295),
+  [`e2bc57a`](https://github.com/ditto-assistant/ditto-subnet/commit/e2bc57a03470e268a73eaf1662f5a9ddbd08cdbe))
+
+
+## v0.416.2 (2026-10-31)
+
+### Bug Fixes
+
+- **platform**: Keep generator round indexes monotonic across cadence changes
+  ([#3294](https://github.com/ditto-assistant/ditto-subnet/pull/3294),
+  [`3d65ab0`](https://github.com/ditto-assistant/ditto-subnet/commit/3d65ab0e1db4f4d4db55131f01104819dd0fdf3a))
+
+
+## v0.416.1 (2026-10-31)
+
+### Bug Fixes
+
+- Charge harness OOMs only against a published runtime envelope
+  ([#3292](https://github.com/ditto-assistant/ditto-subnet/pull/3292),
+  [`8e5b260`](https://github.com/ditto-assistant/ditto-subnet/commit/8e5b260c6354b2676a36bd95c7bb64ef870037dc))
+
+- Handle OpenRouter's 200-with-error-body failure on the confirmation lane
+  ([#3293](https://github.com/ditto-assistant/ditto-subnet/pull/3293),
+  [`b4be918`](https://github.com/ditto-assistant/ditto-subnet/commit/b4be9183f3227904ca0ac0d0b57db75dbc6ffde4))
+
+
+## v0.416.0 (2026-10-30)
+
+### Features
+
+- **platform**: Add a live bf16 price-order route for scored inference
+  ([#3291](https://github.com/ditto-assistant/ditto-subnet/pull/3291),
+  [`ca0aaca`](https://github.com/ditto-assistant/ditto-subnet/commit/ca0aaca482be4219b88286ce10bc48cd517b1382))
+
+
+## v0.415.0 (2026-10-30)
+
+### Features
+
+- Retry receipt-free confirmation provider failures with a bounded budget
+  ([#3289](https://github.com/ditto-assistant/ditto-subnet/pull/3289),
+  [`d9f23d0`](https://github.com/ditto-assistant/ditto-subnet/commit/d9f23d0d71a45c834b1c2e2bebdfc0531c6d6a10))
+
+
+## v0.414.0 (2026-10-30)
+
+### Bug Fixes
+
+- **treasury**: Release unacked manual request leases instead of waiting out the ack deadline
+  ([#3288](https://github.com/ditto-assistant/ditto-subnet/pull/3288),
+  [`0ea5551`](https://github.com/ditto-assistant/ditto-subnet/commit/0ea5551e9d623ec1cdd9839486e2c2b5fc81397d))
+
+### Features
+
+- Record why a confirmation provider call failed
+  ([#3287](https://github.com/ditto-assistant/ditto-subnet/pull/3287),
+  [`c2449f3`](https://github.com/ditto-assistant/ditto-subnet/commit/c2449f301b4423dac063c12ef6098b2a20a64d77))
+
+
+## v0.413.3 (2026-10-30)
+
+### Bug Fixes
+
+- **screener**: Treat a reused draft that reaches the deciding prompt only as text as not I4
+  ([#3281](https://github.com/ditto-assistant/ditto-subnet/pull/3281),
+  [`7ac8582`](https://github.com/ditto-assistant/ditto-subnet/commit/7ac8582138d1c3be1ea205622b6da49c004c3332))
+
+
+## v0.413.2 (2026-10-30)
+
+### Bug Fixes
+
+- Stop mislabeling model faults as infra and never-scored agents as earning
+  ([#3280](https://github.com/ditto-assistant/ditto-subnet/pull/3280),
+  [`3fc9df6`](https://github.com/ditto-assistant/ditto-subnet/commit/3fc9df6165b29d092a5131e321915914389f9839))
+
+
+## v0.413.1 (2026-10-30)
+
+### Bug Fixes
+
+- **bench**: Read multi-word case values as one phrase from the v15 grading floor
+  ([#3279](https://github.com/ditto-assistant/ditto-subnet/pull/3279),
+  [`dcb7808`](https://github.com/ditto-assistant/ditto-subnet/commit/dcb780895fcdccb5da2c9e3dd8e408404ecd5287))
+
+
+## v0.413.0 (2026-10-29)
+
+### Features
+
+- **platform**: Add a per-attempt screening review budget read
+  ([#3278](https://github.com/ditto-assistant/ditto-subnet/pull/3278),
+  [`c901e4e`](https://github.com/ditto-assistant/ditto-subnet/commit/c901e4e394832b4bfeefc4ba44454dd5ffb1c264))
+
+
+## v0.412.0 (2026-10-29)
+
+### Features
+
+- **backroom**: Trace the decision lane and read it through Backroom MCP
+  ([#3276](https://github.com/ditto-assistant/ditto-subnet/pull/3276),
+  [`4474b1e`](https://github.com/ditto-assistant/ditto-subnet/commit/4474b1e1bc6c68d80d397cb8d08685ac2c212458))
+
+
+## v0.411.0 (2026-10-29)
+
+### Features
+
+- **relay**: Broker the dark decision lane through OpenRouter System One
+  ([#3274](https://github.com/ditto-assistant/ditto-subnet/pull/3274),
+  [`623d9e5`](https://github.com/ditto-assistant/ditto-subnet/commit/623d9e516326d236d179d08dbeeb2b50777a2735))
+
+
+## v0.410.0 (2026-10-29)
+
+### Documentation
+
+- **backroom-review**: Add reused-draft no-disagree-clause precedent
+  ([#3270](https://github.com/ditto-assistant/ditto-subnet/pull/3270),
+  [`cf2ee6b`](https://github.com/ditto-assistant/ditto-subnet/commit/cf2ee6bed77cde75fd6dc27483b25649dccc8bb5))
+
+### Features
+
+- **platform**: Add the dark decision-model lane grant schema and knob
+  ([#3273](https://github.com/ditto-assistant/ditto-subnet/pull/3273),
+  [`719e350`](https://github.com/ditto-assistant/ditto-subnet/commit/719e3504e36704e162643016b104cf4386fd7f6a))
+
+
+## v0.409.1 (2026-10-29)
+
+### Bug Fixes
+
+- Accept the scorer's zdr in the confirmation judge route lock
+  ([#3269](https://github.com/ditto-assistant/ditto-subnet/pull/3269),
+  [`a45c47f`](https://github.com/ditto-assistant/ditto-subnet/commit/a45c47fa3517b24cb8bb24d030b9a838dc0d99da))
+
+
+## v0.409.0 (2026-10-29)
+
+### Features
+
+- **platform**: Require an own runtime delta before a released-base copy clear
+  ([#3268](https://github.com/ditto-assistant/ditto-subnet/pull/3268),
+  [`96a9cb5`](https://github.com/ditto-assistant/ditto-subnet/commit/96a9cb5ce0eb6fe0e879d8b8a7f9703686b9e9c8))
+
+
+## v0.408.1 (2026-10-29)
+
+### Bug Fixes
+
+- **validator**: Heartbeat while a drain waits and exit a silent worker
+  ([#3267](https://github.com/ditto-assistant/ditto-subnet/pull/3267),
+  [`e4b2628`](https://github.com/ditto-assistant/ditto-subnet/commit/e4b2628fe7ead1e5d43a81ec591d2ef45eaa19e2))
+
+
+## v0.408.0 (2026-10-29)
+
+### Features
+
+- Name the LongMemEval phase and accounting check behind a confirmation failure
+  ([#3266](https://github.com/ditto-assistant/ditto-subnet/pull/3266),
+  [`0044998`](https://github.com/ditto-assistant/ditto-subnet/commit/004499827462e9d8e31a3d2a4adc1382e82a252d))
+
+
 ## v0.407.0 (2026-10-28)
 
 ### Chores

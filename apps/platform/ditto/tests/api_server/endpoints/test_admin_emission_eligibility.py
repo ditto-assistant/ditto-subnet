@@ -390,6 +390,47 @@ class TestPerAgentRead:
         assert body["effective"]["required_protocol"] == 28
         assert "in_ledger" in body
 
+    async def test_a_never_scored_agent_does_not_read_as_earning(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """DrPresident v20: screening-failed, never scored, read "earning"."""
+        _install(app, session_maker)
+        scored_id = await _seed_scored_agent(session)
+        failed_id = uuid4()
+        async with session.begin():
+            session.add(
+                Agent(
+                    agent_id=failed_id,
+                    miner_hotkey=_MINER,
+                    name="alpha",
+                    sha256="ef" * 32,
+                    status=AgentStatus.SCREENING_FAILED,
+                    created_at=_NOW,
+                )
+            )
+
+        async def read(agent_id: UUID) -> dict:
+            response = await client.get(
+                f"/api/v1/admin/agents/{agent_id}/emission-eligibility",
+                headers=_HEADERS,
+            )
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        failed = await read(failed_id)
+        assert failed["eligibility"]["enforcement"] == "off"
+        assert failed["eligibility"]["state"] == "not_scored"
+        assert failed["eligibility"]["reward_eligible"] is False
+        assert "not earning" in failed["eligibility"]["reason"]
+        assert failed["in_ledger"] is False
+        scored = await read(scored_id)
+        assert scored["eligibility"]["state"] == "eligible"
+        assert scored["eligibility"]["reward_eligible"] is True
+
     async def test_enforce_ahead_of_the_fleet_reads_as_the_shadow_it_is(
         self,
         app: FastAPI,

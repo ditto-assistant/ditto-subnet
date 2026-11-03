@@ -181,6 +181,16 @@ class InferenceProxyConfig:
     route_max_timeout_rate: float = 0.15
     route_cooldown_seconds: int = 30
     reviewed_calibration_manifest_sha256: str | None = None
+    # Decision-lane grant stamps. Never read from env: the operator's
+    # ``decision_lane`` board overlays them (``apply_settings``). ``None`` and
+    # zeros are "lane not granted", which is the pre-lane grant exactly.
+    decision_model: str | None = None
+    decision_input_microusd_per_mtok: int = 0
+    decision_request_budget: int = 0
+    decision_token_budget: int = 0
+    # The board's ``scored_provider_routing``; never read from env. The chat
+    # endpoint resolves the canary mode per ticket before the provider call.
+    scored_provider_routing: str = "throughput"
 
 
 @dataclass(frozen=True)

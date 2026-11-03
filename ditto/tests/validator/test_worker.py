@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import dataclasses
 import hashlib
 import json
+import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
@@ -27,7 +30,7 @@ from ditto.api_models.stack_health import (
     ValidatorComponentHealth,
     ValidatorStackHealth,
 )
-from ditto.api_models.system_health import DockerHealth, SystemMetrics
+from ditto.api_models.system_health import DockerHealth, HostSpecs, SystemMetrics
 from ditto.api_models.validator import (
     ArtifactResponse,
     BenchmarkRuntimeSettings,
@@ -64,6 +67,7 @@ from ditto.validator.errors import (
     SandboxOomError,
     ValidatorInfrastructureError,
 )
+from ditto.validator.liveness import WATCHDOG_EXIT_CODE, LivenessWatchdog
 from ditto.validator.onchain_seed import derive_seed
 from ditto.validator.resource_gate import (
     DEFAULT_RESOURCE_CEILINGS,
@@ -2637,6 +2641,122 @@ class TestRunOnce:
         stop.set()
         await asyncio.wait_for(task, timeout=1)
 
+    async def test_drain_blocked_by_unresolved_handback_keeps_heartbeating(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression for the 2026-10-29 5HEouuDa outage.
+
+        A Platform 502 dropped one ticket hand-back, so the drain the updater
+        requested a few minutes later could not be acknowledged until that
+        ticket's deadline (three hours out). The quiescence wait sent no
+        heartbeat, Platform saw the managed treasury validator go stale after
+        15 minutes, and every validator's ledger read got a 428. The wait may
+        stay long; it must never go silent.
+        """
+        job = _job(
+            "5MinerA" + "x" * 41, deadline=datetime.now(UTC) + timedelta(hours=3)
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.report_ticket_failed = AsyncMock(
+            side_effect=PlatformError("job fail report rejected (502)")
+        )
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        config = _config()
+        config.sweep_seconds = 0.001
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        await worker._report_ticket_failed(
+            job, "scoring_error", "PlatformError: artifact rejected (502)"
+        )
+        assert worker._unresolved_live_tickets()
+        # ``raising=False`` keeps this a timeout, not an AttributeError, on a
+        # worker that predates the quiescence heartbeat.
+        monkeypatch.setattr(
+            worker_mod, "_DRAIN_QUIESCENCE_HEARTBEAT_SECONDS", 0.01, raising=False
+        )
+        states: list[str] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **_kwargs: states.append(state),
+        )
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+        task = asyncio.create_task(worker.run_forever(stop, drain_requested=drain))
+        sent_before = platform.submit_heartbeat.await_count
+
+        async def heartbeats_continue() -> None:
+            while platform.submit_heartbeat.await_count < sent_before + 3:
+                await asyncio.sleep(0.005)
+
+        try:
+            await asyncio.wait_for(heartbeats_continue(), timeout=2)
+        finally:
+            stop.set()
+            await asyncio.wait_for(task, timeout=2)
+        # Still undrained: the lease stays updater-visible until it resolves.
+        assert "drained" not in states
+        assert worker._unresolved_live_tickets()
+
+    async def test_heartbeat_that_never_returns_trips_the_liveness_watchdog(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A Platform heartbeat that never answers must end in a restart."""
+        never_answers = asyncio.Event()
+
+        async def hung_heartbeat(_request: object) -> ValidatorHeartbeatResponse:
+            await never_answers.wait()
+            return ValidatorHeartbeatResponse(accepted=True, seen_at=datetime.now(UTC))
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_heartbeat = AsyncMock(side_effect=hung_heartbeat)
+        config = _config()
+        config.sweep_seconds = 0.001
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        exits: list[int] = []
+        watchdog = LivenessWatchdog(
+            loop=asyncio.get_running_loop(),
+            age_seconds=worker.heartbeat_attempt_age_seconds,
+            timeout_seconds=0.2,
+            check_seconds=0.01,
+            exit_process=exits.append,
+        )
+        caplog.set_level(logging.WARNING, logger="ditto.validator.liveness")
+        stop = asyncio.Event()
+        task = asyncio.create_task(worker.run_forever(stop))
+        watchdog.start()
+        try:
+            for _ in range(400):
+                if exits:
+                    break
+                await asyncio.sleep(0.005)
+        finally:
+            watchdog.stop()
+            stop.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        assert exits == [WATCHDOG_EXIT_CODE]
+        platform.submit_heartbeat.assert_awaited()
+        # The dump names the exact await that never completes.
+        assert "hung_heartbeat" in caplog.text
+        assert "_send_heartbeat_unlocked" in caplog.text
+
     async def test_quiescent_bootstrap_authenticates_before_claiming_work(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -4334,6 +4454,30 @@ class TestRunOnce:
         platform.report_ticket_failed.assert_awaited_once()
         assert platform.report_ticket_failed.await_args.args[1] == "infrastructure"
         assert "slot-0" not in worker._healthy_slots
+
+    async def test_artifact_fetch_502_is_not_charged_to_the_miner(self) -> None:
+        # SN-426: an artifact-fetch 502 while Platform restarted for a deploy
+        # was handed back as scoring_error and spent the miner's attempt.
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[job], ledger=[])
+        platform.get_artifact = AsyncMock(
+            side_effect=PlatformInfrastructureError("artifact unavailable (502): ")
+        )
+        dittobench = MagicMock(score_tarball=AsyncMock())
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(put_weights=AsyncMock()),
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        platform.get_artifact.assert_awaited_once()
+        dittobench.score_tarball.assert_not_awaited()
+        platform.report_ticket_failed.assert_awaited_once()
+        assert platform.report_ticket_failed.await_args.args[1] == "infrastructure"
 
     async def test_derived_seed_ticket_is_scored(self) -> None:
         # The companion arm: a ticket whose seed DOES re-derive proceeds.
@@ -6336,6 +6480,35 @@ class TestResourceConstrainedAdmission:
             system_metrics=collector,
         )
         return worker, platform
+
+    def test_host_memory_admits_only_caps_that_fit(self) -> None:
+        """Sum of harness caps must fit host memory less the reserve.
+
+        Eight 8 GiB caps on a 16 GiB host let two in-cap harnesses exhaust the
+        host together; the kernel then kills one for a fault it did not commit.
+        """
+        collector = self._collector()
+        collector.host_specs = MagicMock(
+            return_value=HostSpecs(
+                cpu_count=8,
+                memory_total_mib=16_000,
+                disk_total_gib=100,
+                architecture="x86_64",
+            )
+        )
+        worker, _ = self._worker(collector=collector)
+        worker._sandbox_memory_limit_mib = 8192
+        # (16000 - 1024 reserve) // 8192 = 1 of 4 configured slots.
+        assert len(worker._available_slots()) == 1
+        worker._sandbox_memory_limit_mib = 3072
+        assert len(worker._available_slots()) == 4
+        # A host that fits one cap plus 1 GiB keeps one slot whatever the
+        # reserve, so it stays in the canonical quorum.
+        worker._sandbox_memory_limit_mib = 8192
+        worker._resource_ceilings = dataclasses.replace(
+            worker._resource_ceilings, host_memory_reserve_mib=8192
+        )
+        assert len(worker._available_slots()) == 1
 
     async def test_a_nearly_full_disk_claims_nothing_but_still_heartbeats(
         self,

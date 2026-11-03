@@ -358,11 +358,17 @@ def test_same_owner_clears_without_auto_apply() -> None:
 
 def test_public_matched_agent_explains_everything() -> None:
     facts = attribute_family(
-        held=_view("c" * 32, "copier", dict(_MATCHED.texts), 48),
+        held=_view(
+            "c" * 32,
+            "copier",
+            {**_MATCHED.texts, "app/extra.py": "def extra(x):\n    return x + 1\n"},
+            48,
+        ),
         matched=_MATCHED,
         bases=[PublicBase(_MATCHED, "matched", _T0)],
     )
     assert facts.unexplained == [] and facts.distinctive_total == 0
+    assert facts.held_delta["runtime_changed"] == ["app/extra.py"]
     verdict = family_verdict(
         _context(
             _HELD,
@@ -486,3 +492,62 @@ def test_many_convergent_edits_count_as_present() -> None:
     )
     assert facts.convergent_edits == []
     assert facts.distinctive_present_count == 5
+
+
+def _unmodified_fork(files: dict[str, str]) -> tuple:
+    held = _view("f" * 32, "fork v3", files, 48)
+    facts = attribute_family(
+        held=held,
+        matched=_MATCHED,
+        bases=[PublicBase(_BASE, "declared_by_held", _T0)],
+    )
+    verdict = family_verdict(
+        _context(
+            held,
+            _MATCHED,
+            [
+                _proof(_MATCHED, proven=False, relation="matched"),
+                _proof(_BASE, proven=True, relation="declared_by_held"),
+            ],
+        ),
+        facts,
+    )
+    return facts, verdict
+
+
+def test_unmodified_fork_of_released_base_recommends_reject() -> None:
+    """Operator ruling 2026-10-29: forking released source needs own changes.
+
+    Runtime files byte-identical to the released base, only declaration,
+    changelog and upstream prose changed: an exact duplicate, never a CLEAR.
+    """
+    facts, verdict = _unmodified_fork(
+        {
+            **_BASE_FILES,
+            "DECLARATION.md": f"Fork of base v25, sha {_BASE.sha256}\n",
+            "CHANGES.md": "- credit the base author\n",
+            "UPSTREAM.md": "base v25\n",
+        }
+    )
+    assert facts.unexplained == [] and facts.distinctive_present_count == 0
+    assert facts.held_delta["added_count"] == 3
+    assert facts.held_delta["runtime_changed_count"] == 0
+    assert verdict.verdict == "reject"
+    assert verdict.basis == "unmodified_fork_of_released_base"
+    assert not verdict.auto_clear_eligible
+    assert verdict.citations[0]["agent_id"] == "p-reject"
+
+
+def test_whitespace_only_runtime_edit_is_not_an_own_change() -> None:
+    _facts, verdict = _unmodified_fork(
+        {**_BASE_FILES, "app/store.py": _STORE.replace("    ", "      ") + "\n\n"}
+    )
+    assert verdict.basis == "unmodified_fork_of_released_base"
+
+
+def test_removal_only_fork_escalates() -> None:
+    files = {path: text for path, text in _BASE_FILES.items() if path != "app/store.py"}
+    facts, verdict = _unmodified_fork(files)
+    assert facts.held_delta["runtime_removed_count"] == 1
+    assert verdict.verdict == "escalate"
+    assert verdict.basis == "own_delta_removal_only"

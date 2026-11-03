@@ -466,3 +466,14 @@ class TestChatBudgetsSurviveAnEmbeddingOnlyEdit:
         message = str(caught.value)
         assert "chat_request_budget" in message
         assert "chat_token_budget" in message
+
+
+def test_decision_lane_ships_off_and_cannot_be_enabled_without_a_pin() -> None:
+    from ditto.api_models.inference_concurrency_settings import DecisionLaneSettings
+
+    assert InferenceConcurrencySettings().decision_lane.enabled is False
+    assert InferenceConcurrencySettings().decision_lane.model is None
+    with pytest.raises(ValidationError):
+        DecisionLaneSettings(enabled=True)
+    with pytest.raises(ValidationError):
+        DecisionLaneSettings(enabled=True, model="~typesafe/jev-latest")

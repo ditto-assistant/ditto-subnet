@@ -265,6 +265,10 @@ class TestSameOwnerReference:
         attempt = await _attempt(session_maker, item["attempt_id"])
         assert attempt.lineage_reference_kind == "same_owner"
         assert attempt.lineage_full_review_reasons == []
+        assert (
+            attempt.lineage_changed_file_count,
+            attempt.lineage_changed_line_count,
+        ) == (packet.changed_file_count, packet.changed_line_count)
 
     async def test_a_refused_same_coldkey_upload_is_not_a_reference(
         self,

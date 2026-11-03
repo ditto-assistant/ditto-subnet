@@ -313,6 +313,10 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	admissionOpen = false
 
 	reservedGrant := result.grant
+	// The provider call keeps the boot config but takes the live scored
+	// provider routing, resolved for this ticket (canary or fleet).
+	cfg.ScoredProviderRouting = effectiveScoredProviderRouting(
+		admissionCfg.ScoredProviderRouting, result.ticketPurpose)
 	ctx = withOpenRouterSession(ctx, cfg.OpenRouterSessionAffinity, headers.grant.String(), headers.generation, model)
 	upstreamPayload, herr := lockedUpstreamPayload(payload, model, maxTokens, reservedGrant.BenchVersion)
 	if herr != nil {
@@ -387,6 +391,8 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	if exhausted != nil {
 		if status, overloaded := receiptFreeOverload(exhausted.phases, model); overloaded {
+			_ = d.openProviderCircuit(ctx, now, status, exhausted.terminalErrorCode)
+		} else if status, broke := gatewayCreditExhausted(exhausted.phases); broke {
 			_ = d.openProviderCircuit(ctx, now, status, exhausted.terminalErrorCode)
 		}
 	} else {

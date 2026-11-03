@@ -23,6 +23,7 @@ from ditto.validator.resource_gate import (
     parse_resource_ceilings_from_env,
 )
 from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
+from ditto_screening_protocol.runtime_envelope import runtime_envelope
 
 # --- Frozen consensus constants (KOTH + ATH gate) ---
 # NOT env-tunable: every validator must fold the public ledger with byte-identical
@@ -494,6 +495,13 @@ class ValidatorConfig:
     coding_canary_poll_seconds: float = 10.0
     """Idle polling interval for the public certification canary worker."""
 
+    liveness_watchdog_seconds: float = 600.0
+    """Exit the worker (code 70) after this long without a heartbeat attempt.
+
+    Docker's ``restart: unless-stopped`` then recovers it. Keep this well under
+    Platform's 15-minute treasury fleet freshness. ``0`` disables the watchdog.
+    See :mod:`ditto.validator.liveness`."""
+
     # --- Competition-track split (scalable, retirable registry) ---
     track_shares_bps: dict[str, int] = field(
         default_factory=lambda: dict(TRACK_SHARES_BPS)
@@ -703,6 +711,15 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         raise ValidatorConfigError(
             "VALIDATOR_STACK_HEALTH_CACHE_SECONDS must be in [0, 3600]"
         )
+    liveness_watchdog_seconds = _parse_float(
+        "VALIDATOR_LIVENESS_WATCHDOG_SECONDS", "600"
+    )
+    if not math.isfinite(liveness_watchdog_seconds) or not (
+        liveness_watchdog_seconds == 0 or 120 <= liveness_watchdog_seconds <= 840
+    ):
+        raise ValidatorConfigError(
+            "VALIDATOR_LIVENESS_WATCHDOG_SECONDS must be 0 (disabled) or in [120, 840]"
+        )
     capabilities_timeout_seconds = _parse_float(
         "VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS", "3"
     )
@@ -862,6 +879,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_probe_url=os.environ.get("VALIDATOR_PYLON_PROBE_URL", ""),
         stack_probe_timeout_seconds=stack_probe_timeout_seconds,
         stack_health_cache_seconds=stack_health_cache_seconds,
+        liveness_watchdog_seconds=liveness_watchdog_seconds,
         validator_hotkey=validator_hotkey,
         wallet_name=os.environ.get("VALIDATOR_WALLET_NAME") or None,
         wallet_hotkey=os.environ.get("VALIDATOR_WALLET_HOTKEY") or None,
@@ -889,7 +907,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_DITTOBENCH_POLL_SECONDS", "10")
         ),
         dittobench_timeout_seconds=float(
-            os.environ.get("VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS", "9900")
+            os.environ.get(
+                "VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS",
+                str(runtime_envelope().run_wall_seconds),
+            )
         ),
         http_timeout_seconds=float(
             os.environ.get("VALIDATOR_HTTP_TIMEOUT_SECONDS", "30")

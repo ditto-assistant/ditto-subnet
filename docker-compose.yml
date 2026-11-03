@@ -287,7 +287,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "33"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "34"
     restart: unless-stopped
     # Longest live ticket plus five minutes for a signed final report:
     # 4h confirmation outlives the canonical scoring lease (Backroom
@@ -382,6 +382,12 @@ services:
       # because heartbeat host metrics ride a five-point grid.
       VALIDATOR_DISK_PERCENT_CEILING: ${VALIDATOR_DISK_PERCENT_CEILING:-95}
       VALIDATOR_MEMORY_PERCENT_CEILING: ${VALIDATOR_MEMORY_PERCENT_CEILING:-95}
+      # Host-memory admission. The worker claims at most
+      # (host RAM - this reserve) // live harness memory cap slots, so the sum
+      # of harness caps never exceeds what the host can back and an in-cap
+      # harness is never OOM-killed by its neighbours. The default is the
+      # published runtime envelope's (docs/RUNTIME-ENVELOPE.md).
+      VALIDATOR_HOST_MEMORY_RESERVE_MIB: ${VALIDATOR_HOST_MEMORY_RESERVE_MIB:-1024}
       # A pinned CPU is a working benchmark host, not a failing one.
       VALIDATOR_CPU_PERCENT_CEILING: ${VALIDATOR_CPU_PERCENT_CEILING:-0}
       VALIDATOR_INFERENCE_PROXY_REQUIRED: "true"

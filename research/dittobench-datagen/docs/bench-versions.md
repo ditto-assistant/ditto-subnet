@@ -25,6 +25,9 @@ applied to an existing version. It ships as a new one.
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
 | 13 (pre-activation) | `2027-05-01` | Deterministic typed worlds and compositional enterprise records; model-authored private wording deferred to V14. A published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Same seed and generator revision reproduce the dataset. Activation follows exact-candidate qualification and canary evidence. |
+| 14 | `2027-06-01` | Action-scoped declarative over-call scoring, rendered-reply grading, supersession chains, point-in-time, relative-sequence, process-step and role families. Activated 2026-10-28. |
+| 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
+| 16 (staged) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. Generatable and vector-pinned, not yet in the supported set. |
 
 ## Answer-pool collision audit
 
@@ -1317,6 +1320,162 @@ pins 1,536 historical composite replay vectors against source
 
 See [the separately gated rollout plan](../../../docs/benchmark-v14-rollout.md).
 Supporting v14 does not change Platform's active version or qualify a fleet.
+
+## V15 production-scale tool surface and decision lane
+
+V15 keeps the v14 generation surface (same profiles, families and answer
+pools; `answerPoolFixBenchVersion` moves to 16) and changes two things a
+harness sees.
+
+- **Production-scale catalog** (`catalog.ConnectorsForSeed`,
+  `catalog/v15.go`). Every seed's catalog carries the v14 surface (product
+  tools plus three to five coined decoys) with `ConnectorToolsPerSeed` (200)
+  connector tools spliced in at seeded positions, drawn from a frozen pool of
+  277 tools across 136 third-party apps. Membership and description variant
+  are seeded. Every connector description ends "Needs the <App> connector to
+  be linked in Settings." None is linked: the mock endpoint refuses every
+  connector call ("<tool> is not connected for this workspace ...") and
+  performs nothing, so a call is an ordinary extra call priced by the existing
+  over-call and catalog gates. No case expects a connector, and the pool
+  excludes every capability the product tools or decoys own (email, calendar,
+  web search, images, memory, reminders, weather, maps, translation, video).
+  The v14 tools keep their bytes and relative order. The full catalog is about
+  62 KB of JSON (~16k tokens), so handing the whole menu to the model on every
+  turn is now expensive; selecting tools is the difficulty.
+- **Decision lane.** The scorer exports `DITTOBENCH_DECISIONS_URL`
+  (`$DITTOBENCH_INFERENCE_BASE_URL/decisions`) into the sandbox. A harness may
+  POST a System One body (`{state, questions, assets?}`) there; the broker
+  signs it with the run's grant and the relay forces the operator-pinned
+  decision model (TypeSafe Jev, e.g. `typesafe/jev-1.14`), meters input tokens
+  as ledger cost, and applies the lane's own walls. Use is unrestricted. Below
+  v15 the route does not exist and grants carry no decision pin.
+
+For seed `123456789`, full profile, public surface salt 0,
+`TestV15KnownVector` pins:
+`33232bf35e829cbd08efc56777988d1e8784760487837aaa2f185c6f2077783d`, with
+epoch `2027-07-01T00:00:00Z`. Every v2–v14 generation and grading vector
+remains unchanged. Supporting v15 does not change Platform's active version;
+see [the rollout plan](../../../docs/benchmark-v15-rollout.md).
+
+## Bench v16 dueling contract, datagen half (staged)
+
+V16 is the dueling contract ([dueling-bench.md](dueling-bench.md)): a
+canonical run is a 175-case datagen half generated here plus five generator
+columns of 35 cases that Platform delivers (`dueling-slice-v1`), scored as one
+composite. This module ships only the datagen half. It inherits v15 exactly
+(catalog, decision lane, grader policy floor, gates, answer pools;
+`answerPoolFixBenchVersion` moves to 17) except for the profile and the
+connector changes below. Every lever is gated on `bench_version >= 16`.
+
+**Staged, not supported.** `protocol.BenchVersionV16` lives in
+`protocol/staged.go`: it has its own epoch (`2027-08-01`) and rotate seed and
+generates through `GenerateDataset`, but it is outside
+`supportedBenchVersions`, so `SupportedBenchVersion`,
+`NewestSupportedBenchVersion`, the scorer's advertised window and efficiency
+readiness all stay at 15, matching the shared ceiling in
+`ditto/tests/contract/bench_versions.json`. Offline tools (`cmd/generate`,
+`cmd/mixaudit`, `cmd/parserprobe`, `cmd/toolprobe`) accept staged versions.
+The cross-layer PR that raises the shared ceiling moves the constant and epoch
+into `epoch.go` and the supported list; generation bytes do not change.
+
+**Dueling profile** (`gen/v16_envelope.go`, `gen.ProfileForVersion(_, 16)`).
+
+| Run size | Tool cases | Memory cases | World scale |
+| --- | ---: | ---: | ---: |
+| full | 50 | 125 | 2 |
+| medium | 24 | 43 | 1 |
+| small | 6 | 27 | 1 |
+
+The tool phase seeds the shared world through the v9 world carrier and the
+memory phase stages corrections against the same world, so both phases draw
+one scale. 50 tool cases select the scale-2 world (the tool passes key their
+world on the case count), so the full memory table is built on the scale-2
+world: story 36 (six arcs x six oracles), ordinary world 14, business
+programs 16, personal programs 16, abstention 8, record quantity 4,
+divergence 8, point-in-time 4, integrity 14, isolation 5. The memory world
+is the same scale-2 world v13 to v15 build; it is smaller than the full v15
+world (14 people, 8 projects, 5 trips, 6 story arcs against 28, 18, 12 and
+13), so the v16 datagen memory half is easier to hold in context than v15's,
+and the generator slice carries the other half of the run's memory weight.
+`gen.MixGateV16` is `MixGateV13` with the abstention target at the scale-2
+share (8/125 = 6.4%); every other cap holds (`go run ./cmd/mixaudit
+-bench-version 16 -seeds 40 -gate`, worst money share of computed answers
+0.227 against the 0.25 cap).
+
+**Connectors stop self-identifying** (dueling-bench.md section 8.1,
+`catalog/v16.go`). Operator ruling (2026-11-03): harnesses may filter
+connector or app tools by a marker or by request wording (an I7 W4
+allowance), so v16 does not ban filters; the difficulty is in the cases.
+
+- *No marker.* The v15 suffix ("Needs the <App> connector to be linked in
+  Settings.") is gone and the variants that named a link state ("the
+  connected workspace", "the linked database") are rewritten in the product
+  grammar ("the user's Slack workspace"). `catalog.HasLinkStatePhrase` and
+  `TestV16ConnectorDescriptionsCarryNoLinkState` keep every rendered variant
+  free of link-state wording. The catalog still carries 200 connector tools.
+- *Linked connectors.* `catalog.V16ConnectorPlanForSeed` draws, from 24
+  scripted apps, two to four apps the seed links and two more it names
+  without linking. Every tool of those apps is in the seed's catalog, so
+  menu presence reveals nothing. In the mock endpoint (`toolexec/v16.go`) a
+  linked app's tools execute: its read tool serves the case needle as the
+  bearer of a linked read case and the scored decoy figure otherwise, its
+  write tool confirms the payload. Every other connector still answers "not
+  connected" and performs nothing.
+- *Cases* (`datagen/v16.go`, after every v13 pass). Full runs convert 11 of
+  50 tool cases (22%), medium 5 of 24 (21%), small one linked read when a
+  slot is free:
+
+| Category | Full | Medium | Gold | Graded by |
+| --- | ---: | ---: | --- | --- |
+| `connector_linked_result_usage` | 3 | 2 | call the linked app's read tool once, report the figure | result-usage (trajectory x needle gate), as the v13 decoy-correct cases |
+| `connector_linked_action` | 3 | 1 | call the linked app's write tool once with the quoted payload | strict trajectory, payload as the required argument |
+| `connector_unlinked_probe` | 2 | 1 | try the named app's tool once, get "not connected", tell the user | strict trajectory (one probe is the expected call); the reply text is not graded in v16.0 |
+| `connector_named_product` | 3 | 1 | use the product tool (calendar, Gmail, web search); the app is context | strict trajectory; any call to the named app's tools is an extra call |
+
+  Unlinked probes reuse the linked surfaces word for word, and named-product
+  cases name a linked app on even ordinals (its tools would really execute),
+  so the request alone never says what is linked. Dropping every connector
+  loses the linked cases; routing on the app named in the request loses the
+  named-product cases and still has to handle a refused probe. No grader
+  branch changes: `grade/` has none for v16, and every case grades through
+  the v13+ tool grader, the v7 result-usage composition and the existing
+  over-call rule. If the quota ever exceeds a seed's free slots, the pass
+  trims one case at a time in rotation from named-product to linked read, so
+  every family survives as long as it can and the last case kept is a linked
+  read, instead of failing (no swept seed trims:
+  `TestV16ConnectorQuotaHoldsAcrossSeeds`).
+
+For seed `123456789`, full profile, public surface salt 0,
+`TestV16KnownVector` pins:
+`56929051f03ce2eded91d27771eef1b84230d94deb88acaeff7e0a497cf439ab`, with
+epoch `2027-08-01T00:00:00Z`. Every v2 to v15 vector is unchanged (v15 stays
+`33232bf35e829cbd08efc56777988d1e8784760487837aaa2f185c6f2077783d`).
+Contract tests: `gen/v16_contract_test.go`, `catalog/v16_test.go`,
+`datagen/v16_test.go`, `toolexec/v16_test.go`, `protocol/epoch_test.go`.
+
+## Bench v15 grading policy (shipped ahead of the generation contract)
+
+`grade.PolicyFloorV15` exists only as a grading-policy floor, as v13's grader floor once did; `protocol` gains `BenchVersionV15` only with the generation contract. It
+is not generatable, advertised or active, and it does not change any v2–v14
+generation or grading vector. The v15 generation contract (the
+production-scale catalog and decision lane) inherits this policy, and so does
+the v16 dueling contract ([dueling-bench.md](dueling-bench.md)).
+
+- **Case values are atomic** (`caseValuesAreAtomic`). Clause segmentation
+  reads every multi-word hidden value of a value or list case (expected,
+  accepted, list item, distractor) as one phrase. Below v15 the boundary word
+  `and` and openers such as `no` or `not` split a value that contains them, so
+  a correct `macaroni and cheese` (an xkcd accent colour in the v13+ corpus)
+  graded as the fragments `macaroni` and `cheese` and missed. An outer
+  rejection, hedge or distractor still applies ("not macaroni and cheese",
+  "either macaroni and cheese or pale brown").
+
+V14 keeps the split: it is the active immutable contract. In the frozen
+corpora, the reachable v14 values it affects are the accent `macaroni and
+cheese` (1 of 952 world seeds; its behaviour and acknowledgement cases) and,
+only as decoys, the fonts `Swanky and Moo Moo`, `Black And White Picture`,
+`Stick No Bills` and `Playwrite NO`. The audit bank is `v15-1`
+(`grade.AuditBankV15`).
 
 ## Auditing an old score
 

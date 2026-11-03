@@ -224,9 +224,9 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	if nWaves < 1 {
 		nWaves = 1
 	}
-	envelope, ok := v13EnvelopeFor(n)
+	envelope, ok := memoryEnvelopeForVersion(n, benchVersion)
 	if !ok {
-		return MemorySuite{}, fmt.Errorf("v13 memory envelope: no slot table for %d memory cases", n)
+		return MemorySuite{}, fmt.Errorf("memory envelope for bench_version %d: no slot table for %d memory cases", benchVersion, n)
 	}
 	scale, _ := v8WorldProfile(n)
 	world := universe.GenerateForVersion(seed, scale, benchVersion)

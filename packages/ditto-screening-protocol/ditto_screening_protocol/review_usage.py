@@ -49,6 +49,9 @@ class ReviewUsageStageEntry(BaseModel):
     reported_cost_usd: Annotated[float, Field(ge=0, le=MAX_STAGE_COST_USD)] | None = (
         None
     )
+    # First request start to last response in this stage, so it includes the
+    # analyzer tool time between turns. Null from workers that predate it.
+    wall_ms: Annotated[int, Field(ge=0, le=MAX_REVIEW_ELAPSED_MS)] | None = None
 
     @model_validator(mode="after")
     def _cached_within_input(self) -> ReviewUsageStageEntry:
@@ -66,6 +69,38 @@ class ReviewUsageStageEntry(BaseModel):
         )
 
 
+ReviewBudgetLimit = Literal["raw_input", "input", "output", "cost", "steps", "tools"]
+
+
+class ReviewBudgetStop(BaseModel):
+    """The model budget that ended an L2/L3 trajectory, as the worker saw it.
+
+    ``tripped`` names every limit exceeded at the stop. ``input`` is the
+    billable-equivalent aggregate (cached input counted at 10%), ``raw_input``
+    the uncached wire ceiling, ``cost`` the gateway-reported cost when every
+    turn reported one, else the worker estimate. Usage is the L2 aggregate
+    across analyst, critic and adjudicator roles at the stop, not the stage.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    stage: ReviewUsageStage
+    code: Literal["model-total-budget", "model-tool-budget", "model-step-budget"]
+    tripped: Annotated[list[ReviewBudgetLimit], Field(max_length=6)] = []
+    max_raw_input_tokens: Annotated[int, Field(ge=0, le=MAX_STAGE_TOKENS)] | None = (
+        None
+    )
+    max_input_tokens: Annotated[int, Field(ge=0, le=MAX_STAGE_TOKENS)] | None = None
+    max_output_tokens: Annotated[int, Field(ge=0, le=MAX_STAGE_TOKENS)] | None = None
+    max_cost_usd: Annotated[float, Field(ge=0, le=MAX_STAGE_COST_USD)] | None = None
+    max_steps: Annotated[int, Field(ge=0, le=MAX_STAGE_REQUESTS)] | None = None
+    raw_input_tokens: Annotated[int, Field(ge=0, le=MAX_STAGE_TOKENS)] = 0
+    effective_input_tokens: Annotated[int, Field(ge=0, le=MAX_STAGE_TOKENS)] = 0
+    output_tokens: Annotated[int, Field(ge=0, le=MAX_STAGE_TOKENS)] = 0
+    cost_usd: Annotated[float, Field(ge=0, le=MAX_STAGE_COST_USD)] = 0.0
+    steps_used: Annotated[int, Field(ge=0, le=MAX_STAGE_REQUESTS)] = 0
+
+
 class ScreeningReviewUsageRequest(BaseModel):
     """One attempt's review usage, posted by the screener that holds it."""
 
@@ -80,6 +115,8 @@ class ScreeningReviewUsageRequest(BaseModel):
     elapsed_ms: Annotated[int, Field(ge=0, le=MAX_REVIEW_ELAPSED_MS)] | None = None
     # Echo of the lineage packet scope the review ran with, when it had one.
     lineage_scope: Literal["diff", "full"] | None = None
+    # The budget that stopped the model review, when one did.
+    budget_stop: ReviewBudgetStop | None = None
 
     @model_validator(mode="after")
     def _unique_stage_models(self) -> ScreeningReviewUsageRequest:
@@ -109,6 +146,8 @@ class ScreeningReviewUsageResponse(BaseModel):
 
 __all__ = [
     "MAX_REVIEW_USAGE_STAGES",
+    "ReviewBudgetLimit",
+    "ReviewBudgetStop",
     "ReviewUsageStage",
     "ReviewUsageStageEntry",
     "ScreeningReviewUsageRequest",

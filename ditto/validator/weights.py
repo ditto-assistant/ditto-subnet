@@ -37,6 +37,11 @@ from ditto.validator.config import (
 )
 from ditto.validator.crn import confirmation_seeds, crn_block_binding_active
 from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
+from ditto_screening_protocol.dueling import (
+    DuelingReport,
+    dueling_composite,
+    is_dueling_bench_version,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -69,6 +74,28 @@ MIN_ELIGIBLE_CASES = 100
 # collide with a miner, and :func:`split_unpaid_share` strips it before the
 # vector meets :func:`apply_miner_emission_cap`.
 UNPAID_SHARE_KEY = "<unpaid>"
+
+
+@dataclass(frozen=True)
+class CrownGate:
+    """Protocol-34 crown rules served as ``LedgerResponse.crown_gate``.
+
+    ``min_shared_seeds``: a challenger takes the crown only on the paired
+    shared-seed statistic, and only once it holds at least this many
+    confirmation seeds in common with the reigning champion. An unpaired or
+    shallow comparison can never move the crown.
+
+    ``standing_rank``: only an entry inside the top ``standing_rank`` of the
+    fold's ranking (quality-first, the board's official order) may hold or
+    take the crown. A champion that falls below it is replaced by the
+    highest-ranked standing entry with ``min_shared_seeds`` shared seeds
+    against it, or by the rank-1 entry when none qualifies.
+
+    ``None`` everywhere this is accepted is the exact pre-34 fold.
+    """
+
+    min_shared_seeds: int
+    standing_rank: int
 
 
 def resolve_miner_emission_share(
@@ -574,8 +601,144 @@ def filter_eligible(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
     """Keep only full-benchmark entries — the only runs that may rank or earn
     emissions. A **deterministic, consensus-safe** filter (keys off the per-entry
     case count in the shared ledger), mirroring :func:`filter_to_latest_version`,
-    so every validator folds the same subset."""
-    return [e for e in entries if _entry_eligible(e)]
+    so every validator folds the same subset. A bench >= 16 row without its
+    season and aggregates is dropped too (:func:`_dueling_fold_ready`)."""
+    return [e for e in entries if _entry_eligible(e) and _dueling_fold_ready(e)]
+
+
+# --- Dueling bench (bench_version >= 16) -------------------------------------
+#
+# A v16 composite is a datagen half plus five generator columns, each owned by
+# a miner (``research/dittobench-datagen/docs/dueling-bench.md`` sections 1, 3
+# and 7.7). Two consequences for the fold, both inert below v16:
+#
+# - Scores from different generator sets are incomparable, so two v16 rows
+#   compare only inside one ``(bench_version, season_id)``.
+# - Owner neutrality: the paired dethrone test (and the adjacent top-five
+#   order) recomputes every shared seed's composite for BOTH agents with the
+#   columns either owner contributed masked out, then runs the unchanged paired
+#   z-test. The self-masked reported composite still drives everything else.
+#
+# A v16 row without a season or without aggregates fails closed: it never
+# ranks or pays (approved fallback). :func:`dueling_fold_dropped` names them so
+# the worker can log the count.
+
+
+def _is_dueling_entry(entry: LedgerEntry) -> bool:
+    return is_dueling_bench_version(_entry_version(entry))
+
+
+def _entry_dueling(entry: LedgerEntry) -> DuelingReport | None:
+    """The row's signed ``details.dueling`` aggregates, when served."""
+    report = getattr(entry, "dueling", None)
+    return report if isinstance(report, DuelingReport) else None
+
+
+def _entry_season(entry: LedgerEntry) -> str | None:
+    """The dueling season a v16 row was scored in, or ``None`` when unknown.
+
+    Read from the ledger row's ``dueling_season_id`` (Platform's
+    ``scores.dueling_season_id``) and cross-checked against the season the
+    scorer reported in ``details.dueling`` (``LedgerEntry.dueling``). A row
+    without the aggregates, or whose two sources disagree, has no usable
+    season. A row with aggregates but no column falls back to the report's
+    own season.
+    """
+    report = _entry_dueling(entry)
+    if report is None:
+        return None
+    season = getattr(entry, "dueling_season_id", None)
+    if season is None:
+        return report.season_id
+    return season if season == report.season_id else None
+
+
+def _dueling_fold_ready(entry: LedgerEntry) -> bool:
+    """Pre-16 rows always; a v16 row only with its season and aggregates."""
+    return not _is_dueling_entry(entry) or _entry_season(entry) is not None
+
+
+def dueling_fold_dropped(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
+    """The v16 rows the fold drops for a missing season or aggregates."""
+    return [e for e in entries if not _dueling_fold_ready(e)]
+
+
+def _dueling_incomparable(a: LedgerEntry, b: LedgerEntry) -> bool:
+    """Whether two rows may not be compared at all: both are v16+ and they do
+    not share one ``(bench_version, season_id)``. A pre-16 row against a v16
+    row keeps the legacy cross-version comparison of reported composites."""
+    if not (_is_dueling_entry(a) and _is_dueling_entry(b)):
+        return False
+    season_a = _entry_season(a)
+    return (
+        season_a is None
+        or season_a != _entry_season(b)
+        or _entry_version(a) != _entry_version(b)
+    )
+
+
+def _dueling_pair_mask(a: LedgerEntry, b: LedgerEntry) -> frozenset[str] | None:
+    """``{owner(A), owner(B)}`` for two comparable v16 rows, else ``None``."""
+    if not (_is_dueling_entry(a) and _is_dueling_entry(b)):
+        return None
+    if _dueling_incomparable(a, b):
+        return None
+    report_a = _entry_dueling(a)
+    report_b = _entry_dueling(b)
+    if report_a is None or report_b is None:
+        return None
+    return frozenset({report_a.owner_key, report_b.owner_key})
+
+
+def _record_masked_composite(
+    entry: LedgerEntry, record: object, mask: frozenset[str]
+) -> float | None:
+    """One confirmation record's composite with ``mask``'s columns removed.
+
+    The record must carry its own ``details.dueling`` from the row's season
+    and bench version, scored for the row's owner; anything else is not
+    evidence for this pairing (a consensus-safe drop, never a guess).
+    """
+    report = getattr(record, "dueling", None)
+    entry_report = _entry_dueling(entry)
+    if not isinstance(report, DuelingReport) or entry_report is None:
+        return None
+    if (
+        report.season_id != _entry_season(entry)
+        or report.owner_key != entry_report.owner_key
+        or getattr(record, "bench_version", None) != _entry_version(entry)
+    ):
+        return None
+    value = dueling_composite(
+        report.datagen_raw, report.datagen_gate, report.columns, mask
+    )
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        return None
+    return value
+
+
+def _dueling_seed_composites(
+    entry: LedgerEntry, mask: frozenset[str]
+) -> dict[int, float] | None:
+    """Per-seed pair-masked composites over the same seeds the unmasked map
+    keeps (:func:`_entry_confirmation_history`'s bounded window), each the
+    median over that seed's records. Seeds with no record carrying aggregates
+    drop out; ``None`` when nothing survives."""
+    window = _entry_confirmation_history(entry)
+    records = getattr(entry, "confirmation_history", None)
+    if window is None or not isinstance(records, (list, tuple)):
+        return None
+    grouped: dict[int, list[float]] = {}
+    for record in records:
+        seed = getattr(record, "seed", None)
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed not in window:
+            continue
+        value = _record_masked_composite(entry, record, mask)
+        if value is not None:
+            grouped.setdefault(seed, []).append(value)
+    if not grouped:
+        return None
+    return {seed: _median(values) for seed, values in sorted(grouped.items())}
 
 
 # Versions that carry a full-confirmation receipt contract, and may therefore
@@ -664,6 +827,7 @@ def compute_weights(
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
     unpaid_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
@@ -740,6 +904,7 @@ def compute_weights(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_agent_id,
+        crown_gate=crown_gate,
     )
     if len(rank_shares) != tail_size + 1:
         raise ValueError("rank_shares must contain champion plus tail_size entries")
@@ -841,6 +1006,8 @@ def _weight_tied(
     statistical_band_cap: bool = False,
 ) -> bool:
     """Whether two occupied slots may share weight without inventing evidence."""
+    if _dueling_incomparable(candidate, anchor):
+        return False
     if _quality_primary_efficiency_active((candidate, anchor)):
         return _quality_composite(candidate) == _quality_composite(
             anchor
@@ -929,6 +1096,7 @@ def select_champion(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> LedgerEntry | None:
     """Return the deterministic KOTH champion, or ``None`` for an empty pool."""
     scored = [e for e in filter_eligible(entries) if _effective_composite(e) > 0.0]
@@ -940,6 +1108,7 @@ def select_champion(
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
             incumbent_agent_id=incumbent_agent_id,
+            crown_gate=crown_gate,
         )
         if scored
         else None
@@ -1270,7 +1439,9 @@ def _entry_stderr(entry: LedgerEntry) -> float | None:
     return None
 
 
-def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
+def _entry_seed_composites(
+    entry: LedgerEntry, mask: frozenset[str] | None = None
+) -> dict[int, float] | None:
     """The entry's per-seed confirmation composites keyed by their CRN seed, or
     None when the ledger does not carry an aligned ``confirmation_seeds`` +
     ``confirmation_composites`` pair (prod hardening P5). Read via getattr so the
@@ -1279,7 +1450,11 @@ def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
     of at least two validated composites (:func:`_entry_confirmations`) and
     non-negative int seeds with no duplicate; anything else is treated as absent
     (a consensus-safe guard so two validators never pair off a differently-parsed
-    map)."""
+    map).
+
+    ``mask`` (bench >= 16 only, from :func:`_dueling_pair_mask`) recomputes
+    every seed's composite from its records' ``details.dueling`` aggregates
+    with those owners' columns removed (:func:`_dueling_seed_composites`)."""
     # A full-confirmation receipt is a separate signed score authority for
     # every version with a receipt contract. Its KOTH comparison must use that
     # verified receipt, never legacy continual histories that the receipt does
@@ -1291,6 +1466,8 @@ def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
         and getattr(entry, "v9_confirmation", None) is not None
     ):
         return None
+    if mask is not None:
+        return _dueling_seed_composites(entry, mask)
     history = _entry_confirmation_history(entry)
     if history is not None:
         return history
@@ -1590,13 +1767,46 @@ def _paired_dethrone(
     a tighter band at the SAME confidence, without more seeds. The variance term
     also absorbs a lucky single-seed outlier (it inflates both mean_diff and
     se_diff), so the paired mean is safe here where P4 needed the median. Pure
-    and deterministic: sorted shared seeds, explicit float arithmetic."""
+    and deterministic: sorted shared seeds, explicit float arithmetic.
+
+    Two bench >= 16 rows pair on composites recomputed with both owners'
+    columns masked (:func:`_paired_seed_maps`); the z-test is unchanged."""
     if dethrone_z <= 0.0:
         return None
-    chall_map = _entry_seed_composites(challenger)
-    champ_map = _entry_seed_composites(champion)
-    if chall_map is None or champ_map is None:
+    return _paired_statistic(challenger, champion)
+
+
+def _paired_seed_maps(
+    a: LedgerEntry, b: LedgerEntry
+) -> tuple[dict[int, float], dict[int, float]] | None:
+    """The two per-seed composite maps a pairing compares, or ``None``.
+
+    Below v16 (or for a pre-16 row against a v16 row) these are the rows' own
+    confirmation maps. Two v16 rows pair only inside one
+    ``(bench_version, season_id)`` and on composites recomputed with the mask
+    ``{owner(A), owner(B)}`` (``dueling-bench.md`` section 3), so neither
+    agent is scored on a column its own owner, or its rival's, contributed.
+    """
+    mask: frozenset[str] | None = None
+    if _is_dueling_entry(a) and _is_dueling_entry(b):
+        mask = _dueling_pair_mask(a, b)
+        if mask is None:
+            return None
+    a_map = _entry_seed_composites(a, mask)
+    b_map = _entry_seed_composites(b, mask)
+    if a_map is None or b_map is None:
         return None
+    return a_map, b_map
+
+
+def _paired_statistic(
+    challenger: LedgerEntry, champion: LedgerEntry
+) -> tuple[float, float, float] | None:
+    """``(mean_diff, champ_ref, se_diff)`` over at least two shared seeds."""
+    maps = _paired_seed_maps(challenger, champion)
+    if maps is None:
+        return None
+    chall_map, champ_map = maps
     common = sorted(set(chall_map) & set(champ_map))
     if len(common) < 2:
         return None
@@ -1627,6 +1837,7 @@ def _beats(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    crown_gate: CrownGate | None = None,
 ) -> bool:
     """Whether ``challenger`` dethrones ``champion``. The lead must exceed the
     **indifference band** = max(fixed composite-point margin, statistical band).
@@ -1657,7 +1868,23 @@ def _beats(
 
     Protocol-21 quality-primary compares authoritative quality, not the
     efficiency-adjusted projection, so a 0.001 official lead cannot skip
-    hysteresis merely because a factor is present."""
+    hysteresis merely because a factor is present.
+
+    Under a protocol-34 ``crown_gate`` only the paired branch can dethrone,
+    and only with ``crown_gate.min_shared_seeds`` shared seeds: an incumbent's
+    retest-folded score is never compared with a newcomer's unretested
+    three-seed canonical.
+
+    Two bench >= 16 rows from different ``(bench_version, season_id)`` never
+    dethrone each other: the crown carries over until a same-season challenger
+    beats it."""
+    if _dueling_incomparable(challenger, champion):
+        return False
+    if crown_gate is not None and (
+        _shared_seed_count(challenger, champion) < crown_gate.min_shared_seeds
+        or _paired_dethrone(challenger, champion, dethrone_z) is None
+    ):
+        return False
     observed_score, required_score = _dethrone_scores(
         challenger,
         champion,
@@ -1738,6 +1965,7 @@ def _champion(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> LedgerEntry:
     """The KOTH champion of a positive-composite entry set: fold in first-seen
     order, dethroning only when a later entry clears the indifference band
@@ -1754,6 +1982,12 @@ def _champion(
     with efficiency as an exact-quality tiebreak; the crown still requires the
     challenger to clear the indifference band on authoritative quality. A
     0.001 official lead is not a dethrone.
+
+    A protocol-34 ``crown_gate`` (:class:`CrownGate`) first enforces champion
+    standing -- an opener outside the top ``standing_rank`` hands the crown to
+    the best-qualified standing entry -- and then walks only standing
+    challengers, each of which must win the paired comparison on at least
+    ``min_shared_seeds`` shared seeds. The result is always a standing entry.
     """
     ordered = sorted(entries, key=lambda e: (e.first_seen, e.agent_id))
     # Crown incumbency (``LedgerResponse.crown_mode == "incumbent"``): the
@@ -1774,6 +2008,29 @@ def _champion(
     else:
         champ = ordered[0]
         challengers = ordered[1:]
+    if crown_gate is not None:
+        quality_primary = _quality_primary_efficiency_active(entries)
+        ranked = sorted(
+            entries,
+            key=lambda e: _ranking_key(e, quality_primary=quality_primary),
+        )
+        standing = ranked[: max(1, crown_gate.standing_rank)]
+        standing_ids = {e.agent_id for e in standing}
+        if champ.agent_id not in standing_ids:
+            outgoing = champ
+            champ = next(
+                (
+                    e
+                    for e in standing
+                    if _shared_seed_count(e, outgoing) >= crown_gate.min_shared_seeds
+                ),
+                standing[0],
+            )
+        challengers = [
+            e
+            for e in ordered
+            if e.agent_id in standing_ids and e.agent_id != champ.agent_id
+        ]
     for e in challengers:
         if _beats(
             e,
@@ -1782,6 +2039,7 @@ def _champion(
             dethrone_z,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            crown_gate=crown_gate,
         ):
             champ = e
     return champ
@@ -1809,7 +2067,7 @@ def _tail(
         key=lambda e: _ranking_key(e, quality_primary=quality_primary),
     )
     if not distinct_hotkeys:
-        return ranked[:tail_size]
+        return _dueling_adjacent_order(ranked[:tail_size])
     distinct: list[LedgerEntry] = []
     seen_hotkeys = {champion.miner_hotkey}
     for entry in ranked:
@@ -1819,7 +2077,36 @@ def _tail(
         distinct.append(entry)
         if len(distinct) == tail_size:
             break
-    return distinct
+    return _dueling_adjacent_order(distinct)
+
+
+def _dueling_adjacent_order(ranked: Sequence[LedgerEntry]) -> list[LedgerEntry]:
+    """Order paid tail slots by the pair-masked comparison between neighbours.
+
+    Membership is unchanged (the reported, self-masked composite picks who is
+    in the top five); only the order among the selected slots moves. Each
+    adjacent pair of same-season v16 rows that share at least two pair-masked
+    seeds swaps when the lower row's mean paired lead is strictly positive.
+    Pairwise masks are not transitive, so the passes are bounded by the
+    list length: deterministic and terminating. A list without a v16 row is
+    returned exactly as given.
+    """
+    ordered = list(ranked)
+    if not any(_is_dueling_entry(entry) for entry in ordered):
+        return ordered
+    for _ in range(len(ordered)):
+        swapped = False
+        for index in range(len(ordered) - 1):
+            upper, lower = ordered[index], ordered[index + 1]
+            if _dueling_pair_mask(lower, upper) is None:
+                continue
+            paired = _paired_statistic(lower, upper)
+            if paired is not None and paired[0] > 0.0:
+                ordered[index], ordered[index + 1] = lower, upper
+                swapped = True
+        if not swapped:
+            break
+    return ordered
 
 
 def agents_needing_rescore(
@@ -1832,6 +2119,7 @@ def agents_needing_rescore(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> list[LedgerEntry]:
     """The champion + participation-tail entries scored under an **older**
     bench_version than ``current_version`` — they must be re-evaluated before the
@@ -1844,7 +2132,9 @@ def agents_needing_rescore(
     not strand on an empty current-version subset. Returns the ledger entries
     (with ``agent_id``) so the caller can request their re-evaluation.
     """
-    scored = [e for e in entries if _effective_composite(e) > 0.0]
+    scored = [
+        e for e in entries if _effective_composite(e) > 0.0 and _dueling_fold_ready(e)
+    ]
     if not scored:
         return []
     champion = _champion(
@@ -1854,6 +2144,7 @@ def agents_needing_rescore(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_agent_id,
+        crown_gate=crown_gate,
     )
     rewarded = [champion, *_tail(scored, champion, tail_size)]
     return [e for e in rewarded if _entry_version(e) < current_version]
@@ -1900,15 +2191,24 @@ def _entry_has_seeds(entry: LedgerEntry, seeds: Sequence[int]) -> bool:
     return set(seeds).issubset(have.keys())
 
 
-def _shares_confirmation_seeds(a: LedgerEntry, b: LedgerEntry) -> bool:
+def _shares_confirmation_seeds(
+    a: LedgerEntry, b: LedgerEntry, *, minimum: int = 2
+) -> bool:
     """Whether the paired dethrone statistic can already decide this pair:
-    both entries carry per-seed confirmation composites over at least two
-    shared CRN seeds (the :func:`_paired_dethrone` precondition)."""
-    a_map = _entry_seed_composites(a)
-    b_map = _entry_seed_composites(b)
-    if a_map is None or b_map is None:
-        return False
-    return len(set(a_map) & set(b_map)) >= 2
+    both entries carry per-seed confirmation composites over at least
+    ``minimum`` shared CRN seeds (two is the :func:`_paired_dethrone`
+    precondition; a protocol-34 crown gate raises it)."""
+    return _shared_seed_count(a, b) >= minimum
+
+
+def _shared_seed_count(a: LedgerEntry, b: LedgerEntry) -> int:
+    """Confirmation seeds both entries carry a validated composite for (for
+    two v16 rows: a pair-masked one, inside one season)."""
+    maps = _paired_seed_maps(a, b)
+    if maps is None:
+        return 0
+    a_map, b_map = maps
+    return len(set(a_map) & set(b_map))
 
 
 def contested_confirmation_set(
@@ -1920,6 +2220,7 @@ def contested_confirmation_set(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> list[LedgerEntry]:
     """The champion plus the current-version challengers whose crown decision
     sits INSIDE the unpaired indifference band (the seed-luck zone) and cannot
@@ -1955,7 +2256,9 @@ def contested_confirmation_set(
     keep sharing them and are never re-scored: cost is O(1) per new
     challenger, not O(cohort) per sweep.
     """
-    scored = [e for e in entries if _effective_composite(e) > 0.0]
+    scored = [
+        e for e in entries if _effective_composite(e) > 0.0 and _dueling_fold_ready(e)
+    ]
     if len(scored) < 2:
         return []
     champion = _champion(
@@ -1965,6 +2268,7 @@ def contested_confirmation_set(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_agent_id,
+        crown_gate=crown_gate,
     )
     if _entry_version(champion) != current_version:
         return []
@@ -1973,6 +2277,7 @@ def contested_confirmation_set(
         for e in sorted(scored, key=lambda e: (e.first_seen, e.agent_id))
         if e.agent_id != champion.agent_id
         and _entry_version(e) == current_version
+        and not _dueling_incomparable(e, champion)
         and abs(
             _dethrone_composite(
                 e,
@@ -1991,7 +2296,11 @@ def contested_confirmation_set(
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
         )
-        and not _shares_confirmation_seeds(e, champion)
+        and not _shares_confirmation_seeds(
+            e,
+            champion,
+            minimum=2 if crown_gate is None else crown_gate.min_shared_seeds,
+        )
     ]
     if not contested:
         return []

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -408,6 +409,65 @@ func TestPublicProviderResponseKeepsEmptyToolCallsArray(t *testing.T) {
 	}
 }
 
+// providerBodyReasoning is the provider body behind the shared golden relay
+// response in testdata/public_response_reasoning_usage.json. Platform's
+// Python mirror and the dittobench-api broker read the same file.
+const providerBodyReasoning = `{
+	"id":"gen-1","object":"chat.completion","created":1755000000,
+	"model":"openai/gpt-oss-20b",
+	"choices":[{"index":0,"finish_reason":"stop","logprobs":null,
+		"message":{"role":"assistant","content":"hi"}}],
+	"usage":{"prompt_tokens":10,"completion_tokens":1500,"cost":0.01,
+		"completion_tokens_details":{"reasoning_tokens":1200,"audio_tokens":0}}
+}`
+
+// #2972: the v13 cost ledger books answer tokens as completion minus
+// reasoning, so the relay passes the provider's reasoning count through. It is
+// optional, so a missing or invalid count is left out rather than failing the
+// call.
+func TestPublicProviderResponseCarriesBoundedReasoningTokens(t *testing.T) {
+	render := func(t *testing.T, body string) string {
+		t.Helper()
+		payload := decodeProviderBody(t, body)
+		public, herr := publicProviderResponse(payload, []byte(body))
+		if herr != nil {
+			t.Fatalf("unexpected error: %v", herr.message)
+		}
+		raw, err := compactJSON(public)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		return string(raw)
+	}
+	golden, err := os.ReadFile("testdata/public_response_reasoning_usage.json")
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if got, want := render(t, providerBodyReasoning), strings.TrimSpace(string(golden)); got != want {
+		t.Fatalf("relay response = %s\nwant %s", got, want)
+	}
+
+	const plain = `"usage":{"prompt_tokens":10,"completion_tokens":1500,"total_tokens":1510}}`
+	const reported = `"completion_tokens_details":{"reasoning_tokens":1200,"audio_tokens":0}`
+	for _, details := range []string{
+		`"no_details":true`,
+		`"completion_tokens_details":null`,
+		`"completion_tokens_details":{}`,
+		`"completion_tokens_details":{"reasoning_tokens":null}`,
+		`"completion_tokens_details":{"reasoning_tokens":-1}`,
+		`"completion_tokens_details":{"reasoning_tokens":1501}`,
+		`"completion_tokens_details":{"reasoning_tokens":12.0}`,
+		`"completion_tokens_details":{"reasoning_tokens":true}`,
+		`"completion_tokens_details":{"reasoning_tokens":"12"}`,
+		`"completion_tokens_details":[1200]`,
+	} {
+		body := strings.Replace(providerBodyReasoning, reported, details, 1)
+		if got := render(t, body); !strings.HasSuffix(got, plain) {
+			t.Fatalf("details %s: usage must stay plain, got %s", details, got)
+		}
+	}
+}
+
 const structuredOutputFailureBody = `{"error":{"message":"Upstream error from Groq: Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.","code":502}}`
 const unexpectedToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool choice is none, but model called a tool","code":502}}`
 const undeclaredToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool call validation failed: tool call validation failed: attempted to call tool 'calendar_search_events' which was not in request.tools","code":502}}`
@@ -431,7 +491,7 @@ func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 }
 
 func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *testing.T) {
-	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "")
+	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "", "")
 	if aggregate["sort"] != "throughput" || aggregate["allow_fallbacks"] != true ||
 		aggregate["data_collection"] != "deny" || aggregate["zdr"] != true {
 		t.Fatalf("aggregate provider preferences: %v", aggregate)
@@ -440,9 +500,39 @@ func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *test
 	if !ok || len(ignored) != 1 || ignored[0] != "coreweave" {
 		t.Fatalf("aggregate ignored providers: %v", aggregate["ignore"])
 	}
-	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8")
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8", "")
 	if adaptive["allow_fallbacks"] != false {
 		t.Fatalf("adaptive provider unexpectedly gained fallbacks: %v", adaptive)
+	}
+}
+
+func TestBF16PriceOrderPinsBF16ProvidersWithPrivacyAndFallbacks(t *testing.T) {
+	preferences := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "",
+		config.ScoredProviderRoutingBF16PriceOrder)
+	if _, sorted := preferences["sort"]; sorted {
+		t.Fatalf("bf16 price order must not also sort: %v", preferences)
+	}
+	if preferences["allow_fallbacks"] != true || preferences["data_collection"] != "deny" ||
+		preferences["zdr"] != true {
+		t.Fatalf("bf16 price order lost fallbacks or privacy: %v", preferences)
+	}
+	want := "deepinfra,amazon-bedrock,groq,dekallm"
+	for _, key := range []string{"order", "only"} {
+		got, _ := preferences[key].([]string)
+		if strings.Join(got, ",") != want {
+			t.Fatalf("%s = %v, want %s", key, got, want)
+		}
+	}
+	// Adaptive routing and the canary mode (resolved before this call) never
+	// reach the price order.
+	for _, routing := range []string{"", config.ScoredProviderRoutingThroughput, config.ScoredProviderRoutingBF16Canary} {
+		if got := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "", routing); got["sort"] != "throughput" {
+			t.Fatalf("routing %q: %v", routing, got)
+		}
+	}
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "bf16", config.ScoredProviderRoutingBF16PriceOrder)
+	if only, _ := adaptive["only"].([]string); len(only) != 1 || only[0] != "deepinfra" {
+		t.Fatalf("adaptive route changed: %v", adaptive)
 	}
 }
 

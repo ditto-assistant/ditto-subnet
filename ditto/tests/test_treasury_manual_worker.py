@@ -39,7 +39,7 @@ def policy(**changes):
 
 class Mailbox:
     def __init__(self):
-        self.reports, self.acks = [], []
+        self.reports, self.acks, self.released = [], [], []
         self.fail = False
 
     def publish(self, body):
@@ -49,6 +49,9 @@ class Mailbox:
 
     def ack(self, value):
         self.acks.append(value)
+
+    def release(self, value):
+        self.released.append(value)
 
 
 def setup(tmp_path, **policy_changes):
@@ -889,4 +892,80 @@ def test_archive_refusal_during_catchup_still_publishes_readiness_and_pulls(
     )
     log = capsys.readouterr().out
     assert "earnings_catchup_unavailable" in log and "rate limit" not in log
+    journal.close()
+
+
+def _manual_consumer_script():
+    import runpy
+    from pathlib import Path
+
+    return runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py")
+    )
+
+
+def test_retryable_request_failure_releases_lease_instead_of_waiting_deadline(
+    tmp_path, monkeypatch, capsys
+):
+    consume = _manual_consumer_script()["consume_queued"]
+    p, c, journal, env, mailbox = setup(tmp_path)
+    mailbox.pull = lambda: ("ack", env.model_dump())
+
+    def unavailable(*_):
+        raise ValueError("aggregate source proof changed or unavailable")
+
+    monkeypatch.setitem(consume.__globals__, "consume_manual", unavailable)
+    assert consume(mailbox, journal, p, c)
+    assert mailbox.acks == [] and mailbox.released == ["ack"]
+    assert "manual_request_processing_failed" in capsys.readouterr().out
+    journal.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "released"), [("pending", ["ack"]), ("finalized", []), ("failed", [])]
+)
+def test_only_unacked_pending_report_releases_lease(
+    tmp_path, monkeypatch, status, released
+):
+    consume = _manual_consumer_script()["consume_queued"]
+    p, c, journal, env, mailbox = setup(tmp_path)
+    mailbox.pull = lambda: ("ack", env.model_dump())
+    monkeypatch.setitem(
+        consume.__globals__,
+        "consume_manual",
+        lambda *_: SimpleNamespace(status=status),
+    )
+    assert consume(mailbox, journal, p, c)
+    assert mailbox.released == released
+    journal.close()
+
+
+def test_discarded_invalid_message_is_not_released(tmp_path, monkeypatch):
+    consume = _manual_consumer_script()["consume_queued"]
+    p, c, journal, env, mailbox = setup(tmp_path)
+    mailbox.pull = lambda: ("ack", env.model_dump())
+    monkeypatch.setitem(consume.__globals__, "consume_manual", lambda *_: None)
+    assert consume(mailbox, journal, p, c)
+    assert mailbox.released == []
+    journal.close()
+
+
+def test_release_failure_falls_back_to_ack_deadline(tmp_path, monkeypatch, capsys):
+    consume = _manual_consumer_script()["consume_queued"]
+    p, c, journal, env, mailbox = setup(tmp_path)
+    mailbox.pull = lambda: ("ack", env.model_dump())
+
+    def unavailable(*_):
+        raise ValueError("private request failure")
+
+    def failed_release(_):
+        raise TimeoutError("raw provider detail")
+
+    monkeypatch.setitem(consume.__globals__, "consume_manual", unavailable)
+    mailbox.release = failed_release
+    assert consume(mailbox, journal, p, c)
+    assert mailbox.acks == []
+    log = capsys.readouterr().out
+    assert "manual_request_release_failed" in log and "TimeoutError" in log
+    assert "raw provider detail" not in log and "private request failure" not in log
     journal.close()

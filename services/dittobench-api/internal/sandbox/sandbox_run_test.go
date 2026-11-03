@@ -211,11 +211,12 @@ func TestRunArgs_DefaultsHardenAndBound(t *testing.T) {
 		t.Errorf("default must drop all capabilities, got %v", args)
 	}
 	for flag, value := range map[string]string{
-		"--user":   "65532:65532",
-		"--tmpfs":  "/tmp:rw,noexec,nosuid,nodev,size=512m",
-		"--memory": "3g",
-		"--cpus":   "2",
-		"--ulimit": "nofile=1024:1024",
+		"--user":        "65532:65532",
+		"--tmpfs":       "/tmp:rw,noexec,nosuid,nodev,size=512m",
+		"--memory":      "3g",
+		"--memory-swap": "3g",
+		"--cpus":        "2",
+		"--ulimit":      "nofile=1024:1024",
 	} {
 		if !hasFlagPair(args, flag, value) {
 			t.Errorf("expected %s %s, got %v", flag, value, args)
@@ -252,9 +253,11 @@ func TestDiagnosticsCapturesSanitizedResourceEvidence(t *testing.T) {
 		}
 	}
 
-	diagnostics := d.Diagnostics(context.Background(), &Handle{ContainerID: "opaque"})
-	if diagnostics.InfrastructureCode() != "sandbox_oom" {
-		t.Fatalf("expected sandbox_oom, got %+v", diagnostics)
+	d.hostMemAvailable = func() (uint64, bool) { return 8 << 30, true }
+
+	diagnostics := d.Diagnostics(context.Background(), &Handle{ContainerID: "opaque", memoryLimitBytes: 3 << 30})
+	if verdict, ok := diagnostics.ResourceFailure(); !ok || verdict.Code != CodeHarnessOOM || !verdict.MinerFault {
+		t.Fatalf("expected harness_oom, got %+v %+v", verdict, diagnostics)
 	}
 	if diagnostics.MemoryPeakBytes == nil || *diagnostics.MemoryPeakBytes != 3221225472 {
 		t.Fatalf("memory peak missing: %+v", diagnostics)
@@ -273,7 +276,7 @@ func TestDiagnosticsNonOOMExitIsNotInfrastructure(t *testing.T) {
 		return []byte(`{"Running":false,"OOMKilled":false,"ExitCode":2}`), nil
 	}
 	diagnostics := d.Diagnostics(context.Background(), &Handle{ContainerID: "opaque"})
-	if diagnostics.ExitCode != 2 || diagnostics.InfrastructureCode() != "" {
+	if _, classified := diagnostics.ResourceFailure(); diagnostics.ExitCode != 2 || classified {
 		t.Fatalf("ordinary exit must remain non-infrastructure: %+v", diagnostics)
 	}
 }
