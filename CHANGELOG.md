@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.438.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: Retry one failed dueling slice preparation
+  ([#3357](https://github.com/ditto-assistant/ditto-subnet/pull/3357),
+  [`291e908`](https://github.com/ditto-assistant/ditto-subnet/commit/291e908657572c2b9379327952afe9c8b77e1d08))
+
+
 ## v0.437.0 (2026-11-03)
 
 ### Bug Fixes
