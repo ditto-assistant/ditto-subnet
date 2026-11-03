@@ -46,6 +46,7 @@ locals {
     [
       "ADMIN_API_PASSWORD",
       google_secret_manager_secret.backroom_platform_operator_proof.secret_id,
+      google_secret_manager_secret.danilabs_trial_key.secret_id,
       google_secret_manager_secret.db_password.secret_id,
       google_secret_manager_secret.hmac_secret.secret_id,
       google_secret_manager_secret.moderation_audit_signing_key.secret_id,
@@ -581,6 +582,20 @@ resource "google_secret_manager_secret" "backblaze_application_key" {
 resource "google_secret_manager_secret" "backroom_platform_operator_proof" {
   project   = var.project
   secret_id = "backroom-platform-operator-proof"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# Empty container: the trial key is installed separately and never enters
+# Terraform state. The relay remains off until a bounded operator binding and
+# Backroom percentage are both configured.
+resource "google_secret_manager_secret" "danilabs_trial_key" {
+  project   = var.project
+  secret_id = "platform-danilabs-trial-key"
   replication {
     auto {}
   }

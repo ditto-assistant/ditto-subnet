@@ -1,0 +1,70 @@
+---
+# Bind the already-provisioned trial secret to the production relay only.
+# Run deliberately with --limit ditto-platform-prod and explicit variables:
+#   danilabs_trial_scope=canary|fleet
+#   danilabs_trial_until=YYYY-MM-DDTHH:MM:SSZ
+# A relay roll is separate; the Backroom percentage remains the live brake.
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_platform_app
+
+- name: Install the bounded DaniLabs relay binding
+  hosts: role_platform_app
+  become: true
+  gather_facts: true
+  vars:
+    danilabs_secret_id: platform-danilabs-trial-key
+    danilabs_env_path: /opt/ditto-platform-relay/danilabs.env
+  tasks:
+    - name: Require the production host and explicit trial settings
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'ditto-platform-prod'
+          - ansible_limit | default('') == 'ditto-platform-prod'
+          - danilabs_trial_scope | default('') in ['canary', 'fleet']
+          - danilabs_trial_until | default('') is match('^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
+        quiet: true
+
+    - name: Require a future deadline within the free-trial window
+      ansible.builtin.assert:
+        that:
+          - ((danilabs_trial_until | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (ansible_date_time.iso8601 | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() > 900
+          - ((danilabs_trial_until | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (ansible_date_time.iso8601 | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() <= 25200
+        quiet: true
+
+    - name: Verify the existing relay state directory
+      ansible.builtin.stat:
+        path: /opt/ditto-platform-relay
+      register: relay_state
+
+    - name: Refuse to provision a missing relay
+      ansible.builtin.assert:
+        that:
+          - relay_state.stat.isdir | default(false)
+        quiet: true
+
+    - name: Read the trial key from Secret Manager using the host identity
+      ansible.builtin.command:
+        argv: [gcloud, secrets, versions, access, latest, '--secret={{ danilabs_secret_id }}', '--project={{ gcp_project }}']
+      register: danilabs_secret
+      changed_when: false
+      no_log: true
+
+    - name: Refuse an empty or malformed secret
+      ansible.builtin.assert:
+        that:
+          - danilabs_secret.stdout | trim is match('^dani_[A-Za-z0-9_-]{16,}$')
+        quiet: true
+      no_log: true
+
+    - name: Install a relay-only binding without logging its contents
+      ansible.builtin.copy:
+        dest: '{{ danilabs_env_path }}'
+        owner: deploy
+        group: ditto
+        mode: '0600'
+        content: |
+          DANILABS_API_KEY={{ danilabs_secret.stdout | trim | quote }}
+          DANILABS_FREE_TRIAL_UNTIL={{ danilabs_trial_until | quote }}
+          DANILABS_TRIAL_SCOPE={{ danilabs_trial_scope | quote }}
+      no_log: true
