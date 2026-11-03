@@ -47,6 +47,9 @@ from ditto.api_server.endpoints.admin_copy_review import (
 from ditto.api_server.endpoints.admin_database_backup import (
     router as admin_database_backup_router,
 )
+from ditto.api_server.endpoints.admin_dueling import (
+    router as admin_dueling_router,
+)
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
 )
@@ -236,6 +239,7 @@ __all__ = [
     "admin_inference_concurrency_settings_router",
     "admin_inference_observability_router",
     "admin_generator_competition_router",
+    "admin_dueling_router",
     "admin_generator_rounds_router",
     "admin_scoring_lease_settings_router",
     "generator_router",

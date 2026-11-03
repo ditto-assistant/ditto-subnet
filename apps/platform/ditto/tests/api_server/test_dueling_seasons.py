@@ -34,14 +34,17 @@ from ditto.db.models import (
     GeneratorRound,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
+    Score,
 )
 from ditto.db.queries.artifact_release_settings import ArtifactReleasePolicy
 from ditto.tests.api_server.endpoints.test_generator_competition import (
+    _ADMIN,
     _SCORER,
     _archive,
     _install,
     _open_lane,
 )
+from ditto.tests.api_server.endpoints.test_generator_rounds import _seed_agent
 from ditto_screening_protocol.dueling import season_commitment, season_seed, slice_seed
 
 _WORK = "/api/v1/generator-scorer/dueling-work"
@@ -224,6 +227,53 @@ def _slice_post(work: dict[str, Any], raw: bytes) -> dict[str, Any]:
         "slice_sha256": hashlib.sha256(raw).hexdigest(),
         "slice_base64": base64.b64encode(raw).decode(),
     }
+
+
+async def _open_season(
+    maker: async_sessionmaker[AsyncSession],
+    default: GeneratorSubmission,
+    *,
+    season_index: int = 5,
+) -> UUID:
+    """An open v16 season whose five columns are the public default."""
+    season_id = uuid4()
+    secret = b"\x02" * 32
+    pin = {
+        "column_id": "c0",
+        "submission_id": str(default.submission_id),
+        "miner_hotkey": default.miner_hotkey,
+        "owner_key": "",
+        "tree_sha256": default.tree_sha256,
+        "source_sha256": default.source_sha256,
+        "grading_bench_version": 15,
+        "public_default": True,
+    }
+    async with maker() as session, session.begin():
+        session.add(
+            DuelingSeason(
+                id=season_id,
+                bench_version=16,
+                season_index=season_index,
+                shadow=False,
+                status="open",
+                commitment=season_commitment(season_index, secret),
+                secret=secret,
+                committed_at=datetime.now(UTC),
+                rounds_per_season=4,
+                anchor_block=1,
+                anchor_block_hash=_BLOCK,
+                season_seed=season_seed(season_index, secret, _BLOCK),
+                columns=[{**pin, "column_id": f"c{i}"} for i in range(5)],
+                closes_at_round=season_index + 4,
+                detail={
+                    "fallback": {
+                        "submission_id": str(default.submission_id),
+                        "source_sha256": default.source_sha256,
+                    }
+                },
+            )
+        )
+    return season_id
 
 
 class TestDuelingSeasons:
@@ -455,44 +505,8 @@ class TestDuelingSeasons:
             salt="default",
             public_default=True,
         )
-        season_id = uuid4()
-        secret = b"\x02" * 32
-        seed = season_seed(5, secret, _BLOCK)
-        pin = {
-            "column_id": "c0",
-            "submission_id": str(default.submission_id),
-            "miner_hotkey": default.miner_hotkey,
-            "owner_key": "",
-            "tree_sha256": default.tree_sha256,
-            "source_sha256": default.source_sha256,
-            "grading_bench_version": 15,
-            "public_default": True,
-        }
+        season_id = await _open_season(session_maker, default)
         async with session_maker() as session, session.begin():
-            session.add(
-                DuelingSeason(
-                    id=season_id,
-                    bench_version=16,
-                    season_index=5,
-                    shadow=True,
-                    status="open",
-                    commitment=season_commitment(5, secret),
-                    secret=secret,
-                    committed_at=datetime.now(UTC),
-                    rounds_per_season=1,
-                    anchor_block=1,
-                    anchor_block_hash=_BLOCK,
-                    season_seed=seed,
-                    columns=[{**pin, "column_id": f"c{i}"} for i in range(5)],
-                    detail={
-                        "fallback": {
-                            "submission_id": str(default.submission_id),
-                            "source_sha256": default.source_sha256,
-                        }
-                    },
-                )
-            )
-            await session.flush()
             session.add(
                 DuelingSlicePreparation(
                     id=uuid4(),
@@ -543,3 +557,108 @@ class TestDuelingSeasons:
             )
             assert prep is not None and prep.status == "failed"
             assert "tree digest mismatch" in (prep.error or "")
+
+
+class TestDuelingAdmin:
+    async def test_reads_hide_the_secret_and_rotation_is_audited(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client, epochs_per_round=_EPOCHS, dueling_enabled=True)
+        _active(monkeypatch, 16)
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        season_id = await _open_season(session_maker, default, season_index=20)
+        agent_id = await _seed_agent(session_maker, 1)
+        async with session_maker() as session, session.begin():
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey=_MINER_KEY,
+                    bench_version=16,
+                    run_id="run-1",
+                    seed=3,
+                    composite=0.5,
+                    tool_mean=0.5,
+                    memory_mean=0.5,
+                    median_ms=10,
+                    n=350,
+                    generated_at=datetime.now(UTC),
+                    dueling_season_id=season_id,
+                    dueling={
+                        "columns": [
+                            {
+                                "column_id": f"c{i}",
+                                "n": 35,
+                                "sum": 7.0 + i,
+                                "sum_sq": 7.0,
+                            }
+                            for i in range(5)
+                        ]
+                    },
+                )
+            )
+            session.add(
+                DuelingSlicePreparation(
+                    id=uuid4(),
+                    season_id=season_id,
+                    run_seed=4,
+                    status="pending",
+                    attempts=0,
+                )
+            )
+        base = "/api/v1/admin/generator-competition/dueling"
+        assert (await client.get(f"{base}/seasons")).status_code == 401
+        board = (await client.get(f"{base}/seasons", headers=_ADMIN)).json()
+        assert board["target"]["bench_version"] == 16
+        [current] = board["current"]
+        assert current["id"] == str(season_id)
+        assert current["secret_hex"] is None and current["season_seed"] is None
+        means = {m["column_id"]: m for m in current["column_means"]}
+        assert means["c0"]["mean"] == pytest.approx(0.2)
+        assert means["c0"]["below_floor"] is False and means["c0"]["scores"] == 1
+        assert current["slices"] == {"pending": 1}
+        slices = (await client.get(f"{base}/slices", headers=_ADMIN)).json()
+        assert slices["counts"] == {"pending": 1}
+        assert slices["slices"][0]["season_index"] == 20
+
+        rotate = {"reason": "pinned generator was banned", "confirmation": "ROTATE"}
+        wrong = await client.post(f"{base}/rotate", headers=_ADMIN, json=rotate)
+        assert wrong.status_code == 409 and "ROTATE DUELING SEASON" in wrong.text
+        rotate["confirmation"] = "ROTATE DUELING SEASON"
+        ok = await client.post(f"{base}/rotate", headers=_ADMIN, json=rotate)
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["rotation_reason"] == "pinned generator was banned"
+        again = await client.post(f"{base}/rotate", headers=_ADMIN, json=rotate)
+        assert again.status_code == 409
+
+        # The next tick moves its close to the next round boundary.
+        notes = await _tick(session_maker, 21 * _EPOCHS + 1)
+        assert any("rotation closes it at round 22" in note for note in notes)
+        # Escalating to immediate closes it on the next tick.
+        now_body = {**rotate, "immediate": True}
+        assert (
+            await client.post(f"{base}/rotate", headers=_ADMIN, json=now_body)
+        ).status_code == 200
+        await _tick(session_maker, 21 * _EPOCHS + 2)
+        detail = (
+            await client.get(f"{base}/seasons/{season_id}", headers=_ADMIN)
+        ).json()
+        assert detail["status"] == "closed"
+        assert detail["detail"]["close_reason"].startswith("rotated immediately")
+        await _tick(session_maker, 21 * _EPOCHS + 2 + 6)
+        revealed = (
+            await client.get(f"{base}/seasons/{season_id}", headers=_ADMIN)
+        ).json()
+        assert revealed["status"] == "revealed"
+        assert revealed["secret_hex"] == ("02" * 32)
+        assert revealed["season_seed"] == season_seed(20, b"\x02" * 32, _BLOCK)

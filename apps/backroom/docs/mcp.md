@@ -257,6 +257,14 @@ opens, once it is scored or void.
     - the round driver's last tick.
   - `get_generator_round_dataset` (`backroom:artifact:read`) downloads a
     closed round's exact dataset to reproduce it.
+  - `get_dueling_season` reads the dueling bench (bench v16+) seasons: the
+    target version (shadow while only rolling out) and why no season can
+    open; the open, committed and recent seasons; or one season by id with
+    its commitment, anchor, frozen columns, battery results, per-column means
+    across in-season scores (below the 0.15 floor is flagged) and slice
+    counts. The secret and season seed appear only once a season is revealed.
+  - `list_dueling_slices` lists slice preparations (one per season and run
+    seed) with status, attempts, latency and digests, never the bytes.
   - `list_generator_promotion_candidates` returns discriminating round cases.
   - `get_generator_board` returns the ledger validators fold.
 - **Writes (`backroom:write`, actor recorded):**
@@ -278,6 +286,13 @@ opens, once it is scored or void.
     publish the on-chain commitment of a round that has not opened.
   - `release_generator_round_lease` (`RELEASE GENERATOR ROUND LEASE`) frees a
     quiet validator's round lease.
+  - `rotate_dueling_season` (`ROTATE DUELING SEASON`, audited reason) closes
+    the open dueling season at the next round boundary, or on the next
+    round-driver tick with `immediate: true`; the next season opens at the
+    following boundary on a fresh battery. Columns are never swapped in place.
+  - `set_generator_competition_settings` also carries `dueling_enabled`
+    (ships `false`) and `rounds_per_season` (default 1); Platform refuses to
+    enable dueling with `rounds_per_season x epochs_per_round < 2`.
   - `rotate_generator_probe_seed` needs the confirmation
     `ROTATE GENERATOR PROBE SEED`. Every active generator re-qualifies.
   - `rescore_generator_submission` re-qualifies an active generator now.

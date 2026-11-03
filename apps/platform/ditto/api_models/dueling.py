@@ -137,3 +137,143 @@ class DuelingSliceAck(DuelingModel):
     preparation_id: UUID
     status: DuelingSliceStatus
     slice_sha256: str | None = None
+
+
+# --- admin ------------------------------------------------------------------
+
+ROTATE_DUELING_SEASON_CONFIRMATION = "ROTATE DUELING SEASON"
+DUELING_COLUMN_FLOOR = 0.15
+"""A column whose in-season mean falls below this is flagged for an early
+rotation (``dueling-bench.md`` section 3, solvability layer 4)."""
+
+
+class DuelingTargetView(DuelingModel):
+    bench_version: int | None
+    shadow: bool
+    blocked: str | None
+    """Why no new season can open now, or None."""
+    live_versions: list[int]
+
+
+class DuelingBatteryView(DuelingModel):
+    submission_id: UUID
+    miner_hotkey: str
+    owner_key: str
+    tree_sha256: str
+    rank: int
+    """Candidate rank by ledger score; -1 is the public default generator."""
+    evidence: dict | None
+    status: DuelingBatteryStatus
+    attempts: int
+    grading_bench_version: int | None
+    error: str | None
+    scorer_version: str | None
+    finished_at: datetime | None
+
+
+class DuelingColumnMean(DuelingModel):
+    column_id: str
+    submission_id: str
+    owner_key: str
+    public_default: bool
+    scores: int
+    """In-season score rows carrying this column's aggregate."""
+    cases: int
+    mean: float | None
+    default_gap: float | None
+    """Column mean minus the public default columns' mean (the drift anchor)."""
+    below_floor: bool
+
+
+class DuelingSeasonView(DuelingModel):
+    id: UUID
+    bench_version: int
+    season_index: int
+    shadow: bool
+    status: DuelingSeasonStatus
+    commitment: str
+    committed_at: datetime
+    rounds_per_season: int
+    settings_revision: int | None
+    anchor_block: int | None
+    anchor_block_hash: str | None
+    opened_at: datetime | None
+    closes_at_round: int | None
+    closed_at: datetime | None
+    reveal_at_epoch: int | None
+    revealed_at: datetime | None
+    void_reason: str | None
+    rotation_requested_at: datetime | None
+    rotation_immediate: bool | None
+    rotation_actor: str | None
+    rotation_reason: str | None
+    columns: list[dict] | None
+    fallback: dict | None
+    detail: dict | None
+    """Lifecycle notes: close reason, skipped candidates, substituted
+    generators. Never the battery seeds, secret or season seed."""
+    secret_hex: str | None = None
+    """Only once the season is revealed."""
+    season_seed: str | None = None
+    """Only once the season is revealed."""
+    batteries: list[DuelingBatteryView] = Field(default_factory=list)
+    column_means: list[DuelingColumnMean] = Field(default_factory=list)
+    slices: dict[str, int] = Field(default_factory=dict)
+    """Slice preparations by status."""
+
+
+class AdminDuelingSeasonsResponse(DuelingModel):
+    target: DuelingTargetView
+    current: list[DuelingSeasonView]
+    """Open seasons (at most one per bench version)."""
+    next: list[DuelingSeasonView]
+    """Committed seasons waiting for their opening round."""
+    recent: list[DuelingSeasonView]
+    """The newest closed, revealed and void seasons (no batteries or means)."""
+
+
+class DuelingSliceView(DuelingModel):
+    id: UUID
+    season_id: UUID
+    season_index: int
+    bench_version: int
+    run_seed: int
+    status: DuelingSliceStatus
+    attempts: int
+    slice_sha256: str | None
+    size_bytes: int | None
+    bytes_pruned: bool
+    columns: list[dict] | None
+    error: str | None
+    scorer_version: str | None
+    created_at: datetime
+    first_leased_at: datetime | None
+    ready_at: datetime | None
+    failed_at: datetime | None
+    latency_seconds: float | None
+    """Reservation to ready (or failed)."""
+
+
+class AdminDuelingSlicesResponse(DuelingModel):
+    slices: list[DuelingSliceView]
+    counts: dict[str, int]
+    """Every preparation in the filter by status (not only this page)."""
+    latency_p50_seconds: float | None
+    latency_p95_seconds: float | None
+    """Over the ready preparations in this page."""
+
+
+class AdminDuelingRotateRequest(BaseModel):
+    """Close an open dueling season early (an audited mini-rollout)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    season_id: UUID | None = None
+    """The open season to rotate; default the open season of the dueling
+    target version."""
+    immediate: bool = False
+    """Close now instead of at the next round boundary. No season serves
+    slices until the next season opens at the following round boundary."""
+    reason: Annotated[str, Field(min_length=8, max_length=2000)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
