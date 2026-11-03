@@ -1,7 +1,7 @@
 """add operator per-owner submission cooldown overrides
 
 Revision ID: b7d3e91c4f20
-Revises: 6ae1bd48a278
+Revises: 05e61b757387
 Create Date: 2026-11-03
 
 The submission cooldown was one global value per payment coldkey. An operator
@@ -21,7 +21,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b7d3e91c4f20"
-down_revision: str | Sequence[str] | None = "6ae1bd48a278"
+down_revision: str | Sequence[str] | None = "05e61b757387"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
