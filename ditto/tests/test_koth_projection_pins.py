@@ -91,8 +91,10 @@ def test_platform_seed_work_cap_stays_inside_the_validator_fold_ceiling() -> Non
         platform["TOP5_MIN_CONFIRMATION_SEEDS"]
         == validator["TOP5_MIN_CONFIRMATION_SEEDS"]
     )
-    assert (
-        platform["TOP5_MIN_CONFIRMATION_SEEDS"]
-        <= platform["TOP5_MAX_CONFIRMATION_SEEDS"]
-        <= platform["CONFIRMATION_SEED_CEILING"]
-    )
+    floor = platform["TOP5_MIN_CONFIRMATION_SEEDS"]
+    cap = platform["TOP5_MAX_CONFIRMATION_SEEDS"]
+    ceiling = platform["CONFIRMATION_SEED_CEILING"]
+    assert isinstance(floor, int)
+    assert isinstance(cap, int)
+    assert isinstance(ceiling, int)
+    assert floor <= cap <= ceiling

@@ -1,5 +1,5 @@
 {
-  "_comment": "Protocol-34 crown gate cases folded by BOTH the validator (ditto/tests/validator/test_crown_gate.py) and the Platform projection (apps/platform/ditto/tests/api_server/test_crown_gate.py). One fixture, two folds: a drift between them crowns a different King on the board than the fleet pays. Seeds map to per-seed confirmation composites; minutes offset first_seen. Cases with bench_version 16 build dueling rows: each entry's report (and each seed's) has n=35 cases per slice column, sum = mean x 35, sum_sq = mean^2 x 35, datagen_gate 1, the case's slice_owners per column c0..c4, and the entry's owner_key; composites are the self-masked report composites. A null season_id/dueling is a v16 row without its season or aggregates. 'tail', when present, is the ungated fold's paid tail in order. The fold-ceiling case pins both folds to the validator's 15-seed confirmation ceiling: the challenger's lead lives on seeds 11-15 and seeds 16-17 erase it, so a fold that truncates at 10 or at 16 or more crowns the king. Platform's 10-seed retest work cap bounds the window it serves, never this ceiling.",
+  "_comment": "Protocol-34 crown gate cases folded by BOTH the validator (ditto/tests/validator/test_crown_gate.py) and the Platform projection (apps/platform/ditto/tests/api_server/test_crown_gate.py). One fixture, two folds: a drift between them crowns a different King on the board than the fleet pays. Seeds map to per-seed confirmation composites; minutes offset first_seen. Cases with bench_version 16 build dueling rows: each entry's report (and each seed's) has n=35 cases per slice column, sum = mean x 35, sum_sq = mean^2 x 35, datagen_gate 1, the case's slice_owners per column c0..c4, and the entry's owner_key; composites are the self-masked report composites. A null season_id/dueling is a v16 row without its season or aggregates. 'tail', when present, is the ungated fold's paid tail in order. The fold-ceiling case pins both folds to the validator's 15-seed confirmation ceiling: the challenger's lead lives on seeds 11-15 and seeds 16-17 erase it, so a fold that truncates at 10 or at 16 or more crowns the king. Platform's 10-seed retest work cap bounds the window it serves, never this ceiling: 'work_cap_champion', when present, is the King of the Platform projections built from stored rows, which apply that 10-seed window before folding.",
   "cases": [
     {
       "name": "unretested newcomer cannot take the crown",
@@ -274,7 +274,8 @@
       "incumbent": "king",
       "gate": {"min_shared_seeds": 3, "standing_rank": 3},
       "ungated_champion": "challenger",
-      "gated_champion": "challenger"
+      "gated_champion": "challenger",
+      "work_cap_champion": "king"
     }
   ]
 }
