@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -19,12 +19,17 @@ import bittensor
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.dueling_seasons as dueling_mod
 from ditto.api_models.generator import generator_settings_confirmation
 from ditto.api_models.source_disclosure import SourceDisclosure
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_server.confirmation_seed_anchor import (
+    list_reign_seed_anchors,
+    resolve_reign_seed_anchor,
+)
 from ditto.api_server.dueling_seasons import (
     DuelingEvidenceRejected,
     DuelingSliceUnavailable,
@@ -43,8 +48,19 @@ from ditto.db.models import (
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
     Score,
+    ValidatorTicket,
 )
 from ditto.db.queries.artifact_release_settings import ArtifactReleasePolicy
+from ditto.db.queries.confirmation_seed_anchors import NIL_SEASON_KEY
+from ditto.db.queries.dueling_season_window import (
+    dueling_season_window,
+    season_scope_predicate,
+)
+from ditto.db.queries.score_retests import (
+    DUELING_ROTATION_RETEST_BASIS,
+    activate_next_score_retest,
+    queue_dueling_rotation_retests,
+)
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
     _SCORER,
@@ -1083,3 +1099,196 @@ class TestDuelingSliceRetry:
             refused_url, headers=_ADMIN, json=body(refused_id, "c1: build failed")
         )
         assert closed.status_code == 409 and "season is closed" in closed.text
+
+
+async def _season_sequence(
+    maker: async_sessionmaker[AsyncSession], default: GeneratorSubmission
+) -> list[UUID]:
+    """Three v16 seasons: two closed, then the open one (last)."""
+    ids: list[UUID] = []
+    for index in (30, 31, 32):
+        season_id = await _open_season(maker, default, season_index=index)
+        ids.append(season_id)
+        if index != 32:
+            async with maker() as session, session.begin():
+                season = await session.get(DuelingSeason, season_id)
+                assert season is not None
+                season.status = "closed"
+    return ids
+
+
+def _v16_score(
+    agent_id: UUID, validator: str, season_id: UUID, *, composite: float
+) -> Score:
+    return Score(
+        agent_id=agent_id,
+        validator_hotkey=validator,
+        bench_version=16,
+        run_id=f"run-{validator}",
+        seed=3,
+        composite=composite,
+        tool_mean=composite,
+        memory_mean=composite,
+        median_ms=10,
+        n=350,
+        generated_at=datetime.now(UTC),
+        dueling_season_id=season_id,
+        dueling={"columns": []},
+    )
+
+
+class TestDuelingSeasonRotation:
+    async def test_rotation_requeues_the_cohort_and_old_seasons_expire(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        expired, provisional, current = await _season_sequence(session_maker, default)
+        agent_id = await _seed_agent(session_maker, 1)
+        validators = {"5RotV1": expired, "5RotV2": provisional, "5RotV3": current}
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for validator, season_id in validators.items():
+                session.add(_v16_score(agent_id, validator, season_id, composite=0.6))
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=validator,
+                        bench_version=16,
+                        slot_id="slot-0",
+                        status=TicketStatus.SCORED,
+                        purpose=TicketPurpose.CANONICAL_QUORUM,
+                        purpose_revision=1,
+                        issued_at=now,
+                        deadline=now + timedelta(minutes=90),
+                        attempt_count=1,
+                        manual_retry_grants=0,
+                        infra_retry_grants=0,
+                        dueling_season_id=season_id,
+                        slice_sha256="ab" * 32,
+                    )
+                )
+
+        # The window is the open season plus the one before; the oldest
+        # season's score no longer counts anywhere the window is read.
+        async with session_maker() as session:
+            window = await dueling_season_window(session, 16)
+            assert window is not None
+            assert (window.current, window.previous) == (current, provisional)
+            assert await dueling_season_window(session, 15) is None
+            counted = await session.scalar(
+                select(func.count())
+                .select_from(Score)
+                .where(
+                    await season_scope_predicate(
+                        session,
+                        version_column=Score.bench_version,
+                        season_column=Score.dueling_season_id,
+                        bench_versions=(16,),
+                    )
+                )
+            )
+            assert counted == 2
+
+        # Season open queues the cohort's out-of-season scores, champion first.
+        async def _cohort(*_args: Any) -> tuple[list[UUID], str]:
+            return [agent_id], "continual_cohort"
+
+        monkeypatch.setattr(dueling_mod, "_rotation_cohort", _cohort)
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, current)
+            assert season is not None
+            rotation = await dueling_mod.queue_rotation_retests(
+                session, season, now=now
+            )
+        assert rotation["queued"] == 2 and rotation["already_current"] == 1
+        async with session_maker() as session, session.begin():
+            again = await queue_dueling_rotation_retests(
+                session, season_id=current, bench_version=16, cohort=[agent_id], now=now
+            )
+        assert again["queued"] == 0  # idempotent per season
+
+        # A free slot promotes it and drops the old season's slice pin, so
+        # the lease takes the open season's slice.
+        async with session_maker() as session, session.begin():
+            ticket = await activate_next_score_retest(
+                session,
+                validator_hotkey="5RotV1",
+                now=now,
+                supports_version=lambda version: version == 16,
+                required_basis=DUELING_ROTATION_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+            )
+            assert ticket is not None and ticket.status == TicketStatus.ISSUED
+            assert ticket.dueling_season_id is None and ticket.slice_sha256 is None
+
+        view = (
+            await client.get(
+                f"/api/v1/admin/generator-competition/dueling/seasons/{current}",
+                headers=_ADMIN,
+            )
+        ).json()["rotation"]
+        assert view["standing"] == "current" and view["source"] == "continual_cohort"
+        assert (view["pending"], view["running"], view["closed"]) == (1, 1, 0)
+        assert view["cohort_scores_in_season"] == 1
+        assert view["cohort_quorum_in_season"] == 0
+
+    async def test_reign_anchors_restart_per_season(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        champion = await _seed_agent(session_maker, 1)
+        first = await _open_season(session_maker, default, season_index=40)
+        block_hash = "0x" + "9d" * 32
+        now = datetime.now(UTC)
+
+        async def _pin(season_id: UUID) -> None:
+            async with session_maker() as session, session.begin():
+                for version in (15, 16):
+                    key = NIL_SEASON_KEY if version == 15 else season_id
+                    await resolve_reign_seed_anchor(
+                        session,
+                        champion_agent_id=champion,
+                        bench_version=version,
+                        ready_block=100,
+                        now=now,
+                        finalized_hashes={(champion, version, key): block_hash},
+                    )
+
+        await _pin(first)
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, first)
+            assert season is not None
+            season.status = "closed"
+        second = await _open_season(session_maker, default, season_index=41)
+        await _pin(second)
+        async with session_maker() as session:
+            served = await list_reign_seed_anchors(
+                session, bench_version=16, current_season_only=True
+            )
+            every = await list_reign_seed_anchors(session, bench_version=16)
+            legacy = await list_reign_seed_anchors(
+                session, bench_version=15, current_season_only=True
+            )
+        # The ledger serves only the open season's reign; binding a reported
+        # seed still sees both; v15 keeps one nil-keyed anchor per reign.
+        assert [a.season_key for a in served] == [second]
+        assert {a.season_key for a in every} == {first, second}
+        assert [a.season_key for a in legacy] == [NIL_SEASON_KEY]

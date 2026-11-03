@@ -538,17 +538,39 @@ async def confirmation_efficiency_costs_by_agent(
     }
 
 
+async def _dueling_scope(
+    session: AsyncSession, *, bench_version: int, planning: bool
+) -> ColumnElement[bool]:
+    """Bench v16+: only rows of the version's season window (or, for seed
+    planning, of its current season); ``true()`` below the floor."""
+    from ditto.db.queries.dueling_season_window import season_scope_predicate
+
+    return await season_scope_predicate(
+        session,
+        version_column=ConfirmationScore.bench_version,
+        season_column=ConfirmationScore.dueling_season_id,
+        bench_versions=(bench_version,),
+        planning=planning,
+    )
+
+
 async def confirmation_composites_by_seed(
     session: AsyncSession,
     *,
     agent_ids: Iterable[UUID],
     bench_version: int,
+    planning: bool = False,
 ) -> dict[UUID, dict[int, float]]:
     """Per agent, ``{seed: median composite across validators}`` for one version.
 
     The median across validators mirrors the k=3 composite selection (no single
     validator decides a seed), and pairs the fold uses shared seeds against the
     champion. Absent agents / versions map to an empty dict.
+
+    From the dueling floor only seeds scored inside the version's season
+    window count (:mod:`ditto.db.queries.dueling_season_window`);
+    ``planning=True`` narrows that to the current season, so a rotation plans
+    a fresh family rather than catching up on the last season's seeds.
     """
     ids = list(dict.fromkeys(agent_ids))
     if not ids:
@@ -562,6 +584,9 @@ async def confirmation_composites_by_seed(
             ConfirmationScore.agent_id.in_(ids),
             ConfirmationScore.bench_version == bench_version,
             not_voided(),
+            await _dueling_scope(
+                session, bench_version=bench_version, planning=planning
+            ),
         )
     )
     grouped: dict[UUID, dict[int, list[float]]] = {}
@@ -585,7 +610,8 @@ async def confirmation_history_by_agent(
 
     Ordered ``(seed, validator_hotkey)`` for a deterministic wire order. Raw
     per-``(validator, seed)`` records so the fold does its own group-by-seed
-    median; the platform does not pre-aggregate the exposed history.
+    median; the platform does not pre-aggregate the exposed history. From the
+    dueling floor only rows inside the version's season window are served.
     """
     ids = list(dict.fromkeys(agent_ids))
     if not ids:
@@ -604,6 +630,7 @@ async def confirmation_history_by_agent(
             ConfirmationScore.agent_id.in_(ids),
             ConfirmationScore.bench_version == bench_version,
             not_voided(),
+            await _dueling_scope(session, bench_version=bench_version, planning=False),
         )
         .order_by(ConfirmationScore.seed, ConfirmationScore.validator_hotkey)
     )

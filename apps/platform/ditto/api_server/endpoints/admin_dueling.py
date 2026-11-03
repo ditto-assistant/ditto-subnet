@@ -37,6 +37,7 @@ from ditto.api_models.dueling import (
     AdminDuelingSlicesResponse,
     DuelingBatteryView,
     DuelingColumnMean,
+    DuelingRotationView,
     DuelingSeasonView,
     DuelingSliceStatus,
     DuelingSliceView,
@@ -58,8 +59,17 @@ from ditto.db.models import (
     DuelingSeasonBattery,
     DuelingSlicePreparation,
     Score,
+    ScoreAuditEntry,
 )
+from ditto.db.queries.audit import (
+    EVENT_SCORE_RETEST_QUEUED,
+    EVENT_SCORE_RETEST_REQUESTED,
+    SCORE_RETEST_EVENTS,
+)
+from ditto.db.queries.benchmark_rollout import SCORING_QUORUM
+from ditto.db.queries.dueling_season_window import dueling_season_window
 from ditto.db.queries.generator import record_operator_action
+from ditto.db.queries.score_retests import rotation_request_id
 from ditto_screening_protocol.dueling import DUELING_MIN_BENCH_VERSION
 
 router = APIRouter(prefix="/admin/generator-competition/dueling", tags=["admin"])
@@ -134,6 +144,102 @@ async def _column_means(
     return out
 
 
+async def _rotation(
+    session: AsyncSession, season: DuelingSeason
+) -> DuelingRotationView:
+    """The season-open re-scoring and its progress, from the audit log."""
+    window = await dueling_season_window(session, season.bench_version)
+    standing = (
+        "not_opened"
+        if season.status in ("committed", "void")
+        else "current"
+        if window is not None and window.current == season.id
+        else "provisional"
+        if window is not None and window.previous == season.id
+        else "expired"
+    )
+    recorded = dict((season.detail or {}).get("rotation") or {})
+    cohort = [
+        UUID(str(member["agent_id"]))
+        for member in recorded.get("cohort", ())
+        if isinstance(member, dict) and member.get("agent_id")
+    ]
+    latest: dict[tuple[UUID, str | None], ScoreAuditEntry] = {}
+    if cohort:
+        for entry in await session.scalars(
+            # Only the newest lifecycle entry per (agent, validator).
+            select(ScoreAuditEntry)
+            .where(
+                ScoreAuditEntry.agent_id.in_(cohort),
+                ScoreAuditEntry.event.in_(SCORE_RETEST_EVENTS),
+                ScoreAuditEntry.payload["bench_version"].as_integer()
+                == season.bench_version,
+            )
+            .distinct(ScoreAuditEntry.agent_id, ScoreAuditEntry.validator_hotkey)
+            .order_by(
+                ScoreAuditEntry.agent_id,
+                ScoreAuditEntry.validator_hotkey,
+                ScoreAuditEntry.seq.desc(),
+            )
+        ):
+            latest[(entry.agent_id, entry.validator_hotkey)] = entry
+    pending = running = closed = 0
+    for (agent_id, validator_hotkey), entry in latest.items():
+        payload = entry.payload or {}
+        ours = str(rotation_request_id(season.id, agent_id, validator_hotkey or ""))
+        if ours not in (payload.get("request_id"), payload.get("retest_request_id")):
+            continue  # this season never queued it, or a later re-test replaced it
+        if entry.event == EVENT_SCORE_RETEST_QUEUED:
+            pending += 1
+        elif entry.event == EVENT_SCORE_RETEST_REQUESTED:
+            running += 1
+        else:
+            closed += 1
+    per_agent = dict(
+        (
+            await session.execute(
+                select(Score.agent_id, func.count())
+                .where(
+                    Score.dueling_season_id == season.id,
+                    Score.agent_id.in_(cohort or [UUID(int=0)]),
+                )
+                .group_by(Score.agent_id)
+            )
+        )
+        .tuples()
+        .all()
+    )
+    scores_in_season = await session.scalar(
+        select(func.count())
+        .select_from(Score)
+        .where(Score.dueling_season_id == season.id)
+    )
+    confirmations_in_season = await session.scalar(
+        select(func.count())
+        .select_from(ConfirmationScore)
+        .where(ConfirmationScore.dueling_season_id == season.id)
+    )
+    return DuelingRotationView(
+        standing=standing,  # type: ignore[arg-type]
+        source=recorded.get("source"),
+        cohort=list(recorded.get("cohort", ())),
+        queued_at=recorded.get("queued_at"),
+        queued=int(recorded.get("queued", 0)),
+        already_current=int(recorded.get("already_current", 0)),
+        busy=int(recorded.get("busy", 0)),
+        error=recorded.get("error"),
+        pending=pending,
+        running=running,
+        closed=closed,
+        cohort_scores_in_season=sum(int(n) for n in per_agent.values()),
+        cohort_quorum_in_season=sum(
+            1 for n in per_agent.values() if int(n) >= SCORING_QUORUM
+        ),
+        scores_in_season=int(scores_in_season or 0),
+        confirmation_scores_in_season=int(confirmations_in_season or 0),
+    )
+
+
 async def _view(
     session: AsyncSession, season: DuelingSeason, *, full: bool
 ) -> DuelingSeasonView:
@@ -195,6 +301,7 @@ async def _view(
             )
         ]
         view["column_means"] = await _column_means(session, season)
+        view["rotation"] = await _rotation(session, season)
         view["slices"] = {
             str(status): int(count)
             for status, count in await session.execute(

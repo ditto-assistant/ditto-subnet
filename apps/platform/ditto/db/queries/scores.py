@@ -69,7 +69,7 @@ from ditto.score_order import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1438,7 +1438,11 @@ async def ranked_quorum_agent_ids(
             order_by=(Score.composite.asc(), Score.validator_hotkey.asc()),
         )
         .label("srn"),
-    ).where(Score.bench_version == bench_version)
+    ).where(
+        Score.bench_version == bench_version,
+        # Bench v16+: only the season window's rows make a quorum.
+        await _score_season_scope(session, (bench_version,)),
+    )
     if agent_ids is not None:
         if not agent_ids:
             return set()
@@ -1489,6 +1493,22 @@ async def ranked_quorum_agent_ids(
         )
     )
     return ranked & confirmed
+
+
+async def _score_season_scope(
+    session: AsyncSession, bench_versions: Iterable[int | None]
+) -> ColumnElement[bool]:
+    """Bench v16+: only ``scores`` rows of each version's dueling season
+    window (current plus the provisional previous season); ``true()`` below
+    the floor, so every pre-16 read is unchanged."""
+    from ditto.db.queries.dueling_season_window import season_scope_predicate
+
+    return await season_scope_predicate(
+        session,
+        version_column=Score.bench_version,
+        season_column=Score.dueling_season_id,
+        bench_versions=bench_versions,
+    )
 
 
 async def count_ranked_quorum_agents(
@@ -1943,7 +1963,12 @@ async def list_eligible_ledger(
             ),
         )
         .label("srn"),
-    ).where(Score.bench_version.in_(candidate_versions))
+    ).where(
+        Score.bench_version.in_(candidate_versions),
+        # Bench v16+: a score expires from the authoritative ledger one season
+        # after the season it was scored in (dueling_season_window).
+        await _score_season_scope(session, candidate_versions),
+    )
     if v9_enforce:
         agent_best_stmt = (
             agent_best_stmt.outerjoin(
@@ -2912,6 +2937,7 @@ async def quorum_composites(
         select(Score.agent_id, Score.composite, Score.bench_version).where(
             Score.agent_id.in_(agent_ids),
             Score.bench_version.in_(set(versions.values())),
+            await _score_season_scope(session, set(versions.values())),
         )
     )
     out: dict[UUID, list[float]] = {}

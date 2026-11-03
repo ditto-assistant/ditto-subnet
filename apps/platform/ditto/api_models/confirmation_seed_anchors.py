@@ -35,6 +35,9 @@ class AdminConfirmationSeedAnchor(BaseModel):
     pinned: bool
     pinned_at: datetime | None = None
     created_at: datetime
+    dueling_season_id: UUID | None = None
+    """Bench v16+: the dueling season this reign anchor belongs to (one anchor
+    per ``(champion, bench_version, season)``); null below the dueling floor."""
 
 
 class AdminConfirmationSeedAnchorList(BaseModel):

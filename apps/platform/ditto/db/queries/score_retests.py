@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +33,7 @@ from ditto.db.queries.audit import (
     EVENT_SCORE_RETEST_REQUESTED,
     SCORE_RETEST_EVENTS,
     append_audit_entry,
+    get_latest_score_retest_event,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.lease_liveness import (
@@ -48,6 +49,15 @@ from ditto.db.queries.tickets import release_generator_round_dataset_pin
 # value as ``ttl``; a promoted replacement stamps it onto its NEW deadline.
 REPLACEMENT_TICKET_TTL = DEFAULT_SCORING_TICKET_TTL
 V9_CONTRACT_RETEST_BASIS = "v9_contract_mismatch"
+DUELING_ROTATION_RETEST_BASIS = "dueling_season_rotation"
+"""Bench v16+: a season rotation re-runs the champion and the retest cohort on
+the new generator set (``dueling-bench.md`` section 3, "Rotation is a
+mini-rollout"). Queued by Platform at season open, champion first, then by
+rank; promoted ahead of every other re-test, on any free slot."""
+PARALLEL_RETEST_BASES = frozenset(
+    {V9_CONTRACT_RETEST_BASIS, DUELING_ROTATION_RETEST_BASIS}
+)
+"""Typed bases that may run beside ordinary work on otherwise-free slots."""
 MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS = 1
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
 
@@ -287,14 +297,16 @@ async def _ordered_queued_retests(
         rollout_positions.update(
             await _rollout_member_positions(session, bench_version=bench_version)
         )
-    return sorted(
-        queued,
-        key=lambda entry: (
-            0 if entry.agent_id in rollout_positions else 1,
-            rollout_positions.get(entry.agent_id, entry.seq),
-            entry.seq,
-        ),
-    )
+
+    def order(entry: ScoreAuditEntry) -> tuple[int, int, int]:
+        # A season rotation re-test goes first, champion (rank 0) first.
+        if entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS:
+            return (0, int(entry.payload.get("rotation_rank", 0)), entry.seq)
+        if entry.agent_id in rollout_positions:
+            return (1, rollout_positions[entry.agent_id], entry.seq)
+        return (2, entry.seq, entry.seq)
+
+    return sorted(queued, key=order)
 
 
 async def activate_next_score_retest(
@@ -322,8 +334,11 @@ async def activate_next_score_retest(
     """
     if (
         allow_parallel_ordinary or allow_parallel_contract_retests
-    ) and required_basis != V9_CONTRACT_RETEST_BASIS:
-        raise ValueError("parallel execution is reserved for v9 contract retests")
+    ) and required_basis not in PARALLEL_RETEST_BASES:
+        raise ValueError(
+            "parallel execution is reserved for v9 contract and dueling "
+            "rotation retests"
+        )
     # Look before locking. A validator with no re-test lifecycle at all cannot
     # reach any mutating branch below -- `issued` needs a REQUESTED entry and
     # `queued` needs a QUEUED one, so an empty history returns None down every
@@ -509,7 +524,7 @@ async def activate_next_score_retest(
             stale_reason = "accepted score ticket is no longer reusable"
         elif (
             ticket.status == TicketStatus.ISSUED
-            and entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
+            and entry.payload.get("basis") in PARALLEL_RETEST_BASES
         ):
             # Continual evidence reuses the same (agent, version, validator)
             # ticket row as the accepted canonical score. A contract repair
@@ -525,6 +540,10 @@ async def activate_next_score_retest(
             stale_reason = "accepted score ticket is no longer reusable"
         elif score is None or score.run_id != entry.payload.get("run_id"):
             stale_reason = "accepted score changed while the request was queued"
+        elif entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS:
+            stale_reason = await _rotation_retest_stale_reason(
+                session, entry=entry, score=score
+            )
         if stale_reason is not None:
             await _close_unserviceable(
                 session, entry=entry, now=now, reason=stale_reason
@@ -534,6 +553,11 @@ async def activate_next_score_retest(
         assert ticket is not None
         deadline = now + ttl
         release_generator_round_dataset_pin(ticket)
+        if entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS:
+            # The row still pins the last season's slice for this run seed;
+            # a rotation re-test must take the open season's slice instead.
+            ticket.dueling_season_id = None
+            ticket.slice_sha256 = None
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -563,6 +587,121 @@ async def activate_next_score_retest(
         return ticket
     await session.flush()
     return None
+
+
+async def _rotation_retest_stale_reason(
+    session: AsyncSession, *, entry: ScoreAuditEntry, score: Score
+) -> str | None:
+    """Why a queued season rotation re-test no longer applies, or None."""
+    from ditto.api_server.dueling_seasons import open_season
+
+    season = await open_season(session, int(entry.payload.get("bench_version", -1)))
+    if season is None or str(season.id) != entry.payload.get("dueling_season_id"):
+        return "the dueling season it was queued for is no longer open"
+    if score.dueling_season_id == season.id:
+        return "the score is already from the open dueling season"
+    return None
+
+
+def rotation_request_id(season_id: UUID, agent_id: UUID, validator_hotkey: str) -> UUID:
+    """The deterministic request id of one season's rotation re-test."""
+    return uuid5(season_id, f"dueling-rotation:{agent_id}:{validator_hotkey}")
+
+
+async def queue_dueling_rotation_retests(
+    session: AsyncSession,
+    *,
+    season_id: UUID,
+    bench_version: int,
+    cohort: list[UUID],
+    now: datetime,
+) -> dict[str, int]:
+    """Queue one rotation re-test per accepted score of every cohort member.
+
+    ``cohort`` is the champion first, then the retest cohort by rank. Every
+    ``(agent, validator)`` score at ``bench_version`` from another season is
+    queued behind nothing (:func:`_ordered_queued_retests` puts rotation work
+    first); a score already in ``season_id``, a live ticket, or an open
+    re-test of another basis is left alone. A rotation re-test still waiting
+    from an earlier season is closed and replaced. Idempotent per season: the
+    request id is derived from ``(season, agent, validator)``. Caller commits.
+    """
+    counts = {"queued": 0, "already_current": 0, "busy": 0, "replaced": 0}
+    for rank, agent_id in enumerate(dict.fromkeys(cohort)):
+        rows = list(
+            (
+                await session.execute(
+                    select(
+                        Score.validator_hotkey,
+                        Score.run_id,
+                        Score.dueling_season_id,
+                    ).where(
+                        Score.agent_id == agent_id,
+                        Score.bench_version == bench_version,
+                    )
+                )
+            ).all()
+        )
+        for validator_hotkey, run_id, scored_season in sorted(rows):
+            if scored_season == season_id:
+                counts["already_current"] += 1
+                continue
+            request_id = rotation_request_id(season_id, agent_id, validator_hotkey)
+            latest = await get_latest_score_retest_event(
+                session, agent_id=agent_id, validator_hotkey=validator_hotkey
+            )
+            if latest is not None and latest.payload.get("request_id") == str(
+                request_id
+            ):
+                continue  # already queued (or run) for this season
+            if retest_is_open(latest):
+                assert latest is not None
+                ticket = await session.get(
+                    ValidatorTicket, (agent_id, bench_version, validator_hotkey)
+                )
+                running = (
+                    latest.event == EVENT_SCORE_RETEST_REQUESTED
+                    and ticket is not None
+                    and ticket.status == TicketStatus.ISSUED
+                )
+                if (
+                    latest.payload.get("basis") != DUELING_ROTATION_RETEST_BASIS
+                    or running
+                ):
+                    counts["busy"] += 1
+                    continue
+                # An earlier season's rotation re-test still queued, or one
+                # whose lease already ended without a score: replace it.
+                await _close_unserviceable(
+                    session,
+                    entry=latest,
+                    now=now,
+                    reason="a newer dueling season rotation replaced this re-test",
+                )
+                counts["replaced"] += 1
+            await append_audit_entry(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=validator_hotkey,
+                event=EVENT_SCORE_RETEST_QUEUED,
+                payload={
+                    "request_id": str(request_id),
+                    "actor": "platform:dueling-season-rotation",
+                    "reason": "dueling season rotation: re-score on the new set",
+                    "basis": DUELING_ROTATION_RETEST_BASIS,
+                    "bench_version": bench_version,
+                    "run_id": run_id,
+                    "dueling_season_id": str(season_id),
+                    "previous_dueling_season_id": (
+                        None if scored_season is None else str(scored_season)
+                    ),
+                    "rotation_rank": rank,
+                    "automatic": True,
+                },
+                recorded_at=now,
+            )
+            counts["queued"] += 1
+    return counts
 
 
 def retest_is_open(entry: ScoreAuditEntry | None) -> bool:

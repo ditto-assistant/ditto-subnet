@@ -1183,8 +1183,14 @@ async def materialize_ledger_snapshot(
             anchor_block=anchor.anchor_block,
             anchor_block_hash=anchor.block_hash or "",
         )
+        # Bench v16+: the current dueling season's anchors only. The validator
+        # plans a reign from the FIRST served anchor matching its champion
+        # (oldest first), so serving the previous season's anchor too would
+        # plan the old family. A leased seed carries its own binding
+        # (bind_confirmation_seed searches every season), so no in-flight
+        # lease needs a previous-season pin here.
         for anchor in await list_reign_seed_anchors(
-            session, bench_version=canonical_version
+            session, bench_version=canonical_version, current_season_only=True
         )
         if anchor.block_hash is not None
     )
