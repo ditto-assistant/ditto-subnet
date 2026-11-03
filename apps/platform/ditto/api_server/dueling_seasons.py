@@ -810,7 +810,7 @@ async def lease_slice_work(
     if row is None:
         return None
     season = await session.get(DuelingSeason, row.season_id)
-    if row.attempts >= MAX_SLICE_ATTEMPTS:
+    if slice_attempts_exhausted(row):
         _fail_slice(row, "slice lease expired repeatedly", now=now)
         await session.flush()
         return None
@@ -875,6 +875,53 @@ async def lease_slice_work(
             tree_sha256=fallback_sub.tree_sha256,
         ),
     )
+
+
+UNSUPPORTED_SLICE_ERROR_PREFIX = "infra: unsupported_request:"
+"""A preparation failed this way was refused by the scorer itself (a digest
+mismatch on the pinned source, an unbuildable request): a retry repeats it,
+so it needs a season rotation, not a re-queue."""
+
+
+def slice_attempts_exhausted(row: DuelingSlicePreparation) -> bool:
+    """Each operator retry restarts the lease attempt cap."""
+    return row.attempts >= MAX_SLICE_ATTEMPTS * (1 + (row.retries or 0))
+
+
+def slice_retry_refusal(
+    row: DuelingSlicePreparation, season: DuelingSeason | None, *, force: bool
+) -> str | None:
+    """Why this preparation cannot be re-queued now, or None."""
+    if row.status != "failed":
+        return f"preparation is {row.status}; only a failed one is retried"
+    if season is None or season.status != "open":
+        status = "missing" if season is None else season.status
+        return (
+            f"its season is {status}; only an open season's slices are retried "
+            "(a closed season's tickets keep their pinned bytes or are refused)"
+        )
+    if not force and (row.error or "").startswith(UNSUPPORTED_SLICE_ERROR_PREFIX):
+        return (
+            "the scorer refused this request itself (a digest mismatch or an "
+            "unbuildable pin): rotate the season instead, or pass force with a "
+            "reason"
+        )
+    return None
+
+
+def retry_slice(
+    row: DuelingSlicePreparation, *, actor: str, reason: str, now: datetime
+) -> None:
+    """Re-queue one failed preparation: attempts kept, error cleared."""
+    row.status = "pending"
+    row.error = None
+    row.failed_at = None
+    row.lease_id = None
+    row.lease_expires_at = None
+    row.retries = (row.retries or 0) + 1
+    row.last_retry_at = now
+    row.last_retry_actor = actor
+    row.last_retry_reason = reason
 
 
 def _fail_slice(row: DuelingSlicePreparation, error: str, *, now: datetime) -> None:
@@ -1212,7 +1259,7 @@ async def record_dueling_fault(
     )
     if slice_row is not None:
         if payload.error_kind == "unsupported_request" or (
-            slice_row.attempts >= MAX_SLICE_ATTEMPTS
+            slice_attempts_exhausted(slice_row)
         ):
             _fail_slice(slice_row, detail, now=now)
             await session.flush()

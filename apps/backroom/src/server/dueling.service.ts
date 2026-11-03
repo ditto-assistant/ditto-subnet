@@ -4,6 +4,7 @@ import {
   duelingSlicesSchema,
   getDuelingSeasonInputSchema,
   listDuelingSlicesInputSchema,
+  retryDuelingSliceInputSchema,
   rotateDuelingSeasonInputSchema,
 } from '../lib/dueling.schemas'
 import { PlatformAdminError, platformAdminRequest } from './ditto.server'
@@ -29,6 +30,7 @@ export async function listDuelingSlices(rawInput: unknown) {
     offset: String(input.offset),
   })
   if (input.seasonId) params.set('season_id', input.seasonId)
+  if (input.preparationId) params.set('preparation_id', input.preparationId)
   if (input.status) params.set('status', input.status)
   return duelingSlicesSchema.parse(await platformAdminRequest(`${BASE}/slices?${params}`))
 }
@@ -54,6 +56,38 @@ export async function rotateDuelingSeason(rawInput: unknown, actor: string) {
       throw new Error(
         `Nothing was rotated: ${cause.message}. Re-read get_dueling_season and retry only `
         + 'against an open season that has not already been rotated.',
+      )
+    }
+    throw cause
+  }
+}
+
+// Re-queue exactly one failed slice preparation (audited); returns its row.
+export async function retryDuelingSlicePreparation(rawInput: unknown, actor: string) {
+  const input = retryDuelingSliceInputSchema.parse(rawInput)
+  try {
+    return duelingSlicesSchema.shape.slices.element.parse(
+      await platformAdminRequest(
+        `${BASE}/slices/${encodeURIComponent(input.preparationId)}/retry`,
+        {
+          method: 'POST',
+          actor,
+          body: {
+            expected_status: input.expectedStatus,
+            expected_error: input.expectedError,
+            reason: input.reason,
+            actor,
+            confirmation: input.confirmation,
+            force: input.force,
+          },
+        },
+      ),
+    )
+  } catch (cause) {
+    if (cause instanceof PlatformAdminError && cause.status === 409) {
+      throw new Error(
+        `Nothing was retried: ${cause.message}. Re-read list_dueling_slices `
+        + '(preparationId) and retry against the status and error it shows.',
       )
     }
     throw cause

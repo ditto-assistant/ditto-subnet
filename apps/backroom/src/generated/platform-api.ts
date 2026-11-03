@@ -1898,11 +1898,33 @@ export interface paths {
         };
         /**
          * Admin Dueling Slices
-         * @description Slice preparations, newest first, with latency and digests.
+         * @description Slice preparations, newest first, with latency, digests and whether a
+         *     failed one can be retried (``retry_dueling_slice_preparation``).
          */
         get: operations["admin_dueling_slices_api_v1_admin_generator_competition_dueling_slices_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/slices/{preparation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Retry Dueling Slice
+         * @description Re-queue exactly one failed slice preparation: status pending, attempts
+         *     kept, error cleared, so the next lease of its seed reserves it again.
+         */
+        post: operations["admin_retry_dueling_slice_api_v1_admin_generator_competition_dueling_slices__preparation_id__retry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12110,6 +12132,33 @@ export interface components {
              */
             scores_without_dueling: number;
             target: components["schemas"]["DuelingTargetView"];
+        };
+        /**
+         * AdminDuelingSliceRetryRequest
+         * @description Re-queue exactly one failed slice preparation (audited).
+         */
+        AdminDuelingSliceRetryRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Error */
+            expected_error: string | null;
+            /**
+             * Expected Status
+             * @constant
+             */
+            expected_status: "failed";
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+            /** Reason */
+            reason: string;
         };
         /** AdminDuelingSlicesResponse */
         AdminDuelingSlicesResponse: {
@@ -22802,10 +22851,28 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Last Retry Actor */
+            last_retry_actor?: string | null;
+            /** Last Retry At */
+            last_retry_at?: string | null;
+            /** Last Retry Reason */
+            last_retry_reason?: string | null;
             /** Latency Seconds */
             latency_seconds: number | null;
             /** Ready At */
             ready_at: string | null;
+            /**
+             * Retries
+             * @default 0
+             */
+            retries: number;
+            /** Retry Refusal */
+            retry_refusal?: string | null;
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
             /** Run Seed */
             run_seed: string;
             /** Scorer Version */
@@ -49820,6 +49887,7 @@ export interface operations {
                 status?: ("pending" | "leased" | "ready" | "failed") | null;
                 limit?: number;
                 offset?: number;
+                preparation_id?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -49836,6 +49904,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminDuelingSlicesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_retry_dueling_slice_api_v1_admin_generator_competition_dueling_slices__preparation_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                preparation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDuelingSliceRetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSliceView"];
                 };
             };
             /** @description Validation Error */

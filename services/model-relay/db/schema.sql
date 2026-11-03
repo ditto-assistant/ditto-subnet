@@ -3978,13 +3978,18 @@ CREATE TABLE public.dueling_slice_preparations (
     ready_at timestamp with time zone,
     failed_at timestamp with time zone,
     bytes_pruned_at timestamp with time zone,
+    retries integer DEFAULT 0 NOT NULL,
+    last_retry_at timestamp with time zone,
+    last_retry_actor text,
+    last_retry_reason text,
     CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_0913 CHECK ((attempts >= 0)),
     CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_2b2c CHECK (((slice_bytes IS NULL) OR (((octet_length(slice_bytes) >= 1) AND (octet_length(slice_bytes) <= 33554432)) AND (slice_sha256 = encode(sha256(slice_bytes), 'hex'::text))))),
     CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_4cdf CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((status <> 'leased'::text) OR (lease_id IS NOT NULL)))),
     CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_6562 CHECK (((slice_sha256 IS NULL) OR (slice_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_7a53 CHECK ((status = ANY (ARRAY['pending'::text, 'leased'::text, 'ready'::text, 'failed'::text]))),
     CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_8022 CHECK ((((status = 'ready'::text) = (slice_sha256 IS NOT NULL)) AND ((status <> 'ready'::text) OR (slice_bytes IS NOT NULL) OR (bytes_pruned_at IS NOT NULL)))),
-    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_993c CHECK ((run_seed >= 0))
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_993c CHECK ((run_seed >= 0)),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_f2e0 CHECK (((retries >= 0) AND ((retries = 0) = (last_retry_at IS NULL))))
 );
 
 

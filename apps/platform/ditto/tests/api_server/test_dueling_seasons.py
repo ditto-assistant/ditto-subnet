@@ -38,6 +38,7 @@ from ditto.db.models import (
     DuelingSeason,
     DuelingSeasonBattery,
     DuelingSlicePreparation,
+    GeneratorOperatorAction,
     GeneratorRound,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
@@ -957,3 +958,128 @@ class TestShadowCanarySeasons:
         await _tick(session_maker, 11 * _EPOCHS + 1)
         closed = next(s for s in await _seasons(session_maker) if s.id == opened.id)
         assert closed.status == "closed"
+
+
+class TestDuelingSliceRetry:
+    async def test_retry_requeues_one_failed_preparation_behind_its_guards(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client, epochs_per_round=_EPOCHS, dueling_enabled=True)
+        _active(monkeypatch, 16)
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        season_id = await _open_season(session_maker, default)
+        prep_id, refused_id = uuid4(), uuid4()
+        async with session_maker() as session, session.begin():
+            for pid, seed, error in (
+                (prep_id, 7, "c0: build failed"),
+                (refused_id, 8, "infra: unsupported_request: tree digest mismatch"),
+            ):
+                session.add(
+                    DuelingSlicePreparation(
+                        id=pid,
+                        season_id=season_id,
+                        run_seed=seed,
+                        status="failed",
+                        attempts=3,
+                        error=error,
+                        failed_at=datetime.now(UTC),
+                    )
+                )
+        base = "/api/v1/admin/generator-competition/dueling/slices"
+        listing = (await client.get(base, headers=_ADMIN)).json()["slices"]
+        views = {view["id"]: view for view in listing}
+        assert views[str(prep_id)]["retryable"] is True
+        assert views[str(refused_id)]["retryable"] is False
+        assert "rotate the season" in views[str(refused_id)]["retry_refusal"]
+        assert (
+            await client.get(
+                base, headers=_ADMIN, params={"preparation_id": str(prep_id)}
+            )
+        ).json()["slices"][0]["error"] == "c0: build failed"
+
+        def body(pid: UUID, error: str, **extra: Any) -> dict[str, Any]:
+            return {
+                "expected_status": "failed",
+                "expected_error": error,
+                "reason": "builder host was replaced",
+                "confirmation": f"RETRY DUELING SLICE {pid}",
+                **extra,
+            }
+
+        url = f"{base}/{prep_id}/retry"
+        good = body(prep_id, "c0: build failed")
+        assert (
+            await client.post(url, headers=_ADMIN, json={**good, "confirmation": "x"})
+        ).status_code == 409
+        assert (
+            await client.post(url, headers=_ADMIN, json={**good, "reason": "short"})
+        ).status_code == 422
+        stale = await client.post(
+            url, headers=_ADMIN, json={**good, "expected_error": "something else"}
+        )
+        assert stale.status_code == 409 and "re-read" in stale.text
+        refused_url = f"{base}/{refused_id}/retry"
+        refused_body = body(
+            refused_id, "infra: unsupported_request: tree digest mismatch"
+        )
+        unsupported = await client.post(refused_url, headers=_ADMIN, json=refused_body)
+        assert unsupported.status_code == 409 and "rotate" in unsupported.text
+
+        ok = await client.post(url, headers=_ADMIN, json=good)
+        assert ok.status_code == 200, ok.text
+        view = ok.json()
+        assert (view["status"], view["error"], view["attempts"]) == ("pending", None, 3)
+        assert view["retries"] == 1 and view["last_retry_reason"] == good["reason"]
+        again = await client.post(url, headers=_ADMIN, json=good)
+        assert again.status_code == 409  # no longer failed
+        async with session_maker() as session:
+            action = await session.scalar(
+                select(GeneratorOperatorAction).where(
+                    GeneratorOperatorAction.subject == f"dueling_slice:{prep_id}"
+                )
+            )
+            assert action is not None
+            assert action.action == "retry_dueling_slice_preparation"
+            assert (action.detail or {})["previous_error"] == "c0: build failed"
+
+        # The re-queued preparation leases again (its attempt cap restarted)
+        # and pins a slice.
+        work = (await client.get(_WORK, headers=_SCORER, params=_POLL)).json()["work"]
+        assert work["kind"] == "slice" and work["preparation_id"] == str(prep_id)
+        raw = _slice_bytes(work)
+        ready = await client.post(
+            "/api/v1/generator-scorer/dueling-slice",
+            headers=_SCORER,
+            json=_slice_post(work, raw),
+        )
+        assert ready.status_code == 200 and ready.json()["status"] == "ready"
+
+        # force retries the scorer-refused one, recorded; a closed season's
+        # slices are never retried.
+        forced = await client.post(
+            refused_url, headers=_ADMIN, json={**refused_body, "force": True}
+        )
+        assert forced.status_code == 200, forced.text
+        async with session_maker() as session, session.begin():
+            row = await session.get(DuelingSlicePreparation, refused_id)
+            assert row is not None
+            row.status, row.error = "failed", "c1: build failed"
+            row.failed_at = datetime.now(UTC)
+            season = await session.get(DuelingSeason, season_id)
+            assert season is not None
+            season.status = "closed"
+        closed = await client.post(
+            refused_url, headers=_ADMIN, json=body(refused_id, "c1: build failed")
+        )
+        assert closed.status_code == 409 and "season is closed" in closed.text
