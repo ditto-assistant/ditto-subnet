@@ -143,7 +143,8 @@ func v16Email(seed int64, index int) string {
 
 // v16ConnectorSlots ranks the cases the v16 pass may replace: the v13
 // conversion order (ordinary duplicates, then world cases above the floor,
-// then singletons), minus every case a later or earlier pass depends on.
+// then singletons), minus every case a later or earlier pass depends on and
+// every case that carries prerequisite pairs (a replacement would drop them).
 func v16ConnectorSlots(seed int64, cases []protocol.ToolCase) []int {
 	referenced := map[string]bool{}
 	for _, tc := range cases {
@@ -153,7 +154,7 @@ func v16ConnectorSlots(seed int64, cases []protocol.ToolCase) []int {
 	}
 	free := func(tc protocol.ToolCase) bool {
 		return tc.Restraint == nil && tc.EffectAnswer == "" && tc.TwinGroup == "" && tc.RunAfterCaseID == "" &&
-			len(tc.ForbiddenTools) == 0 && len(tc.AlternativeExpectedTools) == 0 && !referenced[tc.ID] &&
+			len(tc.ForbiddenTools) == 0 && len(tc.AlternativeExpectedTools) == 0 && len(tc.PrerequisitePairs) == 0 && !referenced[tc.ID] &&
 			!IsV13Restraint(tc.Category) && !v13IsUnexpectedFamily(tc.Category) && !IsV16ConnectorCase(tc.Category)
 	}
 	var out []int
