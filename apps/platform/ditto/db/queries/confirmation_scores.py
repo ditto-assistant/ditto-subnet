@@ -71,6 +71,10 @@ class ConfirmationSeedScore:
     v9_efficiency_cost_eligible: bool | None = None
     """``True`` for valid cost evidence, ``False`` for an explicit integrity
     failure, and ``None`` for historical/non-v9 rows without cost authority."""
+    dueling_season_id: UUID | None = None
+    """Bench v16+: the dueling season this seed ran in."""
+    dueling: dict | None = None
+    """Bench v16+: this seed's signed ``details.dueling`` aggregates."""
 
 
 @dataclass(frozen=True)
@@ -100,6 +104,8 @@ class ConfirmationHistoryRow:
     validator_hotkey: str
     bench_version: int
     signature: str | None
+    dueling: dict | None = None
+    """Bench v16+: this seed's signed ``details.dueling`` aggregates."""
 
 
 def completed_confirmation_wave_seeds(
@@ -445,6 +451,8 @@ async def append_confirmation_scores(
                 "signature": row.signature,
                 "v9_efficiency_token_total": row.v9_efficiency_token_total,
                 "v9_efficiency_cost_eligible": row.v9_efficiency_cost_eligible,
+                "dueling_season_id": row.dueling_season_id,
+                "dueling": row.dueling,
                 "created_at": created_at,
             }
         )
@@ -590,6 +598,7 @@ async def confirmation_history_by_agent(
             ConfirmationScore.validator_hotkey,
             ConfirmationScore.bench_version,
             ConfirmationScore.signature,
+            ConfirmationScore.dueling,
         )
         .where(
             ConfirmationScore.agent_id.in_(ids),
@@ -599,7 +608,15 @@ async def confirmation_history_by_agent(
         .order_by(ConfirmationScore.seed, ConfirmationScore.validator_hotkey)
     )
     history: dict[UUID, list[ConfirmationHistoryRow]] = {}
-    for agent_id, seed, composite, validator_hotkey, version, signature in rows:
+    for (
+        agent_id,
+        seed,
+        composite,
+        validator_hotkey,
+        version,
+        signature,
+        dueling,
+    ) in rows:
         history.setdefault(agent_id, []).append(
             ConfirmationHistoryRow(
                 agent_id=agent_id,
@@ -608,6 +625,7 @@ async def confirmation_history_by_agent(
                 validator_hotkey=validator_hotkey,
                 bench_version=version,
                 signature=signature,
+                dueling=dueling,
             )
         )
     return history

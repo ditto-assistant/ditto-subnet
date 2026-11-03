@@ -86,6 +86,9 @@ export const duelingSeasonsSchema = z.object({
   current: z.array(duelingSeasonSchema),
   next: z.array(duelingSeasonSchema),
   recent: z.array(duelingSeasonSchema),
+  // Bench v16+ rows with no season or aggregates (never rank or pay; should be 0).
+  scores_without_dueling: z.number().int().default(0),
+  confirmation_scores_without_dueling: z.number().int().default(0),
 })
 
 export const duelingSlicesSchema = z.object({

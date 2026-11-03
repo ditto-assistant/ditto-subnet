@@ -12093,12 +12093,22 @@ export interface components {
         };
         /** AdminDuelingSeasonsResponse */
         AdminDuelingSeasonsResponse: {
+            /**
+             * Confirmation Scores Without Dueling
+             * @default 0
+             */
+            confirmation_scores_without_dueling: number;
             /** Current */
             current: components["schemas"]["DuelingSeasonView"][];
             /** Next */
             next: components["schemas"]["DuelingSeasonView"][];
             /** Recent */
             recent: components["schemas"]["DuelingSeasonView"][];
+            /**
+             * Scores Without Dueling
+             * @default 0
+             */
+            scores_without_dueling: number;
             target: components["schemas"]["DuelingTargetView"];
         };
         /** AdminDuelingSlicesResponse */

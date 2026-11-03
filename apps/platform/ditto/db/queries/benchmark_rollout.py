@@ -36,6 +36,7 @@ from ditto.db.models import (
     ValidatorHeartbeat,
     ValidatorTicket,
 )
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -1437,6 +1438,12 @@ def verified_scorer_for_version(
     # Typed-semantic epochs retain the deterministic v13 generation surface;
     # an earlier canary scorer cannot serve these contracts.
     if version >= 13 and not scorer.deterministic_v13_datasets:
+        return None
+    # Bench v16+ (dueling) runs carry a generator slice: lease them only to a
+    # validator that forwards the version in ``dueling_slice_bench_versions``.
+    if is_dueling_bench_version(version) and version not in (
+        scorer.dueling_slice_bench_versions or ()
+    ):
         return None
     # A v14 target needs its own version-bound environment packet. The
     # historical v13 packet stays immutable and cannot qualify a v14 rollout.

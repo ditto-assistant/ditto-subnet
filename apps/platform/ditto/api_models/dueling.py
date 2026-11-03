@@ -230,6 +230,11 @@ class AdminDuelingSeasonsResponse(DuelingModel):
     """Committed seasons waiting for their opening round."""
     recent: list[DuelingSeasonView]
     """The newest closed, revealed and void seasons (no batteries or means)."""
+    scores_without_dueling: int = 0
+    """Bench v16+ score rows with no season or aggregates. Ingestion refuses
+    them, so this should stay 0; any such row never ranks or pays."""
+    confirmation_scores_without_dueling: int = 0
+    """The same for bench v16+ continual-retest seed records."""
 
 
 class DuelingSliceView(DuelingModel):

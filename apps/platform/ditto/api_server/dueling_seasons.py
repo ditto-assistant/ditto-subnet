@@ -51,7 +51,9 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import defer
 
 from ditto.api_models.dueling import (
@@ -79,6 +81,7 @@ from ditto_screening_protocol.dueling import (
     DUELING_SLICE_COLUMNS,
     DUELING_SLICE_CONTRACT,
     DuelingColumnPin,
+    DuelingReport,
     is_dueling_bench_version,
     season_commitment,
     season_seed,
@@ -86,7 +89,7 @@ from ditto_screening_protocol.dueling import (
 )
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from ditto.api_models.generator import (
         GeneratorCompetitionSettings,
@@ -1211,3 +1214,172 @@ async def record_dueling_fault(
         row.lease_expires_at = None
     await session.flush()
     return "released"
+
+
+# --- lease and ingestion ----------------------------------------------------
+
+SLICE_RETRY_AFTER_SECONDS = 15
+MAX_PENDING_SLICES = 64
+"""Bounded admission: preparations the scorer has not finished, across
+seasons. A slice is seconds of generator CPU, so this caps a stuck scorer's
+backlog, not spend."""
+
+
+@dataclass(frozen=True)
+class DuelingLeaseSlice:
+    """The generator slice a bench v16+ lease serves."""
+
+    season_id: UUID
+    slice_bytes: bytes
+    slice_sha256: str
+
+    def __repr__(self) -> str:  # never log private slice bytes
+        return f"DuelingLeaseSlice(season_id={self.season_id}, sha={self.slice_sha256})"
+
+
+class DuelingSliceUnavailable(Exception):
+    """No ready slice yet; the lease answers 503 with ``Retry-After``."""
+
+    def __init__(self, detail: str, *, retry_after: int = SLICE_RETRY_AFTER_SECONDS):
+        super().__init__(detail)
+        self.detail = detail
+        self.retry_after = retry_after
+
+
+async def resolve_dueling_slice(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    bench_version: int,
+    run_seed: int,
+    pinned_season_id: UUID | None,
+    pinned_slice_sha256: str | None,
+    now: datetime,
+) -> DuelingLeaseSlice:
+    """The ready slice for ``(season, run_seed)``, or reserve one and refuse.
+
+    Runs in its own short transaction (the private-dataset preparation
+    pattern): a refusal rolls back the caller's lease, never the reservation.
+    A ticket that already holds a slice for this seed keeps it, even after its
+    season closed, so quorum re-leases and retries run the same bytes;
+    otherwise the open season of ``bench_version`` serves. Concurrent leases
+    of one seed share one preparation row; existing pinned bytes win.
+    """
+    async with sessions() as session, session.begin():
+        if pinned_season_id is not None and pinned_slice_sha256 is not None:
+            pinned = await session.scalar(
+                select(DuelingSlicePreparation).where(
+                    DuelingSlicePreparation.season_id == pinned_season_id,
+                    DuelingSlicePreparation.run_seed == run_seed,
+                    DuelingSlicePreparation.status == "ready",
+                    DuelingSlicePreparation.slice_sha256 == pinned_slice_sha256,
+                )
+            )
+            if pinned is not None and pinned.slice_bytes is not None:
+                return DuelingLeaseSlice(
+                    pinned_season_id, pinned.slice_bytes, pinned_slice_sha256
+                )
+        season = await open_season(session, bench_version)
+        if season is None or season.season_seed is None:
+            raise DuelingSliceUnavailable(
+                f"no dueling season is open for bench v{bench_version}; one opens "
+                "at the next generator-round boundary",
+                retry_after=60,
+            )
+        row = await session.scalar(
+            select(DuelingSlicePreparation).where(
+                DuelingSlicePreparation.season_id == season.id,
+                DuelingSlicePreparation.run_seed == run_seed,
+            )
+        )
+        if row is not None and row.status == "ready" and row.slice_bytes is not None:
+            assert row.slice_sha256 is not None
+            return DuelingLeaseSlice(season.id, row.slice_bytes, row.slice_sha256)
+        if row is None:
+            pending = await session.scalar(
+                select(func.count())
+                .select_from(DuelingSlicePreparation)
+                .where(DuelingSlicePreparation.status.in_(("pending", "leased")))
+            )
+            if (pending or 0) >= MAX_PENDING_SLICES:
+                raise DuelingSliceUnavailable(
+                    "dueling slice preparation backlog is full", retry_after=60
+                )
+            await session.execute(
+                pg_insert(DuelingSlicePreparation)
+                .values(
+                    id=uuid4(),
+                    season_id=season.id,
+                    run_seed=run_seed,
+                    status="pending",
+                    attempts=0,
+                    requested_by="lease",
+                    created_at=now,
+                )
+                .on_conflict_do_nothing(
+                    constraint="dueling_slice_preparations_seed_key"
+                )
+            )
+            status = "pending"
+        else:
+            status = row.status
+    if status == "failed":
+        raise DuelingSliceUnavailable(
+            "dueling slice preparation failed; operator review required "
+            "(list_dueling_slices)",
+            retry_after=300,
+        )
+    raise DuelingSliceUnavailable("dueling slice preparation pending")
+
+
+async def agent_owner_key(session: AsyncSession, agent: Any) -> str:
+    """The scored agent's emission owner (coldkey, else hotkey): the key the
+    scorer self-masks and generator columns are owned under."""
+    from ditto.db.models import EvaluationPayment
+    from ditto.db.queries.scores import emission_owner
+
+    coldkey = await session.scalar(
+        select(EvaluationPayment.miner_coldkey).where(
+            EvaluationPayment.agent_id == agent.agent_id
+        )
+    )
+    return emission_owner(miner_hotkey=agent.miner_hotkey, miner_coldkey=coldkey)
+
+
+class DuelingEvidenceRejected(ValueError):
+    """A bench v16+ report's ``details.dueling`` does not match its lease."""
+
+
+def dueling_score_evidence(
+    details: dict[str, Any] | None,
+    *,
+    bench_version: int,
+    season_id: UUID | None,
+    slice_sha256: str | None,
+) -> tuple[UUID | None, dict[str, Any] | None]:
+    """The season and aggregates to store with a score, or a refusal.
+
+    Below the dueling floor nothing is stored. At v16+ the signed report must
+    carry ``details.dueling`` naming the lease's season and pinned slice
+    digest; anything else is refused rather than stored, so a v16 row without
+    a season or aggregates never reaches the ledger.
+    """
+    if not is_dueling_bench_version(bench_version):
+        return None, None
+    raw = (details or {}).get("dueling")
+    if raw is None:
+        raise DuelingEvidenceRejected("bench v16+ report carries no details.dueling")
+    try:
+        report = DuelingReport.model_validate(raw)
+    except ValidationError as exc:
+        raise DuelingEvidenceRejected(
+            f"details.dueling is malformed: {exc.error_count()} error(s)"
+        ) from exc
+    if season_id is None or report.season_id != str(season_id):
+        raise DuelingEvidenceRejected(
+            "details.dueling names another season than the lease"
+        )
+    if slice_sha256 is None or report.slice_sha256 != slice_sha256:
+        raise DuelingEvidenceRejected(
+            "details.dueling slice digest does not match the leased slice"
+        )
+    return season_id, report.model_dump(mode="json")
