@@ -44,6 +44,27 @@ const columnMeanSchema = z.object({
   below_floor: z.boolean(),
 })
 
+// Season-open mini-rollout: the champion, then the retest cohort by rank,
+// re-scored on the new generator set, and whether this season's scores still
+// count (current, provisional for one season, then expired).
+const rotationSchema = z.object({
+  standing: z.enum(['current', 'provisional', 'expired', 'not_opened']),
+  source: nullableString.optional().default(null),
+  cohort: z.array(z.record(z.string(), z.unknown())).default([]),
+  queued_at: nullableString.optional().default(null),
+  queued: z.number().int().default(0),
+  already_current: z.number().int().default(0),
+  busy: z.number().int().default(0),
+  error: nullableString.optional().default(null),
+  pending: z.number().int().default(0),
+  running: z.number().int().default(0),
+  closed: z.number().int().default(0),
+  cohort_scores_in_season: z.number().int().default(0),
+  cohort_quorum_in_season: z.number().int().default(0),
+  scores_in_season: z.number().int().default(0),
+  confirmation_scores_in_season: z.number().int().default(0),
+})
+
 export const duelingSeasonSchema = z.object({
   id: uuid,
   bench_version: z.number().int(),
@@ -74,6 +95,7 @@ export const duelingSeasonSchema = z.object({
   batteries: z.array(batterySchema).default([]),
   column_means: z.array(columnMeanSchema).default([]),
   slices: z.record(z.string(), z.number().int()).default({}),
+  rotation: rotationSchema.nullable().optional().default(null),
 })
 
 export const duelingSeasonsSchema = z.object({

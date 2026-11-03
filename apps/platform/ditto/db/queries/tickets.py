@@ -53,6 +53,7 @@ from ditto.db.queries.queue_order import (
     owner_live_lease_agent_ids,
     queue_candidate_predicate,
     queue_order_terms,
+    queue_score_season_scope,
     quorum_capable_validator_hotkeys,
     resolve_fifo_start_at,
     resolve_owner_linkage,
@@ -758,6 +759,9 @@ async def issue_ticket(
         provisional_contender_floor=provisional_contender_floor,
         completion_first=completion_first,
         validator_hotkey=validator_hotkey,
+        score_season_scope=await queue_score_season_scope(
+            session, bench_version=bench_version
+        ),
     )
     # Lock one candidate Agent row before counting its tickets. The recount is a
     # separate statement after the lock is acquired, so under Postgres READ

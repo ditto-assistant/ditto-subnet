@@ -1184,7 +1184,7 @@ async def materialize_ledger_snapshot(
             anchor_block_hash=anchor.block_hash or "",
         )
         for anchor in await list_reign_seed_anchors(
-            session, bench_version=canonical_version
+            session, bench_version=canonical_version, current_season_only=True
         )
         if anchor.block_hash is not None
     )

@@ -25,6 +25,12 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
    round's open block as anchor, and up to five columns freeze: battery-passed
    candidates by rank, one per owner, then the public default generator, which
    is never masked and fills every remaining column.
+   Opening is a mini-rollout (:func:`queue_rotation_retests`): the champion,
+   then the retest cohort by rank, get a rotation re-test of every accepted
+   score on the new set, and the champion's confirmation family re-anchors
+   per ``(champion, bench_version, season)``. Scores of the season before
+   stay provisional for one season, then expire from the authoritative
+   ledger (:mod:`ditto.db.queries.dueling_season_window`).
 4. **Close.** At ``closes_at_round`` (or on an audited rotation), or as soon
    as its bench version is neither active nor rolling out. Disabling dueling
    commits no new season but lets the open one finish.
@@ -548,8 +554,94 @@ async def _open(
         "fallback": fallback,
         "opened_epoch_index": position.subnet_epoch_index,
     }
+    await session.flush()
+    rotation = await queue_rotation_retests(session, season, now=now)
     miners = sum(1 for column in columns if not column["public_default"])
-    return f"open ({miners} miner column(s))"
+    return (
+        f"open ({miners} miner column(s)); "
+        f"{rotation.get('queued', 0)} rotation re-test(s) queued"
+    )
+
+
+async def _rotation_cohort(
+    session: AsyncSession, season: DuelingSeason
+) -> tuple[list[UUID], str]:
+    """Who a season's opening re-scores, champion first, and where from.
+
+    An authoritative season re-scores the continual-retest cohort of its
+    (active) version: the champion, then ``retest_cohort_size`` agents by
+    rank. A shadow season re-scores the open rollout's frozen cohort in
+    position order. A canary-only shadow season has no cohort.
+    """
+    from ditto.db.models import BenchmarkRolloutMember
+
+    if season.shadow:
+        rollout = await open_rollout(session)
+        if rollout is None or rollout.desired_version != season.bench_version:
+            return [], "none (canary shadow season: no rollout cohort)"
+        members = list(
+            await session.scalars(
+                select(BenchmarkRolloutMember.agent_id)
+                .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
+                .order_by(BenchmarkRolloutMember.position)
+            )
+        )
+        return members, "rollout_members"
+    from ditto.api_server.continual_retest_settings import settings_from_row
+    from ditto.api_server.endpoints.validator import _current_retest_cohort
+    from ditto.db.queries.continual_retest_settings import (
+        latest_continual_retest_settings_revision,
+    )
+
+    revision = await latest_continual_retest_settings_revision(session)
+    settings = settings_from_row(revision)
+    emission, _wave, cohort, _challengers = await _current_retest_cohort(
+        session, canonical_version=season.bench_version, settings=settings
+    )
+    ordered = list(
+        dict.fromkeys(
+            [*(m.agent_id for m in emission[:1]), *(m.agent_id for m in cohort)]
+        )
+    )
+    return ordered[: max(1, settings.retest_cohort_size)], "continual_cohort"
+
+
+async def queue_rotation_retests(
+    session: AsyncSession, season: DuelingSeason, *, now: datetime
+) -> dict[str, Any]:
+    """Queue the season-open rotation re-tests and record them on the season.
+
+    Runs in its own savepoint: a cohort read that fails leaves the season
+    open with the failure recorded (``detail.rotation.error``), never a
+    season that cannot open. Caller commits.
+    """
+    from ditto.db.queries.score_retests import queue_dueling_rotation_retests
+
+    rotation: dict[str, Any] = {"queued_at": now.isoformat()}
+    try:
+        async with session.begin_nested():
+            cohort, source = await _rotation_cohort(session, season)
+            counts = await queue_dueling_rotation_retests(
+                session,
+                season_id=season.id,
+                bench_version=season.bench_version,
+                cohort=cohort,
+                now=now,
+            )
+    except Exception as exc:  # noqa: BLE001 - recorded, never blocks the open
+        logger.exception("dueling season %s: rotation re-tests failed", season.id)
+        rotation["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    else:
+        rotation.update(
+            source=source,
+            cohort=[
+                {"agent_id": str(agent_id), "rank": rank}
+                for rank, agent_id in enumerate(cohort)
+            ],
+            **counts,
+        )
+    season.detail = {**(season.detail or {}), "rotation": rotation}
+    return rotation
 
 
 async def advance_seasons(

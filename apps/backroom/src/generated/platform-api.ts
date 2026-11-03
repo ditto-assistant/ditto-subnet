@@ -11247,6 +11247,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Dueling Season Id */
+            dueling_season_id?: string | null;
             /** Pinned */
             pinned: boolean;
             /** Pinned At */
@@ -22650,6 +22652,77 @@ export interface components {
             /** Slice Sha256 */
             slice_sha256: string;
         };
+        /**
+         * DuelingRotationView
+         * @description The season-open mini-rollout and how far its re-scoring has got.
+         */
+        DuelingRotationView: {
+            /**
+             * Already Current
+             * @default 0
+             */
+            already_current: number;
+            /**
+             * Busy
+             * @default 0
+             */
+            busy: number;
+            /**
+             * Closed
+             * @default 0
+             */
+            closed: number;
+            /** Cohort */
+            cohort?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Cohort Quorum In Season
+             * @default 0
+             */
+            cohort_quorum_in_season: number;
+            /**
+             * Cohort Scores In Season
+             * @default 0
+             */
+            cohort_scores_in_season: number;
+            /**
+             * Confirmation Scores In Season
+             * @default 0
+             */
+            confirmation_scores_in_season: number;
+            /** Error */
+            error?: string | null;
+            /**
+             * Pending
+             * @default 0
+             */
+            pending: number;
+            /**
+             * Queued
+             * @default 0
+             */
+            queued: number;
+            /** Queued At */
+            queued_at?: string | null;
+            /**
+             * Running
+             * @default 0
+             */
+            running: number;
+            /**
+             * Scores In Season
+             * @default 0
+             */
+            scores_in_season: number;
+            /** Source */
+            source?: string | null;
+            /**
+             * Standing
+             * @enum {string}
+             */
+            standing: "current" | "provisional" | "expired" | "not_opened";
+        };
         /** DuelingSeasonView */
         DuelingSeasonView: {
             /** Anchor Block */
@@ -22696,6 +22769,7 @@ export interface components {
             reveal_at_epoch: number | null;
             /** Revealed At */
             revealed_at: string | null;
+            rotation?: components["schemas"]["DuelingRotationView"] | null;
             /** Rotation Actor */
             rotation_actor: string | null;
             /** Rotation Immediate */

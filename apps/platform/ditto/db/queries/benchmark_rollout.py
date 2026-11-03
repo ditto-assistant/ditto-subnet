@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, select, true
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import (
@@ -36,6 +36,7 @@ from ditto.db.models import (
     ValidatorHeartbeat,
     ValidatorTicket,
 )
+from ditto.db.queries.dueling_season_window import season_scope_predicate
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
@@ -388,6 +389,13 @@ async def rolling_top_five(
                     if target_version is not None
                     else (source_version,)
                 ),
+                # Bench v16+: only each version's dueling season window ranks.
+                await season_scope_predicate(
+                    session,
+                    version_column=Score.bench_version,
+                    season_column=Score.dueling_season_id,
+                    bench_versions=(source_version, target_version),
+                ),
             )
         )
     ).all()
@@ -507,6 +515,12 @@ async def historical_rescore_cohort(
             ).where(
                 Score.agent_id.in_([agent.agent_id for agent in agents]),
                 Score.bench_version.in_(versions),
+                await season_scope_predicate(
+                    session,
+                    version_column=Score.bench_version,
+                    season_column=Score.dueling_season_id,
+                    bench_versions=versions,
+                ),
             )
         )
     ).all()
@@ -1688,7 +1702,9 @@ async def rollout_cohort_score_complete(
             .outerjoin(
                 Score,
                 (Score.agent_id == BenchmarkRolloutMember.agent_id)
-                & (Score.bench_version == rollout.desired_version),
+                & (Score.bench_version == rollout.desired_version)
+                # Bench v16+: an expired season's score is not a quorum row.
+                & await _desired_season_scope(session, rollout),
             )
             .where(
                 BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
@@ -1758,14 +1774,34 @@ ROLLOUT_SCOREABLE_STATUSES = (
 )
 
 
+async def _desired_season_scope(
+    session: AsyncSession, rollout: BenchmarkRollout
+) -> ColumnElement[bool]:
+    """``scores`` rows of the desired version's dueling season window;
+    ``true()`` below the dueling floor."""
+    return await season_scope_predicate(
+        session,
+        version_column=Score.bench_version,
+        season_column=Score.dueling_season_id,
+        bench_versions=(rollout.desired_version,),
+    )
+
+
 def _rollout_member_candidates(
     *,
     rollout: BenchmarkRollout,
     validator_hotkey: str,
     now: datetime,
     extra_predicates: Sequence[ColumnElement[bool]] = (),
+    score_season_scope: ColumnElement[bool] | None = None,
 ) -> tuple[Select, ColumnElement[int]]:
     """Frozen members this validator may advance, and their quorum occupancy.
+
+    ``score_season_scope`` (:func:`_desired_season_scope`) counts, at a bench
+    v16+ desired version, only scores of its dueling season window, so a
+    member whose scores expired can be topped up by a validator that never
+    scored it. A validator whose own row expired re-runs it through the season
+    rotation retest instead (``already_scored`` still excludes it here).
 
     One candidate filter for the open rollout lane and its post-activation
     top-up, so the distinct-validator rule, the retry budget and the
@@ -1787,6 +1823,7 @@ def _rollout_member_candidates(
         .where(
             Score.agent_id == BenchmarkRolloutMember.agent_id,
             Score.bench_version == rollout.desired_version,
+            true() if score_season_scope is None else score_season_scope,
         )
         .correlate(BenchmarkRolloutMember)
         .scalar_subquery()
@@ -1940,6 +1977,7 @@ async def issue_rollout_topup_ticket(
         validator_hotkey=validator_hotkey,
         now=now,
         extra_predicates=extra_predicates,
+        score_season_scope=await _desired_season_scope(session, rollout),
     )
     if (
         await session.scalar(
@@ -2050,6 +2088,7 @@ async def _issue_rollout_member_ticket(
         validator_hotkey=validator_hotkey,
         now=now,
         extra_predicates=extra_predicates,
+        score_season_scope=await _desired_season_scope(session, rollout),
     )
 
     def ordered_candidate(statement: Select) -> Select:
@@ -2312,7 +2351,9 @@ async def _activate_earned_rollout(
             .outerjoin(
                 Score,
                 (Score.agent_id == BenchmarkRolloutMember.agent_id)
-                & (Score.bench_version == rollout.desired_version),
+                & (Score.bench_version == rollout.desired_version)
+                # Bench v16+: an expired season's score is not a quorum row.
+                & await _desired_season_scope(session, rollout),
             )
             .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
             .group_by(BenchmarkRolloutMember.agent_id)
@@ -2371,7 +2412,9 @@ async def maybe_activate_rollout(
             .outerjoin(
                 Score,
                 (Score.agent_id == BenchmarkRolloutMember.agent_id)
-                & (Score.bench_version == rollout.desired_version),
+                & (Score.bench_version == rollout.desired_version)
+                # Bench v16+: an expired season's score is not a quorum row.
+                & await _desired_season_scope(session, rollout),
             )
             .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
             .group_by(BenchmarkRolloutMember.agent_id)
@@ -2619,7 +2662,9 @@ async def rollout_state(
             .outerjoin(
                 Score,
                 (Score.agent_id == BenchmarkRolloutMember.agent_id)
-                & (Score.bench_version == rollout.desired_version),
+                & (Score.bench_version == rollout.desired_version)
+                # Bench v16+: an expired season's score is not a quorum row.
+                & await _desired_season_scope(session, rollout),
             )
             .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
             .group_by(BenchmarkRolloutMember.agent_id, Agent.status)

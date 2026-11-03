@@ -63,7 +63,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, and_, case, func, literal, or_, select
+from sqlalchemy import ColumnElement, and_, case, func, literal, or_, select, true
 from sqlalchemy.orm import aliased
 
 from ditto.api_models.agent_status import AgentStatus
@@ -93,6 +93,7 @@ from ditto.db.queries.similarity_grouping import (
     similar_submissions,
 )
 from ditto.screener_policy_state import effective_screening_policy_version
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -313,7 +314,10 @@ def queue_candidate_predicate(
 
 
 def _top_provisional_contenders(
-    *, bench_version: int, provisional_contender_floor: float | None
+    *,
+    bench_version: int,
+    provisional_contender_floor: float | None,
+    score_season_scope: ColumnElement[bool] | None = None,
 ) -> Any:
     """The bounded contender lane: one best submission per emission owner.
 
@@ -325,6 +329,8 @@ def _top_provisional_contenders(
     from ditto.db.queries.scores import SCORING_QUORUM, emission_owner_key
 
     contender = aliased(Agent)
+    # Bench v16+: only this season window's rows compare (dueling_season_window).
+    season_scope = true() if score_season_scope is None else score_season_scope
     contender_accepted_score_count = (
         select(func.count())
         .where(
@@ -341,6 +347,7 @@ def _top_provisional_contenders(
         .where(
             Score.agent_id == contender.agent_id,
             Score.bench_version == bench_version,
+            season_scope,
         )
         .correlate(contender)
         .scalar_subquery()
@@ -350,6 +357,7 @@ def _top_provisional_contenders(
         .where(
             Score.agent_id == contender.agent_id,
             Score.bench_version == bench_version,
+            season_scope,
         )
         .order_by(Score.created_at.asc(), Score.validator_hotkey.asc())
         .limit(1)
@@ -361,6 +369,7 @@ def _top_provisional_contenders(
         .where(
             Score.agent_id == contender.agent_id,
             Score.bench_version == bench_version,
+            season_scope,
         )
         .correlate(contender)
         .scalar_subquery()
@@ -465,6 +474,23 @@ def _occupied_quorum_slots(
     )
 
 
+async def queue_score_season_scope(
+    session: AsyncSession, *, bench_version: int
+) -> ColumnElement[bool] | None:
+    """The ``score_season_scope`` for :func:`queue_order_terms`: ``None``
+    below the dueling floor, else the version's season-window predicate."""
+    from ditto.db.queries.dueling_season_window import season_scope_predicate
+
+    if not is_dueling_bench_version(bench_version):
+        return None
+    return await season_scope_predicate(
+        session,
+        version_column=Score.bench_version,
+        season_column=Score.dueling_season_id,
+        bench_versions=(bench_version,),
+    )
+
+
 def queue_order_terms(
     *,
     bench_version: int,
@@ -476,6 +502,7 @@ def queue_order_terms(
     completion_first: bool = False,
     validator_hotkey: str | None,
     agent: AgentEntity = Agent,
+    score_season_scope: ColumnElement[bool] | None = None,
 ) -> tuple[ColumnElement[Any], ...]:
     """The queue's ``ORDER BY``, for whoever is reading it.
 
@@ -486,8 +513,14 @@ def queue_order_terms(
     ``validator_hotkey=None`` means "rank this for the whole fleet", which drops
     the per-validator ``had_prior_ticket`` coverage tiebreak because no global
     answer to it exists. Every other term is fleet-wide by construction.
+
+    ``score_season_scope`` (:func:`queue_score_season_scope`) keeps, at bench
+    v16+, every recorded-score term inside the version's dueling season
+    window, so a partial quorum compares only against same-window scores.
     """
     from ditto.db.queries.scores import SCORING_QUORUM
+
+    season_scope = true() if score_season_scope is None else score_season_scope
 
     fifo_age = _fifo_arrival(fifo_start_at, agent=agent)
     if completion_first:
@@ -501,6 +534,7 @@ def queue_order_terms(
         .where(
             Score.agent_id == agent.agent_id,
             Score.bench_version == bench_version,
+            season_scope,
         )
         .correlate(agent)
         .scalar_subquery()
@@ -511,6 +545,7 @@ def queue_order_terms(
             .where(
                 Score.agent_id == agent.agent_id,
                 Score.bench_version == bench_version,
+                season_scope,
             )
             .correlate(agent)
             .scalar_subquery()
@@ -523,6 +558,7 @@ def queue_order_terms(
             .where(
                 Score.agent_id == agent.agent_id,
                 Score.bench_version == bench_version,
+                season_scope,
             )
             .correlate(agent)
             .scalar_subquery()
@@ -556,6 +592,7 @@ def queue_order_terms(
     top_provisional_contenders = _top_provisional_contenders(
         bench_version=bench_version,
         provisional_contender_floor=provisional_contender_floor,
+        score_season_scope=score_season_scope,
     )
     contender_lane = case(
         (agent.agent_id.in_(top_provisional_contenders), 0),
@@ -1383,6 +1420,9 @@ async def preview_queue_order(
                     score_continuation_floor=score_continuation_floor,
                     provisional_contender_floor=provisional_contender_floor,
                     validator_hotkey=None,
+                    score_season_scope=await queue_score_season_scope(
+                        session, bench_version=bench_version
+                    ),
                 )
             )
         )

@@ -3624,8 +3624,10 @@ CREATE TABLE public.confirmation_seed_anchors (
     anchor_block_hash text,
     pinned_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    season_key uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
     CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__187e CHECK (((ready_block >= 0) AND (anchor_block > ready_block))),
     CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__18b7 CHECK (((anchor_block_hash IS NULL) OR (anchor_block_hash ~ '^0x[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__63f0 CHECK (((season_key = '00000000-0000-0000-0000-000000000000'::uuid) OR (bench_version >= 16))),
     CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__bb97 CHECK ((bench_version > 0)),
     CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__c2e5 CHECK (((anchor_block_hash IS NULL) = (pinned_at IS NULL)))
 );
@@ -8898,7 +8900,7 @@ ALTER TABLE ONLY public.confirmation_scores
 --
 
 ALTER TABLE ONLY public.confirmation_seed_anchors
-    ADD CONSTRAINT confirmation_seed_anchors_pkey PRIMARY KEY (champion_agent_id, bench_version);
+    ADD CONSTRAINT confirmation_seed_anchors_pkey PRIMARY KEY (champion_agent_id, bench_version, season_key);
 
 
 --

@@ -185,6 +185,42 @@ class DuelingColumnMean(DuelingModel):
     below_floor: bool
 
 
+class DuelingRotationView(DuelingModel):
+    """The season-open mini-rollout and how far its re-scoring has got."""
+
+    standing: Literal["current", "provisional", "expired", "not_opened"]
+    """Whether this season's scores count now: ``current`` (the version's
+    latest opened season), ``provisional`` (the one before it, visible for one
+    more season), ``expired`` (out of the authoritative ledger), or
+    ``not_opened``."""
+    source: str | None = None
+    """Where the cohort came from: ``continual_cohort`` (authoritative),
+    ``rollout_members`` (shadow during a rollout), or ``none``."""
+    cohort: list[dict] = Field(default_factory=list)
+    """``{agent_id, rank}`` in queue order, champion (rank 0) first."""
+    queued_at: datetime | None = None
+    queued: int = 0
+    """Rotation re-tests queued at open, one per accepted score."""
+    already_current: int = 0
+    busy: int = 0
+    """Scores left alone at open because another re-test was live."""
+    error: str | None = None
+    pending: int = 0
+    """Rotation re-tests for this season still waiting for a slot."""
+    running: int = 0
+    """Rotation re-tests for this season holding a lease now."""
+    closed: int = 0
+    """Rotation re-tests for this season that ended (scored or released)."""
+    cohort_scores_in_season: int = 0
+    """Cohort score rows already re-scored in this season."""
+    cohort_quorum_in_season: int = 0
+    """Cohort agents with a full quorum of scores in this season."""
+    scores_in_season: int = 0
+    """Every score row (any agent) recorded in this season."""
+    confirmation_scores_in_season: int = 0
+    """Every confirmation (continual retest) row recorded in this season."""
+
+
 class DuelingSeasonView(DuelingModel):
     id: UUID
     bench_version: int
@@ -220,6 +256,8 @@ class DuelingSeasonView(DuelingModel):
     column_means: list[DuelingColumnMean] = Field(default_factory=list)
     slices: dict[str, int] = Field(default_factory=dict)
     """Slice preparations by status."""
+    rotation: DuelingRotationView | None = None
+    """Season-open re-scoring of the champion and cohort (full views only)."""
 
 
 class AdminDuelingSeasonsResponse(DuelingModel):

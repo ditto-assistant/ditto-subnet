@@ -10206,8 +10206,10 @@ export type CopyCourtRecommendationList = z.infer<
 >
 
 // Bench v13+ finalized-block confirmation seed anchors: one row per
-// (champion, bench_version) reign, pinned or still in its finality wait. The
-// ledger serves pinned rows only, so this read is where a waiting reign shows.
+// (champion, bench_version) reign, pinned or still in its finality wait. From
+// bench v16 a reign restarts per dueling season (dueling_season_id). The
+// ledger serves pinned rows only (current season only at v16+), so this read
+// is where a waiting reign shows.
 
 export const confirmationSeedAnchorSchema = z.object({
   champion_agent_id: z.string().uuid(),
@@ -10220,6 +10222,7 @@ export const confirmationSeedAnchorSchema = z.object({
   pinned: z.boolean(),
   pinned_at: z.string().nullable(),
   created_at: z.string(),
+  dueling_season_id: z.string().uuid().nullable().optional().default(null),
 })
 
 export const confirmationSeedAnchorListSchema: z.ZodType<GeneratedConfirmationSeedAnchorList> =
