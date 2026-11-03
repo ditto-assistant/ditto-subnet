@@ -411,6 +411,35 @@ class TestDuelingSeasons:
         )
         assert revealed.status == "revealed" and revealed.revealed_at is not None
 
+    async def test_a_season_voided_before_its_boundary_is_recommitted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client, epochs_per_round=_EPOCHS, dueling_enabled=True)
+        _active(monkeypatch, 16)
+        await _tick(session_maker, _ROUND * _EPOCHS + 1)
+        [first] = await _seasons(session_maker)
+        assert (first.season_index, first.status) == (11, "committed")
+
+        async def _never(*_args: Any, **_kwargs: Any) -> ArtifactReleasePolicy:
+            return ArtifactReleasePolicy(
+                disclosure=SourceDisclosure.NEVER, embargo_hours=24
+            )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(dueling_mod, "artifact_release_policy", _never)
+            await _tick(session_maker, _ROUND * _EPOCHS + 2)
+        [voided] = await _seasons(session_maker)
+        assert voided.status == "void"
+        await _tick(session_maker, _ROUND * _EPOCHS + 3)
+        [again] = await _seasons(session_maker)
+        assert (again.season_index, again.status) == (11, "committed")
+        assert again.id != first.id and again.commitment != first.commitment
+
     async def test_scorer_fault_releases_a_slice_lease(
         self,
         app: FastAPI,

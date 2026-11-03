@@ -51,7 +51,8 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import defer
 
 from ditto.api_models.dueling import (
     DuelingBatteryAck,
@@ -210,8 +211,21 @@ async def season_candidates(
     out: list[SeasonCandidate] = []
     skipped: list[dict[str, Any]] = []
     owners: set[str] = set()
+    # One read, without the source archives eligibility never looks at.
+    subs = {
+        row.submission_id: row
+        for row in await session.scalars(
+            select(GeneratorSubmission)
+            .options(defer(GeneratorSubmission.source_bytes))
+            .where(
+                GeneratorSubmission.submission_id.in_(
+                    [entry.submission_id for entry in ledger.entries]
+                )
+            )
+        )
+    }
     for entry in ledger.entries:
-        sub = await session.get(GeneratorSubmission, entry.submission_id)
+        sub = subs.get(entry.submission_id)
         why: str | None = None
         if sub is None or sub.public_default:
             continue
@@ -635,11 +649,32 @@ async def advance_seasons(
             committed = None
         if committed is None:
             already = await session.scalar(
-                select(DuelingSeason.id).where(
+                select(DuelingSeason)
+                .where(
                     DuelingSeason.bench_version == target.bench_version,
                     DuelingSeason.season_index == next_index,
                 )
+                .with_for_update()
             )
+            if (
+                already is not None
+                and already.status == "void"
+                and already.opened_at is None
+            ):
+                # A season voided before it opened (its boundary has not come
+                # yet) is recommitted on a fresh secret rather than leaving
+                # its round without a season.
+                await session.execute(
+                    delete(DuelingSeasonBattery).where(
+                        DuelingSeasonBattery.season_id == already.id
+                    )
+                )
+                await session.delete(already)
+                await session.flush()
+                notes.append(
+                    f"season {next_index}: void season replaced by a fresh commit"
+                )
+                already = None
             if already is None:
                 committed = _commit_season(
                     bench_version=target.bench_version,
@@ -1086,9 +1121,9 @@ async def record_slice(
         raise DuelingResultRejected("slice_sha256 does not match the slice bytes")
     checked = _check_slice_bytes(raw, season=season, row=row)
     for column in column_errors:
-        checked.setdefault(str(column["column_id"]), {}).update(
-            {"ok": column["ok"], "error": column["error"]}
-        )
+        entry = checked.get(str(column["column_id"]))
+        if entry is not None:  # a report for an unpinned column is ignored
+            entry.update({"ok": column["ok"], "error": column["error"]})
     row.status = "ready"
     row.slice_bytes = raw
     row.slice_sha256 = payload.slice_sha256
