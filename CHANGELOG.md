@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.445.0 (2026-11-03)
+
+### Features
+
+- **infra**: Prepare DaniLabs relay trial secret binding
+  ([#3373](https://github.com/ditto-assistant/ditto-subnet/pull/3373),
+  [`6fa7394`](https://github.com/ditto-assistant/ditto-subnet/commit/6fa739445b67a3812f176e4299031e9d7b56db28))
+
+
 ## v0.444.0 (2026-11-03)
 
 ### Features
