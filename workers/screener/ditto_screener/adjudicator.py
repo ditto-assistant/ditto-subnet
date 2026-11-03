@@ -315,6 +315,9 @@ _MAX_COMPLETION_RESPONSE_BYTES = 512_000
 _MAX_COMPLETION_STREAM_BYTES = 8_000_000
 # Bound the evidence-bearing, decision-only request before asking a model to
 # reason over it. Never silently truncate source or a retained ledger to fit.
+# The bound covers the case material only: the fixed, operator-owned system
+# prompt is not evidence, and counting it let prompt growth alone (9.6 KB at
+# policy v12, 28 KB at v13) push legitimate packets over the limit (SN-435).
 _MAX_DECISION_PACKET_BYTES = 64_000
 
 
@@ -1380,6 +1383,11 @@ def _packet_bytes(messages: Sequence[Mapping[str, object]]) -> int:
     return len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
 
 
+def _case_bytes(messages: Sequence[Mapping[str, object]]) -> int:
+    """Packet bytes without the fixed system prompt."""
+    return _packet_bytes([m for m in messages if m.get("role") != "system"])
+
+
 class SourceReviewAdjudicator:
     """Small tool-using court with no shell, edit, execution, or web tools."""
 
@@ -1514,7 +1522,7 @@ class SourceReviewAdjudicator:
                     notes=note_count,
                     policy_version=policy_version,
                 )
-            if _packet_bytes(decision_packet) > _MAX_DECISION_PACKET_BYTES:
+            if _case_bytes(decision_packet) > _MAX_DECISION_PACKET_BYTES:
                 return _escalate(
                     "adjudicator-packet-too-large",
                     "Automated adjudication could not fit all retained source "
