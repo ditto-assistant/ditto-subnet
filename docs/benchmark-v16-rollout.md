@@ -114,10 +114,9 @@ accept packs declaring 15 or 16. Policy 16 grades like 15.
 
 Each must be closed, or waived by the operator, before activation.
 
-- **KOTH pair-mask parity on Platform.** The validator fold pair-masks the v16
-  dethrone test (#3343). Platform `koth.py` (the public KOTH projection, season
-  isolation and the shared crown fixture) must match it. This work is in
-  progress in another PR.
+- **KOTH pair-mask parity on Platform.** Done in #3351: Platform `koth.py`
+  pair-masks and season-isolates the v16 projection like the validator fold
+  (#3343). Recheck the shared crown fixture before activation.
 - **v16 KOTH constants.** `KOTH_MARGIN`, `KOTH_BAND_DECAY_START_COMPOSITE` and
   the statistical band cap need v16 values from shadow calibration, gated on
   `bench_version >= 16`. Recheck `TOP5_MIN_CONFIRMATION_SEEDS` too: 35-case
