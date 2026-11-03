@@ -46,7 +46,6 @@ locals {
     [
       "ADMIN_API_PASSWORD",
       google_secret_manager_secret.backroom_platform_operator_proof.secret_id,
-      google_secret_manager_secret.danilabs_trial_key.secret_id,
       google_secret_manager_secret.db_password.secret_id,
       google_secret_manager_secret.hmac_secret.secret_id,
       google_secret_manager_secret.moderation_audit_signing_key.secret_id,

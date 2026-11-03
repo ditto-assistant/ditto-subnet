@@ -38,7 +38,7 @@ setting do not establish that this qualification has passed.
 ## Relay-only key delivery
 
 Terraform provisions the empty `platform-danilabs-trial-key` Secret Manager
-container and grants the existing Platform runtime identities read access; it
+container without granting the shared Platform runtime identities access; it
 does not put the value in Terraform state. Install a secret version separately
 through an approved secret-handling path. Never put the value in shell history,
 logs, a pull request, or an untrusted test machine.
@@ -46,8 +46,10 @@ logs, a pull request, or an untrusted test machine.
 After the protected apply and secret version exist, use the narrowly scoped
 `infra/ansible/playbooks/danilabs-relay-binding.yml` against
 `ditto-platform-prod`, with an explicit UTC `danilabs_trial_until` and
-`danilabs_trial_scope=canary`. The playbook reads Secret Manager under the
-host identity and renders a mode-0600 relay-only file. A separately authorized
+`danilabs_trial_scope=canary`. The playbook reads Secret Manager on the
+operator's machine under the authenticated gcloud identity, then transfers the
+key over the existing Ansible connection into a mode-0600 relay-only file.
+A separately authorized
 relay roll loads that file; normal Platform startup does not. The playbook
 rejects a deadline less than 15 minutes away or more than seven hours away.
 

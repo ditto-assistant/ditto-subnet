@@ -28,7 +28,7 @@
     - name: Require a future deadline within the free-trial window
       ansible.builtin.assert:
         that:
-          - ((danilabs_trial_until | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (ansible_date_time.iso8601 | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() > 900
+          - ((danilabs_trial_until | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (ansible_date_time.iso8601 | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() >= 900
           - ((danilabs_trial_until | to_datetime('%Y-%m-%dT%H:%M:%SZ')) - (ansible_date_time.iso8601 | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() <= 25200
         quiet: true
 
@@ -43,9 +43,11 @@
           - relay_state.stat.isdir | default(false)
         quiet: true
 
-    - name: Read the trial key from Secret Manager using the host identity
+    - name: Read the trial key from Secret Manager using the operator identity
       ansible.builtin.command:
         argv: [gcloud, secrets, versions, access, latest, '--secret={{ danilabs_secret_id }}', '--project={{ gcp_project }}']
+      delegate_to: localhost
+      become: false
       register: danilabs_secret
       changed_when: false
       no_log: true
