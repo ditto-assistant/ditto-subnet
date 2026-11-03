@@ -25,7 +25,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import func, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
@@ -175,7 +175,7 @@ async def public_dueling_seasons(
     if before_index is not None:
         stmt = stmt.where(
             tuple_(DuelingSeason.season_index, DuelingSeason.bench_version)
-            < tuple_(before_index, before_bench_version)
+            < tuple_(literal(before_index), literal(before_bench_version))
             if before_bench_version is not None
             else DuelingSeason.season_index < before_index
         )

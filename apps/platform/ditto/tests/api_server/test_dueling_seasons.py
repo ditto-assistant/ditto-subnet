@@ -1376,6 +1376,16 @@ class TestDuelingReveal:
         assert (await client.get(f"{base}/seasons/{current}")).status_code == 404
         [season_view] = (await client.get(f"{base}/seasons")).json()["seasons"]
         assert season_view["id"] == str(revealed)
+        # The (index, version) cursor keeps a tied index; the index alone skips it.
+        tied = {"before_index": 50, "before_bench_version": 17}
+        assert (
+            len((await client.get(f"{base}/seasons", params=tied)).json()["seasons"])
+            == 1
+        )
+        older = {"before_index": 50}
+        assert (await client.get(f"{base}/seasons", params=older)).json()[
+            "seasons"
+        ] == []
         assert season_view["secret_hex"] == ("02" * 32)
         assert season_view["slices"] == 1
         assert season_view["pins"]["columns"][0]["submission_id"] == str(
