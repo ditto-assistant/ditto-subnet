@@ -600,7 +600,12 @@ class AdminInferenceConcurrencySettingsRequest(BaseModel):
         # their current values instead of resetting them.
         missing = sorted(
             set(InferenceConcurrencySettings.model_fields)
-            - {"benchmark_runtime", "decision_lane", "scored_provider_routing", "danilabs_percent"}
+            - {
+                "benchmark_runtime",
+                "decision_lane",
+                "scored_provider_routing",
+                "danilabs_percent",
+            }
             - self.settings.model_fields_set
         )
         if missing:
