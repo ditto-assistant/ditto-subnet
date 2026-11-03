@@ -27,13 +27,17 @@ func TestWorkPollsAdvertiseCapability(t *testing.T) {
 	if busy, err := processRound(context.Background(), client, genrun.Docker{}); busy || err != nil {
 		t.Fatalf("processRound: busy=%v err=%v", busy, err)
 	}
-	if len(queries) != 2 {
+	if busy, err := processDueling(context.Background(), client, newBuildCache(genrun.Docker{}, 1)); busy || err != nil {
+		t.Fatalf("processDueling: busy=%v err=%v", busy, err)
+	}
+	if len(queries) != 3 {
 		t.Fatalf("polls = %d", len(queries))
 	}
 	for _, q := range queries {
 		if q.Get("scorer_id") != "scorer-prod.1" || q.Get("scorer_version") != ScorerVersion ||
 			q.Get("min_cases") != strconv.Itoa(challenge.MinCases) || q.Get("max_cases") != strconv.Itoa(challenge.MaxCases) ||
-			q.Get("sandbox") != "docker" || q.Get("grading_bench_versions") != gradingVersionsParam(challenge.SupportedGradingBenchVersions()) {
+			q.Get("sandbox") != "docker" || q.Get("grading_bench_versions") != gradingVersionsParam(challenge.SupportedGradingBenchVersions()) ||
+			q.Get("dueling_work_kinds") != "slice,battery" {
 			t.Fatalf("advertisement = %v", q)
 		}
 	}

@@ -85,13 +85,13 @@ Older scorers wrote request refusals (`request cases must be in 8..64`) into
 seed and column errors. Platform still recognises those messages as the
 scorer's fault.
 
-Every work poll (`/work` and `/round-work`) also advertises this build's
-capability as query parameters: `scorer_id` (`-scorer-id`, default the
-hostname), `scorer_version`, `min_cases` and `max_cases`
+Every work poll (`/work`, `/round-work` and `/dueling-work`) also advertises
+this build's capability as query parameters: `scorer_id` (`-scorer-id`,
+default the hostname), `scorer_version`, `min_cases` and `max_cases`
 (`challenge.MinCases`/`MaxCases`), `grading_bench_versions` (the pack grading
 policies this build requests and grades, `challenge.SupportedGradingBenchVersions`,
-as `13,14`), `sandbox` and, when the binary knows its commit,
-`build_revision`. Platform records the latest per scorer and uses it before
+as `13,14`), `dueling_work_kinds` (`slice,battery` from `challenge-scorer/7`),
+`sandbox` and, when the binary knows its commit, `build_revision`. Platform records the latest per scorer and uses it before
 any fault can happen:
 
 - it leases no qualification whose `cases_per_seed` the polling scorer refuses;
@@ -157,11 +157,12 @@ DITTO_GENERATOR_SCORER_TOKEN=... go run ./cmd/challenge-scorer serve \
 
 `-platform` must be an `https://` URL, because the scorer token is a bearer
 credential. Use `-insecure-platform` only for a local stack. `-once` processes
-at most one item of each kind and exits nonzero if either cycle failed.
+at most one item of each kind and exits nonzero if any cycle failed.
 
-Each `serve` cycle does at most one round work item, then at most one
-qualification. Round work goes first because it gates the validators and the
-ledger.
+Each `serve` cycle does at most one round work item, then at most one dueling
+work item, then at most one qualification. Round work goes first because it
+gates the validators and the ledger. Dueling slices come next because a v16+
+agent lease waits (503 with `Retry-After`) until its slice is ready.
 
 **Rounds** (`GET /api/v1/generator-scorer/round-work`):
 
@@ -177,6 +178,68 @@ ledger.
   earlier rounds claimed. The scorer applies `challenge.ScoreRound` and posts
   column scores and pairwise-neutral agent standings to `POST /round-score`.
 
+**Dueling** (`GET /api/v1/generator-scorer/dueling-work`, bench v16+,
+[dueling-bench.md](../../../research/dittobench-datagen/docs/dueling-bench.md)
+sections 2 and 7.4). Platform answers `{"work": null}` when idle. A Platform
+that predates dueling work answers 404, which the scorer treats as idle
+without logging. Builds are cached by `source_sha256` across leases (up to 24
+generators, least recently used out), so a season's binaries are built once
+and a slice is five sandboxed runs. A build's compile or archive failure is
+cached too. A build timeout is reported as a `sandbox` fault, never as the
+generator's failure: every dueling generator already built inside the same
+limit to qualify.
+
+- `kind=battery`: the season qualification battery.
+  `{kind, lease_id, season_id, bench_version, cases, seeds: [hex],
+  candidates: [{submission_id, miner_hotkey, owner_key, source_sha256,
+  source_base64}]}`.
+  1. Every request (`challenge.NewGenerateRequestFor(seed, hotkey, cases,
+     bench_version)`, so the season's two-policy window) is checked before
+     anything is built.
+  2. Each candidate is built once and run on every seed. Every pack must pass
+     `challenge.ValidateGenerated`, and all of them must declare the same
+     grading policy inside the window.
+  3. Seed 0 is regenerated and must produce identical pack bytes.
+  4. The scorer posts `POST /api/v1/generator-scorer/dueling-battery`
+     `{lease_id, season_id, scorer_version, candidates: [{submission_id, ok,
+     grading_bench_version, error}]}`. `grading_bench_version` is present only
+     when `ok`; `error` names the first failure (`build: ...`, `seed <i>: ...`
+     or `determinism: ...`).
+- `kind=slice`: one agent run's generator slice.
+  `{kind, lease_id, preparation_id, season_id, season_index, bench_version,
+  run_seed, cases_per_column: 35, columns: [{column_id, submission_id,
+  miner_hotkey, owner_key, source_sha256, source_base64, grading_bench_version,
+  slice_seed, public_default}], fallback: {submission_id, miner_hotkey,
+  source_sha256, source_base64}}`.
+  1. The scorer refuses, as an `unsupported_request` fault, a slice it cannot
+     produce: a bench version below 16, a column set other than `c0..c4`, a
+     case count other than 35, a pinned policy outside the window, or a miner
+     column without an `owner_key`.
+  2. Each column runs `challenge.SliceGenerateRequest` (its `slice_seed`, its
+     hotkey, exactly its pinned policy) and the pack is validated.
+  3. A miner column whose generator fails (build, crash, timeout, invalid
+     pack) is regenerated with `fallback` on the same `slice_seed` and pinned
+     policy, and recorded as substituted: `public_default: true`,
+     `substituted: true`, the fallback's submission and hotkey, and an empty
+     `owner_key`. A public default column is never substituted.
+  4. The columns are encoded with `challenge.EncodeSliceDataset`. Each
+     column's `tree_sha256` is the tree digest of the archive actually built;
+     a lease that also pins `tree_sha256` must match it.
+  5. The scorer posts `POST /api/v1/generator-scorer/dueling-slice`
+     `{lease_id, preparation_id, scorer_version, columns: [{column_id, ok,
+     substituted, error}], slice_sha256, slice_base64}`. `ok` means the slice
+     holds a valid pack for the column (the pinned generator's, or the
+     fallback's when `substituted`). `error` is the pinned generator's failure
+     and is set whenever a column was substituted or failed, so Platform can
+     exclude that generator from the next season. When any column has no pack
+     (no fallback, or the fallback failed too) or encoding fails, the slice
+     fields are omitted and Platform fails the preparation.
+
+A sandbox failure or a request this build refuses is posted to
+`POST /api/v1/generator-scorer/fault` with `work: "dueling"`, the `lease_id`,
+`season_id` and, for a slice, `preparation_id`. A source that does not hash to
+its pin (or a pinned `tree_sha256` the archive does not match) is never run and is reported as an `unsupported_request` fault.
+
 **Qualification** (`GET /api/v1/generator-scorer/work`):
 
 1. The work carries a new submission's exact archive, fresh secret seeds, the
@@ -189,6 +252,33 @@ ledger.
 
 The token is read from the environment, is sent only as a Bearer header, and is
 never logged.
+
+## Reproducing a dueling slice
+
+A slice becomes reproducible once its season is revealed (secret and anchor
+block public) and each pinned generator's source is published
+(dueling-bench.md "Delayed reproducibility"). `reproduce-slice` rebuilds it
+byte for byte and prints its SHA-256, which must equal the `slice_sha256` on
+the score row:
+
+```bash
+go run ./cmd/challenge-scorer reproduce-slice \
+  -season-secret <64 hex> -season-index 26119 -anchor-block-hash 0x<64 hex> \
+  -run-seed 123 -bench-version 16 -pins pins.json \
+  -source c0=gen-a.tar.gz -source c1=default.tar.gz -source c2=./gen-b ... \
+  -expect-sha256 <slice_sha256> -out slice.json
+```
+
+`pins.json` holds `season_id` and each column's pin: `column_id`,
+`submission_id`, `owner_key`, `miner_hotkey`, `tree_sha256`,
+`grading_bench_version`, `public_default` and `substituted`. A revealed slice
+file has this shape and works as pins; its packs are ignored. The command
+derives every column's `slice_seed` from the secret, anchor and run seed and
+refuses a pin whose `slice_seed` differs. It logs the season commitment, so
+you can compare it with the published one. A substituted column's `-source` is
+the public default generator's archive. A `-source` directory is packed like an
+upload, and its tree digest must match the pinned `tree_sha256`. Builds run in
+the Docker sandbox unless `-sandbox local`.
 
 ## Production deployment
 
