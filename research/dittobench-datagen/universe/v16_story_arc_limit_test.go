@@ -45,5 +45,22 @@ func TestStoryArcLimitKeepsKindProportion(t *testing.T) {
 		if errA != nil || errB != nil || !reflect.DeepEqual(a, b) {
 			t.Fatalf("seed %d: a limit of every arc must equal no limit (%v, %v)", seed, errA, errB)
 		}
+		// A real limit asks only the chosen arcs, six oracles each, and keeps
+		// every other plan.
+		six := base
+		six.StoryArcLimit = 6
+		c, counts, errC := w.SelectQuestionPlans(six)
+		if errC != nil || counts.Story != 36 || len(c) != len(a)-(len(w.StoryArcs)-6)*6 {
+			t.Fatalf("seed %d: limited selection story=%d plans=%d (unlimited %d): %v", seed, counts.Story, len(c), len(a), errC)
+		}
+		asked := map[int]bool{}
+		for _, arc := range got {
+			asked[arc] = true
+		}
+		for _, p := range c {
+			if isStoryOracle(p.oracleKind) && !asked[p.StoryArcIndex()] {
+				t.Fatalf("seed %d: story plan for unasked arc %d", seed, p.StoryArcIndex())
+			}
+		}
 	}
 }
