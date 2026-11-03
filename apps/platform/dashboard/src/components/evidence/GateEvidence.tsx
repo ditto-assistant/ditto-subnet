@@ -153,6 +153,28 @@ export function gateSummaryRows(
       detail: parts.join(" · "),
     });
   }
+  const priced = evidence.priced_cost;
+  if (priced) {
+    const parts: string[] = [];
+    if (priced.result === "priced") {
+      if (typeof priced.normalized_cost_usd === "number") {
+        parts.push(`$${priced.normalized_cost_usd.toFixed(3)} per 350 cases`);
+      }
+      if (typeof priced.factor_bps === "number") {
+        parts.push(`factor ${(priced.factor_bps / 10_000).toFixed(4)}`);
+      }
+      if (!priced.applied) parts.push("not applied");
+    } else {
+      parts.push("not priced (incomplete accounting)");
+    }
+    if (priced.rule_consistent === false) parts.push("disagrees with the published rule");
+    rows.push({
+      gate: "priced_cost",
+      label: "Priced cost",
+      posture: priced.posture,
+      detail: parts.join(" · "),
+    });
+  }
   return rows;
 }
 

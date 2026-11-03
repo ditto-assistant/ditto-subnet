@@ -29344,6 +29344,7 @@ export interface components {
             inference_cost?: components["schemas"]["InferenceCostSummary"] | null;
             /** Posture */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            priced_cost?: components["schemas"]["PricedCostSummary"] | null;
             /** Run Id */
             run_id: string;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
@@ -30648,6 +30649,129 @@ export interface components {
              * @default true
              */
             require_desired_era_drained: boolean;
+        };
+        /**
+         * PricedCostSummary
+         * @description Run-level bench v16+ priced inference cost (``details.priced_cost``).
+         *
+         *     The scorer prices the WHOLE run (datagen half and generator slice) at the
+         *     contract's locked public per-token rates, normalises it to a 350-case run
+         *     and maps it to ``factor_bps`` through the published curve
+         *     (``ditto_screening_protocol.priced_cost``). ``applied_factor_bps`` is what
+         *     the composite carries (inside ``details.dueling.datagen_gate``): the factor
+         *     under ``enforce``, 10000 under ``shadow`` or without complete accounting.
+         *     ``rule_consistent`` is Platform's own recomputation of the factor from the
+         *     reported token counts; ``False`` means the scorer's block disagrees with
+         *     the published rule.
+         */
+        PricedCostSummary: {
+            /**
+             * Applied
+             * @default false
+             */
+            applied: boolean;
+            /** Applied Factor Bps */
+            applied_factor_bps?: number | null;
+            /**
+             * Cases
+             * @default 0
+             */
+            cases: number;
+            /**
+             * Completion Cost Nano Usd
+             * @default 0
+             */
+            completion_cost_nano_usd: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /** Contract Id */
+            contract_id?: string | null;
+            /**
+             * Cost Nano Usd
+             * @default 0
+             */
+            cost_nano_usd: number;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /**
+             * Decision Calls
+             * @default 0
+             */
+            decision_calls: number;
+            /**
+             * Decision Cost Nano Usd
+             * @default 0
+             */
+            decision_cost_nano_usd: number;
+            /**
+             * Decision Input Tokens
+             * @default 0
+             */
+            decision_input_tokens: number;
+            /**
+             * Decision Output Tokens
+             * @default 0
+             */
+            decision_output_tokens: number;
+            /**
+             * Embedding Cost Nano Usd
+             * @default 0
+             */
+            embedding_cost_nano_usd: number;
+            /**
+             * Embedding Tokens
+             * @default 0
+             */
+            embedding_tokens: number;
+            /** Factor Bps */
+            factor_bps?: number | null;
+            /** Floor Bps */
+            floor_bps?: number | null;
+            /**
+             * Normalization Cases
+             * @default 0
+             */
+            normalization_cases: number;
+            /**
+             * Normalized Cost Nano Usd
+             * @default 0
+             */
+            normalized_cost_nano_usd: number;
+            /** Normalized Cost Usd */
+            normalized_cost_usd?: number | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /**
+             * Prompt Cost Nano Usd
+             * @default 0
+             */
+            prompt_cost_nano_usd: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Ratio Bps
+             * @default 0
+             */
+            ratio_bps: number;
+            /**
+             * Reference Nano Usd
+             * @default 0
+             */
+            reference_nano_usd: number;
+            /** Result */
+            result?: ("priced" | "insufficient_evidence") | null;
+            /** Rule Consistent */
+            rule_consistent?: boolean | null;
+            /** Source */
+            source?: string | null;
+            /** Window */
+            window?: string | null;
         };
         /** PrivateDatasetRequest */
         PrivateDatasetRequest: {
@@ -33209,8 +33333,9 @@ export interface components {
          * PublicGateEvidence
          * @description Run-level v13 gate verdict, published beside a validator's score.
          *
-         *     Aggregates only: the posture the gates ran under, the four gate summaries
-         *     (counts and rates), how many cases the gates would zero, and per-finding
+         *     Aggregates only: the posture the gates ran under, the gate summaries
+         *     (counts and rates), the bench 16+ priced inference cost and its factor,
+         *     how many cases the gates would zero, and per-finding
          *     counts. The per-case notes behind these counts are owner-only
          *     (``GET /me/agents/{agent_id}/gate-notes``).
          */
@@ -33248,6 +33373,7 @@ export interface components {
              * @description The most severe posture any v13 gate ran under: ``enforce`` means at least one gate changed scores; ``shadow`` means every gate only recorded what it would have done. Per-gate postures are on the gate summaries.
              */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            priced_cost?: components["schemas"]["PricedCostSummary"] | null;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
         };
         /**

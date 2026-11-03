@@ -5380,6 +5380,53 @@ describe('production score reads', () => {
     })
   })
 
+  it('carries the bench v16 priced inference cost and folds its medians into history', async () => {
+    const pricedCost = (normalizedUsd: number, factorBps: number) => ({
+      contract_id: 'priced-cost-v1',
+      posture: 'enforce',
+      applied: true,
+      result: 'priced',
+      window: 'whole_run',
+      source: 'relay',
+      cases: 350,
+      prompt_tokens: 22_318_268,
+      completion_tokens: 1_690_233,
+      embedding_tokens: 294_000,
+      cost_nano_usd: Math.round(normalizedUsd * 1e9),
+      normalization_cases: 350,
+      normalized_cost_nano_usd: Math.round(normalizedUsd * 1e9),
+      reference_nano_usd: 1_000_000_000,
+      ratio_bps: Math.floor(normalizedUsd * 10_000),
+      floor_bps: 6000,
+      factor_bps: factorBps,
+      applied_factor_bps: factorBps,
+      cost_usd: normalizedUsd,
+      normalized_cost_usd: normalizedUsd,
+      rule_consistent: true,
+    })
+    const v16Scores = {
+      ...agentScores,
+      score_count: 9,
+      scores: [
+        ...agentScores.scores,
+        scoreRow({ validator_hotkey: '5ValA', composite: 0.61, bench_version: 16, seed: 999, run_id: 'run-a16', generated_at: '2026-11-13T00:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: pricedCost(1.81699, 6733) }) }),
+        scoreRow({ validator_hotkey: '5ValB', composite: 0.62, bench_version: 16, seed: 999, run_id: 'run-b16', generated_at: '2026-11-13T01:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: pricedCost(1.70001, 7200) }) }),
+        // A row that could not price its run carries no cost into the medians.
+        scoreRow({ validator_hotkey: '5ValC', composite: 0.9, bench_version: 16, seed: 999, run_id: 'run-c16', generated_at: '2026-11-13T02:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: { ...pricedCost(0, 10_000), result: 'insufficient_evidence' } }) }),
+      ],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(v16Scores)))
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    const v16 = history.versions.find((version) => version.bench_version === 16)
+    expect(v16?.median_priced_cost_usd).toBeCloseTo((1.81699 + 1.70001) / 2, 10)
+    expect(v16?.median_priced_cost_factor_bps).toBe((6733 + 7200) / 2)
+    expect(history.versions.find((version) => version.bench_version === 7)).toMatchObject({
+      median_priced_cost_usd: null,
+      median_priced_cost_factor_bps: null,
+    })
+  })
+
   it('reports a mixed bench v13 gate posture as null instead of picking one', async () => {
     const mixed = {
       ...gatedAgentScores,

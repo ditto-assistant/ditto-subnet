@@ -3,7 +3,8 @@
 See :mod:`ditto.api_models.gate_evidence` for the wire contract. This module is
 the one place the platform reads the scorer's v13 gate telemetry -- the
 per-case ``catalog`` / ``claim_provenance`` / ``inference_cost`` records and
-twin markers on ``per_case``, and the four run summaries under ``details`` --
+twin markers on ``per_case``, and the run summaries under ``details`` (from
+bench 16 also ``priced_cost``) --
 and everything downstream (the public aggregate, the owner-only notes, the
 dispute link) consumes the stored projection it builds, so a scorer-side
 reshaping has exactly one seam to cross.
@@ -45,12 +46,14 @@ from ditto.api_models.gate_evidence import (
     MinerGateNoteCase,
     MinerGateNotesResponse,
     MinerGateNotesRun,
+    PricedCostSummary,
     PublicGateEvidence,
     StoredGateCase,
     StoredGateEvidence,
     TwinPostPassSummary,
 )
 from ditto.api_models.validator import CaseScore, ScoreReport
+from ditto_screening_protocol.priced_cost import PricedCostReport
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,7 @@ _RUN_SUMMARIES: dict[str, type[BaseModel]] = {
     "claim_provenance": ClaimProvenanceSummary,
     "twin_post_pass": TwinPostPassSummary,
     "inference_cost": InferenceCostSummary,
+    "priced_cost": PricedCostSummary,
 }
 
 
@@ -161,7 +165,9 @@ def _cost_factor(case: CaseScore) -> float | None:
     return round(cost.factor_bps / 10_000, 4)
 
 
-def _run_summaries(details: dict[str, Any]) -> dict[str, BaseModel | None]:
+def _run_summaries(
+    details: dict[str, Any], *, bench_version: int
+) -> dict[str, BaseModel | None]:
     """Validate each ``details`` gate summary on its own.
 
     Advisory telemetry must never turn a valid score into a 4xx, and one
@@ -179,7 +185,39 @@ def _run_summaries(details: dict[str, Any]) -> dict[str, BaseModel | None]:
         except ValidationError as exc:
             logger.warning("dropping malformed details.%s: %s", key, exc)
             out[key] = None
+    priced = out.get("priced_cost")
+    if isinstance(priced, PricedCostSummary):
+        out["priced_cost"] = _with_priced_cost_check(
+            priced, details.get("priced_cost"), bench_version
+        )
     return out
+
+
+def _with_priced_cost_check(
+    summary: PricedCostSummary, raw: object, bench_version: int
+) -> PricedCostSummary:
+    """Add the dollar projections and Platform's recomputation of the factor.
+
+    ``rule_consistent`` re-derives the factor from the block's own token
+    counts under the published constants
+    (``ditto_screening_protocol.priced_cost``); a block the rule does not
+    reproduce is kept, flagged ``False``, never silently corrected.
+    """
+    consistent: bool | None = None
+    if isinstance(raw, dict):
+        try:
+            consistent = PricedCostReport.model_validate(raw).matches_published_rule(
+                bench_version
+            )
+        except ValidationError:
+            consistent = False
+    return summary.model_copy(
+        update={
+            "cost_usd": round(summary.cost_nano_usd / 1e9, 6),
+            "normalized_cost_usd": round(summary.normalized_cost_nano_usd / 1e9, 6),
+            "rule_consistent": consistent,
+        }
+    )
 
 
 def overall_posture(postures: list[GatePosture | None]) -> GatePosture | None:
@@ -212,7 +250,7 @@ def build_gate_evidence(
     if not carries_gate_evidence(bench_version):
         return None
     details = report.details if isinstance(report.details, dict) else {}
-    summaries = _run_summaries(details)
+    summaries = _run_summaries(details, bench_version=bench_version)
 
     gate_counts: Counter[str] = Counter()
     cases: list[StoredGateCase] = []
@@ -266,6 +304,7 @@ def build_gate_evidence(
         claim_provenance=summaries["claim_provenance"],  # type: ignore[arg-type]
         twin_post_pass=summaries["twin_post_pass"],  # type: ignore[arg-type]
         inference_cost=summaries["inference_cost"],  # type: ignore[arg-type]
+        priced_cost=summaries["priced_cost"],  # type: ignore[arg-type]
         catalog_suppression_rate=(
             catalog_gate.catalog_suppression_rate if catalog_gate is not None else None
         ),
@@ -304,6 +343,7 @@ def public_gate_evidence(raw: object) -> PublicGateEvidence | None:
         claim_provenance=stored.claim_provenance,
         twin_post_pass=stored.twin_post_pass,
         inference_cost=stored.inference_cost,
+        priced_cost=stored.priced_cost,
         catalog_suppression_rate=stored.catalog_suppression_rate,
         flagged_case_count=stored.flagged_case_count,
         flagged_case_share=stored.flagged_case_share,
@@ -382,6 +422,7 @@ def _run_notes(score: Any, *, agent_id: UUID) -> MinerGateNotesRun | None:
         claim_provenance=stored.claim_provenance,
         twin_post_pass=stored.twin_post_pass,
         inference_cost=stored.inference_cost,
+        priced_cost=stored.priced_cost,
         catalog_suppression_rate=stored.catalog_suppression_rate,
         flagged_case_count=stored.flagged_case_count,
         flagged_case_share=stored.flagged_case_share,
