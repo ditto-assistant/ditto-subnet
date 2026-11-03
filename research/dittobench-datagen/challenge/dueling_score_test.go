@@ -205,3 +205,31 @@ func TestDuelingCompositeStderrMatchesSectionFourUnmasked(t *testing.T) {
 		t.Fatalf("stratified SE %v, want %v", got, want)
 	}
 }
+
+func TestCheckDuelingColumns(t *testing.T) {
+	if err := CheckDuelingColumns(duelingSlice()); err != nil {
+		t.Fatal(err)
+	}
+	long := append(duelingSlice(), agg("c5", "coldkey:o5", 1))
+	if CheckDuelingColumns(long) == nil {
+		t.Fatal("an overlong report must be refused")
+	}
+	if CheckDuelingColumns(duelingSlice()[:4]) == nil {
+		t.Fatal("a short report must be refused")
+	}
+	dup := duelingSlice()
+	dup[0].ColumnID = "c0"
+	if CheckDuelingColumns(dup) == nil {
+		t.Fatal("duplicate column ids must be refused")
+	}
+	bad := duelingSlice()
+	bad[1].Sum = math.NaN()
+	if CheckDuelingColumns(bad) == nil {
+		t.Fatal("non-finite statistics must be refused")
+	}
+	neg := duelingSlice()
+	neg[2].N = -1
+	if CheckDuelingColumns(neg) == nil {
+		t.Fatal("a negative count must be refused")
+	}
+}

@@ -189,6 +189,10 @@ def test_report_is_strict() -> None:
         DuelingReport.model_validate(_report(column_weight=0.2))
     with pytest.raises(ValidationError):
         DuelingReport.model_validate(_report(columns=_report()["columns"][:4]))
+    renamed = _report()["columns"]
+    renamed[4] = {**renamed[4], "column_id": "c7"}
+    with pytest.raises(ValidationError):
+        DuelingReport.model_validate(_report(columns=renamed))
     dup = _report()["columns"]
     dup[1] = {**dup[1], "column_id": "c0"}
     with pytest.raises(ValidationError):

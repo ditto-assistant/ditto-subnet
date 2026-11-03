@@ -264,9 +264,12 @@ class DuelingReport(BaseModel):
             raise ValueError(
                 f"column_weight must be the contract weight {DUELING_COLUMN_WEIGHT}"
             )
-        ids = [c.column_id for c in self.columns]
-        if len(set(ids)) != len(ids):
-            raise ValueError("dueling columns need unique column ids")
+        ids = sorted(c.column_id for c in self.columns)
+        if ids != [f"c{i}" for i in range(DUELING_SLICE_COLUMNS)]:
+            raise ValueError(
+                "dueling columns must be the unique ids c0..c"
+                f"{DUELING_SLICE_COLUMNS - 1} (challenge.CheckDuelingColumns)"
+            )
         return self
 
     def composite(self, mask: Set[str]) -> float:

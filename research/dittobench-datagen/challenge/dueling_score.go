@@ -1,6 +1,8 @@
 package challenge
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"sort"
 
@@ -21,6 +23,35 @@ type DuelingColumnAggregate struct {
 	Sum         float64 `json:"sum"`
 	SumSq       float64 `json:"sum_sq"`
 	Substituted bool    `json:"substituted"`
+}
+
+// CheckDuelingColumns validates a run's column aggregates at the report
+// boundary, before DuelingComposite or DuelingCompositeStderr scores them:
+// exactly protocol.DuelingSliceColumns columns with the unique ids c0..c4,
+// non-negative counts and finite sums. The composite functions themselves take
+// any slice (a subset is how masks and tests exercise them), so every consumer
+// of a signed report calls this first; an overlong slice would otherwise give
+// the datagen half a negative weight.
+func CheckDuelingColumns(columns []DuelingColumnAggregate) error {
+	if len(columns) != protocol.DuelingSliceColumns {
+		return fmt.Errorf("dueling report needs exactly %d columns, got %d", protocol.DuelingSliceColumns, len(columns))
+	}
+	seen := map[string]bool{}
+	for _, c := range columns {
+		ok := false
+		for i := 0; i < protocol.DuelingSliceColumns; i++ {
+			ok = ok || c.ColumnID == SliceColumnID(i)
+		}
+		if !ok || seen[c.ColumnID] {
+			return fmt.Errorf("dueling report columns must be the unique ids c0..c%d, got %q", protocol.DuelingSliceColumns-1, c.ColumnID)
+		}
+		seen[c.ColumnID] = true
+		finite := !math.IsNaN(c.Sum) && !math.IsInf(c.Sum, 0) && !math.IsNaN(c.SumSq) && !math.IsInf(c.SumSq, 0)
+		if c.N < 0 || !finite || c.SumSq < 0 {
+			return errors.New("dueling report column " + c.ColumnID + " has invalid statistics")
+		}
+	}
+	return nil
 }
 
 // duelingWeight is the column weight as a float64 variable, never a typed
