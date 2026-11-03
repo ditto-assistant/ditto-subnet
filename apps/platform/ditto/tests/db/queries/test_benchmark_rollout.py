@@ -3007,6 +3007,8 @@ def _post_v7_capabilities(now: datetime) -> tuple[dict, dict]:
     scorer.pop("deterministic_v13_datasets", None)
     scorer.pop("v14_scored_runtime_env", None)
     scorer.pop("v15_scored_runtime_env", None)
+    scorer.pop("dueling_slice_bench_versions", None)
+    scorer.pop("v16_scored_runtime_env", None)
     scorer.pop("v7_calibration")
     return capabilities, stack
 
@@ -3165,6 +3167,22 @@ def _heartbeat(
         capabilities["scorer_benchmarks"].pop("v14_scored_runtime_env", None)
     if 15 not in versions:
         capabilities["scorer_benchmarks"].pop("v15_scored_runtime_env", None)
+    if 16 in versions:
+        # A v16 (dueling) scorer carries its version-bound packet and forwards
+        # its slice versions; Platform leases 16+ only with both.
+        revision = capabilities["scorer_benchmarks"]["source_revision"]
+        keys = ["DITTOBENCH_DB", "DITTOBENCH_DECISIONS_URL", "DITTOBENCH_MODEL"]
+        material = f"scored-runtime-env-v1\n16\n{revision}\n" + "\n".join(keys)
+        capabilities["scorer_benchmarks"]["v16_scored_runtime_env"] = {
+            "bench_version": 16,
+            "scope": "scorer-injected-env-only",
+            "source_revision": revision,
+            "injected_keys": keys,
+            "sha256": hashlib.sha256(material.encode()).hexdigest(),
+        }
+        capabilities["scorer_benchmarks"]["dueling_slice_bench_versions"] = [
+            v for v in versions if v >= 16
+        ]
     if 7 not in versions:
         capabilities["scorer_benchmarks"].pop("v7_calibration", None)
         capabilities["ticket_inference"] = False
@@ -3405,6 +3423,22 @@ async def test_v8_requires_an_isolated_executor_but_v7_remains_compatible(
     assert heartbeat_supports_version(heartbeat, now=now, version=8) is supports_v8
 
 
+def test_v16_needs_its_own_runtime_env_packet_and_slice_versions() -> None:
+    """A v16 scorer qualifies only with the v16 packet (a v15 packet never
+    does) and with 16 in ``dueling_slice_bench_versions``."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    versions = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    heartbeat = _heartbeat("v16", now, versions=versions, protocol_version=18)
+    assert verified_scorer_for_version(heartbeat, version=16) is not None
+    scorer = heartbeat.capabilities["scorer_benchmarks"]  # type: ignore[index]
+    packet = scorer.pop("v16_scored_runtime_env")
+    assert verified_scorer_for_version(heartbeat, version=16) is None
+    assert verified_scorer_for_version(heartbeat, version=15) is not None
+    scorer["v16_scored_runtime_env"] = packet
+    scorer.pop("dueling_slice_bench_versions")
+    assert verified_scorer_for_version(heartbeat, version=16) is None
+
+
 async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
     """The v0.44 capability shape can receive v8 work without v7 metadata."""
 
@@ -3416,6 +3450,8 @@ async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
     scorer["supported_bench_versions"] = [8]
     scorer.pop("v14_scored_runtime_env", None)
     scorer.pop("v15_scored_runtime_env", None)
+    scorer.pop("dueling_slice_bench_versions", None)
+    scorer.pop("v16_scored_runtime_env", None)
     scorer.pop("v7_calibration")
 
     assert heartbeat_supports_version(heartbeat, now=now, version=8)

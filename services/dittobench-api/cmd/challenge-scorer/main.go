@@ -495,18 +495,32 @@ func (c *platformClient) do(ctx context.Context, method, path string, body, out 
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, challenge.MaxArchiveBytes*2))
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, maxPlatformResponseBytes+1))
 	if err != nil {
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return &httpStatusError{Method: method, Path: path, Status: resp.StatusCode}
 	}
+	if len(payload) > maxPlatformResponseBytes {
+		return fmt.Errorf("%s %s: response exceeds %d bytes", method, path, maxPlatformResponseBytes)
+	}
 	if out != nil {
 		return json.Unmarshal(payload, out)
 	}
 	return nil
 }
+
+// maxPlatformResponseBytes bounds one Platform answer. Work carries source
+// archives base64-encoded in JSON: a dueling battery up to 10 miner candidates
+// plus the default generator, a slice five columns plus its fallback, a round
+// up to eight columns. maxLeaseArchives of them at challenge.MaxArchiveBytes,
+// base64-expanded, plus 1 MiB of metadata fits every one; a larger answer is
+// refused by name instead of truncating into a JSON error.
+const (
+	maxLeaseArchives         = 16
+	maxPlatformResponseBytes = maxLeaseArchives*((challenge.MaxArchiveBytes+2)/3*4) + (1 << 20)
+)
 
 // httpStatusError is a non-2xx Platform answer.
 type httpStatusError struct {

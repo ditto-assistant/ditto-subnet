@@ -37759,6 +37759,7 @@ export interface components {
             supported_bench_versions: number[];
             v14_scored_runtime_env?: components["schemas"]["V14ScoredRuntimeEnvEvidence"] | null;
             v15_scored_runtime_env?: components["schemas"]["V15ScoredRuntimeEnvEvidence"] | null;
+            v16_scored_runtime_env?: components["schemas"]["V16ScoredRuntimeEnvEvidence"] | null;
             v7_calibration?: components["schemas"]["V7InferenceCalibration"] | null;
         };
         /**
@@ -43625,6 +43626,32 @@ export interface components {
              * @constant
              */
             bench_version: 15;
+            /** Injected Keys */
+            injected_keys: string[];
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "scorer-injected-env-only";
+            /** Sha256 */
+            sha256: string;
+            /** Source Revision */
+            source_revision: string;
+        };
+        /**
+         * V16ScoredRuntimeEnvEvidence
+         * @description Keys reported by a descriptor-verified scorer for its v16 sandbox.
+         *
+         *     v16 (the dueling bench) injects the v15 key set, but the packet is bound to
+         *     its version like every earlier one, so a v15 packet can never qualify a
+         *     v16 rollout.
+         */
+        V16ScoredRuntimeEnvEvidence: {
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 16;
             /** Injected Keys */
             injected_keys: string[];
             /**
