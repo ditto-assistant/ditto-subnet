@@ -26,6 +26,7 @@ const (
 	BenchVersionV13 = 13
 	BenchVersionV14 = 14
 	BenchVersionV15 = 15
+	BenchVersionV16 = 16
 	BasisPointScale = 10_000
 	MaxCaseCount    = 10_000_000
 	MaxUsageCount   = uint64(9_007_199_254_740_991)
@@ -50,7 +51,7 @@ const (
 // unchanged; generator slice cases never enter gate evidence.
 func SupportedBenchVersion(benchVersion int) bool {
 	return benchVersion >= BenchVersionV9 &&
-		(benchVersion <= BenchVersionV15 || protocol.StagedBenchVersion(benchVersion))
+		(benchVersion <= BenchVersionV16 || protocol.StagedBenchVersion(benchVersion))
 }
 
 var (
