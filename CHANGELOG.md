@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.454.0 (2026-11-04)
+
+### Features
+
+- **platform,backroom**: Run season rotation re-scores on the duel seeds
+  ([#3382](https://github.com/ditto-assistant/ditto-subnet/pull/3382),
+  [`b31f9b8`](https://github.com/ditto-assistant/ditto-subnet/commit/b31f9b89d51dfc511a77f8935e3a86f1af416e26))
+
+
 ## v0.453.0 (2026-11-04)
 
 ### Bug Fixes
