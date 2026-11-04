@@ -44,10 +44,8 @@ export async function boundMcpRequest(request: Request, limit = MAX_MCP_BODY_BYT
         }
         coalesced.set(value, size - value.byteLength)
       } else {
-        // A small view can otherwise retain an arbitrarily large backing buffer.
-        chunks.push(value.byteOffset === 0 && value.byteLength === value.buffer.byteLength
-          ? value
-          : new Uint8Array(value))
+        // Snapshot producer-owned bytes and avoid retaining oversized backing buffers.
+        chunks.push(new Uint8Array(value))
         if (chunks.length >= MAX_BUFFERED_CHUNKS) {
           // Bound per-chunk overhead for streams fragmented into tiny pieces.
           coalesced = new Uint8Array(Math.min(limit, Math.max(size, 1024)))
