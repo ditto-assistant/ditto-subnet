@@ -396,6 +396,162 @@ class PublicBenchmarkQualityFactor(BaseModel):
     explanation: str
 
 
+DUELING_BREAKDOWN_FORMULA = "gate x ((1 - w x |U|) x datagen + w x sum col)"
+"""The bench v16+ dueling composite (``challenge.DuelingComposite``)."""
+
+
+class PublicDuelingColumn(BaseModel):
+    """One generator-slice column of a bench v16+ run, as aggregates only.
+
+    Mirrors the Backroom canary read: no owner key, no generator submission
+    id, no case text. ``self_masked`` says the column's generator belongs to
+    the scored agent's own owner, so the composite dropped it (its weight
+    returned to the datagen half).
+    """
+
+    column_id: Annotated[str, Field(pattern=r"^c[0-9]{1,2}$")]
+    grading_bench_version: Annotated[int | None, Field(default=None, ge=1)] = None
+    n: Annotated[int, Field(ge=0, description="Executed cases in this column.")]
+    sum: Annotated[float, Field(ge=0.0, description="Sum of the column's case scores.")]
+    mean: Annotated[
+        float, Field(ge=0.0, le=1.0, description="``sum / n`` (0 with no cases).")
+    ]
+    substituted: Annotated[
+        bool,
+        Field(
+            description=(
+                "The pinned generator failed and the public default generator "
+                "filled this column."
+            )
+        ),
+    ]
+    public_default: Annotated[
+        bool,
+        Field(description="The column's pinned generator is the public default."),
+    ]
+    self_masked: Annotated[
+        bool,
+        Field(
+            description=(
+                "Owned by the scored agent's own owner, so excluded from ``U`` "
+                "(an agent never scores on its owner's generator)."
+            )
+        ),
+    ]
+    contribution: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description="``w x mean`` when counted, 0 when self-masked.",
+        ),
+    ]
+
+
+class PublicDuelingBreakdown(BaseModel):
+    """Bench v16+ arithmetic from the datagen half and slice to the composite.
+
+    Projected by Platform from the stored, ingestion-validated
+    ``scores.dueling`` aggregates and the ``priced_cost`` gate evidence. It is
+    a read-side explanation only: the signed composite is authoritative and
+    nothing here feeds ranking, weights or ingestion.
+    """
+
+    formula: str = DUELING_BREAKDOWN_FORMULA
+    season_id: str
+    season_index: Annotated[int, Field(ge=0)]
+    datagen_raw: Annotated[
+        float, Field(ge=0.0, le=1.0, description="The datagen half's raw mean.")
+    ]
+    datagen_gate: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description=(
+                "The run's whole composite gate (quality gates times the "
+                "applied priced-cost factor)."
+            ),
+        ),
+    ]
+    column_weight: Annotated[float, Field(ge=0.0, le=1.0, description="``w``.")]
+    counted_columns: Annotated[
+        int, Field(ge=0, description="``|U|``: columns not self-masked.")
+    ]
+    datagen_share: Annotated[
+        float, Field(ge=0.0, le=1.0, description="``1 - w x |U|``.")
+    ]
+    generator_sum: Annotated[
+        float, Field(ge=0.0, le=1.0, description="``w x sum col`` over ``U``.")
+    ]
+    pre_gate_composite: Annotated[
+        float,
+        Field(
+            ge=0.0, le=1.0, description="``datagen_share x datagen + generator_sum``."
+        ),
+    ]
+    composite: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description=(
+                "``datagen_gate x pre_gate_composite``, recomputed from the "
+                "aggregates; it reproduces the signed composite."
+            ),
+        ),
+    ]
+    composite_stderr: Annotated[float | None, Field(default=None, ge=0.0)] = None
+    priced_cost_applied_factor_bps: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            le=10_000,
+            description=(
+                "The priced-cost factor inside ``datagen_gate`` (10000 under "
+                "shadow or without complete accounting). Null when the run "
+                "recorded no priced cost."
+            ),
+        ),
+    ] = None
+    priced_cost_factor_bps: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            le=10_000,
+            description="The factor the published curve gives, applied or not.",
+        ),
+    ] = None
+    priced_cost_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description="``priced_cost_applied_factor_bps / 10000``.",
+        ),
+    ] = None
+    priced_cost_posture: str | None = None
+    priced_cost_result: str | None = None
+    priced_cost_window: Annotated[str | None, Field(default=None, max_length=32)] = None
+    other_gate_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "``datagen_gate / priced_cost_factor``: every other gate "
+                "combined. Null when the run recorded no priced cost or its "
+                "factor is 0."
+            ),
+        ),
+    ] = None
+    columns: list[PublicDuelingColumn] = Field(default_factory=list)
+
+
 class PublicCompositeBreakdown(BaseModel):
     """Public arithmetic from capability means to the final composite.
 
@@ -2914,6 +3070,15 @@ class PublicValidatorScore(BaseModel):
     model_use: PublicModelUse | None = None
     token_efficiency: PublicTokenEfficiency | None = None
     composite_breakdown: PublicCompositeBreakdown | None = None
+    dueling_breakdown: PublicDuelingBreakdown | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench v16+ dueling arithmetic: datagen half, generator-slice "
+            "columns (self-masked columns flagged) and the priced-cost factor "
+            "inside the composite gate. Aggregates only; omitted below v16."
+        ),
+    )
     v9_base: PublicV9BaseEvidence | None = None
     median_ms: Annotated[int, Field(ge=0, description="Median per-case latency (ms).")]
     n: Annotated[int, Field(ge=0, description="Number of cases scored.")]
@@ -4307,6 +4472,15 @@ class PublicProvisionalScore(BaseModel):
     model_use: PublicModelUse | None = None
     token_efficiency: PublicTokenEfficiency | None = None
     composite_breakdown: PublicCompositeBreakdown | None = None
+    dueling_breakdown: PublicDuelingBreakdown | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench v16+ dueling arithmetic: datagen half, generator-slice "
+            "columns (self-masked columns flagged) and the priced-cost factor "
+            "inside the composite gate. Aggregates only; omitted below v16."
+        ),
+    )
     v9_base: PublicV9BaseEvidence | None = None
     calibration_brier: Annotated[
         float | None,

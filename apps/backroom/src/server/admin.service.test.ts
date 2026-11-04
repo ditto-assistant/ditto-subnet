@@ -5446,6 +5446,73 @@ describe('production score reads', () => {
     })
   })
 
+  it('carries the bench v16 dueling breakdown through get_agent_scores without owner keys', async () => {
+    const column = (id: string, extra: Record<string, unknown> = {}) => ({
+      column_id: id, grading_bench_version: 16, n: 35, sum: 28, mean: 0.8,
+      substituted: false, public_default: false, self_masked: false, contribution: 0.08,
+      ...extra,
+    })
+    const breakdown = {
+      formula: 'gate x ((1 - w x |U|) x datagen + w x sum col)',
+      season_id: '8f2b6a52-3b7f-4a55-9d0c-0d6c7d2a9e11',
+      season_index: 3,
+      datagen_raw: 0.9,
+      datagen_gate: 0.79832,
+      column_weight: 0.1,
+      counted_columns: 4,
+      datagen_share: 0.6,
+      generator_sum: 0.23,
+      pre_gate_composite: 0.77,
+      composite: 0.6147064,
+      composite_stderr: 0.0125,
+      priced_cost_applied_factor_bps: 9392,
+      priced_cost_factor_bps: 9392,
+      priced_cost_factor: 0.9392,
+      priced_cost_posture: 'enforce',
+      priced_cost_result: 'priced',
+      priced_cost_window: 'whole_run',
+      other_gate_factor: 0.85,
+      columns: [
+        column('c0', { public_default: true }),
+        // A field Platform never sends is stripped, never forwarded.
+        column('c1', { self_masked: true, contribution: 0, owner_key: '5SecretOwner' }),
+        column('c2'),
+        column('c3', { substituted: true }),
+        column('c4'),
+      ],
+    }
+    const v16Scores = {
+      ...agentScores,
+      score_count: 4,
+      scores: [
+        ...agentScores.scores,
+        scoreRow({ validator_hotkey: '5ValA', composite: 0.614706, bench_version: 16, seed: 999, run_id: 'run-a16', generated_at: '2026-11-13T00:00:00Z', dueling_breakdown: breakdown }),
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(Response.json(leaderboard))
+        .mockResolvedValueOnce(Response.json(v16Scores)),
+    )
+
+    const detail = await fetchAgentScores({ agentId: topAgentId, benchVersion: 16 })
+    const [row] = detail.scores
+    expect(row?.dueling_breakdown).toMatchObject({
+      priced_cost_applied_factor_bps: 9392,
+      priced_cost_window: 'whole_run',
+      counted_columns: 4,
+    })
+    expect(row?.dueling_breakdown?.columns.map((c) => c.self_masked)).toEqual([
+      false, true, false, false, false,
+    ])
+    expect(JSON.stringify(detail)).not.toContain('5SecretOwner')
+    expect(JSON.stringify(detail)).not.toContain('owner_key')
+    // Pre-v16 rows carry no breakdown at all.
+    const v7 = detail.other_bench_versions.find((group) => group.bench_version === 7)
+    expect(v7?.scores.every((score) => score.dueling_breakdown === undefined)).toBe(true)
+  })
+
   it('reports a mixed bench v13 gate posture as null instead of picking one', async () => {
     const mixed = {
       ...gatedAgentScores,
