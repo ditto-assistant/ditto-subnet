@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.451.1 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Serve title-duel evidence from seasons that ran a duel
+  ([#3379](https://github.com/ditto-assistant/ditto-subnet/pull/3379),
+  [`7387d6b`](https://github.com/ditto-assistant/ditto-subnet/commit/7387d6b6064333a24cb14bc8aa4426ad0158c38b))
+
+
 ## v0.451.0 (2026-11-04)
 
 ### Features
