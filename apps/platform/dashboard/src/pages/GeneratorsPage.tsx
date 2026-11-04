@@ -86,6 +86,8 @@ const ROUND_STATUS: Record<GeneratorRoundStatus, readonly [string, string]> = {
   running: ["Running", "progress"],
   scoring: ["Scoring", "progress"],
   scored: ["Scored", "good"],
+  // Nothing changed since the last scored round, so it was not rerun.
+  skipped: ["Unchanged", ""],
   void: ["Void", "warn"],
 };
 

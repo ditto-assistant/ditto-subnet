@@ -58,6 +58,7 @@ export type GeneratorRoundStatus =
   | "running"
   | "scoring"
   | "scored"
+  | "skipped"
   | "void";
 
 export interface GeneratorRoundSummary {

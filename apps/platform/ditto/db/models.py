@@ -14380,7 +14380,9 @@ class GeneratorRound(Base):
     and panel frozen, ``seed`` derived from the secret and the open block),
     then ``running`` once the scorer posts the round dataset, ``scoring``
     when the round closes, and ``scored``. A round that cannot finish is
-    ``void`` with a reason. ``secret`` and the dataset are private until
+    ``void`` with a reason. A round that would only repeat the last scored
+    round is ``skipped`` when it opens (``generation.skipped_unchanged``
+    names the scored round it carries forward): no dataset, no panel runs. ``secret`` and the dataset are private until
     ``revealed_at`` (the privacy window).
     """
 
@@ -14432,7 +14434,7 @@ class GeneratorRound(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('committed', 'generating', 'running', 'scoring', "
-            "'scored', 'void')",
+            "'scored', 'skipped', 'void')",
             name="generator_rounds_status_check",
         ),
         CheckConstraint(

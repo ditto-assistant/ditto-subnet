@@ -414,6 +414,26 @@ same number.
    A void round is never scored and never replaces a generator's ledger
    score.
 
+### Unchanged rounds are skipped
+
+With `skip_unchanged_rounds` (on by default), a round is `skipped` when it
+opens if it would only repeat the last scored round. That means the same
+generator columns (submission ids and source digests, counted or challenger),
+the same panel agents and champion, the same bench version and column size,
+and the same score parameters. The last scored round must also be a complete
+measurement: every column generated, no panel agent dropped, and every seated
+agent reported. A skipped round generates nothing and leases no panel runs, so
+it spends no inference. Its `generation.skipped_unchanged` names the scored
+round it carries forward.
+
+The ledger keeps paying that scored round's column scores. Each skip dates
+them afresh for `window_days`. A skip never revives a scored round that has
+already left the window.
+
+An upload, a new or retired qualified generator, a panel change, a crown
+change, or a policy change makes the next round run. Dueling seasons still
+open on the skipped round's open block.
+
 ## Scoring (`challenge.ScoreCases`, `challenge.ScoreRound`)
 
 `challenge.ScoreRound` scores the whole matrix.
@@ -441,7 +461,8 @@ column score = Σ credit / ((1 + champion_bonus) · max(n, cases_per_seed)) × (
 ```
 
 A generator's ledger score is its latest *scored* round column score within
-`window_days`; void rounds never count.
+`window_days`; void rounds never count. A skipped round extends its source
+round's freshness without adding a score.
 
 **Agents.** Agents are ranked **pairwise-neutral**. Agents A and B are
 compared only on cases of counted columns owned by neither A's owner nor B's
