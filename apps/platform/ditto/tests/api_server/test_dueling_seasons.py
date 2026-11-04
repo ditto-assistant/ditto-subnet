@@ -1552,7 +1552,10 @@ class TestRolloutBlockingRotationOrder:
         maker: async_sessionmaker[AsyncSession],
         *,
         rollout_status: str | None,
+        v16_validators: tuple[str, ...] = ("5BlkV1", "5BlkV2", "5BlkV3"),
     ) -> tuple[UUID, UUID]:
+        from ditto.tests.db.queries.test_benchmark_rollout import _heartbeat
+
         default = await _generator(
             maker,
             hotkey=_DEFAULT_KEY,
@@ -1570,6 +1573,11 @@ class TestRolloutBlockingRotationOrder:
         }
         rows[complete]["5BlkV3"] = provisional
         async with maker() as session, session.begin():
+            for validator in ("5BlkV1", "5BlkV2", "5BlkV3"):
+                versions = list(range(7, 17 if validator in v16_validators else 16))
+                session.add(
+                    _heartbeat(validator, now, versions=versions, protocol_version=18)
+                )
             for agent_id, scores in rows.items():
                 for validator, season_id in scores.items():
                     session.add(
@@ -1681,6 +1689,20 @@ class TestRolloutBlockingRotationOrder:
                 )
             )
         ticket = await self._promote(session_maker, "5BlkV3", "slot-1")
+        assert ticket is not None and ticket.agent_id == complete
+
+    async def test_a_validator_that_cannot_serve_the_rollout_does_not_defer(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        # V3's heartbeat no longer serves v16, so it cannot take the blocking
+        # member's lease; a caller that can still run the re-score (operator
+        # promotion) is not held behind work this validator cannot lease.
+        complete, _blocking = await self._seed(
+            session_maker,
+            rollout_status="collecting",
+            v16_validators=("5BlkV1", "5BlkV2"),
+        )
+        ticket = await self._promote(session_maker, "5BlkV3", "slot-0")
         assert ticket is not None and ticket.agent_id == complete
 
     async def test_blocking_quorum_rescores_order_before_complete_members(

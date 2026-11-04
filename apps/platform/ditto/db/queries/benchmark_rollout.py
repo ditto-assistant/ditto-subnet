@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
@@ -2307,16 +2307,20 @@ class ActivationBlockingQuorum:
 
 
 async def activation_blocking_quorum(
-    session: AsyncSession, *, bench_version: int
+    session: AsyncSession, *, bench_versions: Collection[int]
 ) -> ActivationBlockingQuorum | None:
-    """The open rollout's blocking members at ``bench_version``, or ``None``.
+    """The open rollout's blocking members, if it targets one of
+    ``bench_versions``; otherwise ``None``.
 
     ``None`` outside an open rollout, at another version, or once every
     priority member holds its raw quorum, so callers leave non-rollout and
-    post-barrier ordering untouched.
+    post-barrier ordering untouched. One rollout read however many versions
+    the caller holds work for: only the open rollout's target can block.
     """
+    if not bench_versions:
+        return None
     rollout = await open_rollout(session)
-    if rollout is None or rollout.desired_version != bench_version:
+    if rollout is None or rollout.desired_version not in bench_versions:
         return None
     score_count = (
         select(func.count(Score.validator_hotkey))
@@ -2359,13 +2363,20 @@ async def blocking_quorum_lease_available(
     """Whether ``validator_hotkey`` could lease a blocking member's missing
     quorum score right now through :func:`issue_rollout_ticket`.
 
-    The rollout lane's own candidate filter, narrowed to the priority
-    positions: a distinct validator that has not scored, does not hold, and is
-    not cooling down on a member whose scores plus live leases are below
-    quorum. A member whose third score is already leased elsewhere, or that
-    this validator cannot advance, does not hold the slot.
+    The rollout lane's own gates, narrowed to the priority positions: a fresh
+    heartbeat that serves the desired version (as
+    :func:`_issue_rollout_member_ticket` requires), and a distinct validator
+    that has not scored, does not hold, and is not cooling down on a member
+    whose scores plus live leases are below quorum. A member whose third score
+    is already leased elsewhere, or that this validator cannot advance, does
+    not hold the slot.
     """
     rollout = blocking.rollout
+    heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
+    if heartbeat is None or not heartbeat_supports_version(
+        heartbeat, now=now, version=rollout.desired_version
+    ):
+        return False
     statement, _occupancy = _rollout_member_candidates(
         rollout=rollout,
         validator_hotkey=validator_hotkey,

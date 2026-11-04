@@ -295,19 +295,20 @@ def _queued_entries(
 async def _rotation_blocking_quorums(
     session: AsyncSession, entries: list[ScoreAuditEntry]
 ) -> dict[int, ActivationBlockingQuorum]:
-    """The open rollout's blocking members, keyed by the rotation re-tests'
-    bench version; empty outside an open rollout (ordering unchanged)."""
-    versions = {
-        int(entry.payload.get("bench_version", -1))
-        for entry in entries
-        if entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
-    }
-    out: dict[int, ActivationBlockingQuorum] = {}
-    for version in sorted(versions):
-        blocking = await activation_blocking_quorum(session, bench_version=version)
-        if blocking is not None:
-            out[version] = blocking
-    return out
+    """The open rollout's blocking members, keyed by its desired version when
+    rotation re-tests wait at it; empty outside an open rollout (ordering
+    unchanged)."""
+    blocking = await activation_blocking_quorum(
+        session,
+        bench_versions={
+            int(entry.payload.get("bench_version", -1))
+            for entry in entries
+            if entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
+        },
+    )
+    if blocking is None:
+        return {}
+    return {blocking.rollout.desired_version: blocking}
 
 
 def _rotation_supplies_missing_score(
