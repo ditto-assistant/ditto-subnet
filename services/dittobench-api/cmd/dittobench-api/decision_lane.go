@@ -154,9 +154,7 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadGateway, "decision lane unavailable")
 		return
 	}
-	if response.StatusCode >= 200 && response.StatusCode < 300 {
-		recordDecisionUsage(session, responseBody)
-	}
+	recordDecisionUsage(session, response.StatusCode, responseBody)
 	if retryAfter := response.Header.Get("Retry-After"); retryAfter != "" {
 		w.Header().Set("Retry-After", retryAfter)
 	}
@@ -165,12 +163,13 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 	_, _ = w.Write(responseBody)
 }
 
-// recordDecisionUsage books one successful decision call's relay-reported
-// usage ({usage: {input_tokens, output_tokens}}) on the session for the bench
-// v16 priced cost (priced_cost.go). A 2xx body without parsable usage still
-// counts the call; its tokens are unknown and priced at zero, which only the
-// relay can produce (the relay meters every completed call).
-func recordDecisionUsage(session *brokerSession, responseBody []byte) {
+// recordDecisionUsage books one decision call's relay-reported usage
+// ({usage: {input_tokens, output_tokens}}) on the session for the bench v16
+// priced cost (v16_priced_cost.go). Usage is booked whatever the status, so a
+// call the relay metered and then answered with an error is still priced. A
+// 2xx without parsable usage is counted as missing, which makes the run's
+// priced cost insufficient evidence rather than silently cheaper.
+func recordDecisionUsage(session *brokerSession, status int, responseBody []byte) {
 	var decoded struct {
 		Usage *struct {
 			InputTokens  int64 `json:"input_tokens"`
@@ -179,9 +178,15 @@ func recordDecisionUsage(session *brokerSession, responseBody []byte) {
 	}
 	usageOK := json.Unmarshal(responseBody, &decoded) == nil && decoded.Usage != nil &&
 		decoded.Usage.InputTokens >= 0 && decoded.Usage.OutputTokens >= 0
+	success := status >= 200 && status < 300
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	session.decisionCompleted++
+	if success {
+		session.decisionCompleted++
+		if !usageOK {
+			session.decisionUsageMissing++
+		}
+	}
 	if usageOK {
 		session.decisionInputTokens += uint64(decoded.Usage.InputTokens)
 		session.decisionOutputTokens += uint64(decoded.Usage.OutputTokens)

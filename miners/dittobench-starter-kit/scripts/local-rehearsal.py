@@ -1429,15 +1429,17 @@ def run(args: argparse.Namespace) -> int:
             if args.no_cost_meter
             else rehearsal_cost.meter_for_environment(harness_env)
         )
-        if cost_meter is not None:
-            harness_env = rehearsal_cost.route_harness_through(
-                cost_meter.start(), harness_env
-            )
 
         harness: subprocess.Popen[bytes] | None = None
         api: subprocess.Popen[bytes] | None = None
         with harness_log.open("wb") as harness_output, api_log.open("wb") as api_output:
             try:
+                # Started inside the protected scope so the finally below
+                # always stops it; the meter binds nothing before start().
+                if cost_meter is not None:
+                    harness_env = rehearsal_cost.route_harness_through(
+                        cost_meter.start(), harness_env
+                    )
                 harness = subprocess.Popen(
                     [str(harness_binary), "serve", "--port", str(harness_port)],
                     cwd=kit_dir,

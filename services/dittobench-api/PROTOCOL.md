@@ -75,8 +75,11 @@ contract from the first v16 canary therefore shows the real board, and the
 constants can still move before activation if the canary re-check disagrees.
 The posture is a per-validator scorer setting. Flipping it after activation
 would mix seeds scored under both postures in one crown fold, which is a
-mid-bench rescore. Incomplete chat accounting, or zero scored cases, reports
-`result: "insufficient_evidence"` and applies 10000.
+mid-bench rescore. Incomplete chat accounting, a successful decision-lane call
+without usage, or zero scored cases reports `result: "insufficient_evidence"`
+and applies 10000. A decision call the relay metered and then answered with an
+error is still priced from its usage. A practice run with no broker session
+meters nothing and names no `source`.
 
 The report adds:
 

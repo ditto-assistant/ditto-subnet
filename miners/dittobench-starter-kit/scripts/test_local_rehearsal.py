@@ -2216,6 +2216,22 @@ class PricedCostEstimateTest(unittest.TestCase):
                 )
                 self.assertEqual(env["DITTOBENCH_PROVIDER"], "platform")
                 self.assertNotIn("OPENROUTER_API_KEY", env)
+                base = env["DITTOBENCH_INFERENCE_BASE_URL"]
+                self.assertIn("/m/", base)
+                # Wrong token, other routes and a bad Content-Length are refused
+                # without reaching the upstream or the key.
+                port_root = base.split("/m/")[0]
+                for url, method, data, headers, code in (
+                    (port_root + "/v1/chat/completions", "POST", b"{}", {}, 404),
+                    (base + "/embeddings", "POST", b"{}", {}, 404),
+                    (base + "/chat/completions", "POST", b"{}", {"Content-Length": "4, 5"}, 400),
+                ):
+                    request = LOCAL.urllib.request.Request(
+                        url, data=data, method=method, headers=headers
+                    )
+                    with self.assertRaises(LOCAL.urllib.error.HTTPError) as caught:
+                        LOCAL.urllib.request.urlopen(request, timeout=10)
+                    self.assertEqual(caught.exception.code, code)
                 for _ in range(2):
                     request = LOCAL.urllib.request.Request(
                         env["DITTOBENCH_INFERENCE_BASE_URL"] + "/chat/completions",
@@ -2227,11 +2243,27 @@ class PricedCostEstimateTest(unittest.TestCase):
                         self.assertEqual(response.status, 200)
             finally:
                 meter.stop()
+            # A keyless meter (platform / OpenAI-compatible upstream) passes the
+            # harness's own Authorization header through.
+            keyless = COST.CostMeter(
+                f"http://127.0.0.1:{upstream.server_address[1]}/v1", None
+            ).start()
+            try:
+                request = LOCAL.urllib.request.Request(
+                    keyless.base_url + "/chat/completions",
+                    data=b"{}",
+                    method="POST",
+                    headers={"Content-Type": "application/json", "Authorization": "Bearer ticket"},
+                )
+                with LOCAL.urllib.request.urlopen(request, timeout=10) as response:
+                    self.assertEqual(response.status, 200)
+            finally:
+                keyless.stop()
         finally:
             upstream.shutdown()
             upstream.server_close()
-        self.assertEqual([s["path"] for s in seen], ["/v1/chat/completions"] * 2)
-        self.assertEqual({s["auth"] for s in seen}, {"Bearer sk-local"})
+        self.assertEqual([s["path"] for s in seen], ["/v1/chat/completions"] * 3)
+        self.assertEqual([s["auth"] for s in seen], ["Bearer sk-local"] * 2 + ["Bearer ticket"])
         estimate = COST.estimate(meter, {"n": 2})
         assert estimate is not None
         self.assertEqual(estimate["source"], "local_meter")
@@ -2257,6 +2289,11 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertIn("not metered", COST.format_estimate(None, 16))
         self.assertIsNone(COST.meter_for_environment({"DITTOBENCH_PROVIDER": "openrouter"}))
         self.assertIsNone(COST.meter_for_environment({"DITTOBENCH_PROVIDER": "unknown"}))
+        # A meter that never started binds nothing and stops cleanly.
+        idle = COST.CostMeter("http://127.0.0.1:9/v1", None)
+        idle.stop()
+        with self.assertRaises(RuntimeError):
+            _ = idle.base_url
 
     def test_no_cost_meter_flag_parses(self) -> None:
         self.assertTrue(LOCAL.parse_args(["--no-cost-meter"]).no_cost_meter)

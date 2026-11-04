@@ -183,6 +183,7 @@ type brokerSession struct {
 	// 2xx decision calls and their relay-reported usage (bench v16 priced
 	// cost; recordDecisionUsage).
 	decisionCompleted    uint64
+	decisionUsageMissing uint64
 	decisionInputTokens  uint64
 	decisionOutputTokens uint64
 	// chatConcurrency is the per-source in-flight chat admission for this

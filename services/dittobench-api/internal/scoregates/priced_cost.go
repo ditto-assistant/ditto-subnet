@@ -132,9 +132,9 @@ func ParsePricedCostPosture(raw string) PricedCostPosture {
 
 // PricedCostUsage is the run's metered inference.
 type PricedCostUsage struct {
-	// ChatComplete is true when every successful chat completion carried
-	// provider usage; otherwise the counts are a lower bound and the factor
-	// is not computed.
+	// ChatComplete is true when every successful chat completion and every
+	// successful decision-lane call carried usage; otherwise the counts are a
+	// lower bound and the factor is not computed.
 	ChatComplete         bool
 	Source               string
 	PromptTokens         uint64
@@ -276,6 +276,9 @@ func ValidatePricedCost(benchVersion int, s protocol.PricedCostSummary) error {
 		curveMatches = s.Curve[i] == want.Curve[i]
 	}
 	if !curveMatches || s.ContractID != want.ContractID || s.Result != want.Result || s.Posture != want.Posture ||
+		s.PromptTokens != want.PromptTokens || s.CompletionTokens != want.CompletionTokens ||
+		s.EmbeddingTokens != want.EmbeddingTokens || s.DecisionInputTokens != want.DecisionInputTokens ||
+		s.DecisionOutputTokens != want.DecisionOutputTokens ||
 		s.Window != want.Window || s.Prices != want.Prices || s.NormalizationCases != want.NormalizationCases ||
 		s.ReferenceNanoUSD != want.ReferenceNanoUSD || s.FloorBPS != want.FloorBPS ||
 		s.PromptCostNanoUSD != want.PromptCostNanoUSD || s.CompletionCostNanoUSD != want.CompletionCostNanoUSD ||

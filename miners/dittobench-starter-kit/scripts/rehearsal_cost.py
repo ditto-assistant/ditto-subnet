@@ -20,6 +20,7 @@ embedder and the decision lane does not exist, so the estimate omits them
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import urllib.error
 import urllib.request
@@ -145,34 +146,68 @@ class CostMeter:
     The harness is pointed at it with ``DITTOBENCH_PROVIDER=platform`` and
     ``DITTOBENCH_INFERENCE_BASE_URL`` -- the same variables a validator
     injects -- so the provider key stays in this process, exactly as a
-    validator never hands one to a harness.
+    validator never hands one to a harness. The base URL carries a random
+    per-meter path token (like the validator broker's per-session route), so
+    another local process cannot borrow the key through the port, and only
+    ``POST .../chat/completions`` and ``GET .../models`` are forwarded.
     """
 
     def __init__(self, upstream_base_url: str, api_key: str | None) -> None:
         self.upstream = upstream_base_url.rstrip("/")
         self._api_key = api_key
+        self._token = secrets.token_urlsafe(24)
         self.totals = MeterTotals()
         self._lock = threading.Lock()
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    def _handler(self) -> type[BaseHTTPRequestHandler]:
         meter = self
+        prefix = f"/m/{self._token}/v1"
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_: Any) -> None:  # quiet
                 return
 
+            def _route(self) -> str | None:
+                """The upstream path for an allowed request, else None."""
+                if not self.path.startswith(prefix + "/"):
+                    return None
+                rest = self.path[len(prefix) :]
+                if self.command == "POST" and rest == "/chat/completions":
+                    return rest
+                if self.command == "GET" and rest == "/models":
+                    return rest
+                return None
+
             def do_GET(self) -> None:  # noqa: N802
                 if self.path == "/health":
                     self._reply(200, b'{"status":"ok"}', "application/json")
                     return
-                self._forward(None)
+                route = self._route()
+                if route is None:
+                    self._reply(404, b'{"error":"not found"}', "application/json")
+                    return
+                self._forward(route, None)
 
             def do_POST(self) -> None:  # noqa: N802
-                length = int(self.headers.get("Content-Length") or 0)
-                if length > _BODY_LIMIT:
+                route = self._route()
+                if route is None:
+                    self._reply(404, b'{"error":"not found"}', "application/json")
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    self._reply(
+                        400, b'{"error":"bad Content-Length"}', "application/json"
+                    )
+                    return
+                if length < 0 or length > _BODY_LIMIT:
                     self._reply(
                         413, b'{"error":"request too large"}', "application/json"
                     )
                     return
-                self._forward(self.rfile.read(length))
+                self._forward(route, self.rfile.read(length))
 
             def _reply(self, status: int, body: bytes, content_type: str) -> None:
                 self.send_response(status)
@@ -181,12 +216,9 @@ class CostMeter:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def _forward(self, body: bytes | None) -> None:
-                path = self.path
-                if path.startswith("/v1/"):
-                    path = path[3:]
+            def _forward(self, route: str, body: bytes | None) -> None:
                 request = urllib.request.Request(
-                    meter.upstream + path, data=body, method=self.command
+                    meter.upstream + route, data=body, method=self.command
                 )
                 request.add_header(
                     "Content-Type",
@@ -194,6 +226,11 @@ class CostMeter:
                 )
                 if meter._api_key:
                     request.add_header("Authorization", f"Bearer {meter._api_key}")
+                elif self.headers.get("Authorization"):
+                    # A platform / OpenAI-compatible upstream the harness was
+                    # already configured for authenticates with the harness's
+                    # own header; pass it through unchanged.
+                    request.add_header("Authorization", self.headers["Authorization"])
                 try:
                     with urllib.request.urlopen(request, timeout=600) as response:
                         status = response.status
@@ -211,21 +248,18 @@ class CostMeter:
                     )
                     self._reply(502, message.encode(), "application/json")
                     return
-                if (
-                    body is not None
-                    and path.endswith("/chat/completions")
-                    and 200 <= status < 300
-                ):
+                if body is not None and 200 <= status < 300:
                     meter.record(_usage_from_body(payload, content_type))
                 self._reply(status, payload, content_type)
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        return Handler
 
     @property
     def base_url(self) -> str:
+        if self._server is None:
+            raise RuntimeError("cost meter is not started")
         host, port = self._server.server_address[:2]
-        return f"http://{host}:{port}/v1"
+        return f"http://{host}:{port}/m/{self._token}/v1"
 
     def record(self, usage: dict[str, Any] | None) -> None:
         with self._lock:
@@ -239,12 +273,22 @@ class CostMeter:
             self.totals.completion_tokens += max(completion, 0)
 
     def start(self) -> CostMeter:
-        self._thread.start()
+        """Bind the loopback port and serve; nothing is bound before this."""
+        if self._server is None:
+            self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+            self._thread = threading.Thread(
+                target=self._server.serve_forever, daemon=True
+            )
+            self._thread.start()
         return self
 
     def stop(self) -> None:
+        """Stop serving; a no-op for a meter that never started."""
+        if self._server is None:
+            return
         self._server.shutdown()
         self._server.server_close()
+        self._server = None
 
 
 def meter_for_environment(env: dict[str, str]) -> CostMeter | None:

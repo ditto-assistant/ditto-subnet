@@ -47,7 +47,7 @@ func TestPricedCostPricesTheWholeRunRelayInterval(t *testing.T) {
 		t.Fatalf("incomplete accounting priced: %+v", got)
 	}
 	// A practice run without a broker session meters nothing.
-	if got := s.v16PricedCostFor(16, scoregates.PricedCostEnforce, nil, "", 350); got.Result != scoregates.PricedCostResultInsufficientEvidence || got.AppliedFactorBPS != scoregates.BasisPointScale {
+	if got := s.v16PricedCostFor(16, scoregates.PricedCostEnforce, nil, "", 350); got.Result != scoregates.PricedCostResultInsufficientEvidence || got.AppliedFactorBPS != scoregates.BasisPointScale || got.Source != "" {
 		t.Fatalf("unmetered practice run priced: %+v", got)
 	}
 }
@@ -150,5 +150,26 @@ func TestDecisionLaneUsageIsBookedForPricing(t *testing.T) {
 	summary := (&server{broker: broker}).v16PricedCostFor(16, scoregates.PricedCostEnforce, fullCatalogRun(), prepared["session_id"], 350)
 	if summary.DecisionCostNanoUSD != 240*scoregates.PricedCostNanoUSDPerDecisionInputToken || summary.DecisionCalls != 2 {
 		t.Fatalf("decision lane not priced: %+v", summary)
+	}
+}
+
+// A decision call the relay metered but answered with an error is still
+// priced; a 2xx without usage makes the priced cost insufficient evidence.
+func TestDecisionUsageCompleteness(t *testing.T) {
+	session := &brokerSession{}
+	recordDecisionUsage(session, http.StatusTooManyRequests, []byte(`{"usage":{"input_tokens":50,"output_tokens":0}}`))
+	recordDecisionUsage(session, http.StatusBadGateway, []byte(`{"error":"down"}`))
+	if session.decisionCompleted != 0 || session.decisionInputTokens != 50 || session.decisionUsageMissing != 0 {
+		t.Fatalf("non-2xx booking = %+v", session)
+	}
+	recordDecisionUsage(session, http.StatusOK, []byte(`{"answers":{}}`))
+	if session.decisionCompleted != 1 || session.decisionUsageMissing != 1 {
+		t.Fatalf("2xx without usage = completed %d missing %d", session.decisionCompleted, session.decisionUsageMissing)
+	}
+	b := newInferenceBroker(1)
+	b.sessions = map[string]*brokerSession{"s": session}
+	got := (&server{broker: b}).v16PricedCostFor(16, scoregates.PricedCostEnforce, fullCatalogRun(), "s", 350)
+	if got.Result != scoregates.PricedCostResultInsufficientEvidence || got.AppliedFactorBPS != scoregates.BasisPointScale {
+		t.Fatalf("missing decision usage still priced: %+v", got)
 	}
 }

@@ -90,6 +90,7 @@ def test_version_floor() -> None:
         {"decision_cost_nano_usd": 1},
         {"prices": {"prompt_token": 1}},
         {"curve": [{"ratio_bps": 10_000, "factor_bps": 10_000}]},
+        {"prompt_tokens": 9_007_199_254_740_992},
     ],
     ids=lambda change: "+".join(change),
 )

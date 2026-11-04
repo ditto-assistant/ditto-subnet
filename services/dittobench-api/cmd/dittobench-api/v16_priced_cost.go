@@ -39,6 +39,7 @@ type brokerPricedUsage struct {
 	usageUnavailable     uint64
 	embeddingTokens      uint64
 	decisionCalls        uint64
+	decisionUsageMissing uint64
 	decisionInputTokens  uint64
 	decisionOutputTokens uint64
 }
@@ -63,6 +64,7 @@ func (b *inferenceBroker) sessionPricedUsage(id string) (brokerPricedUsage, bool
 		usageUnavailable:     session.usageUnavailable,
 		embeddingTokens:      session.embeddingTokens,
 		decisionCalls:        session.decisionCompleted,
+		decisionUsageMissing: session.decisionUsageMissing,
 		decisionInputTokens:  session.decisionInputTokens,
 		decisionOutputTokens: session.decisionOutputTokens,
 	}, true
@@ -103,8 +105,11 @@ func (s *server) v16PricedCostFor(benchVersion int, posture scoregates.PricedCos
 		usage.CompletionTokens = session.completionTokens
 	default:
 		// No broker session (a practice run against a harness that talks to
-		// its own provider): nothing was metered, so nothing is priced.
-		usage.Source = scoregates.PricedCostSourceBrokerSession
+		// its own provider): nothing was metered, so nothing is priced and
+		// no source is named.
+	}
+	if haveSession && session.decisionUsageMissing > 0 {
+		usage.ChatComplete = false
 	}
 	return scoregates.BuildPricedCost(benchVersion, posture, cases, usage)
 }
