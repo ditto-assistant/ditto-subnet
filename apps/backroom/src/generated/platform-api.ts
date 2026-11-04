@@ -2071,7 +2071,8 @@ export interface paths {
         };
         /**
          * Admin Round Loop
-         * @description The round driver's last tick: actions taken, errors, chain position.
+         * @description The round driver's last tick: actions taken, errors, chain position,
+         *     and whether (and when last) it skipped an unchanged round.
          */
         get: operations["admin_round_loop_api_v1_admin_generator_competition_rounds_loop_get"];
         put?: never;
@@ -12793,7 +12794,7 @@ export interface components {
              * Expected Status
              * @enum {string}
              */
-            expected_status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            expected_status: "committed" | "generating" | "running" | "scoring" | "scored" | "skipped" | "void";
             /** Reason */
             reason: string;
         };
@@ -24947,6 +24948,11 @@ export interface components {
              */
             seeds_per_run: number;
             /**
+             * Skip Unchanged Rounds
+             * @default true
+             */
+            skip_unchanged_rounds: boolean;
+            /**
              * Solve Threshold
              * @default 0.5
              */
@@ -25166,7 +25172,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            status: "committed" | "generating" | "running" | "scoring" | "scored" | "skipped" | "void";
         };
         /** GeneratorRoundAttemptView */
         GeneratorRoundAttemptView: {
@@ -25627,7 +25633,15 @@ export interface components {
         GeneratorRoundLoopResponse: {
             /** Available */
             available: boolean;
+            last_skipped_round?: components["schemas"]["GeneratorRoundSkipView"] | null;
             schedule: components["schemas"]["GeneratorRoundSchedule"] | null;
+            /** Skip Unchanged Rounds */
+            skip_unchanged_rounds?: boolean | null;
+            /**
+             * Skipped Rounds
+             * @default 0
+             */
+            skipped_rounds: number;
             status: components["schemas"]["GeneratorRoundLoopStatus"] | null;
         };
         /**
@@ -25799,6 +25813,20 @@ export interface components {
             scorer_version: string;
         };
         /**
+         * GeneratorRoundSkipView
+         * @description One round skipped because it would only repeat the last scored round.
+         */
+        GeneratorRoundSkipView: {
+            /** Carried From Round */
+            carried_from_round: number | null;
+            /** Reason */
+            reason: string;
+            /** Round Index */
+            round_index: number;
+            /** Skipped At */
+            skipped_at: string | null;
+        };
+        /**
          * GeneratorRoundSkippedAgent
          * @description A ranked owner passed over when the panel froze: its agent could not
          *     run, so the next eligible owner took the seat.
@@ -25860,6 +25888,8 @@ export interface components {
              * @default 0
              */
             answered_results: number;
+            /** Carried From Round */
+            carried_from_round?: number | null;
             /** Closed At */
             closed_at?: string | null;
             /**
@@ -25921,11 +25951,13 @@ export interface components {
             secret_hex?: string | null;
             /** Seed */
             seed?: string | null;
+            /** Skip Reason */
+            skip_reason?: string | null;
             /**
              * Status
              * @enum {string}
              */
-            status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            status: "committed" | "generating" | "running" | "scoring" | "scored" | "skipped" | "void";
             /** Void Reason */
             void_reason?: string | null;
         };
