@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.452.0 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Drop a continual retest's wave seed when scoring reuses its row
+  ([#3385](https://github.com/ditto-assistant/ditto-subnet/pull/3385),
+  [`716b0cc`](https://github.com/ditto-assistant/ditto-subnet/commit/716b0cca8841ba09c150aa39559e5aa0bdce5fbf))
+
+- **validator**: Retry a job request that Platform asks to retry later instead of isolating the slot
+  ([#3381](https://github.com/ditto-assistant/ditto-subnet/pull/3381),
+  [`39c14e2`](https://github.com/ditto-assistant/ditto-subnet/commit/39c14e28af855f061238daa1ec83aa590482f462))
+
+### Features
+
+- **backroom**: Show bench v16 priced cost and dueling aggregates on canaries
+  ([#3384](https://github.com/ditto-assistant/ditto-subnet/pull/3384),
+  [`61354cd`](https://github.com/ditto-assistant/ditto-subnet/commit/61354cd9af9d314e0a3eee0d374d3c48607467e8))
+
+- **platform,backroom**: Skip generator rounds that change nothing
+  ([#3380](https://github.com/ditto-assistant/ditto-subnet/pull/3380),
+  [`6562ccc`](https://github.com/ditto-assistant/ditto-subnet/commit/6562ccccaa0fb9a581f76b32053af6501f11ca19))
+
+
 ## v0.451.1 (2026-11-04)
 
 ### Bug Fixes

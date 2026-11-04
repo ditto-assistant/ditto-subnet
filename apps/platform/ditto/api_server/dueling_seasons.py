@@ -33,7 +33,15 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
    ledger (:mod:`ditto.db.queries.dueling_season_window`).
 4. **Close.** At ``closes_at_round`` (or on an audited rotation), or as soon
    as its bench version is neither active nor rolling out. Disabling dueling
-   commits no new season but lets the open one finish.
+   commits no new season but lets the open one finish. With
+   ``skip_unchanged_rounds``, an *idle* boundary extends the open season by
+   ``rounds_per_season`` instead (:func:`idle_season_extension`): the next
+   season would pin the same generators for the same cohort, and nobody new
+   is eligible, so a rotation would only buy the same evidence again. No new
+   season opens, so the two-season score window does not advance (nothing
+   expires) and no rotation re-test is queued for anyone. Agents uploaded
+   after the first extension owe no season duel seeds in it
+   (:func:`ditto.api_server.season_duel.season_duel_entrant_excluded`).
 5. **Reveal.** ``privacy_window_rounds`` subnet epochs after it closes, the
    secret and season seed become readable, publicly
    (``/public/dueling/seasons``), with the pins ``reproduce-slice`` needs.
@@ -59,7 +67,7 @@ import json
 import logging
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -68,6 +76,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import defer
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.dueling import (
     DuelingBatteryAck,
     DuelingBatteryCandidate,
@@ -87,6 +96,7 @@ from ditto.api_server.generator_source_releases import (
     sync_generator_source_releases,
 )
 from ditto.db.models import (
+    Agent,
     DuelingSeason,
     DuelingSeasonBattery,
     DuelingSlicePreparation,
@@ -660,6 +670,142 @@ async def queue_rotation_retests(
     return rotation
 
 
+IDLE_EXTENSIONS_KEY = "idle_extensions"
+"""``DuelingSeason.detail`` key: how often, and when, the season was extended."""
+MAX_RECORDED_IDLE_EXTENSIONS = 20
+IDLE_ELIGIBLE_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE, AgentStatus.EVALUATING)
+"""An agent created since the season opened in one of these statuses is a
+change: scored, or being scored right now (it reaches the board within the
+season). A long operator hold (``ath_pending_review``) is not, or one held
+agent would force a paid rotation every boundary; its release is."""
+
+
+def _pin_identity(columns: Any) -> list[list[Any]]:
+    """A season's frozen generator set, order-free: who fills each column with
+    which exact source and grading policy."""
+    return sorted(
+        [
+            str(column.get("submission_id")),
+            str(column.get("source_sha256")),
+            column.get("grading_bench_version"),
+            bool(column.get("public_default")),
+        ]
+        for column in columns or ()
+    )
+
+
+def season_first_extended_at(season: DuelingSeason | None) -> datetime | None:
+    """When ``season`` was first extended as idle, if ever."""
+    record = ((season.detail or {}) if season is not None else {}).get(
+        IDLE_EXTENSIONS_KEY
+    )
+    first = record.get("first_extended_at") if isinstance(record, dict) else None
+    if not isinstance(first, str):
+        return None
+    # Always aware: it is compared with TIMESTAMPTZ columns (Agent.created_at).
+    parsed = datetime.fromisoformat(first)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+async def idle_season_extension(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    resolved: ResolvedSettings,
+    target: DuelingTarget,
+    current: int,
+) -> str | None:
+    """Why the open, due ``season`` should not rotate, or None to rotate.
+
+    Idle means a rotation would only re-buy the evidence the season already
+    holds, so it is extended instead (all or nothing: the whole cohort keeps
+    its rows, nobody is re-tested):
+
+    a. the committed season that would open now freezes the same generator
+       pins (submission, source digest, grading policy, default flag);
+    b. the rotation cohort has the members this season re-scored when it
+       opened;
+    c. no agent created since the season opened is scored, live or being
+       scored;
+    d. no rotation was requested (checked by the caller).
+    """
+    if not resolved.settings.skip_unchanged_rounds:
+        return None
+    if target.blocked is not None or target.bench_version != season.bench_version:
+        return None
+    if target.shadow != season.shadow or season.opened_at is None:
+        return None
+    committed = await session.scalar(
+        select(DuelingSeason).where(
+            DuelingSeason.bench_version == season.bench_version,
+            DuelingSeason.status == "committed",
+            DuelingSeason.season_index == current,
+        )
+    )
+    if committed is None or committed.shadow != season.shadow:
+        return None
+    columns, fallback = await freeze_columns(session, committed)
+    if isinstance(fallback, str) or _pin_identity(columns) != _pin_identity(
+        season.columns
+    ):
+        return None
+    rotation = (season.detail or {}).get("rotation") or {}
+    if rotation.get("error") or "cohort" not in rotation:
+        return None
+    # Membership, not rank order: the same agents re-scored on the same pins
+    # buy the same evidence whatever order the board lists them in.
+    opened_cohort = sorted(str(member.get("agent_id")) for member in rotation["cohort"])
+    cohort, _source = await _rotation_cohort(session, season)
+    if sorted(str(agent_id) for agent_id in cohort) != opened_cohort:
+        return None
+    entrant = await session.scalar(
+        select(Agent.agent_id)
+        .where(
+            Agent.created_at > season.opened_at,
+            Agent.status.in_(IDLE_ELIGIBLE_STATUSES),
+        )
+        .limit(1)
+    )
+    if entrant is not None:
+        return None
+    return (
+        "idle: same generator pins and rotation cohort, no new eligible agent "
+        "since the season opened"
+    )
+
+
+def _extend(
+    season: DuelingSeason,
+    *,
+    why: str,
+    current: int,
+    position: ChainPosition,
+    now: datetime,
+) -> None:
+    """Push ``season``'s close one season length out and record why."""
+    season.closes_at_round = current + season.rounds_per_season
+    detail = dict(season.detail or {})
+    record = dict(detail.get(IDLE_EXTENSIONS_KEY) or {})
+    history = list(record.get("recent") or [])
+    history.append(
+        {
+            "at_round": current,
+            "closes_at_round": season.closes_at_round,
+            "epoch_index": position.subnet_epoch_index,
+            "at": now.isoformat(),
+            "reason": why,
+        }
+    )
+    record.update(
+        count=int(record.get("count") or 0) + 1,
+        first_extended_at=record.get("first_extended_at") or now.isoformat(),
+        last_extended_at=now.isoformat(),
+        recent=history[-MAX_RECORDED_IDLE_EXTENSIONS:],
+    )
+    detail[IDLE_EXTENSIONS_KEY] = record
+    season.detail = detail
+
+
 async def advance_seasons(
     session: AsyncSession,
     *,
@@ -705,6 +851,26 @@ async def advance_seasons(
         elif season.rotation_requested_at is not None and season.rotation_immediate:
             reason = f"rotated immediately: {season.rotation_reason}"
         elif season.closes_at_round is not None and season.closes_at_round <= current:
+            idle = (
+                await idle_season_extension(
+                    session,
+                    season,
+                    resolved=resolved,
+                    target=target,
+                    current=current,
+                )
+                if season.rotation_requested_at is None
+                else None
+            )
+            if idle is not None:
+                # The privacy window counts from the extended close, so the
+                # secret is never revealed before the season really ends.
+                _extend(season, why=idle, current=current, position=position, now=now)
+                notes.append(
+                    f"season {season.season_index} v{season.bench_version}: "
+                    f"extended to round {season.closes_at_round} ({idle})"
+                )
+                continue
             reason = (
                 f"rotated: {season.rotation_reason}"
                 if season.rotation_requested_at is not None
