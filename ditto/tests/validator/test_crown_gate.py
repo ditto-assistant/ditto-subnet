@@ -345,3 +345,31 @@ def test_the_duel_is_inert_below_bench_16() -> None:
         crown_gate=CrownGate(gate.min_shared_seeds, gate.standing_rank, 15),
     )
     assert plain.agent_id == dueled.agent_id
+
+
+def test_a_season_scoped_quorum_seed_must_re_derive() -> None:
+    """Protocol 35: a season seed is a CRN seed bound to its season anchor and
+    is never accepted unverified."""
+    from ditto.validator.crn import crn_seed
+    from ditto.validator.worker import _season_seed_matches
+
+    anchor = UUID(int=7)
+    block_hash = "0x" + "ab" * 32
+    seed = crn_seed([str(anchor)], version=16, k=1, block_hash=block_hash)
+    job = SimpleNamespace(
+        seed=seed,
+        seed_scope="season",
+        seed_anchor_agent_id=anchor,
+        seed_index=1,
+        dataset_seed_block_hash=block_hash,
+        bench_version=16,
+    )
+    assert _season_seed_matches(job)
+    for change in (
+        {"seed": seed + 1},
+        {"seed_index": 2},
+        {"seed_anchor_agent_id": UUID(int=8)},
+        {"dataset_seed_block_hash": None},
+        {"seed_index": None},
+    ):
+        assert not _season_seed_matches(SimpleNamespace(**{**vars(job), **change}))

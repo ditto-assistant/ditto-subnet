@@ -376,11 +376,31 @@ class JobResponse(BaseModel):
         int | None,
         Field(default=None, description="Platform-pinned dataset seed (regenerable)."),
     ] = None
-    seed_scope: Literal["agent", "validator"] = Field(
+    seed_scope: Literal["agent", "validator", "season"] = Field(
         default="agent",
         description="Inputs used by the on-chain seed derivation. Validator "
-        "scope additionally binds the ticket holder's hotkey.",
+        "scope additionally binds the ticket holder's hotkey. Season scope "
+        "(protocol 35, title duels) is a dueling season's shared seed: "
+        "``crn_seed([seed_anchor_agent_id], bench_version, seed_index, "
+        "dataset_seed_block_hash)``.",
     )
+    seed_anchor_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description="Season scope: champion the season's family is anchored on.",
+        ),
+    ] = None
+    seed_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description="Season scope: replicate index of the shared seed.",
+        ),
+    ] = None
     dataset_sha256: Annotated[
         str | None,
         Field(default=None, description="SHA-256 of the pinned dataset (tamper pin)."),

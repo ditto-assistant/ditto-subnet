@@ -1143,11 +1143,36 @@
         ],
         "default": null
       },
+      "seed_anchor_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed_index": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "seed_scope": {
         "default": "agent",
         "enum": [
           "agent",
-          "validator"
+          "validator",
+          "season"
         ],
         "type": "string"
       },

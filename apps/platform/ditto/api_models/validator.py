@@ -396,11 +396,31 @@ class JobResponse(BaseModel):
             "seeds; retries by the same validator retain the same seed.",
         ),
     ] = None
-    seed_scope: Literal["agent", "validator"] = Field(
+    seed_scope: Literal["agent", "validator", "season"] = Field(
         default="agent",
         description="Inputs used by the on-chain seed derivation. Validator "
-        "scope additionally binds the ticket holder's hotkey.",
+        "scope additionally binds the ticket holder's hotkey. Season scope "
+        "(protocol 35, title duels) is a dueling season's shared seed: "
+        "``crn_seed([seed_anchor_agent_id], bench_version, seed_index, "
+        "dataset_seed_block_hash)``. Issued only to protocol-35 validators.",
     )
+    seed_anchor_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description="Season scope: champion the season's family is anchored on.",
+        ),
+    ] = None
+    seed_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description="Season scope: replicate index of the shared seed.",
+        ),
+    ] = None
     dataset_sha256: Annotated[
         str | None,
         Field(
@@ -479,6 +499,27 @@ class JobResponse(BaseModel):
             description="Dueling season the slice belongs to.",
         ),
     ] = None
+
+    @model_validator(mode="after")
+    def _season_seed_is_bound(self) -> JobResponse:
+        """A season-scoped seed always carries its whole CRN binding.
+
+        Platform-side only, like the slice rule below: the validator refuses an
+        unbound season seed itself (``seed_binding_mismatch``).
+        """
+        if self.seed_scope != "season":
+            return self
+        if (
+            self.seed is None
+            or self.seed_anchor_agent_id is None
+            or self.seed_index is None
+            or not self.dataset_seed_block_hash
+        ):
+            raise ValueError(
+                "a season-scoped seed needs seed, seed_anchor_agent_id, "
+                "seed_index and dataset_seed_block_hash"
+            )
+        return self
 
     @model_validator(mode="after")
     def _dueling_slice_all_or_none(self) -> JobResponse:

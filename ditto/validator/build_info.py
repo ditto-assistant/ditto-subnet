@@ -167,7 +167,10 @@ from ditto import __version__
 # against a frozen boundary, instead of one season's capped fixed-z test. A
 # v34 validator ignores both additive fields and keeps the single-season test
 # -- a different champion -- so Platform withholds them until every
-# recently-live weight setter reports v35+. Heartbeat signing bytes are
+# recently-live weight setter reports v35+. v35 also verifies a
+# ``seed_scope: "season"`` quorum lease (a dueling season's shared seed, so a
+# rotation re-score doubles as duel evidence) by re-deriving its CRN binding;
+# Platform issues those only to v35+ validators. Heartbeat signing bytes are
 # unchanged.
 HEARTBEAT_PROTOCOL_VERSION = 35
 
