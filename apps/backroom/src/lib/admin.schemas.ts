@@ -2503,6 +2503,9 @@ const continualRetestSettingsBaseSchema = z.object({
     .min(MIN_SEASON_DUEL_SEEDS)
     .max(MAX_SEASON_DUEL_SEEDS)
     .default(DEFAULT_SEASON_DUEL_SEEDS),
+  // Phase B2: season rotation re-scores run on the season's duel seeds and
+  // double as duel evidence (season_duel at v16+ only; off by default).
+  season_duel_rotation_seeds: z.boolean().default(false),
 })
 
 export const continualRetestSettingsSchema =
@@ -2531,6 +2534,7 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
     wave_seeds_per_window: z.number().int().min(1).max(MAX_WAVE_SEEDS_PER_WINDOW),
     retest_mode: z.enum(['continual', 'season_duel']),
     season_duel_seeds: z.number().int().min(MIN_SEASON_DUEL_SEEDS).max(MAX_SEASON_DUEL_SEEDS),
+    season_duel_rotation_seeds: z.boolean(),
     retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
     retest_eligibility_mode: z.enum(['fixed', 'statistical']),
     retest_eligibility_z: z.number().min(0).max(MAX_RETEST_ELIGIBILITY_Z),
@@ -2794,6 +2798,12 @@ export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExte
     label: 'a season duel seed count',
     legacyValue: () => DEFAULT_SEASON_DUEL_SEEDS,
     legacyBehaviour: () => 'there are no season duels',
+  },
+  {
+    field: 'season_duel_rotation_seeds',
+    label: 'season-seeded rotation re-scores',
+    legacyValue: () => false,
+    legacyBehaviour: () => 'rotation re-scores keep their canonical seeds',
   },
 ]
 

@@ -39,6 +39,7 @@ const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   wave_seeds_per_window: 3,
   retest_mode: 'continual' as const,
   season_duel_seeds: 3,
+  season_duel_rotation_seeds: false,
 }
 
 function control(
@@ -99,6 +100,7 @@ function control(
       wave_seeds_per_window: true,
       retest_mode: true,
       season_duel_seeds: true,
+      season_duel_rotation_seeds: true,
     },
     cohort_sizing_supported: true,
   }
@@ -343,6 +345,7 @@ describe('ContinualRetestControlPanel', () => {
       wave_seeds_per_window: 3,
       retest_mode: 'continual' as const,
       season_duel_seeds: 3,
+      season_duel_rotation_seeds: false,
     })
   })
 

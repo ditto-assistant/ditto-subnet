@@ -105,6 +105,8 @@ async def test_defaults_are_safe_and_revision_is_audited(
         # mode is inert below the dueling floor either way.
         "retest_mode": "continual",
         "season_duel_seeds": 3,
+        # Phase B2 ships OFF: rotation re-scores keep canonical seeds.
+        "season_duel_rotation_seeds": False,
         # NOT a no-op on merge: this one feeds the weight fold, and it ships
         # deliberately widened. "strict" is what emptied the intersection at
         # 03:56Z and reverted every agent to its quorum median; it stays
