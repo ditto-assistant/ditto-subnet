@@ -130,7 +130,9 @@ services:
       context: ../..
       dockerfile: preview/cloud/oauth-fixture.Dockerfile
     restart: unless-stopped
-    network_mode: service:gateway
+    network_mode: none
+    volumes:
+      - preview-oauth-socket:/run/preview-oauth
     environment:
       PREVIEW_PR: ${PREVIEW_PR:-0}
       PREVIEW_PROFILE: ${PREVIEW_PROFILE}
@@ -184,10 +186,12 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - preview-caddy-data:/data
       - preview-backroom-cert:/run/preview-backroom-cert:ro
+      - preview-oauth-socket:/run/preview-oauth
 
 volumes:
   preview-postgres:
   preview-minio:
   preview-backroom-key:
   preview-backroom-cert:
+  preview-oauth-socket:
   preview-caddy-data:

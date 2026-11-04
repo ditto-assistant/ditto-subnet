@@ -45,7 +45,7 @@ platform.{$PREVIEW_BASE_DOMAIN} {
 
 backroom.{$PREVIEW_BASE_DOMAIN} {
   handle /__preview/oauth-session {
-    reverse_proxy 127.0.0.1:3001
+    reverse_proxy unix//run/preview-oauth/fixture.sock
   }
   handle {
     reverse_proxy https://backroom:3000 {

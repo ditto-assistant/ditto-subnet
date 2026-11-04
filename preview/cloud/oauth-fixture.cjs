@@ -2,6 +2,7 @@
 // It creates no real identity and is scoped to PR 3359's fresh preview only.
 const http = require('node:http')
 const crypto = require('node:crypto')
+const fs = require('node:fs')
 
 const EMAIL = 'synthetic-preview-only@omniaura.ai'
 const MAX_AGE = 300
@@ -29,14 +30,19 @@ function response(req, env, now = Date.now()) {
   return { status: 204, cookie: `__Host-backroom_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${MAX_AGE}` }
 }
 
-if (require.main === module) {
-  http.createServer((req, res) => {
-    const result = response(req, process.env)
+function startServer(socketPath, env = process.env) {
+  // The named volume can retain the socket after the disposable process exits.
+  fs.rmSync(socketPath, { force: true })
+  const server = http.createServer((req, res) => {
+    const result = response(req, env)
     res.setHeader('Cache-Control', 'no-store')
     res.setHeader('Content-Security-Policy', "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
     if (result.cookie) res.setHeader('Set-Cookie', result.cookie)
     if (result.page) res.setHeader('Content-Type', 'text/html; charset=utf-8')
     res.writeHead(result.status).end(result.page)
-  }).listen(3001, '127.0.0.1')
+  })
+  server.listen(socketPath, () => fs.chmodSync(socketPath, 0o666))
+  return server
 }
-module.exports = { response, EMAIL, MAX_AGE }
+if (require.main === module) startServer('/run/preview-oauth/fixture.sock')
+module.exports = { response, startServer, EMAIL, MAX_AGE }
