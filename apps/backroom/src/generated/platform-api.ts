@@ -10144,7 +10144,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Case Set Sha256 */
             case_set_sha256: string;
             /** Contract Version */
@@ -21333,7 +21333,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -21378,7 +21378,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Checksum */
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
@@ -28844,7 +28844,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Case Set Digest */
             case_set_digest: string;
             /** Dataset Revision */
@@ -32724,7 +32724,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /**
              * Bundle Id
              * Format: uuid
@@ -36408,7 +36408,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**
@@ -44731,7 +44731,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -44824,7 +44824,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -44919,7 +44919,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /**
              * Bundle Id
              * Format: uuid
@@ -45232,7 +45232,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             claim_provenance?: components["schemas"]["V13ClaimProvenanceGate"] | null;
             inference_latency?: components["schemas"]["V12InferenceLatencyGate"] | null;
             model_dependence?: components["schemas"]["V12ModelDependenceGate"] | null;
