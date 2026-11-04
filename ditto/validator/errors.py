@@ -140,6 +140,20 @@ class PlatformHeartbeatRequiredError(PlatformError):
     """Platform refused a work claim (428) until it sees a fresh heartbeat."""
 
 
+class PlatformRetryLaterError(PlatformError):
+    """Platform refused a work claim (503) for now and said when to ask again.
+
+    Raised only for a 503 that carries a delta-seconds ``Retry-After`` (for
+    example while Platform prepares a bench v16+ seed's dueling slice).
+    ``retry_after_seconds`` is already bounded by the client; a 503 without a
+    usable ``Retry-After`` stays a plain :class:`PlatformError`.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: float) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
 class WeightReceiptConflictError(PlatformError):
     """Platform refused a weight receipt that conflicts with an immutable identity.
 

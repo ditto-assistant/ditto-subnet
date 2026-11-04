@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
@@ -143,6 +144,7 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
     WeightReceiptConflictError,
 )
 from ditto.validator.signing import (
@@ -195,6 +197,12 @@ _SCORE_SUBMIT_DEADLINE_MARGIN = timedelta(seconds=30)
 # safe to repeat. A Platform deploy refuses connections for ~6s (SN-426); these
 # delays outlast that before the ticket is handed back as infrastructure.
 _ARTIFACT_FETCH_RETRY_DELAYS = (1.0, 3.0, 8.0)
+# A job claim Platform answers with 503 + delta-seconds ``Retry-After`` (e.g. a
+# bench v16+ dueling slice still being prepared) is retried by the same slot.
+# Bound the wait so a misconfigured or hostile header cannot park a slot, and
+# floor it so ``Retry-After: 0`` cannot turn the retry into a hot loop.
+JOB_RETRY_AFTER_MIN_SECONDS = 1.0
+JOB_RETRY_AFTER_MAX_SECONDS = 120.0
 # Exchange is idempotent for one signed nonce. Keep fast recovery for ordinary
 # blips, but survive a full relay handover window without throwing away a
 # benchmark ticket. This does not spend inference budget: no model request can
@@ -320,6 +328,24 @@ def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
             "inference exchange returned invalid budget evidence"
         )
     return evidence
+
+
+def _job_retry_after_seconds(response: httpx.Response) -> float | None:
+    """A 503's delta-seconds ``Retry-After``, clamped; ``None`` if unusable.
+
+    HTTP-date values and anything non-numeric, negative, or non-finite are
+    ignored so the caller keeps treating the refusal as a plain failure.
+    """
+    raw = response.headers.get("Retry-After", "").strip()
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return None
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+    return min(max(seconds, JOB_RETRY_AFTER_MIN_SECONDS), JOB_RETRY_AFTER_MAX_SECONDS)
 
 
 def _is_transient_platform_status(status_code: int) -> bool:
@@ -468,6 +494,17 @@ class PlatformClient:
             raise PlatformHeartbeatRequiredError(
                 f"job request rejected (428): {resp.text[:200]}"
             )
+        if resp.status_code == 503:
+            # Platform is preparing something this claim needs (a v16+ dueling
+            # slice) and said when to ask again. Typed so the slot waits and
+            # re-polls instead of isolating itself for the rest of the sweep.
+            retry_after = _job_retry_after_seconds(resp)
+            if retry_after is not None:
+                raise PlatformRetryLaterError(
+                    f"job request deferred (503, retry after {retry_after:g}s): "
+                    f"{resp.text[:200]}",
+                    retry_after_seconds=retry_after,
+                )
         if resp.status_code != 200:
             raise PlatformError(
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"
