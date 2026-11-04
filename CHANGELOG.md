@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.450.0 (2026-11-04)
+
+### Documentation
+
+- **benchmark**: Design the no-inference (decision-only) competition mode
+  ([#3377](https://github.com/ditto-assistant/ditto-subnet/pull/3377),
+  [`3170cab`](https://github.com/ditto-assistant/ditto-subnet/commit/3170cab8a0b234854ffe4266e16bf6856ddb3e49))
+
+### Features
+
+- **platform,backroom**: Run season title duels instead of continual walks
+  ([#3376](https://github.com/ditto-assistant/ditto-subnet/pull/3376),
+  [`09f6a2e`](https://github.com/ditto-assistant/ditto-subnet/commit/09f6a2e9312c3699ba764e24c1cc795dad9670b4))
+
+
 ## v0.449.0 (2026-11-04)
 
 ### Features
