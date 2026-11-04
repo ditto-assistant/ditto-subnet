@@ -71,6 +71,18 @@ describe('bounded MCP pre-parser', () => {
     expect(first.value?.buffer.byteLength).toBe(1)
     expect(first.value?.[0]).toBe(120)
   })
+  it('snapshots a full-buffer chunk before replay', async () => {
+    const bytes = new Uint8Array([120])
+    const incoming = new Request('https://backroom.example/mcp', {
+      method: 'POST', body: new ReadableStream({ start(controller) {
+        controller.enqueue(bytes)
+        controller.close()
+      } }), duplex: 'half',
+    } as RequestInit)
+    const bounded = await boundMcpRequest(incoming)
+    bytes[0] = 121
+    expect(await (bounded as Request).text()).toBe('x')
+  })
   it('cancels a stream that repeatedly produces no bytes', async () => {
     let cancelled = false
     const incoming = new Request('https://backroom.example/mcp', {
