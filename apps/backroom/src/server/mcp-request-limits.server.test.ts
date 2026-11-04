@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { boundMcpRequest } from './mcp-request-limits.server'
+import { observerRequestAllowed } from './treasury-observer-access.server'
 
 function request(chunks: string[]) {
   const encoder = new TextEncoder()
@@ -21,6 +22,47 @@ describe('bounded MCP pre-parser', () => {
     expect(bounded.headers.get('Authorization')).toBe('Bearer fixture')
     expect(await bounded.clone().json()).toEqual({ ok: true })
     expect(await bounded.text()).toBe('{"ok":true}')
+  })
+  it('replays empty and highly fragmented bodies without changing bytes', async () => {
+    const empty = await boundMcpRequest(request(['']))
+    expect(empty).toBeInstanceOf(Request)
+    expect(await (empty as Request).text()).toBe('')
+
+    const text = 'x'.repeat(1100)
+    const bounded = await boundMcpRequest(request(Array.from(text)), text.length)
+    expect(bounded).toBeInstanceOf(Request)
+    expect(await (bounded as Request).clone().text()).toBe(text)
+    expect(await (bounded as Request).text()).toBe(text)
+
+    const belowLimit = await boundMcpRequest(request(Array.from(text)))
+    expect(belowLimit).toBeInstanceOf(Request)
+    const first = await (belowLimit as Request).body!.getReader().read()
+    expect(first.value?.byteLength).toBe(text.length)
+    expect(first.value?.buffer.byteLength).toBe(text.length)
+  })
+  it('preserves UTF-8 split across chunks for both readers', async () => {
+    const bytes = new TextEncoder().encode('{"s":"é"}')
+    const incoming = new Request('https://backroom.example/mcp', {
+      method: 'POST',
+      body: new ReadableStream({ start(controller) {
+        controller.enqueue(bytes.subarray(0, 7))
+        controller.enqueue(bytes.subarray(7, 8))
+        controller.enqueue(bytes.subarray(8))
+        controller.close()
+      } }),
+      duplex: 'half',
+    } as RequestInit)
+    const bounded = await boundMcpRequest(incoming, bytes.byteLength)
+    expect(bounded).toBeInstanceOf(Request)
+    expect(await (bounded as Request).clone().json()).toEqual({ s: 'é' })
+    expect(await (bounded as Request).text()).toBe('{"s":"é"}')
+  })
+  it('keeps the original body readable after an observer clone rejects it', async () => {
+    const body = '{"jsonrpc":"2.0","id":1,"method":"resources/list"}'
+    const bounded = await boundMcpRequest(request([body]))
+    expect(bounded).toBeInstanceOf(Request)
+    expect(await observerRequestAllowed(bounded as Request)).toBe(false)
+    expect(await (bounded as Request).text()).toBe(body)
   })
   it('bounds observed UTF-8 bytes without a Content-Length header', async () => {
     const bounded = await boundMcpRequest(request(['{"s":"', 'éé', '"}']), 10)
