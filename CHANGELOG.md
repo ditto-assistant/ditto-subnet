@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.453.0 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Skip unchanged rounds whichever column is counted
+  ([#3386](https://github.com/ditto-assistant/ditto-subnet/pull/3386),
+  [`af9e5b5`](https://github.com/ditto-assistant/ditto-subnet/commit/af9e5b570356cfeff995a2502980b925b95e4248))
+
+### Features
+
+- **backroom**: Decompose a canary's composite gate
+  ([#3387](https://github.com/ditto-assistant/ditto-subnet/pull/3387),
+  [`c0915f0`](https://github.com/ditto-assistant/ditto-subnet/commit/c0915f0b691137f24fcc0b3045d5cfa3e21619cb))
+
+- **platform,backroom**: Extend idle dueling seasons instead of rotating
+  ([#3383](https://github.com/ditto-assistant/ditto-subnet/pull/3383),
+  [`eefead9`](https://github.com/ditto-assistant/ditto-subnet/commit/eefead98d768dfdfc12ea3bf2558f4c4e37804e0))
+
+
 ## v0.452.0 (2026-11-04)
 
 ### Bug Fixes
