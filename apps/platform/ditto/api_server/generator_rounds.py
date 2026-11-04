@@ -623,16 +623,21 @@ def _round_signature(
     cases_per_column: int | None,
     score_params: dict[str, float | int],
 ) -> str:
-    """Everything a round measures, order-free: which generator source fills a
-    counted or challenger column, which agents sit on the panel (and which is
-    the champion), the bench contract, the column size and the score params.
-    Column labels and seat order are left out: they only name the same work."""
+    """Everything a round measures, order-free: which generator sources hold a
+    column, which agents sit on the panel (and which is the champion), the
+    bench contract, the column size and the score params.
+
+    Column labels, seat order and whether a column is counted or a challenger
+    are left out. Every column is scored the same way against the whole panel,
+    and generator pay reads only column scores. ``counted`` is re-derived from
+    the latest round scores, so the 5th and 6th best generators trade it after
+    almost every scored round; keying on it would rerun the same matrix
+    forever."""
     document = {
         "columns": sorted(
             [
                 str(column["submission_id"]),
                 str(column.get("source_sha256") or ""),
-                bool(column.get("counted")),
                 bool(column.get("public_default")),
             ]
             for column in columns
