@@ -5491,6 +5491,7 @@ async def _top5_confirmation_seed_plan(
     seed_planning: tuple[str | None, bool] | None = None,
     wave_window: WaveWindow | None = None,
     duel_seed_count: int | None = None,
+    duel_history: Mapping[UUID, Mapping[int, float]] | None = None,
 ) -> tuple[int, ...]:
     """Every seed this member still owes: its backlog first, then wave growth.
 
@@ -5532,11 +5533,15 @@ async def _top5_confirmation_seed_plan(
     stops introducing datasets instead of growing forever.
     """
     if duel_seed_count is not None:
-        member_history = await confirmation_composites_by_seed(
-            session,
-            agent_ids=(member_agent_id,),
-            bench_version=canonical_version,
-            planning=True,
+        member_history = (
+            duel_history
+            if duel_history is not None and member_agent_id in duel_history
+            else await confirmation_composites_by_seed(
+                session,
+                agent_ids=(member_agent_id,),
+                bench_version=canonical_version,
+                planning=True,
+            )
         )
         if seed_planning is None:
             seed_planning = await reign_seed_planning(
@@ -5698,6 +5703,7 @@ async def _unserved_catchup_members(
     canonical_version: int,
     now: datetime,
     duel_seed_count: int | None = None,
+    duel_history: Mapping[UUID, Mapping[int, float]] | None = None,
 ) -> frozenset[UUID]:
     """Emission members and bounded owner challengers with unserved backlog.
 
@@ -5713,12 +5719,13 @@ async def _unserved_catchup_members(
         duel_members = tuple(dict.fromkeys((*wave_member_ids, *emission_member_ids)))
         if not duel_members:
             return frozenset()
-        duel_history = await confirmation_composites_by_seed(
-            session,
-            agent_ids=duel_members,
-            bench_version=canonical_version,
-            planning=True,
-        )
+        if duel_history is None:
+            duel_history = await confirmation_composites_by_seed(
+                session,
+                agent_ids=duel_members,
+                bench_version=canonical_version,
+                planning=True,
+            )
         duel_block_hash, duel_fresh = await reign_seed_planning(
             session,
             champion_agent_id=champion_agent_id,
@@ -6650,7 +6657,12 @@ async def request_top5_confirmation_job(
         )
         wave_window = await current_wave_window(
             session,
-            cadence_tempos=continual_settings.wave_cadence_tempos,
+            # Season duels replace wave pacing (the season is the window).
+            cadence_tempos=(
+                0
+                if duel_seed_count is not None
+                else continual_settings.wave_cadence_tempos
+            ),
             seeds_per_window=continual_settings.wave_seeds_per_window,
             netuid=getattr(getattr(config, "chain", None), "netuid", None),
         )
@@ -6676,6 +6688,22 @@ async def request_top5_confirmation_job(
         # outside the reign cadence below, so two validators must not both see
         # the same unserved gap and spend separate slots on it.
         await _lock_top5_fairness(session)
+        # Season duels plan every candidate from one history read; a member
+        # absent from it simply holds no season seed yet.
+        duel_history: dict[UUID, dict[int, float]] | None = (
+            {
+                agent_id: {}
+                for agent_id in dict.fromkeys((*member_ids, *wave_member_ids))
+            }
+            | await confirmation_composites_by_seed(
+                session,
+                agent_ids=tuple(dict.fromkeys((*member_ids, *wave_member_ids))),
+                bench_version=canonical_version,
+                planning=True,
+            )
+            if duel_seed_count is not None
+            else None
+        )
         catchup_member_ids = await _unserved_catchup_members(
             session,
             champion_agent_id=anchor_champion_id,
@@ -6685,6 +6713,7 @@ async def request_top5_confirmation_job(
             canonical_version=canonical_version,
             now=now,
             duel_seed_count=duel_seed_count,
+            duel_history=duel_history,
         )
         candidate_member_ids: tuple[UUID, ...]
         if requested_member_id is not None:
@@ -6773,6 +6802,7 @@ async def request_top5_confirmation_job(
                 seed_planning=seed_planning,
                 wave_window=wave_window,
                 duel_seed_count=duel_seed_count,
+                duel_history=duel_history,
             )
             if not seeds:
                 legacy_decline = (

@@ -385,7 +385,11 @@ async def _claimability(
     )
     wave_window = await current_wave_window(
         session,
-        cadence_tempos=settings.wave_cadence_tempos,
+        # Season duels replace wave pacing: the season is the window, so no
+        # pacing window is reported (or applied) under them.
+        cadence_tempos=0
+        if duel_seed_count is not None
+        else settings.wave_cadence_tempos,
         seeds_per_window=settings.wave_seeds_per_window,
         netuid=getattr(getattr(config, "chain", None), "netuid", None),
     )
