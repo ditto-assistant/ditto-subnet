@@ -1084,7 +1084,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req submitRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBody)
+	r.Body = http.MaxBytesReader(w, r.Body, s.practiceBodyBytes())
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or oversized JSON body")
 		return
@@ -1094,15 +1094,15 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "private datasets are not accepted on practice")
 		return
 	}
-	if hasDuelingSliceFields(req) {
-		writeError(w, http.StatusBadRequest, "dueling slices are not accepted on practice")
-		return
-	}
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	req.BenchVersion = version
+	if msg := validatePracticeDuelingSlice(req, s.allowPrivate); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	// Exactly one submission source: a running harness (direct), a git repo, or
 	// a presigned platform tarball (mode B). git_url + tarball_url both build in
 	// the Docker sandbox.

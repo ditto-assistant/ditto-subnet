@@ -94,6 +94,47 @@ func validateDuelingSliceRequest(req submitRequest, enabled bool) error {
 	return nil
 }
 
+// validatePracticeDuelingSlice admits a slice on practice only for the miner
+// kit's LOCAL slice rehearsal (scripts/local-rehearsal.py at bench >= 16): a
+// scorer started with DITTOBENCH_ALLOW_PRIVATE_HARNESS, which can never also
+// load screened images (validatePrivateHarnessPosture), so neither hosted
+// practice nor a validator stack takes one here. The slice must be complete
+// and bound to an explicit seed, because decodeDuelingSlice requires
+// run_seed == seed and a practice seed is otherwise fresh. A practice run at
+// >= 16 without slice fields still scores the datagen half only. Returns ""
+// when admitted.
+func validatePracticeDuelingSlice(req submitRequest, localScorer bool) string {
+	if !hasDuelingSliceFields(req) {
+		return ""
+	}
+	if !localScorer {
+		return "dueling slices are not accepted on practice"
+	}
+	// A practice slice is never a scored run: a scored /v1/submit (an expected
+	// dataset digest) with a slice would skip /v2/score's ticket and inference
+	// checks, so refuse it here.
+	if runScope(req) == scorer.ScopeScored {
+		return "a local dueling slice rehearsal cannot be a scored run (omit dataset_sha256)"
+	}
+	if req.Seed == 0 {
+		return "a local dueling slice rehearsal requires an explicit seed (the slice is built for it)"
+	}
+	if err := validateDuelingSliceRequest(req, true); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// practiceBodyBytes is the /v1/submit body cap: tiny on hosted practice, and
+// large enough for a base64 slice on a local private-harness scorer.
+func (s *server) practiceBodyBytes() int64 {
+	limit := int64(maxSubmitBody)
+	if s.allowPrivate {
+		limit += int64((challenge.MaxRoundDatasetBytes + 2) / 3 * 4)
+	}
+	return limit
+}
+
 // duelingSlice is a decoded, verified slice ready to execute.
 type duelingSlice struct {
 	dataset  challenge.SliceDataset

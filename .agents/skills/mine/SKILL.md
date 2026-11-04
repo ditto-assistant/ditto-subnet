@@ -39,6 +39,22 @@ calls) plus the scored decision lane at `DITTOBENCH_DECISIONS_URL`. Pin
 `--bench-version 14` only to compare against the previous contract. See
 [`benchmark-v15-rollout.md`](../../../docs/benchmark-v15-rollout.md).
 
+Bench 16 (the dueling bench) is shipped and **shadow, not live**: it scores
+nothing on chain until the operator activates it
+([`benchmark-v16-rollout.md`](../../../docs/benchmark-v16-rollout.md)). A v16
+run is a 175-case datagen half plus a 175-case generator slice (5 columns x 35,
+`composite = gate x (0.5 x datagen + 0.1 x each unmasked column)`; a column
+your own coldkey owns is masked and its 10% returns to the datagen half).
+`uv run ditto practice --bench-version 16` rehearses it: the runner builds a
+local slice with `challenge-scorer reproduce-slice` from the **public default
+generator only** (`miners/dittobench-generator-starter-kit` in all five
+columns, owner `""`, a throwaway local season secret and anchor), passes it to
+the local scorer, and prints the composite plus each column's mean. Live
+columns come from the top eligible miner generators and stay private until
+their source is released, so a local v16 score is a shape check, not a
+prediction. `--no-slice` scores the datagen half only; `--slice-sandbox docker`
+runs the generator isolated.
+
 ## Practice loops (do not collapse these)
 
 | Command | What it is | Use for |
