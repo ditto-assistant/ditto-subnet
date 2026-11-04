@@ -40,6 +40,7 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
 )
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import (
@@ -184,6 +185,90 @@ async def test_job_claim_types_the_stale_heartbeat_gate(
         with pytest.raises(expected) as raised:
             await platform.request_job(slot_id="slot-0")
     assert (type(raised.value) is PlatformHeartbeatRequiredError) is (status == 428)
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected_seconds"),
+    [
+        ("15", 15.0),
+        ("2.5", 2.5),
+        ("0", 1.0),
+        ("9999", 120.0),
+        (None, None),
+        ("", None),
+        ("Wed, 21 Oct 2015 07:28:00 GMT", None),
+        ("-5", None),
+        ("nan", None),
+        ("inf", None),
+    ],
+)
+async def test_job_claim_types_a_retry_later_refusal(
+    retry_after: str | None, expected_seconds: float | None
+) -> None:
+    """Only a 503 with usable delta-seconds Retry-After is a retry-later."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    headers = {} if retry_after is None else {"Retry-After": retry_after}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503, json={"detail": "dueling slice preparation pending"}, headers=headers
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformError) as raised:
+            await platform.request_job(slot_id="slot-0")
+    if expected_seconds is None:
+        assert type(raised.value) is PlatformError
+    else:
+        assert isinstance(raised.value, PlatformRetryLaterError)
+        assert raised.value.retry_after_seconds == expected_seconds
+        assert "dueling slice preparation pending" in str(raised.value)
+
+
+async def test_confirmation_claim_types_a_retry_later_refusal() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"detail": "dueling slice preparation pending"},
+            headers={"Retry-After": "15"},
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformRetryLaterError) as raised:
+            await platform.request_top5_confirmation_job(slot_id="slot-0")
+    assert raised.value.retry_after_seconds == 15.0
+
+
+async def test_job_claim_conflict_is_not_a_retry_later() -> None:
+    """409 keeps its plain refusal even when it carries Retry-After."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409, json={"detail": "stale"}, headers={"Retry-After": "5"}
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformError) as raised:
+            await platform.request_job(slot_id="slot-0")
+    assert type(raised.value) is PlatformError
 
 
 def _coding_certification_submit_args() -> tuple[
