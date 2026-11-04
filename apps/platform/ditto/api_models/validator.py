@@ -396,11 +396,31 @@ class JobResponse(BaseModel):
             "seeds; retries by the same validator retain the same seed.",
         ),
     ] = None
-    seed_scope: Literal["agent", "validator"] = Field(
+    seed_scope: Literal["agent", "validator", "season"] = Field(
         default="agent",
         description="Inputs used by the on-chain seed derivation. Validator "
-        "scope additionally binds the ticket holder's hotkey.",
+        "scope additionally binds the ticket holder's hotkey. Season scope "
+        "(protocol 35, title duels) is a dueling season's shared seed: "
+        "``crn_seed([seed_anchor_agent_id], bench_version, seed_index, "
+        "dataset_seed_block_hash)``. Issued only to protocol-35 validators.",
     )
+    seed_anchor_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description="Season scope: champion the season's family is anchored on.",
+        ),
+    ] = None
+    seed_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description="Season scope: replicate index of the shared seed.",
+        ),
+    ] = None
     dataset_sha256: Annotated[
         str | None,
         Field(
@@ -479,6 +499,27 @@ class JobResponse(BaseModel):
             description="Dueling season the slice belongs to.",
         ),
     ] = None
+
+    @model_validator(mode="after")
+    def _season_seed_is_bound(self) -> JobResponse:
+        """A season-scoped seed always carries its whole CRN binding.
+
+        Platform-side only, like the slice rule below: the validator refuses an
+        unbound season seed itself (``seed_binding_mismatch``).
+        """
+        if self.seed_scope != "season":
+            return self
+        if (
+            self.seed is None
+            or self.seed_anchor_agent_id is None
+            or self.seed_index is None
+            or not self.dataset_seed_block_hash
+        ):
+            raise ValueError(
+                "a season-scoped seed needs seed, seed_anchor_agent_id, "
+                "seed_index and dataset_seed_block_hash"
+            )
+        return self
 
     @model_validator(mode="after")
     def _dueling_slice_all_or_none(self) -> JobResponse:
@@ -2007,6 +2048,20 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    duel_history: Annotated[
+        list[ConfirmationScoreRecord] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel evidence: this agent's bench >= 16 "
+                "confirmation records from the newest dueling seasons, each "
+                "with its signed details.dueling. Served only with "
+                "crown_gate.duel_window_pairs; the dethrone test pairs them "
+                "by (season, seed). Levels never read it."
+            ),
+        ),
+    ] = None
     continual_aggregate_method: Literal["mean_after_quorum"] | None = Field(
         default=None,
         description=(
@@ -2146,6 +2201,22 @@ class CrownGateMarker(BaseModel):
             ),
         ),
     ]
+    duel_window_pairs: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=2,
+            le=15,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel. When present, two bench >= 16 rows are "
+                "compared on the newest this-many pair-masked (season, seed) "
+                "pairs of duel_history across dueling seasons, and the "
+                "challenger dethrones only past the frozen sequential boundary "
+                "(docs/title-duels.md). Absent is the protocol-34 gate."
+            ),
+        ),
+    ] = None
 
 
 class LedgerResponse(BaseModel):

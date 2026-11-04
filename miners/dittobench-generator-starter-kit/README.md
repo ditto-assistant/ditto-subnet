@@ -126,7 +126,7 @@ after payment, it prints `--payment-block-*` flags. Rerun with them within 24
 hours to reuse the payment without paying again. See "Upload fee" in
 [generator-competition.md](../../research/dittobench-datagen/docs/generator-competition.md).
 
-## Grading policies (v13 and v14)
+## Grading policies (v13, v14 and v16)
 
 Every pack declares the memory grading policy its cases are graded under in
 `grading_bench_version`. A v13 round's request accepts only 13 and is
@@ -190,6 +190,37 @@ package ignores grading policies it does not know yet, so a rebuilt generator
 keeps working when a newer round offers one, as long as the request still
 accepts a policy it supports. A generator built before this release must
 rebuild to take part in v15 rounds.
+
+### Bench v16: policy 16 and dueling slices
+
+Bench v16 (the dueling bench, [dueling-bench.md](../../research/dittobench-datagen/docs/dueling-bench.md))
+is shipped but not active. Once it activates, rounds open at v16 and offer
+`"grading_bench_versions": [15, 16]`, so a generator that can declare only 13
+or 14 loses its v16 columns. The same window applies to the dueling slices that
+put generator cases into agents' canonical runs: a season at v16 accepts
+packs declaring 15 or 16, and a season's 32-seed qualification battery must
+see one policy on every seed.
+
+Kit version 5 adds policy 16 to `GradingBenchVersions`. Policy 16 grades like
+15 and adds no pack rule, so the kit's cases declare it unchanged. It does not
+add 15: a v15 round keeps getting exactly the version 4 pack (v14 policy), byte
+for byte apart from the version string, and a v13 or v14 round is unchanged
+too. Rehearse both windows:
+
+```bash
+go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 35 -round-bench 15
+go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 35 -round-bench 16
+```
+
+To migrate a fork, rebuild against the current `research/dittobench-datagen`
+(it knows `challenge.GradingBenchVersionV16`), add it to the policies you pass
+to `req.NewestAccepted`, rehearse at `-round-bench 16`, and re-upload. Declare
+15 as well only if your cases were written for the v15 phrase policy. Your
+generator's columns in canonical agent runs stay private until its source is
+released under the subnet's source-disclosure policy; until then only
+per-column aggregates are shown.
 
 ### How this kit improves
 

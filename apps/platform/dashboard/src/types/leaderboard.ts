@@ -60,7 +60,7 @@ export interface RewardEligibility {
 }
 
 export interface RawLeaderDecision {
-  /** "paired" | "unpaired" | anything else reads as the fixed margin. */
+  /** "paired" | "duel" | "unpaired" | anything else reads as the fixed margin. */
   method?: string;
   challenger_lead: number;
   required_lead: number;
@@ -535,6 +535,41 @@ export interface InferenceCostSummary {
   mean_factor_bps?: number | null;
 }
 
+/** Bench v16+ priced inference cost (`details.priced_cost`): whole-run
+ * tokens priced at the contract's locked public rates, normalised to a
+ * 350-case run, and the factor the composite carries. `rule_consistent` is
+ * Platform's own recomputation of the factor. Mirrors `PricedCostSummary`. */
+export interface PricedCostSummary {
+  contract_id?: string | null;
+  posture?: GatePosture | null;
+  applied?: boolean;
+  result?: "priced" | "insufficient_evidence" | null;
+  window?: string | null;
+  source?: string | null;
+  cases?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  embedding_tokens?: number;
+  decision_calls?: number;
+  decision_input_tokens?: number;
+  decision_output_tokens?: number;
+  prompt_cost_nano_usd?: number;
+  completion_cost_nano_usd?: number;
+  embedding_cost_nano_usd?: number;
+  decision_cost_nano_usd?: number;
+  cost_nano_usd?: number;
+  normalization_cases?: number;
+  normalized_cost_nano_usd?: number;
+  reference_nano_usd?: number;
+  ratio_bps?: number;
+  floor_bps?: number | null;
+  factor_bps?: number | null;
+  applied_factor_bps?: number | null;
+  cost_usd?: number | null;
+  normalized_cost_usd?: number | null;
+  rule_consistent?: boolean | null;
+}
+
 /** Run-level bench v13+ gate verdict published beside a validator's score.
  *
  * Aggregates only: the per-case notes behind these counts are owner-only
@@ -550,6 +585,7 @@ export interface GateEvidence {
   claim_provenance?: ClaimProvenanceSummary | null;
   twin_post_pass?: TwinPostPassSummary | null;
   inference_cost?: InferenceCostSummary | null;
+  priced_cost?: PricedCostSummary | null;
   catalog_suppression_rate?: number | null;
   flagged_case_count?: number;
   flagged_case_share?: number | null;

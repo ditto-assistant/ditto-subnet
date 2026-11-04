@@ -1143,11 +1143,36 @@
         ],
         "default": null
       },
+      "seed_anchor_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed_index": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "seed_scope": {
         "default": "agent",
         "enum": [
           "agent",
-          "validator"
+          "validator",
+          "season"
         ],
         "type": "string"
       },
@@ -3307,6 +3332,20 @@
         ],
         "default": null
       },
+      "duel_history": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/ConfirmationScoreRecord"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "dueling": {
         "anyOf": [
           {
@@ -4012,6 +4051,19 @@
             "minimum": 1,
             "type": "integer"
           },
+          "duel_window_pairs": {
+            "anyOf": [
+              {
+                "maximum": 15,
+                "minimum": 2,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "min_dethrone_confirmations": {
             "maximum": 15,
             "minimum": 2,
@@ -4302,6 +4354,20 @@
               {
                 "const": "mean_after_quorum",
                 "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "duel_history": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ConfirmationScoreRecord"
+                },
+                "type": "array"
               },
               {
                 "type": "null"

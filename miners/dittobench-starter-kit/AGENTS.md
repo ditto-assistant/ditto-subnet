@@ -24,3 +24,9 @@ served-path defect; fix it, never tune it away. The rehearsal refuses a
 `--bench-version` the local scorer build does not advertise (its
 `/v1/capabilities` `supported_bench_versions`); 14 needs a scorer that
 advertises it.
+
+Bench 16 (the dueling bench) is shadow, not live. `uv run ditto practice
+--bench-version 16` builds a local generator slice from the public default
+generator only (miner generator columns stay private until their source is
+released) and prints the composite plus per-column means; `--no-slice` scores
+the datagen half alone.

@@ -8303,6 +8303,16 @@ class InferenceGrant(Base):
     decision_active_requests: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    inference_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default="chat", server_default=text("'chat'")
+    )
+    """Which hosted lanes the grant may use: ``chat`` or ``no_chat``.
+
+    ``chat`` is every grant minted before the no-inference mode existed.
+    ``no_chat`` (docs/no-inference-mode.md) refuses every chat call as
+    ``model_not_permitted`` while embeddings and the decision lane stay open,
+    so it requires a decision pin. Stamped at mint, immutable for the lease.
+    """
     request_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
@@ -8401,6 +8411,11 @@ class InferenceGrant(Base):
             "AND (decision_model IS NULL OR "
             "(decision_request_budget > 0 AND decision_token_budget > 0))",
             name="inference_grants_decision_accounting",
+        ),
+        CheckConstraint(
+            "inference_mode IN ('chat', 'no_chat') "
+            "AND (inference_mode = 'chat' OR decision_model IS NOT NULL)",
+            name="inference_grants_inference_mode",
         ),
         Index("inference_grants_expiry_idx", "expires_at"),
     )

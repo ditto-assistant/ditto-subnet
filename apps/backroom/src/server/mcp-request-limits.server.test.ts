@@ -57,6 +57,58 @@ describe('bounded MCP pre-parser', () => {
     expect(await (bounded as Request).clone().json()).toEqual({ s: 'é' })
     expect(await (bounded as Request).text()).toBe('{"s":"é"}')
   })
+  it('does not retain a large backing buffer for a small chunk', async () => {
+    const backing = new Uint8Array(1024 * 1024)
+    backing[0] = 120
+    const incoming = new Request('https://backroom.example/mcp', {
+      method: 'POST', body: new ReadableStream({ start(controller) {
+        controller.enqueue(backing.subarray(0, 1))
+        controller.close()
+      } }), duplex: 'half',
+    } as RequestInit)
+    const bounded = await boundMcpRequest(incoming)
+    const first = await (bounded as Request).body!.getReader().read()
+    expect(first.value?.buffer.byteLength).toBe(1)
+    expect(first.value?.[0]).toBe(120)
+  })
+  it('snapshots a full-buffer chunk before replay', async () => {
+    const bytes = new Uint8Array([120])
+    const incoming = new Request('https://backroom.example/mcp', {
+      method: 'POST', body: new ReadableStream({ start(controller) {
+        controller.enqueue(bytes)
+        controller.close()
+      } }), duplex: 'half',
+    } as RequestInit)
+    const bounded = await boundMcpRequest(incoming)
+    bytes[0] = 121
+    expect(await (bounded as Request).text()).toBe('x')
+  })
+  it('cancels a stream that repeatedly produces no bytes', async () => {
+    let cancelled = false
+    const incoming = new Request('https://backroom.example/mcp', {
+      method: 'POST', body: new ReadableStream({
+        pull(controller) { controller.enqueue(new Uint8Array()) },
+        cancel() { cancelled = true },
+      }), duplex: 'half',
+    } as RequestInit)
+    const response = await boundMcpRequest(incoming)
+    expect((response as Response).status).toBe(400)
+    expect(cancelled).toBe(true)
+  })
+  it('bounds empty reads even when interleaved with nonempty chunks', async () => {
+    let cancelled = false
+    let reads = 0
+    const incoming = new Request('https://backroom.example/mcp', {
+      method: 'POST', body: new ReadableStream({
+        pull(controller) { controller.enqueue(++reads % 2 ? new Uint8Array() : new Uint8Array([120])) },
+        cancel() { cancelled = true },
+      }), duplex: 'half',
+    } as RequestInit)
+    const response = await boundMcpRequest(incoming)
+    expect((response as Response).status).toBe(400)
+    expect(cancelled).toBe(true)
+    expect(reads).toBeLessThan(40)
+  })
   it('keeps the original body readable after an observer clone rejects it', async () => {
     const body = '{"jsonrpc":"2.0","id":1,"method":"resources/list"}'
     const bounded = await boundMcpRequest(request([body]))

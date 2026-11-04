@@ -376,11 +376,31 @@ class JobResponse(BaseModel):
         int | None,
         Field(default=None, description="Platform-pinned dataset seed (regenerable)."),
     ] = None
-    seed_scope: Literal["agent", "validator"] = Field(
+    seed_scope: Literal["agent", "validator", "season"] = Field(
         default="agent",
         description="Inputs used by the on-chain seed derivation. Validator "
-        "scope additionally binds the ticket holder's hotkey.",
+        "scope additionally binds the ticket holder's hotkey. Season scope "
+        "(protocol 35, title duels) is a dueling season's shared seed: "
+        "``crn_seed([seed_anchor_agent_id], bench_version, seed_index, "
+        "dataset_seed_block_hash)``.",
     )
+    seed_anchor_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description="Season scope: champion the season's family is anchored on.",
+        ),
+    ] = None
+    seed_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description="Season scope: replicate index of the shared seed.",
+        ),
+    ] = None
     dataset_sha256: Annotated[
         str | None,
         Field(default=None, description="SHA-256 of the pinned dataset (tamper pin)."),
@@ -1856,6 +1876,20 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    duel_history: Annotated[
+        list[ConfirmationScoreRecord] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel evidence: this agent's bench >= 16 "
+                "confirmation records from the newest dueling seasons, each "
+                "with its signed details.dueling. Served only with "
+                "crown_gate.duel_window_pairs; the dethrone test pairs them "
+                "by (season, seed). Levels never read it."
+            ),
+        ),
+    ] = None
     continual_aggregate_method: Literal["mean_after_quorum"] | None = Field(
         default=None,
         description=(
@@ -1993,6 +2027,22 @@ class CrownGateMarker(BaseModel):
             ),
         ),
     ]
+    duel_window_pairs: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=2,
+            le=15,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel. When present, two bench >= 16 rows are "
+                "compared on the newest this-many pair-masked (season, seed) "
+                "pairs of duel_history across dueling seasons, and the "
+                "challenger dethrones only past the frozen sequential boundary "
+                "(docs/title-duels.md). Absent is the protocol-34 gate."
+            ),
+        ),
+    ] = None
 
 
 class LedgerResponse(BaseModel):

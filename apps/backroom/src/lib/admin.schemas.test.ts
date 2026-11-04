@@ -4,6 +4,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
+  publicDethroneDecisionSchema,
   SCREENING_SUBMISSION_AGENT_STATUSES,
   competitionFeesInputSchema,
   submissionSettingsRevisionSchema,
@@ -3975,6 +3976,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     ledger_pin_mode: false,
     crown_incumbent_mode: false,
     crown_gate_mode: false,
+    crown_duel_mode: false,
     min_dethrone_confirmations: false,
     champion_standing_rank: false,
     retest_cohort_size: false,
@@ -3984,6 +3986,8 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_cohort_max_size: false,
     wave_cadence_tempos: false,
     wave_seeds_per_window: false,
+    retest_mode: false,
+    season_duel_seeds: false,
   }
   const fullSupport = Object.fromEntries(
     Object.keys(legacySupport).map((field) => [field, true]),
@@ -3997,6 +4001,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     ledger_pin_mode: 'live' as const,
     crown_incumbent_mode: 'disabled' as const,
     crown_gate_mode: 'disabled' as const,
+    crown_duel_mode: 'disabled' as const,
     min_dethrone_confirmations: 3,
     champion_standing_rank: 3,
     idle_retests_enabled: true,
@@ -4008,6 +4013,8 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_cohort_max_size: 25,
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
   }
 
   it('reads a dethrone minimum up to the 15-seed ceiling but writes at most 10', () => {
@@ -4113,6 +4120,7 @@ describe('continual retest cohort sizing against an older platform', () => {
       ledger_pin_mode: false,
       crown_incumbent_mode: false,
       crown_gate_mode: false,
+      crown_duel_mode: false,
       min_dethrone_confirmations: false,
       champion_standing_rank: false,
       retest_cohort_size: false,
@@ -4122,6 +4130,8 @@ describe('continual retest cohort sizing against an older platform', () => {
       retest_cohort_max_size: false,
       wave_cadence_tempos: false,
       wave_seeds_per_window: false,
+      retest_mode: false,
+      season_duel_seeds: false,
     })
     expect(continualRetestFieldSupport(null).wave_membership).toBe(false)
   })
@@ -4135,6 +4145,7 @@ describe('continual retest write contract', () => {
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'fleet_ready' as const,
     crown_gate_mode: 'fleet_ready' as const,
+    crown_duel_mode: 'disabled' as const,
     min_dethrone_confirmations: 3,
     champion_standing_rank: 3,
     idle_retests_enabled: false,
@@ -4146,7 +4157,27 @@ describe('continual retest write contract', () => {
     retest_cohort_max_size: 25,
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
   }
+
+  it('refuses a season duel that could never carry a dethrone case', () => {
+    const starved = continualRetestSettingsWriteSchema.safeParse({
+      ...complete,
+      retest_mode: 'season_duel',
+      season_duel_seeds: 2,
+      min_dethrone_confirmations: 3,
+    })
+    expect(starved.success).toBe(false)
+    expect(starved.error?.issues[0]?.path).toEqual(['season_duel_seeds'])
+    expect(
+      continualRetestSettingsWriteSchema.safeParse({
+        ...complete,
+        retest_mode: 'season_duel',
+        season_duel_seeds: 3,
+      }).success,
+    ).toBe(true)
+  })
 
   it('refuses a body missing any field a revision would overwrite', () => {
     expect(continualRetestSettingsWriteSchema.parse(complete)).toEqual(complete)
@@ -4160,6 +4191,7 @@ describe('continual retest write contract', () => {
       'ledger_pin_mode',
       'crown_incumbent_mode',
       'crown_gate_mode',
+      'crown_duel_mode',
       'min_dethrone_confirmations',
       'champion_standing_rank',
       'wave_membership',
@@ -4169,6 +4201,8 @@ describe('continual retest write contract', () => {
       'retest_cohort_max_size',
       'wave_cadence_tempos',
       'wave_seeds_per_window',
+      'retest_mode',
+      'season_duel_seeds',
     ] as const) {
       const { [field]: _omitted, ...partial } = complete
       expect(continualRetestSettingsWriteSchema.safeParse(partial).success).toBe(false)
@@ -4213,6 +4247,8 @@ describe('continual retest write contract', () => {
         retest_cohort_max_size: 25,
         wave_cadence_tempos: 0,
         wave_seeds_per_window: 3,
+        retest_mode: 'continual' as const,
+        season_duel_seeds: 3,
       }).success,
     ).toBe(true)
   })
@@ -4232,6 +4268,7 @@ describe('continual retest write contract', () => {
       ledger_pin_mode: 'epoch',
       crown_incumbent_mode: 'disabled',
       crown_gate_mode: 'disabled',
+      crown_duel_mode: 'disabled',
       min_dethrone_confirmations: 3,
       champion_standing_rank: 3,
       idle_retests_enabled: false,
@@ -4243,6 +4280,8 @@ describe('continual retest write contract', () => {
       retest_cohort_max_size: 25,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: 3,
+      retest_mode: 'continual' as const,
+      season_duel_seeds: 3,
     })
   })
 
@@ -5811,5 +5850,22 @@ describe('benchmark rollout qualification detail', () => {
       blocking_reason: 'no benchmark rollout is open',
     })
     expect(parsed.source_bench_version).toBeNull()
+  })
+})
+
+describe('publicDethroneDecisionSchema', () => {
+  it('parses a protocol-35 title-duel decision', () => {
+    const parsed = publicDethroneDecisionSchema.parse({
+      challenger_lead: 0.03,
+      required_lead: 0.0085,
+      margin_lead: 0.0057,
+      statistical_lead: 0.0085,
+      method: 'duel',
+      dethrones: true,
+      paired_standard_error: 0.0032,
+      shared_seed_count: 15,
+      seed_differences: [0.03],
+    })
+    expect(parsed.method).toBe('duel')
   })
 })

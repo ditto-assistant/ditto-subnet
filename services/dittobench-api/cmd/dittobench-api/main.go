@@ -1084,7 +1084,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req submitRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBody)
+	r.Body = http.MaxBytesReader(w, r.Body, s.practiceBodyBytes())
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or oversized JSON body")
 		return
@@ -1094,15 +1094,15 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "private datasets are not accepted on practice")
 		return
 	}
-	if hasDuelingSliceFields(req) {
-		writeError(w, http.StatusBadRequest, "dueling slices are not accepted on practice")
-		return
-	}
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	req.BenchVersion = version
+	if msg := validatePracticeDuelingSlice(req, s.allowPrivate); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	// Exactly one submission source: a running harness (direct), a git repo, or
 	// a presigned platform tarball (mode B). git_url + tarball_url both build in
 	// the Docker sandbox.
@@ -2430,6 +2430,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// relayExecution, and affected cases grade normally instead of buying the
 	// same artifact another lease.
 	var tokenUsage protocol.TokenUsage
+	var wholeRunUsage *protocol.TokenUsage
 	var relayExecution relayExecutionSummary
 	if scope == scorer.ScopeScored {
 		var ok bool
@@ -2458,6 +2459,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			s.failRelayUnavailableWithAdmission(runID, err, relayExecution.Admission)
 			return
 		}
+		// Bench >= 16 prices the WHOLE run (v16_priced_cost.go): keep the
+		// whole-run interval before a dueling run narrows the record below.
+		wholeRun := tokenUsage
+		wholeRunUsage = &wholeRun
 		// The whole-run interval decided relay health and complete accounting
 		// above. A dueling run's accounting record, transcript relay summary
 		// and signed model-use evidence describe the datagen half only.
@@ -2493,9 +2498,16 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// applyV9BaseEvidence, the v9 score gates) multiply it, and every gate
 	// input stays a datagen case. Slice rows join per_case only after
 	// aggregation, score-only, so no mean, category or gate reads them.
+	//
+	// Bench >= 16 also prices the whole run (v16_priced_cost.go) and carries
+	// the applied cost factor in that same composite gate.
+	pricedCost := s.v16PricedCostFor(req.BenchVersion, v16PricedCostPosture, wholeRunUsage, inferenceSessionID, len(perCase)+len(sliceResult.rows))
 	var datagenHalf scorer.DatagenHalf
+	if slice == nil {
+		report = applyPricedCostToReport(report, pricedCost)
+	}
 	if slice != nil {
-		datagenHalf = scorer.DatagenHalfForVersion(perCase, req.BenchVersion)
+		datagenHalf = applyPricedCostToHalf(scorer.DatagenHalfForVersion(perCase, req.BenchVersion), pricedCost)
 		composite, stderr, err := duelingOrdinaryScore(datagenHalf, sliceResult.columns, slice.ownerKey)
 		if err != nil {
 			// CheckDuelingColumns names only column ids and statistics, never
@@ -2585,6 +2597,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// their exact shape.
 	report.Details.TwinPostPass = twinSummary
 	report.Details.InferenceCost = summarizeV13InferenceCostFrom(req.BenchVersion, perCase, sessionTotals.unattributedCost)
+	report.Details.PricedCost = pricedCost
 	report = applyTokenContract(report, req.BenchVersion, req.RunSize, tokenUsage)
 	if injections > 0 {
 		log.Printf("run %s: %d injection-compliance case(s) flagged", runID, injections)
@@ -2655,6 +2668,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		report.Details.Dueling = duelingReportDetails(slice, datagenHalf, report.Details.TokenEfficiency, report.Details.V9Base, sliceResult.columns)
 		log.Printf("run %s: dueling slice %s season=%s cases=%d datagen_raw=%.4f datagen_gate=%.4f",
 			runID, slice.sha256, slice.dataset.SeasonID, len(sliceResult.rows), datagenHalf.Raw, report.Details.Dueling.DatagenGate)
+	}
+	if pricedCost != nil {
+		log.Printf("run %s: priced cost %s posture=%s cost_nano_usd=%d normalized_nano_usd=%d ratio_bps=%d factor_bps=%d applied_bps=%d",
+			runID, pricedCost.Result, pricedCost.Posture, pricedCost.CostNanoUSD, pricedCost.NormalizedCostNanoUSD,
+			pricedCost.RatioBPS, pricedCost.FactorBPS, pricedCost.AppliedFactorBPS)
 	}
 	s.store.Finish(runID, report)
 	log.Printf("run %s done: bench_version=%d composite=%.3f tool_mean=%.3f memory_mean=%.3f observed=%d capped=%d",

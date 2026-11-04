@@ -41,6 +41,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models import ConfirmationScoreRecord, LedgerEntry, LedgerResponse
 from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL, BurnSettings
 from ditto.api_models.continual_retest_settings import (
+    CROWN_DUEL_PROTOCOL,
+    CROWN_DUEL_SEASONS,
     CROWN_GATE_PROTOCOL,
     CROWN_INCUMBENT_PROTOCOL,
     PROVISIONAL_INCUMBENT_PROTOCOL,
@@ -110,6 +112,7 @@ from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     confirmation_history_by_agent,
+    duel_history_by_agent,
 )
 from ditto.db.queries.emission_eligibility import (
     load_review_postures,
@@ -200,6 +203,7 @@ _STATISTICAL_BAND_CAP_PROTOCOL = 29
 # Served only once every recently-live weight setter reports it; a v33
 # validator would ignore the marker and walk the crown ungated.
 _CROWN_GATE_PROTOCOL = CROWN_GATE_PROTOCOL
+_CROWN_DUEL_PROTOCOL = CROWN_DUEL_PROTOCOL
 # The first validator protocol whose fold reads the served ``rank_shares``
 # payout curve. Withheld until every recently-live weight setter reports it, or
 # a mixed fleet would fold two curves in one epoch.
@@ -322,6 +326,7 @@ class _LedgerContext:
     dethrone_band_clamp_fleet_ready: bool = False
     statistical_band_cap_fleet_ready: bool = False
     crown_gate_fleet_ready: bool = False
+    crown_duel_fleet_ready: bool = False
     crown_incumbent_fleet_ready: bool = False
     reward_eligibility_fleet_ready: bool = False
     rank_shares_fleet_ready: bool = False
@@ -543,6 +548,9 @@ async def resolve_ledger_context(
     crown_gate_fleet_ready = await live_weight_setter_fleet_supports_protocol(
         session, minimum_protocol=_CROWN_GATE_PROTOCOL, now=now
     )
+    crown_duel_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+        session, minimum_protocol=_CROWN_DUEL_PROTOCOL, now=now
+    )
     rank_shares_fleet_ready = await live_weight_setter_fleet_supports_protocol(
         session, minimum_protocol=_RANK_SHARES_PROTOCOL, now=now
     )
@@ -576,6 +584,7 @@ async def resolve_ledger_context(
         dethrone_band_clamp_fleet_ready=dethrone_band_clamp_fleet_ready,
         statistical_band_cap_fleet_ready=statistical_band_cap_fleet_ready,
         crown_gate_fleet_ready=crown_gate_fleet_ready,
+        crown_duel_fleet_ready=crown_duel_fleet_ready,
         crown_incumbent_fleet_ready=crown_incumbent_fleet_ready,
         reward_eligibility_fleet_ready=reward_eligibility_fleet_ready,
         rank_shares_fleet_ready=rank_shares_fleet_ready,
@@ -795,6 +804,7 @@ async def _ledger_entries(
     emit: Callable[[LedgerRow], bool] | None = None,
     registered_hotkeys: AbstractSet[str] | None = None,
     efficiency_projection: FrozenEfficiencyProjection | None = None,
+    duel_active: bool = False,
 ) -> tuple[list[LedgerRow], list[LedgerEntry]]:
     """Build the fold's ``LedgerEntry`` list from materialized rows.
 
@@ -817,6 +827,18 @@ async def _ledger_entries(
         session,
         agent_ids=[r.agent_id for r in rows],
         bench_version=canonical_version,
+    )
+    # Protocol 35: cross-season title-duel evidence, read only while the duel
+    # is served so every other ledger stays byte-identical.
+    duel_history = (
+        await duel_history_by_agent(
+            session,
+            agent_ids=[r.agent_id for r in rows],
+            bench_version=canonical_version,
+            seasons=CROWN_DUEL_SEASONS,
+        )
+        if duel_active
+        else {}
     )
     confirmation_by_seed = await confirmation_composites_by_seed(
         session,
@@ -934,6 +956,21 @@ async def _ledger_entries(
                 if continual_mean_active
                 and r.v9_confirmation is None
                 and r.agent_id in history
+                else None
+            ),
+            duel_history=(
+                [
+                    ConfirmationScoreRecord(
+                        seed=row.seed,
+                        composite=row.composite,
+                        validator_hotkey=row.validator_hotkey,
+                        bench_version=row.bench_version,
+                        signature=row.signature,
+                        dueling=_dueling_report(row.dueling),
+                    )
+                    for row in duel_history[r.agent_id]
+                ]
+                if r.v9_confirmation is None and duel_history.get(r.agent_id)
                 else None
             ),
             continual_aggregate_method=(
@@ -1195,6 +1232,13 @@ async def materialize_ledger_snapshot(
         if anchor.block_hash is not None
     )
     registered_hotkeys = await _registered_miner_hotkeys(app_state)
+    # The crown gate this ledger serves, title duel (protocol 35) included.
+    served_gate = crown_gate_for(
+        continual_settings,
+        fleet_protocol_ready=ledger_context.crown_gate_fleet_ready,
+        duel_fleet_ready=ledger_context.crown_duel_fleet_ready,
+    )
+    duel_active = served_gate is not None and served_gate.duel_window is not None
     rows, entries = await _ledger_entries(
         session,
         rows,
@@ -1205,6 +1249,7 @@ async def materialize_ledger_snapshot(
         requesting_validator_hotkey=requesting_validator_hotkey,
         registered_hotkeys=registered_hotkeys,
         efficiency_projection=efficiency_projection,
+        duel_active=duel_active,
         emit=(
             lambda row: (
                 row.eligible
@@ -1255,6 +1300,7 @@ async def materialize_ledger_snapshot(
             ),
             registered_hotkeys=registered_hotkeys,
             efficiency_projection=efficiency_projection,
+            duel_active=duel_active,
         )
     return _LedgerSnapshot(
         efficiency_context=(
@@ -1279,10 +1325,7 @@ async def materialize_ledger_snapshot(
             )
             else None
         ),
-        crown_gate=crown_gate_for(
-            continual_settings,
-            fleet_protocol_ready=ledger_context.crown_gate_fleet_ready,
-        ),
+        crown_gate=served_gate,
         rank_shares=(
             burn_settings.rank_shares
             if ledger_context.rank_shares_fleet_ready
@@ -1319,6 +1362,7 @@ async def materialize_ledger_snapshot(
             "dethrone_band_clamp": ledger_context.dethrone_band_clamp_fleet_ready,
             "statistical_band_cap": ledger_context.statistical_band_cap_fleet_ready,
             "crown_gate": ledger_context.crown_gate_fleet_ready,
+            "crown_duel": ledger_context.crown_duel_fleet_ready,
             "crown_incumbent": ledger_context.crown_incumbent_fleet_ready,
             "reward_eligibility": ledger_context.reward_eligibility_fleet_ready,
             "rank_shares": ledger_context.rank_shares_fleet_ready,
@@ -1463,6 +1507,11 @@ async def _require_statistical_cap_requester(
     split = bool(ledger.track_shares_bps)
     # And the crown gate: a sub-34 rejoiner walks the crown ungated.
     gated = ledger.crown_gate is not None
+    # And the title duel: a sub-35 rejoiner folds one season's capped z-test.
+    dueled = (
+        ledger.crown_gate is not None
+        and ledger.crown_gate.duel_window_pairs is not None
+    )
     if not capped and not curved and not split and not gated:
         return ledger
     heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
@@ -1494,6 +1543,11 @@ async def _require_statistical_cap_requester(
         raise HTTPException(
             status_code=428,
             detail="validator protocol 34 is required for the pinned crown gate",
+        )
+    if dueled and protocol < _CROWN_DUEL_PROTOCOL:
+        raise HTTPException(
+            status_code=428,
+            detail="validator protocol 35 is required for the pinned title duel",
         )
     return ledger
 
@@ -1943,6 +1997,7 @@ def _serve_last_known(
                     "confirmation_composites": None,
                     "confirmation_seeds": None,
                     "confirmation_history": None,
+                    "duel_history": None,
                     "efficiency_factor": None,
                     "effective_composite": (
                         None if had_factor else entry.effective_composite

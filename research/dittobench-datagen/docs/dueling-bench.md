@@ -453,6 +453,14 @@ cohort above 10 needs at least 4 epochs. At 25 it needs a longer season or
   profile and generation, with no run seed and no datagen half, so there is
   nothing to slice. A v16 bundle needs no dueling fields; the lane admits 16
   once the shared evidence set (`V9EvidenceBenchVersion`) includes it.
+- **Priced inference cost.** The one input that reads the whole run. The
+  scorer prices the run's chat, embedding and decision-lane tokens at locked
+  public rates and multiplies the composite by a factor floored at 0.6. The
+  factor rides inside `details.dueling.datagen_gate`, so it scales both halves
+  and leaves the column statistics raw. A generator's column means never move
+  with the agent's spend, and no generator case feeds a zeroing gate. See
+  `services/dittobench-api/PROTOCOL.md`, "Bench v16 priced inference cost
+  factor".
 - **Efficiency, outlier escalation, deferred source review, ATH anomaly.**
   Efficiency and gates use the datagen half only in v16.0. Outlier and anomaly
   thresholds are recalibrated on the v16 shadow distribution before

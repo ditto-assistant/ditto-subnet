@@ -121,6 +121,41 @@ describe("GateEvidencePanel (#1852 shadow verdict)", () => {
     );
   });
 
+  it("shows the bench v16 priced inference cost and its factor", () => {
+    const v16: GateEvidence = {
+      ...shadow,
+      bench_version: 16,
+      posture: "enforce",
+      priced_cost: {
+        contract_id: "priced-cost-v1",
+        posture: "enforce",
+        applied: true,
+        result: "priced",
+        window: "whole_run",
+        cases: 350,
+        normalized_cost_usd: 1.81699,
+        factor_bps: 6733,
+        applied_factor_bps: 6733,
+        rule_consistent: true,
+      },
+    };
+    render(() => <GateEvidencePanel evidence={v16} />);
+    const priced = document.querySelector('[data-gate-summary="priced_cost"]');
+    expect(priced?.textContent).toContain("$1.817 per 350 cases");
+    expect(priced?.textContent).toContain("factor 0.6733");
+    expect(priced?.textContent).not.toContain("not applied");
+    expect(
+      gateSummaryRows({
+        bench_version: 16,
+        priced_cost: {
+          posture: "enforce",
+          result: "insufficient_evidence",
+          rule_consistent: false,
+        },
+      }).map((row) => row.detail),
+    ).toEqual(["not priced (incomplete accounting) · disagrees with the published rule"]);
+  });
+
   it("lists per-finding counts with human labels, most frequent first, marking would-be zeros", () => {
     render(() => <GateEvidencePanel evidence={shadow} />);
     const notes = Array.from(document.querySelectorAll("[data-gate-note]")).map((node) =>

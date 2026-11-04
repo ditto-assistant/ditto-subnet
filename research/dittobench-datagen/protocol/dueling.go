@@ -41,7 +41,9 @@ func DuelingBenchVersion(v int) bool { return v >= DuelingMinBenchVersion }
 // challenge.DuelingComposite(DatagenRaw, DatagenGate, Columns, {OwnerKey}),
 // quantized to micros like every v9+ composite. DatagenRaw is the datagen half
 // before any gate (0.5 x tool_mean + 0.5 x memory_mean); DatagenGate is the
-// product of every gate factor, all computed from datagen cases only.
+// product of every gate factor, all computed from datagen cases only, and the
+// applied priced inference cost factor (details.priced_cost), which prices the
+// whole run and is floored above zero.
 // Generator case text never leaves the scorer: only these aggregates do.
 type DuelingDetails struct {
 	SeasonID        string                 `json:"season_id"`
