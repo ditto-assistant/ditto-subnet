@@ -79,7 +79,12 @@ const canaryDuelingSchema = z.object({
 })
 
 const unit = z.number().min(0).max(1)
-const v9GateSchema = z.object({ result: z.string().max(40), factor_bps: bps })
+// The closed verdict tokens the scoregates package signs (scoregates.Result*).
+const v9GateResultSchema = z.enum([
+  'passed', 'below_threshold', 'zero_inference', 'insufficient_evidence', 'not_applicable',
+  'latency_implausible', 'answer_stuffed', 'review_required', 'claim_provenance_flagged',
+])
+const v9GateSchema = z.object({ result: v9GateResultSchema, factor_bps: bps })
   .nullish().catch(null)
 
 // The factors that multiply a run's composite gate, so a canary's
@@ -97,14 +102,14 @@ const canaryGateFactorsSchema = z.object({
   audit_pairs: z.object({
     both_correct: count, base_only: count, transform_only: count, both_wrong: count,
   }).nullish().catch(null),
-  token_efficiency: z.object({ multiplier: z.number().min(0).max(2) }).nullish().catch(null),
+  token_efficiency: z.object({ multiplier: unit }).nullish().catch(null),
   v9_base: z.object({
     ordinary_composite_micros: count,
     effective_composite_micros: count,
     semantic_gate_factor_bps: bps,
     applied_gate_factor_bps: bps,
     score_gates: z.object({
-      rollout_mode: z.string().max(16),
+      rollout_mode: z.enum(['shadow', 'enforce']),
       model_use: v9GateSchema,
       authoritative_tool: v9GateSchema,
       model_dependence: v9GateSchema,

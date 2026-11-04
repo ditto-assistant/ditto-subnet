@@ -76,4 +76,21 @@ describe('benchmark canary boundary', () => {
       details: { priced_cost: { factor_bps: 'x' } } } })
     expect(broken.result?.details).toBeUndefined()
   })
+  it('drops out-of-contract gate verdicts, modes and multipliers', () => {
+    const base = { canary_id: id, agent_id: id, bench_version: 16, validator_hotkey: '5'.repeat(48),
+      slot_id: 'slot-0', artifact_sha256: 'a'.repeat(64), screened_image_sha256: 'b'.repeat(64),
+      dataset_sha256: 'c'.repeat(64), seed: '1', run_size: 'full', actor: 'staff', reason: 'Diagnostic',
+      issued_at: 'now', deadline: 'later', status: 'completed', finished_at: 'now',
+      failure_detail: null, authoritative: false }
+    const dueling = { season_id: 's', datagen_raw: 0.9, datagen_gate: 0.9, column_weight: 0.1, columns: [] }
+    const parse = (details: object) => benchmarkCanarySchema.parse({ ...base, result: { run_id: 'r',
+      bench_version: 16, composite: .5, tool_mean: .5, memory_mean: .5, n: 350, generated_at: 'now', details } })
+    const gates = (v9: object, extra: object = {}) => parse({ dueling, ...extra, v9_base: {
+      ordinary_composite_micros: 1, effective_composite_micros: 1, semantic_gate_factor_bps: 10000,
+      applied_gate_factor_bps: 10000, score_gates: v9 } }).result?.details?.gate_factors
+    expect(gates({ rollout_mode: 'disabled' })?.v9_base?.score_gates).toBeNull()
+    expect(gates({ rollout_mode: 'enforce', model_use: { result: 'free text', factor_bps: 0 } })
+      ?.v9_base?.score_gates?.model_use).toBeNull()
+    expect(gates({ rollout_mode: 'enforce' }, { token_efficiency: { multiplier: 1.5 } })?.token_efficiency).toBeNull()
+  })
 })
