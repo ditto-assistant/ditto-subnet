@@ -27929,12 +27929,22 @@ export interface components {
              */
             seed?: number | null;
             /**
+             * Seed Anchor Agent Id
+             * @description Season scope: champion the season's family is anchored on.
+             */
+            seed_anchor_agent_id?: string | null;
+            /**
+             * Seed Index
+             * @description Season scope: replicate index of the shared seed.
+             */
+            seed_index?: number | null;
+            /**
              * Seed Scope
-             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey.
+             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey. Season scope (protocol 35, title duels) is a dueling season's shared seed: ``crn_seed([seed_anchor_agent_id], bench_version, seed_index, dataset_seed_block_hash)``. Issued only to protocol-35 validators.
              * @default agent
              * @enum {string}
              */
-            seed_scope: "agent" | "validator";
+            seed_scope: "agent" | "validator" | "season";
             /**
              * Sha256
              * @description SHA-256 of the uploaded tarball, lowercase hex.
