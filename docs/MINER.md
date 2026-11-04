@@ -383,6 +383,14 @@ result.
   your prompting and reasoning budget for the active benchmark model; `GET
   /api/v1/public/bench/config` reports the authoritative contract. Your local
   practice key and model are not included in the submitted build context.
+- **Bench v16 (the dueling bench) is shipped and shadow-only.** A v16 run adds
+  a generator slice (5 columns x 35 cases from the top generator-competition
+  miners) to a smaller datagen half and scores one composite. It sets no
+  weights until the operator activates it
+  ([`benchmark-v16-rollout.md`](benchmark-v16-rollout.md)). Rehearse it with
+  `uv run ditto practice --bench-version 16`, which builds a local slice from
+  the public default generator only; live miner columns stay private until
+  their source is released.
 - The validator self-checks its `tool_endpoint` before scoring. A platform
   listener failure aborts and retries the run; if the listener is healthy and
   your harness never calls it, the run completes with the corresponding

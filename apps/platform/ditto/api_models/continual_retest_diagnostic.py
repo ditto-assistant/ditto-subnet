@@ -95,6 +95,17 @@ class RetestClaimability(BaseModel):
     """The provider-outage gate admits no new lease right now (open circuit
     cooling down, or its one half-open probe already claimed). The lane then
     issues nothing on any route and the decision is ``provider_outage``."""
+    retest_mode: Literal["continual", "season_duel"] = "continual"
+    """The lane's retest mode (``docs/title-duels.md``)."""
+    season_duel_seed_count: int | None = None
+    """Shared seeds in the current season's duel, or null when season duels do
+    not govern this version (``continual`` mode, or below the dueling floor)."""
+    season_duel_anchor_champion_id: UUID | None = None
+    """The champion the season's duel family is anchored on: the one that
+    opened the season, which a mid-season crown change does not move."""
+    season_duel_held_seed_count: int | None = None
+    """Duel seeds this agent already ran this season (a count; seeds stay
+    private). Equal to ``season_duel_seed_count`` once its duel is complete."""
     wave_cadence_tempos: int = 0
     """Tempo-aligned wave pacing in force (0: historical pacing)."""
     wave_seeds_per_window: int | None = None

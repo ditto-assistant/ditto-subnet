@@ -21788,6 +21788,12 @@ export interface components {
              */
             champion_standing_rank: number;
             /**
+             * Crown Duel Mode
+             * @default disabled
+             * @enum {string}
+             */
+            crown_duel_mode: "disabled" | "fleet_ready";
+            /**
              * Crown Gate Mode
              * @default disabled
              * @enum {string}
@@ -21837,11 +21843,22 @@ export interface components {
              */
             retest_eligibility_z: number;
             /**
+             * Retest Mode
+             * @default continual
+             * @enum {string}
+             */
+            retest_mode: "continual" | "season_duel";
+            /**
              * Rollout Standdown
              * @default capable_validators
              * @enum {string}
              */
             rollout_standdown: "off" | "capable_validators" | "all";
+            /**
+             * Season Duel Seeds
+             * @default 3
+             */
+            season_duel_seeds: number;
             /**
              * Statistical Band Mode
              * @default disabled
@@ -22372,6 +22389,11 @@ export interface components {
              * @description Only an entry inside this many places of the fold's official ranking may hold or take the crown.
              */
             champion_standing_rank: number;
+            /**
+             * Duel Window Pairs
+             * @description Protocol-35 title duel. When present, two bench >= 16 rows are compared on the newest this-many pair-masked (season, seed) pairs of duel_history across dueling seasons, and the challenger dethrones only past the frozen sequential boundary (docs/title-duels.md). Absent is the protocol-34 gate.
+             */
+            duel_window_pairs?: number | null;
             /**
              * Min Dethrone Confirmations
              * @description Shared-seed confirmations a challenger must hold against the champion before the paired comparison may move the crown.
@@ -23507,6 +23529,21 @@ export interface components {
             aggregate_active: boolean;
             /** Checksum */
             checksum: string;
+            /**
+             * Crown Duel Active
+             * @default false
+             */
+            crown_duel_active: boolean;
+            /**
+             * Crown Duel Fleet Ready
+             * @default false
+             */
+            crown_duel_fleet_ready: boolean;
+            /**
+             * Crown Duel Required Protocol
+             * @default 35
+             */
+            crown_duel_required_protocol: number;
             /**
              * Crown Gate Active
              * @default false
@@ -27892,12 +27929,22 @@ export interface components {
              */
             seed?: number | null;
             /**
+             * Seed Anchor Agent Id
+             * @description Season scope: champion the season's family is anchored on.
+             */
+            seed_anchor_agent_id?: string | null;
+            /**
+             * Seed Index
+             * @description Season scope: replicate index of the shared seed.
+             */
+            seed_index?: number | null;
+            /**
              * Seed Scope
-             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey.
+             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey. Season scope (protocol 35, title duels) is a dueling season's shared seed: ``crn_seed([seed_anchor_agent_id], bench_version, seed_index, dataset_seed_block_hash)``. Issued only to protocol-35 validators.
              * @default agent
              * @enum {string}
              */
-            seed_scope: "agent" | "validator";
+            seed_scope: "agent" | "validator" | "season";
             /**
              * Sha256
              * @description SHA-256 of the uploaded tarball, lowercase hex.
@@ -28312,6 +28359,11 @@ export interface components {
              * @description Activation marker for validator protocol v14+. When present, the weight fold uses the arithmetic mean of the three signed quorum scores plus one aggregate per completed continual cohort wave. Older validators ignore this additive field.
              */
             continual_aggregate_method?: "mean_after_quorum" | null;
+            /**
+             * Duel History
+             * @description Protocol-35 title duel evidence: this agent's bench >= 16 confirmation records from the newest dueling seasons, each with its signed details.dueling. Served only with crown_gate.duel_window_pairs; the dethrone test pairs them by (season, seed). Levels never read it.
+             */
+            duel_history?: components["schemas"]["ConfirmationScoreRecord"][] | null;
             /** @description Bench >= 16 only: the authoritative score's signed ``details.dueling`` aggregates (owner key, datagen half, slice columns). A v16 row without them never ranks or pays. */
             dueling?: components["schemas"]["DuelingReport"] | null;
             /**
@@ -29344,6 +29396,7 @@ export interface components {
             inference_cost?: components["schemas"]["InferenceCostSummary"] | null;
             /** Posture */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            priced_cost?: components["schemas"]["PricedCostSummary"] | null;
             /** Run Id */
             run_id: string;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
@@ -30648,6 +30701,129 @@ export interface components {
              * @default true
              */
             require_desired_era_drained: boolean;
+        };
+        /**
+         * PricedCostSummary
+         * @description Run-level bench v16+ priced inference cost (``details.priced_cost``).
+         *
+         *     The scorer prices the WHOLE run (datagen half and generator slice) at the
+         *     contract's locked public per-token rates, normalises it to a 350-case run
+         *     and maps it to ``factor_bps`` through the published curve
+         *     (``ditto_screening_protocol.priced_cost``). ``applied_factor_bps`` is what
+         *     the composite carries (inside ``details.dueling.datagen_gate``): the factor
+         *     under ``enforce``, 10000 under ``shadow`` or without complete accounting.
+         *     ``rule_consistent`` is Platform's own recomputation of the factor from the
+         *     reported token counts; ``False`` means the scorer's block disagrees with
+         *     the published rule.
+         */
+        PricedCostSummary: {
+            /**
+             * Applied
+             * @default false
+             */
+            applied: boolean;
+            /** Applied Factor Bps */
+            applied_factor_bps?: number | null;
+            /**
+             * Cases
+             * @default 0
+             */
+            cases: number;
+            /**
+             * Completion Cost Nano Usd
+             * @default 0
+             */
+            completion_cost_nano_usd: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /** Contract Id */
+            contract_id?: string | null;
+            /**
+             * Cost Nano Usd
+             * @default 0
+             */
+            cost_nano_usd: number;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /**
+             * Decision Calls
+             * @default 0
+             */
+            decision_calls: number;
+            /**
+             * Decision Cost Nano Usd
+             * @default 0
+             */
+            decision_cost_nano_usd: number;
+            /**
+             * Decision Input Tokens
+             * @default 0
+             */
+            decision_input_tokens: number;
+            /**
+             * Decision Output Tokens
+             * @default 0
+             */
+            decision_output_tokens: number;
+            /**
+             * Embedding Cost Nano Usd
+             * @default 0
+             */
+            embedding_cost_nano_usd: number;
+            /**
+             * Embedding Tokens
+             * @default 0
+             */
+            embedding_tokens: number;
+            /** Factor Bps */
+            factor_bps?: number | null;
+            /** Floor Bps */
+            floor_bps?: number | null;
+            /**
+             * Normalization Cases
+             * @default 0
+             */
+            normalization_cases: number;
+            /**
+             * Normalized Cost Nano Usd
+             * @default 0
+             */
+            normalized_cost_nano_usd: number;
+            /** Normalized Cost Usd */
+            normalized_cost_usd?: number | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /**
+             * Prompt Cost Nano Usd
+             * @default 0
+             */
+            prompt_cost_nano_usd: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Ratio Bps
+             * @default 0
+             */
+            ratio_bps: number;
+            /**
+             * Reference Nano Usd
+             * @default 0
+             */
+            reference_nano_usd: number;
+            /** Result */
+            result?: ("priced" | "insufficient_evidence") | null;
+            /** Rule Consistent */
+            rule_consistent?: boolean | null;
+            /** Source */
+            source?: string | null;
+            /** Window */
+            window?: string | null;
         };
         /** PrivateDatasetRequest */
         PrivateDatasetRequest: {
@@ -32768,7 +32944,7 @@ export interface components {
              * Method
              * @enum {string}
              */
-            method: "flat" | "unpaired" | "paired";
+            method: "flat" | "unpaired" | "paired" | "duel";
             /**
              * Paired Standard Error
              * @description Standard error of the per-seed challenger-minus-champion differences. Present only on a paired comparison. The statistical term is dethrone_z times this value, before high-score decay and the ceiling cap.
@@ -33209,8 +33385,9 @@ export interface components {
          * PublicGateEvidence
          * @description Run-level v13 gate verdict, published beside a validator's score.
          *
-         *     Aggregates only: the posture the gates ran under, the four gate summaries
-         *     (counts and rates), how many cases the gates would zero, and per-finding
+         *     Aggregates only: the posture the gates ran under, the gate summaries
+         *     (counts and rates), the bench 16+ priced inference cost and its factor,
+         *     how many cases the gates would zero, and per-finding
          *     counts. The per-case notes behind these counts are owner-only
          *     (``GET /me/agents/{agent_id}/gate-notes``).
          */
@@ -33248,6 +33425,7 @@ export interface components {
              * @description The most severe posture any v13 gate ran under: ``enforce`` means at least one gate changed scores; ``shadow`` means every gate only recorded what it would have done. Per-gate postures are on the gate summaries.
              */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            priced_cost?: components["schemas"]["PricedCostSummary"] | null;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
         };
         /**
@@ -37058,6 +37236,12 @@ export interface components {
              * @default false
              */
             provider_outage_active: boolean;
+            /**
+             * Retest Mode
+             * @default continual
+             * @enum {string}
+             */
+            retest_mode: "continual" | "season_duel";
             /** Route Position */
             route_position: number | null;
             /**
@@ -37067,6 +37251,12 @@ export interface components {
             route_priority: "champion" | "void_rerun" | "catchup" | "emission" | "extended" | "not_routed";
             /** Scheduled Round */
             scheduled_round: boolean | null;
+            /** Season Duel Anchor Champion Id */
+            season_duel_anchor_champion_id?: string | null;
+            /** Season Duel Held Seed Count */
+            season_duel_held_seed_count?: number | null;
+            /** Season Duel Seed Count */
+            season_duel_seed_count?: number | null;
             /** Spare Capacity Window */
             spare_capacity_window: boolean;
             /**

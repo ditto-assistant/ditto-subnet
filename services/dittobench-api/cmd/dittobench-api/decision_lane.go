@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -137,26 +138,102 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 	if traceCtx != "" {
 		upstream.Header.Set(traceContextHeader, traceCtx)
 	}
+	// Bench v16 priced cost: until the call settles, its request size stands
+	// in for its input tokens (an upper bound: a token is at least one byte),
+	// so a call still in flight when the run is priced is never free.
+	pending := uint64(len(body))
 	session.mu.Lock()
 	session.decisionDispatches++
+	session.decisionPendingBytes += pending
 	session.mu.Unlock()
 	response, err := b.client.Do(upstream)
 	if err != nil {
 		// No response at all: the same no-fault relay-unavailable class the
-		// chat lane reports.
+		// chat lane reports. A call cancelled by the harness or by run
+		// teardown may still have been metered, so it keeps its upper bound;
+		// a transport failure is not charged.
+		settleDecisionWithoutUsage(session, pending, requestCtx.Err() != nil)
 		writeError(w, http.StatusBadGateway, "decision lane unavailable")
 		return
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, decisionResponseLimit+1))
 	if err != nil || len(responseBody) > decisionResponseLimit {
+		// The relay answered, so it may have metered the call; with the body
+		// unreadable its usage is unknown. Keep the request-size bound, and
+		// a 2xx also counts as usage missing (recordDecisionUsage with nil).
+		if response.StatusCode >= 200 && response.StatusCode < 300 {
+			recordDecisionUsage(session, response.StatusCode, nil, pending)
+		} else {
+			settleDecisionWithoutUsage(session, pending, true)
+		}
 		writeError(w, http.StatusBadGateway, "decision lane unavailable")
 		return
 	}
+	recordDecisionUsage(session, response.StatusCode, responseBody, pending)
 	if retryAfter := response.Header.Get("Retry-After"); retryAfter != "" {
 		w.Header().Set("Retry-After", retryAfter)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 	_, _ = w.Write(responseBody)
+}
+
+// recordDecisionUsage settles one dispatched decision call (pending is its
+// request size, booked at dispatch) with the relay-reported usage
+// ({usage: {input_tokens, output_tokens}}, both required) for the bench v16
+// priced cost (v16_priced_cost.go). Usage is booked whatever the status, so a
+// call the relay metered and then answered with an error is still priced. A
+// 2xx without complete usage (including an unreadable body, passed as nil) is
+// counted as missing, which makes the run's priced cost insufficient evidence
+// rather than silently cheaper; an unreadable body also keeps the call's
+// request-size upper bound.
+func recordDecisionUsage(session *brokerSession, status int, responseBody []byte, pending uint64) {
+	var decoded struct {
+		Usage *struct {
+			InputTokens  *int64 `json:"input_tokens"`
+			OutputTokens *int64 `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	usageOK := responseBody != nil && json.Unmarshal(responseBody, &decoded) == nil && decoded.Usage != nil &&
+		decoded.Usage.InputTokens != nil && *decoded.Usage.InputTokens >= 0 &&
+		decoded.Usage.OutputTokens != nil && *decoded.Usage.OutputTokens >= 0
+	success := status >= 200 && status < 300
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	releaseDecisionPendingLocked(session, pending)
+	if success {
+		session.decisionCompleted++
+		if !usageOK {
+			session.decisionUsageMissing++
+		}
+	}
+	if usageOK {
+		session.decisionInputTokens += uint64(*decoded.Usage.InputTokens)
+		session.decisionOutputTokens += uint64(*decoded.Usage.OutputTokens)
+	} else if responseBody == nil {
+		// An unreadable body: keep the call's request-size upper bound.
+		session.decisionInputTokens += pending
+	}
+}
+
+// settleDecisionWithoutUsage settles a dispatched call that produced no usage.
+// keepBound books its request-size upper bound as input tokens (a cancelled
+// call the relay may still have metered); otherwise it is not charged.
+func settleDecisionWithoutUsage(session *brokerSession, pending uint64, keepBound bool) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	releaseDecisionPendingLocked(session, pending)
+	if keepBound {
+		session.decisionInputTokens += pending
+	}
+}
+
+// releaseDecisionPendingLocked removes a settled call's upper bound from the
+// in-flight total. The caller holds session.mu.
+func releaseDecisionPendingLocked(session *brokerSession, pending uint64) {
+	if pending > session.decisionPendingBytes {
+		pending = session.decisionPendingBytes
+	}
+	session.decisionPendingBytes -= pending
 }

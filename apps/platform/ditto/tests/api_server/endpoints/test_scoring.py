@@ -125,6 +125,38 @@ async def test_protocol_33_requester_cannot_read_gated_pin() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_protocol_34_requester_cannot_read_a_title_duel_pin() -> None:
+    now = datetime.now(UTC)
+    heartbeat_get = AsyncMock(
+        return_value=SimpleNamespace(protocol_version=34, seen_at=now)
+    )
+    session = cast(AsyncSession, SimpleNamespace(get=heartbeat_get))
+    ledger = LedgerResponse(
+        entries=[],
+        count=0,
+        crown_gate=CrownGateMarker(
+            min_dethrone_confirmations=3,
+            champion_standing_rank=3,
+            duel_window_pairs=15,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+    assert rejected.value.status_code == 428
+
+    heartbeat_get.return_value.protocol_version = 35
+    assert (
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+        is ledger
+    )
+
+
 @pytest.fixture(autouse=True)
 async def _live_era_has_activated(
     session_maker: async_sessionmaker[AsyncSession],
@@ -989,6 +1021,67 @@ class TestScoringLedger:
         assert ready.json()["crown_gate"] == {
             "min_dethrone_confirmations": 3,
             "champion_standing_rank": 3,
+        }
+
+    async def test_title_duel_requires_operator_gate_and_protocol_35(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A v34 weight setter would fold one season's capped test: the duel
+        window rides the gate only once every weight setter reports v35."""
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.449.0",
+                    protocol_version=34,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=ContinualRetestSettings(
+                        crown_gate_mode="fleet_ready", crown_duel_mode="fleet_ready"
+                    ).model_dump(mode="json"),
+                    checksum="ab" * 32,
+                    reason="decide the crown by title duel",
+                    actor="operator@example.com",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json()["crown_gate"] == {
+            "min_dethrone_confirmations": 3,
+            "champion_standing_rank": 3,
+        }
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 35
+        app.state.continual_retest_settings.invalidate()
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["crown_gate"] == {
+            "min_dethrone_confirmations": 3,
+            "champion_standing_rank": 3,
+            "duel_window_pairs": 15,
         }
 
     async def test_missing_auth_returns_401(

@@ -127,4 +127,3 @@ jobs:
 
       - name: Prove the synthetic OAuth fixture boundary
         run: node --test preview/cloud/oauth-fixture.test.cjs
-

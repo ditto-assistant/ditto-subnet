@@ -2,6 +2,57 @@
 
 <!-- version list -->
 
+## v0.451.0 (2026-11-04)
+
+### Features
+
+- **validator,platform**: Decide v16 crowns by a sequential title duel
+  ([#3378](https://github.com/ditto-assistant/ditto-subnet/pull/3378),
+  [`2b188c6`](https://github.com/ditto-assistant/ditto-subnet/commit/2b188c6647616dec6ac0b8faffdb4a2887fe1f77))
+
+
+## v0.450.0 (2026-11-04)
+
+### Documentation
+
+- **benchmark**: Design the no-inference (decision-only) competition mode
+  ([#3377](https://github.com/ditto-assistant/ditto-subnet/pull/3377),
+  [`3170cab`](https://github.com/ditto-assistant/ditto-subnet/commit/3170cab8a0b234854ffe4266e16bf6856ddb3e49))
+
+### Features
+
+- **platform,backroom**: Run season title duels instead of continual walks
+  ([#3376](https://github.com/ditto-assistant/ditto-subnet/pull/3376),
+  [`09f6a2e`](https://github.com/ditto-assistant/ditto-subnet/commit/09f6a2e9312c3699ba764e24c1cc795dad9670b4))
+
+
+## v0.449.0 (2026-11-04)
+
+### Features
+
+- **platform,model-relay**: Refuse chat on no-chat inference grants
+  ([#3375](https://github.com/ditto-assistant/ditto-subnet/pull/3375),
+  [`b008a5d`](https://github.com/ditto-assistant/ditto-subnet/commit/b008a5d90a10ed5d33210417cf769f951d7fbddd))
+
+
+## v0.448.0 (2026-11-04)
+
+### Features
+
+- **bench**: Enforce a priced inference cost factor in bench v16
+  ([#3369](https://github.com/ditto-assistant/ditto-subnet/pull/3369),
+  [`86bc89e`](https://github.com/ditto-assistant/ditto-subnet/commit/86bc89e773d63b81a4109985aacf659d89ccd35e))
+
+
+## v0.447.0 (2026-11-04)
+
+### Features
+
+- **miner**: Rehearse bench 16 locally with a public default generator slice
+  ([#3360](https://github.com/ditto-assistant/ditto-subnet/pull/3360),
+  [`4552730`](https://github.com/ditto-assistant/ditto-subnet/commit/455273058b194223638f212ce67f2fe3f1cd2c10))
+
+
 ## v0.446.0 (2026-11-04)
 
 ### Features

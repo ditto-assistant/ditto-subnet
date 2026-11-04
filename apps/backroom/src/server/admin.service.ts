@@ -4400,6 +4400,17 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
     const shares = gated.flatMap((evidence) =>
       typeof evidence.flagged_case_share === 'number' ? [evidence.flagged_case_share] : [],
     )
+    // Bench v16+ priced inference cost: the 350-case-normalised cost and the
+    // factor the composite carried, over the rows that priced their run.
+    const priced = gated.flatMap((evidence) =>
+      evidence.priced_cost?.result === 'priced' ? [evidence.priced_cost] : [],
+    )
+    const pricedCosts = priced.flatMap((cost) =>
+      typeof cost.normalized_cost_usd === 'number' ? [cost.normalized_cost_usd] : [],
+    )
+    const pricedFactors = priced.flatMap((cost) =>
+      typeof cost.applied_factor_bps === 'number' ? [cost.applied_factor_bps] : [],
+    )
     const version = {
       bench_version: benchVersion,
       score_count: rows.length,
@@ -4416,6 +4427,8 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
         previousMedian === null ? null : medianComposite - previousMedian,
       gate_posture: postures.size === 1 ? ([...postures][0] ?? null) : null,
       median_flagged_case_share: shares.length ? median(shares) : null,
+      median_priced_cost_usd: pricedCosts.length ? median(pricedCosts) : null,
+      median_priced_cost_factor_bps: pricedFactors.length ? median(pricedFactors) : null,
     }
     previousMedian = medianComposite
     return version
