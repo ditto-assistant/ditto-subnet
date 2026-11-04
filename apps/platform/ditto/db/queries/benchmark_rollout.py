@@ -36,7 +36,11 @@ from ditto.db.models import (
     ValidatorHeartbeat,
     ValidatorTicket,
 )
-from ditto.db.queries.dueling_season_window import season_scope_predicate
+from ditto.db.queries.dueling_season_window import (
+    DuelingSeasonWindow,
+    dueling_season_window,
+    season_scope_predicate,
+)
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
@@ -2271,6 +2275,111 @@ async def _issue_rollout_member_ticket(
         ticket.first_reported_at = None
     await session.flush()
     return ticket
+
+
+@dataclass(frozen=True)
+class ActivationBlockingQuorum:
+    """An open rollout's priority members still short of the 3/3 barrier.
+
+    These are the members ``rollout_retry_diagnostics`` reports as
+    ``blocks_activation`` that :func:`rollout_cohort_score_complete` still
+    waits for: the same frozen ``priority_cohort_target`` width and the same
+    season-scoped raw score count. Re-score lanes read it to decide whether
+    their work supplies a missing quorum score or would only re-buy evidence
+    while an activation-blocking member waits for the slot.
+    """
+
+    rollout: BenchmarkRollout
+    members: frozenset[UUID]
+    window: DuelingSeasonWindow | None
+
+    def supplies_missing_score(
+        self, agent_id: UUID, *, score_season_id: UUID | None
+    ) -> bool:
+        """Whether re-scoring this member's row from one validator adds a
+        quorum score: the member blocks, and that row no longer counts
+        (at bench v16+, its season left the comparable window)."""
+        if agent_id not in self.members:
+            return False
+        if self.window is None:
+            return False
+        return score_season_id not in self.window.comparable
+
+
+async def activation_blocking_quorum(
+    session: AsyncSession, *, bench_version: int
+) -> ActivationBlockingQuorum | None:
+    """The open rollout's blocking members at ``bench_version``, or ``None``.
+
+    ``None`` outside an open rollout, at another version, or once every
+    priority member holds its raw quorum, so callers leave non-rollout and
+    post-barrier ordering untouched.
+    """
+    rollout = await open_rollout(session)
+    if rollout is None or rollout.desired_version != bench_version:
+        return None
+    score_count = (
+        select(func.count(Score.validator_hotkey))
+        .where(
+            Score.agent_id == BenchmarkRolloutMember.agent_id,
+            Score.bench_version == rollout.desired_version,
+            await _desired_season_scope(session, rollout),
+        )
+        .correlate(BenchmarkRolloutMember)
+        .scalar_subquery()
+    )
+    members = frozenset(
+        await session.scalars(
+            select(BenchmarkRolloutMember.agent_id)
+            .join(Agent, Agent.agent_id == BenchmarkRolloutMember.agent_id)
+            .where(
+                BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
+                BenchmarkRolloutMember.position <= rollout.priority_cohort_target,
+                Agent.status.not_in(tuple(PERMANENTLY_INELIGIBLE_MEMBER_STATUSES)),
+                score_count < SCORING_QUORUM,
+            )
+        )
+    )
+    if not members:
+        return None
+    return ActivationBlockingQuorum(
+        rollout=rollout,
+        members=members,
+        window=await dueling_season_window(session, rollout.desired_version),
+    )
+
+
+async def blocking_quorum_lease_available(
+    session: AsyncSession,
+    *,
+    blocking: ActivationBlockingQuorum,
+    validator_hotkey: str,
+    now: datetime,
+) -> bool:
+    """Whether ``validator_hotkey`` could lease a blocking member's missing
+    quorum score right now through :func:`issue_rollout_ticket`.
+
+    The rollout lane's own candidate filter, narrowed to the priority
+    positions: a distinct validator that has not scored, does not hold, and is
+    not cooling down on a member whose scores plus live leases are below
+    quorum. A member whose third score is already leased elsewhere, or that
+    this validator cannot advance, does not hold the slot.
+    """
+    rollout = blocking.rollout
+    statement, _occupancy = _rollout_member_candidates(
+        rollout=rollout,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        extra_predicates=(
+            BenchmarkRolloutMember.position <= rollout.priority_cohort_target,
+        ),
+        score_season_scope=await _desired_season_scope(session, rollout),
+    )
+    return (
+        await session.scalar(
+            statement.with_only_columns(BenchmarkRolloutMember.agent_id).limit(1)
+        )
+    ) is not None
 
 
 async def _terminal_exhausted_rollout_tail(

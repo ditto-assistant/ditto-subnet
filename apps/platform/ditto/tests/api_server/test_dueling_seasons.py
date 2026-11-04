@@ -45,6 +45,8 @@ from ditto.api_server.generator_source_releases import (
     sync_generator_source_releases,
 )
 from ditto.db.models import (
+    BenchmarkRollout,
+    BenchmarkRolloutMember,
     DuelingSeason,
     DuelingSeasonBattery,
     DuelingSlicePreparation,
@@ -65,6 +67,7 @@ from ditto.db.queries.score_retests import (
     DUELING_ROTATION_RETEST_BASIS,
     activate_next_score_retest,
     queue_dueling_rotation_retests,
+    score_retest_queue_positions,
 )
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
@@ -1533,6 +1536,189 @@ class TestDuelingSeasonRotation:
         assert [a.season_key for a in served] == [second]
         assert {a.season_key for a in every} == {first, second}
         assert [a.season_key for a in legacy] == [NIL_SEASON_KEY]
+
+
+class TestRolloutBlockingRotationOrder:
+    """An open rollout's activation-blocking quorum work leases ahead of
+    season rotation re-scores of members whose quorum already counts.
+
+    Position 1 holds a complete in-window quorum (V1, V2, V3). Position 2
+    blocks activation: its V1 score is from an expired season and it has
+    never been scored by V3, so V3 is a distinct validator it still needs.
+    """
+
+    async def _seed(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        *,
+        rollout_status: str | None,
+    ) -> tuple[UUID, UUID]:
+        default = await _generator(
+            maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        expired, provisional, current = await _season_sequence(maker, default)
+        complete = await _seed_agent(maker, 1)
+        blocking = await _seed_agent(maker, 2)
+        now = datetime.now(UTC)
+        rows = {
+            complete: {"5BlkV1": provisional, "5BlkV2": provisional},
+            blocking: {"5BlkV1": expired, "5BlkV2": provisional},
+        }
+        rows[complete]["5BlkV3"] = provisional
+        async with maker() as session, session.begin():
+            for agent_id, scores in rows.items():
+                for validator, season_id in scores.items():
+                    session.add(
+                        _v16_score(agent_id, validator, season_id, composite=0.6)
+                    )
+                    session.add(
+                        ValidatorTicket(
+                            agent_id=agent_id,
+                            validator_hotkey=validator,
+                            bench_version=16,
+                            slot_id="slot-0",
+                            status=TicketStatus.SCORED,
+                            purpose=TicketPurpose.CANONICAL_QUORUM,
+                            purpose_revision=1,
+                            issued_at=now,
+                            deadline=now + timedelta(minutes=90),
+                            attempt_count=1,
+                            manual_retry_grants=0,
+                            infra_retry_grants=0,
+                            dueling_season_id=season_id,
+                            slice_sha256="ab" * 32,
+                        )
+                    )
+            if rollout_status is not None:
+                rollout_id = uuid4()
+                session.add(
+                    BenchmarkRollout(
+                        rollout_id=rollout_id,
+                        from_version=15,
+                        desired_version=16,
+                        status=rollout_status,
+                        cohort_size=5,
+                        rescore_cohort_target=5,
+                        priority_cohort_target=5,
+                        created_at=now - timedelta(hours=1),
+                        activated_at=(now if rollout_status == "activated" else None),
+                    )
+                )
+                await session.flush()
+                for position, agent_id in enumerate((complete, blocking), start=1):
+                    session.add(
+                        BenchmarkRolloutMember(
+                            rollout_id=rollout_id,
+                            agent_id=agent_id,
+                            position=position,
+                            frozen_miner_hotkey=f"5PanelMiner{position}",
+                            frozen_composite=0.6,
+                        )
+                    )
+        # The shadow season's rotation: the frozen cohort in position order.
+        async with maker() as session, session.begin():
+            await queue_dueling_rotation_retests(
+                session,
+                season_id=current,
+                bench_version=16,
+                cohort=[complete, blocking],
+                now=now,
+            )
+        return complete, blocking
+
+    @staticmethod
+    async def _promote(
+        maker: async_sessionmaker[AsyncSession], validator: str, slot_id: str
+    ) -> ValidatorTicket | None:
+        async with maker() as session, session.begin():
+            return await activate_next_score_retest(
+                session,
+                validator_hotkey=validator,
+                now=datetime.now(UTC),
+                supports_version=lambda version: version == 16,
+                slot_id=slot_id,
+                required_basis=DUELING_ROTATION_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+            )
+
+    async def test_a_rescore_never_takes_the_blocking_members_third_validator(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        complete, blocking = await self._seed(
+            session_maker, rollout_status="collecting"
+        )
+        # V3 is the only validator left that can add the blocking member's
+        # missing score; the complete member's re-score waits, still queued.
+        assert await self._promote(session_maker, "5BlkV3", "slot-0") is None
+        async with session_maker() as session:
+            assert await score_retest_queue_positions(
+                session, validator_hotkey="5BlkV3"
+            ) == {complete: 1}
+
+        # Once the blocking member's quorum lease is out on V3 the re-score
+        # runs on the next free slot.
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=blocking,
+                    validator_hotkey="5BlkV3",
+                    bench_version=16,
+                    slot_id="slot-0",
+                    status=TicketStatus.ISSUED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    purpose_revision=1,
+                    issued_at=now,
+                    deadline=now + timedelta(minutes=90),
+                    attempt_count=1,
+                    manual_retry_grants=0,
+                    infra_retry_grants=0,
+                )
+            )
+        ticket = await self._promote(session_maker, "5BlkV3", "slot-1")
+        assert ticket is not None and ticket.agent_id == complete
+
+    async def test_blocking_quorum_rescores_order_before_complete_members(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        complete, blocking = await self._seed(
+            session_maker, rollout_status="collecting"
+        )
+        # On V1 the blocking member's row expired, so its rotation re-score
+        # restores a quorum score and goes ahead of the champion-rank re-score.
+        async with session_maker() as session:
+            assert await score_retest_queue_positions(
+                session, validator_hotkey="5BlkV1"
+            ) == {blocking: 1, complete: 2}
+        ticket = await self._promote(session_maker, "5BlkV1", "slot-0")
+        assert ticket is not None and ticket.agent_id == blocking
+        # V2 can add nothing for the blocking member (both rows count), so
+        # rotation keeps its rank order there.
+        ticket = await self._promote(session_maker, "5BlkV2", "slot-0")
+        assert ticket is not None and ticket.agent_id == complete
+
+    @pytest.mark.parametrize("rollout_status", [None, "activated"])
+    async def test_no_change_outside_an_open_rollout(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        rollout_status: str | None,
+    ) -> None:
+        complete, blocking = await self._seed(
+            session_maker, rollout_status=rollout_status
+        )
+        async with session_maker() as session:
+            assert await score_retest_queue_positions(
+                session, validator_hotkey="5BlkV1"
+            ) == {complete: 1, blocking: 2}
+        ticket = await self._promote(session_maker, "5BlkV3", "slot-0")
+        assert ticket is not None and ticket.agent_id == complete
+        ticket = await self._promote(session_maker, "5BlkV1", "slot-0")
+        assert ticket is not None and ticket.agent_id == complete
 
 
 class TestDuelingReveal:
