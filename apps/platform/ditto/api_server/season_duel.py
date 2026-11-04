@@ -84,10 +84,10 @@ async def season_duel_anchor_champion(
     return champion_agent_id if first is None else first
 
 
-async def season_duel_entrant_excluded(
-    session: AsyncSession, *, bench_version: int, member_agent_id: UUID
-) -> bool:
-    """Whether ``member_agent_id`` sits out the open season's duel.
+async def season_duel_excluded_entrants(
+    session: AsyncSession, *, bench_version: int, agent_ids: Iterable[UUID]
+) -> frozenset[UUID]:
+    """The agents of ``agent_ids`` that sit out the open season's duel.
 
     A season extended as idle (:func:`ditto.api_server.dueling_seasons.
     idle_season_extension`) keeps its duel seeds, which have been public since
@@ -95,17 +95,33 @@ async def season_duel_entrant_excluded(
     first extension could have seen them, so it owes no duel seed in that
     season: its canonical runs keep their private per-agent seeds, and it
     joins the duel at the next rotation (its upload makes the next boundary
-    rotate). This is the rule ``docs/title-duels.md`` already applies to
-    uploads after a season's anchor."""
+    rotate). This mirrors the exposure rule ``docs/title-duels.md`` proposes
+    for canonical runs."""
     from ditto.api_server.dueling_seasons import open_season, season_first_extended_at
 
+    ids = list(dict.fromkeys(agent_ids))
+    if not ids:
+        return frozenset()
     first = season_first_extended_at(await open_season(session, bench_version))
     if first is None:
-        return False
-    created = await session.scalar(
-        select(Agent.created_at).where(Agent.agent_id == member_agent_id)
+        return frozenset()
+    return frozenset(
+        await session.scalars(
+            select(Agent.agent_id).where(
+                Agent.agent_id.in_(ids), Agent.created_at > first
+            )
+        )
     )
-    return created is not None and created > first
+
+
+async def season_duel_entrant_excluded(
+    session: AsyncSession, *, bench_version: int, member_agent_id: UUID
+) -> bool:
+    """Whether ``member_agent_id`` sits out the open season's duel
+    (:func:`season_duel_excluded_entrants`)."""
+    return member_agent_id in await season_duel_excluded_entrants(
+        session, bench_version=bench_version, agent_ids=(member_agent_id,)
+    )
 
 
 def season_duel_seeds(

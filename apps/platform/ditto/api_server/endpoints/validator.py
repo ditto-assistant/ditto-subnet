@@ -258,6 +258,7 @@ from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.api_server.season_duel import (
     season_duel_anchor_champion,
     season_duel_entrant_excluded,
+    season_duel_excluded_entrants,
     season_duel_owed,
     season_duel_seed_count,
     season_duel_seeds,
@@ -5722,6 +5723,12 @@ async def _unserved_catchup_members(
     """
     if duel_seed_count is not None:
         duel_members = tuple(dict.fromkeys((*wave_member_ids, *emission_member_ids)))
+        # An entrant sitting out an extended season's duel owes no seed, so it
+        # never takes catch-up route priority (see _top5_confirmation_seed_plan).
+        excluded = await season_duel_excluded_entrants(
+            session, bench_version=canonical_version, agent_ids=duel_members
+        )
+        duel_members = tuple(m for m in duel_members if m not in excluded)
         if not duel_members:
             return frozenset()
         if duel_history is None:

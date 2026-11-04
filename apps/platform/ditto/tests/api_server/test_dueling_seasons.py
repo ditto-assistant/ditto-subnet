@@ -626,7 +626,10 @@ class TestIdleSeasonExtension:
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from ditto.api_server.season_duel import season_duel_entrant_excluded
+        from ditto.api_server.season_duel import (
+            season_duel_entrant_excluded,
+            season_duel_excluded_entrants,
+        )
 
         _install(app, session_maker)
         await _open_lane(
@@ -719,10 +722,15 @@ class TestIdleSeasonExtension:
         # season 14 opens with a rotation.
         entrant = await _seed_agent(session_maker, 2)
         async with session_maker() as session:
-            # Uploaded after the first extension: no duel seeds this season.
+            # Uploaded after the first extension: no duel seeds this season,
+            # and no catch-up priority either (the batch form the catch-up
+            # planner reads).
             assert await season_duel_entrant_excluded(
                 session, bench_version=16, member_agent_id=entrant
             )
+            assert await season_duel_excluded_entrants(
+                session, bench_version=16, agent_ids=[incumbent, entrant]
+            ) == frozenset({entrant})
         assert await _pass_batteries(client) == 1
         await _tick(session_maker, 14 * _EPOCHS)
         seasons = {s.season_index: s for s in await _seasons(session_maker)}
@@ -791,6 +799,26 @@ class TestIdleSeasonExtension:
         await _tick(session_maker, 12 * _EPOCHS)
         seasons = {s.season_index: s for s in await _seasons(session_maker)}
         assert seasons[11].status == "closed" and seasons[12].status == "open"
+
+
+def test_first_extension_time_is_always_timezone_aware() -> None:
+    """Compared with Agent.created_at (TIMESTAMPTZ): never naive."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from ditto.api_server.dueling_seasons import season_first_extended_at
+
+    def season(first: object) -> Any:
+        return SimpleNamespace(detail={"idle_extensions": {"first_extended_at": first}})
+
+    aware = season_first_extended_at(season("2026-11-04T06:00:00+00:00"))
+    naive = season_first_extended_at(season("2026-11-04T06:00:00"))
+    assert aware == naive == datetime(2026, 11, 4, 6, tzinfo=UTC)
+    assert aware is not None and aware.tzinfo is not None
+    assert naive is not None and naive.tzinfo is not None
+    assert season_first_extended_at(None) is None
+    assert season_first_extended_at(cast(Any, SimpleNamespace(detail=None))) is None
+    assert season_first_extended_at(season(None)) is None
 
 
 class TestDuelingAdmin:

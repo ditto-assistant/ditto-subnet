@@ -67,7 +67,7 @@ import json
 import logging
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -696,7 +696,11 @@ def season_first_extended_at(season: DuelingSeason | None) -> datetime | None:
         IDLE_EXTENSIONS_KEY
     )
     first = record.get("first_extended_at") if isinstance(record, dict) else None
-    return datetime.fromisoformat(first) if isinstance(first, str) else None
+    if not isinstance(first, str):
+        return None
+    # Always aware: it is compared with TIMESTAMPTZ columns (Agent.created_at).
+    parsed = datetime.fromisoformat(first)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 async def idle_season_extension(
