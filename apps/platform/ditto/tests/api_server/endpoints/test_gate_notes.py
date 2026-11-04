@@ -177,6 +177,7 @@ _EXPECTED_STORED = {
         "cases_below_full_factor": 1,
         "mean_factor_bps": 9733,
     },
+    "priced_cost": None,
     "catalog_suppression_rate": 0.5,
     "gate_counts": {
         "answer_in_prompt": 1,

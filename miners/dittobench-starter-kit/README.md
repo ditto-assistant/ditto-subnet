@@ -772,6 +772,24 @@ produces a container serving that protocol on :8080.
 > locked decision model (TypeSafe Jev) choice or score questions, for example
 > which tools to offer the chat model. Use it however you like; it is metered
 > like chat. This kit accepts `bench_version` 15 on `/run`.
+>
+> **Bench v16 (shipped, shadow only, not live)** is the dueling bench: a
+> canonical run becomes a 175-case datagen half (the v15 surface at a smaller
+> profile, with connector tools that no longer say whether they are linked)
+> plus a 175-case generator slice, 5 columns of 35 cases from the top
+> generator-competition miners, scored as one composite
+> (`0.5 x datagen + 0.1 per column`). Slice cases reach your harness as
+> ordinary memory `/seed` and `/run` calls. This kit accepts `bench_version` 16
+> on `/run`. Rehearse it locally with
+> `uv run ditto practice --bench-version 16`: the rehearsal builds a local slice
+> from the **public default generator** only
+> (`miners/dittobench-generator-starter-kit`, all five columns, owner `""`, on
+> a throwaway season), sends it to the local scorer, and prints the composite
+> plus each column's mean. Live seasons pin miner generators whose cases stay
+> private until their source is released, so live columns differ.
+> `--no-slice` scores the datagen half alone. v16 does not set weights until
+> the operator activates it; see
+> [`benchmark-v16-rollout.md`](../../docs/benchmark-v16-rollout.md).
 
 1. Registration. You need a hotkey registered on subnet netuid 118 and TAO for
 the registration cost plus per-submission eval fees. `ditto upload` offers to

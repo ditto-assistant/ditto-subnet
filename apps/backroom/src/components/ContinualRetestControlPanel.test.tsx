@@ -36,6 +36,8 @@ const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   retest_cohort_max_size: 25,
   wave_cadence_tempos: 0,
   wave_seeds_per_window: 3,
+  retest_mode: 'continual' as const,
+  season_duel_seeds: 3,
 }
 
 function control(
@@ -90,6 +92,8 @@ function control(
       retest_cohort_max_size: true,
       wave_cadence_tempos: true,
       wave_seeds_per_window: true,
+      retest_mode: true,
+      season_duel_seeds: true,
     },
     cohort_sizing_supported: true,
   }
@@ -331,6 +335,8 @@ describe('ContinualRetestControlPanel', () => {
       retest_cohort_max_size: 25,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: 3,
+      retest_mode: 'continual' as const,
+      season_duel_seeds: 3,
     })
   })
 

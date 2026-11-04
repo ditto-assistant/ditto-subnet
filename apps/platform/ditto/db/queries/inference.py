@@ -65,6 +65,13 @@ def _decision_grant_stamps(
     }
 
 
+CHAT_MODE = "chat"
+NO_CHAT_MODE = "no_chat"
+"""``InferenceGrant.inference_mode`` values. A ``no_chat`` grant refuses every
+chat call as ``model_not_permitted`` and keeps embeddings and the decision lane
+(docs/no-inference-mode.md). Nothing mints one yet."""
+
+
 USAGE_ACCOUNTING_VERSION = 2
 """The metering contract new grants are booked under.
 
@@ -600,10 +607,12 @@ async def begin_inference_request(
     if _aware(grant.expires_at) <= now:
         return InferenceDecline.LEASE_EXPIRED
     if (
-        model not in grant.allowed_models
+        model not in grant.allowed_models or grant.inference_mode == NO_CHAT_MODE
         if request_kind == "chat"
         else grant.bench_version < 7 or model != grant.embedding_model
     ):
+        # A no-chat grant (docs/no-inference-mode.md) permits no chat model at
+        # all; embeddings stay open, and the decision lane lives on the relay.
         return InferenceDecline.MODEL_NOT_PERMITTED
     # This gate is what makes the terminal declines *persistent*. The first
     # refusal below sets the status; every subsequent call in the run lands

@@ -12584,6 +12584,217 @@ class TestTop5CatchUpConvergence:
         assert issued == 2, "ordinary quorum scoring must be untouched"
 
 
+class TestSeasonDuelLane:
+    """``retest_mode = season_duel`` (``docs/title-duels.md``, phase A).
+
+    The fixture era is v7; the season-duel gate is lowered onto it so the lane
+    runs end to end. Every other dueling predicate keeps its own v16 floor,
+    which is exactly what phase A needs: it changes only which seeds lease.
+    """
+
+    @pytest.fixture(autouse=True)
+    async def _v7_duel_lane(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ditto.api_server.season_duel as season_duel
+
+        monkeypatch.setattr(season_duel, "is_dueling_bench_version", lambda _v: True)
+        _install_dataset_generator(app)
+        await _install_ticket_inference(app, session_maker)
+
+    async def test_plan_is_the_season_duel_not_the_walk(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A depth-zero entrant owes the K duel seeds, never the whole walk; a
+        member already holding them owes nothing more this season."""
+        from ditto.api_server.crn import champion_anchored_seeds
+        from ditto.api_server.endpoints.validator import (
+            _current_emission_set,
+            _top5_confirmation_seed_plan,
+        )
+
+        champion, newcomer, settled = await _seed_catchup_board(
+            app, session_maker, settled_depth=4
+        )
+        async with session_maker() as session:
+            members = await _current_emission_set(
+                session, canonical_version=_BENCH_VERSION
+            )
+        member_ids = tuple(member.agent_id for member in members)
+        settled_member = next(
+            agent_id for agent_id in member_ids if agent_id not in (champion, newcomer)
+        )
+
+        async def plan_for(agent_id: UUID, duel: int | None) -> tuple[int, ...]:
+            async with session_maker() as session:
+                return await _top5_confirmation_seed_plan(
+                    session,
+                    champion_agent_id=champion,
+                    member_agent_id=agent_id,
+                    wave_member_ids=member_ids,
+                    cohort_member_ids=member_ids,
+                    canonical_version=_BENCH_VERSION,
+                    duel_seed_count=duel,
+                )
+
+        duel = tuple(
+            champion_anchored_seeds(champion, version=_BENCH_VERSION, max_seeds=3)
+        )
+        assert await plan_for(newcomer, None) == tuple(settled), "the walk: 4 seeds"
+        assert await plan_for(newcomer, 3) == duel, "the duel: exactly K seeds"
+        assert await plan_for(settled_member, 3) == ()
+        assert await plan_for(champion, 3) == ()
+
+    async def test_cohort_is_the_top_five_without_extension_or_band(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.api_server.continual_retest_settings import settings_from_row
+        from ditto.api_server.endpoints.validator import _current_retest_cohort
+        from ditto.db.queries.continual_retest_settings import (
+            latest_continual_retest_settings_revision,
+        )
+
+        await _seed_catchup_board(
+            app,
+            session_maker,
+            pool_composites=(0.90, 0.88, 0.86, 0.84, 0.82, 0.80, 0.78, 0.76),
+        )
+        await _set_retest_cohort_size(
+            session_maker,
+            8,
+            retest_eligibility_mode="statistical",
+            retest_cohort_max_size=12,
+            retest_mode="season_duel",
+        )
+        async with session_maker() as session:
+            settings = settings_from_row(
+                await latest_continual_retest_settings_revision(session)
+            )
+            emission, wave, cohort, challengers = await _current_retest_cohort(
+                session, canonical_version=_BENCH_VERSION, settings=settings
+            )
+        top_five = {m.agent_id for m in (*emission, *wave)}
+        assert {m.agent_id for m in cohort} == top_five
+        assert len(emission) == 5 and len(cohort) <= 10
+        assert challengers == frozenset()
+
+    async def test_a_mid_season_crown_keeps_the_opening_family(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The season opened under another king: the board champion now owes
+        that family's K seeds (not its own walk), split one per validator off
+        the reign-backoff cadence."""
+        from ditto.api_server.crn import champion_anchored_seeds
+        from ditto.db.models import ConfirmationSeedAnchor
+        from ditto.db.queries.confirmation_seed_anchors import NIL_SEASON_KEY
+
+        champion, _newcomer, _settled = await _seed_catchup_board(
+            app, session_maker, settled_depth=4
+        )
+        opener = await _seed_agent(
+            session_maker, status=AgentStatus.SCORED, name="opener", sha256="a3" * 32
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                ConfirmationSeedAnchor(
+                    champion_agent_id=opener,
+                    bench_version=_BENCH_VERSION,
+                    season_key=NIL_SEASON_KEY,
+                    ready_block=97,
+                    anchor_block=100,
+                )
+            )
+        await _set_retest_cohort_size(session_maker, 5, retest_mode="season_duel")
+        app.state.continual_retest_settings.invalidate()
+        for keypair in _KEYPAIRS:
+            response = await client.post(
+                "/api/v1/validator/top5-confirmation-job",
+                headers=_top5_auth_header(keypair),
+                json=_auto_top5_job_payload("slot-0", keypair=keypair),
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["agent_id"] == str(champion)
+        leased = await _leased_retest_seeds(session_maker, champion)
+        assert sorted(seed for seed in leased.values() if seed is not None) == sorted(
+            champion_anchored_seeds(opener, version=_BENCH_VERSION, max_seeds=3)
+        )
+
+
+async def test_season_duel_anchor_is_the_season_opener(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A crown change mid-season keeps the family on the opening champion."""
+    from ditto.api_server.season_duel import season_duel_anchor_champion
+    from ditto.db.models import ConfirmationSeedAnchor
+    from ditto.db.queries.confirmation_seed_anchors import NIL_SEASON_KEY
+
+    opener = await _seed_agent(
+        session_maker, status=AgentStatus.SCORED, name="opener", sha256="a1" * 32
+    )
+    usurper = await _seed_agent(
+        session_maker, status=AgentStatus.SCORED, name="usurper", sha256="a2" * 32
+    )
+    async with session_maker() as session:
+        assert (
+            await season_duel_anchor_champion(
+                session, bench_version=_BENCH_VERSION, champion_agent_id=usurper
+            )
+            == usurper
+        ), "no row yet: the current champion opens the season"
+    async with session_maker() as session, session.begin():
+        for agent_id, block in ((usurper, 200), (opener, 100)):
+            session.add(
+                ConfirmationSeedAnchor(
+                    champion_agent_id=agent_id,
+                    bench_version=_BENCH_VERSION,
+                    season_key=NIL_SEASON_KEY,
+                    ready_block=block - 3,
+                    anchor_block=block,
+                )
+            )
+    async with session_maker() as session:
+        assert (
+            await season_duel_anchor_champion(
+                session, bench_version=_BENCH_VERSION, champion_agent_id=usurper
+            )
+            == opener
+        )
+
+
+def test_season_duel_gate_is_inert_below_the_dueling_floor() -> None:
+    from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+    from ditto.api_server.season_duel import season_duel_seed_count
+
+    duel = ContinualRetestSettings(retest_mode="season_duel", season_duel_seeds=4)
+    assert season_duel_seed_count(duel, bench_version=15) is None
+    assert season_duel_seed_count(duel, bench_version=16) == 4
+    assert season_duel_seed_count(ContinualRetestSettings(), bench_version=16) is None
+
+
+def test_season_duel_unserved_counts_only_unleased_owed_seeds() -> None:
+    from ditto.api_server.season_duel import season_duel_owed, season_duel_unserved
+
+    a, b, c = uuid4(), uuid4(), uuid4()
+    assert season_duel_owed((1, 2, 3), (2, 9)) == (1, 3)
+    unserved = season_duel_unserved(
+        member_ids=(a, b, c),
+        duel_seeds=(1, 2, 3),
+        seeds_by_agent={a: (1, 2, 3), b: (1,), c: ()},
+        leases={b: {"v1": 2, "v2": 3}, c: {"v1": 1}},
+    )
+    assert unserved == frozenset({c})
+
+
 async def test_v30_treasury_capability_is_signed_and_cannot_be_retrofitted(
     app: FastAPI,
     client: httpx.AsyncClient,
