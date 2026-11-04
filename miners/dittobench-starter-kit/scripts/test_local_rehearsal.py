@@ -669,7 +669,7 @@ class LocalRehearsalTest(unittest.TestCase):
         """Materialise a starter-kit checkout with no services/ tree."""
         scripts = root / "miners" / "dittobench-starter-kit" / "scripts"
         scripts.mkdir(parents=True)
-        for name in ("local-rehearsal.py", "rehearsal_gates.py"):
+        for name in ("local-rehearsal.py", "rehearsal_gates.py", "rehearsal_cost.py"):
             shutil.copy(SCRIPT_PATH.with_name(name), scripts / name)
         assert not (root / "services").exists()
         return scripts / "local-rehearsal.py"
@@ -2151,6 +2151,170 @@ class GateReplayTest(unittest.TestCase):
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600, path)
             with self.assertRaisesRegex(LOCAL.RehearsalError, "dataset artifact"):
                 LOCAL.replay_gates(tmp, {"run_id": "missing"})
+
+
+COST = LOCAL.rehearsal_cost
+PRICED_COST_VECTORS = (
+    LOCAL.REPO_ROOT
+    / "services/dittobench-api/internal/scoregates/testdata/priced_cost_vectors.json"
+)
+
+
+class PricedCostEstimateTest(unittest.TestCase):
+    """The rehearsal's copy of the bench 16 priced cost rule and its meter."""
+
+    def test_rule_matches_the_shared_go_vectors(self) -> None:
+        vectors = json.loads(PRICED_COST_VECTORS.read_text(encoding="utf-8"))
+        for vector in vectors["vectors"]:
+            summary = vector["summary"]
+            if summary is None or summary["result"] != "priced":
+                continue
+            got = COST.priced_cost(cases=vector["cases"], **{
+                k: v for k, v in vector["usage"].items() if k != "decision_calls"
+            })
+            with self.subTest(vector=vector["name"]):
+                self.assertEqual(got["cost_nano_usd"], summary["cost_nano_usd"])
+                self.assertEqual(
+                    got["normalized_cost_nano_usd"], summary["normalized_cost_nano_usd"]
+                )
+                self.assertEqual(got["ratio_bps"], summary["ratio_bps"])
+                self.assertEqual(got["factor_bps"], summary["factor_bps"])
+        for point in vectors["factors"]:
+            self.assertEqual(COST.factor_bps(point["ratio_bps"]), point["factor_bps"])
+
+    def test_meter_counts_provider_usage_and_keeps_the_key(self) -> None:
+        import http.server
+        import threading
+
+        seen: list[dict[str, str]] = []
+
+        class Upstream(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_: object) -> None:
+                return
+
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                seen.append({"path": self.path, "auth": self.headers.get("Authorization", "")})
+                body = json.dumps(
+                    {"choices": [{"message": {"content": "ok"}}],
+                     "usage": {"prompt_tokens": 9000, "completion_tokens": 300}}
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        try:
+            meter = COST.CostMeter(f"http://127.0.0.1:{upstream.server_address[1]}/v1", "sk-local")
+            meter.start()
+            try:
+                env = COST.route_harness_through(
+                    meter, {"DITTOBENCH_PROVIDER": "openrouter", "OPENROUTER_API_KEY": "sk-local"}
+                )
+                self.assertEqual(env["DITTOBENCH_PROVIDER"], "platform")
+                self.assertNotIn("OPENROUTER_API_KEY", env)
+                base = env["DITTOBENCH_INFERENCE_BASE_URL"]
+                self.assertIn("/m/", base)
+                # Wrong token, other routes and a bad Content-Length are refused
+                # without reaching the upstream or the key.
+                port_root = base.split("/m/")[0]
+                for url, method, data, headers, code in (
+                    (port_root + "/v1/chat/completions", "POST", b"{}", {}, 404),
+                    (base + "/embeddings", "POST", b"{}", {}, 404),
+                    (base + "/chat/completions", "POST", b"{}", {"Content-Length": "4, 5"}, 400),
+                ):
+                    request = LOCAL.urllib.request.Request(
+                        url, data=data, method=method, headers=headers
+                    )
+                    with self.assertRaises(LOCAL.urllib.error.HTTPError) as caught:
+                        LOCAL.urllib.request.urlopen(request, timeout=10)
+                    self.assertEqual(caught.exception.code, code)
+                    caught.exception.close()
+                # A body without Content-Length (chunked) is refused, not
+                # forwarded empty.
+                host_port = base.split("//", 1)[1].split("/", 1)[0]
+                host, port = host_port.split(":")
+                path = "/" + base.split("//", 1)[1].split("/", 1)[1] + "/chat/completions"
+                with LOCAL.socket.create_connection((host, int(port)), timeout=10) as raw:
+                    raw.sendall(
+                        f"POST {path} HTTP/1.1\r\nHost: {host_port}\r\n"
+                        "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                        "2\r\n{}\r\n0\r\n\r\n".encode()
+                    )
+                    status_line = raw.makefile("rb").readline().decode()
+                self.assertIn(" 411 ", status_line)
+                for _ in range(2):
+                    request = LOCAL.urllib.request.Request(
+                        env["DITTOBENCH_INFERENCE_BASE_URL"] + "/chat/completions?trace=1",
+                        data=b'{"model":"openai/gpt-oss-20b","messages":[]}',
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with LOCAL.urllib.request.urlopen(request, timeout=10) as response:
+                        self.assertEqual(response.status, 200)
+            finally:
+                meter.stop()
+            # A keyless meter (platform / OpenAI-compatible upstream) passes the
+            # harness's own Authorization header through.
+            keyless = COST.CostMeter(
+                f"http://127.0.0.1:{upstream.server_address[1]}/v1", None
+            ).start()
+            try:
+                request = LOCAL.urllib.request.Request(
+                    keyless.base_url + "/chat/completions",
+                    data=b"{}",
+                    method="POST",
+                    headers={"Content-Type": "application/json", "Authorization": "Bearer ticket"},
+                )
+                with LOCAL.urllib.request.urlopen(request, timeout=10) as response:
+                    self.assertEqual(response.status, 200)
+            finally:
+                keyless.stop()
+        finally:
+            upstream.shutdown()
+            upstream.server_close()
+        self.assertEqual(
+            [s["path"] for s in seen],
+            ["/v1/chat/completions?trace=1"] * 2 + ["/v1/chat/completions"],
+        )
+        self.assertEqual([s["auth"] for s in seen], ["Bearer sk-local"] * 2 + ["Bearer ticket"])
+        estimate = COST.estimate(meter, {"n": 2})
+        assert estimate is not None
+        self.assertEqual(estimate["source"], "local_meter")
+        self.assertEqual(estimate["prompt_tokens"], 18_000)
+        self.assertEqual(estimate["completion_tokens"], 600)
+        # 18000 x 70 + 600 x 150 = 1,350,000 nano-USD over 2 cases -> $0.23625
+        # per 350 cases, under the $1.00 reference.
+        self.assertEqual(estimate["cost_nano_usd"], 1_350_000)
+        self.assertEqual(estimate["factor_bps"], 10_000)
+        text = COST.format_estimate(estimate, 16)
+        self.assertIn("cost factor:         1.0000", text)
+        self.assertIn("per 350 cases:       $0.2362", text)
+        self.assertIn("informational", COST.format_estimate(estimate, 15))
+
+    def test_scorer_block_wins_and_unmeterable_providers_say_so(self) -> None:
+        scored = {"result": "priced", "cases": 350, "cost_nano_usd": 1_816_989_710,
+                  "normalized_cost_nano_usd": 1_816_989_710, "factor_bps": 6733}
+        estimate = COST.estimate(None, {"details": {"priced_cost": scored}})
+        assert estimate is not None
+        self.assertEqual(estimate["source"], "scorer")
+        self.assertIn("cost factor:         0.6733", COST.format_estimate(estimate, 16))
+        self.assertIsNone(COST.estimate(None, {"n": 350}))
+        self.assertIn("not metered", COST.format_estimate(None, 16))
+        self.assertIsNone(COST.meter_for_environment({"DITTOBENCH_PROVIDER": "openrouter"}))
+        self.assertIsNone(COST.meter_for_environment({"DITTOBENCH_PROVIDER": "unknown"}))
+        # A meter that never started binds nothing and stops cleanly.
+        idle = COST.CostMeter("http://127.0.0.1:9/v1", None)
+        idle.stop()
+        with self.assertRaises(RuntimeError):
+            _ = idle.base_url
+
+    def test_no_cost_meter_flag_parses(self) -> None:
+        self.assertTrue(LOCAL.parse_args(["--no-cost-meter"]).no_cost_meter)
+        self.assertFalse(LOCAL.parse_args([]).no_cost_meter)
 
 
 if __name__ == "__main__":

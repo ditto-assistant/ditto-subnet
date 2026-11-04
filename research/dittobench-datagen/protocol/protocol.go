@@ -1408,6 +1408,10 @@ type RunDetails struct {
 	// column's case statistics, so the validator fold can recompute the
 	// composite under any owner mask. nil for every earlier contract.
 	Dueling *DuelingDetails `json:"dueling,omitempty"`
+	// PricedCost (bench_version >= PricedCostMinBenchVersion) is the run's
+	// inference priced at the contract's locked public rates and the cost
+	// factor it maps to (priced_cost.go). nil for every earlier contract.
+	PricedCost *PricedCostSummary `json:"priced_cost,omitempty"`
 }
 
 // TokenUsage is validator-observed model consumption for one isolated run.

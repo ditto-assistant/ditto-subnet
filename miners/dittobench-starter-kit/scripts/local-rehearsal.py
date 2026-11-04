@@ -27,6 +27,7 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+import rehearsal_cost  # noqa: E402  (sibling module: bench 16 priced cost estimate)
 import rehearsal_gates  # noqa: E402  (sibling module: the public v13 gate replay)
 
 DEFAULT_KIT_DIR = SCRIPT_DIR.parent
@@ -219,6 +220,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "copy the pass-off dataset artifact, transcript, completion log, and "
             "gate result into this directory for an offline re-run "
             "(scripts/rehearsal_gates.py)"
+        ),
+    )
+    parser.add_argument(
+        "--no-cost-meter",
+        action="store_true",
+        help=(
+            "do not route the harness's chat through the local cost meter; the "
+            "bench 16 priced cost estimate is then not printed"
         ),
     )
     parser.add_argument(
@@ -1413,11 +1422,24 @@ def run(args: argparse.Namespace) -> int:
 
         harness_env = harness_rehearsal_env(tmp, gates=args.gates)
         api_env = scorer_environment(tmp, broker_port)
+        # Bench 16 prices inference: meter the harness's chat so the summary
+        # can show the estimated cost and cost factor (rehearsal_cost.py).
+        cost_meter = (
+            None
+            if args.no_cost_meter
+            else rehearsal_cost.meter_for_environment(harness_env)
+        )
 
         harness: subprocess.Popen[bytes] | None = None
         api: subprocess.Popen[bytes] | None = None
         with harness_log.open("wb") as harness_output, api_log.open("wb") as api_output:
             try:
+                # Started inside the protected scope so the finally below
+                # always stops it; the meter binds nothing before start().
+                if cost_meter is not None:
+                    harness_env = rehearsal_cost.route_harness_through(
+                        cost_meter.start(), harness_env
+                    )
                 harness = subprocess.Popen(
                     [str(harness_binary), "serve", "--port", str(harness_port)],
                     cwd=kit_dir,
@@ -1506,6 +1528,9 @@ def run(args: argparse.Namespace) -> int:
                 if dueling_summary:
                     print(dueling_summary)
                 combined = dict(completed)
+                cost = rehearsal_cost.estimate(cost_meter, completed.get("report") or {})
+                combined["priced_cost_estimate"] = cost
+                print(rehearsal_cost.format_estimate(cost, args.bench_version))
                 if args.gates:
                     gates = replay_gates(tmp, completed)
                     combined["gates"] = gates
@@ -1557,6 +1582,8 @@ def run(args: argparse.Namespace) -> int:
             finally:
                 stop_process(api)
                 stop_process(harness)
+                if cost_meter is not None:
+                    cost_meter.stop()
 
 
 def main() -> int:
