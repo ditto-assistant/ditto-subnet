@@ -1286,6 +1286,13 @@ type RunDetails struct {
 	// value, so the applied factor stays reconstructable. nil when no twin groups
 	// ran.
 	MetamorphicConsistency *float64 `json:"metamorphic_consistency,omitempty"`
+	// Metamorphic (bench_version >= 16) is the applied metamorphic tier: the
+	// groups measured, how many split, and the factor the composite gate
+	// folded. From bench 16 a run with fewer than the v15 reference of 13
+	// groups is charged per split group against 13, so the rate above alone
+	// no longer reconstructs the factor. nil below bench 16 or when no twin
+	// group ran.
+	Metamorphic *MetamorphicTier `json:"metamorphic,omitempty"`
 	// TransformRobustness is the reproduce-under-transform audit result: the
 	// fraction of audit pairs the harness answered CONSISTENTLY, where each pair
 	// is a base case and the same underlying fact re-asked under a post-commit
@@ -1519,4 +1526,13 @@ type ScoreReport struct {
 	// (nil when unavailable), forwarded to the platform's anti-copy gate as
 	// advisory (unsigned) moderation metadata. It never affects the score.
 	StructuralFingerprint *CodeFingerprint `json:"structural_fingerprint,omitempty"`
+}
+
+// MetamorphicTier is details.metamorphic: the applied metamorphic-consistency
+// tier of the composite gate.
+type MetamorphicTier struct {
+	Groups          int     `json:"groups"`
+	SplitGroups     int     `json:"split_groups"`
+	ReferenceGroups int     `json:"reference_groups"`
+	Factor          float64 `json:"factor"`
 }

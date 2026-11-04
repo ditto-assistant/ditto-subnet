@@ -97,6 +97,9 @@ const canaryGateFactorsSchema = z.object({
   tool_efficiency: unit.nullish().catch(null),
   memory_over_call: unit.nullish().catch(null),
   metamorphic_consistency: unit.nullish().catch(null),
+  metamorphic: z.object({
+    groups: count, split_groups: count, reference_groups: count, factor: unit,
+  }).nullish().catch(null),
   conversational_sanity: unit.nullish().catch(null),
   transform_robustness: unit.nullish().catch(null),
   audit_pairs: z.object({
