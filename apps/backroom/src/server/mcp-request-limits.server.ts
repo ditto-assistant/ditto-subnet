@@ -13,11 +13,22 @@ export async function boundMcpRequest(request: Request, limit = MAX_MCP_BODY_BYT
   const reader = request.body.getReader()
   const chunks: Uint8Array[] = []
   let size = 0
+  let emptyReads = 0
   let coalesced: Uint8Array | undefined
   try {
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
+      if (value.byteLength === 0) {
+        if (++emptyReads >= MAX_BUFFERED_CHUNKS) {
+          await reader.cancel().catch(() => {})
+          return Response.json({ error: 'Could not read MCP request body' }, {
+            status: 400, headers: { 'Cache-Control': 'no-store' },
+          })
+        }
+        continue
+      }
+      emptyReads = 0
       size += value.byteLength
       if (size > limit) {
         await reader.cancel().catch(() => {})
@@ -33,7 +44,8 @@ export async function boundMcpRequest(request: Request, limit = MAX_MCP_BODY_BYT
         }
         coalesced.set(value, size - value.byteLength)
       } else {
-        chunks.push(value)
+        // A small view can otherwise retain an arbitrarily large backing buffer.
+        chunks.push(Uint8Array.from(value))
         if (chunks.length >= MAX_BUFFERED_CHUNKS) {
           // Bound per-chunk overhead for streams fragmented into tiny pieces.
           coalesced = new Uint8Array(Math.min(limit, Math.max(size, 1024)))

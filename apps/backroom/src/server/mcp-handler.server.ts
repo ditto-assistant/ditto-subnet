@@ -81,7 +81,8 @@ export class BackroomMcpHandler extends WorkerEntrypoint<
     if (!observer && !hasReadAccess(props)) {
       return insufficientScopeResponse(request, BACKROOM_READ_SCOPE)
     }
-    const bounded = await boundMcpRequest(request, observer ? MAX_OBSERVER_BODY_BYTES : MAX_MCP_BODY_BYTES)
+    const bodyLimit = observer ? MAX_OBSERVER_BODY_BYTES : MAX_MCP_BODY_BYTES
+    const bounded = await boundMcpRequest(request, bodyLimit)
     if (bounded instanceof Response) return bounded
     request = bounded
     if (observer && !await observerRequestAllowed(request)) {
@@ -104,7 +105,7 @@ export class BackroomMcpHandler extends WorkerEntrypoint<
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
-      maxRequestBodySize: MAX_MCP_BODY_BYTES,
+      maxRequestBodySize: bodyLimit,
     })
     await server.connect(transport)
     const response = await transport.handleRequest(request)
