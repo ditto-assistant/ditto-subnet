@@ -49,15 +49,48 @@ describe('benchmark canary boundary', () => {
       status: 'completed', finished_at: 'now', failure_detail: null, authoritative: false,
       result: { run_id: 'r', bench_version: 16, composite: .5, tool_mean: .5,
         memory_mean: .5, n: 350, generated_at: 'now',
-        details: { priced_cost: priced, dueling, transcript: 'private trace' } },
+        details: { priced_cost: priced, dueling, transcript: 'private trace',
+          tool_efficiency: 0.95, memory_over_call: 0.94, metamorphic_consistency: 1,
+          conversational_sanity: 1, transform_robustness: 0.9,
+          audit_pairs: { both_correct: 9, base_only: 1, transform_only: 0, both_wrong: 0 },
+          token_efficiency: { multiplier: 1, formula_version: 'private-formula' },
+          v9_base: { run_id: 'private-run', ordinary_composite_micros: 633747,
+            effective_composite_micros: 633747, semantic_gate_factor_bps: 10000,
+            applied_gate_factor_bps: 10000, score_gates_sha256: 'private-digest',
+            score_gates: { rollout_mode: 'shadow', threshold_profile: { id: 'private-profile' },
+              model_use: { result: 'passed', factor_bps: 10000, observed_requests: 9 },
+              answer_stuffing: { result: 'passed', factor_bps: 10000 } } } } },
     })
     expect(result.result?.details?.priced_cost).toMatchObject({ factor_bps: 6733, window: 'whole_run' })
     expect(result.result?.details?.dueling?.datagen_gate).toBe(0.6733)
     expect(result.result?.details?.dueling?.columns[0]).toEqual({ column_id: 'c0', n: 35, sum: 30, substituted: false })
+    expect(result.result?.details?.gate_factors).toMatchObject({
+      tool_efficiency: 0.95, memory_over_call: 0.94, transform_robustness: 0.9,
+      token_efficiency: { multiplier: 1 },
+      v9_base: { applied_gate_factor_bps: 10000, ordinary_composite_micros: 633747,
+        score_gates: { rollout_mode: 'shadow', model_use: { result: 'passed', factor_bps: 10000 } } },
+    })
     expect(JSON.stringify(result)).not.toContain('private')
     // A malformed block is dropped, not a failed read.
     const broken = benchmarkCanarySchema.parse({ ...result, result: { ...result.result,
       details: { priced_cost: { factor_bps: 'x' } } } })
     expect(broken.result?.details).toBeUndefined()
+  })
+  it('drops out-of-contract gate verdicts, modes and multipliers', () => {
+    const base = { canary_id: id, agent_id: id, bench_version: 16, validator_hotkey: '5'.repeat(48),
+      slot_id: 'slot-0', artifact_sha256: 'a'.repeat(64), screened_image_sha256: 'b'.repeat(64),
+      dataset_sha256: 'c'.repeat(64), seed: '1', run_size: 'full', actor: 'staff', reason: 'Diagnostic',
+      issued_at: 'now', deadline: 'later', status: 'completed', finished_at: 'now',
+      failure_detail: null, authoritative: false }
+    const dueling = { season_id: 's', datagen_raw: 0.9, datagen_gate: 0.9, column_weight: 0.1, columns: [] }
+    const parse = (details: object) => benchmarkCanarySchema.parse({ ...base, result: { run_id: 'r',
+      bench_version: 16, composite: .5, tool_mean: .5, memory_mean: .5, n: 350, generated_at: 'now', details } })
+    const gates = (v9: object, extra: object = {}) => parse({ dueling, ...extra, v9_base: {
+      ordinary_composite_micros: 1, effective_composite_micros: 1, semantic_gate_factor_bps: 10000,
+      applied_gate_factor_bps: 10000, score_gates: v9 } }).result?.details?.gate_factors
+    expect(gates({ rollout_mode: 'disabled' })?.v9_base?.score_gates).toBeNull()
+    expect(gates({ rollout_mode: 'enforce', model_use: { result: 'free text', factor_bps: 0 } })
+      ?.v9_base?.score_gates?.model_use).toBeNull()
+    expect(gates({ rollout_mode: 'enforce' }, { token_efficiency: { multiplier: 1.5 } })?.token_efficiency).toBeNull()
   })
 })
