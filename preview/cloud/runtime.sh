@@ -8,8 +8,9 @@ runtime_diagnostics() {
     # startup.sh's own trap is gone by the time this file runs, so repeat the
     # sentinel the controller watches for on the serial console.
     echo "sn118-preview: startup failed with status ${status}" >&2
-    docker compose -f preview/cloud/compose.yml --profile oauth-fixture ps >&2 || true
-    docker compose -f preview/cloud/compose.yml --profile oauth-fixture logs --no-color --tail=200 >&2 || true
+    docker compose -f preview/cloud/compose.yml ps >&2 || true
+    docker compose -f preview/cloud/compose.yml logs --no-color --tail=200 >&2 || true
+    docker compose -f preview/cloud/compose.yml --profile oauth-fixture logs --no-color --tail=200 oauth-fixture >&2 || true
   fi
   exit "$status"
 }
@@ -50,5 +51,6 @@ docker compose -f preview/cloud/compose.yml up -d platform dashboard backroom pr
 if [ "$PREVIEW_PR" = 3359 ] && [ "$PREVIEW_PROFILE" = stack ]; then
   docker compose -f preview/cloud/compose.yml up -d oauth-fixture
 fi
-docker compose -f preview/cloud/compose.yml --profile oauth-fixture ps
+docker compose -f preview/cloud/compose.yml ps
+docker compose -f preview/cloud/compose.yml --profile oauth-fixture ps oauth-fixture
 trap - EXIT
