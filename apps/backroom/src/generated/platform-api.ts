@@ -21788,6 +21788,12 @@ export interface components {
              */
             champion_standing_rank: number;
             /**
+             * Crown Duel Mode
+             * @default disabled
+             * @enum {string}
+             */
+            crown_duel_mode: "disabled" | "fleet_ready";
+            /**
              * Crown Gate Mode
              * @default disabled
              * @enum {string}
@@ -22383,6 +22389,11 @@ export interface components {
              * @description Only an entry inside this many places of the fold's official ranking may hold or take the crown.
              */
             champion_standing_rank: number;
+            /**
+             * Duel Window Pairs
+             * @description Protocol-35 title duel. When present, two bench >= 16 rows are compared on the newest this-many pair-masked (season, seed) pairs of duel_history across dueling seasons, and the challenger dethrones only past the frozen sequential boundary (docs/title-duels.md). Absent is the protocol-34 gate.
+             */
+            duel_window_pairs?: number | null;
             /**
              * Min Dethrone Confirmations
              * @description Shared-seed confirmations a challenger must hold against the champion before the paired comparison may move the crown.
@@ -23518,6 +23529,21 @@ export interface components {
             aggregate_active: boolean;
             /** Checksum */
             checksum: string;
+            /**
+             * Crown Duel Active
+             * @default false
+             */
+            crown_duel_active: boolean;
+            /**
+             * Crown Duel Fleet Ready
+             * @default false
+             */
+            crown_duel_fleet_ready: boolean;
+            /**
+             * Crown Duel Required Protocol
+             * @default 35
+             */
+            crown_duel_required_protocol: number;
             /**
              * Crown Gate Active
              * @default false
@@ -27903,12 +27929,22 @@ export interface components {
              */
             seed?: number | null;
             /**
+             * Seed Anchor Agent Id
+             * @description Season scope: champion the season's family is anchored on.
+             */
+            seed_anchor_agent_id?: string | null;
+            /**
+             * Seed Index
+             * @description Season scope: replicate index of the shared seed.
+             */
+            seed_index?: number | null;
+            /**
              * Seed Scope
-             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey.
+             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey. Season scope (protocol 35, title duels) is a dueling season's shared seed: ``crn_seed([seed_anchor_agent_id], bench_version, seed_index, dataset_seed_block_hash)``. Issued only to protocol-35 validators.
              * @default agent
              * @enum {string}
              */
-            seed_scope: "agent" | "validator";
+            seed_scope: "agent" | "validator" | "season";
             /**
              * Sha256
              * @description SHA-256 of the uploaded tarball, lowercase hex.
@@ -28323,6 +28359,11 @@ export interface components {
              * @description Activation marker for validator protocol v14+. When present, the weight fold uses the arithmetic mean of the three signed quorum scores plus one aggregate per completed continual cohort wave. Older validators ignore this additive field.
              */
             continual_aggregate_method?: "mean_after_quorum" | null;
+            /**
+             * Duel History
+             * @description Protocol-35 title duel evidence: this agent's bench >= 16 confirmation records from the newest dueling seasons, each with its signed details.dueling. Served only with crown_gate.duel_window_pairs; the dethrone test pairs them by (season, seed). Levels never read it.
+             */
+            duel_history?: components["schemas"]["ConfirmationScoreRecord"][] | null;
             /** @description Bench >= 16 only: the authoritative score's signed ``details.dueling`` aggregates (owner key, datagen half, slice columns). A v16 row without them never ranks or pays. */
             dueling?: components["schemas"]["DuelingReport"] | null;
             /**
@@ -32903,7 +32944,7 @@ export interface components {
              * Method
              * @enum {string}
              */
-            method: "flat" | "unpaired" | "paired";
+            method: "flat" | "unpaired" | "paired" | "duel";
             /**
              * Paired Standard Error
              * @description Standard error of the per-seed challenger-minus-champion differences. Present only on a paired comparison. The statistical term is dethrone_z times this value, before high-score decay and the ceiling cap.

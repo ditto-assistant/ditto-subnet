@@ -283,7 +283,19 @@ def _ledger_crown_gate(ledger: LedgerResponse) -> CrownGate | None:
         or not 1 <= standing <= 5
     ):
         return None
-    return CrownGate(min_shared_seeds=min_seeds, standing_rank=standing)
+    # Protocol 35: a served title-duel window. Out of range reads as absent, so
+    # every validator falls back to the protocol-34 gate identically.
+    window = getattr(served, "duel_window_pairs", None)
+    duel_window = (
+        window
+        if isinstance(window, int)
+        and not isinstance(window, bool)
+        and 2 <= window <= TOP5_MAX_CONFIRMATION_SEEDS
+        else None
+    )
+    return CrownGate(
+        min_shared_seeds=min_seeds, standing_rank=standing, duel_window=duel_window
+    )
 
 
 def _ledger_rank_shares(
@@ -574,6 +586,33 @@ def _confirmation_pin_binding_mismatch(
         if expected != pin.seed:
             return pin
     return None
+
+
+def _season_seed_matches(job: object) -> bool:
+    """Whether a season-scoped quorum seed (protocol 35) re-derives.
+
+    A title-duel quorum run scores a dueling season's shared seed, the same
+    champion-anchored CRN family a confirmation pin names, so it is verified
+    the same way: ``seed == crn_seed([seed_anchor_agent_id],
+    version=bench_version, k=seed_index, block_hash=dataset_seed_block_hash)``.
+    Any missing binding field is a mismatch: a season seed is never accepted
+    unverified, unlike a pre-derivation agent seed.
+    """
+    seed = getattr(job, "seed", None)
+    anchor = getattr(job, "seed_anchor_agent_id", None)
+    index = getattr(job, "seed_index", None)
+    block_hash = getattr(job, "dataset_seed_block_hash", None)
+    version = getattr(job, "bench_version", None)
+    if seed is None or anchor is None or index is None or not block_hash:
+        return False
+    if version is None or not crn_block_binding_active(int(version)):
+        return False
+    return (
+        crn_seed(
+            [str(anchor)], version=int(version), k=int(index), block_hash=block_hash
+        )
+        == seed
+    )
 
 
 def confirmation_failure_class(error: BaseException) -> str:
@@ -4786,8 +4825,15 @@ class ValidatorWorker:
                 f"benchmark v{job.bench_version} ticket did not declare its "
                 "policy-9 screened-image contract"
             )
+        if job.seed_scope == "season" and not _season_seed_matches(job):
+            raise ValidatorInfrastructureError(
+                f"season-scoped ticket seed {job.seed} for agent {job.agent_id} "
+                "does not re-derive from its season anchor; refusing to score",
+                code="seed_binding_mismatch",
+            )
         if (
-            job.seed is not None
+            job.seed_scope != "season"
+            and job.seed is not None
             and job.dataset_seed_block_hash
             and not seed_matches(
                 job.dataset_seed_block_hash,

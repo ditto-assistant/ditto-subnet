@@ -1605,7 +1605,7 @@ class PublicDethroneDecision(BaseModel):
     required_lead: Annotated[float, Field(ge=0.0)]
     margin_lead: Annotated[float, Field(ge=0.0)]
     statistical_lead: Annotated[float | None, Field(default=None, ge=0.0)]
-    method: Literal["flat", "unpaired", "paired"]
+    method: Literal["flat", "unpaired", "paired", "duel"]
     dethrones: bool
     required_score: float
     score_ceiling: Annotated[float, Field(gt=0.0)]
