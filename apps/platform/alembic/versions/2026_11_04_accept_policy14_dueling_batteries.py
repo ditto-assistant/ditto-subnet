@@ -59,7 +59,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # A passed policy-14 battery cannot be rewritten to 15. Refuse loudly
-    # instead of letting the constraint rebuild fail mid-downgrade.
+    # instead of letting the constraint rebuild fail mid-downgrade. The lock
+    # blocks battery writes until the rebuild commits, so none can land
+    # between the guard and the new check.
+    op.execute(f"LOCK TABLE {_TABLE} IN SHARE ROW EXCLUSIVE MODE")
     op.execute(
         """DO $$ BEGIN
           IF EXISTS (
