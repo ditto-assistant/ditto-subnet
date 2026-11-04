@@ -2026,7 +2026,7 @@ async def _issue_rollout_member_ticket(
     """Lease one frozen ``rollout`` member to ``validator_hotkey``'s slot."""
     from ditto.db.queries.tickets import (
         expire_overdue_tickets,
-        release_generator_round_dataset_pin,
+        release_foreign_dataset_pin,
         ticket_attempt_cap,
     )
 
@@ -2253,7 +2253,7 @@ async def _issue_rollout_member_ticket(
             ticket.seed_block_hash = None
             ticket.provider_outage_epoch = None
             ticket.provider_outage_attempted_epoch = None
-        release_generator_round_dataset_pin(ticket)
+        release_foreign_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1

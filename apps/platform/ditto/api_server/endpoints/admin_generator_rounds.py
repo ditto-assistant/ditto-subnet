@@ -47,6 +47,7 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundPanelSlot,
     GeneratorRoundSchedule,
     GeneratorRoundSkippedAgent,
+    GeneratorRoundSkipView,
     void_round_confirmation,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -61,6 +62,7 @@ from ditto.api_server.generator_competition import (
     load_settings,
 )
 from ditto.api_server.generator_rounds import (
+    FINAL_ROUND_STATUSES,
     ROUND_COMMITMENT_PUBLISHERS,
     ROUND_OPEN_CAPACITY_GRACE,
     GeneratorRoundLoop,
@@ -81,6 +83,7 @@ from ditto.api_server.generator_rounds import (
     round_summary,
     select_columns,
     select_round_panel,
+    skipped_round_views,
     standing_views,
     void_round,
 )
@@ -118,6 +121,13 @@ class GeneratorRoundLoopResponse(BaseModel):
     """``False`` when this process does not run the round driver."""
     status: GeneratorRoundLoopStatus | None
     schedule: GeneratorRoundSchedule | None
+    skip_unchanged_rounds: bool | None = None
+    """The governing ``skip_unchanged_rounds`` setting: rounds that would only
+    repeat the last scored round are ``skipped`` and spend no inference."""
+    skipped_rounds: int = 0
+    """Rounds ever skipped as unchanged."""
+    last_skipped_round: GeneratorRoundSkipView | None = None
+    """The newest skipped round and the scored round it carried forward."""
 
 
 class GeneratorRoundTickResponse(BaseModel):
@@ -178,14 +188,20 @@ async def admin_list_rounds(
 
 @router.get("/rounds/loop", response_model=GeneratorRoundLoopResponse)
 async def admin_round_loop(
-    request: Request, _admin: AdminDep
+    request: Request, _admin: AdminDep, session: SessionDep
 ) -> GeneratorRoundLoopResponse:
-    """The round driver's last tick: actions taken, errors, chain position."""
+    """The round driver's last tick: actions taken, errors, chain position,
+    and whether (and when last) it skipped an unchanged round."""
+    resolved = await load_settings(session)
+    skipped = await skipped_round_views(session, limit=1)
     loop = _loop(request)
-    if loop is None:
-        return GeneratorRoundLoopResponse(available=False, status=None, schedule=None)
     return GeneratorRoundLoopResponse(
-        available=True, status=loop.status, schedule=loop.schedule
+        available=loop is not None,
+        status=loop.status if loop is not None else None,
+        schedule=loop.schedule if loop is not None else None,
+        skip_unchanged_rounds=resolved.settings.skip_unchanged_rounds,
+        skipped_rounds=(await round_counts_by_status(session)).get("skipped", 0),
+        last_skipped_round=skipped[0] if skipped else None,
     )
 
 
@@ -319,7 +335,7 @@ async def admin_round_detail(
     row = await get_round(session, round_index)
     if row is None:
         raise HTTPException(status_code=404, detail="unknown round")
-    closed = row.status in {"scoring", "scored", "void"}
+    closed = row.status in {"scoring", "scored", "skipped", "void"}
     now = datetime.now(UTC)
     publications, elected = await commitment_publication_views(session, row, now=now)
     return AdminGeneratorRoundDetail(
@@ -415,7 +431,7 @@ async def admin_void_round(
             ),
         )
     row, reason, actor = await _locked_round(session, round_index, payload)
-    if row.status in {"scored", "void"}:
+    if row.status in FINAL_ROUND_STATUSES:
         raise HTTPException(status_code=409, detail=f"a {row.status} round is final")
     now = datetime.now(UTC)
     await expire_round_tickets(session, row, now=now, detail=f"operator void: {reason}")

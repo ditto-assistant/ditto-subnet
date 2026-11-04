@@ -203,16 +203,25 @@ def scoring_retry_ticket() -> ColumnElement[bool]:
     )
 
 
-def release_generator_round_dataset_pin(ticket: ValidatorTicket) -> None:
-    """Drop a generator round's dataset pin before a scoring lane reuses a row.
+# Lanes that pin a dataset of their own on the shared (agent, version,
+# validator) row instead of the validator-identity seed a scoring lease uses.
+_FOREIGN_DATASET_PIN_PURPOSES = frozenset(
+    {TicketPurpose.GENERATOR_ROUND, TicketPurpose.CONTINUAL_RETEST}
+)
 
-    The round lease pins the round's own dataset on the shared row. A scoring
-    lease re-derives its seed from the agent's dataset block and this
-    validator's identity at job time, so clearing the pin restores exactly the
-    one a prior scoring lease held. Without this, the scoring job is refused
-    because its seed does not match the validator identity. No-op otherwise.
+
+def release_foreign_dataset_pin(ticket: ValidatorTicket) -> None:
+    """Drop another lane's dataset pin before a scoring lane reuses a row.
+
+    A generator round pins the round's dataset, and a continual retest pins
+    its shared wave seed, on the same row a canonical score uses (the retest
+    row closes ``scored`` still holding that seed). A scoring lease re-derives
+    its seed from the agent's dataset block and this validator's identity at
+    job time, so clearing the pin restores exactly the one the prior scoring
+    lease held. Without this, the job is refused on every poll because its
+    seed does not match the validator identity. No-op for any other purpose.
     """
-    if ticket.purpose != TicketPurpose.GENERATOR_ROUND:
+    if ticket.purpose not in _FOREIGN_DATASET_PIN_PURPOSES:
         return
     ticket.seed = None
     ticket.dataset_sha256 = None
@@ -1092,7 +1101,7 @@ async def issue_ticket(
         else:
             # ``attempt_count`` already counts only scoring leases, so it
             # continues from its true value below.
-            release_generator_round_dataset_pin(ticket)
+            release_foreign_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1

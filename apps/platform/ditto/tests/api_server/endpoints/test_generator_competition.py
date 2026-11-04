@@ -93,6 +93,7 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "dueling_enabled": False,
         "rounds_per_season": 1,
         "dueling_shadow_bench_version": None,
+        "skip_unchanged_rounds": True,
     }
     base.update(overrides)
     return base
