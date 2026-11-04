@@ -1419,6 +1419,10 @@ material availability effect and do not require a model/scorer effect.
 _L2_POLICY_TAILS[13] = (
     _L2_POLICY_TAILS[12] + _L2_POLICY_V13_ADDENDUM + "\n" + DECISION_PATH_GUIDANCE
 )
+# V14 source-review invariants are identical to v13.  The only v14 change is
+# in the runtime oracle (zero-call agents now clear rather than escalate);
+# that is a runtime signal, not a source-code invariant.
+_L2_POLICY_TAILS[14] = _L2_POLICY_TAILS[13]
 
 
 def _l2_review_system_prompt(policy_version: int) -> str:
