@@ -572,7 +572,9 @@ export function crownContest(
   let pairedStandardError = finiteOrNull(decision.paired_standard_error);
   if (
     pairedStandardError == null &&
-    isSharedSeedMethod(decision.method) &&
+    // Only the one-season paired band is z × SE; a duel's boundary is c(n) × SE
+    // and always ships its own standard error.
+    decision.method === "paired" &&
     statisticalLead != null &&
     z != null &&
     z > 0
