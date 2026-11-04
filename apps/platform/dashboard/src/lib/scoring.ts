@@ -572,6 +572,8 @@ export function crownContest(
   let pairedStandardError = finiteOrNull(decision.paired_standard_error);
   if (
     pairedStandardError == null &&
+    // Only the one-season paired band is z × SE; a duel's boundary is c(n) × SE
+    // and always ships its own standard error.
     decision.method === "paired" &&
     statisticalLead != null &&
     z != null &&
@@ -589,7 +591,7 @@ export function crownContest(
   let bindingTerm: CrownContest["bindingTerm"] = "unknown";
   if (marginLead != null && statisticalLead != null) {
     bindingTerm = statisticalLead > marginLead ? "statistical" : "margin";
-  } else if (decision.method === "paired" || decision.method === "unpaired") {
+  } else if (isSharedSeedMethod(decision.method) || decision.method === "unpaired") {
     bindingTerm = "statistical";
   } else if (decision.method === "flat") {
     bindingTerm = "margin";
@@ -621,7 +623,7 @@ export function signedScore(value: number): string {
 
 /** One-line reason the required lead is larger than the flat margin. */
 export function crownWhyHigh(contest: CrownContest): string {
-  if (contest.bindingTerm === "statistical" && contest.method === "paired") {
+  if (contest.bindingTerm === "statistical" && isSharedSeedMethod(contest.method)) {
     const n =
       contest.sharedSeedCount != null
         ? contest.sharedSeedCount +
@@ -633,7 +635,9 @@ export function crownWhyHigh(contest: CrownContest): string {
         : "seed-to-seed variance is high";
     const band =
       contest.statisticalLead != null
-        ? ", so the 95% band (1.64 × SE) starts at " + fxScore(contest.statisticalLead)
+        ? contest.method === "duel"
+          ? ", so the sequential title-duel boundary starts at " + fxScore(contest.statisticalLead)
+          : ", so the 95% band (1.64 × SE) starts at " + fxScore(contest.statisticalLead)
         : "";
     const margin = contest.marginLead != null ? num(contest.marginLead) : "the flat margin";
     return (
@@ -699,25 +703,36 @@ export function crownDifferenceText(contest: CrownContest): string {
   );
 }
 
+/** Paired shared-seed crown tests: one season ("paired") or a title duel. */
+export function isSharedSeedMethod(method: string | undefined): boolean {
+  return method === "paired" || method === "duel";
+}
+
 /** Metric label for the challenger's crown-test score. */
 export function crownChallengerScoreLabel(method: string | undefined): string {
-  return method === "paired" ? "Shared-seed mean" : "Challenger score";
+  return isSharedSeedMethod(method) ? "Shared-seed mean" : "Challenger score";
 }
 
 /** Metric label for the incumbent's crown-test score. */
 export function crownChampionScoreLabel(method: string | undefined): string {
-  return method === "paired" ? "Champion shared-seed mean" : "Champion score";
+  return isSharedSeedMethod(method) ? "Champion shared-seed mean" : "Champion score";
 }
 
 /** Metric label for required_score. Paired bars are not the Score column. */
 export function crownThresholdLabel(method: string | undefined): string {
-  if (method === "paired") return "Shared-seed bar";
+  if (isSharedSeedMethod(method)) return "Shared-seed bar";
   if (method === "unpaired") return "Score bar";
   return "Dethrone bar";
 }
 
 /** One-line rule: rank number vs crown test. */
 export function crownComparisonNote(method: string | undefined): string {
+  if (method === "duel") {
+    return (
+      "The Score column ranks the board. The crown is a title duel: shared-seed head-to-heads " +
+      "accumulated across dueling seasons, and close calls keep the King."
+    );
+  }
   if (method === "paired") {
     return (
       "The Score column ranks the board. The crown is a head-to-head on shared confirmation " +
@@ -748,7 +763,7 @@ export function crownScaleNote(
   const ownSeed = leader.composite;
   const ownSeedDiffers = Number.isFinite(ownSeed) && Math.abs(ownSeed - boardScore) >= SCORE_EPS;
 
-  if (contest.method === "paired") {
+  if (isSharedSeedMethod(contest.method)) {
     let text = "Do not compare the Score column (" + fxScore(boardScore) + ")";
     if (contest.requiredScore != null) {
       text += " to the shared-seed bar (>" + fxScore(contest.requiredScore) + ")";
@@ -791,7 +806,7 @@ export function crownScaleNote(
 export function crownHeldRowTip(contest: CrownContest): string {
   const threshold =
     contest.requiredScore != null
-      ? contest.method === "paired"
+      ? isSharedSeedMethod(contest.method)
         ? " The shared-seed mean must exceed " +
           fxScore(contest.requiredScore) +
           ". The Score column is a different number."

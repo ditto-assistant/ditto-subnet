@@ -72,6 +72,13 @@ PROVISIONAL_INCUMBENT_PROTOCOL = 28
 # minimum shared-seed confirmations a challenger needs before the paired
 # comparison may move the crown, and the official standing the crown must keep.
 CROWN_GATE_PROTOCOL = 34
+# The first validator heartbeat protocol whose fold reads
+# ``crown_gate.duel_window_pairs`` and ``LedgerEntry.duel_history``: the
+# sequential cross-season title duel (``docs/title-duels.md``, phase B).
+CROWN_DUEL_PROTOCOL = 35
+# Dueling seasons whose confirmation records the ledger serves as title-duel
+# evidence: five 3-seed seasons fill the 15-pair window.
+CROWN_DUEL_SEASONS = 5
 DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
 DEFAULT_CHAMPION_STANDING_RANK = 3
 # A challenger cannot hold more shared seeds than the continual lane retains:
@@ -133,6 +140,20 @@ class ContinualRetestSettings(BaseModel):
     on the paired statistic over at least :attr:`min_dethrone_confirmations`
     shared seeds, and only within the top :attr:`champion_standing_rank`
     official places. There is deliberately no unconditional override.
+    """
+
+    crown_duel_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Whether two bench >= 16 rows dethrone on the sequential title duel
+    (protocol 35, ``docs/title-duels.md``).
+
+    ``disabled`` is the protocol-34 gate and the exact rollback: a challenger
+    dethrones on one season's paired statistic with the capped fixed-z band.
+    ``fleet_ready`` adds ``duel_window_pairs`` to the served crown gate and
+    ``duel_history`` to the ledger once every recently-live weight setter
+    reports protocol 35, and only while the crown gate itself is served: the
+    newest 15 pair-masked ``(season, seed)`` pairs across dueling seasons
+    must clear ``max(margin x decay, c(n) x se)``. Close calls keep the king.
+    There is deliberately no unconditional override.
     """
 
     min_dethrone_confirmations: Annotated[
@@ -407,6 +428,9 @@ class EffectiveContinualRetestSettings(BaseModel):
     crown_gate_fleet_ready: bool = False
     crown_gate_active: bool = False
     crown_gate_required_protocol: int = CROWN_GATE_PROTOCOL
+    crown_duel_fleet_ready: bool = False
+    crown_duel_active: bool = False
+    crown_duel_required_protocol: int = CROWN_DUEL_PROTOCOL
     ledger_pin: LedgerPinStatus | None = None
     """The pin validators are folding right now, or ``None`` when no pin has
     ever been taken (bootstrap) or the mode is ``live``."""

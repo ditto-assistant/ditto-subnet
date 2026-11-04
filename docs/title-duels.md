@@ -176,11 +176,11 @@ the noise is the run, not the case. If wanted later, it needs a signed per-case
 vector (about 350 bits per run) in the scorer report, the ledger and both
 folds.
 
-### 4. Rotation re-scores are the duel runs (Phase B)
+### 4. Rotation re-scores are the duel runs (Phase B2)
 
 v16 needs a same-season quorum for each cohort member, or the member's row goes
 provisional and then expires. Today that is the rotation re-score (#3362),
-which re-runs each member's three canonical seeds. Phase B runs those three
+which re-runs each member's three canonical seeds. Phase B2 runs those three
 rotation re-scores on the season's K = 3 shared seeds instead (quorum validator
 `i` takes seed `i`), and records each accepted run as both the quorum `Score`
 and the seed's confirmation record. One run is then both level evidence and
@@ -207,11 +207,11 @@ cases.
 | Today (v15 continual) | n/a | 180–200 | 266–296 |
 | v16 as merged: rotation 5×3 + walk 8×8 | ~80 | ~400 | ~590 |
 | **Phase A**: rotation 5×3 + duel 5×3 | 30 (+3 per mid-season entrant) | ~150 | ~222 |
-| **Phase B**: rotation on duel seeds, 5×3 | 15 | **~75** | **~111** |
+| **Phase B2**: rotation on duel seeds, 5×3 | 15 | **~75** | **~111** |
 
-Phase B saves about $170 a day against today (−60%, about $62k a year) and
+Phase B2 saves about $170 a day against today (−60%, about $62k a year) and
 about $480 a day against v16 as merged. New uploads' canonical runs are
-unchanged in count; in Phase B they also count as duel evidence.
+unchanged in count; in Phase B2 they also count as duel evidence.
 
 ### 6. Parity and rollout
 
@@ -224,28 +224,44 @@ receipt fails with `ledger_pin_mismatch`.
   they are folded. It is inert below the dueling floor, so v15 is untouched.
   Backroom shows and sets it; the diagnostic reports the season's duel seeds,
   anchor and per-member coverage.
-- **Phase B (both folds).**
-  - Validator protocol 35 adds the sequential dethrone (`ditto/validator/weights.py`)
-    and season-seeded quorum verification (`worker.py`).
-  - Platform mirrors the fold (`apps/platform/ditto/api_server/koth.py`). Both
-    folds run the shared `ditto/tests/fixtures/crown_gate_cases.json` cases,
-    extended with sequential cases; #3351's pair-mask and season cases must
-    keep passing unchanged.
-  - Platform serves `crown_duel` only under `crown_duel_mode: fleet_ready`,
-    after every recently-live weight setter reports protocol 35, exactly like
-    `crown_gate_mode`. Season-seeded quorum leases go only to protocol-35
-    validators.
-  - Phase B is active only after compat-2 adoption: release, deploy, and every
-    validator updated.
+- **Phase B (both folds, protocol 35).** The duel rides the crown gate, so
+  every place that threads the gate carries it.
+  - **Shared arithmetic.** Pair grouping, window order, moments and the frozen
+    `c(n)` table live once, in
+    `packages/ditto-screening-protocol/ditto_screening_protocol/title_duel.py`.
+  - **Validator** (`ditto/validator/weights.py`). `CrownGate.duel_window`;
+    `_duel_beats` decides the comparison for two v16 rows, and standing
+    replacement counts duel pairs.
+  - **Platform** (`apps/platform/ditto/api_server/koth.py`). The same rule,
+    exposed as `DethroneDecision.method = "duel"` for the board.
+  - **Wire.** `crown_gate.duel_window_pairs` (15). `LedgerEntry.duel_history`
+    holds the entry's not-voided v16 confirmation records from the
+    `CROWN_DUEL_SEASONS` = 5 newest seasons. Both are served only under
+    `crown_duel_mode: fleet_ready`, only with the gate, and only after every
+    recently-live weight setter reports protocol 35. A requester below 35 gets
+    428, and a stale replay drops both.
+  - **Parity.** Both folds run the shared
+    `ditto/tests/fixtures/crown_gate_cases.json` `duel_cases` (expectations
+    computed independently). #3351's pair-mask and season cases pass
+    unchanged.
+  - **Rollout.** Phase B is active only after compat-2 adoption: release,
+    deploy and every validator updated.
+- **Phase B2 (follow-up).** Run rotation re-scores, and new uploads that
+  predate the season anchor, on the season's shared seeds. This needs a
+  validator-verified `seed_scope: "season"` quorum lease, since today the
+  validator re-derives every quorum seed with `derive_validator_seed`. It takes
+  the run budget from about 150 to about 75 a day and changes no fold.
 
 ### 7. Phases
 
 - **Phase A**: ship `retest_mode: season_duel` (Platform scheduling). Flip it
   after v16 activates and stabilises. It costs half of v16-as-merged and is no
   worse on fairness.
-- **Phase B**: ship protocol 35 (sequential dethrone plus season-seeded quorum
-  runs). Enable `crown_duel_mode: fleet_ready` once the fleet reports
-  protocol 35. This is where the coin flip ends.
+- **Phase B**: ship protocol 35 (the sequential dethrone). Enable
+  `crown_duel_mode: fleet_ready` once the fleet reports protocol 35. This is
+  where the coin flip ends.
+- **Phase B2**: season-seeded quorum runs, so rotation re-scores are the duel
+  runs (about 75 runs a day).
 
 Operator payloads (Peyton applies; never flipped by the build):
 

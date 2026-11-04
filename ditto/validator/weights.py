@@ -42,6 +42,14 @@ from ditto_screening_protocol.dueling import (
     dueling_composite,
     is_dueling_bench_version,
 )
+from ditto_screening_protocol.title_duel import (
+    DuelStatistic,
+    collapse_records,
+    duel_pairs,
+    duel_required_lead,
+    duel_statistic,
+    season_seed_key,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -92,10 +100,19 @@ class CrownGate:
     against it, or by the rank-1 entry when none qualifies.
 
     ``None`` everywhere this is accepted is the exact pre-34 fold.
+
+    ``duel_window`` (protocol 35, ``docs/title-duels.md``) replaces, for two
+    bench >= 16 rows, the single-season paired test with the sequential title
+    duel: the newest ``duel_window`` pair-masked ``(season, seed)`` pairs of
+    ``LedgerEntry.duel_history`` across dueling seasons, dethroning only past
+    the frozen boundary (:mod:`ditto_screening_protocol.title_duel`).
+    ``min_shared_seeds`` then counts those pairs. ``None`` is the protocol-34
+    gate unchanged.
     """
 
     min_shared_seeds: int
     standing_rank: int
+    duel_window: int | None = None
 
 
 def resolve_miner_emission_share(
@@ -1880,6 +1897,15 @@ def _beats(
     beats it."""
     if _dueling_incomparable(challenger, champion):
         return False
+    if _duel_governs(challenger, champion, crown_gate):
+        assert crown_gate is not None
+        return _duel_beats(
+            challenger,
+            champion,
+            margin,
+            crown_gate=crown_gate,
+            ceiling_band_clamp=ceiling_band_clamp,
+        )
     if crown_gate is not None and (
         _shared_seed_count(challenger, champion) < crown_gate.min_shared_seeds
         or _paired_dethrone(challenger, champion, dethrone_z) is None
@@ -2022,7 +2048,8 @@ def _champion(
                 (
                     e
                     for e in standing
-                    if _shared_seed_count(e, outgoing) >= crown_gate.min_shared_seeds
+                    if _crown_evidence_count(e, outgoing, crown_gate)
+                    >= crown_gate.min_shared_seeds
                 ),
                 standing[0],
             )
@@ -2209,6 +2236,122 @@ def _shared_seed_count(a: LedgerEntry, b: LedgerEntry) -> int:
         return 0
     a_map, b_map = maps
     return len(set(a_map) & set(b_map))
+
+
+def _duel_governs(
+    challenger: LedgerEntry, champion: LedgerEntry, crown_gate: CrownGate | None
+) -> bool:
+    """Whether the protocol-35 title duel decides this comparison."""
+    return (
+        crown_gate is not None
+        and crown_gate.duel_window is not None
+        and _is_dueling_entry(challenger)
+        and _is_dueling_entry(champion)
+    )
+
+
+def _entry_duel_records(
+    entry: LedgerEntry, mask: frozenset[str]
+) -> dict[tuple[str, int], tuple[int, float]] | None:
+    """``(season_id, seed) -> (season_index, pair-masked median)`` from the
+    entry's served ``duel_history``.
+
+    A record is evidence only when it carries its own ``details.dueling``,
+    scored for this entry's owner at this entry's bench version; it may come
+    from any served season (the title duel accumulates across seasons).
+    Anything else is dropped, never guessed.
+    """
+    records = getattr(entry, "duel_history", None)
+    entry_report = _entry_dueling(entry)
+    if not isinstance(records, (list, tuple)) or not records or entry_report is None:
+        return None
+    values: list[tuple[tuple[str, int, int], float]] = []
+    for record in records:
+        seed = getattr(record, "seed", None)
+        report = getattr(record, "dueling", None)
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            continue
+        if not isinstance(report, DuelingReport):
+            continue
+        if report.owner_key != entry_report.owner_key or getattr(
+            record, "bench_version", None
+        ) != _entry_version(entry):
+            continue
+        value = dueling_composite(
+            report.datagen_raw, report.datagen_gate, report.columns, mask
+        )
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            continue
+        values.append(
+            (season_seed_key(report.season_id, report.season_index, seed), value)
+        )
+    collapsed = collapse_records(values)
+    return collapsed or None
+
+
+def _duel_statistic(
+    challenger: LedgerEntry, champion: LedgerEntry, *, window: int
+) -> DuelStatistic | None:
+    """The windowed cross-season paired statistic for two v16 rows."""
+    mask = _dueling_pair_mask(challenger, champion)
+    if mask is None:
+        return None
+    chall = _entry_duel_records(challenger, mask)
+    champ = _entry_duel_records(champion, mask)
+    if chall is None or champ is None:
+        return None
+    quality_primary = _quality_primary_efficiency_active((challenger, champion))
+
+    def _scored(
+        entry: LedgerEntry, records: dict[tuple[str, int], tuple[int, float]]
+    ) -> dict[tuple[str, int], tuple[int, float]]:
+        if quality_primary:
+            return records
+        return {
+            key: (index, _efficiency_adjusted_composite(entry, value))
+            for key, (index, value) in records.items()
+        }
+
+    return duel_statistic(
+        duel_pairs(_scored(challenger, chall), _scored(champion, champ), window=window)
+    )
+
+
+def _duel_beats(
+    challenger: LedgerEntry,
+    champion: LedgerEntry,
+    margin: float,
+    *,
+    crown_gate: CrownGate,
+    ceiling_band_clamp: bool = False,
+) -> bool:
+    """The protocol-35 title duel: ``mean_d`` must strictly exceed
+    ``max(margin x decay, c(n) x se_d)`` over at least ``min_shared_seeds``
+    pairs. The statistical term is never capped; the served ceiling clamp
+    still bounds the whole lead, exactly as on the paired branch."""
+    assert crown_gate.duel_window is not None
+    stat = _duel_statistic(challenger, champion, window=crown_gate.duel_window)
+    if stat is None or stat.count < crown_gate.min_shared_seeds:
+        return False
+    reference = stat.champion_reference
+    floor = margin * _dethrone_band_scale(challenger, champion, reference)
+    lead = duel_required_lead(stat, margin_floor=floor)
+    if lead is None:
+        return False
+    lead = _ceiling_capped_band(
+        lead, challenger, champion, reference, active=ceiling_band_clamp
+    )
+    return reference + stat.mean_difference > reference + lead
+
+
+def _crown_evidence_count(a: LedgerEntry, b: LedgerEntry, crown_gate: CrownGate) -> int:
+    """What ``min_shared_seeds`` counts: duel pairs under a served title duel,
+    else shared confirmation seeds."""
+    if _duel_governs(a, b, crown_gate):
+        assert crown_gate.duel_window is not None
+        stat = _duel_statistic(a, b, window=crown_gate.duel_window)
+        return 0 if stat is None else stat.count
+    return _shared_seed_count(a, b)
 
 
 def contested_confirmation_set(

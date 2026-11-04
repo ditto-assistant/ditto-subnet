@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.451.0 (2026-11-04)
+
+### Features
+
+- **validator,platform**: Decide v16 crowns by a sequential title duel
+  ([#3378](https://github.com/ditto-assistant/ditto-subnet/pull/3378),
+  [`2b188c6`](https://github.com/ditto-assistant/ditto-subnet/commit/2b188c6647616dec6ac0b8faffdb4a2887fe1f77))
+
+
 ## v0.450.0 (2026-11-04)
 
 ### Documentation
