@@ -32,7 +32,7 @@ export const cancelBenchmarkCanaryInputSchema = getBenchmarkCanaryInputSchema.ex
   }
 })
 
-const count = z.number().int().nonnegative()
+const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 const bps = z.number().int().min(0).max(10_000)
 
 // Bench v16+ `details.priced_cost`: numbers only (token counts, nano-USD
