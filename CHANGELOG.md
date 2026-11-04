@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.448.0 (2026-11-04)
+
+### Features
+
+- **bench**: Enforce a priced inference cost factor in bench v16
+  ([#3369](https://github.com/ditto-assistant/ditto-subnet/pull/3369),
+  [`86bc89e`](https://github.com/ditto-assistant/ditto-subnet/commit/86bc89e773d63b81a4109985aacf659d89ccd35e))
+
+
 ## v0.447.0 (2026-11-04)
 
 ### Features
