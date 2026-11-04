@@ -570,7 +570,9 @@ async def test_duel_history_serves_the_newest_seasons_only(
     from ditto.db.queries.confirmation_scores import duel_history_by_agent
 
     aid = await _seed_agent(session)
-    season_ids = [uuid4() for _ in range(3)]
+    # Seasons 1-3 hold duel rows; season 4 is idle (opened, no duel ran) and
+    # must not push season 2 out of a two-season window.
+    season_ids = [uuid4() for _ in range(4)]
     async with session.begin():
         for index, season_id in enumerate(season_ids, start=1):
             session.add(
@@ -579,7 +581,7 @@ async def test_duel_history_serves_the_newest_seasons_only(
                     bench_version=16,
                     season_index=index,
                     shadow=False,
-                    status="closed" if index < 3 else "open",
+                    status="closed" if index < 4 else "open",
                     commitment="ab" * 32,
                     secret=bytes(32),
                     committed_at=_NOW,
@@ -604,7 +606,7 @@ async def test_duel_history_serves_the_newest_seasons_only(
                     dueling_season_id=season_id,
                     dueling={"season_id": str(season_id)},
                 )
-                for index, season_id in enumerate(season_ids, start=1)
+                for index, season_id in enumerate(season_ids[:3], start=1)
             ],
             bench_version=16,
             created_at=_NOW,
