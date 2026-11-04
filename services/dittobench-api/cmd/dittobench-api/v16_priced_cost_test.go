@@ -178,6 +178,12 @@ func TestDecisionUsageCompleteness(t *testing.T) {
 	if session.decisionPendingBytes != 0 || session.decisionInputTokens != 110 {
 		t.Fatalf("settled without usage = %+v", session)
 	}
+	// An unreadable 2xx body keeps its bound and counts as usage missing.
+	session.decisionPendingBytes = 30
+	recordDecisionUsage(session, http.StatusOK, nil, 30)
+	if session.decisionPendingBytes != 0 || session.decisionInputTokens != 140 || session.decisionUsageMissing != 2 {
+		t.Fatalf("unreadable 2xx = %+v", session)
+	}
 	b := newInferenceBroker(1)
 	b.sessions = map[string]*brokerSession{"s": session}
 	got := (&server{broker: b}).v16PricedCostFor(16, scoregates.PricedCostEnforce, fullCatalogRun(), "s", 350)

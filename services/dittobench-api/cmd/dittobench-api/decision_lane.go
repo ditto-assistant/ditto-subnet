@@ -159,11 +159,13 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, decisionResponseLimit+1))
 	if err != nil || len(responseBody) > decisionResponseLimit {
+		// The relay answered, so it may have metered the call; with the body
+		// unreadable its usage is unknown. Keep the request-size bound, and
+		// a 2xx also counts as usage missing (recordDecisionUsage with nil).
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			recordDecisionUsage(session, response.StatusCode, nil, pending)
 		} else {
-			// A cancel mid-read may follow relay metering; keep the bound.
-			settleDecisionWithoutUsage(session, pending, requestCtx.Err() != nil)
+			settleDecisionWithoutUsage(session, pending, true)
 		}
 		writeError(w, http.StatusBadGateway, "decision lane unavailable")
 		return
@@ -184,7 +186,8 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 // call the relay metered and then answered with an error is still priced. A
 // 2xx without complete usage (including an unreadable body, passed as nil) is
 // counted as missing, which makes the run's priced cost insufficient evidence
-// rather than silently cheaper.
+// rather than silently cheaper; an unreadable body also keeps the call's
+// request-size upper bound.
 func recordDecisionUsage(session *brokerSession, status int, responseBody []byte, pending uint64) {
 	var decoded struct {
 		Usage *struct {
@@ -208,6 +211,9 @@ func recordDecisionUsage(session *brokerSession, status int, responseBody []byte
 	if usageOK {
 		session.decisionInputTokens += uint64(*decoded.Usage.InputTokens)
 		session.decisionOutputTokens += uint64(*decoded.Usage.OutputTokens)
+	} else if responseBody == nil {
+		// An unreadable body: keep the call's request-size upper bound.
+		session.decisionInputTokens += pending
 	}
 }
 

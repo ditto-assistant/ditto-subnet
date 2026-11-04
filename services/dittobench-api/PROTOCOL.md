@@ -80,8 +80,9 @@ without usage, or zero scored cases reports `result: "insufficient_evidence"`
 and applies 10000. A decision call the relay metered and then answered with an
 error is still priced from its usage. A decision call still in flight when the
 run is priced is charged at its request size as input tokens (an upper bound).
-A call cancelled by the harness or by run teardown keeps that bound. A
-transport failure is not charged. A practice run with no broker session
+A call cancelled by the harness or by run teardown keeps that bound, as does
+a call whose relay response body cannot be read. A transport failure with no
+response is not charged. A practice run with no broker session
 meters nothing and names no `source`.
 
 The report adds:
