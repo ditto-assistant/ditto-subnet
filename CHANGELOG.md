@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.454.1 (2026-11-04)
+
+### Bug Fixes
+
+- **bench**: Charge v16 metamorphic splits against the v15 group count
+  ([#3388](https://github.com/ditto-assistant/ditto-subnet/pull/3388),
+  [`409572c`](https://github.com/ditto-assistant/ditto-subnet/commit/409572c24206f102d91799cccc12b1fbd892addb))
+
+
 ## v0.454.0 (2026-11-04)
 
 ### Features
