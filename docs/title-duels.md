@@ -236,7 +236,9 @@ receipt fails with `ledger_pin_mismatch`.
     exposed as `DethroneDecision.method = "duel"` for the board.
   - **Wire.** `crown_gate.duel_window_pairs` (15). `LedgerEntry.duel_history`
     holds the entry's not-voided v16 confirmation records from the
-    `CROWN_DUEL_SEASONS` = 5 newest seasons. Both are served only under
+    `CROWN_DUEL_SEASONS` = 5 newest seasons that hold any confirmation
+    record, so an idle season that ran no duel never pushes evidence out.
+    Both are served only under
     `crown_duel_mode: fleet_ready`, only with the gate, and only after every
     recently-live weight setter reports protocol 35. A requester below 35 gets
     428, and a stale replay drops both.

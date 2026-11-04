@@ -699,9 +699,11 @@ async def duel_history_by_agent(
     Unlike :func:`confirmation_history_by_agent` (the current and provisional
     season only, which score levels read), the title duel accumulates paired
     differences across dueling seasons, so this serves every not-voided row
-    with signed ``details.dueling`` from the ``seasons`` most recently opened
-    seasons of ``bench_version``. Empty below the dueling floor. Same row
-    shape and deterministic ``(seed, validator_hotkey)`` order.
+    with signed ``details.dueling`` from the ``seasons`` most recent seasons of
+    ``bench_version`` that hold any not-voided confirmation row. Seasons that
+    ran no duel (idle skip) are passed over, so evidence carries forward.
+    Empty below the dueling floor. Same row shape and deterministic
+    ``(seed, validator_hotkey)`` order.
     """
     from ditto.db.models import DuelingSeason
     from ditto_screening_protocol.dueling import is_dueling_bench_version
@@ -715,6 +717,15 @@ async def duel_history_by_agent(
             .where(
                 DuelingSeason.bench_version == bench_version,
                 DuelingSeason.status.in_(("open", "closed", "revealed")),
+                # Seasons holding evidence, not merely opened ones: an idle
+                # season that skipped its duel must not push a real one out.
+                exists(
+                    select(ConfirmationScore.agent_id).where(
+                        ConfirmationScore.dueling_season_id == DuelingSeason.id,
+                        ConfirmationScore.bench_version == bench_version,
+                        not_voided(),
+                    )
+                ),
             )
             .order_by(DuelingSeason.season_index.desc())
             .limit(int(seasons))
