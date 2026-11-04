@@ -257,6 +257,7 @@ from ditto.api_server.scoring_gate import (
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.api_server.season_duel import (
     season_duel_anchor_champion,
+    season_duel_entrant_excluded,
     season_duel_owed,
     season_duel_seed_count,
     season_duel_seeds,
@@ -5533,6 +5534,10 @@ async def _top5_confirmation_seed_plan(
     stops introducing datasets instead of growing forever.
     """
     if duel_seed_count is not None:
+        if await season_duel_entrant_excluded(
+            session, bench_version=canonical_version, member_agent_id=member_agent_id
+        ):
+            return ()
         member_history = (
             duel_history
             if duel_history is not None and member_agent_id in duel_history

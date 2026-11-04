@@ -590,6 +590,209 @@ class TestDuelingSeasons:
             assert "tree digest mismatch" in (prep.error or "")
 
 
+async def _pass_batteries(client: httpx.AsyncClient) -> int:
+    """Pass every queued battery candidate; returns how many batteries ran."""
+    ran = 0
+    while True:
+        work = (await client.get(_WORK, headers=_SCORER, params=_POLL)).json()["work"]
+        if work is None or work["kind"] != "battery":
+            return ran
+        posted = await client.post(
+            "/api/v1/generator-scorer/dueling-battery",
+            headers=_SCORER,
+            json={
+                "lease_id": work["lease_id"],
+                "season_id": work["season_id"],
+                "scorer_version": "challenge-scorer/9",
+                "candidates": [
+                    {
+                        "submission_id": c["submission_id"],
+                        "ok": True,
+                        "grading_bench_version": 15,
+                    }
+                    for c in work["candidates"]
+                ],
+            },
+        )
+        assert posted.status_code == 200, posted.text
+        ran += 1
+
+
+class TestIdleSeasonExtension:
+    async def test_an_idle_boundary_extends_the_season_and_a_change_rotates(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server.season_duel import season_duel_entrant_excluded
+
+        _install(app, session_maker)
+        await _open_lane(
+            client,
+            epochs_per_round=_EPOCHS,
+            dueling_enabled=True,
+            privacy_window_rounds=6,
+        )
+        _active(monkeypatch, 16)
+        incumbent = await _seed_agent(session_maker, 1)
+        queued: list[UUID] = []
+
+        async def _cohort(*_args: Any) -> tuple[list[UUID], str]:
+            return [incumbent], "continual_cohort"
+
+        async def _queue(*_args: Any, season_id: UUID, **_kwargs: Any) -> dict:
+            queued.append(season_id)
+            return {"queued": 1}
+
+        monkeypatch.setattr(dueling_mod, "_rotation_cohort", _cohort)
+        import ditto.db.queries.score_retests as retests_mod
+
+        monkeypatch.setattr(retests_mod, "queue_dueling_rotation_retests", _queue)
+        await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:a", salt="a"
+        )
+        await _scored_round(session_maker, [(miner, 0.4, 0.1)])
+
+        # Season 11 commits, batteries, and opens with one rotation.
+        await _tick(session_maker, _ROUND * _EPOCHS + 1)
+        assert await _pass_batteries(client) == 1
+        await _tick(session_maker, 11 * _EPOCHS)
+        [opened] = [s for s in await _seasons(session_maker) if s.season_index == 11]
+        assert opened.status == "open" and opened.closes_at_round == 12
+        assert queued == [opened.id]
+        async with session_maker() as session:
+            window = await dueling_season_window(session, 16)
+        assert window is not None and window.current == opened.id
+
+        # Season 12's batteries pass on the same generators. Nothing else
+        # changed, so its boundary extends season 11: no rotation, no new
+        # season, the score window does not move and nothing reveals.
+        assert await _pass_batteries(client) == 1
+        notes = await _tick(session_maker, 12 * _EPOCHS)
+        assert any("season 11 v16: extended to round 13 (idle" in n for n in notes)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "open" and seasons[11].closes_at_round == 13
+        assert seasons[12].status == "void" and seasons[12].opened_at is None
+        assert seasons[13].status == "committed"
+        extensions = (seasons[11].detail or {})["idle_extensions"]
+        assert extensions["count"] == 1
+        assert extensions["recent"][0]["at_round"] == 12
+        assert queued == [opened.id]
+        async with session_maker() as session:
+            window = await dueling_season_window(session, 16)
+            assert window is not None
+            assert (window.current, window.previous) == (opened.id, None)
+            # Present since before the extension: still owes the duel seeds.
+            assert not await season_duel_entrant_excluded(
+                session, bench_version=16, member_agent_id=incumbent
+            )
+        # Idle again at round 13: extended once more. Had season 11 closed at
+        # round 12 it would reveal at epoch 48 + 6; extended, it stays private.
+        assert await _pass_batteries(client) == 1
+        notes = await _tick(session_maker, 13 * _EPOCHS)
+        assert any("season 11 v16: extended to round 14" in n for n in notes)
+        await _tick(session_maker, 12 * _EPOCHS + 6)
+        [still] = [s for s in await _seasons(session_maker) if s.season_index == 11]
+        assert still.status == "open" and still.revealed_at is None
+        assert still.reveal_at_epoch is None
+        assert (still.detail or {})["idle_extensions"]["count"] == 2
+        assert queued == [opened.id]
+        view = (
+            await client.get(
+                f"/api/v1/admin/generator-competition/dueling/seasons/{opened.id}",
+                headers=_ADMIN,
+            )
+        ).json()
+        assert view["detail"]["idle_extensions"]["count"] == 2
+
+        # A new eligible upload makes the next boundary rotate: season 11
+        # closes, its privacy window counts from the extended close, and
+        # season 14 opens with a rotation.
+        entrant = await _seed_agent(session_maker, 2)
+        async with session_maker() as session:
+            # Uploaded after the first extension: no duel seeds this season.
+            assert await season_duel_entrant_excluded(
+                session, bench_version=16, member_agent_id=entrant
+            )
+        assert await _pass_batteries(client) == 1
+        await _tick(session_maker, 14 * _EPOCHS)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "closed"
+        assert seasons[11].reveal_at_epoch == 14 * _EPOCHS + 6
+        assert seasons[14].status == "open"
+        assert queued == [opened.id, seasons[14].id]
+        async with session_maker() as session:
+            window = await dueling_season_window(session, 16)
+            assert window is not None
+            assert (window.current, window.previous) == (seasons[14].id, opened.id)
+            # The new season was never extended: nobody is excluded.
+            assert not await season_duel_entrant_excluded(
+                session, bench_version=16, member_agent_id=entrant
+            )
+        await _tick(session_maker, 14 * _EPOCHS + 5)
+        assert (
+            next(
+                s for s in await _seasons(session_maker) if s.season_index == 11
+            ).status
+            == "closed"
+        )
+        await _tick(session_maker, 14 * _EPOCHS + 6)
+        assert (
+            next(
+                s for s in await _seasons(session_maker) if s.season_index == 11
+            ).status
+            == "revealed"
+        )
+
+    async def test_skip_off_rotates_an_idle_boundary(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(
+            client,
+            epochs_per_round=_EPOCHS,
+            dueling_enabled=True,
+            skip_unchanged_rounds=False,
+        )
+        _active(monkeypatch, 16)
+
+        async def _cohort(*_args: Any) -> tuple[list[UUID], str]:
+            return [], "continual_cohort"
+
+        monkeypatch.setattr(dueling_mod, "_rotation_cohort", _cohort)
+        await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:a", salt="a"
+        )
+        await _scored_round(session_maker, [(miner, 0.4, 0.1)])
+        await _tick(session_maker, _ROUND * _EPOCHS + 1)
+        await _pass_batteries(client)
+        await _tick(session_maker, 11 * _EPOCHS)
+        await _pass_batteries(client)
+        await _tick(session_maker, 12 * _EPOCHS)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "closed" and seasons[12].status == "open"
+
+
 class TestDuelingAdmin:
     async def test_reads_hide_the_secret_and_rotation_is_audited(
         self,

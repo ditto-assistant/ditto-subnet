@@ -386,6 +386,25 @@ Agents scored against different generator sets are not comparable, so the
   ledger. The crown carries over until a same-season challenger beats it.
 - A ban or copy ruling against a pinned generator mid-season triggers an early
   rotation, not an in-place swap.
+- **Idle seasons extend instead of rotating** (`skip_unchanged_rounds`, on by
+  default). At a due boundary the open season is extended by
+  `rounds_per_season` when all of these hold:
+  1. the waiting season would pin the same generators (submission, source
+     digest, grading policy and default flag);
+  2. the rotation cohort is the one the season re-scored when it opened;
+  3. no agent created since the season opened is scored or live;
+  4. no rotation was requested.
+
+  No season opens, so the two-season window does not advance: no score
+  expires and nobody is re-tested. The skip is all or nothing for the cohort,
+  and the fold reads exactly the rows it read before. The waiting season is
+  voided and recommitted at the new boundary, because its commitment binds its
+  index. `detail.idle_extensions` records every extension
+  (`get_dueling_season`). The privacy window counts from the extended close,
+  so the secret is never revealed early. An agent uploaded after the first
+  extension owes no season duel seeds in that season, because those seeds
+  have been public since the anchor. It joins at the next rotation, which its
+  upload triggers.
 
 ### Rotation cost at 4.8 h, and the minimum safe season
 

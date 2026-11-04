@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from ditto.api_server.crn import champion_anchored_seeds
-from ditto.db.models import ConfirmationSeedAnchor
+from ditto.db.models import Agent, ConfirmationSeedAnchor
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
@@ -82,6 +82,30 @@ async def season_duel_anchor_champion(
         .limit(1)
     )
     return champion_agent_id if first is None else first
+
+
+async def season_duel_entrant_excluded(
+    session: AsyncSession, *, bench_version: int, member_agent_id: UUID
+) -> bool:
+    """Whether ``member_agent_id`` sits out the open season's duel.
+
+    A season extended as idle (:func:`ditto.api_server.dueling_seasons.
+    idle_season_extension`) keeps its duel seeds, which have been public since
+    its anchor was pinned, possibly for days. An agent uploaded after the
+    first extension could have seen them, so it owes no duel seed in that
+    season: its canonical runs keep their private per-agent seeds, and it
+    joins the duel at the next rotation (its upload makes the next boundary
+    rotate). This is the rule ``docs/title-duels.md`` already applies to
+    uploads after a season's anchor."""
+    from ditto.api_server.dueling_seasons import open_season, season_first_extended_at
+
+    first = season_first_extended_at(await open_season(session, bench_version))
+    if first is None:
+        return False
+    created = await session.scalar(
+        select(Agent.created_at).where(Agent.agent_id == member_agent_id)
+    )
+    return created is not None and created > first
 
 
 def season_duel_seeds(
