@@ -60,7 +60,7 @@ export interface RewardEligibility {
 }
 
 export interface RawLeaderDecision {
-  /** "paired" | "unpaired" | anything else reads as the fixed margin. */
+  /** "paired" | "duel" | "unpaired" | anything else reads as the fixed margin. */
   method?: string;
   challenger_lead: number;
   required_lead: number;

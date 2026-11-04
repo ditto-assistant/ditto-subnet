@@ -2431,6 +2431,9 @@ const continualRetestSettingsBaseSchema = z.object({
   // shared-seed statistic with at least min_dethrone_confirmations shared
   // seeds, and only within the top champion_standing_rank official places.
   crown_gate_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  // Fold change behind fleet protocol 35, riding a served crown gate: two
+  // bench v16 rows dethrone on the sequential title duel across seasons.
+  crown_duel_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
   min_dethrone_confirmations: z
     .number()
     .int()
@@ -2520,6 +2523,7 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
     ledger_pin_mode: z.enum(['live', 'epoch']),
     crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']),
     crown_gate_mode: z.enum(['disabled', 'fleet_ready']),
+    crown_duel_mode: z.enum(['disabled', 'fleet_ready']),
     min_dethrone_confirmations: z.number().int().min(2).max(MAX_MIN_DETHRONE_CONFIRMATIONS),
     champion_standing_rank: z.number().int().min(1).max(EMISSION_SET_SIZE),
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
@@ -2612,6 +2616,9 @@ export const effectiveContinualRetestSettingsSchema = z.object({
   crown_gate_fleet_ready: z.boolean().default(false),
   crown_gate_active: z.boolean().default(false),
   crown_gate_required_protocol: z.number().int().positive().default(34),
+  crown_duel_fleet_ready: z.boolean().default(false),
+  crown_duel_active: z.boolean().default(false),
+  crown_duel_required_protocol: z.number().int().positive().default(35),
   crown_incumbent_fleet_ready: z.boolean().default(false),
   crown_incumbent_active: z.boolean().default(false),
   crown_incumbent_required_protocol: z.number().int().positive().default(27),
@@ -2678,6 +2685,13 @@ export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExte
     legacyValue: () => 'disabled',
     legacyBehaviour: () =>
       'any challenger that clears the band takes the crown, even with no shared-seed confirmations',
+  },
+  {
+    field: 'crown_duel_mode',
+    label: 'a sequential title duel',
+    legacyValue: () => 'disabled',
+    legacyBehaviour: () =>
+      'the crown moves on one season of shared seeds under the capped fixed-z band',
   },
   {
     field: 'min_dethrone_confirmations',

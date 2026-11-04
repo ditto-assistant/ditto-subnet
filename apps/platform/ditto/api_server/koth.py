@@ -30,6 +30,14 @@ from ditto_screening_protocol.dueling import (
     dueling_composite,
     is_dueling_bench_version,
 )
+from ditto_screening_protocol.title_duel import (
+    DuelStatistic,
+    collapse_records,
+    duel_pairs,
+    duel_required_lead,
+    duel_statistic,
+    season_seed_key,
+)
 
 # Frozen consensus constants from ditto-subnet/ditto/validator/config.py.
 KOTH_MARGIN = 0.007
@@ -88,6 +96,10 @@ class CrownGate:
 
     min_shared_seeds: int
     standing_rank: int
+    duel_window: int | None = None
+    """Protocol 35 (``docs/title-duels.md``): the title-duel window. Two
+    bench >= 16 rows then dethrone on the sequential cross-season test over
+    ``KothEntry.duel_records``; ``min_shared_seeds`` counts its pairs."""
 
 
 @dataclass(frozen=True, eq=False)
@@ -128,6 +140,10 @@ class KothEntry:
     dueling_records: tuple[DuelingSeedRecord, ...] | None = field(
         default=None, compare=False
     )
+    # Protocol 35: ``LedgerEntry.duel_history``, every served season's records.
+    duel_records: tuple[DuelingSeedRecord, ...] | None = field(
+        default=None, compare=False
+    )
 
 
 def crown_gate_marker(gate: CrownGate | None) -> CrownGateMarker | None:
@@ -137,6 +153,7 @@ def crown_gate_marker(gate: CrownGate | None) -> CrownGateMarker | None:
     return CrownGateMarker(
         min_dethrone_confirmations=gate.min_shared_seeds,
         champion_standing_rank=gate.standing_rank,
+        duel_window_pairs=gate.duel_window,
     )
 
 
@@ -229,6 +246,18 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
                         for record in entry.confirmation_history
                     )
                 ),
+                duel_records=(
+                    None
+                    if receipt is not None or not entry.duel_history
+                    else tuple(
+                        DuelingSeedRecord(
+                            seed=record.seed,
+                            bench_version=record.bench_version,
+                            report=record.dueling,
+                        )
+                        for record in entry.duel_history
+                    )
+                ),
             )
         )
     return lifted
@@ -274,7 +303,7 @@ class DethroneDecision:
     required_lead: float
     margin_lead: float
     statistical_lead: float | None
-    method: Literal["flat", "unpaired", "paired"]
+    method: Literal["flat", "unpaired", "paired", "duel"]
     dethrones: bool
     required_score: float
     score_ceiling: float
@@ -587,7 +616,7 @@ def crown_standings(
                 official_score=_dethrone_composite(
                     entry, quality_primary=quality_primary
                 ),
-                shared_seeds=shared_seed_count(entry, king),
+                shared_seeds=crown_evidence_count(entry, king, crown_gate),
                 within_standing=positions[entry.agent_id] <= crown_gate.standing_rank,
                 decision=_dethrone_decision(
                     entry,
@@ -922,7 +951,8 @@ def project_koth(
                 (
                     entry
                     for entry in standing
-                    if shared_seed_count(entry, outgoing) >= crown_gate.min_shared_seeds
+                    if crown_evidence_count(entry, outgoing, crown_gate)
+                    >= crown_gate.min_shared_seeds
                 ),
                 standing[0],
             )
@@ -1330,6 +1360,23 @@ def dueling_seed_records(
     return records or None
 
 
+def duel_seed_records(
+    rows: Iterable[DuelingConfirmationRowLike],
+) -> tuple[DuelingSeedRecord, ...] | None:
+    """Protocol-35 ``KothEntry.duel_records`` from stored confirmation rows of
+    the served duel seasons (:func:`duel_history_by_agent`): every row, the
+    database analogue of ``LedgerEntry.duel_history``."""
+    records = tuple(
+        DuelingSeedRecord(
+            seed=row.seed,
+            bench_version=row.bench_version,
+            report=_stored_dueling_report(row.dueling),
+        )
+        for row in rows
+    )
+    return records or None
+
+
 def _record_masked_composite(
     entry: KothEntry, record: DuelingSeedRecord, mask: frozenset[str]
 ) -> float | None:
@@ -1518,6 +1565,14 @@ def _dethrone_decision(
         decision = replace(decision, dethrones=False)
     if crown_gate is None:
         return decision
+    if _duel_governs(challenger, champion, crown_gate):
+        return _duel_decision(
+            challenger,
+            champion,
+            crown_gate=crown_gate,
+            ceiling_band_clamp=ceiling_band_clamp,
+            ungated=decision,
+        )
     qualified = (
         decision.method == "paired"
         and shared_seed_count(challenger, champion) >= crown_gate.min_shared_seeds
@@ -1616,4 +1671,143 @@ def _ungated_dethrone_decision(
         required_score=required_score,
         score_ceiling=score_ceiling,
         ceiling_deadlocked=(not dethrones and required_score >= score_ceiling),
+    )
+
+
+# --- Title duel (protocol 35) ------------------------------------------------
+#
+# Mirrors ``ditto/validator/weights.py`` (``_duel_governs`` / ``_duel_beats``)
+# over the shared arithmetic in ``ditto_screening_protocol.title_duel``. Inert
+# unless the served crown gate carries ``duel_window`` and both rows are
+# bench >= 16; ``ditto/tests/fixtures/crown_gate_cases.json`` folds both.
+
+
+def _duel_governs(
+    challenger: KothEntry, champion: KothEntry, crown_gate: CrownGate | None
+) -> bool:
+    return (
+        crown_gate is not None
+        and crown_gate.duel_window is not None
+        and _is_dueling_entry(challenger)
+        and _is_dueling_entry(champion)
+    )
+
+
+def _entry_duel_records(
+    entry: KothEntry, mask: frozenset[str]
+) -> dict[tuple[str, int], tuple[int, float]] | None:
+    records = entry.duel_records
+    if not records or entry.dueling is None:
+        return None
+    values: list[tuple[tuple[str, int, int], float]] = []
+    for record in records:
+        report = record.report
+        if record.seed < 0 or report is None:
+            continue
+        if (
+            report.owner_key != entry.dueling.owner_key
+            or record.bench_version != entry.bench_version
+        ):
+            continue
+        value = dueling_composite(
+            report.datagen_raw, report.datagen_gate, report.columns, mask
+        )
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            continue
+        values.append(
+            (season_seed_key(report.season_id, report.season_index, record.seed), value)
+        )
+    collapsed = collapse_records(values)
+    return collapsed or None
+
+
+def duel_statistic_for(
+    challenger: KothEntry, champion: KothEntry, *, window: int
+) -> DuelStatistic | None:
+    """The windowed cross-season paired statistic for two v16 rows."""
+    mask = _dueling_pair_mask(challenger, champion)
+    if mask is None:
+        return None
+    chall = _entry_duel_records(challenger, mask)
+    champ = _entry_duel_records(champion, mask)
+    if chall is None or champ is None:
+        return None
+    quality_primary = _quality_primary_efficiency_active((challenger, champion))
+
+    def _scored(
+        entry: KothEntry, records: dict[tuple[str, int], tuple[int, float]]
+    ) -> dict[tuple[str, int], tuple[int, float]]:
+        if quality_primary:
+            return records
+        return {
+            key: (index, _efficiency_adjusted_composite(entry, value))
+            for key, (index, value) in records.items()
+        }
+
+    return duel_statistic(
+        duel_pairs(_scored(challenger, chall), _scored(champion, champ), window=window)
+    )
+
+
+def crown_evidence_count(a: KothEntry, b: KothEntry, crown_gate: CrownGate) -> int:
+    """What ``min_shared_seeds`` counts: duel pairs under a served title duel,
+    else shared confirmation seeds (the validator's ``_crown_evidence_count``)."""
+    if _duel_governs(a, b, crown_gate):
+        assert crown_gate.duel_window is not None
+        stat = duel_statistic_for(a, b, window=crown_gate.duel_window)
+        return 0 if stat is None else stat.count
+    return shared_seed_count(a, b)
+
+
+def _duel_decision(
+    challenger: KothEntry,
+    champion: KothEntry,
+    *,
+    crown_gate: CrownGate,
+    ceiling_band_clamp: bool,
+    ungated: DethroneDecision,
+) -> DethroneDecision:
+    """The validator's ``_duel_beats`` as an explainable decision."""
+    assert crown_gate.duel_window is not None
+    stat = duel_statistic_for(challenger, champion, window=crown_gate.duel_window)
+    if stat is None:
+        return replace(
+            ungated,
+            dethrones=False,
+            required_shared_seeds=crown_gate.min_shared_seeds,
+            gate_blocked=ungated.dethrones,
+            shared_seed_count=0,
+        )
+    reference = stat.champion_reference
+    margin_lead = KOTH_MARGIN * _dethrone_band_scale(challenger, champion, reference)
+    lead = duel_required_lead(stat, margin_floor=margin_lead)
+    required = (
+        None
+        if lead is None
+        else _ceiling_capped_band(
+            lead, challenger, champion, reference, active=ceiling_band_clamp
+        )
+    )
+    # Below the boundary table (two pairs) no lead dethrones; the floor is
+    # still what the board shows as the bar.
+    enough = stat.count >= crown_gate.min_shared_seeds and required is not None
+    shown = required if required is not None else margin_lead
+    observed_score = reference + stat.mean_difference
+    required_score = reference + shown
+    dethrones = enough and observed_score > required_score
+    return DethroneDecision(
+        challenger_lead=stat.mean_difference,
+        required_lead=shown,
+        margin_lead=margin_lead,
+        statistical_lead=lead,
+        method="duel",
+        dethrones=dethrones,
+        required_score=required_score,
+        score_ceiling=ungated.score_ceiling,
+        ceiling_deadlocked=ungated.ceiling_deadlocked,
+        paired_standard_error=stat.standard_error,
+        shared_seed_count=stat.count,
+        seed_differences=tuple(pair.difference for pair in stat.pairs),
+        required_shared_seeds=crown_gate.min_shared_seeds,
+        gate_blocked=not enough and observed_score > required_score,
     )

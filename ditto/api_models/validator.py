@@ -1856,6 +1856,20 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    duel_history: Annotated[
+        list[ConfirmationScoreRecord] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel evidence: this agent's bench >= 16 "
+                "confirmation records from the newest dueling seasons, each "
+                "with its signed details.dueling. Served only with "
+                "crown_gate.duel_window_pairs; the dethrone test pairs them "
+                "by (season, seed). Levels never read it."
+            ),
+        ),
+    ] = None
     continual_aggregate_method: Literal["mean_after_quorum"] | None = Field(
         default=None,
         description=(
@@ -1993,6 +2007,22 @@ class CrownGateMarker(BaseModel):
             ),
         ),
     ]
+    duel_window_pairs: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=2,
+            le=15,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel. When present, two bench >= 16 rows are "
+                "compared on the newest this-many pair-masked (season, seed) "
+                "pairs of duel_history across dueling seasons, and the "
+                "challenger dethrones only past the frozen sequential boundary "
+                "(docs/title-duels.md). Absent is the protocol-34 gate."
+            ),
+        ),
+    ] = None
 
 
 class LedgerResponse(BaseModel):

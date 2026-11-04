@@ -283,7 +283,19 @@ def _ledger_crown_gate(ledger: LedgerResponse) -> CrownGate | None:
         or not 1 <= standing <= 5
     ):
         return None
-    return CrownGate(min_shared_seeds=min_seeds, standing_rank=standing)
+    # Protocol 35: a served title-duel window. Out of range reads as absent, so
+    # every validator falls back to the protocol-34 gate identically.
+    window = getattr(served, "duel_window_pairs", None)
+    duel_window = (
+        window
+        if isinstance(window, int)
+        and not isinstance(window, bool)
+        and 2 <= window <= TOP5_MAX_CONFIRMATION_SEEDS
+        else None
+    )
+    return CrownGate(
+        min_shared_seeds=min_seeds, standing_rank=standing, duel_window=duel_window
+    )
 
 
 def _ledger_rank_shares(

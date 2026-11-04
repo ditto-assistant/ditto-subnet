@@ -167,6 +167,8 @@ from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.continual_retest_settings import (
+    CROWN_DUEL_PROTOCOL,
+    CROWN_DUEL_SEASONS,
     CROWN_GATE_PROTOCOL,
     DEFAULT_CHAMPION_STANDING_RANK,
     DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
@@ -296,6 +298,7 @@ from ditto.api_server.koth import (
     bounded_efficiency_adjusted_quality,
     champion_defense,
     crown_standings,
+    duel_seed_records,
     dueling_seed_records,
     emission_allocation,
     koth_entries_from_ledger,
@@ -394,6 +397,7 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     confirmation_depths,
     confirmation_history_by_agent,
+    duel_history_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import prev_generation_agent_ids
 from ditto.db.queries.emission_eligibility import (
@@ -2979,6 +2983,7 @@ def _public_koth_emissions(
     rank_shares: Sequence[float] | None = None,
     crown_gate: CrownGate | None = None,
     crown_rules: CrownGate | None = None,
+    duel_history: Mapping[UUID, Sequence[Any]] | None = None,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool.
 
@@ -3081,6 +3086,11 @@ def _public_koth_emissions(
                         (dueling_history or {}).get(row.agent_id, ()),
                         seeds=merged_confirmations.keys(),
                     )
+                ),
+                duel_records=(
+                    None
+                    if v9_confirmed
+                    else duel_seed_records((duel_history or {}).get(row.agent_id, ()))
                 ),
             )
         )
@@ -3728,6 +3738,12 @@ async def build_public_leaderboard(
             fleet_protocol_ready=await live_weight_setter_fleet_supports_protocol(
                 session,
                 minimum_protocol=CROWN_GATE_PROTOCOL,
+                now=now,
+                freshness=_VALIDATOR_STALE_WINDOW,
+            ),
+            duel_fleet_ready=await live_weight_setter_fleet_supports_protocol(
+                session,
+                minimum_protocol=CROWN_DUEL_PROTOCOL,
                 now=now,
                 freshness=_VALIDATOR_STALE_WINDOW,
             ),
@@ -4566,6 +4582,19 @@ async def build_public_leaderboard(
                 rank_shares=board_rank_shares,
                 crown_gate=crown_gate_active_rules,
                 crown_rules=crown_rules,
+                duel_history=(
+                    await duel_history_by_agent(
+                        session,
+                        agent_ids=[row.agent_id for row in finalized_rows],
+                        bench_version=active_version,
+                        seasons=CROWN_DUEL_SEASONS,
+                    )
+                    if continual_mean_active
+                    and crown_gate_active_rules is not None
+                    and crown_gate_active_rules.duel_window is not None
+                    and active_version is not None
+                    else {}
+                ),
             )
         ),
         efficiency=_efficiency_status(efficiency_view),

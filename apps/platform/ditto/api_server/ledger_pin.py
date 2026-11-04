@@ -242,7 +242,18 @@ def served_crown_gate(served: dict[str, Any]) -> CrownGate | None:
         or not 1 <= standing <= 5
     ):
         return None
-    return CrownGate(min_shared_seeds=min_seeds, standing_rank=standing)
+    # Protocol 35: out of range reads as absent, as the validator reads it.
+    window = raw.get("duel_window_pairs")
+    duel_window = (
+        window
+        if isinstance(window, int)
+        and not isinstance(window, bool)
+        and 2 <= window <= CONFIRMATION_SEED_CEILING
+        else None
+    )
+    return CrownGate(
+        min_shared_seeds=min_seeds, standing_rank=standing, duel_window=duel_window
+    )
 
 
 def served_track_shares(served: dict[str, Any]) -> dict[str, int]:
@@ -1059,6 +1070,10 @@ def build_pin_draft(
             "min_dethrone_confirmations": crown_gate.min_shared_seeds,
             "champion_standing_rank": crown_gate.standing_rank,
         }
+        # Keyed only when the protocol-35 title duel rides the gate, so a
+        # protocol-34 pin keeps its digest byte for byte.
+        if crown_gate.duel_window is not None:
+            served["crown_gate"]["duel_window_pairs"] = crown_gate.duel_window
     # Keyed only when a fleet-ready operator curve is served, so every pin taken
     # on the frozen curve keeps its digest byte for byte.
     rank_shares = getattr(snapshot, "rank_shares", None)

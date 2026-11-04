@@ -440,6 +440,9 @@ export function ContinualRetestControlPanel({
             wave_seeds_per_window: state.field_support.wave_seeds_per_window
               ? effective.settings.wave_seeds_per_window
               : DEFAULT_WAVE_SEEDS_PER_WINDOW,
+            crown_duel_mode: state.field_support.crown_duel_mode
+              ? effective.settings.crown_duel_mode
+              : 'disabled',
             // Season title duels are written through Backroom MCP too.
             retest_mode: state.field_support.retest_mode
               ? effective.settings.retest_mode
