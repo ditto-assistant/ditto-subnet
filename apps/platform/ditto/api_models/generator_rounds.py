@@ -37,7 +37,9 @@ from ditto.api_models.generator_ledger import (
 from ditto.api_models.generator_round_validator import round_commitment_payload
 from ditto.api_models.name_claim import PublicNameHandle
 
-RoundStatus = Literal["committed", "generating", "running", "scoring", "scored", "void"]
+RoundStatus = Literal[
+    "committed", "generating", "running", "scoring", "scored", "skipped", "void"
+]
 CommitmentPublication = Literal["pending", "published", "failed", "disabled"]
 CommitmentPublicationStatus = Literal["claimed", "confirmed", "failed", "expired"]
 RoundCaseStatus = Literal[
@@ -157,6 +159,13 @@ class GeneratorRoundSummary(RoundModel):
     closed_at: datetime | None = None
     scored_at: datetime | None = None
     void_reason: str | None = None
+    skip_reason: str | None = None
+    """``skipped_unchanged`` for a ``skipped`` round: its columns, panel, bench
+    version, column size and score params matched the last scored round, so
+    it ran no generation or panel inference."""
+    carried_from_round: int | None = None
+    """The scored round a ``skipped`` round carries forward: the ledger keeps
+    paying that round's column scores and dates them from this skip."""
     revealed_at: datetime | None = None
     secret_hex: str | None = None
     """Revealed secret; ``RoundCommitment(round, secret)`` must equal
@@ -466,6 +475,17 @@ class AdminGeneratorRoundPreview(RoundModel):
     blockers: list[str]
     skipped_panel_agents: list[GeneratorRoundSkippedAgent] = Field(default_factory=list)
     bench_contract: GeneratorRoundBenchContractPreview | None = None
+
+
+class GeneratorRoundSkipView(RoundModel):
+    """One round skipped because it would only repeat the last scored round."""
+
+    round_index: int
+    reason: str
+    """Always ``skipped_unchanged``."""
+    carried_from_round: int | None
+    """The scored round whose column scores the ledger keeps paying."""
+    skipped_at: datetime | None
 
 
 class GeneratorRoundLoopStatus(RoundModel):

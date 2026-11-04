@@ -220,6 +220,15 @@ class GeneratorCompetitionSettings(BaseModel):
     authoritative. Must name a shipped bench contract. Null by default, and a
     revision written before this field existed reads as null."""
 
+    skip_unchanged_rounds: bool = True
+    """Spend no inference on a round that cannot change anything. A round
+    whose frozen columns (generator submissions and their source digests)
+    and panel agents, bench version, case count and score parameters all
+    match the last scored round is ``skipped`` at opening, with no
+    generation or panel runs. The ledger keeps paying that scored round's
+    column scores, and the skip keeps it inside ``window_days``. On by
+    default, and a revision written before this field existed reads as on."""
+
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
         if self.min_solver_owners > self.min_panel:

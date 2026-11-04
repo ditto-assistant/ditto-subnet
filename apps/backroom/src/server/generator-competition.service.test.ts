@@ -692,4 +692,54 @@ describe('generator competition MCP tools', () => {
       await reader.server.close()
     }
   })
+
+  it('shows a round skipped as unchanged and the loop that skipped it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const summary = {
+      round_index: 12, status: 'skipped', epochs_per_round: 4, commitment: 'aa'.repeat(32),
+      commitment_publication: 'disabled', committed_at: '2026-11-04T00:00:00Z', column_count: 5,
+      panel_size: 5, panel_dropped: 0, results: 0, answered_results: 0, secret_hex: null, seed: null,
+      void_reason: null, skip_reason: 'skipped_unchanged', carried_from_round: 11,
+    }
+    const detail = {
+      summary, settings_revision: 2, cases_per_column: 70, seed: null, columns: [], panel: [],
+      generation: { skipped_unchanged: { reason: 'skipped_unchanged', carried_from_round: 11 } },
+      column_case_counts: {}, dataset_bytes: null, lease_id: null, lease_expires_at: null,
+      lease_attempts: 0, commitment_published_at: null, commitment_error: null, attempts: [],
+      results: [], pending_agents: [], score: null, scorer_version: null, standings: [],
+      columns_scored: [], skipped_panel_agents: [],
+    }
+    const loop = {
+      available: true,
+      status: { last_tick_at: null, last_success_at: null, last_error: null, last_actions: ['round 12: skipped'], ticks: 1 },
+      schedule: { mode: 'enforce', epochs_per_round: 4 },
+      skip_unchanged_rounds: true,
+      skipped_rounds: 3,
+      last_skipped_round: { round_index: 12, reason: 'skipped_unchanged', carried_from_round: 11, skipped_at: '2026-11-04T05:00:00Z' },
+    }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.includes('/rounds/loop')
+        ? Response.json(loop)
+        : url.includes('/rounds?')
+          ? Response.json({ schedule: { mode: 'enforce', epochs_per_round: 4 }, rounds: [summary], counts_by_status: { skipped: 3 } })
+          : Response.json(detail)
+    )))
+
+    const reader = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await reader.client.callTool({ name: 'list_generator_rounds', arguments: {} })))
+        .toMatchObject({ rounds: [{ status: 'skipped', skip_reason: 'skipped_unchanged', carried_from_round: 11 }] })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 12 } })))
+        .toMatchObject({ summary: { status: 'skipped', skip_reason: 'skipped_unchanged', carried_from_round: 11 } })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))
+        .toMatchObject({
+          skip_unchanged_rounds: true,
+          skipped_rounds: 3,
+          last_skipped_round: { round_index: 12, reason: 'skipped_unchanged', carried_from_round: 11 },
+        })
+    } finally {
+      await reader.client.close()
+      await reader.server.close()
+    }
+  })
 })

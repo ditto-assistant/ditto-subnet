@@ -85,6 +85,11 @@ export const generatorCompetitionSettingsSchema = z.object({
   // dueling version is active or rolling out, so a canary at it can lease a
   // slice before start_benchmark_rollout. Null by default; needs dueling_enabled.
   dueling_shadow_bench_version: z.number().int().min(16).nullable(),
+  // Skip a round that would only repeat the last scored round (same
+  // generator sources, panel agents, bench version, column size and score
+  // params): no generation or panel inference, and the ledger keeps paying
+  // that scored round. Ships on; a write that omits it keeps it on.
+  skip_unchanged_rounds: z.boolean().default(true),
 })
 
 // The shortest safe dueling season in subnet epochs (dueling-bench.md
@@ -371,7 +376,9 @@ export const reinstateGeneratorInputSchema = z.object({
 
 // --- rounds ----------------------------------------------------------------
 
-const roundStatus = z.enum(['committed', 'generating', 'running', 'scoring', 'scored', 'void'])
+const roundStatus = z.enum([
+  'committed', 'generating', 'running', 'scoring', 'scored', 'skipped', 'void',
+])
 
 const roundScheduleSchema = z.object({
   mode: z.string(),
@@ -409,6 +416,10 @@ const roundSummarySchema = z.object({
   closed_at: z.string().nullable().optional(),
   scored_at: z.string().nullable().optional(),
   void_reason: z.string().nullable().optional(),
+  // skipped_unchanged on a skipped round, and the scored round it carries
+  // forward. Absent from a Platform that never skips.
+  skip_reason: z.string().nullable().optional().default(null),
+  carried_from_round: z.number().int().nullable().optional().default(null),
   revealed_at: z.string().nullable().optional(),
   secret_hex: z.string().nullable().optional(),
   seed: z.string().nullable().optional(),
@@ -584,6 +595,20 @@ export const generatorRoundLoopSchema = z.object({
     })
     .nullable(),
   schedule: roundScheduleSchema.nullable(),
+  // The governing skip_unchanged_rounds setting, how many rounds were ever
+  // skipped as unchanged, and the newest one. Absent from an older Platform.
+  skip_unchanged_rounds: z.boolean().nullable().optional().default(null),
+  skipped_rounds: z.number().int().optional().default(0),
+  last_skipped_round: z
+    .object({
+      round_index: z.number().int(),
+      reason: z.string(),
+      carried_from_round: z.number().int().nullable(),
+      skipped_at: z.string().nullable(),
+    })
+    .nullable()
+    .optional()
+    .default(null),
 })
 
 const generatorScorerHeartbeatSchema = z.object({

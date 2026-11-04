@@ -44,6 +44,7 @@ from ditto.db.queries.tickets import (
     issue_confirmation_ticket,
     issue_ticket,
     mark_ticket_scored,
+    release_foreign_dataset_pin,
     scoring_retry_ticket,
     ticket_retry_budget_spent,
 )
@@ -4035,6 +4036,55 @@ async def test_round_only_row_reused_for_continual_retest_starts_fresh(
         assert ticket.purpose == TicketPurpose.CONTINUAL_RETEST
         assert ticket.attempt_count == 1
         assert (ticket.seed, ticket.dataset_sha256) == (123, "ab" * 32)
+
+
+@pytest.mark.parametrize(
+    ("purpose", "released"),
+    [
+        (TicketPurpose.GENERATOR_ROUND, True),
+        # A scored continual retest leaves its shared wave seed on the row; a
+        # canonical reuse that kept it was refused 409 "ticket seed does not
+        # match its validator identity" on every poll (5CFtz, 2026-11-04).
+        (TicketPurpose.CONTINUAL_RETEST, True),
+        # A canonical lease's own validator-identity pin must survive, so a
+        # retry cannot rotate its dataset.
+        (TicketPurpose.CANONICAL_QUORUM, False),
+    ],
+)
+async def test_scoring_reuse_drops_only_a_foreign_dataset_pin(
+    session: AsyncSession, purpose: TicketPurpose, released: bool
+) -> None:
+    agent_id = await _seed_scored(session)
+    async with session.begin():
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey="5ForeignPin",
+                slot_id="slot-0",
+                status=TicketStatus.SCORED,
+                purpose=purpose,
+                purpose_revision=3,
+                issued_at=_NOW - timedelta(hours=2),
+                deadline=_NOW - timedelta(minutes=30),
+                bench_version=_BENCH,
+                seed=987654321,
+                dataset_sha256="ef" * 32,
+                seed_block=100,
+                seed_block_hash="0x" + "ab" * 32,
+                attempt_count=1,
+                manual_retry_grants=0,
+                legacy_completion_allowed=False,
+            )
+        )
+    async with session.begin():
+        row = await session.get(ValidatorTicket, (agent_id, _BENCH, "5ForeignPin"))
+        assert row is not None
+        release_foreign_dataset_pin(row)
+        pin = (row.seed, row.dataset_sha256, row.seed_block, row.seed_block_hash)
+    if released:
+        assert pin == (None, None, None, None)
+    else:
+        assert pin == (987654321, "ef" * 32, 100, "0x" + "ab" * 32)
 
 
 async def test_scoring_retry_ticket_sql_matches_python(

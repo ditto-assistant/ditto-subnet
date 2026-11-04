@@ -136,7 +136,7 @@ from ditto.db.queries.score_retests import (
 )
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.tickets import (
-    release_generator_round_dataset_pin,
+    release_foreign_dataset_pin,
     scoring_retry_ticket,
     ticket_attempt_cap,
 )
@@ -2364,7 +2364,7 @@ async def replace_validator_score_after_infrastructure_failure(
         assert target is not None and ticket is not None
         now = datetime.now(UTC)
         deadline = now + replacement_ttl
-        release_generator_round_dataset_pin(ticket)
+        release_foreign_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
