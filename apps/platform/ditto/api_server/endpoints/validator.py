@@ -2622,7 +2622,9 @@ async def _activate_dueling_rotation_retest(
     ticket moves onto its duel seed, or back to its canonical seed.
     """
     protocol = heartbeat.protocol_version if heartbeat is not None else None
-    if settings is not None:
+    if settings is not None and rotation_seeds_active(
+        settings, bench_version=bench_version
+    ):
         from ditto.api_server.dueling_seasons import open_season
 
         if await defer_for_season_anchor(

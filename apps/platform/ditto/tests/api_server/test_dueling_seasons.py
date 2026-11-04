@@ -1919,18 +1919,38 @@ class TestSeasonSeededRotation:
             assign_rotation_seed,
             mirror_season_seeded_score,
         )
-        from ditto.db.models import ConfirmationScore
+        from ditto.db.models import ConfirmationScore, ValidatorHeartbeat
         from ditto.db.queries.audit import (
             EVENT_SCORE_RETEST_RELEASED,
             append_audit_entry,
         )
 
         season, agent_id, validators = await self._board(session_maker)
-        async with session_maker() as session:
-            pending = await agents_with_pending_rotation(
-                session, agent_ids=[agent_id], season_id=season, bench_version=16
-            )
-        assert pending == frozenset({agent_id})
+
+        async def pending_now() -> frozenset[UUID]:
+            async with session_maker() as session:
+                return await agents_with_pending_rotation(
+                    session, agent_ids=[agent_id], season_id=season, bench_version=16
+                )
+
+        # Queued for validators that cannot run a season seed: those re-scores
+        # cover no duel seed, so they must not hold the member's duel work.
+        assert await pending_now() == frozenset()
+        async with session_maker() as session, session.begin():
+            for validator in validators:
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=validator,
+                        software_version="0.451.0",
+                        protocol_version=35,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=datetime.now(UTC),
+                        seen_at=datetime.now(UTC),
+                        signature="cd" * 64,
+                    )
+                )
+        assert await pending_now() == frozenset({agent_id})
         now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
             ticket = await activate_next_score_retest(
@@ -2007,13 +2027,7 @@ class TestSeasonSeededRotation:
                     payload={"request_id": str(uuid4()), "reason": "test close"},
                     recorded_at=now,
                 )
-        async with session_maker() as session:
-            assert (
-                await agents_with_pending_rotation(
-                    session, agent_ids=[agent_id], season_id=season, bench_version=16
-                )
-                == frozenset()
-            )
+        assert await pending_now() == frozenset()
 
     async def test_rotation_waits_briefly_for_an_unpinned_anchor(
         self, session_maker: async_sessionmaker[AsyncSession]

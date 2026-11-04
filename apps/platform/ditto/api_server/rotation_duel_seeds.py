@@ -43,7 +43,13 @@ from ditto.api_server.confirmation_seed_anchor import (
 )
 from ditto.api_server.onchain_seed import derive_validator_seed
 from ditto.api_server.season_duel import season_duel_seed_count, season_duel_seeds
-from ditto.db.models import ConfirmationSeedAnchor, Score, ScoreAuditEntry
+from ditto.db.models import (
+    ConfirmationSeedAnchor,
+    Score,
+    ScoreAuditEntry,
+    ValidatorHeartbeat,
+    ValidatorTicket,
+)
 from ditto.db.queries.audit import (
     EVENT_SCORE_RETEST_QUEUED,
     EVENT_SCORE_RETEST_REQUESTED,
@@ -60,7 +66,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from ditto.api_models.continual_retest_settings import ContinualRetestSettings
-    from ditto.db.models import DuelingSeason, ValidatorTicket
+    from ditto.db.models import DuelingSeason
 
 ROTATION_ANCHOR_GRACE = timedelta(minutes=20)
 """How long a season-seeded rotation re-score waits for the season's anchor.
@@ -179,7 +185,11 @@ async def assign_rotation_seed(
                 rotation_seed_index(ticket.validator_hotkey, scorers.all(), count)
             ]
     if duel_seed is not None and anchor is not None:
-        if ticket.seed != duel_seed:
+        if (
+            ticket.seed != duel_seed
+            or ticket.seed_block != anchor.anchor_block
+            or ticket.seed_block_hash != anchor.anchor_block_hash
+        ):
             ticket.dataset_sha256 = None
         ticket.seed = duel_seed
         ticket.seed_block = anchor.anchor_block
@@ -319,10 +329,34 @@ async def agents_with_pending_rotation(
         )
     )
     wanted = str(season_id)
-    return frozenset(
-        entry.agent_id
-        for entry in latest
-        if entry.event in (EVENT_SCORE_RETEST_QUEUED, EVENT_SCORE_RETEST_REQUESTED)
-        and entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
-        and entry.payload.get("dueling_season_id") == wanted
-    )
+    pending: set[UUID] = set()
+    for entry in latest:
+        if (
+            entry.agent_id in pending
+            or entry.event
+            not in (EVENT_SCORE_RETEST_QUEUED, EVENT_SCORE_RETEST_REQUESTED)
+            or entry.payload.get("basis") != DUELING_ROTATION_RETEST_BASIS
+            or entry.payload.get("dueling_season_id") != wanted
+        ):
+            continue
+        # Only a rotation that will run on a duel seed covers one: a running
+        # re-score already bound to the season anchor, or a queued one for a
+        # validator that verifies season seeds. A canonical re-score covers
+        # nothing, so it must not hold back the member's duel seeds.
+        if entry.event == EVENT_SCORE_RETEST_REQUESTED:
+            ticket = await session.get(
+                ValidatorTicket,
+                (entry.agent_id, bench_version, entry.validator_hotkey),
+            )
+            covers = ticket is not None and (
+                await season_seed_binding(session, ticket) is not None
+            )
+        else:
+            heartbeat = await session.get(ValidatorHeartbeat, entry.validator_hotkey)
+            covers = (
+                heartbeat is not None
+                and heartbeat.protocol_version >= CROWN_DUEL_PROTOCOL
+            )
+        if covers:
+            pending.add(entry.agent_id)
+    return frozenset(pending)
