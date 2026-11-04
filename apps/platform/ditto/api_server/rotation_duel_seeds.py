@@ -137,6 +137,8 @@ async def defer_for_season_anchor(
     opened = season.opened_at
     if opened.tzinfo is None:
         opened = opened.replace(tzinfo=now.tzinfo)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=opened.tzinfo)
     if now - opened >= ROTATION_ANCHOR_GRACE:
         return False
     anchor = await _season_anchor(session, bench_version=bench_version)
