@@ -13,6 +13,9 @@ env_file="$(mktemp)"
 trap 'rm -f "$env_file" "${key:-/nonexistent}.tmp" "${cert:-/nonexistent}.tmp"' EXIT
 printf 'DITTO_ADMIN_API_TOKEN=%s\nSESSION_SECRET=%s\n' \
   "$DITTO_ADMIN_API_TOKEN" "$SESSION_SECRET" > "$env_file"
+if [ "${PREVIEW_PR:-0}" = 3359 ] && [ "${PREVIEW_PROFILE:-}" = stack ]; then
+  printf '%s\n' 'BACKROOM_ADMIN_EMAILS=synthetic-preview-only@omniaura.ai' >> "$env_file"
+fi
 
 # The public gateway terminates TLS, but Wrangler must also receive HTTPS so
 # the app's origin and security-header checks see the browser's scheme. Keep

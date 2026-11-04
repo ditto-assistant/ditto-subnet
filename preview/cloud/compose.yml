@@ -102,6 +102,8 @@ services:
       DITTO_PLATFORM_API_BASE_URL: http://platform:8000
       DITTO_ADMIN_API_TOKEN: ${PREVIEW_ADMIN_TOKEN}
       SESSION_SECRET: ${PREVIEW_SESSION_SECRET}
+      PREVIEW_PR: ${PREVIEW_PR:-0}
+      PREVIEW_PROFILE: ${PREVIEW_PROFILE}
       BACKROOM_PREVIEW_MODE: "true"
       BACKROOM_PREVIEW_SHA: ${PREVIEW_SHA}
     depends_on:
@@ -121,6 +123,19 @@ services:
     environment:
       PREVIEW_CONTROL_TOKEN: preview-only
     command: [uv, run, python, -m, ditto.preview, serve, --host, 127.0.0.1, --port, "8080", --network, preview, --endpoint, ws://127.0.0.1:9944, --netuid, "118", --validator-hotkey, 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY]
+
+  oauth-fixture:
+    profiles: [oauth-fixture]
+    build:
+      context: ../..
+      dockerfile: preview/cloud/oauth-fixture.Dockerfile
+    restart: unless-stopped
+    network_mode: service:gateway
+    environment:
+      PREVIEW_PR: ${PREVIEW_PR:-0}
+      PREVIEW_PROFILE: ${PREVIEW_PROFILE}
+      PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN}
+      PREVIEW_SESSION_SECRET: ${PREVIEW_SESSION_SECRET}
 
   validator:
     build:
