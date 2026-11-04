@@ -209,6 +209,9 @@ from ditto.api_server.endpoints.miner_mcp import router as miner_mcp_router
 from ditto.api_server.endpoints.miner_me import router as miner_me_router
 from ditto.api_server.endpoints.name_claims import router as name_claims_router
 from ditto.api_server.endpoints.public import router as public_router
+from ditto.api_server.endpoints.public_dueling import (
+    router as public_dueling_router,
+)
 from ditto.api_server.endpoints.retrieval import router as retrieval_router
 from ditto.api_server.endpoints.scoring import router as scoring_router
 from ditto.api_server.endpoints.screener import router as screener_router
@@ -240,6 +243,7 @@ __all__ = [
     "admin_inference_observability_router",
     "admin_generator_competition_router",
     "admin_dueling_router",
+    "public_dueling_router",
     "admin_generator_rounds_router",
     "admin_scoring_lease_settings_router",
     "generator_router",

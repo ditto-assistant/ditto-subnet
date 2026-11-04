@@ -14,9 +14,16 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError
 
+from ditto.api_models.continual_retest_settings import (
+    MAX_MIN_DETHRONE_CONFIRMATIONS,
+    AdminContinualRetestSettingsRequest,
+    ContinualRetestSettings,
+)
 from ditto.api_models.validator import ConfirmationScoreRecord, LedgerEntry
 from ditto.api_server.koth import (
+    TOP5_MAX_CONFIRMATION_SEEDS,
     CrownGate,
     KothEntry,
     crown_standings,
@@ -224,3 +231,66 @@ def test_pins_replay_only_a_well_formed_gate() -> None:
     assert served_crown_gate({}) is None
     bad = {"crown_gate": {"min_dethrone_confirmations": 1, "champion_standing_rank": 3}}
     assert served_crown_gate(bad) is None
+    # Replay parses against the validator's 15-seed fold ceiling, exactly as
+    # ``ditto.validator.worker._ledger_crown_gate`` does, not the work cap.
+    deep = {
+        "crown_gate": {"min_dethrone_confirmations": 12, "champion_standing_rank": 3}
+    }
+    assert served_crown_gate(deep) == CrownGate(12, 3)
+    past = {
+        "crown_gate": {"min_dethrone_confirmations": 16, "champion_standing_rank": 3}
+    }
+    assert served_crown_gate(past) is None
+
+
+def _write(min_confirmations: int) -> AdminContinualRetestSettingsRequest:
+    return AdminContinualRetestSettingsRequest(
+        expected_revision=0,
+        settings=ContinualRetestSettings(min_dethrone_confirmations=min_confirmations),
+        reason="seed cap bound check",
+        confirmation="APPLY",
+    )
+
+
+def test_operators_cannot_require_more_confirmations_than_the_work_cap() -> None:
+    assert MAX_MIN_DETHRONE_CONFIRMATIONS == TOP5_MAX_CONFIRMATION_SEEDS == 10
+    assert _write(10).settings.min_dethrone_confirmations == 10
+    with pytest.raises(ValidationError):
+        _write(11)
+
+
+def test_a_revision_stored_under_the_former_cap_keeps_its_policy() -> None:
+    """A stored 11-15 minimum loads faithfully (its checksum still matches) and
+    is served clamped to the work cap; nothing else resets."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from ditto.api_server.continual_retest_settings import (
+        crown_gate_for,
+        settings_from_row,
+    )
+    from ditto.db.models import ContinualRetestSettingsRevision
+
+    stored = {
+        "crown_gate_mode": "fleet_ready",
+        "crown_incumbent_mode": "fleet_ready",
+        "min_dethrone_confirmations": 12,
+        "champion_standing_rank": 2,
+        "retest_cohort_size": 5,
+        "retest_cohort_max_size": 5,
+    }
+    row = cast(
+        ContinualRetestSettingsRevision, SimpleNamespace(revision=7, settings=stored)
+    )
+
+    loaded = settings_from_row(row)
+
+    assert loaded.min_dethrone_confirmations == 12
+    assert loaded.crown_gate_mode == "fleet_ready"
+    assert loaded.crown_incumbent_mode == "fleet_ready"
+    assert loaded.champion_standing_rank == 2
+    assert crown_gate_for(loaded, fleet_protocol_ready=True) == CrownGate(
+        MAX_MIN_DETHRONE_CONFIRMATIONS, 2
+    )
+    with pytest.raises(ValidationError):
+        ContinualRetestSettings(min_dethrone_confirmations=16)

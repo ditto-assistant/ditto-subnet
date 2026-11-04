@@ -37,6 +37,7 @@ from ditto.validator.dittobench import (
     SUPPORTED_BENCH_VERSIONS,
     DittobenchClient,
     DittobenchProgressSnapshot,
+    DuelingSlice,
     InferenceBrokerSession,
     _agent_attributable_failure_code,
     _sandbox_infrastructure_failure_code,
@@ -52,6 +53,7 @@ from ditto.validator.errors import (
     failure_detail,
 )
 from ditto.validator.signing import score_signing_message
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 # The next epoch after the ceiling is the canonical *unsupported* version. It
 # moves with the shared derivation instead of being retyped each bump, which
@@ -1228,6 +1230,18 @@ async def test_current_versions_use_versioned_route_and_bind_request(
     config = SimpleNamespace(
         dittobench_api_url="http://dittobench.test", run_size="full"
     )
+    # A dueling version (16+) is scored only with its generator slice.
+    slice_bytes = b'{"contract":"dittobench-dueling-slice/v1"}'
+    dueling = (
+        DuelingSlice(
+            slice_bytes=slice_bytes,
+            expected_slice_sha256=hashlib.sha256(slice_bytes).hexdigest(),
+            owner_key="",
+            season_id="0b6f1c1e-6a52-4d8e-9a57-3f0c2d1e4b5a",
+        )
+        if is_dueling_bench_version(bench_version)
+        else None
+    )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
             tarball_url="https://example.test/agent.tgz",
@@ -1240,9 +1254,12 @@ async def test_current_versions_use_versioned_route_and_bind_request(
             screened_image_ref=(
                 "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
             ),
+            dueling_slice=dueling,
         )
     assert seen["path"] == "/v2/score"
-    assert cast(dict[str, object], seen["body"])["bench_version"] == bench_version
+    body = cast(dict[str, object], seen["body"])
+    assert body["bench_version"] == bench_version
+    assert ("dueling_slice_mode" in body) == (dueling is not None)
 
 
 @pytest.mark.asyncio

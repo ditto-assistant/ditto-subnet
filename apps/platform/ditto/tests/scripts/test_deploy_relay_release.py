@@ -31,6 +31,8 @@ def _run_release(
     with_sha256sums: bool = True,
     corrupt_binary_after_sums: bool = False,
     strip_exec_bit: bool = False,
+    danilabs_binding: bool = False,
+    danilabs_symlink: bool = False,
 ):
     artifact = tmp_path / "artifact"
     fake_bin = tmp_path / "bin"
@@ -68,6 +70,16 @@ def _run_release(
     platform_env.write_text(
         "PYLON_URL=http://127.0.0.1:1\nPERPLEXITY_API_KEY=direct-provider-test-key\n"
     )
+    danilabs_env = tmp_path / "danilabs.env"
+    if danilabs_binding or danilabs_symlink:
+        target = tmp_path / "binding" if danilabs_symlink else danilabs_env
+        target.write_text(
+            "DANILABS_API_KEY=synthetic-test-key\n"
+            "DANILABS_FREE_TRIAL_UNTIL=2026-11-04T02:20:54Z\n"
+            "DANILABS_TRIAL_SCOPE=canary\n"
+        )
+        if danilabs_symlink:
+            danilabs_env.symlink_to(target)
 
     command_log = tmp_path / "commands.log"
     jlist = json.dumps(
@@ -90,6 +102,8 @@ def _run_release(
         f"""
 echo "pm2 $*" >> "$TEST_COMMAND_LOG"
 echo "pm2 perplexity-bound=${{PERPLEXITY_API_KEY:+yes}}" >> "$TEST_COMMAND_LOG"
+echo "pm2 danilabs-bound=${{DANILABS_API_KEY:+yes}}" >> "$TEST_COMMAND_LOG"
+echo "pm2 danilabs-scope=${{DANILABS_TRIAL_SCOPE:-none}}" >> "$TEST_COMMAND_LOG"
 if [ "$1" = jlist ]; then
   printf '%s\\n' '{jlist}'
   exit 0
@@ -114,6 +128,9 @@ fi
         "DITTO_RELAY_STATE_ROOT": str(state),
         "DITTO_RELAY_PLATFORM_ENV": str(platform_env),
         "DITTO_RELAY_DEPLOY_ENV": str(tmp_path / "missing.deploy.env"),
+        "DITTO_RELAY_DANILABS_ENV": str(danilabs_env),
+        "DANILABS_API_KEY": "stale-ambient-test-key",
+        "DANILABS_TRIAL_SCOPE": "fleet",
         "DITTO_RELAY_START_TIMEOUT_SECONDS": "2",
         "FAIL_RELAY_2": "1" if fail_relay_2 else "0",
     }
@@ -159,7 +176,24 @@ def test_release_installs_binary_once_and_rolls_slots_in_order(
         "pm2 delete ditto-api-relay-2"
     )
     assert "pm2 perplexity-bound=yes" in commands
+    assert "pm2 danilabs-bound=\n" in commands
+    assert "pm2 danilabs-scope=none" in commands
     assert "relay-release-commit=" + COMMIT in result.stdout
+
+
+def test_release_loads_only_the_explicit_danilabs_binding(tmp_path: Path) -> None:
+    result, commands, _, _ = _run_release(tmp_path, danilabs_binding=True)
+    assert result.returncode == 0, result.stderr
+    assert "pm2 danilabs-bound=yes" in commands
+    assert "pm2 danilabs-scope=canary" in commands
+    assert "synthetic-test-key" not in result.stdout + result.stderr + commands
+
+
+def test_release_refuses_a_symlinked_danilabs_binding(tmp_path: Path) -> None:
+    result, commands, _, _ = _run_release(tmp_path, danilabs_symlink=True)
+    assert result.returncode != 0
+    assert "DaniLabs relay binding" in result.stderr
+    assert "pm2" not in commands
 
 
 def test_release_defaults_to_ansible_owned_monorepo_env() -> None:

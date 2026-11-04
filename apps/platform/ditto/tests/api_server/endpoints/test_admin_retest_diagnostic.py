@@ -413,6 +413,11 @@ async def test_stronger_successor_is_outside_the_cohort_it_outscores(
     assert incumbent_result.official_sample_count == 18
     assert incumbent_result.representative_selection == "self"
     assert incumbent_result.representative_margin == 0
+    # The lane's seed budget is visible: floor 8, work cap 10, and the live
+    # variance target (no recorded wave variance here, so the floor).
+    assert incumbent_result.confirmation_seed_floor == 8
+    assert incumbent_result.confirmation_seed_cap == 10
+    assert incumbent_result.confirmation_seed_target == 8
 
 
 def _decide(

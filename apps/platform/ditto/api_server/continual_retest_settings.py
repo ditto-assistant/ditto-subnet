@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_models.continual_retest_settings import (
+    MAX_MIN_DETHRONE_CONFIRMATIONS,
+    ContinualRetestSettings,
+)
 from ditto.api_server.koth import CrownGate
 
 if TYPE_CHECKING:
@@ -68,16 +71,27 @@ def statistical_band_cap_is_active(
     return settings.statistical_band_mode == "fleet_ready" and fleet_protocol_ready
 
 
+def configured_crown_gate(settings: ContinualRetestSettings) -> CrownGate:
+    """The operator's protocol-34 crown rules, active or not.
+
+    A revision stored under the former 15-seed cap is clamped here: no
+    challenger holds more shared seeds than the 10-seed work cap.
+    """
+    return CrownGate(
+        min_shared_seeds=min(
+            settings.min_dethrone_confirmations, MAX_MIN_DETHRONE_CONFIRMATIONS
+        ),
+        standing_rank=settings.champion_standing_rank,
+    )
+
+
 def crown_gate_for(
     settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
 ) -> CrownGate | None:
     """The protocol-34 crown rules to serve, or ``None`` for the pre-34 walk."""
     if settings.crown_gate_mode != "fleet_ready" or not fleet_protocol_ready:
         return None
-    return CrownGate(
-        min_shared_seeds=settings.min_dethrone_confirmations,
-        standing_rank=settings.champion_standing_rank,
-    )
+    return configured_crown_gate(settings)
 
 
 def crown_incumbent_is_active(

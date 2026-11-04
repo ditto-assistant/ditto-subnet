@@ -381,6 +381,95 @@ async def test_v14_canary_requires_the_v14_runtime_env_packet(
     assert (await issue(client, payload))["bench_version"] == 14
 
 
+def _runtime_env(version: int, revision: str, keys: list[str]) -> dict:
+    material = f"scored-runtime-env-v1\n{version}\n{revision}\n" + "\n".join(keys)
+    return {
+        "bench_version": version,
+        "scope": "scorer-injected-env-only",
+        "source_revision": revision,
+        "injected_keys": keys,
+        "sha256": hashlib.sha256(material.encode()).hexdigest(),
+    }
+
+
+async def test_v16_canary_leases_only_with_a_ready_dueling_slice(
+    client, ready, session_maker
+):
+    """A v16 (dueling) canary is issued only to a validator forwarding 16 in
+    ``dueling_slice_bench_versions``, and its claim cannot lease without a
+    ready slice: with no open v16 season the job answers 503 + Retry-After,
+    the canary stays issued and no score or ticket result is written."""
+    payload = {
+        **ready,
+        "bench_version": 16,
+        "confirmation": f"ISSUE CANARY V16 {ready['agent_id']}",
+    }
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.get(ValidatorHeartbeat, HOTKEY)
+        capabilities = dict(heartbeat.capabilities)
+        revision = capabilities["scorer_benchmarks"]["source_revision"]
+        scorer = {
+            **capabilities["scorer_benchmarks"],
+            "supported_bench_versions": [7, 8, 12, 13, 14, 15, 16],
+            "v14_scored_runtime_env": _runtime_env(
+                14, revision, ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+            ),
+            "v15_scored_runtime_env": _runtime_env(
+                15,
+                revision,
+                ["DITTOBENCH_DB", "DITTOBENCH_DECISIONS_URL", "DITTOBENCH_MODEL"],
+            ),
+            "v16_scored_runtime_env": _runtime_env(
+                16,
+                revision,
+                ["DITTOBENCH_DB", "DITTOBENCH_DECISIONS_URL", "DITTOBENCH_MODEL"],
+            ),
+        }
+        capabilities["scorer_benchmarks"] = scorer
+        heartbeat.capabilities = capabilities
+    # A scorer that runs 16 but forwards no slice versions is not v16-capable.
+    missing = await client.post(
+        "/api/v1/admin/benchmark-canaries", headers=_HEADERS, json=payload
+    )
+    assert missing.status_code == 409, missing.text
+    assert (
+        missing.json()["message"] == "validator lacks fresh target-version capability"
+    )
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.get(ValidatorHeartbeat, HOTKEY)
+        heartbeat.capabilities = {
+            **capabilities,
+            "scorer_benchmarks": {**scorer, "dueling_slice_bench_versions": [16]},
+        }
+    assert (await issue(client, payload))["bench_version"] == 16
+    async with session_maker() as session:
+        scores_before = await session.scalar(select(func.count()).select_from(Score))
+
+    now, nonce = datetime.now(UTC), uuid4()
+    signature = KEY.sign(
+        validator._job_signing_message(HOTKEY, nonce, now, "slot-0")
+    ).hex()
+    claim = await client.post(
+        "/api/v1/validator/job",
+        headers={"X-Validator-Hotkey": HOTKEY},
+        json={
+            "validator_hotkey": HOTKEY,
+            "nonce": str(nonce),
+            "requested_at": now.isoformat(),
+            "signature": signature,
+            "slot_id": "slot-0",
+        },
+    )
+    assert claim.status_code == 503, claim.text
+    assert "no dueling season is open for bench v16" in claim.text
+    assert int(claim.headers["Retry-After"]) > 0
+    async with session_maker() as session:
+        canary = await session.get(BenchmarkCanary, UUID(payload["canary_id"]))
+        assert canary is not None and canary.status == "issued"
+        scores_after = await session.scalar(select(func.count()).select_from(Score))
+        assert scores_after == scores_before
+
+
 async def test_later_ordinary_lease_starts_fresh(client, ready, session_maker):
     from ditto.api_models.agent_status import AgentStatus
     from ditto.api_models.screener import SCREENING_POLICY_VERSION

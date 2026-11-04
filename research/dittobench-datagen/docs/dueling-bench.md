@@ -278,6 +278,8 @@ v16 adds a third work kind beside `generate` and `score` in `round.go`:
   1-3 MiB) are kept in Platform-owned private storage until every contributing
   generator's source is released and the score-dispute window has passed. After
   that, only digests are kept, because anyone can regenerate the bytes.
+  Platform prunes on the season tick, 7 days after the later of the reveal
+  and the last pinned source release.
 
 ### Transport
 
@@ -446,6 +448,11 @@ cohort above 10 needs at least 4 epochs. At 25 it needs a longer season or
   calibration, because 35-case columns are noisier per seed.
 - **LongMem confirmation.** An instrument, not a per-epoch contract. The
   existing profile confirms v16 unchanged (bench-version-bump skill, section 1b).
+  **Decided 2026-11-03: the v9 confirmation-bundle lane carries no dueling
+  slice.** A bundle is one LongMem and ablation execution per artifact,
+  profile and generation, with no run seed and no datagen half, so there is
+  nothing to slice. A v16 bundle needs no dueling fields; the lane admits 16
+  once the shared evidence set (`V9EvidenceBenchVersion`) includes it.
 - **Efficiency, outlier escalation, deferred source review, ATH anomaly.**
   Efficiency and gates use the datagen half only in v16.0. Outlier and anomaly
   thresholds are recalibrated on the v16 shadow distribution before

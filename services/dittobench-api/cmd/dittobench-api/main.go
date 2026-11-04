@@ -489,7 +489,7 @@ func (s *server) scoredRuntimeEnvEvidenceForVersion(version int) *scoredRuntimeE
 // Platform's reviewed rollout and exact scorer packet govern scheduling.
 const (
 	advertisedMinBenchVersion = protocol.BenchVersionV8
-	advertisedMaxBenchVersion = protocol.BenchVersionV15
+	advertisedMaxBenchVersion = protocol.BenchVersionV16
 )
 
 // supportedBenchVersions is the capability set this build can administer. It is

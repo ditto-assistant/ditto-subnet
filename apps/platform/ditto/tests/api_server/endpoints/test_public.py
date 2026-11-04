@@ -3597,7 +3597,9 @@ class TestPublicLeaderboard:
         )
         # A reign this board never had: seeds anchored on some other agent, the
         # way a dethroned champion's trail survives in the append-only table.
-        stale_seeds = _anchor_seeds(str(uuid4()), count=8)
+        # Seven stale seeds plus the three live ones fill exactly the 10-seed
+        # board-wide active window, so the work cap trims nothing here.
+        stale_seeds = _anchor_seeds(str(uuid4()), count=7)
         live_seeds = _anchor_seeds(champion_id)
         assert not set(stale_seeds) & set(live_seeds)
 
@@ -3680,14 +3682,14 @@ class TestPublicLeaderboard:
         # The stale-only member permanently retains its own accepted samples.
         # They affect its mean but cannot become paired evidence against either
         # live member because the seed identities do not intersect.
-        assert entries[stale_only_id]["completed_wave_count"] == 8
-        assert entries[stale_only_id]["retained_sample_count"] == 8
+        assert entries[stale_only_id]["completed_wave_count"] == 7
+        assert entries[stale_only_id]["retained_sample_count"] == 7
         assert entries[stale_only_id]["aggregate_method"] == "continual_mean"
         assert entries[stale_only_id]["official_composite"] == pytest.approx(
-            (0.70 * 3 + 0.10 * 8) / 11
+            (0.70 * 3 + 0.10 * 7) / 10
         )
         # ...but the append-only audit trail is still reported in full.
-        assert entries[stale_only_id]["confirmation_seed_depth"] == 8
+        assert entries[stale_only_id]["confirmation_seed_depth"] == 7
 
     async def test_a_dethrone_keeps_the_evidence_the_cohort_already_shares(
         self,

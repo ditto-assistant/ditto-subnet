@@ -225,6 +225,9 @@ func TestDatasetFeaturesAdvertiseDuelingExactlyForRunVersions(t *testing.T) {
 	s := &server{allowDuelingSlices: true}
 	features := s.datasetFeatures()
 	runsDueling := slices.ContainsFunc(supportedBenchVersions(), protocol.DuelingBenchVersion)
+	if !runsDueling || !slices.Contains(features, "dueling-slice-bench-16") {
+		t.Fatalf("the flip advertises bench 16 with its slice mode: %v / %v", supportedBenchVersions(), features)
+	}
 	if slices.Contains(features, duelingSliceMode) != runsDueling {
 		t.Fatalf("dueling-slice-v1 advertised=%v, but the scorer runs a dueling version=%v (%v)",
 			slices.Contains(features, duelingSliceMode), runsDueling, supportedBenchVersions())

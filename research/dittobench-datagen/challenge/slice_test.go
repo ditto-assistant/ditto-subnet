@@ -3,6 +3,8 @@ package challenge
 import (
 	"encoding/json"
 	"os"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,15 +33,17 @@ type SliceVector struct {
 // floor, so the test keeps working when later versions ship.
 const testSliceBenchVersion = protocol.DuelingMinBenchVersion
 
-// testSlicePolicy is the newest pack policy a slice at testSliceBenchVersion
-// accepts.
+// testSlicePolicy is the oldest pack policy a slice at testSliceBenchVersion
+// accepts. The window at the floor is fixed once pack policy 16 exists
+// ({15, 16}), so its oldest entry never moves and neither do the slice
+// vectors; TestSliceAcceptsEveryPolicyInItsWindow covers the newest.
 func testSlicePolicy(t *testing.T) int {
 	t.Helper()
 	accepted := GradingBenchVersionsThrough(testSliceBenchVersion)
 	if len(accepted) == 0 {
 		t.Fatalf("a v%d slice accepts no pack policy", testSliceBenchVersion)
 	}
-	return accepted[len(accepted)-1]
+	return accepted[0]
 }
 
 // slicePack is a valid DuelingSliceCasesPerColumn-case pack generated for a
@@ -254,6 +258,53 @@ func repack(t *testing.T, col *SliceDatasetColumn, mutate func(*Pack)) {
 		t.Fatal(err)
 	}
 	col.Pack, col.PackSHA256 = compact, sum
+}
+
+// TestSliceAcceptsEveryPolicyInItsWindow decodes a slice at the dueling floor
+// whose columns declare each policy the floor's window accepts (15 and 16 at
+// v16), and refuses one that declares a policy outside it.
+func TestSliceAcceptsEveryPolicyInItsWindow(t *testing.T) {
+	t.Parallel()
+	accepted := GradingBenchVersionsThrough(testSliceBenchVersion)
+	if want := []int{GradingBenchVersionV15, GradingBenchVersionV16}; !reflect.DeepEqual(accepted, want) {
+		t.Fatalf("a v%d slice accepts %v, want %v", testSliceBenchVersion, accepted, want)
+	}
+	seasonSeed := testSliceSeasonSeed(t)
+	newest := accepted[len(accepted)-1]
+	ds := testSlice(t, seasonSeed, 7)
+	for i := range ds.Columns {
+		ds.Columns[i].GradingBenchVersion = newest
+		ds.Columns[i].Pack = slicePack(t, int64(200+i), ds.Columns[i].SliceSeed, newest)
+	}
+	raw, sum, err := EncodeSliceDataset(ds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, cols, err := DecodeSliceDataset(raw, sum); err != nil || len(cols) != protocol.DuelingSliceColumns {
+		t.Fatalf("a slice at policy %d must decode: %v", newest, err)
+	}
+	old := GradingBenchVersionV14
+	ds.Columns[0].GradingBenchVersion = old
+	ds.Columns[0].Pack = slicePack(t, 300, ds.Columns[0].SliceSeed, old)
+	if _, _, err := EncodeSliceDataset(ds); err == nil {
+		t.Fatalf("the encoder accepted a v%d slice column at policy %d", testSliceBenchVersion, old)
+	}
+	// The decoder must refuse it too, on bytes the validating encoder never saw.
+	sort.Slice(ds.Columns, func(i, j int) bool { return ds.Columns[i].ColumnID < ds.Columns[j].ColumnID })
+	for i := range ds.Columns {
+		compact, packSum, err := CompactPack(ds.Columns[i].Pack)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ds.Columns[i].Pack, ds.Columns[i].PackSHA256 = compact, packSum
+	}
+	forged, err := json.Marshal(ds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := DecodeSliceDataset(forged, Digest(forged)); err == nil || !strings.Contains(err.Error(), "grading_bench_version") {
+		t.Fatalf("a v%d slice must refuse a column at policy %d, got %v", testSliceBenchVersion, old, err)
+	}
 }
 
 func TestDecodeSliceDatasetRefusesBrokenBindings(t *testing.T) {

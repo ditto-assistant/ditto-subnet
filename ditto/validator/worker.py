@@ -2002,6 +2002,7 @@ class ValidatorWorker:
                     "scorer_benchmarks": scorer_benchmarks,
                     "treasury_weights": await self._treasury_weight_capability(),
                     "round_commitments": self._round_commitments.supported(),
+                    "season_commitments": (self._round_commitments.supports_seasons()),
                 }
             )
             # v9: per-component runtime health. A collector failure (or no

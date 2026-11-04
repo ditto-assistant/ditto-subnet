@@ -9,11 +9,11 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
 1. **Commit.** While the previous season (or round) runs, Platform draws the
    next season's 32-byte secret and publishes ``commitment =
    season_commitment(s, secret)`` on Platform, where ``s`` is the round index
-   the season opens on. The anchor block does not exist yet.
-   TODO(dueling): publish ``dds1:{s}:{commitment}`` on chain when
-   ``onchain_commitment`` is set. The round machinery elects validators to
-   write ``dgr1`` payloads; a ``dds1`` job needs the validator's publisher to
-   accept it, which is a validator change outside this layer.
+   the season opens on. The anchor block does not exist yet. When
+   ``onchain_commitment`` is set, elected validators publish
+   ``dds1:{s}:{commitment}`` on chain while the season is committed
+   (:mod:`ditto.api_server.dueling_season_commitments`, the season twin of
+   the round lane's ``dgr1``); shadow seasons publish too.
 2. **Battery.** Each candidate column (eligibility rules 1, 2 and 4 of section
    1: active, qualified, a counted or challenger column in a scored round
    inside ``window_days`` with ``column score > 0`` and an unsolved fraction of
@@ -35,7 +35,13 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
    as its bench version is neither active nor rolling out. Disabling dueling
    commits no new season but lets the open one finish.
 5. **Reveal.** ``privacy_window_rounds`` subnet epochs after it closes, the
-   secret and season seed become readable.
+   secret and season seed become readable, publicly
+   (``/public/dueling/seasons``), with the pins ``reproduce-slice`` needs.
+6. **Release.** Each pinned generator's exact source is published at
+   ``max(last pinning season's reveal, first pinning season's close +
+   embargo_hours)`` (:mod:`ditto.api_server.generator_source_releases`).
+   Once every source a revealed season pinned is released and the score
+   dispute window has passed, its slice bytes are pruned (digests kept).
 
 Seasons only open while ``dueling_enabled``, a contract ``>= 16`` is active
 (an authoritative season) or is the desired version of an open rollout (a
@@ -73,6 +79,13 @@ from ditto.api_models.dueling import (
 )
 from ditto.api_models.generator_round_validator import accepted_grading_versions
 from ditto.api_models.source_disclosure import SourceDisclosure
+from ditto.api_server.dueling_season_commitments import (
+    settle_season_commitment_publications,
+)
+from ditto.api_server.generator_source_releases import (
+    prune_released_slice_bytes,
+    sync_generator_source_releases,
+)
 from ditto.db.models import (
     DuelingSeason,
     DuelingSeasonBattery,
@@ -345,6 +358,9 @@ def _commit_season(
         rounds_per_season=resolved.settings.rounds_per_season,
         settings_revision=resolved.revision,
         detail={"committed_epoch_index": position.subnet_epoch_index},
+        commitment_publication=(
+            "pending" if resolved.settings.onchain_commitment else "disabled"
+        ),
     )
 
 
@@ -844,6 +860,20 @@ async def advance_seasons(
                     f"season {committed.season_index}: {queued} battery candidate(s)"
                 )
     await session.flush()
+    # Close on-chain commitment publication for seasons that left committed.
+    notes.extend(await settle_season_commitment_publications(session))
+    # 5. Publish pinned generator sources whose embargo and reveal have passed.
+    try:
+        async with session.begin_nested():
+            notes.extend(await sync_generator_source_releases(session, now=now))
+    except Exception:  # noqa: BLE001 - a release sync never blocks seasons
+        logger.exception("dueling seasons: generator source release sync failed")
+    # 6. Prune slice bytes anyone can now regenerate, in its own savepoint.
+    try:
+        async with session.begin_nested():
+            notes.extend(await prune_released_slice_bytes(session, now=now))
+    except Exception:  # noqa: BLE001 - pruning never blocks seasons
+        logger.exception("dueling seasons: slice byte prune failed")
     for note in notes:
         logger.info("dueling seasons: %s", note)
     return notes
