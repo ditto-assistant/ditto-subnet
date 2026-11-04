@@ -78,3 +78,17 @@ func TestV16CompositeGateUsesTheReference(t *testing.T) {
 		t.Fatalf("v15 composite gate = %v, want 0.92", got)
 	}
 }
+
+func TestMetamorphicTierIsPublishedFromBench16(t *testing.T) {
+	run := twinRun(5, 1)
+	if got := MetamorphicTierForVersion(run, protocol.BenchVersionV15); got != nil {
+		t.Fatalf("v15 tier = %+v", got)
+	}
+	got := MetamorphicTierForVersion(run, 16)
+	if got == nil || got.Groups != 5 || got.SplitGroups != 1 || got.ReferenceGroups != 13 || got.Factor != compositeGateV7(run, 16) {
+		t.Fatalf("v16 tier = %+v", got)
+	}
+	if MetamorphicTierForVersion(nil, 16) != nil {
+		t.Fatal("tier without twins")
+	}
+}

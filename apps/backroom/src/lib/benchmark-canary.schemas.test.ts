@@ -51,6 +51,7 @@ describe('benchmark canary boundary', () => {
         memory_mean: .5, n: 350, generated_at: 'now',
         details: { priced_cost: priced, dueling, transcript: 'private trace',
           tool_efficiency: 0.95, memory_over_call: 0.94, metamorphic_consistency: 1,
+          metamorphic: { groups: 5, split_groups: 0, reference_groups: 13, factor: 1 },
           conversational_sanity: 1, transform_robustness: 0.9,
           audit_pairs: { both_correct: 9, base_only: 1, transform_only: 0, both_wrong: 0 },
           token_efficiency: { multiplier: 1, formula_version: 'private-formula' },
@@ -66,6 +67,7 @@ describe('benchmark canary boundary', () => {
     expect(result.result?.details?.dueling?.columns[0]).toEqual({ column_id: 'c0', n: 35, sum: 30, substituted: false })
     expect(result.result?.details?.gate_factors).toMatchObject({
       tool_efficiency: 0.95, memory_over_call: 0.94, transform_robustness: 0.9,
+      metamorphic: { groups: 5, split_groups: 0, reference_groups: 13, factor: 1 },
       token_efficiency: { multiplier: 1 },
       v9_base: { applied_gate_factor_bps: 10000, ordinary_composite_micros: 633747,
         score_gates: { rollout_mode: 'shadow', model_use: { result: 'passed', factor_bps: 10000 } } },

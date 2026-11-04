@@ -229,6 +229,23 @@ func metamorphicConsistencyFactorForVersion(perCase []protocol.CaseScore, maxPen
 	return metamorphicConsistencyFactorWith(perCase, maxPenalty)
 }
 
+// MetamorphicTierForVersion publishes the applied metamorphic tier for
+// details.metamorphic. nil below MetamorphicReferenceMinBenchVersion and when
+// no twin group ran.
+func MetamorphicTierForVersion(perCase []protocol.CaseScore, benchVersion int) *protocol.MetamorphicTier {
+	if benchVersion < MetamorphicReferenceMinBenchVersion {
+		return nil
+	}
+	consistent, total := metamorphicGroupCounts(perCase)
+	if total == 0 {
+		return nil
+	}
+	return &protocol.MetamorphicTier{
+		Groups: total, SplitGroups: total - consistent, ReferenceGroups: MetamorphicReferenceGroups,
+		Factor: metamorphicConsistencyFactorForVersion(perCase, v7MetamorphicMaxPenalty, benchVersion),
+	}
+}
+
 // metamorphicConsistencyFactorWith is MetamorphicConsistencyFactor with an
 // explicit max penalty.
 func metamorphicConsistencyFactorWith(perCase []protocol.CaseScore, maxPenalty float64) float64 {
