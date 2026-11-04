@@ -396,6 +396,48 @@ class TestScoreRetestLockingAndPriority:
             assert resumed.agent_id == agent_id
             assert resumed.deadline == _NOW + timedelta(minutes=75)
 
+    async def test_replacement_on_a_scored_continual_retest_row_drops_wave_seed(
+        self, session: AsyncSession
+    ) -> None:
+        """A continual retest closes ``scored`` holding its shared wave seed.
+
+        Promoting a score re-test onto that row must clear the wave pin, so
+        the job lane re-derives the validator-identity seed instead of
+        refusing every poll with 409 "ticket seed does not match its
+        validator identity" (5CFtz slot-0, 2026-11-04).
+        """
+        agent_id = uuid4()
+        async with session.begin():
+            await _seed_contract_retest(
+                session,
+                agent_id=agent_id,
+                run_id="retested-replacement",
+                event=EVENT_SCORE_RETEST_QUEUED,
+                request_id=str(uuid4()),
+                name="retested replacement",
+            )
+            row = await session.get(ValidatorTicket, (agent_id, 9, _HOTKEY))
+            assert row is not None
+            row.purpose = TicketPurpose.CONTINUAL_RETEST
+            row.purpose_revision = 2
+            row.seed = 424242
+            row.dataset_sha256 = "cd" * 32
+        async with session.begin():
+            promoted = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                required_basis=V9_CONTRACT_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+                ttl=timedelta(minutes=75),
+            )
+            assert promoted is not None and promoted.agent_id == agent_id
+            assert promoted.purpose == TicketPurpose.CANONICAL_QUORUM
+            assert (promoted.seed, promoted.dataset_sha256) == (None, None)
+            assert (promoted.seed_block, promoted.seed_block_hash) == (None, None)
+
     async def test_promoted_replacement_defaults_to_the_paired_180_minutes(
         self, session: AsyncSession
     ) -> None:
