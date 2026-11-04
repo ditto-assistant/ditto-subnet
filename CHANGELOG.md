@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.449.0 (2026-11-04)
+
+### Features
+
+- **platform,model-relay**: Refuse chat on no-chat inference grants
+  ([#3375](https://github.com/ditto-assistant/ditto-subnet/pull/3375),
+  [`b008a5d`](https://github.com/ditto-assistant/ditto-subnet/commit/b008a5d90a10ed5d33210417cf769f951d7fbddd))
+
+
 ## v0.448.0 (2026-11-04)
 
 ### Features
