@@ -162,7 +162,8 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			recordDecisionUsage(session, response.StatusCode, nil, pending)
 		} else {
-			settleDecisionWithoutUsage(session, pending, false)
+			// A cancel mid-read may follow relay metering; keep the bound.
+			settleDecisionWithoutUsage(session, pending, requestCtx.Err() != nil)
 		}
 		writeError(w, http.StatusBadGateway, "decision lane unavailable")
 		return
