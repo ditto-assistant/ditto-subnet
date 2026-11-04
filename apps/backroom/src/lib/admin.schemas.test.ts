@@ -3988,6 +3988,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     wave_seeds_per_window: false,
     retest_mode: false,
     season_duel_seeds: false,
+    season_duel_rotation_seeds: false,
   }
   const fullSupport = Object.fromEntries(
     Object.keys(legacySupport).map((field) => [field, true]),
@@ -4015,6 +4016,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     wave_seeds_per_window: 3,
     retest_mode: 'continual' as const,
     season_duel_seeds: 3,
+    season_duel_rotation_seeds: false,
   }
 
   it('reads a dethrone minimum up to the 15-seed ceiling but writes at most 10', () => {
@@ -4132,6 +4134,7 @@ describe('continual retest cohort sizing against an older platform', () => {
       wave_seeds_per_window: false,
       retest_mode: false,
       season_duel_seeds: false,
+      season_duel_rotation_seeds: false,
     })
     expect(continualRetestFieldSupport(null).wave_membership).toBe(false)
   })
@@ -4159,6 +4162,7 @@ describe('continual retest write contract', () => {
     wave_seeds_per_window: 3,
     retest_mode: 'continual' as const,
     season_duel_seeds: 3,
+    season_duel_rotation_seeds: false,
   }
 
   it('refuses a season duel that could never carry a dethrone case', () => {
@@ -4175,6 +4179,7 @@ describe('continual retest write contract', () => {
         ...complete,
         retest_mode: 'season_duel',
         season_duel_seeds: 3,
+        season_duel_rotation_seeds: false,
       }).success,
     ).toBe(true)
   })
@@ -4203,6 +4208,7 @@ describe('continual retest write contract', () => {
       'wave_seeds_per_window',
       'retest_mode',
       'season_duel_seeds',
+      'season_duel_rotation_seeds',
     ] as const) {
       const { [field]: _omitted, ...partial } = complete
       expect(continualRetestSettingsWriteSchema.safeParse(partial).success).toBe(false)
@@ -4249,6 +4255,7 @@ describe('continual retest write contract', () => {
         wave_seeds_per_window: 3,
         retest_mode: 'continual' as const,
         season_duel_seeds: 3,
+        season_duel_rotation_seeds: false,
       }).success,
     ).toBe(true)
   })
@@ -4282,6 +4289,7 @@ describe('continual retest write contract', () => {
       wave_seeds_per_window: 3,
       retest_mode: 'continual' as const,
       season_duel_seeds: 3,
+      season_duel_rotation_seeds: false,
     })
   })
 

@@ -186,19 +186,34 @@ rotation re-scores on the season's K = 3 shared seeds instead (quorum validator
 and the seed's confirmation record. One run is then both level evidence and
 duel evidence. The continual lane is idle in `season_duel` once this is active.
 
-Validators verify a season-seeded quorum lease the same way they verify a
-confirmation pin (`seed_scope: "season"` plus the anchor binding fields).
-Platform only issues these leases to validators that advertise protocol 35.
+**As built** (`apps/platform/ditto/api_server/rotation_duel_seeds.py`, behind
+`season_duel_rotation_seeds`, default off; only under `retest_mode:
+season_duel`):
 
-New uploads follow the same rule. An upload whose seed-binding block (its
-job-ready block) precedes the season anchor block gets the season's shared
-seeds for its three canonical runs. They double as its first three duel
-pairs, with no catch-up runs. A later upload keeps the per-agent
-`derive_validator_seed` seeds and joins the duel at the next season's
-rotation. Either way, no scored seed is ever predictable at submission. This
-is the one refinement to the approved target: putting every new upload on
-already-public season seeds would let it hard-code that season's datagen
-cases.
+- **Seed.** When a rotation re-score is promoted, quorum validator `i` takes
+  duel seed `i mod K`. `i` is the validator's rank among the agent's scorers,
+  so three re-scores cover the three seeds. The ticket keeps the season
+  anchor's block binding.
+- **Lease.** The lease serves `seed_scope: "season"` with
+  `seed_anchor_agent_id` and `seed_index`, and the validator re-derives the
+  seed (protocol 35).
+  - Platform recognises a season-scoped ticket with no stored marker: its seed
+    is not the canonical `derive_validator_seed` over its own pinned block, and
+    a pinned season anchor derives it over that block.
+- **Mirror.** The accepted score is also appended as that seed's confirmation
+  record. While a member's rotation is still queued or running, the continual
+  lane owes it no duel seed.
+- **Fallbacks.** In each of these cases the re-score keeps, or returns to, its
+  canonical seed, so no season's quorum is ever stranded:
+  - a protocol-34 validator;
+  - a season anchor still unpinned 20 minutes after the season opened (until
+    then, the re-score waits for it);
+  - the setting turned off.
+
+New uploads keep their canonical seeds and join the duel through the continual
+lane if they reach the top five. Putting a new upload on already-public
+season seeds would let it hard-code that season's datagen cases, so that part
+of the original target is not built.
 
 ### 5. Run budget
 
@@ -211,7 +226,7 @@ cases.
 
 Phase B2 saves about $170 a day against today (−60%, about $62k a year) and
 about $480 a day against v16 as merged. New uploads' canonical runs are
-unchanged in count; in Phase B2 they also count as duel evidence.
+unchanged in count and stay on canonical seeds.
 
 ### 6. Parity and rollout
 
@@ -248,11 +263,10 @@ receipt fails with `ledger_pin_mismatch`.
     unchanged.
   - **Rollout.** Phase B is active only after compat-2 adoption: release,
     deploy and every validator updated.
-- **Phase B2 (follow-up).** Run rotation re-scores, and new uploads that
-  predate the season anchor, on the season's shared seeds. This needs a
-  validator-verified `seed_scope: "season"` quorum lease, since today the
-  validator re-derives every quorum seed with `derive_validator_seed`. It takes
-  the run budget from about 150 to about 75 a day and changes no fold.
+- **Phase B2.** Rotation re-scores run on the season's shared seeds behind
+  `season_duel_rotation_seeds`, default off (section 4). The validator half
+  shipped with protocol 35. It takes the run budget from about 150 to about 75
+  a day and changes no fold.
 
 ### 7. Phases
 

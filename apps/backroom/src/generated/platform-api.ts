@@ -21856,6 +21856,11 @@ export interface components {
              */
             rollout_standdown: "off" | "capable_validators" | "all";
             /**
+             * Season Duel Rotation Seeds
+             * @default false
+             */
+            season_duel_rotation_seeds: boolean;
+            /**
              * Season Duel Seeds
              * @default 3
              */
