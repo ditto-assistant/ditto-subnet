@@ -35,6 +35,10 @@ from fastapi import HTTPException, Response
 logger = logging.getLogger(__name__)
 
 RequestLane = Literal["job", "top5_confirmation", "scoring_ledger"]
+# Lanes that lease work. There a 503 carrying ``Retry-After`` (a v16+ dueling
+# slice still being prepared, say) is a deferral the validator waits out on the
+# same slot, so it is tallied as ``retry_later`` rather than ``http_503``.
+_LEASE_LANES = frozenset({"job", "top5_confirmation"})
 RECENT_WINDOW = timedelta(minutes=15)
 MAX_VALIDATORS = 256
 MAX_DETAIL_CHARS = 200
@@ -152,9 +156,15 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def _outcome_from_exception(exc: BaseException) -> tuple[str, str | None]:
+def _outcome_from_exception(exc: BaseException, lane: str) -> tuple[str, str | None]:
     if isinstance(exc, HTTPException):
         detail = exc.detail if isinstance(exc.detail, str) else repr(exc.detail)
+        if (
+            lane in _LEASE_LANES
+            and exc.status_code == 503
+            and (exc.headers or {}).get("Retry-After")
+        ):
+            return "retry_later", detail
         return f"http_{exc.status_code}", detail
     return f"error_{type(exc).__name__}", str(exc) or None
 
@@ -199,7 +209,7 @@ def track_request_outcomes(
                 _safely(_record_unauthenticated, lane, type(exc).__name__)
                 raise
             except BaseException as exc:
-                outcome, detail = _outcome_from_exception(exc)
+                outcome, detail = _outcome_from_exception(exc, lane)
                 _safely(_record, payload, header_hotkey, lane, outcome, detail)
                 raise
             else:
