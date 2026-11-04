@@ -2530,3 +2530,46 @@ def test_round_seconds_left_tracks_the_closing_boundary() -> None:
     # Past the closing epoch no time is left; before the round, no estimate.
     assert round_seconds_left(row, _head(epoch=32, last_epoch_block=0, block=1)) == 0
     assert round_seconds_left(row, _head(epoch=27, last_epoch_block=0, block=1)) is None
+
+
+def test_round_signature_ignores_labels_order_and_counted() -> None:
+    """The same generator sources on the same panel measure the same thing,
+    whichever column is counted; a different source or champion does not."""
+    from ditto.api_server.generator_rounds import _round_signature
+
+    a = {"submission_id": "a", "source_sha256": "1", "public_default": False}
+    b = {"submission_id": "b", "source_sha256": "2", "public_default": False}
+    panel = [
+        {"agent_id": "x", "champion": True},
+        {"agent_id": "y", "champion": False},
+    ]
+    params: dict[str, float | int] = {"min_panel": 3, "target_cases": 70}
+
+    def signature(columns: list[dict], seats: list[dict] = panel) -> str:
+        return _round_signature(
+            columns=columns,
+            panel=seats,
+            bench_version=15,
+            cases_per_column=70,
+            score_params=params,
+        )
+
+    base = signature(
+        [
+            {**a, "column_id": "c0", "counted": True},
+            {**b, "column_id": "c1", "counted": False},
+        ]
+    )
+    assert base == signature(
+        [
+            {**b, "column_id": "c0", "counted": True},
+            {**a, "column_id": "c1", "counted": False},
+        ]
+    )
+    assert base != signature(
+        [{**a, "column_id": "c0"}, {**b, "column_id": "c1", "source_sha256": "3"}]
+    )
+    assert base != signature(
+        [{**a, "column_id": "c0"}, {**b, "column_id": "c1"}],
+        [{"agent_id": "x", "champion": False}, {"agent_id": "y", "champion": True}],
+    )
