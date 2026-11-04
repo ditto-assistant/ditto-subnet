@@ -2232,9 +2232,23 @@ class PricedCostEstimateTest(unittest.TestCase):
                     with self.assertRaises(LOCAL.urllib.error.HTTPError) as caught:
                         LOCAL.urllib.request.urlopen(request, timeout=10)
                     self.assertEqual(caught.exception.code, code)
+                    caught.exception.close()
+                # A body without Content-Length (chunked) is refused, not
+                # forwarded empty.
+                host_port = base.split("//", 1)[1].split("/", 1)[0]
+                host, port = host_port.split(":")
+                path = "/" + base.split("//", 1)[1].split("/", 1)[1] + "/chat/completions"
+                with LOCAL.socket.create_connection((host, int(port)), timeout=10) as raw:
+                    raw.sendall(
+                        f"POST {path} HTTP/1.1\r\nHost: {host_port}\r\n"
+                        "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                        "2\r\n{}\r\n0\r\n\r\n".encode()
+                    )
+                    status_line = raw.makefile("rb").readline().decode()
+                self.assertIn(" 411 ", status_line)
                 for _ in range(2):
                     request = LOCAL.urllib.request.Request(
-                        env["DITTOBENCH_INFERENCE_BASE_URL"] + "/chat/completions",
+                        env["DITTOBENCH_INFERENCE_BASE_URL"] + "/chat/completions?trace=1",
                         data=b'{"model":"openai/gpt-oss-20b","messages":[]}',
                         method="POST",
                         headers={"Content-Type": "application/json"},
@@ -2262,7 +2276,10 @@ class PricedCostEstimateTest(unittest.TestCase):
         finally:
             upstream.shutdown()
             upstream.server_close()
-        self.assertEqual([s["path"] for s in seen], ["/v1/chat/completions"] * 3)
+        self.assertEqual(
+            [s["path"] for s in seen],
+            ["/v1/chat/completions?trace=1"] * 2 + ["/v1/chat/completions"],
+        )
         self.assertEqual([s["auth"] for s in seen], ["Bearer sk-local"] * 2 + ["Bearer ticket"])
         estimate = COST.estimate(meter, {"n": 2})
         assert estimate is not None

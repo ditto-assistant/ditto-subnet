@@ -65,7 +65,9 @@ func (b *inferenceBroker) sessionPricedUsage(id string) (brokerPricedUsage, bool
 		embeddingTokens:      session.embeddingTokens,
 		decisionCalls:        session.decisionCompleted,
 		decisionUsageMissing: session.decisionUsageMissing,
-		decisionInputTokens:  session.decisionInputTokens,
+		// A decision call still in flight is priced at its request-size
+		// upper bound until it settles (decision_lane.go).
+		decisionInputTokens:  session.decisionInputTokens + session.decisionPendingBytes,
 		decisionOutputTokens: session.decisionOutputTokens,
 	}, true
 }

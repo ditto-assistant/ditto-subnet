@@ -174,10 +174,12 @@ class CostMeter:
                 if not self.path.startswith(prefix + "/"):
                     return None
                 rest = self.path[len(prefix) :]
-                if self.command == "POST" and rest == "/chat/completions":
-                    return rest
-                if self.command == "GET" and rest == "/models":
-                    return rest
+                path, separator, query = rest.partition("?")
+                suffix = f"?{query}" if separator else ""
+                if self.command == "POST" and path == "/chat/completions":
+                    return path + suffix
+                if self.command == "GET" and path == "/models":
+                    return path + suffix
                 return None
 
             def do_GET(self) -> None:  # noqa: N802
@@ -195,8 +197,14 @@ class CostMeter:
                 if route is None:
                     self._reply(404, b'{"error":"not found"}', "application/json")
                     return
+                raw_length = self.headers.get("Content-Length")
+                if raw_length is None:
+                    self._reply(
+                        411, b'{"error":"Content-Length required"}', "application/json"
+                    )
+                    return
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
+                    length = int(raw_length)
                 except ValueError:
                     self._reply(
                         400, b'{"error":"bad Content-Length"}', "application/json"

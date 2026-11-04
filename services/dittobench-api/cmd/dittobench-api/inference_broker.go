@@ -184,6 +184,9 @@ type brokerSession struct {
 	// cost; recordDecisionUsage).
 	decisionCompleted    uint64
 	decisionUsageMissing uint64
+	// decisionPendingBytes is the request size of decision calls dispatched
+	// but not yet settled, priced as input tokens until they settle.
+	decisionPendingBytes uint64
 	decisionInputTokens  uint64
 	decisionOutputTokens uint64
 	// chatConcurrency is the per-source in-flight chat admission for this

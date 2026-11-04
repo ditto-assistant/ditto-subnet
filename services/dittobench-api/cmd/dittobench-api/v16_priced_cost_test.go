@@ -156,15 +156,27 @@ func TestDecisionLaneUsageIsBookedForPricing(t *testing.T) {
 // A decision call the relay metered but answered with an error is still
 // priced; a 2xx without usage makes the priced cost insufficient evidence.
 func TestDecisionUsageCompleteness(t *testing.T) {
-	session := &brokerSession{}
-	recordDecisionUsage(session, http.StatusTooManyRequests, []byte(`{"usage":{"input_tokens":50,"output_tokens":0}}`))
-	recordDecisionUsage(session, http.StatusBadGateway, []byte(`{"error":"down"}`))
-	if session.decisionCompleted != 0 || session.decisionInputTokens != 50 || session.decisionUsageMissing != 0 {
+	session := &brokerSession{decisionPendingBytes: 4 * 100}
+	recordDecisionUsage(session, http.StatusTooManyRequests, []byte(`{"usage":{"input_tokens":50,"output_tokens":0}}`), 100)
+	recordDecisionUsage(session, http.StatusBadGateway, []byte(`{"error":"down"}`), 100)
+	if session.decisionCompleted != 0 || session.decisionInputTokens != 50 || session.decisionUsageMissing != 0 || session.decisionPendingBytes != 200 {
 		t.Fatalf("non-2xx booking = %+v", session)
 	}
-	recordDecisionUsage(session, http.StatusOK, []byte(`{"answers":{}}`))
+	// Absent usage fields are not zero-token usage.
+	recordDecisionUsage(session, http.StatusOK, []byte(`{"usage":{}}`), 100)
 	if session.decisionCompleted != 1 || session.decisionUsageMissing != 1 {
 		t.Fatalf("2xx without usage = completed %d missing %d", session.decisionCompleted, session.decisionUsageMissing)
+	}
+	// One call is still in flight: the snapshot prices its 100-byte upper bound.
+	usage, _ := (&inferenceBroker{sessions: map[string]*brokerSession{"s": session}}).sessionPricedUsage("s")
+	if usage.decisionInputTokens != 150 {
+		t.Fatalf("in-flight decision not priced at its upper bound: %+v", usage)
+	}
+	// A cancelled call keeps its bound; a transport failure is not charged.
+	settleDecisionWithoutUsage(session, 60, true)
+	settleDecisionWithoutUsage(session, 40, false)
+	if session.decisionPendingBytes != 0 || session.decisionInputTokens != 110 {
+		t.Fatalf("settled without usage = %+v", session)
 	}
 	b := newInferenceBroker(1)
 	b.sessions = map[string]*brokerSession{"s": session}
