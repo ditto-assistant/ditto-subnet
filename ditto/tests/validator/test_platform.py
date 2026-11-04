@@ -230,6 +230,27 @@ async def test_job_claim_types_a_retry_later_refusal(
         assert "dueling slice preparation pending" in str(raised.value)
 
 
+async def test_confirmation_claim_types_a_retry_later_refusal() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"detail": "dueling slice preparation pending"},
+            headers={"Retry-After": "15"},
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformRetryLaterError) as raised:
+            await platform.request_top5_confirmation_job(slot_id="slot-0")
+    assert raised.value.retry_after_seconds == 15.0
+
+
 async def test_job_claim_conflict_is_not_a_retry_later() -> None:
     """409 keeps its plain refusal even when it carries Retry-After."""
     keypair = bittensor.Keypair.create_from_uri("//Alice")

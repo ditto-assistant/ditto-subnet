@@ -6994,6 +6994,42 @@ class TestJobRetryLater:
         assert platform.request_job.await_count == 1
         assert waits == []
 
+    async def test_confirmation_claim_deferral_repolls_the_same_slot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_top5_confirmation_job = AsyncMock(
+            side_effect=[_retry_later(15.0), _retry_later(15.0), None]
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        assert await worker._run_top5_confirmation_lane() is False
+
+        assert [
+            call.kwargs["slot_id"]
+            for call in platform.request_top5_confirmation_job.await_args_list
+        ] == ["slot-0"] * 3
+        assert waits == [15.0, 15.0]
+
+    async def test_confirmation_claim_deferrals_are_bounded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cap = worker_mod._JOB_RETRY_LATER_MAX_CONSECUTIVE
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_top5_confirmation_job = AsyncMock(
+            side_effect=lambda **_: _raise_retry_later()
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        assert await worker._run_top5_confirmation_lane() is False
+
+        assert platform.request_top5_confirmation_job.await_count == cap + 1
+        assert waits == [15.0] * cap
+        # Nothing was leased, so nothing is handed back against the agent.
+        platform.report_ticket_failed.assert_not_awaited()
+
 
 def _raise_retry_later() -> None:
     raise _retry_later(15.0)

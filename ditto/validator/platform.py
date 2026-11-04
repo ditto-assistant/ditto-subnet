@@ -2040,6 +2040,16 @@ class PlatformClient:
             raise PlatformError(f"top-5 confirmation job request failed: {e}") from e
         if resp.status_code == 204:
             return None
+        if resp.status_code == 503:
+            # Same deferral as ``request_job``: a v16+ confirmation lease also
+            # waits on the season's dueling slice for its seed.
+            retry_after = _job_retry_after_seconds(resp)
+            if retry_after is not None:
+                raise PlatformRetryLaterError(
+                    f"top-5 confirmation job deferred (503, retry after "
+                    f"{retry_after:g}s): {resp.text[:200]}",
+                    retry_after_seconds=retry_after,
+                )
         if resp.status_code != 200:
             raise PlatformError(
                 f"top-5 confirmation job rejected "
