@@ -83,6 +83,20 @@ describe('bounded MCP pre-parser', () => {
     expect((response as Response).status).toBe(400)
     expect(cancelled).toBe(true)
   })
+  it('bounds empty reads even when interleaved with nonempty chunks', async () => {
+    let cancelled = false
+    let reads = 0
+    const incoming = new Request('https://backroom.example/mcp', {
+      method: 'POST', body: new ReadableStream({
+        pull(controller) { controller.enqueue(++reads % 2 ? new Uint8Array() : new Uint8Array([120])) },
+        cancel() { cancelled = true },
+      }), duplex: 'half',
+    } as RequestInit)
+    const response = await boundMcpRequest(incoming)
+    expect((response as Response).status).toBe(400)
+    expect(cancelled).toBe(true)
+    expect(reads).toBeLessThan(40)
+  })
   it('keeps the original body readable after an observer clone rejects it', async () => {
     const body = '{"jsonrpc":"2.0","id":1,"method":"resources/list"}'
     const bounded = await boundMcpRequest(request([body]))
