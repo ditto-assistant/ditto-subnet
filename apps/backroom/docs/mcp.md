@@ -152,7 +152,13 @@ in it (`wave_window_opened_seed_count`, a count) and `wave_growth_paused`, true
 when the window's `wave_seeds_per_window` budget is spent. A paused window
 withholds only fresh shared seeds; catch-up and open waves still lease. Null
 window fields at a positive cadence mean no ledger pin anchors a window, and
-pacing fails open. A
+pacing fails open. `retest_mode` names the lane's mode. Under `season_duel`
+(bench v16+, `docs/title-duels.md`) `season_duel_seed_count` is the season's
+K, `season_duel_anchor_champion_id` the champion the season's family is
+anchored on (the season opener, which a mid-season crown change does not
+move) and `season_duel_held_seed_count` how many of the K duel seeds this
+agent already ran; all three are null under `continual` or below the dueling
+floor. A
 `chain_unavailable` decision means the block read failed, not that the lane is
 idle. The tool also returns ticket counts and the latest ticket and accepted
 result. Outstanding work is only a count, `pending_seed_count`. Pending seed

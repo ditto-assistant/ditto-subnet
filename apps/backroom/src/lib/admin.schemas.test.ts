@@ -3984,6 +3984,8 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_cohort_max_size: false,
     wave_cadence_tempos: false,
     wave_seeds_per_window: false,
+    retest_mode: false,
+    season_duel_seeds: false,
   }
   const fullSupport = Object.fromEntries(
     Object.keys(legacySupport).map((field) => [field, true]),
@@ -4008,6 +4010,8 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_cohort_max_size: 25,
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
   }
 
   it('reads a dethrone minimum up to the 15-seed ceiling but writes at most 10', () => {
@@ -4122,6 +4126,8 @@ describe('continual retest cohort sizing against an older platform', () => {
       retest_cohort_max_size: false,
       wave_cadence_tempos: false,
       wave_seeds_per_window: false,
+      retest_mode: false,
+      season_duel_seeds: false,
     })
     expect(continualRetestFieldSupport(null).wave_membership).toBe(false)
   })
@@ -4146,7 +4152,27 @@ describe('continual retest write contract', () => {
     retest_cohort_max_size: 25,
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
   }
+
+  it('refuses a season duel that could never carry a dethrone case', () => {
+    const starved = continualRetestSettingsWriteSchema.safeParse({
+      ...complete,
+      retest_mode: 'season_duel',
+      season_duel_seeds: 2,
+      min_dethrone_confirmations: 3,
+    })
+    expect(starved.success).toBe(false)
+    expect(starved.error?.issues[0]?.path).toEqual(['season_duel_seeds'])
+    expect(
+      continualRetestSettingsWriteSchema.safeParse({
+        ...complete,
+        retest_mode: 'season_duel',
+        season_duel_seeds: 3,
+      }).success,
+    ).toBe(true)
+  })
 
   it('refuses a body missing any field a revision would overwrite', () => {
     expect(continualRetestSettingsWriteSchema.parse(complete)).toEqual(complete)
@@ -4169,6 +4195,8 @@ describe('continual retest write contract', () => {
       'retest_cohort_max_size',
       'wave_cadence_tempos',
       'wave_seeds_per_window',
+      'retest_mode',
+      'season_duel_seeds',
     ] as const) {
       const { [field]: _omitted, ...partial } = complete
       expect(continualRetestSettingsWriteSchema.safeParse(partial).success).toBe(false)
@@ -4213,6 +4241,8 @@ describe('continual retest write contract', () => {
         retest_cohort_max_size: 25,
         wave_cadence_tempos: 0,
         wave_seeds_per_window: 3,
+        retest_mode: 'continual' as const,
+        season_duel_seeds: 3,
       }).success,
     ).toBe(true)
   })
@@ -4243,6 +4273,8 @@ describe('continual retest write contract', () => {
       retest_cohort_max_size: 25,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: 3,
+      retest_mode: 'continual' as const,
+      season_duel_seeds: 3,
     })
   })
 

@@ -99,6 +99,10 @@ async def test_defaults_are_safe_and_revision_is_audited(
         # Tempo-aligned waves ship OFF: cadence 0 is the historical pacing.
         "wave_cadence_tempos": 0,
         "wave_seeds_per_window": 3,
+        # Season duels ship OFF: "continual" is the historical walk, and the
+        # mode is inert below the dueling floor either way.
+        "retest_mode": "continual",
+        "season_duel_seeds": 3,
         # NOT a no-op on merge: this one feeds the weight fold, and it ships
         # deliberately widened. "strict" is what emptied the intersection at
         # 03:56Z and reverted every agent to its quorum median; it stays
@@ -305,6 +309,45 @@ async def test_the_tie_band_is_operator_controlled_and_bounded(
         ),
     )
     assert incoherent.status_code == 422, incoherent.text
+
+
+async def test_season_duels_are_one_bounded_revision_away(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """``retest_mode = season_duel`` (docs/title-duels.md) with both rails."""
+    _install(app, settings_maker)
+
+    applied = await client.post(
+        _URL,
+        headers=_HEADERS,
+        json=_payload(retest_mode="season_duel", season_duel_seeds=3),
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["settings"]["retest_mode"] == "season_duel"
+    assert applied.json()["settings"]["season_duel_seeds"] == 3
+
+    for seeds in (1, 6):
+        out_of_range = await client.post(
+            _URL,
+            headers=_HEADERS,
+            json=_payload(expected_revision=1, season_duel_seeds=seeds),
+        )
+        assert out_of_range.status_code == 422, out_of_range.text
+
+    # A season holding fewer seeds than the crown gate could never dethrone.
+    starved = await client.post(
+        _URL,
+        headers=_HEADERS,
+        json=_payload(
+            expected_revision=1,
+            retest_mode="season_duel",
+            season_duel_seeds=2,
+            min_dethrone_confirmations=3,
+        ),
+    )
+    assert starved.status_code == 422, starved.text
 
 
 async def test_rollout_standdown_modes_are_explicit() -> None:
