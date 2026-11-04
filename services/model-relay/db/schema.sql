@@ -3914,6 +3914,26 @@ CREATE TABLE public.dueling_season_batteries (
 
 
 --
+-- Name: dueling_season_commitment_publications; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dueling_season_commitment_publications (
+    season_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    commitment text NOT NULL,
+    status text NOT NULL,
+    claimed_at timestamp with time zone NOT NULL,
+    claim_expires_at timestamp with time zone NOT NULL,
+    reported_at timestamp with time zone,
+    block_number bigint,
+    extrinsic_hash text,
+    detail text,
+    CONSTRAINT ck_dueling_season_commitment_publications_season_public_282a CHECK (((status <> 'confirmed'::text) OR (block_number IS NOT NULL))),
+    CONSTRAINT ck_dueling_season_commitment_publications_season_public_db3a CHECK ((status = ANY (ARRAY['claimed'::text, 'confirmed'::text, 'failed'::text])))
+);
+
+
+--
 -- Name: dueling_seasons; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3945,8 +3965,14 @@ CREATE TABLE public.dueling_seasons (
     rotation_actor text,
     rotation_reason text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    commitment_publication text DEFAULT 'disabled'::text NOT NULL,
+    commitment_published_at timestamp with time zone,
+    commitment_block bigint,
+    commitment_extrinsic_hash text,
+    commitment_error text,
     CONSTRAINT ck_dueling_seasons_dueling_seasons_bench_floor CHECK ((bench_version >= 16)),
     CONSTRAINT ck_dueling_seasons_dueling_seasons_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_commitment_publication_check CHECK ((commitment_publication = ANY (ARRAY['pending'::text, 'published'::text, 'failed'::text, 'disabled'::text]))),
     CONSTRAINT ck_dueling_seasons_dueling_seasons_index_check CHECK (((season_index >= 0) AND ((rounds_per_season >= 1) AND (rounds_per_season <= 48)))),
     CONSTRAINT ck_dueling_seasons_dueling_seasons_open_check CHECK (((season_seed IS NULL) OR ((season_seed ~ '^[0-9a-f]{64}$'::text) AND (anchor_block_hash IS NOT NULL) AND (columns IS NOT NULL)))),
     CONSTRAINT ck_dueling_seasons_dueling_seasons_reveal_check CHECK (((status = 'revealed'::text) = (revealed_at IS NOT NULL))),
@@ -4586,6 +4612,35 @@ CREATE TABLE public.generator_scorer_heartbeats (
     CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_46e0 CHECK (((dueling_work_kinds IS NULL) OR ((jsonb_typeof(dueling_work_kinds) = 'array'::text) AND ((jsonb_array_length(dueling_work_kinds) >= 1) AND (jsonb_array_length(dueling_work_kinds) <= 8))))),
     CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_8669 CHECK ((last_poll = ANY (ARRAY['qualification'::text, 'round'::text, 'dueling'::text]))),
     CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_c3f0 CHECK ((((min_cases IS NULL) = (max_cases IS NULL)) AND ((min_cases IS NULL) OR ((min_cases >= 1) AND (max_cases >= min_cases)))))
+);
+
+
+--
+-- Name: generator_source_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_source_releases (
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    owner_key text NOT NULL,
+    tree_sha256 text NOT NULL,
+    source_sha256 text NOT NULL,
+    bench_version integer NOT NULL,
+    first_season_id uuid NOT NULL,
+    last_season_id uuid NOT NULL,
+    seasons integer NOT NULL,
+    first_closed_at timestamp with time zone,
+    last_revealed_at timestamp with time zone,
+    embargo_hours integer NOT NULL,
+    disclosure text NOT NULL,
+    release_at timestamp with time zone,
+    released_at timestamp with time zone,
+    scorer_version text,
+    updated_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_source_releases_generator_source_releases__2ae6 CHECK ((bench_version >= 16)),
+    CONSTRAINT ck_generator_source_releases_generator_source_releases__507b CHECK (((seasons >= 1) AND (embargo_hours >= 0))),
+    CONSTRAINT ck_generator_source_releases_generator_source_releases__5544 CHECK (((released_at IS NULL) OR (release_at IS NOT NULL)))
 );
 
 
@@ -9928,6 +9983,14 @@ ALTER TABLE ONLY public.dueling_season_batteries
 
 
 --
+-- Name: dueling_season_commitment_publications pk_dueling_season_commitment_publications; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_season_commitment_publications
+    ADD CONSTRAINT pk_dueling_season_commitment_publications PRIMARY KEY (season_id, validator_hotkey);
+
+
+--
 -- Name: dueling_seasons pk_dueling_seasons; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10085,6 +10148,14 @@ ALTER TABLE ONLY public.generator_runs
 
 ALTER TABLE ONLY public.generator_scorer_heartbeats
     ADD CONSTRAINT pk_generator_scorer_heartbeats PRIMARY KEY (scorer_id);
+
+
+--
+-- Name: generator_source_releases pk_generator_source_releases; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_source_releases
+    ADD CONSTRAINT pk_generator_source_releases PRIMARY KEY (submission_id);
 
 
 --
@@ -12363,6 +12434,13 @@ CREATE INDEX generator_runs_scored_idx ON public.generator_runs USING btree (fin
 --
 
 CREATE INDEX generator_runs_submission_idx ON public.generator_runs USING btree (submission_id, leased_at DESC);
+
+
+--
+-- Name: generator_source_releases_release_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_source_releases_release_idx ON public.generator_source_releases USING btree (released_at, release_at);
 
 
 --
@@ -15242,6 +15320,14 @@ ALTER TABLE ONLY public.dueling_season_batteries
 
 
 --
+-- Name: dueling_season_commitment_publications fk_dueling_season_commitment_publications_season_id_due_bd00; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_season_commitment_publications
+    ADD CONSTRAINT fk_dueling_season_commitment_publications_season_id_due_bd00 FOREIGN KEY (season_id) REFERENCES public.dueling_seasons(id) ON DELETE CASCADE;
+
+
+--
 -- Name: dueling_slice_preparations fk_dueling_slice_preparations_season_id_dueling_seasons; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -15335,6 +15421,14 @@ ALTER TABLE ONLY public.generator_runs
 
 ALTER TABLE ONLY public.generator_runs
     ADD CONSTRAINT fk_generator_runs_submission_id_generator_submissions FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_source_releases fk_generator_source_releases_submission_id_generator_su_797e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_source_releases
+    ADD CONSTRAINT fk_generator_source_releases_submission_id_generator_su_797e FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE CASCADE;
 
 
 --

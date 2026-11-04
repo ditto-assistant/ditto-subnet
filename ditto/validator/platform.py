@@ -71,6 +71,10 @@ from ditto.api_models.coding_inference_grants import (
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
+    DuelingSeasonCommitmentJobRequest,
+    DuelingSeasonCommitmentJobResponse,
+    DuelingSeasonCommitmentReportRequest,
+    DuelingSeasonCommitmentReportResponse,
     GeneratorRoundCaseResult,
     GeneratorRoundCommitmentJobRequest,
     GeneratorRoundCommitmentJobResponse,
@@ -2177,6 +2181,72 @@ class PlatformClient:
                 f"commitment report rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return GeneratorRoundCommitmentReportResponse.model_validate(resp.json())
+
+    async def request_dueling_season_commitment_job(
+        self,
+    ) -> DuelingSeasonCommitmentJobResponse | None:
+        """Ask Platform whether this validator should publish a dueling season
+        commitment (``dds1``). ``None`` (HTTP 204) means nothing needs it."""
+        payload = DuelingSeasonCommitmentJobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/dueling-season-commitment-job"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"season commitment job request failed: {exc}") from exc
+        if resp.status_code == 204:
+            return None
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"season commitment job rejected ({resp.status_code}): "
+                f"{resp.text[:200]}"
+            )
+        return DuelingSeasonCommitmentJobResponse.model_validate(resp.json())
+
+    async def report_dueling_season_commitment(
+        self,
+        job: DuelingSeasonCommitmentJobResponse,
+        *,
+        outcome: GeneratorRoundCommitmentOutcome,
+        block_number: int | None = None,
+        extrinsic_hash: str | None = None,
+        detail: str | None = None,
+    ) -> DuelingSeasonCommitmentReportResponse:
+        """Post the signed outcome of one elected season commitment publication."""
+        payload = DuelingSeasonCommitmentReportRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            season_id=job.season_id,
+            season_index=job.season_index,
+            commitment=job.commitment,
+            outcome=outcome,
+            block_number=block_number,
+            extrinsic_hash=extrinsic_hash,
+            detail=(detail or None) and detail[:500],
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/dueling-season-commitment-report"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"season commitment report failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"season commitment report rejected ({resp.status_code}): "
+                f"{resp.text[:200]}"
+            )
+        return DuelingSeasonCommitmentReportResponse.model_validate(resp.json())
 
     async def get_ledger(self) -> LedgerResponse:
         """Pull the best-score-per-payment-coldkey ledger folded into weights.

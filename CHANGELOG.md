@@ -2,6 +2,61 @@
 
 <!-- version list -->
 
+## v0.445.0 (2026-11-03)
+
+### Features
+
+- **infra**: Prepare DaniLabs relay trial secret binding
+  ([#3373](https://github.com/ditto-assistant/ditto-subnet/pull/3373),
+  [`6fa7394`](https://github.com/ditto-assistant/ditto-subnet/commit/6fa739445b67a3812f176e4299031e9d7b56db28))
+
+
+## v0.444.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: Cap continual retests at 10 shared seeds
+  ([#3367](https://github.com/ditto-assistant/ditto-subnet/pull/3367),
+  [`94f9710`](https://github.com/ditto-assistant/ditto-subnet/commit/94f9710b721fa4191f1aec63ae579590f5d1ad70))
+
+
+## v0.443.0 (2026-11-03)
+
+### Bug Fixes
+
+- **miner-cli**: Retire a saved payment proof that already funded an upload
+  ([#3078](https://github.com/ditto-assistant/ditto-subnet/pull/3078),
+  [`48db910`](https://github.com/ditto-assistant/ditto-subnet/commit/48db910cdbd6432ed626ba5ad9cfef5e44a557b8))
+
+### Features
+
+- **validator,platform,backroom**: Publish dueling season commitments on chain
+  ([#3366](https://github.com/ditto-assistant/ditto-subnet/pull/3366),
+  [`42940c5`](https://github.com/ditto-assistant/ditto-subnet/commit/42940c59bd146b69e0e94ff8bfef23a5bacabaab))
+
+
+## v0.442.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: Prune released dueling slice bytes and tidy follow-ups
+  ([#3365](https://github.com/ditto-assistant/ditto-subnet/pull/3365),
+  [`073b6ef`](https://github.com/ditto-assistant/ditto-subnet/commit/073b6efbee4735785e67d1f0e47274cad41904f3))
+
+
+## v0.441.0 (2026-11-03)
+
+### Features
+
+- **inference**: Prepare DaniLabs trial routing
+  ([#3363](https://github.com/ditto-assistant/ditto-subnet/pull/3363),
+  [`7bf02ed`](https://github.com/ditto-assistant/ditto-subnet/commit/7bf02edc71bc9289654ba77ea7a13c1941163a59))
+
+- **platform,backroom**: Release pinned generator sources and publish revealed dueling seasons
+  ([#3364](https://github.com/ditto-assistant/ditto-subnet/pull/3364),
+  [`d0302c7`](https://github.com/ditto-assistant/ditto-subnet/commit/d0302c7f058cd2a80966e275af735dfb0f2378b8))
+
+
 ## v0.440.0 (2026-11-03)
 
 ### Features

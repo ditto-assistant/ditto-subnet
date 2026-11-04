@@ -18,7 +18,16 @@ import (
 // connector pool, a non-answer distractor menu (no case expects a connector,
 // TestV15ArtifactCarriesConnectorsNoCaseExpectsOne) covered by the catalog
 // package's own canary.
-const poolLedgerAuditedThrough = protocol.BenchVersionV15
+//
+// v16 audit: gen/ adds only the dueling envelope (profilesV16, exempt as
+// configuration, and the V16FullEnvelope slot table); universe/ adds only
+// WorldPlanSelection.StoryArcLimit, which chooses which already-seeded story
+// arcs are asked and draws from no new pool. The v16 surface lives in catalog/ (v16ConnectorScripts,
+// now a question cue because linked-connector cases name those apps, in the
+// catalog ledger) and datagen/v16.go, whose quoted payloads join a per-seed
+// coined stem to a noun, so no payload is a pool value. Generator slice cases
+// come from Platform, not this module.
+const poolLedgerAuditedThrough = protocol.BenchVersionV16
 
 // TestPoolCardinalityCanary is the generator's pool-cardinality canary (#492,
 // item 4). A closed pool small enough to copy into a dispatch table is a

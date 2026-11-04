@@ -45,7 +45,7 @@ from ditto.api_models.treasury_readiness import (
 )
 from ditto.api_models.validator import ConfirmationSeedAnchorPin
 from ditto.api_server.koth import (
-    TOP5_MAX_CONFIRMATION_SEEDS,
+    CONFIRMATION_SEED_CEILING,
     CrownGate,
     crown_gate_marker,
     koth_entries_from_ledger,
@@ -238,7 +238,7 @@ def served_crown_gate(served: dict[str, Any]) -> CrownGate | None:
         or isinstance(standing, bool)
         or not isinstance(min_seeds, int)
         or not isinstance(standing, int)
-        or not 2 <= min_seeds <= TOP5_MAX_CONFIRMATION_SEEDS
+        or not 2 <= min_seeds <= CONFIRMATION_SEED_CEILING
         or not 1 <= standing <= 5
     ):
         return None

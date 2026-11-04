@@ -233,6 +233,7 @@ from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retir
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
+    configured_crown_gate,
     crown_gate_for,
     crown_incumbent_is_active,
     statistical_band_cap_is_active,
@@ -3720,10 +3721,7 @@ async def build_public_leaderboard(
     # The protocol-34 crown rules: configured by the operator, folded only
     # once every recently-live weight setter reports v34 -- the same gate the
     # validator ledger applies, so the board's King is the fleet's King.
-    crown_rules = CrownGate(
-        min_shared_seeds=continual_settings.min_dethrone_confirmations,
-        standing_rank=continual_settings.champion_standing_rank,
-    )
+    crown_rules = configured_crown_gate(continual_settings)
     crown_gate_active_rules = (
         crown_gate_for(
             continual_settings,
