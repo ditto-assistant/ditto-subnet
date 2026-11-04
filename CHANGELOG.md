@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.447.0 (2026-11-04)
+
+### Features
+
+- **miner**: Rehearse bench 16 locally with a public default generator slice
+  ([#3360](https://github.com/ditto-assistant/ditto-subnet/pull/3360),
+  [`4552730`](https://github.com/ditto-assistant/ditto-subnet/commit/455273058b194223638f212ce67f2fe3f1cd2c10))
+
+
 ## v0.446.0 (2026-11-04)
 
 ### Features
