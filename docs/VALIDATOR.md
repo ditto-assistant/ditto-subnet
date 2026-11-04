@@ -835,7 +835,9 @@ test about half the time, so the crown changed 2–3 times a day on noise
 Under `crown_duel_mode: fleet_ready`, a served crown gate also carries
 `duel_window_pairs` (15), and each entry carries `duel_history`: its
 confirmation records, with their signed `details.dueling`, from the five
-newest dueling seasons. For two bench v16 rows the fold then works as follows:
+newest dueling seasons that hold any confirmation record. A season that ran no
+duel (idle skip) is passed over, so evidence carries forward. For two bench v16
+rows the fold then works as follows:
 
 1. **Pairs.** A pair is a `(season, seed)` that both agents scored in that
    season. Each side is the median across validators, with both owners'
