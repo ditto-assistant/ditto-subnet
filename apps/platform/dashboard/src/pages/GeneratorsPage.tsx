@@ -525,8 +525,12 @@ function RoundDetail(props: {
         <Show when={props.detail}>
           {(detail) => (
             <span>
-              Scored {relTime(detail().summary.scored_at)} · {detail().summary.panel_size} panel
-              agents
+              {detail().summary.status === "skipped"
+                ? "Unchanged since round " +
+                  (detail().summary.carried_from_round ?? "?") +
+                  ", not rerun"
+                : "Scored " + relTime(detail().summary.scored_at)}{" "}
+              · {detail().summary.panel_size} panel agents
               <Show when={cases() !== null}> · {cases()} cases per generator</Show>
               <Show when={props.pinned}>
                 {" · "}

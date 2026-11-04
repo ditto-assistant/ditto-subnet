@@ -81,6 +81,10 @@ export interface GeneratorRoundSummary {
   closed_at: string | null;
   scored_at: string | null;
   void_reason: string | null;
+  /** "skipped_unchanged" on a skipped round; absent from an older Platform. */
+  skip_reason?: string | null;
+  /** The scored round a skipped round carries forward. */
+  carried_from_round?: number | null;
   revealed_at: string | null;
   secret_hex: string | null;
   seed: string | null;

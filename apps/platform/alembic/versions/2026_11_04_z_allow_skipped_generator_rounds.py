@@ -26,6 +26,10 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _CHECK = "ck_generator_rounds_generator_rounds_status_check"
+# The name the table was declared with; a database built without the naming
+# convention carries this one instead (as 2026_10_26_widen_generator_run_cases
+# allows for), and it would keep refusing ``skipped`` beside the new check.
+_LEGACY_CHECK = "generator_rounds_status_check"
 _WITH_SKIPPED = (
     "status IN ('committed', 'generating', 'running', 'scoring', 'scored', "
     "'skipped', 'void')"
@@ -42,6 +46,7 @@ def _swap(check_sql: str, label: str) -> None:
             bind,
             [
                 "ALTER TABLE generator_rounds "
+                f"DROP CONSTRAINT IF EXISTS {_LEGACY_CHECK}, "
                 f"DROP CONSTRAINT IF EXISTS {_CHECK}, "
                 f"ADD CONSTRAINT {_CHECK} CHECK ({check_sql}) NOT VALID"
             ],
