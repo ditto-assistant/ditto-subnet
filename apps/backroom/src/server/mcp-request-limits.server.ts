@@ -1,4 +1,5 @@
 export const MAX_MCP_BODY_BYTES = 1024 * 1024
+const MAX_BUFFERED_CHUNKS = 1024
 
 // Scope and observer checks parse the body before the SDK sees it. Bound that
 // first read as well as the transport, including requests without Content-Length.
@@ -12,6 +13,7 @@ export async function boundMcpRequest(request: Request, limit = MAX_MCP_BODY_BYT
   const reader = request.body.getReader()
   const chunks: Uint8Array[] = []
   let size = 0
+  let coalesced: Uint8Array | undefined
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -23,7 +25,26 @@ export async function boundMcpRequest(request: Request, limit = MAX_MCP_BODY_BYT
           status: 413, headers: { 'Cache-Control': 'no-store' },
         })
       }
-      chunks.push(value)
+      if (coalesced) {
+        if (size > coalesced.byteLength) {
+          const grown = new Uint8Array(Math.min(limit, Math.max(size, coalesced.byteLength * 2)))
+          grown.set(coalesced)
+          coalesced = grown
+        }
+        coalesced.set(value, size - value.byteLength)
+      } else {
+        chunks.push(value)
+        if (chunks.length >= MAX_BUFFERED_CHUNKS) {
+          // Bound per-chunk overhead for streams fragmented into tiny pieces.
+          coalesced = new Uint8Array(Math.min(limit, Math.max(size, 1024)))
+          let offset = 0
+          for (const chunk of chunks) {
+            coalesced.set(chunk, offset)
+            offset += chunk.byteLength
+          }
+          chunks.length = 0
+        }
+      }
     }
   } catch {
     return Response.json({ error: 'Could not read MCP request body' }, {
@@ -32,11 +53,12 @@ export async function boundMcpRequest(request: Request, limit = MAX_MCP_BODY_BYT
   } finally {
     reader.releaseLock()
   }
-  const body = new Uint8Array(size)
-  let offset = 0
-  for (const chunk of chunks) {
-    body.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return new Request(request, { body })
+  if (coalesced) chunks.push(coalesced.slice(0, size))
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk)
+      controller.close()
+    },
+  })
+  return new Request(request, { body, duplex: 'half' } as RequestInit)
 }
