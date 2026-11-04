@@ -335,7 +335,9 @@ is the agents' runtime contract; the grading policy is per column:
   two-version window, N and N-1 (`challenge.GradingBenchVersionsThrough`,
   `challenge.GradingPolicyWindow`; Platform `accepted_grading_versions`). With
   policies {13, 14} that is both; once policy 15 exists a v15 round accepts 14
-  and 15 only. Each column's request lists them, each column's pack declares
+  and 15 only. From v16 the window is three policies
+  (`challenge.GradingPolicyWindowV16`, operator decision 2026-11-04), so a v16
+  round accepts 14, 15 and 16. Each column's request lists them, each column's pack declares
   one, and the validator grades every case at its pack's declared policy. A v13 round accepts only v13, so its
   requests, packs and grading are byte-identical to the original contract.
 - In a v14 round, a v14-aware generator's column grades at v14 and a generator

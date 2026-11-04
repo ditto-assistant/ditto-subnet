@@ -365,28 +365,55 @@ def test_every_activatable_bench_version_has_a_generator_pack_version() -> None:
         "supportedGradingBenchVersions and N to GENERATOR_ROUND_BENCH_VERSIONS "
         "(research/dittobench-datagen/docs/tandem-upgrades.md)"
     )
-    # Versions are consecutive, so the two-version window is always {N-1, N}.
+    # Versions are consecutive, so the window is always the N-1 (N-2 from v16)
+    # versions below N plus N.
     assert pack_versions == list(range(first, max(pack_versions) + 1))
 
 
-def test_generator_grading_policy_window_is_two_versions() -> None:
-    """Operator policy (2026-10-27): a round at N accepts packs at N and N-1
-    only. Go and Python must agree on the window."""
+def test_generator_grading_policy_window_matches_go() -> None:
+    """Operator policy: a round at N accepts packs at N and N-1 (2026-10-27),
+    and from v16 on at N, N-1 and N-2 (2026-11-04: a v16 round or dueling
+    season accepts {14, 15, 16}). Go and Python must agree on the window."""
     from ditto.api_models.generator_round_validator import (
         GENERATOR_ROUND_BENCH_VERSIONS,
         GRADING_POLICY_WINDOW,
+        GRADING_POLICY_WINDOW_V16,
+        GRADING_POLICY_WINDOW_V16_FROM,
         accepted_grading_versions,
+        grading_policy_window,
     )
 
     pack = (ROOT / "research/dittobench-datagen/challenge/pack.go").read_text()
     go_window = re.search(r"const GradingPolicyWindow = (\d+)", pack)
     assert go_window, "challenge.GradingPolicyWindow is no longer a literal"
     assert int(go_window.group(1)) == GRADING_POLICY_WINDOW == 2
+    go_wide = re.search(r"const GradingPolicyWindowV16 = (\d+)", pack)
+    assert go_wide, "challenge.GradingPolicyWindowV16 is no longer a literal"
+    assert int(go_wide.group(1)) == GRADING_POLICY_WINDOW_V16 == 3
+    assert re.search(
+        r"const GradingPolicyWindowV16From = GradingBenchVersionV16\b", pack
+    ), "challenge.GradingPolicyWindowV16From must stay GradingBenchVersionV16"
+    assert GRADING_POLICY_WINDOW_V16_FROM == 16
     for version in GENERATOR_ROUND_BENCH_VERSIONS:
+        window = grading_policy_window(version)
+        assert window == (
+            GRADING_POLICY_WINDOW_V16 if version >= 16 else GRADING_POLICY_WINDOW
+        )
         accepted = accepted_grading_versions(version)
         assert accepted[-1] == version
-        assert len(accepted) <= GRADING_POLICY_WINDOW
-        assert all(version - v < GRADING_POLICY_WINDOW for v in accepted)
+        assert len(accepted) <= window
+        assert all(version - v < window for v in accepted)
+    # The same table challenge.TestSupportedGradingBenchVersions pins.
+    assert {v: accepted_grading_versions(v) for v in range(12, 20)} == {
+        12: (),
+        13: (13,),
+        14: (13, 14),
+        15: (14, 15),
+        16: (14, 15, 16),
+        17: (15, 16),
+        18: (16,),
+        19: (),
+    }
 
 
 # --- TypeScript mirrors (hand-written and generated) --------------------------

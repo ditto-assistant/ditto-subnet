@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -276,6 +277,25 @@ func TestBatteryQualifiesOnlyValidDeterministicGenerators(t *testing.T) {
 	// Four candidates, three distinct archives: three builds.
 	if sb.count() != 3 {
 		t.Fatalf("builds = %d, want 3 (cached by source digest)", sb.count())
+	}
+}
+
+// A v16 season accepts policies {14, 15, 16} (operator decision 2026-11-04),
+// so a generator declaring 14 is not an unsupported_request fault; 13 still is.
+func TestSeasonPoliciesAtV16AcceptPolicy14(t *testing.T) {
+	got, err := seasonPolicies(testDuelingBench)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []int{14, 15, 16}) {
+		t.Fatalf("a v%d season accepts %v, want [14 15 16]", testDuelingBench, got)
+	}
+	if containsInt(got, challenge.GradingBenchVersion) {
+		t.Fatal("a v16 season must not accept the v13 baseline")
+	}
+	req := challenge.NewGenerateRequestFor(batterySeeds(1)[0], testHotkey, 35, testDuelingBench)
+	if err := req.Validate(); err != nil || req.GradingBenchVersion != 14 || !req.Accepts(14) {
+		t.Fatalf("v16 battery request = %+v (%v), want floor 14", req, err)
 	}
 }
 

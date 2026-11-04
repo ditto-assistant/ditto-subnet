@@ -14827,7 +14827,9 @@ class DuelingSeasonBattery(Base):
             name="dueling_season_batteries_lease_check",
         ),
         CheckConstraint(
-            "status <> 'passed' OR grading_bench_version >= 15",
+            # A floor, not the window: from v16 a season accepts policies
+            # {14, 15, 16} (accepted_grading_versions).
+            "status <> 'passed' OR grading_bench_version >= 14",
             name="dueling_season_batteries_policy_check",
         ),
         CheckConstraint(

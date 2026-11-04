@@ -908,11 +908,20 @@ def test_request_refusals_from_the_window_are_scorer_faults(
 
 @pytest.mark.parametrize(
     ("round_version", "accepted"),
-    [(13, (13,)), (14, (13, 14)), (15, (14, 15)), (16, (15, 16)), (17, (16,))],
+    [
+        (13, (13,)),
+        (14, (13, 14)),
+        (15, (14, 15)),
+        (16, (14, 15, 16)),
+        (17, (15, 16)),
+        (18, (16,)),
+    ],
 )
-def test_a_round_accepts_its_version_and_the_one_before(
+def test_a_round_accepts_its_version_and_the_ones_before(
     round_version: int, accepted: tuple[int, ...]
 ) -> None:
+    """Below v16 a round accepts N and N-1; from v16 on N, N-1 and N-2
+    (operator decision 2026-11-04: a v16 round accepts policy-14 packs)."""
     from ditto.api_models.generator_round_validator import accepted_grading_versions
 
     assert accepted_grading_versions(round_version) == accepted

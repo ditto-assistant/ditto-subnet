@@ -32,7 +32,10 @@ func TestSupportedGradingBenchVersions(t *testing.T) {
 	if GradingBenchVersion != protocol.BenchVersionV13 {
 		t.Fatal("the baseline policy must stay v13: every pre-v14 generator emits it")
 	}
-	for round, want := range map[int][]int{12: nil, 13: {13}, 14: {13, 14}, 15: {14, 15}, 16: {15, 16}, 17: {16}} {
+	// 16 and above take the three-policy window (GradingPolicyWindowV16): a
+	// v16 round accepts {14, 15, 16}; a v17 round, with no policy 17 shipped,
+	// accepts what is left of (14, 17], {15, 16}.
+	for round, want := range map[int][]int{12: nil, 13: {13}, 14: {13, 14}, 15: {14, 15}, 16: {14, 15, 16}, 17: {15, 16}, 18: {16}, 19: nil} {
 		if got := GradingBenchVersionsThrough(round); !reflect.DeepEqual(got, want) {
 			t.Errorf("through(%d) = %v, want %v", round, got, want)
 		}
@@ -42,12 +45,17 @@ func TestSupportedGradingBenchVersions(t *testing.T) {
 	}
 }
 
-// TestGradingPolicyWindowIsTwoVersions pins the operator's support window: a
-// round at N accepts packs at N and N-1 only, so a third policy retires the
-// oldest for rounds above it while an older round keeps it.
+// TestGradingPolicyWindowIsTwoVersions pins the operator's support window
+// below v16: a round at N accepts packs at N and N-1 only, so a third policy
+// retires the oldest for rounds above it while an older round keeps it.
 func TestGradingPolicyWindowIsTwoVersions(t *testing.T) {
 	if GradingPolicyWindow != 2 {
 		t.Fatalf("GradingPolicyWindow = %d; the operator fixed the window at two versions", GradingPolicyWindow)
+	}
+	for _, round := range []int{12, 13, 14, 15} {
+		if got := GradingPolicyWindowFor(round); got != GradingPolicyWindow {
+			t.Fatalf("GradingPolicyWindowFor(%d) = %d; rounds below 16 keep the two-version window", round, got)
+		}
 	}
 	saved := supportedGradingBenchVersions
 	t.Cleanup(func() { supportedGradingBenchVersions = saved })
@@ -72,6 +80,53 @@ func TestGradingPolicyWindowIsTwoVersions(t *testing.T) {
 	}
 	if err := CheckRoundGradingVersions([]RoundColumnPack{{ColumnID: "c0", Pack: ReferencePack(3, testHotkey)}}, 15); err == nil {
 		t.Fatal("a v15 round dataset must refuse a v13 column")
+	}
+}
+
+// TestGradingPolicyWindowV16AcceptsPolicy14 pins the operator's v16 exception
+// (2026-11-04): a v16 round or dueling season accepts {14, 15, 16}, so a
+// generator that declares 14 keeps its v16 columns and battery seeds. The
+// window slides from 16 on (three policies), so a v17 round would accept
+// {15, 16, 17}.
+func TestGradingPolicyWindowV16AcceptsPolicy14(t *testing.T) {
+	if GradingPolicyWindowV16 != 3 || GradingPolicyWindowV16From != 16 {
+		t.Fatalf("v16 window = %d from v%d; the operator fixed {14, 15, 16} at v16", GradingPolicyWindowV16, GradingPolicyWindowV16From)
+	}
+	for _, round := range []int{16, 17, 20} {
+		if got := GradingPolicyWindowFor(round); got != GradingPolicyWindowV16 {
+			t.Fatalf("GradingPolicyWindowFor(%d) = %d, want %d", round, got, GradingPolicyWindowV16)
+		}
+	}
+	saved := supportedGradingBenchVersions
+	t.Cleanup(func() { supportedGradingBenchVersions = saved })
+	supportedGradingBenchVersions = []int{13, 14, 15, 16, 17}
+	for round, want := range map[int][]int{15: {14, 15}, 16: {14, 15, 16}, 17: {15, 16, 17}} {
+		if got := GradingBenchVersionsThrough(round); !reflect.DeepEqual(got, want) {
+			t.Errorf("with a policy 17, through(%d) = %v, want %v", round, got, want)
+		}
+	}
+	supportedGradingBenchVersions = saved
+
+	v16 := NewGenerateRequestFor(SeedFromInt64(7), testHotkey, 16, 16)
+	if err := v16.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if v16.GradingBenchVersion != 14 || !reflect.DeepEqual(v16.Accepted(), []int{14, 15, 16}) {
+		t.Fatalf("v16 request = %+v, want floor 14 accepting [14 15 16]", v16)
+	}
+	if v16.Accepts(13) || v16.AcceptsBaseline() {
+		t.Fatal("a v16 round must not accept a v13 pack (no legacy retry either)")
+	}
+	// A generator built for {13, 14} picks 14 and still validates.
+	if got := v16.NewestAccepted([]int{13, 14}); got != 14 {
+		t.Fatalf("a {13, 14} generator picks v%d in a v16 round, want 14", got)
+	}
+	p14 := v14ReferencePack(3)
+	if err := CheckRoundGradingVersions([]RoundColumnPack{{ColumnID: "c0", Pack: p14}}, 16); err != nil {
+		t.Fatalf("a v16 round dataset must accept a v14 column: %v", err)
+	}
+	if err := CheckRoundGradingVersions([]RoundColumnPack{{ColumnID: "c0", Pack: ReferencePack(3, testHotkey)}}, 16); err == nil {
+		t.Fatal("a v16 round dataset must refuse a v13 column")
 	}
 }
 

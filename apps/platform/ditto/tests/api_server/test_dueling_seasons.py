@@ -395,6 +395,9 @@ class TestDuelingSeasons:
             str(miner.submission_id),
             str(default.submission_id),
         }
+        # A v16 season accepts policies {14, 15, 16} (operator decision
+        # 2026-11-04): the miner's generator declares 14 and still passes.
+        declared = {str(miner.submission_id): 14, str(default.submission_id): 15}
         posted = await client.post(
             "/api/v1/generator-scorer/dueling-battery",
             headers=_SCORER,
@@ -406,7 +409,7 @@ class TestDuelingSeasons:
                     {
                         "submission_id": c["submission_id"],
                         "ok": True,
-                        "grading_bench_version": 15,
+                        "grading_bench_version": declared[c["submission_id"]],
                     }
                     for c in work["candidates"]
                 ],
@@ -428,6 +431,9 @@ class TestDuelingSeasons:
         ] + [str(default.submission_id)] * 4
         assert [c["owner_key"] for c in opened.columns or ()] == ["coldkey:a"] + [
             ""
+        ] * 4
+        assert [c["grading_bench_version"] for c in opened.columns or ()] == [14] + [
+            15
         ] * 4
         assert any(s.season_index == 12 and s.status == "committed" for s in seasons)
 
