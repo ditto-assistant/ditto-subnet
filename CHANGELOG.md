@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.446.0 (2026-11-04)
+
+### Features
+
+- **bench**: Support and advertise bench v16 (dueling) across scorer, validator and Platform
+  ([#3354](https://github.com/ditto-assistant/ditto-subnet/pull/3354),
+  [`bd36b08`](https://github.com/ditto-assistant/ditto-subnet/commit/bd36b0882b847a2101a25f49d8cf85e454839985))
+
+
 ## v0.445.0 (2026-11-03)
 
 ### Features
