@@ -96,6 +96,7 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
     SandboxOomError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
@@ -676,6 +677,12 @@ _JOB_HEARTBEAT_REFRESH_SECONDS = 120.0
 # never re-dispatches its once-per-sweep retest lane. Until the heartbeat refresh
 # above, the stale-heartbeat 428 ended these sweeps at about this age.
 _IDLE_SWEEP_MAX_SECONDS = 300.0
+# How many consecutive 503 + ``Retry-After`` job refusals one slot rides out in
+# a sweep before isolating itself as for any other refusal. Platform answers a
+# bench v16+ seed's first lease this way while it prepares the dueling slice
+# (normally seconds, Retry-After 15s), so a few waits cover a fresh seed, while
+# a preparation stuck behind operator review cannot keep the slot spinning.
+_JOB_RETRY_LATER_MAX_CONSECUTIVE = 6
 
 # Must stay exhaustive over ``BenchmarkProgressStage``: a missing stage raises
 # KeyError in ``_publish_benchmark_progress``, which the fail-open telemetry
@@ -1352,6 +1359,7 @@ class ValidatorWorker:
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
+                retry_laters = 0
                 token = _CURRENT_SLOT.set(slot_id)
                 try:
                     while not self._new_work_blocked(stop_requested, drain_requested):
@@ -1362,6 +1370,42 @@ class ValidatorWorker:
                             pending_claims += 1
                         try:
                             job = await self._request_job_with_fresh_heartbeat(slot_id)
+                        except PlatformRetryLaterError as error:
+                            async with budget_lock:
+                                claimed -= 1
+                                pending_claims -= 1
+                                lease_state_changed.set()
+                            retry_laters += 1
+                            if retry_laters > _JOB_RETRY_LATER_MAX_CONSECUTIVE:
+                                logger.warning(
+                                    "job request for %s deferred %d times in a "
+                                    "row; slot is isolated: %s",
+                                    slot_id,
+                                    retry_laters,
+                                    error,
+                                )
+                                slot_failed += 1
+                                break
+                            # Not a failure: Platform is preparing what this
+                            # claim needs and named when to ask again. Wait on
+                            # the same slot (stop/drain cut the wait short and
+                            # the loop guard then ends it) instead of idling it
+                            # until the longest sibling lease finishes.
+                            logger.info(
+                                "job request for %s deferred; retrying in %gs "
+                                "(%d/%d): %s",
+                                slot_id,
+                                error.retry_after_seconds,
+                                retry_laters,
+                                _JOB_RETRY_LATER_MAX_CONSECUTIVE,
+                                error,
+                            )
+                            await self._sleep_or_interrupt(
+                                error.retry_after_seconds,
+                                stop_requested,
+                                drain_requested,
+                            )
+                            continue
                         except PlatformError as error:
                             async with budget_lock:
                                 claimed -= 1
@@ -1374,6 +1418,7 @@ class ValidatorWorker:
                             )
                             slot_failed += 1
                             break
+                        retry_laters = 0
                         if job is None:
                             async with budget_lock:
                                 claimed -= 1
@@ -3484,13 +3529,41 @@ class ValidatorWorker:
         slot_token = None
         ticket_claimed = False
         try:
-            try:
-                job = await self._platform.request_top5_confirmation_job(
-                    slot_id=_slot_id
-                )
-            finally:
-                if _claim_resolved is not None:
-                    _claim_resolved.set()
+            retry_laters = 0
+            while True:
+                try:
+                    job = await self._platform.request_top5_confirmation_job(
+                        slot_id=_slot_id
+                    )
+                except PlatformRetryLaterError as error:
+                    # Platform is preparing this lease's dueling slice. The
+                    # lane runs once per sweep, so giving up here would defer
+                    # the retest a whole sweep; wait it out, bounded like the
+                    # canonical slot loop. Siblings' claims proceed meanwhile.
+                    retry_laters += 1
+                    if retry_laters > _JOB_RETRY_LATER_MAX_CONSECUTIVE:
+                        raise
+                    if _claim_resolved is not None:
+                        _claim_resolved.set()
+                    logger.info(
+                        "top-five confirmation claim for %s deferred; retrying "
+                        "in %gs (%d/%d): %s",
+                        _slot_id,
+                        error.retry_after_seconds,
+                        retry_laters,
+                        _JOB_RETRY_LATER_MAX_CONSECUTIVE,
+                        error,
+                    )
+                    await self._sleep_or_interrupt(
+                        error.retry_after_seconds, stop_requested, drain_requested
+                    )
+                    if self._new_work_blocked(stop_requested, drain_requested):
+                        return False
+                    continue
+                finally:
+                    if _claim_resolved is not None:
+                        _claim_resolved.set()
+                break
             if job is None:
                 return False
             # Mirrors the canonical path's slot-mismatch guard: binding an
