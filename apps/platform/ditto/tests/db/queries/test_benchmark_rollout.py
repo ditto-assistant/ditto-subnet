@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.admin_quarantine import AdminBenchmarkQualificationRequest
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_contract import benchmark_contracts
 from ditto.api_models.public import PublicBenchRolloutResponse
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
@@ -66,7 +67,9 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import (
-    CANARY_BENCH_VERSION,
+    CANARY_BENCH_VERSION as _NEWEST_SHIPPED_BENCH_VERSION,
+)
+from ditto.db.queries.benchmark_rollout import (
     DEFAULT_BENCH_VERSION,
     DEFAULT_RESCORE_COHORT_SIZE,
     DESIRED_AUTHORITY_EARNED_EVENT,
@@ -113,8 +116,20 @@ from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
 )
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 pytestmark = pytest.mark.asyncio
+
+# The generic rollout lifecycle is exercised at the newest NON-dueling
+# contract. From bench 16 a score counts on the ledger only with its dueling
+# season and aggregates (season-isolated KOTH, #3351), which these fixtures do
+# not build; dueling rollouts are covered by the dueling season tests.
+CANARY_BENCH_VERSION = max(
+    contract.version
+    for contract in benchmark_contracts()
+    if not is_dueling_bench_version(contract.version)
+)
+assert CANARY_BENCH_VERSION < _NEWEST_SHIPPED_BENCH_VERSION
 
 _Seeded = TypeVar("_Seeded")
 
@@ -225,7 +240,17 @@ async def test_admin_status_read_does_not_start_rollout(
         # A target must be both above the active version and at or above the
         # floor. Shipping v8 through v11 makes each discoverable as a target but
         # does not create or activate a rollout.
-        assert control["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14, 15]
+        assert control["available_target_versions"] == [
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+        ]
         contracts = control["contracts"]
         assert isinstance(contracts, list)
         assert [item["version"] for item in contracts] == [
@@ -243,6 +268,7 @@ async def test_admin_status_read_does_not_start_rollout(
             13,
             14,
             15,
+            16,
         ]
         assert control["status"] == "inactive"
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
@@ -266,7 +292,7 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
             # Model a current scorer that retains every shipped rollout
             # contract. Individual tests narrow this list when they need to
             # exercise a missing-version boundary.
-            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
             "deterministic_v13_datasets": True,
             "v14_scored_runtime_env": {
                 "bench_version": 14,
@@ -299,6 +325,27 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
                     ).encode()
                 ).hexdigest(),
             },
+            "v16_scored_runtime_env": {
+                "bench_version": 16,
+                "scope": "scorer-injected-env-only",
+                "source_revision": revision,
+                "injected_keys": [
+                    "DITTOBENCH_DB",
+                    "DITTOBENCH_DECISIONS_URL",
+                    "DITTOBENCH_MODEL",
+                ],
+                "sha256": hashlib.sha256(
+                    (
+                        "scored-runtime-env-v1\n16\n"
+                        + revision
+                        + "\nDITTOBENCH_DB\nDITTOBENCH_DECISIONS_URL"
+                        + "\nDITTOBENCH_MODEL"
+                    ).encode()
+                ).hexdigest(),
+            },
+            # A v16 (dueling) scorer forwards its slice versions; Platform
+            # leases 16+ only to validators that list the version here.
+            "dueling_slice_bench_versions": [16],
             "observed_at": int(now.timestamp()),
             "software_version": "1.3.0",
             "source_revision": revision,
@@ -2750,6 +2797,23 @@ async def test_only_one_open_rollout_across_collecting_and_blocked_states(
         await session.rollback()
 
 
+async def _enable_dueling_for_the_latest_contract(session: AsyncSession) -> None:
+    """The newest shipped contract is a dueling version (16+), whose rollout
+    start needs the dueling lane on (``_dueling_start_blocker``)."""
+    from ditto.api_models.generator import GeneratorCompetitionSettings
+    from ditto.db.queries.generator import insert_generator_settings_revision
+
+    settings = GeneratorCompetitionSettings(mode="enforce", dueling_enabled=True)
+    await insert_generator_settings_revision(
+        session,
+        parent_revision=0,
+        settings=settings.model_dump(mode="json"),
+        checksum="f" * 64,
+        reason="open the dueling lane for the newest contract",
+        actor="backroom:test",
+    )
+
+
 async def test_capable_validator_cannot_automatically_seed_rollout_work(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -2777,6 +2841,7 @@ async def test_capable_validator_cannot_automatically_seed_rollout_work(
         await grandfather_active_era(
             session, version=DEFAULT_BENCH_VERSION, now=now - timedelta(days=30)
         )
+        await _enable_dueling_for_the_latest_contract(session)
         for position in range(1, 6):
             agent_id = uuid4()
             session.add(
@@ -3167,22 +3232,13 @@ def _heartbeat(
         capabilities["scorer_benchmarks"].pop("v14_scored_runtime_env", None)
     if 15 not in versions:
         capabilities["scorer_benchmarks"].pop("v15_scored_runtime_env", None)
-    if 16 in versions:
-        # A v16 (dueling) scorer carries its version-bound packet and forwards
-        # its slice versions; Platform leases 16+ only with both.
-        revision = capabilities["scorer_benchmarks"]["source_revision"]
-        keys = ["DITTOBENCH_DB", "DITTOBENCH_DECISIONS_URL", "DITTOBENCH_MODEL"]
-        material = f"scored-runtime-env-v1\n16\n{revision}\n" + "\n".join(keys)
-        capabilities["scorer_benchmarks"]["v16_scored_runtime_env"] = {
-            "bench_version": 16,
-            "scope": "scorer-injected-env-only",
-            "source_revision": revision,
-            "injected_keys": keys,
-            "sha256": hashlib.sha256(material.encode()).hexdigest(),
-        }
-        capabilities["scorer_benchmarks"]["dueling_slice_bench_versions"] = [
-            v for v in versions if v >= 16
-        ]
+    if 16 not in versions:
+        capabilities["scorer_benchmarks"].pop("v16_scored_runtime_env", None)
+    dueling = [v for v in versions if v >= 16]
+    if dueling:
+        capabilities["scorer_benchmarks"]["dueling_slice_bench_versions"] = dueling
+    else:
+        capabilities["scorer_benchmarks"].pop("dueling_slice_bench_versions", None)
     if 7 not in versions:
         capabilities["scorer_benchmarks"].pop("v7_calibration", None)
         capabilities["ticket_inference"] = False
@@ -3924,7 +3980,7 @@ async def test_admin_start_route_is_parameterised_by_version(
 
         # An unshipped version fails closed rather than opening a bad rollout.
         with pytest.raises(HTTPException) as exc_info:
-            await get_rollout(None, session, "16")
+            await get_rollout(None, session, "17")
         assert exc_info.value.status_code == 409
         with pytest.raises(HTTPException) as not_found:
             await get_rollout(None, session, "banana")
@@ -5093,6 +5149,7 @@ async def _start_for_cohort_size(
         session.begin(),
     ):
         await _seed_eligible_v2_era(session, now, count=12)
+        await _enable_dueling_for_the_latest_contract(session)
         if configured is not None:
             await insert_queue_policy_settings_revision(
                 session,

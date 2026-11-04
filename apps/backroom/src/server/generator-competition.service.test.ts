@@ -249,6 +249,20 @@ describe('generator competition MCP tools', () => {
       expect(JSON.stringify(shortSeason.content)).toContain('at least 2 epochs')
       expect(fetchMock).not.toHaveBeenCalled()
 
+      // A canary shadow version needs dueling on.
+      const shadowOff = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, dueling_shadow_bench_version: 16 },
+          reason: 'shadow canary',
+          confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(shadowOff.isError).toBe(true)
+      expect(JSON.stringify(shadowOff.content)).toContain('needs dueling_enabled')
+      expect(fetchMock).not.toHaveBeenCalled()
+
       const applied = json(await client.callTool({
         name: 'set_generator_competition_settings',
         arguments: { expectedRevision: 1, settings: { ...settings, upload_fee_required: true }, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },

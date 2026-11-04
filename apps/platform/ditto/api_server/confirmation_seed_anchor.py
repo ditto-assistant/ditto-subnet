@@ -45,7 +45,7 @@ from ditto.api_server.crn import (
     champion_anchored_seeds,
     crn_block_binding_active,
 )
-from ditto.api_server.koth import TOP5_MAX_CONFIRMATION_SEEDS
+from ditto.api_server.koth import CONFIRMATION_SEED_CEILING
 from ditto.chain import ChainError
 from ditto.db.queries.confirmation_seed_anchors import (
     NIL_SEASON_KEY,
@@ -305,7 +305,7 @@ def bind_confirmation_seed(
     *,
     seed: int,
     bench_version: int,
-    max_seeds: int = TOP5_MAX_CONFIRMATION_SEEDS,
+    max_seeds: int = CONFIRMATION_SEED_CEILING,
 ) -> SeedBinding | None:
     """Name the ``(anchor, k, block)`` a seed re-derives from, or None.
 
@@ -314,6 +314,11 @@ def bind_confirmation_seed(
     reign's block, so a validator can re-derive it without knowing reign
     history. ``None`` means no pinned anchor of this version derives the seed
     -- a legacy seed, or a version below the floor.
+
+    ``max_seeds`` defaults to the deepest family any binding reign has drawn
+    (:data:`CONFIRMATION_SEED_CEILING`), not the current work cap: a seed
+    recorded at replicate index 12 under the former 15-seed cap may still sit in
+    the active window and must keep its pin when a member catches up on it.
     """
     if not crn_block_binding_active(bench_version):
         return None

@@ -310,9 +310,15 @@ unused receipt tied to a reservation that was active at the fee-change cutover
 can qualify, and it must have finalized before that cutover. This is a
 receipt-scoped exception, not a coldkey-wide fee waiver.
 
-If a saved receipt is instead definitively rejected for an amount mismatch or
-because its 24-hour recovery window expired, the CLI prints the rejected proof
-and sends nothing. In an interactive terminal it asks whether to pay the
+If a saved receipt is instead definitively rejected for an amount mismatch,
+because its 24-hour recovery window expired, or because it cannot fund this
+upload (`3207`: it already funded another upload, typically an earlier one
+whose response was lost before a retry with a different archive, or it belongs
+to another hotkey or owner), the CLI prints the rejected proof and sends
+nothing. Platform gives the same `3207` answer for each of these causes, so the
+CLI cannot say which applies. Only a proof that funded an earlier upload of
+this hotkey returns that agent when you rerun its exact archive, without paying
+again. In an interactive terminal it asks whether to pay the
 currently reserved TAO fee. For non-interactive recovery, opt in explicitly:
 
 ```sh
@@ -324,9 +330,11 @@ uv run ditto --network finney upload \
   --pay-again
 ```
 
-`--pay-again` is narrowly limited to those two definitive receipt failures.
+`--pay-again` is narrowly limited to those three definitive receipt failures.
 The CLI runs a fresh pre-check before retiring the rejected local proof or
-submitting a replacement transfer. It never overrides a signer, destination,
+submitting a replacement transfer. A rejected proof named with the
+`--payment-block-*` flags is retired from the saved list too, so a hotkey with
+several saved receipts is not asked for proof flags again. It never overrides a signer, destination,
 cooldown, archive, transport, or other validation failure, and `-y` alone does
 not authorize abandoning a finalized receipt.
 
@@ -411,7 +419,10 @@ result.
   strictly below the ceiling — a perfect run always takes the crown. The cap
   only ever lowers the bar, never raises it, and the leaderboard's "beat this
   to contend" figure already includes it. A near-miss is settled by re-scoring
-  both agents on shared seeds rather than dataset luck.
+  both agents on shared seeds rather than dataset luck. Each top agent is
+  re-scored on at least 8 and at most 10 shared seeds (more than 8 only while
+  the measured spread still asks for it); the official score folds at most
+  those 10.
 - Competitive weight is distributed to the champion and next four distinct
   miners by the payout curve the public leaderboard reports as `rank_shares`
   (default 65% / 14% / 10% / 7% / 4%; operators can set another curve, which

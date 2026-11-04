@@ -99,6 +99,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "chat_request_budget",
                 "chat_token_budget",
                 "decision_lane",
+                "danilabs_percent",
                 "embedding_global_concurrency",
                 "embedding_global_requests_per_minute",
                 "embedding_per_ticket_concurrency",

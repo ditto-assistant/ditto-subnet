@@ -41,11 +41,12 @@ PUBLIC_ROLLOUT_URL = "https://dittobench.ai/api/v1/public/bench/rollout"
 # Override (or set to "off" to skip the lookup) for air-gapped rehearsals.
 PUBLIC_ROLLOUT_URL_ENV = "DITTOBENCH_PUBLIC_ROLLOUT_URL"
 MIN_BENCH_VERSION = 8
-# Bench 15 is the live scoring contract (activated 2026-11-03). The harness
-# wire stays 9.
+# Bench 15 is the live scoring contract (activated 2026-11-03). Bench 16 (the
+# dueling bench) is supported and shadow-only, not live. The harness wire
+# stays 9.
 # Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
 # ditto/tests/test_bench_version_pins.py diffs across every layer.
-MAX_BENCH_VERSION = 15
+MAX_BENCH_VERSION = 16
 # Environment variables the harness honours only during a local rehearsal.
 COMPLETION_LOG_ENV = "DITTOBENCH_COMPLETION_LOG"
 # The kit's `answer` slot is off by default (the wire stays at bench 9, so a

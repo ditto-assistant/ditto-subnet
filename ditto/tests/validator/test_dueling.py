@@ -385,6 +385,13 @@ def test_a_complete_dueling_lease_decodes_and_verifies() -> None:
             },
             "dueling_slice_undecodable",
         ),
+        (
+            {
+                "dueling_slice_bytes": base64.b64encode(b"[" * 100_000).decode(),
+                "expected_slice_sha256": hashlib.sha256(b"[" * 100_000).hexdigest(),
+            },
+            "dueling_slice_undecodable",
+        ),
     ],
 )
 def test_an_incomplete_or_tampered_dueling_lease_is_refused(

@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.dueling_seasons as dueling_mod
+import ditto.api_server.generator_source_releases as releases_mod
 from ditto.api_models.generator import generator_settings_confirmation
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -39,6 +40,10 @@ from ditto.api_server.dueling_seasons import (
 )
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import ChainPosition
+from ditto.api_server.generator_source_releases import (
+    prune_released_slice_bytes,
+    sync_generator_source_releases,
+)
 from ditto.db.models import (
     DuelingSeason,
     DuelingSeasonBattery,
@@ -1292,3 +1297,219 @@ class TestDuelingSeasonRotation:
         assert [a.season_key for a in served] == [second]
         assert {a.season_key for a in every} == {first, second}
         assert [a.season_key for a in legacy] == [NIL_SEASON_KEY]
+
+
+class TestDuelingReveal:
+    async def test_revealed_season_publishes_pins_slices_and_released_sources(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:eve", salt="miner"
+        )
+        late = await _generator(
+            session_maker, hotkey=_WEAK_KEY, owner="coldkey:ferdie", salt="late"
+        )
+        revealed = await _open_season(session_maker, default, season_index=50)
+        current = None
+        now = datetime.now(UTC)
+        miner_pin = {
+            "column_id": "c0",
+            "submission_id": str(miner.submission_id),
+            "miner_hotkey": miner.miner_hotkey,
+            "owner_key": miner.owner_key,
+            "tree_sha256": miner.tree_sha256,
+            "source_sha256": miner.source_sha256,
+            "grading_bench_version": 16,
+            "public_default": False,
+        }
+        fallback = {
+            "submission_id": str(default.submission_id),
+            "miner_hotkey": default.miner_hotkey,
+            "source_sha256": default.source_sha256,
+            "tree_sha256": default.tree_sha256,
+            "grading_bench_version": 15,
+        }
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, revealed)
+            assert season is not None
+            season.columns = [miner_pin, *(season.columns or [])[1:]]
+            season.detail = {"fallback": fallback}
+            season.status = "revealed"
+            season.closed_at = now - timedelta(days=60)
+            season.revealed_at = now - timedelta(hours=1)
+            session.add(
+                DuelingSlicePreparation(
+                    id=uuid4(),
+                    season_id=revealed,
+                    run_seed=7,
+                    status="ready",
+                    attempts=1,
+                    slice_sha256=hashlib.sha256(b"{}").hexdigest(),
+                    slice_bytes=b"{}",
+                    ready_at=now,
+                    columns=[
+                        {"column_id": "c0", "substituted": False},
+                        {"column_id": "c1", "substituted": True},
+                    ],
+                )
+            )
+        current = await _open_season(session_maker, default, season_index=51)
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, current)
+            assert season is not None
+            season.columns = [
+                {**miner_pin, "submission_id": str(late.submission_id)},
+                *(season.columns or [])[1:],
+            ]
+            notes = await sync_generator_source_releases(session, now=now)
+        assert notes == [f"generator {miner.submission_id}: source released"]
+
+        base = "/api/v1/public/dueling"
+        # An unrevealed season is not public at all.
+        assert (await client.get(f"{base}/seasons/{current}")).status_code == 404
+        [season_view] = (await client.get(f"{base}/seasons")).json()["seasons"]
+        assert season_view["id"] == str(revealed)
+        # The (index, version) cursor keeps a tied index; the index alone skips it.
+        tied = {"before_index": 50, "before_bench_version": 17}
+        assert (
+            len((await client.get(f"{base}/seasons", params=tied)).json()["seasons"])
+            == 1
+        )
+        older = {"before_index": 50}
+        assert (await client.get(f"{base}/seasons", params=older)).json()[
+            "seasons"
+        ] == []
+        assert season_view["secret_hex"] == ("02" * 32)
+        assert season_view["slices"] == 1
+        assert season_view["pins"]["columns"][0]["submission_id"] == str(
+            miner.submission_id
+        )
+        sources = {s["submission_id"]: s for s in season_view["sources"]}
+        assert sources[str(miner.submission_id)]["available"] is True
+        assert sources[str(default.submission_id)]["public_default"] is True
+
+        page = (await client.get(f"{base}/seasons/{revealed}/slices")).json()
+        [entry] = page["slices"]
+        assert entry["run_seed"] == "7"
+        filtered = await client.get(
+            f"{base}/seasons/{revealed}/slices", params={"run_seed": "8"}
+        )
+        assert filtered.json()["total"] == 0
+        # The late generator is pinned only by an open season: no public status.
+        status = await client.get(f"{base}/generator-sources/{late.submission_id}")
+        assert status.status_code == 404
+        assert entry["slice_sha256"] == hashlib.sha256(b"{}").hexdigest()
+        c0, c1 = entry["pins"]["columns"][:2]
+        assert c0["substituted"] is False and c0["owner_key"] == "coldkey:eve"
+        assert c1["substituted"] is True and c1["public_default"] is True
+        assert c1["submission_id"] == str(default.submission_id)
+        assert c1["owner_key"] == "" and c1["grading_bench_version"] == 15
+        assert c1["slice_seed"] == slice_seed(
+            season_seed(50, b"\x02" * 32, _BLOCK), 7, "c1"
+        )
+
+        archive = await client.get(
+            f"{base}/generator-sources/{miner.submission_id}/archive"
+        )
+        assert archive.status_code == 200
+        assert hashlib.sha256(archive.content).hexdigest() == miner.source_sha256
+        # Pinned only by an open season: not public at all yet.
+        held = await client.get(
+            f"{base}/generator-sources/{late.submission_id}/archive"
+        )
+        assert held.status_code == 404
+        unknown = await client.get(f"{base}/generator-sources/{uuid4()}/archive")
+        assert unknown.status_code == 404
+
+        board = (
+            await client.get(
+                "/api/v1/admin/generator-competition/dueling/source-releases",
+                headers=_ADMIN,
+            )
+        ).json()
+        assert board["counts"] == {"released": 1, "waiting_close": 1}
+
+    async def test_slice_bytes_are_pruned_once_every_source_is_public(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:eve", salt="miner"
+        )
+        season_id = await _open_season(session_maker, default, season_index=60)
+        now = datetime.now(UTC)
+        raw = b'{"slice":1}'
+        prep_id = uuid4()
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, season_id)
+            assert season is not None
+            season.columns = [
+                {
+                    **(season.columns or [])[0],
+                    "submission_id": str(miner.submission_id),
+                    "public_default": False,
+                },
+                *(season.columns or [])[1:],
+            ]
+            season.status = "revealed"
+            season.closed_at = now - timedelta(days=30)
+            season.revealed_at = now - timedelta(days=10)
+            session.add(
+                DuelingSlicePreparation(
+                    id=prep_id,
+                    season_id=season_id,
+                    run_seed=9,
+                    status="ready",
+                    attempts=1,
+                    slice_sha256=hashlib.sha256(raw).hexdigest(),
+                    slice_bytes=raw,
+                    ready_at=now,
+                )
+            )
+
+        async def _prune(at: datetime) -> list[str]:
+            async with session_maker() as session, session.begin():
+                return await prune_released_slice_bytes(session, now=at)
+
+        # The pinned miner source is not released: the bytes stay.
+        assert await _prune(now) == []
+        async with session_maker() as session, session.begin():
+            await sync_generator_source_releases(session, now=now)
+        # Released just now: still inside the score dispute window.
+        assert await _prune(now) == []
+
+        # A withholding policy keeps every byte: nobody else can regenerate.
+        async def _withheld(*_args: Any, **_kwargs: Any) -> ArtifactReleasePolicy:
+            return ArtifactReleasePolicy(
+                disclosure=SourceDisclosure.NEVER, embargo_hours=48
+            )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(releases_mod, "artifact_release_policy", _withheld)
+            assert await _prune(now + timedelta(days=8)) == []
+        notes = await _prune(now + timedelta(days=8))
+        assert notes == ["season 60 v16: pruned 1 slice(s); digests kept"]
+        async with session_maker() as session:
+            row = await session.get(DuelingSlicePreparation, prep_id)
+            assert row is not None
+            assert row.slice_bytes is None and row.bytes_pruned_at is not None
+            assert row.slice_sha256 == hashlib.sha256(raw).hexdigest()

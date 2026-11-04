@@ -278,7 +278,7 @@ def dueling_slice_from_lease(job: JobResponse) -> DuelingSlice | None:
     # before anything runs.
     try:
         header = json.loads(slice_bytes)
-    except ValueError as exc:  # includes UnicodeDecodeError
+    except (ValueError, RecursionError) as exc:  # UnicodeDecodeError, deep nesting
         raise DuelingSliceError(
             f"dueling slice for agent {job.agent_id} is not valid JSON",
             code="dueling_slice_undecodable",

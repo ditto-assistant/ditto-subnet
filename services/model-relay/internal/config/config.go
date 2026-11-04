@@ -251,8 +251,12 @@ type InferenceProxyConfig struct {
 	Required      bool   // DITTO_INFERENCE_PROXY_REQUIRED, default false
 	PublicBaseURL string // DITTO_INFERENCE_PUBLIC_BASE_URL, default http://localhost:8000
 
-	OpenRouterAPIKey string // OPENROUTER_API_KEY; REQUIRED when Enabled
-	PerplexityAPIKey string // PERPLEXITY_API_KEY; optional
+	OpenRouterAPIKey   string // OPENROUTER_API_KEY; REQUIRED when Enabled
+	PerplexityAPIKey   string // PERPLEXITY_API_KEY; optional
+	DaniLabsAPIKey     string // DANILABS_API_KEY; optional, server-only
+	DaniLabsTrialUntil string // DANILABS_FREE_TRIAL_UNTIL; RFC3339, required to route
+	DaniLabsTrialScope string // DANILABS_TRIAL_SCOPE: canary or fleet
+	DaniLabsPercent    int    // live board selection percentage; defaults to zero
 
 	UpstreamURL          string // DITTO_INFERENCE_UPSTREAM_URL
 	EmbeddingUpstreamURL string // DITTO_EMBEDDING_UPSTREAM_URL
@@ -583,8 +587,11 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		Required:      r.boolval("DITTO_INFERENCE_PROXY_REQUIRED", false),
 		PublicBaseURL: strings.TrimRight(r.str("DITTO_INFERENCE_PUBLIC_BASE_URL", "http://localhost:8000"), "/"),
 
-		OpenRouterAPIKey: r.str("OPENROUTER_API_KEY", ""),
-		PerplexityAPIKey: r.str("PERPLEXITY_API_KEY", ""),
+		OpenRouterAPIKey:   r.str("OPENROUTER_API_KEY", ""),
+		PerplexityAPIKey:   r.str("PERPLEXITY_API_KEY", ""),
+		DaniLabsAPIKey:     r.str("DANILABS_API_KEY", ""),
+		DaniLabsTrialUntil: r.str("DANILABS_FREE_TRIAL_UNTIL", ""),
+		DaniLabsTrialScope: r.str("DANILABS_TRIAL_SCOPE", ""),
 
 		UpstreamURL:          r.str("DITTO_INFERENCE_UPSTREAM_URL", "https://openrouter.ai/api/v1/chat/completions"),
 		EmbeddingUpstreamURL: r.str("DITTO_EMBEDDING_UPSTREAM_URL", "https://openrouter.ai/api/v1/embeddings"),
