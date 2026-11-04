@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.455.1 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Lease activation-blocking rollout quorum work ahead of season re-scores
+  ([#3390](https://github.com/ditto-assistant/ditto-subnet/pull/3390),
+  [`c4b5c1c`](https://github.com/ditto-assistant/ditto-subnet/commit/c4b5c1c05b247a846aacd3e52c9c7ee8d26913bb))
+
+
 ## v0.455.0 (2026-11-04)
 
 ### Features
