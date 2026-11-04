@@ -348,6 +348,14 @@ async def test_every_issued_seed_binds_back_to_the_reign_that_introduced_it(
     assert catchup.seed_index == 4
     assert catchup.seed_block == 100 + CRN_ANCHOR_BLOCK_DELTA
     assert catchup.seed_block_hash == _HASH
+    # A seed drawn past the current 10-seed work cap under the former 15-seed
+    # cap still sits in a reign's family and must keep its pin on catch-up.
+    deep = bind_confirmation_seed(
+        anchors, seed=first_family[12], bench_version=_BOUND_VERSION
+    )
+    assert deep is not None
+    assert deep.anchor_agent_id == first
+    assert deep.seed_index == 12
     growth = bind_confirmation_seed(
         anchors, seed=second_family[0], bench_version=_BOUND_VERSION
     )

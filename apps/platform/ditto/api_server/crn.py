@@ -133,8 +133,10 @@ def champion_anchored_seeds(
     **major** benchmark version, so successive versions get distinct seeds. This
     is exactly what the subnet's ``top5_confirmation_set`` derives via
     ``confirmation_seeds([str(champion_id)], version=current_version, count)`` —
-    the platform mirrors it to bound the anti-grind check to the first
-    ``max_seeds`` (``TOP5_MAX_CONFIRMATION_SEEDS``) replicate indices.
+    the platform mirrors it to bound fresh growth to the first ``max_seeds``
+    replicate indices (at most ``TOP5_MAX_CONFIRMATION_SEEDS``, the work cap).
+    Binding an already-recorded seed searches the deeper historical family
+    (``CONFIRMATION_SEED_CEILING``; see ``bind_confirmation_seed``).
 
     ``block_hash`` is the reign's pinned finalized-block anchor (bench v13+):
     with it the family is unpredictable before the pin; without it (legacy

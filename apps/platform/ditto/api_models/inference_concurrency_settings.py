@@ -463,6 +463,13 @@ class InferenceConcurrencySettings(BaseModel):
     within the relay's five-second refresh; set ``throughput`` to revert.
     """
 
+    danilabs_percent: Annotated[int, Field(ge=0, le=100, strict=True)] = 0
+    """Percentage of eligible GPT-OSS chat requests selected for the DaniLabs trial.
+
+    Zero disables selection. The relay also requires a server-side credential and
+    an unexpired free-trial deadline; ineligible requests use OpenRouter.
+    """
+
     @model_validator(mode="after")
     def _hierarchy_holds(self) -> InferenceConcurrencySettings:
         if self.chat_per_ticket_concurrency > self.chat_per_validator_concurrency:
@@ -593,7 +600,12 @@ class AdminInferenceConcurrencySettingsRequest(BaseModel):
         # their current values instead of resetting them.
         missing = sorted(
             set(InferenceConcurrencySettings.model_fields)
-            - {"benchmark_runtime", "decision_lane", "scored_provider_routing"}
+            - {
+                "benchmark_runtime",
+                "decision_lane",
+                "scored_provider_routing",
+                "danilabs_percent",
+            }
             - self.settings.model_fields_set
         )
         if missing:

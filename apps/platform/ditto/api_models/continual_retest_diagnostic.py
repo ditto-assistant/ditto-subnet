@@ -203,6 +203,15 @@ class AdminContinualRetestDiagnostic(BaseModel):
     """Observations behind the official continual composite (quorum + waves)."""
     raw_confirmation_depth: int = 0
     """Distinct accepted shared seeds, including any not yet fold-eligible."""
+    confirmation_seed_floor: int = 0
+    """Shared seeds the lane gathers before variance may stop it (minimum)."""
+    confirmation_seed_cap: int = 0
+    """The continual-retest work cap: the most shared seeds the lane ever
+    targets and the size of the active window the official composite folds."""
+    confirmation_seed_target: int | None = None
+    """The variance-sized seed target the lane is planning toward right now,
+    between floor and cap, from the raw emission set's recorded composites;
+    ``None`` when there is no current emission set."""
     composite_stderr: float | None = None
     aggregate_mode: Literal["disabled", "fleet_ready", "enabled"] = "fleet_ready"
     wave_membership: WaveMembership = "participants"

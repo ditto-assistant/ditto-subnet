@@ -6,9 +6,10 @@
     12,
     13,
     14,
-    15
+    15,
+    16
   ],
-  "max_supported_bench_version": 15,
+  "max_supported_bench_version": 16,
   "min_executable_bench_version": 8,
   "supported_bench_versions": [
     8,
@@ -18,6 +19,7 @@
     12,
     13,
     14,
-    15
+    15,
+    16
   ]
 }

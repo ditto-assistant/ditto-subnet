@@ -176,6 +176,7 @@ describe('admin API schemas', () => {
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
       scored_provider_routing: 'throughput',
+      danilabs_percent: 0,
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -207,6 +208,7 @@ describe('admin API schemas', () => {
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
       scored_provider_routing: 'throughput',
+      danilabs_percent: 0,
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -240,6 +242,7 @@ describe('admin API schemas', () => {
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
       scored_provider_routing: 'throughput',
+      danilabs_percent: 0,
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -303,6 +306,9 @@ describe('admin API schemas', () => {
         confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
       })
     expect(write({}).settings.scored_provider_routing).toBeUndefined()
+    expect(write({}).settings.danilabs_percent).toBeUndefined()
+    expect(write({ danilabs_percent: 10 }).settings.danilabs_percent).toBe(10)
+    expect(() => write({ danilabs_percent: 101 })).toThrow()
     expect(write({ scored_provider_routing: 'bf16_price_order_canary' }).settings
       .scored_provider_routing).toBe('bf16_price_order_canary')
     expect(() => write({ scored_provider_routing: 'fp4_cheapest' })).toThrow()
@@ -4003,6 +4009,15 @@ describe('continual retest cohort sizing against an older platform', () => {
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
   }
+
+  it('reads a dethrone minimum up to the 15-seed ceiling but writes at most 10', () => {
+    // A Platform still serving a revision written under the former 15-seed cap
+    // stays displayable; a new write cannot exceed the 10-seed work cap.
+    expect(continualRetestSettingsSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 15 }).success).toBe(true)
+    expect(continualRetestSettingsSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 16 }).success).toBe(false)
+    expect(continualRetestSettingsWriteSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 10 }).success).toBe(true)
+    expect(continualRetestSettingsWriteSchema.safeParse({ ...legacyPolicy, min_dethrone_confirmations: 11 }).success).toBe(false)
+  })
 
   it('tells a defaulted cohort size apart from a reported one', () => {
     // Reading defaults the field so the page still renders, which makes the

@@ -2,8 +2,11 @@ import {
   duelingSeasonSchema,
   duelingSeasonsSchema,
   duelingSlicesSchema,
+  generatorSourceReleasesSchema,
   getDuelingSeasonInputSchema,
   listDuelingSlicesInputSchema,
+  listGeneratorSourceReleasesInputSchema,
+  republishDuelingCommitmentInputSchema,
   retryDuelingSliceInputSchema,
   rotateDuelingSeasonInputSchema,
 } from '../lib/dueling.schemas'
@@ -35,6 +38,21 @@ export async function listDuelingSlices(rawInput: unknown) {
   return duelingSlicesSchema.parse(await platformAdminRequest(`${BASE}/slices?${params}`))
 }
 
+// Every pinned generator's source release: due time, status and the policy
+// snapshot it was computed under.
+export async function listGeneratorSourceReleases(rawInput: unknown) {
+  const input = listGeneratorSourceReleasesInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  if (input.status) params.set('status', input.status)
+  if (input.submissionId) params.set('submission_id', input.submissionId)
+  return generatorSourceReleasesSchema.parse(
+    await platformAdminRequest(`${BASE}/source-releases?${params}`),
+  )
+}
+
 export async function rotateDuelingSeason(rawInput: unknown, actor: string) {
   const input = rotateDuelingSeasonInputSchema.parse(rawInput)
   try {
@@ -56,6 +74,32 @@ export async function rotateDuelingSeason(rawInput: unknown, actor: string) {
       throw new Error(
         `Nothing was rotated: ${cause.message}. Re-read get_dueling_season and retry only `
         + 'against an open season that has not already been rotated.',
+      )
+    }
+    throw cause
+  }
+}
+
+// Re-elect validators to publish a committed season's dds1 commitment
+// (audited); returns the season in full.
+export async function republishDuelingSeasonCommitment(rawInput: unknown, actor: string) {
+  const input = republishDuelingCommitmentInputSchema.parse(rawInput)
+  try {
+    return duelingSeasonSchema.parse(
+      await platformAdminRequest(
+        `${BASE}/seasons/${encodeURIComponent(input.seasonId)}/republish-commitment`,
+        {
+          method: 'POST',
+          actor,
+          body: { reason: input.reason, actor, confirmation: input.confirmation },
+        },
+      ),
+    )
+  } catch (cause) {
+    if (cause instanceof PlatformAdminError && cause.status === 409) {
+      throw new Error(
+        `Nothing was republished: ${cause.message}. Re-read get_dueling_season (seasonId); `
+        + 'republish only a committed season whose publication has not reached its target.',
       )
     }
     throw cause

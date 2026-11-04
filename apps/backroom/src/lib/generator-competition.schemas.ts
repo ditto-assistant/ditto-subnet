@@ -158,6 +158,14 @@ export const setGeneratorSettingsInputSchema = z
         path: ['settings', 'rounds_per_season'],
       })
     }
+    // Platform refuses this too; checking here saves an operator a round trip.
+    if (input.settings.dueling_shadow_bench_version != null && !input.settings.dueling_enabled) {
+      context.addIssue({
+        code: 'custom',
+        message: 'dueling_shadow_bench_version needs dueling_enabled',
+        path: ['settings', 'dueling_shadow_bench_version'],
+      })
+    }
   })
 
 const caseCountsSchema = z.object({

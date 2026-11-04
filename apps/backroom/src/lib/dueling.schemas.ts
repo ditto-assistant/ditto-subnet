@@ -8,6 +8,7 @@ import { auditReasonSchema } from './admin.schemas'
 // revealed.
 
 export const ROTATE_DUELING_SEASON_CONFIRMATION = 'ROTATE DUELING SEASON'
+export const REPUBLISH_DUELING_COMMITMENT_CONFIRMATION = 'REPUBLISH DUELING SEASON COMMITMENT'
 
 const uuid = z.string().uuid()
 const nullableString = z.string().nullable()
@@ -96,6 +97,24 @@ export const duelingSeasonSchema = z.object({
   column_means: z.array(columnMeanSchema).default([]),
   slices: z.record(z.string(), z.number().int()).default({}),
   rotation: rotationSchema.nullable().optional().default(null),
+  // On-chain dds1:{season_index}:{commitment} publication by elected
+  // validators, and the first confirmed block and extrinsic.
+  commitment_publication: z.enum(['pending', 'published', 'failed', 'disabled']).default('disabled'),
+  commitment_published_at: nullableString.optional().default(null),
+  commitment_block: nullableInt.optional().default(null),
+  commitment_extrinsic_hash: nullableString.optional().default(null),
+  commitment_error: nullableString.optional().default(null),
+  commitment_publications: z.array(z.object({
+    validator_hotkey: z.string(),
+    status: z.enum(['claimed', 'confirmed', 'failed', 'expired']),
+    claimed_at: z.string(),
+    claim_expires_at: z.string(),
+    reported_at: nullableString.optional().default(null),
+    block_number: nullableInt.optional().default(null),
+    extrinsic_hash: nullableString.optional().default(null),
+    detail: nullableString.optional().default(null),
+  })).default([]),
+  commitment_publishers_elected: z.array(z.string()).default([]),
 })
 
 export const duelingSeasonsSchema = z.object({
@@ -148,6 +167,44 @@ export const duelingSlicesSchema = z.object({
   latency_p95_seconds: z.number().nullable(),
 })
 
+// Each pinned generator's source release (bench v16+): release_at =
+// max(reveal of the last season that pinned it, close of the first season that
+// pinned it + embargo_hours); released once due while the policy publishes.
+export const generatorSourceReleaseStatus = z.enum([
+  'waiting_close', 'waiting_reveal', 'embargoed', 'due', 'withheld', 'released',
+])
+
+export const generatorSourceReleasesSchema = z.object({
+  items: z.array(z.object({
+    submission_id: uuid,
+    miner_hotkey: z.string(),
+    owner_key: z.string(),
+    tree_sha256: z.string(),
+    source_sha256: z.string(),
+    bench_version: z.number().int(),
+    first_season_id: uuid,
+    last_season_id: uuid,
+    seasons: z.number().int(),
+    first_closed_at: nullableString,
+    last_revealed_at: nullableString,
+    embargo_hours: z.number().int(),
+    disclosure: z.string(),
+    release_at: nullableString,
+    released_at: nullableString,
+    scorer_version: nullableString,
+    status: generatorSourceReleaseStatus,
+    updated_at: z.string(),
+  })),
+  counts: z.record(z.string(), z.number().int()).default({}),
+})
+
+export const listGeneratorSourceReleasesInputSchema = z.object({
+  status: generatorSourceReleaseStatus.optional(),
+  submissionId: uuid.nullish(),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).max(100_000).default(0),
+})
+
 export const getDuelingSeasonInputSchema = z.object({
   seasonId: uuid.nullish(),
 })
@@ -172,6 +229,22 @@ export const rotateDuelingSeasonInputSchema = z
       context.addIssue({
         code: 'custom',
         message: `confirmation must be exactly ${ROTATE_DUELING_SEASON_CONFIRMATION}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export const republishDuelingCommitmentInputSchema = z
+  .object({
+    seasonId: uuid,
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    if (input.confirmation !== REPUBLISH_DUELING_COMMITMENT_CONFIRMATION) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${REPUBLISH_DUELING_COMMITMENT_CONFIRMATION}`,
         path: ['confirmation'],
       })
     }
