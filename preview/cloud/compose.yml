@@ -181,6 +181,7 @@ services:
       PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN}
       PREVIEW_SHA: ${PREVIEW_SHA}
       PREVIEW_PROFILE: ${PREVIEW_PROFILE}
+      PREVIEW_PR: ${PREVIEW_PR:-0}
     ports: ["80:80", "443:443"]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
