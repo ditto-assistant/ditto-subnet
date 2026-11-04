@@ -119,6 +119,14 @@
     {
       "name": "glossary-block-prompt-grounding-model-draft-served",
       "source": "fn answer(req: Request) { let records = retrieve(req.user_id); let glossary_block = role_grounding(records); return call_model(req.question, records, glossary_block); }"
+    },
+    {
+      "name": "documented-default-user-on-seed-and-run",
+      "source": "fn seed(req: Request) { store(req.user_id.unwrap_or(DEFAULT_USER), req.turns); } fn run(req: Request) { let scoped = load(req.user_id.unwrap_or(DEFAULT_USER)); respond(model(scoped, tools_for(req.user_id.unwrap_or(DEFAULT_USER)))); }"
+    },
+    {
+      "name": "stdout-log-of-the-requests-own-tool-result",
+      "source": "fn run(req: Request) { let result = call_tool(req.user_id, selected); println!(\"tool result: {}\", &result[..80.min(result.len())]); respond(model(result)); }"
     }
   ],
   "advisory": [
