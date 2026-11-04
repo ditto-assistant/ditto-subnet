@@ -194,18 +194,14 @@ async def admin_round_loop(
     and whether (and when last) it skipped an unchanged round."""
     resolved = await load_settings(session)
     skipped = await skipped_round_views(session, limit=1)
-    skips = {
-        "skip_unchanged_rounds": resolved.settings.skip_unchanged_rounds,
-        "skipped_rounds": (await round_counts_by_status(session)).get("skipped", 0),
-        "last_skipped_round": skipped[0] if skipped else None,
-    }
     loop = _loop(request)
-    if loop is None:
-        return GeneratorRoundLoopResponse(
-            available=False, status=None, schedule=None, **skips
-        )
     return GeneratorRoundLoopResponse(
-        available=True, status=loop.status, schedule=loop.schedule, **skips
+        available=loop is not None,
+        status=loop.status if loop is not None else None,
+        schedule=loop.schedule if loop is not None else None,
+        skip_unchanged_rounds=resolved.settings.skip_unchanged_rounds,
+        skipped_rounds=(await round_counts_by_status(session)).get("skipped", 0),
+        last_skipped_round=skipped[0] if skipped else None,
     )
 
 

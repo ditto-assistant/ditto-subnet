@@ -14382,8 +14382,9 @@ class GeneratorRound(Base):
     when the round closes, and ``scored``. A round that cannot finish is
     ``void`` with a reason. A round that would only repeat the last scored
     round is ``skipped`` when it opens (``generation.skipped_unchanged``
-    names the scored round it carries forward): no dataset, no panel runs. ``secret`` and the dataset are private until
-    ``revealed_at`` (the privacy window).
+    names the scored round it carries forward): no dataset, no panel runs.
+    ``secret`` and the dataset are private until ``revealed_at`` (the
+    privacy window).
     """
 
     __tablename__ = "generator_rounds"
