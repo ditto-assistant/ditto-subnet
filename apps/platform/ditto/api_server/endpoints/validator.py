@@ -4761,7 +4761,15 @@ async def request_job(
             # and the season anchor's binding; the validator re-derives it.
             season_binding = await season_seed_binding(session, ticket)
             if season_binding is not None:
-                if ticket.dataset_sha256 is None and generator.run_size is not None:
+                if ticket.dataset_sha256 is None:
+                    if generator.run_size is None:
+                        # Never pair a season seed with a digest derived for
+                        # another seed: fail closed until generation returns.
+                        raise HTTPException(
+                            503,
+                            f"season seed binding for V{ticket.bench_version} "
+                            "is unavailable",
+                        )
                     assert ticket.seed is not None
                     ticket.dataset_sha256 = await lease_dataset_sha(
                         request,

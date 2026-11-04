@@ -267,6 +267,9 @@ async def mirror_season_seeded_score(
         ],
         bench_version=int(ticket.bench_version),
         created_at=created_at,
+        # A re-run after an infrastructure void reopens the seed, exactly as
+        # the continual single-seed retest path does.
+        rerun_seeds=frozenset({int(seed)}),
     )
     return True
 
