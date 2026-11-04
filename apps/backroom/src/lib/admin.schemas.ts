@@ -9405,7 +9405,7 @@ export const publicDethroneDecisionSchema = z.object({
   required_lead: z.number().nonnegative(),
   margin_lead: z.number().nonnegative(),
   statistical_lead: z.number().nonnegative().nullable().optional(),
-  method: z.enum(['flat', 'unpaired', 'paired']),
+  method: z.enum(['flat', 'unpaired', 'paired', 'duel']),
   dethrones: z.boolean(),
   paired_standard_error: z.number().nonnegative().nullable().optional(),
   shared_seed_count: z.number().int().nonnegative().nullable().optional(),

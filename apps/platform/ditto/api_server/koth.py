@@ -616,17 +616,24 @@ def crown_standings(
                 official_score=_dethrone_composite(
                     entry, quality_primary=quality_primary
                 ),
-                shared_seeds=crown_evidence_count(entry, king, crown_gate),
+                shared_seeds=(
+                    decision.shared_seed_count or 0
+                    if decision.method == "duel"
+                    else crown_evidence_count(entry, king, crown_gate)
+                ),
                 within_standing=positions[entry.agent_id] <= crown_gate.standing_rank,
-                decision=_dethrone_decision(
+                decision=decision,
+            )
+            for entry in rivals
+            for decision in [
+                _dethrone_decision(
                     entry,
                     king,
                     ceiling_band_clamp=ceiling_band_clamp,
                     statistical_band_cap=statistical_band_cap,
                     crown_gate=crown_gate,
-                ),
-            )
-            for entry in rivals
+                )
+            ]
         ),
     )
 
@@ -1559,20 +1566,25 @@ def _dethrone_decision(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
     )
-    if _dueling_incomparable(challenger, champion):
+    ungated = decision
+    incomparable = _dueling_incomparable(challenger, champion)
+    if incomparable:
         # Two v16 rows from different seasons never dethrone each other (the
         # validator's ``_beats``); the ceiling read stays the ungated one.
         decision = replace(decision, dethrones=False)
     if crown_gate is None:
         return decision
     if _duel_governs(challenger, champion, crown_gate):
-        return _duel_decision(
+        duel = _duel_decision(
             challenger,
             champion,
             crown_gate=crown_gate,
             ceiling_band_clamp=ceiling_band_clamp,
-            ungated=decision,
+            ungated=ungated,
         )
+        # The duel reads pairs across seasons, but the two rows must still be
+        # same-season entries to contest the crown, exactly as ``_beats``.
+        return replace(duel, dethrones=False) if incomparable else duel
     qualified = (
         decision.method == "paired"
         and shared_seed_count(challenger, champion) >= crown_gate.min_shared_seeds

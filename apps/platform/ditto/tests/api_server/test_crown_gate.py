@@ -399,6 +399,9 @@ def test_projection_matches_shared_title_duel_cases(case: dict[str, Any]) -> Non
     challenger = next(e for e in entries if names[e.agent_id] == "challenger")
     king = next(e for e in entries if names[e.agent_id] == "king")
     decision = _dethrone_decision(challenger, king, crown_gate=duel)
+    assert decision.dethrones == (case["duel_champion"] == "challenger")
+    if challenger.dueling_season_id != king.dueling_season_id:
+        return  # rows of two seasons never contest the crown; no pairing
     assert decision.method == "duel"
     assert decision.shared_seed_count == case["_stat"]["pairs"]
     assert decision.dethrones == (case["duel_champion"] == "challenger")

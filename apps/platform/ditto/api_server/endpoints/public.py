@@ -4589,8 +4589,7 @@ async def build_public_leaderboard(
                         bench_version=active_version,
                         seasons=CROWN_DUEL_SEASONS,
                     )
-                    if continual_mean_active
-                    and crown_gate_active_rules is not None
+                    if crown_gate_active_rules is not None
                     and crown_gate_active_rules.duel_window is not None
                     and active_version is not None
                     else {}

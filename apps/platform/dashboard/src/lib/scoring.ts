@@ -633,7 +633,9 @@ export function crownWhyHigh(contest: CrownContest): string {
         : "seed-to-seed variance is high";
     const band =
       contest.statisticalLead != null
-        ? ", so the 95% band (1.64 × SE) starts at " + fxScore(contest.statisticalLead)
+        ? contest.method === "duel"
+          ? ", so the sequential title-duel boundary starts at " + fxScore(contest.statisticalLead)
+          : ", so the 95% band (1.64 × SE) starts at " + fxScore(contest.statisticalLead)
         : "";
     const margin = contest.marginLead != null ? num(contest.marginLead) : "the flat margin";
     return (
