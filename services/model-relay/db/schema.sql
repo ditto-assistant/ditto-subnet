@@ -3908,7 +3908,7 @@ CREATE TABLE public.dueling_season_batteries (
     finished_at timestamp with time zone,
     CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_at_d825 CHECK ((attempts >= 0)),
     CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_le_7164 CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((status <> 'leased'::text) OR (lease_id IS NOT NULL)))),
-    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_po_02bb CHECK (((status <> 'passed'::text) OR (grading_bench_version >= 15))),
+    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_po_02bb CHECK (((status <> 'passed'::text) OR (grading_bench_version >= 14))),
     CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_st_dedb CHECK ((status = ANY (ARRAY['pending'::text, 'leased'::text, 'passed'::text, 'failed'::text])))
 );
 

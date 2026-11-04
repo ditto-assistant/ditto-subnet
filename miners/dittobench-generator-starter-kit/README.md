@@ -195,11 +195,12 @@ rebuild to take part in v15 rounds.
 
 Bench v16 (the dueling bench, [dueling-bench.md](../../research/dittobench-datagen/docs/dueling-bench.md))
 is shipped but not active. Once it activates, rounds open at v16 and offer
-`"grading_bench_versions": [15, 16]`, so a generator that can declare only 13
-or 14 loses its v16 columns. The same window applies to the dueling slices that
-put generator cases into agents' canonical runs: a season at v16 accepts
-packs declaring 15 or 16, and a season's 32-seed qualification battery must
-see one policy on every seed.
+`"grading_bench_versions": [14, 15, 16]` (a three-policy window from v16 on,
+operator decision 2026-11-04), so a generator that declares 14 keeps its v16
+columns without a rebuild; one that can declare only 13 loses them. The same
+window applies to the dueling slices that put generator cases into agents'
+canonical runs: a season at v16 accepts packs declaring 14, 15 or 16, and a
+season's 32-seed qualification battery must see one policy on every seed.
 
 Kit version 5 adds policy 16 to `GradingBenchVersions`. Policy 16 grades like
 15 and adds no pack rule, so the kit's cases declare it unchanged. It does not

@@ -33,17 +33,22 @@ type SliceVector struct {
 // floor, so the test keeps working when later versions ship.
 const testSliceBenchVersion = protocol.DuelingMinBenchVersion
 
-// testSlicePolicy is the oldest pack policy a slice at testSliceBenchVersion
-// accepts. The window at the floor is fixed once pack policy 16 exists
-// ({15, 16}), so its oldest entry never moves and neither do the slice
-// vectors; TestSliceAcceptsEveryPolicyInItsWindow covers the newest.
+// testSlicePolicy is the pack policy the slice vectors were recorded at:
+// policy 15, which a slice at testSliceBenchVersion accepts. It is pinned
+// rather than read off the window so widening the v16 window to
+// {14, 15, 16} (GradingPolicyWindowV16) does not move the vectors;
+// TestSliceAcceptsEveryPolicyInItsWindow covers the window's ends.
 func testSlicePolicy(t *testing.T) int {
 	t.Helper()
+	policy := GradingBenchVersionV15
 	accepted := GradingBenchVersionsThrough(testSliceBenchVersion)
-	if len(accepted) == 0 {
-		t.Fatalf("a v%d slice accepts no pack policy", testSliceBenchVersion)
+	for _, v := range accepted {
+		if v == policy {
+			return policy
+		}
 	}
-	return accepted[0]
+	t.Fatalf("a v%d slice accepts %v, which no longer holds the vectors' policy %d", testSliceBenchVersion, accepted, policy)
+	return 0
 }
 
 // slicePack is a valid DuelingSliceCasesPerColumn-case pack generated for a
@@ -261,29 +266,31 @@ func repack(t *testing.T, col *SliceDatasetColumn, mutate func(*Pack)) {
 }
 
 // TestSliceAcceptsEveryPolicyInItsWindow decodes a slice at the dueling floor
-// whose columns declare each policy the floor's window accepts (15 and 16 at
-// v16), and refuses one that declares a policy outside it.
+// whose columns declare each end of the floor's window (14 and 16 at v16,
+// GradingPolicyWindowV16), and refuses one that declares a policy outside it.
 func TestSliceAcceptsEveryPolicyInItsWindow(t *testing.T) {
 	t.Parallel()
 	accepted := GradingBenchVersionsThrough(testSliceBenchVersion)
-	if want := []int{GradingBenchVersionV15, GradingBenchVersionV16}; !reflect.DeepEqual(accepted, want) {
+	if want := []int{GradingBenchVersionV14, GradingBenchVersionV15, GradingBenchVersionV16}; !reflect.DeepEqual(accepted, want) {
 		t.Fatalf("a v%d slice accepts %v, want %v", testSliceBenchVersion, accepted, want)
 	}
 	seasonSeed := testSliceSeasonSeed(t)
-	newest := accepted[len(accepted)-1]
+	for _, policy := range []int{accepted[0], accepted[len(accepted)-1]} {
+		ds := testSlice(t, seasonSeed, 7)
+		for i := range ds.Columns {
+			ds.Columns[i].GradingBenchVersion = policy
+			ds.Columns[i].Pack = slicePack(t, int64(200+i), ds.Columns[i].SliceSeed, policy)
+		}
+		raw, sum, err := EncodeSliceDataset(ds)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, cols, err := DecodeSliceDataset(raw, sum); err != nil || len(cols) != protocol.DuelingSliceColumns {
+			t.Fatalf("a slice at policy %d must decode: %v", policy, err)
+		}
+	}
 	ds := testSlice(t, seasonSeed, 7)
-	for i := range ds.Columns {
-		ds.Columns[i].GradingBenchVersion = newest
-		ds.Columns[i].Pack = slicePack(t, int64(200+i), ds.Columns[i].SliceSeed, newest)
-	}
-	raw, sum, err := EncodeSliceDataset(ds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, cols, err := DecodeSliceDataset(raw, sum); err != nil || len(cols) != protocol.DuelingSliceColumns {
-		t.Fatalf("a slice at policy %d must decode: %v", newest, err)
-	}
-	old := GradingBenchVersionV14
+	old := GradingBenchVersion
 	ds.Columns[0].GradingBenchVersion = old
 	ds.Columns[0].Pack = slicePack(t, 300, ds.Columns[0].SliceSeed, old)
 	if _, _, err := EncodeSliceDataset(ds); err == nil {

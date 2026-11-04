@@ -30,7 +30,12 @@ inference cost factor prices the whole run (both halves) and rides in
 `gate_datagen`. It is floored at 0.6, so it never zeroes a run.
 
 Pack policy 16 ships with it (tandem upgrade). A v16 round and a v16 season
-accept packs declaring 15 or 16. Policy 16 grades like 15.
+accept packs declaring 14, 15 or 16 (`challenge.GradingPolicyWindowV16`,
+operator decision 2026-11-04; v15 rounds stay {14, 15}). Policy 16 grades like
+15, and neither 15 nor 16 adds a pack rule over 14, so a policy-14 pack
+validates identically and grades under its declared v14 floor. Generators that
+declare 13 or 14 and hold v15 columns therefore keep their v16 columns and
+batteries without a rebuild.
 
 ## Layers
 
@@ -57,9 +62,10 @@ accept packs declaring 15 or 16. Policy 16 grades like 15.
    policy 16.
 2. **Re-register the public default generator** from generator kit version 5
    (`create_default_generator_upload`, then `register_default_generator`).
-   The currently registered kit (version 4) declares at most policy 14, so it
-   fails every v16 season battery and cannot fill or substitute a v16 column.
-   Even a default-only shadow season needs this.
+   Kit version 4 declares at most policy 14. Since the three-policy v16
+   window (2026-11-04) a v16 season accepts that, so version 4 would pass a
+   v16 battery at policy 14; version 5 is still the intended default because
+   it declares 16 (its cases are unchanged).
 3. **Shadow seasons without a rollout.** A season opens only while
    `dueling_enabled` is on and a v16 contract is active, is an open rollout's
    desired version, or is the generator competition setting
@@ -141,7 +147,8 @@ Each must be closed, or waived by the operator, before activation.
   disagree, regenerate `priced_cost_vectors.json`, and keep the Python mirror
   in step. After activation these constants are frozen.
 - **Announcement.** At least 24 hours' notice in #118 for agent miners, and at
-  least 7 days for generator miners (tandem upgrade runbook).
+  least 48 hours for generator miners: v16 accepts policy 14, so no generator
+  needs a rebuild (tandem upgrade runbook, "v16 exception").
 - **Generator track share and upload fee**, through governance, together with
   activation.
 

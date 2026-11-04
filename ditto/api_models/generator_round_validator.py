@@ -57,10 +57,10 @@ GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX = "generator-round-max-cases-"
 # version below it) and keeps it until it is scored. The set is the pack
 # contract's grading policies (``challenge.SupportedGradingBenchVersions``): a
 # round at version N accepts packs graded at the listed versions in its window
-# (``accepted_grading_versions``: N-1 and N), each column at the policy its
-# pack declares, so a generator that predates v14 keeps its v13 column in a
-# v14 round. Every activatable bench version from the first round version on
-# has an entry: one number for both competitions, and
+# (``accepted_grading_versions``: N-1 and N, plus N-2 from v16), each column
+# at the policy its pack declares, so a generator that predates v14 keeps its
+# v13 column in a v14 round. Every activatable bench version from the first
+# round version on has an entry: one number for both competitions, and
 # ``test_bench_version_pins`` fails on a shipped benchmark contract without
 # one. dittobench-api's ``generator-round-v1`` mode runs a round at every
 # listed version and advertises each as ``generator-round-bench-<n>``.
@@ -71,21 +71,36 @@ GENERATOR_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13, 14, 15, 16)
 # that advertises none runs (the original v13-only round mode).
 GENERATOR_ROUND_BENCH_FEATURE_PREFIX = "generator-round-bench-"
 LEGACY_SCORER_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13,)
-# How many grading policies a round accepts: its own version and the one
-# before it (``challenge.GradingPolicyWindow``). With {13, 14} that is every
-# policy; once a third exists a round at N accepts only N-1 and N.
+# How many grading policies a round below v16 accepts: its own version and
+# the one before it (``challenge.GradingPolicyWindow``). With {13, 14} that is
+# every policy; once a third exists a round at N accepts only N-1 and N.
 GRADING_POLICY_WINDOW = 2
+# From v16 on, rounds and dueling seasons accept three policies
+# (``challenge.GradingPolicyWindowV16``, operator decision 2026-11-04): a v16
+# round or season accepts {14, 15, 16}, because 15 and 16 add no pack rule
+# over 14. The window slides, so a v17 round would accept {15, 16, 17}.
+GRADING_POLICY_WINDOW_V16 = 3
+GRADING_POLICY_WINDOW_V16_FROM = 16
 # The version every round opened before rounds recorded one ran at.
 LEGACY_ROUND_BENCH_VERSION = 13
+
+
+def grading_policy_window(round_bench_version: int) -> int:
+    """How many grading policies a round frozen at ``round_bench_version``
+    accepts (``challenge.GradingPolicyWindowFor``)."""
+    if round_bench_version >= GRADING_POLICY_WINDOW_V16_FROM:
+        return GRADING_POLICY_WINDOW_V16
+    return GRADING_POLICY_WINDOW
 
 
 def accepted_grading_versions(round_bench_version: int) -> tuple[int, ...]:
     """The pack grading policies a round frozen at ``round_bench_version``
     accepts, oldest first (``challenge.GradingBenchVersionsThrough``)."""
+    window = grading_policy_window(round_bench_version)
     return tuple(
         version
         for version in GENERATOR_ROUND_BENCH_VERSIONS
-        if round_bench_version - GRADING_POLICY_WINDOW < version <= round_bench_version
+        if round_bench_version - window < version <= round_bench_version
     )
 
 

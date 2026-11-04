@@ -73,8 +73,9 @@ const GradingBenchVersionV15 = protocol.BenchVersionV15
 // branch, so a v16 pack grades exactly like a v15 pack (grading is by floor),
 // and it adds no pack validation rule beyond v14's. It exists because every
 // activatable bench version ships a pack policy of the same number (tandem
-// upgrade): v16 rounds accept packs declaring 15 or 16, which is also the
-// window a v16 dueling season accepts (docs/dueling-bench.md section 7.1).
+// upgrade): v16 rounds accept packs declaring 14, 15 or 16
+// (GradingPolicyWindowV16), which is also the window a v16 dueling season
+// accepts (docs/dueling-bench.md section 7.1).
 const GradingBenchVersionV16 = protocol.BenchVersionV16
 
 // supportedGradingBenchVersions is the ordered set of policies a pack may
@@ -99,21 +100,48 @@ func SupportsGradingBenchVersion(v int) bool {
 	return false
 }
 
-// GradingPolicyWindow is how many grading policies a round accepts: its own
-// version and the one before it (operator decision, 2026-10-27; see
-// docs/tandem-upgrades.md "Support window"). With policies {13, 14} that is
-// every policy; once a third exists, a round at N accepts only N-1 and N, so a
-// v15 round no longer accepts v13 packs while a v14 round still does.
+// GradingPolicyWindow is how many grading policies a round below
+// GradingPolicyWindowV16From accepts: its own version and the one before it
+// (operator decision, 2026-10-27; see docs/tandem-upgrades.md "Support
+// window"). With policies {13, 14} that is every policy; once a third exists,
+// a round at N accepts only N-1 and N, so a v15 round no longer accepts v13
+// packs while a v14 round still does.
 const GradingPolicyWindow = 2
+
+// GradingPolicyWindowV16 is how many grading policies a round (or dueling
+// season) at GradingPolicyWindowV16From or above accepts: its own version and
+// the two before it (operator decision, 2026-11-04). A v16 round or season
+// accepts {14, 15, 16}: policies 15 and 16 add no pack validation rule over
+// 14, so a policy-14 pack validates identically and grades under its declared
+// v14 floor, and most live generators declare 13 or 14. The rule slides: a
+// v17 round would accept {15, 16, 17}, retiring 14. Rounds below 16 keep
+// GradingPolicyWindow, so a v15 round still accepts exactly {14, 15}.
+const GradingPolicyWindowV16 = 3
+
+// GradingPolicyWindowV16From is the first round bench version that uses
+// GradingPolicyWindowV16.
+const GradingPolicyWindowV16From = GradingBenchVersionV16
+
+// GradingPolicyWindowFor returns how many grading policies a round frozen at
+// roundBenchVersion accepts: GradingPolicyWindow below
+// GradingPolicyWindowV16From, GradingPolicyWindowV16 from it on.
+func GradingPolicyWindowFor(roundBenchVersion int) int {
+	if roundBenchVersion >= GradingPolicyWindowV16From {
+		return GradingPolicyWindowV16
+	}
+	return GradingPolicyWindow
+}
 
 // GradingBenchVersionsThrough returns the grading policies a round frozen at
 // roundBenchVersion accepts: the supported versions in the window
-// (roundBenchVersion-GradingPolicyWindow, roundBenchVersion], oldest first. It
-// is empty when roundBenchVersion predates every supported policy.
+// (roundBenchVersion-GradingPolicyWindowFor(roundBenchVersion),
+// roundBenchVersion], oldest first. It is empty when roundBenchVersion
+// predates every supported policy.
 func GradingBenchVersionsThrough(roundBenchVersion int) []int {
+	window := GradingPolicyWindowFor(roundBenchVersion)
 	var out []int
 	for _, s := range supportedGradingBenchVersions {
-		if s <= roundBenchVersion && s > roundBenchVersion-GradingPolicyWindow {
+		if s <= roundBenchVersion && s > roundBenchVersion-window {
 			out = append(out, s)
 		}
 	}

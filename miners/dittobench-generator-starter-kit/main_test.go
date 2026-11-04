@@ -216,11 +216,15 @@ func TestV15OutputIsUnchanged(t *testing.T) {
 }
 
 // A v16 round's request (and a v16 dueling slice column, 35 cases) gets a v16
-// pack that passes every rule, with the same cases as the v13 pack.
+// pack that passes every rule, with the same cases as the v13 pack. The v16
+// window also accepts 14 (2026-11-04), and the kit still picks 16.
 func TestV16RequestDeclaresV16(t *testing.T) {
 	for _, seed := range []int64{1, 2, 3} {
 		for _, cases := range []int{challenge.MinCases, 35, MaxCases} {
 			req := challenge.NewGenerateRequestFor(challenge.SeedFromInt64(seed), testHotkey, cases, challenge.GradingBenchVersionV16)
+			if !req.Accepts(challenge.GradingBenchVersionV14) {
+				t.Fatalf("a v16 request must accept policy 14: %v", req.Accepted())
+			}
 			pack, err := Generate(req)
 			if err != nil {
 				t.Fatal(err)

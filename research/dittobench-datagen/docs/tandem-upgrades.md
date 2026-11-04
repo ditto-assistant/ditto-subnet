@@ -35,7 +35,7 @@ fixes how they move, from v14 on.
 |---|---|
 | Identifier | **One version number for both competitions** (operator-confirmed). Bench version N is the agent contract, the generator-round runtime contract, and pack grading policy N. Every activatable bench version gets a pack policy N, even when its grader is unchanged (grading is by floor, so policy 15 grades like 14 unless v15 changes `grade/`). Enforced: `test_every_activatable_bench_version_has_a_generator_pack_version` (`ditto/tests/test_bench_version_pins.py`) fails when any bench version from 13 on that a rollout can target (a shipped `benchmark_contract.py` entry or a validator-supported version) has no pack policy and round contract of the same number. |
 | Compatibility | Derived, never a hand-kept matrix. A run or round at version N accepts packs at the **supported** policies in its window (`challenge.GradingBenchVersionsThrough(N)`, Platform `accepted_grading_versions(N)`). Each column is graded at its pack's declared policy. |
-| Support window | **Two policies: the round's version and the one before it** (operator-confirmed). Enforced in the contract: `challenge.GradingPolicyWindow = 2` and Platform `GRADING_POLICY_WINDOW = 2`, pinned equal by `test_generator_grading_policy_window_is_two_versions`. A round at N accepts packs at N and N-1 only once a third policy exists; with {13, 14} a v14 round accepts both. A v15 round's request floor is 14 (`grading_bench_version: 14, grading_bench_versions: [14, 15]`), so v13 packs retire for v15 rounds without a separate baseline release. `challenge.GradingBenchVersion` (13) stays the floor a pre-v14 generator requires. |
+| Support window | **Below v16, two policies: the round's version and the one before it** (operator-confirmed 2026-10-27). **From v16, three: N, N-1 and N-2** (operator decision 2026-11-04), so a v16 round or dueling season accepts {14, 15, 16}. Enforced in the contract: `challenge.GradingPolicyWindowFor(N)` returns `GradingPolicyWindow = 2` below `GradingPolicyWindowV16From` (16) and `GradingPolicyWindowV16 = 3` from it; Platform mirrors it (`GRADING_POLICY_WINDOW`, `GRADING_POLICY_WINDOW_V16`, `grading_policy_window`), pinned equal by `test_generator_grading_policy_window_matches_go`. A round at N accepts packs at N and N-1 only once a third policy exists; with {13, 14} a v14 round accepts both. A v15 round's request floor is 14 (`grading_bench_version: 14, grading_bench_versions: [14, 15]`), so v13 packs retire for v15 rounds without a separate baseline release. A v16 round's request floor is also 14 (`grading_bench_versions: [14, 15, 16]`): policies 15 and 16 add no pack rule over 14, so a policy-14 pack validates identically and grades under its declared v14 floor. The window slides, so a v17 round would accept {15, 16, 17} and retire 14. `challenge.GradingBenchVersion` (13) stays the floor a pre-v14 generator requires. |
 | Who chooses a column's policy | **The generator**, deterministically from the request (`req.NewestAccepted(supported)`). Platform never forces a policy. A generator that cannot or does not upgrade keeps emitting the baseline. |
 | Failure on a newer request | **Retry once on the baseline request** (`legacy_retry`). A working generator never loses its column to an upgrade. |
 | What a round freezes | Bench version (runtime), columns, panel, column size at open. Each column's declared policy is recorded at generation. |
@@ -110,13 +110,20 @@ Rules:
 |---|---|---|---|
 | Pack policy N merged (rehearsable with `-round-bench N`) | Same day: what changed in grading, the new validation rules, "no action required" | None | Discord announcement, starter kit README |
 | Rollout for N opens | Planned activation window | Existing rollout notice | Discord |
-| Activation of N | At least 7 days after the policy merged | Existing activation notice | Discord, Backroom record |
+| Activation of N | At least 7 days after the policy merged (v16: 48 hours, below) | Existing activation notice | Discord, Backroom record |
 | Activation of N+1 (rounds at N+1 stop accepting policy N-1, by the window) | At least 14 days before that activation, naming the version | None | Discord, starter kit README |
 | Changing `cases_per_seed` or `MaxCases` | Existing rule: announce before applying | None | Discord |
 
 Retiring a policy is the only step that can strand a generator, which is why it
 has the longest notice. With the window in the contract it happens at the
-activation of the version two above it, not by a separate release.
+activation of the version two above it (three above it from v16), not by a
+separate release.
+
+**v16 exception (operator decision 2026-11-04).** A v16 round or season accepts
+policy 14, so v16 retires nothing a v15 round accepts: every generator that
+holds a v15 column keeps its v16 column and battery with **no rebuild**. The
+generator notice for v16 activation is therefore **48 hours**, not 7 days, and
+needs no retirement notice; 13 already retired with v15.
 
 ## Dual support and the upgrade sequence
 
@@ -186,16 +193,17 @@ across a pack policy change. They extend the v16 checklist in
    eligible set. They are non-authoritative and never move generator pay.
    Without them the v16 cohort has no slices to run.
 5. **Eligibility reads round columns in the season's window.** A column
-   scored in a round at policy 15 is eligible for a v16 season (15 is in
-   {15, 16}); one at policy 13 or 14 is not, and its generator must declare 15
-   or 16 in a round first. Its measured solvability is under its declared
-   policy, which the season pins, so solvability carries over.
+   scored in a round at policy 14 or 15 is eligible for a v16 season (both are
+   in {14, 15, 16}, the three-policy v16 window decided 2026-11-04); one at
+   policy 13 is not, and its generator must declare 14 or later in a round
+   first. Its measured solvability is under its declared policy, which the
+   season pins, so solvability carries over.
 6. **Pack policy 16.** Add `GradingBenchVersionV16` to
    `supportedGradingBenchVersions` and 16 to `GENERATOR_ROUND_BENCH_VERSIONS`
    in the v16 contract release, even if `grade/` is unchanged. The pin test
    fails on a shipped v16 benchmark contract without them. When 16 activates,
-   the window is {15, 16} by `GradingPolicyWindow`; no baseline release is
-   needed.
+   the window is {14, 15, 16} by `GradingPolicyWindowV16` (operator decision
+   2026-11-04); no baseline release and no generator rebuild is needed.
 7. **Rollback from 16.** Seasons stop at the next season open; canonical runs
    return to the v15 datagen-only profile; rounds return to 15. Generators that
    declared 16 re-choose 15 from the v15 request. Accepted v16 rows stay
@@ -349,7 +357,7 @@ has no baseline to retry on.
 | # | Question | Decision | Where it lives |
 |---|---|---|---|
 | 1 | One number | **Yes.** Every activatable bench version gets a pack policy of the same number, even with an unchanged grader. | `test_every_activatable_bench_version_has_a_generator_pack_version` |
-| 2 | Window length | **Two versions**: a round at N accepts N and N-1. | `challenge.GradingPolicyWindow`, `GRADING_POLICY_WINDOW`, `accepted_grading_versions`; pinned equal |
+| 2 | Window length | **Two versions**: a round at N accepts N and N-1. **Amended 2026-11-04: three from v16** (N, N-1, N-2; a v16 round or season accepts {14, 15, 16}). | `challenge.GradingPolicyWindowFor`, `GRADING_POLICY_WINDOW`, `GRADING_POLICY_WINDOW_V16`, `accepted_grading_versions`; pinned equal |
 | 3 | Round switch threshold | **Quorum, symmetrical with the agent rollout: default 3.** | `min_round_validators`; "Round switch quorum" above |
 | 4 | Rollout readiness probe | **Open** (below). | Not implemented |
 | 5 | Generator scorer policy advertisement | **Explicit.** The scorer sends `grading_bench_versions`; none means v13-only. | `challenge-scorer/6`, `generator_scorer_heartbeats.grading_bench_versions` |

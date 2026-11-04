@@ -44,8 +44,8 @@ const (
 // round's request also accepts v14, and the kit declares v14.
 //
 // Policy 16 (the dueling bench) grades like 15 and adds no pack rule, so the
-// same cases declare it in a v16 round, whose window is {15, 16}, and in a v16
-// dueling slice. Policy 15 is deliberately absent: a v15 round (window
+// same cases declare it in a v16 round, whose window is {14, 15, 16}, and in a
+// v16 dueling slice (NewestAccepted picks 16 there, not 14). Policy 15 is deliberately absent: a v15 round (window
 // {14, 15}) keeps getting the v14 pack this kit has always emitted there, so
 // the public default generator's live v15 columns do not move.
 var GradingBenchVersions = []int{challenge.GradingBenchVersion, challenge.GradingBenchVersionV14, challenge.GradingBenchVersionV16}

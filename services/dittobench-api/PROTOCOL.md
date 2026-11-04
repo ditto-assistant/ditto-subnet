@@ -320,7 +320,9 @@ it runs a round at: the pack grading policies
 `bench_version` must be one of them. The harness is seeded and run at that
 version, and each case is graded at the `grading_bench_version` its pack
 declares, which must be the round's version or the one before it (the
-two-version window, `challenge.GradingPolicyWindow`;
+two-version window, `challenge.GradingPolicyWindow`), or from v16 on one of
+the two before it (a v16 round accepts 14, 15 or 16;
+`challenge.GradingPolicyWindowFor`;
 `challenge.CheckRoundGradingVersions`; a dataset with any other column fails
 the run). The validator forwards the set as
 `scorer_benchmarks.generator_round_bench_versions`; a scorer without the

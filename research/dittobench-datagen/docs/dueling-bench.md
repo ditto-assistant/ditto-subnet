@@ -19,8 +19,8 @@ dueling bench therefore ships as `protocol.BenchVersionV16`, and its datagen hal
 **inherits the v15 contract** (catalog, decision lane, grader floor and gates),
 with the two v15 lessons in section 8 applied. Everywhere below, "v15" in the
 2026-10-27 amendments reads as **v16**, "the inherited contract" is v15, and
-"accepts columns declaring 14 or 15" becomes "15 or 16" (the two-version pack
-window at 16).
+"accepts columns declaring 14 or 15" becomes "14, 15 or 16" (the three-policy
+pack window at 16, operator decision 2026-11-04; section 7.1).
 
 Rounds moved from 1 to 4 epochs on 2026-10-31 (generator settings revision
 10), so one round is already about 4.8 h. A season is now
@@ -46,8 +46,10 @@ this design:
 4. While a v16 rollout is open, Platform runs non-authoritative shadow seasons
    at 16 for the cohort's desired-version runs.
 
-With the two-version window (also decided 2026-10-27), a v16 season accepts
-columns declaring 15 or 16 only.
+The two-version window (also decided 2026-10-27) would have left a v16 season
+accepting only 15 or 16. The operator widened it on 2026-11-04: a v16 season
+(and a v16 generator round) accepts columns declaring **14, 15 or 16**
+(section 7.1).
 
 ## Summary of the proposal
 
@@ -448,7 +450,7 @@ cohort above 10 needs at least 4 epochs. At 25 it needs a longer season or
 ## 4. Scoring
 
 - **Grading.** Slice cases are graded by `scorer.GradeMemory` at the pack's
-  declared `grading_bench_version` (15 or 16 in a v16 season), which the season pins per
+  declared `grading_bench_version` (14, 15 or 16 in a v16 season), which the season pins per
   column ([tandem-upgrades.md](tandem-upgrades.md)). That is the grader rounds
   use, so a column's measured round solvability carries over to canonical
   runs. Datagen cases are
@@ -567,7 +569,17 @@ ships OFF and additive; nothing here changes v2-v15 bytes or behaviour.
   The v16 datagen surface is the v15 surface plus section 8.1.
 - Pack policy 16: `challenge.GradingBenchVersionV16` in
   `supportedGradingBenchVersions` (grades like 15 unless `grade/` adds a 16
-  branch). A v16 season accepts packs declaring 15 or 16.
+  branch). A v16 season accepts packs declaring 14, 15 or 16.
+- Policy window: `challenge.GradingPolicyWindowFor(bench)` is
+  `GradingPolicyWindow` (2) below 16 and `GradingPolicyWindowV16` (3) from 16 on
+  (operator decision 2026-11-04), so `GradingBenchVersionsThrough(16)` is
+  {14, 15, 16} while a v15 round stays {14, 15}. Policies 15 and 16 add no pack
+  validation rule over 14, so a policy-14 pack validates identically and grades
+  under its declared v14 floor; with the 2-version window 10 of the top 11
+  generators (declaring 13 or 14) were excluded from the first shadow season.
+  The window slides: a v17 season would accept {15, 16, 17}. Platform
+  `accepted_grading_versions` mirrors it and
+  `test_generator_grading_policy_window_matches_go` pins the two equal.
 
 ### 7.2 Season and slice primitives (`challenge/season.go`)
 

@@ -181,9 +181,11 @@ so policy N grades like N-1). Detail and rationale:
   (`req.NewestAccepted(...)`, rehearse `-round-bench N-1` and `-round-bench N`); bump its
   version, keep the N-1 output byte-identical apart from the version string, add a README
   migration note, and re-register the public default generator after release.
-- Do **not** move the request baseline (`challenge.GradingBenchVersion`). The two-version window
-  (`challenge.GradingPolicyWindow`, Platform `accepted_grading_versions`) retires N-2 for rounds
-  at N on its own; announce that 14 days before N activates.
+- Do **not** move the request baseline (`challenge.GradingBenchVersion`). The window
+  (`challenge.GradingPolicyWindowFor`, Platform `accepted_grading_versions`) retires the oldest
+  policy for rounds at N on its own: N-2 below v16, N-3 from v16 on; announce that 14 days before
+  N activates. v16 retires nothing (its window {14, 15, 16} keeps 14), so its generator notice
+  is 48 hours.
 - `test_every_activatable_bench_version_has_a_generator_pack_version` fails while a shipped
   `benchmark_contract.py` entry N has no pack policy N and round contract.
 
@@ -192,7 +194,7 @@ Standing decisions (operator, 2026-10-27):
 | Decision | Rule |
 |---|---|
 | Pack version per bench version | Every activated bench version gets a matching pack policy, grader changed or not. |
-| Support window | Two policies: a round at N accepts N and N-1 (`GradingPolicyWindow = 2`, enforced and pinned). Today {13, 14}, baseline 13. |
+| Support window | Two policies below v16: a round at N accepts N and N-1 (`GradingPolicyWindow = 2`). **v16 exception (operator, 2026-11-04): from 16 on, three policies** (`GradingPolicyWindowV16 = 3` via `GradingPolicyWindowFor`), so v16 rounds and dueling seasons accept {14, 15, 16}; v15 stays {14, 15}; the window slides (v17 would be {15, 16, 17}). Go and Python pinned equal by `test_generator_grading_policy_window_matches_go`. Baseline 13. |
 | Who picks a column's policy | The generator, from the request. Platform never forces one. |
 | Legacy retry | Keep the once-only retry on the baseline request (`legacy_retry`) for now. |
 | Round switch | Rounds move to N only once a **validator quorum** can run N, symmetrical with the agent rollout quorum. The quorum gate is the generator setting `min_round_validators` (default 3 = the agent rollout's `SCORING_QUORUM`); read the live value from Backroom `preview_generator_round` before assuming it. Until the quorum is met, rounds stay on the previous round's version with a recorded reason. |
