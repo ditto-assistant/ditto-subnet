@@ -2609,6 +2609,7 @@ async def _activate_dueling_rotation_retest(
     slot_id: str,
     ttl: timedelta,
     settings: ContinualRetestSettings | None = None,
+    season_seeds: bool = True,
 ) -> ValidatorTicket | None:
     """Promote this validator's next dueling season rotation re-test, if any.
 
@@ -2622,8 +2623,10 @@ async def _activate_dueling_rotation_retest(
     ticket moves onto its duel seed, or back to its canonical seed.
     """
     protocol = heartbeat.protocol_version if heartbeat is not None else None
-    if settings is not None and rotation_seeds_active(
-        settings, bench_version=bench_version
+    if (
+        season_seeds
+        and settings is not None
+        and rotation_seeds_active(settings, bench_version=bench_version)
     ):
         from ditto.api_server.dueling_seasons import open_season
 
@@ -2636,6 +2639,18 @@ async def _activate_dueling_rotation_retest(
             now=now,
         ):
             return None
+    # Live rotation leases this slot already holds: re-polling one resumes it,
+    # and a resumed lease must keep the seed its validator is already running.
+    resumable = set(
+        await session.scalars(
+            select(ValidatorTicket.agent_id).where(
+                ValidatorTicket.validator_hotkey == validator_hotkey,
+                ValidatorTicket.bench_version == bench_version,
+                ValidatorTicket.slot_id == slot_id,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+            )
+        )
+    )
     ticket = await activate_next_score_retest(
         session,
         validator_hotkey=validator_hotkey,
@@ -2652,9 +2667,13 @@ async def _activate_dueling_rotation_retest(
         allow_parallel_contract_retests=True,
         ttl=ttl,
     )
-    if ticket is not None and settings is not None:
+    if ticket is not None and settings is not None and ticket.agent_id not in resumable:
         await assign_rotation_seed(
-            session, ticket, settings=settings, protocol_version=protocol
+            session,
+            ticket,
+            settings=settings,
+            protocol_version=protocol,
+            allow_season_seed=season_seeds,
         )
     return ticket
 
@@ -4323,6 +4342,8 @@ async def request_job(
             ):
                 # A shadow dueling season rotation re-scores the frozen cohort
                 # on the new generator set before any other desired-era work.
+                # Settings pass too, so a stale season binding is always reset
+                # (season seeds themselves only apply at the active version).
                 ticket = await _activate_dueling_rotation_retest(
                     session,
                     validator_hotkey=payload.validator_hotkey,
@@ -4332,6 +4353,8 @@ async def request_job(
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
                     ttl=ticket_ttl,
+                    settings=await _continual_settings(request),
+                    season_seeds=False,
                 )
             # The activation boundary waits for every frozen member, not just
             # the first-five authority subset.  Give that bounded cohort first

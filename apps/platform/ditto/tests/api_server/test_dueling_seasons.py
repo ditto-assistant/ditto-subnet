@@ -2066,3 +2066,33 @@ class TestSeasonSeededRotation:
                 protocol_version=35,
                 now=opened + ROTATION_ANCHOR_GRACE,
             )
+
+    async def test_an_unpinned_anchor_leaves_queued_rotations_uncovering(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Queued rotations cover duel seeds only once the anchor is pinned."""
+        from ditto.api_server.rotation_duel_seeds import agents_with_pending_rotation
+        from ditto.db.models import ValidatorHeartbeat
+
+        season, agent_id, validators = await self._board(session_maker, pin=False)
+        async with session_maker() as session, session.begin():
+            for validator in validators:
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=validator,
+                        software_version="0.451.0",
+                        protocol_version=35,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=datetime.now(UTC),
+                        seen_at=datetime.now(UTC),
+                        signature="cd" * 64,
+                    )
+                )
+        async with session_maker() as session:
+            assert (
+                await agents_with_pending_rotation(
+                    session, agent_ids=[agent_id], season_id=season, bench_version=16
+                )
+                == frozenset()
+            )

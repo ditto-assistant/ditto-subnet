@@ -151,8 +151,12 @@ async def assign_rotation_seed(
     *,
     settings: ContinualRetestSettings,
     protocol_version: int | None,
+    allow_season_seed: bool = True,
 ) -> int | None:
     """Put a just-promoted rotation ticket on its duel seed, or back on canonical.
+
+    ``allow_season_seed=False`` (shadow seasons of a desired version) only ever
+    restores a canonical seed.
 
     Returns the duel seed assigned, or ``None`` when the ticket runs its
     canonical seed. A ticket left season-scoped by an earlier season (or by a
@@ -164,7 +168,8 @@ async def assign_rotation_seed(
     duel_seed: int | None = None
     anchor = None
     if (
-        rotation_seeds_active(settings, bench_version=version)
+        allow_season_seed
+        and rotation_seeds_active(settings, bench_version=version)
         and protocol_version is not None
         and protocol_version >= CROWN_DUEL_PROTOCOL
         and count is not None
@@ -331,6 +336,8 @@ async def agents_with_pending_rotation(
         )
     )
     wanted = str(season_id)
+    anchor = await _season_anchor(session, bench_version=bench_version)
+    anchor_pinned = anchor is not None and anchor.anchor_block_hash is not None
     pending: set[UUID] = set()
     for entry in latest:
         if (
@@ -355,8 +362,11 @@ async def agents_with_pending_rotation(
             )
         else:
             heartbeat = await session.get(ValidatorHeartbeat, entry.validator_hotkey)
+            # Assigned only on a pinned anchor; an unpinned one (past the
+            # grace) leaves the re-score canonical.
             covers = (
-                heartbeat is not None
+                anchor_pinned
+                and heartbeat is not None
                 and heartbeat.protocol_version >= CROWN_DUEL_PROTOCOL
             )
         if covers:
