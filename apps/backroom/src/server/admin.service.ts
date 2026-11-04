@@ -4104,6 +4104,7 @@ function provisionalAgentScores({
     bench_version: score.bench_version ?? null,
     generated_at: score.accepted_at,
     transcript_sha256: score.transcript_sha256 ?? null,
+    ...(score.dueling_breakdown ? { dueling_breakdown: score.dueling_breakdown } : {}),
   }))
   return agentScoresDetailSchema.parse({
     agent_id: pipeline.agent_id,

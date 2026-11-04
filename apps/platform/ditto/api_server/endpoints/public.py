@@ -250,6 +250,7 @@ from ditto.api_server.deferred_source_review import (
     public_review_reason,
     verified_review_notes,
 )
+from ditto.api_server.dueling_breakdown import public_dueling_breakdown
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
     ensure_current_efficiency_state,
@@ -6159,6 +6160,11 @@ def _public_validator_score(s) -> PublicValidatorScore:
             final_composite=s.composite,
             details=details,
         ),
+        dueling_breakdown=public_dueling_breakdown(
+            bench_version=bench_version,
+            dueling=getattr(s, "dueling", None),
+            gate_evidence=getattr(s, "gate_evidence", None),
+        ),
         v9_base=(_safe_public_v9_base(details) if (bench_version or 0) >= 9 else None),
         median_ms=s.median_ms,
         n=s.n,
@@ -8636,6 +8642,11 @@ async def agent_pipeline(
                     memory_mean=score.memory_mean,
                     final_composite=score.composite,
                     details=(score.details if isinstance(score.details, dict) else {}),
+                ),
+                dueling_breakdown=public_dueling_breakdown(
+                    bench_version=_score_bench_version(score),
+                    dueling=getattr(score, "dueling", None),
+                    gate_evidence=getattr(score, "gate_evidence", None),
                 ),
                 v9_base=(
                     _safe_public_v9_base(score.details)

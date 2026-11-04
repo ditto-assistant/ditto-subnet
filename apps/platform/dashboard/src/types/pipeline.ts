@@ -6,6 +6,7 @@
 import type {
   CaseResult,
   CodingShadowScore,
+  DuelingBreakdown,
   GateEvidence,
   NameHandle,
   V9BaseEvidence,
@@ -284,6 +285,8 @@ export interface AcceptedScore {
   case_results?: CaseResult[];
   /** Bench v13+ run-level gate verdict (aggregates only). */
   gate_evidence?: GateEvidence | null;
+  /** Bench v16+ dueling and priced-cost breakdown; omitted below v16. */
+  dueling_breakdown?: DuelingBreakdown | null;
 }
 
 /** A continual top-five retest result. Reusable seed identifiers stay private. */

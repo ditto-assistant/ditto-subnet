@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
+import { duelingColumnAggregateSchema } from './benchmark-canary.schemas'
 
 // Every Platform response field must have an explicit Backroom validator. Making
 // optional OpenAPI properties required in this mapped shape is deliberate: it
@@ -9724,6 +9725,40 @@ export const publicAuditPairCountsSchema = z.object({
   both_wrong: z.number().int().nonnegative(),
 })
 
+// Bench v16+ dueling arithmetic Platform projects from the stored
+// `scores.dueling` aggregates and `priced_cost` gate evidence. Columns extend
+// the canary read's disclosure (no owner key, no generator submission id) with
+// the derived mean, grading version, public-default and self-mask flags.
+const gateBps = z.number().int().min(0).max(10_000)
+export const publicDuelingBreakdownSchema = z.object({
+  formula: z.string(),
+  season_id: z.string(),
+  season_index: z.number().int().nonnegative(),
+  datagen_raw: z.number().min(0).max(1),
+  datagen_gate: z.number().min(0).max(1),
+  column_weight: z.number().min(0).max(1),
+  counted_columns: z.number().int().nonnegative(),
+  datagen_share: z.number().min(0).max(1),
+  generator_sum: z.number().min(0).max(1),
+  pre_gate_composite: z.number().min(0).max(1),
+  composite: z.number().min(0).max(1),
+  composite_stderr: z.number().nonnegative().nullish().default(null),
+  priced_cost_applied_factor_bps: gateBps.nullish().default(null),
+  priced_cost_factor_bps: gateBps.nullish().default(null),
+  priced_cost_factor: z.number().min(0).max(1).nullish().default(null),
+  priced_cost_posture: z.string().nullish().default(null),
+  priced_cost_result: z.string().nullish().default(null),
+  priced_cost_window: z.string().max(32).nullish().default(null),
+  other_gate_factor: z.number().min(0).max(1).nullish().default(null),
+  columns: z.array(duelingColumnAggregateSchema.extend({
+    grading_bench_version: z.number().int().positive().nullish().default(null),
+    mean: z.number().min(0).max(1),
+    public_default: z.boolean(),
+    self_masked: z.boolean(),
+    contribution: z.number().min(0).max(1),
+  })).max(16),
+})
+
 export const publicValidatorScoreSchema = z.object({
   validator_hotkey: z.string(),
   composite: z.number().min(0).max(1),
@@ -9755,6 +9790,8 @@ export const publicValidatorScoreSchema = z.object({
   signature: z.string().nullable().optional(),
   // Null below bench v13 and for a scorer that emitted no gate telemetry.
   gate_evidence: publicGateEvidenceSchema.nullable().optional(),
+  // Omitted below bench v16; a malformed block drops only itself.
+  dueling_breakdown: publicDuelingBreakdownSchema.optional().catch(undefined),
 })
 
 export const publicAgentScoresSchema = z.object({
@@ -9882,6 +9919,8 @@ export const publicProvisionalScoreSchema = z.object({
   bench_version: z.number().int().positive().nullable().optional(),
   accepted_at: z.string(),
   transcript_sha256: z.string().nullable().optional(),
+  // Bench v16+ only (omitted below), as on settled rows.
+  dueling_breakdown: publicDuelingBreakdownSchema.optional().catch(undefined),
 })
 
 export const publicSubmissionPipelineSchema = z.object({

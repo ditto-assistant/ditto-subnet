@@ -62,6 +62,16 @@ const canaryPricedCostSchema = z.object({
   applied_factor_bps: bps,
 })
 
+// One slice column's case statistics. Never the owner key, the generator's
+// submission id, sum_sq or case text: the public score reads' dueling
+// breakdown (admin.schemas.ts) extends exactly this disclosure.
+export const duelingColumnAggregateSchema = z.object({
+  column_id: z.string().max(32),
+  n: count,
+  sum: z.number().nonnegative(),
+  substituted: z.boolean(),
+})
+
 // Bench v16+ `details.dueling` aggregates: the datagen half and gate the fold
 // recomputes from, and each column's case statistics. Never case text.
 const canaryDuelingSchema = z.object({
@@ -70,12 +80,7 @@ const canaryDuelingSchema = z.object({
   datagen_gate: z.number().min(0).max(1),
   column_weight: z.number().min(0).max(1),
   composite_stderr: z.number().nonnegative().optional(),
-  columns: z.array(z.object({
-    column_id: z.string().max(32),
-    n: count,
-    sum: z.number().nonnegative(),
-    substituted: z.boolean(),
-  })).max(16),
+  columns: z.array(duelingColumnAggregateSchema).max(16),
 })
 
 const unit = z.number().min(0).max(1)
