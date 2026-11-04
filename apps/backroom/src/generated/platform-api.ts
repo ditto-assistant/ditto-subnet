@@ -21837,11 +21837,22 @@ export interface components {
              */
             retest_eligibility_z: number;
             /**
+             * Retest Mode
+             * @default continual
+             * @enum {string}
+             */
+            retest_mode: "continual" | "season_duel";
+            /**
              * Rollout Standdown
              * @default capable_validators
              * @enum {string}
              */
             rollout_standdown: "off" | "capable_validators" | "all";
+            /**
+             * Season Duel Seeds
+             * @default 3
+             */
+            season_duel_seeds: number;
             /**
              * Statistical Band Mode
              * @default disabled
@@ -37184,6 +37195,12 @@ export interface components {
              * @default false
              */
             provider_outage_active: boolean;
+            /**
+             * Retest Mode
+             * @default continual
+             * @enum {string}
+             */
+            retest_mode: "continual" | "season_duel";
             /** Route Position */
             route_position: number | null;
             /**
@@ -37193,6 +37210,12 @@ export interface components {
             route_priority: "champion" | "void_rerun" | "catchup" | "emission" | "extended" | "not_routed";
             /** Scheduled Round */
             scheduled_round: boolean | null;
+            /** Season Duel Anchor Champion Id */
+            season_duel_anchor_champion_id?: string | null;
+            /** Season Duel Held Seed Count */
+            season_duel_held_seed_count?: number | null;
+            /** Season Duel Seed Count */
+            season_duel_seed_count?: number | null;
             /** Spare Capacity Window */
             spare_capacity_window: boolean;
             /**

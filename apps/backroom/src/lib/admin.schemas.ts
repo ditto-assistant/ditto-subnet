@@ -2352,6 +2352,11 @@ export const MAX_RETEST_ELIGIBILITY_Z = 3
 export const MAX_WAVE_CADENCE_TEMPOS = 24
 export const MAX_WAVE_SEEDS_PER_WINDOW = 16
 export const DEFAULT_WAVE_SEEDS_PER_WINDOW = 3
+// Season title duels (docs/title-duels.md): mirrors MIN_SEASON_DUEL_SEEDS,
+// MAX_SEASON_DUEL_SEEDS and DEFAULT_SEASON_DUEL_SEEDS in the platform.
+export const MIN_SEASON_DUEL_SEEDS = 2
+export const MAX_SEASON_DUEL_SEEDS = 5
+export const DEFAULT_SEASON_DUEL_SEEDS = 3
 export const DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 // Not `strict`. The platform ships `participants` deliberately, and `strict` is
 // kept as the audited rollback path rather than as the default.
@@ -2463,6 +2468,16 @@ const continualRetestSettingsBaseSchema = z.object({
     .min(1)
     .max(MAX_WAVE_SEEDS_PER_WINDOW)
     .default(DEFAULT_WAVE_SEEDS_PER_WINDOW),
+  // Season title duels: `continual` walks every cohort member to the elastic
+  // target; `season_duel` runs one K-seed duel per dueling season for the top
+  // five (bench v16+ only; inert below the dueling floor).
+  retest_mode: z.enum(['continual', 'season_duel']).default('continual'),
+  season_duel_seeds: z
+    .number()
+    .int()
+    .min(MIN_SEASON_DUEL_SEEDS)
+    .max(MAX_SEASON_DUEL_SEEDS)
+    .default(DEFAULT_SEASON_DUEL_SEEDS),
 })
 
 export const continualRetestSettingsSchema =
@@ -2488,6 +2503,8 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
     wave_cadence_tempos: z.number().int().min(0).max(MAX_WAVE_CADENCE_TEMPOS),
     wave_seeds_per_window: z.number().int().min(1).max(MAX_WAVE_SEEDS_PER_WINDOW),
+    retest_mode: z.enum(['continual', 'season_duel']),
+    season_duel_seeds: z.number().int().min(MIN_SEASON_DUEL_SEEDS).max(MAX_SEASON_DUEL_SEEDS),
     retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
     retest_eligibility_mode: z.enum(['fixed', 'statistical']),
     retest_eligibility_z: z.number().min(0).max(MAX_RETEST_ELIGIBILITY_Z),
@@ -2727,6 +2744,19 @@ export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExte
     label: 'a per-window wave seed budget',
     legacyValue: () => DEFAULT_WAVE_SEEDS_PER_WINDOW,
     legacyBehaviour: () => 'waves are not paced per window',
+  },
+  {
+    field: 'retest_mode',
+    label: 'season title duels',
+    legacyValue: () => 'continual',
+    legacyBehaviour: () =>
+      'the lane walks every cohort member to the elastic shared-seed target',
+  },
+  {
+    field: 'season_duel_seeds',
+    label: 'a season duel seed count',
+    legacyValue: () => DEFAULT_SEASON_DUEL_SEEDS,
+    legacyBehaviour: () => 'there are no season duels',
   },
 ]
 
@@ -9146,6 +9176,12 @@ export const retestClaimabilitySchema = z.object({
   provider_gate_closed: z.boolean().default(false),
   // Tempo-aligned wave pacing: the window this lane is in and whether its
   // fresh-seed budget is spent. Counts only; seed values stay server-side.
+  // Season title duels: the mode, the season's K, the champion its family is
+  // anchored on (the season opener) and how many duel seeds this agent holds.
+  retest_mode: z.enum(['continual', 'season_duel']).default('continual'),
+  season_duel_seed_count: z.number().int().positive().nullable().default(null),
+  season_duel_anchor_champion_id: z.string().uuid().nullable().default(null),
+  season_duel_held_seed_count: z.number().int().nonnegative().nullable().default(null),
   wave_cadence_tempos: z.number().int().nonnegative().default(0),
   wave_seeds_per_window: z.number().int().positive().nullable().default(null),
   wave_window_epoch: z.number().int().nonnegative().nullable().default(null),

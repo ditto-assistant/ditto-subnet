@@ -2348,6 +2348,8 @@ describe('continual retest administration', () => {
     retest_cohort_max_size: 25,
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
   }
   const legacyEquivalent = {
     ...readDefaults,
@@ -2409,6 +2411,8 @@ describe('continual retest administration', () => {
     retest_cohort_max_size: carried,
     wave_cadence_tempos: carried,
     wave_seeds_per_window: carried,
+    retest_mode: carried,
+    season_duel_seeds: carried,
   })
   // The platform carries every field, so reads and writes both keep them.
   const supported = {
@@ -2437,6 +2441,8 @@ describe('continual retest administration', () => {
       retest_cohort_max_size: 25,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: 3,
+      retest_mode: 'continual' as const,
+      season_duel_seeds: 3,
     }
     const enabled = {
       ...control,
@@ -4294,6 +4300,10 @@ describe('production score reads', () => {
       void_rerun_claimable: false,
       provider_outage_active: false,
       provider_gate_closed: false,
+      retest_mode: 'continual' as const,
+      season_duel_seed_count: null,
+      season_duel_anchor_champion_id: null,
+      season_duel_held_seed_count: null,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: null,
       wave_window_epoch: null,

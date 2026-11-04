@@ -5,6 +5,7 @@ import {
   CONTINUAL_RETEST_CONFIRMATION,
   DEFAULT_CHAMPION_STANDING_RANK,
   DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+  DEFAULT_SEASON_DUEL_SEEDS,
   DEFAULT_WAVE_SEEDS_PER_WINDOW,
   EMISSION_SET_SIZE,
   MAX_MIN_DETHRONE_CONFIRMATIONS,
@@ -439,6 +440,13 @@ export function ContinualRetestControlPanel({
             wave_seeds_per_window: state.field_support.wave_seeds_per_window
               ? effective.settings.wave_seeds_per_window
               : DEFAULT_WAVE_SEEDS_PER_WINDOW,
+            // Season title duels are written through Backroom MCP too.
+            retest_mode: state.field_support.retest_mode
+              ? effective.settings.retest_mode
+              : 'continual',
+            season_duel_seeds: state.field_support.season_duel_seeds
+              ? effective.settings.season_duel_seeds
+              : DEFAULT_SEASON_DUEL_SEEDS,
           },
           reason,
           confirmation,

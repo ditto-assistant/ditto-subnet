@@ -255,6 +255,13 @@ from ditto.api_server.scoring_gate import (
     evaluate_rejected_resubmission,
 )
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
+from ditto.api_server.season_duel import (
+    season_duel_anchor_champion,
+    season_duel_owed,
+    season_duel_seed_count,
+    season_duel_seeds,
+    season_duel_unserved,
+)
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.structural_fingerprint import compute_structural_fingerprint
 from ditto.api_server.v13_scorer_cohort import (
@@ -5280,6 +5287,20 @@ async def _current_retest_cohort(
     # confirmation-enriched owner-dedupe already dropped (aceron_v23 vs v20).
     wave_members = snapshot.raw_emission
     emission_members = emission_set(projection)
+    if season_duel_seed_count(settings, bench_version=canonical_version) is not None:
+        # Season duels retest the top five only: the folded emission set plus
+        # the public-board five whose shared coverage gates the fold. No tie
+        # band, no cohort extension, no owner successors (title-duels.md).
+        seen_duel = {member.agent_id for member in emission_members}
+        return (
+            emission_members,
+            wave_members,
+            (
+                *emission_members,
+                *(m for m in wave_members if m.agent_id not in seen_duel),
+            ),
+            frozenset(),
+        )
     configured_cohort = _configured_retest_cohort(
         entries, projection, settings=settings
     )
@@ -5469,8 +5490,15 @@ async def _top5_confirmation_seed_plan(
     canonical_version: int,
     seed_planning: tuple[str | None, bool] | None = None,
     wave_window: WaveWindow | None = None,
+    duel_seed_count: int | None = None,
 ) -> tuple[int, ...]:
     """Every seed this member still owes: its backlog first, then wave growth.
+
+    ``duel_seed_count`` (``retest_mode = season_duel``) replaces both
+    with the season's duel: the first that many seeds of the family anchored
+    on ``champion_agent_id`` (the caller passes the season's anchor champion),
+    minus the seeds this member already ran this season. There is no growth,
+    pacing or catch-up beyond those seeds (:mod:`ditto.api_server.season_duel`).
 
     ``wave_window`` is the tempo-aligned pacing window
     (:mod:`ditto.api_server.retest_wave_window`). When it is paced, growth may
@@ -5503,6 +5531,30 @@ async def _top5_confirmation_seed_plan(
     variance-sized from the emission set and hard-capped, so a completed target
     stops introducing datasets instead of growing forever.
     """
+    if duel_seed_count is not None:
+        member_history = await confirmation_composites_by_seed(
+            session,
+            agent_ids=(member_agent_id,),
+            bench_version=canonical_version,
+            planning=True,
+        )
+        if seed_planning is None:
+            seed_planning = await reign_seed_planning(
+                session,
+                champion_agent_id=champion_agent_id,
+                bench_version=canonical_version,
+            )
+        duel_block_hash, duel_fresh = seed_planning
+        return season_duel_owed(
+            season_duel_seeds(
+                champion_agent_id,
+                version=canonical_version,
+                count=duel_seed_count,
+                block_hash=duel_block_hash,
+                allow_fresh_seeds=duel_fresh,
+            ),
+            member_history.get(member_agent_id, {}),
+        )
     cohort_ids = tuple(dict.fromkeys((*cohort_member_ids, *wave_member_ids)))
     history = await confirmation_composites_by_seed(
         session,
@@ -5645,13 +5697,52 @@ async def _unserved_catchup_members(
     challenger_member_ids: Sequence[UUID] = (),
     canonical_version: int,
     now: datetime,
+    duel_seed_count: int | None = None,
 ) -> frozenset[UUID]:
     """Emission members and bounded owner challengers with unserved backlog.
 
     "Unserved" rather than merely "behind": a member whose whole backlog is
     already leased out is converging as fast as it can, and letting it keep
     blocking extended-cohort work would idle capacity for nothing.
+
+    Under ``duel_seed_count`` the backlog is the season's duel seeds a
+    top-five member has not run (``champion_agent_id`` is the season's anchor
+    champion), so a duel never waits on the reign-backoff round cadence.
     """
+    if duel_seed_count is not None:
+        duel_members = tuple(dict.fromkeys((*wave_member_ids, *emission_member_ids)))
+        if not duel_members:
+            return frozenset()
+        duel_history = await confirmation_composites_by_seed(
+            session,
+            agent_ids=duel_members,
+            bench_version=canonical_version,
+            planning=True,
+        )
+        duel_block_hash, duel_fresh = await reign_seed_planning(
+            session,
+            champion_agent_id=champion_agent_id,
+            bench_version=canonical_version,
+        )
+        return season_duel_unserved(
+            member_ids=duel_members,
+            duel_seeds=season_duel_seeds(
+                champion_agent_id,
+                version=canonical_version,
+                count=duel_seed_count,
+                block_hash=duel_block_hash,
+                allow_fresh_seeds=duel_fresh,
+            ),
+            seeds_by_agent={
+                agent_id: values.keys() for agent_id, values in duel_history.items()
+            },
+            leases=await _live_retest_leases(
+                session,
+                member_agent_ids=duel_members,
+                canonical_version=canonical_version,
+                now=now,
+            ),
+        )
     wave_members = tuple(dict.fromkeys(wave_member_ids or emission_member_ids))
     catchup_members = tuple(
         dict.fromkeys((*emission_member_ids, *challenger_member_ids))
@@ -6523,6 +6614,20 @@ async def request_top5_confirmation_job(
             )
         champion = await get_agent_by_id(session, agent_id=champion_agent_id)
         assert champion is not None
+        # Season duels anchor the whole season on the champion that opened it,
+        # so a crown change mid-season neither draws nor re-walks a family.
+        duel_seed_count = season_duel_seed_count(
+            continual_settings, bench_version=canonical_version
+        )
+        anchor_champion_id = (
+            await season_duel_anchor_champion(
+                session,
+                bench_version=canonical_version,
+                champion_agent_id=champion_agent_id,
+            )
+            if duel_seed_count is not None
+            else champion_agent_id
+        )
         # Bench v13+: the reign's confirmation family binds to the finalized
         # hash of ``B_ready + Δ``. First claim of a reign creates the anchor
         # (unpinned); a later claim pins it from the hash prefetched above once
@@ -6530,7 +6635,7 @@ async def request_top5_confirmation_job(
         # seeds and serves catch-up only.
         reign_anchor = await resolve_reign_seed_anchor(
             session,
-            champion_agent_id=champion_agent_id,
+            champion_agent_id=anchor_champion_id,
             bench_version=canonical_version,
             ready_block=block.number,
             now=now,
@@ -6569,12 +6674,13 @@ async def request_top5_confirmation_job(
         await _lock_top5_fairness(session)
         catchup_member_ids = await _unserved_catchup_members(
             session,
-            champion_agent_id=champion_agent_id,
+            champion_agent_id=anchor_champion_id,
             wave_member_ids=wave_member_ids,
             emission_member_ids=tuple(member.agent_id for member in emission_members),
             challenger_member_ids=tuple(challenger_member_ids),
             canonical_version=canonical_version,
             now=now,
+            duel_seed_count=duel_seed_count,
         )
         candidate_member_ids: tuple[UUID, ...]
         if requested_member_id is not None:
@@ -6655,13 +6761,14 @@ async def request_top5_confirmation_job(
                 continue
             seeds = await _top5_confirmation_seed_plan(
                 session,
-                champion_agent_id=champion_agent_id,
+                champion_agent_id=anchor_champion_id,
                 member_agent_id=candidate_member_id,
                 wave_member_ids=wave_member_ids,
                 cohort_member_ids=member_ids,
                 canonical_version=canonical_version,
                 seed_planning=seed_planning,
                 wave_window=wave_window,
+                duel_seed_count=duel_seed_count,
             )
             if not seeds:
                 legacy_decline = (
