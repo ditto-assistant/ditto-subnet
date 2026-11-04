@@ -8375,7 +8375,16 @@ async def submit_score(
             dueling=dueling,
         )
         # Phase B2: a season-seeded rotation re-score is also that duel
-        # seed's confirmation record (no-op for every canonical ticket).
+        # seed's confirmation record (no-op for every canonical ticket), with
+        # the run's audited cost evidence as a single-seed retest records it.
+        cost_versioned = supports_confirmation(ticket.bench_version)
+        mirrored_tokens = (
+            audited_v9_run_token_total(
+                report.details, base_evidence_sha256=report.base_evidence_sha256
+            )
+            if cost_versioned
+            else None
+        )
         await mirror_season_seeded_score(
             session,
             ticket,
@@ -8387,6 +8396,10 @@ async def submit_score(
             dueling_season_id=dueling_season_id,
             dueling=dueling,
             created_at=audit_now,
+            v9_efficiency_token_total=mirrored_tokens,
+            v9_efficiency_cost_eligible=(
+                mirrored_tokens is not None if cost_versioned else None
+            ),
         )
         await record_ticket_route_quality(
             session,

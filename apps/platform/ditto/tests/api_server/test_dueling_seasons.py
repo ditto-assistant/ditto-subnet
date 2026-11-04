@@ -1959,6 +1959,8 @@ class TestSeasonSeededRotation:
                 dueling_season_id=season,
                 dueling=report,
                 created_at=now,
+                v9_efficiency_token_total=1234,
+                v9_efficiency_cost_eligible=True,
             )
         async with session_maker() as session:
             mirrored = (
@@ -1969,8 +1971,15 @@ class TestSeasonSeededRotation:
                 )
             ).all()
         assert [
-            (row.seed, row.composite, row.dueling_season_id) for row in mirrored
-        ] == [(seed, 0.71, season)]
+            (
+                row.seed,
+                row.composite,
+                row.dueling_season_id,
+                row.v9_efficiency_token_total,
+                row.v9_efficiency_cost_eligible,
+            )
+            for row in mirrored
+        ] == [(seed, 0.71, season, 1234, True)]
         # A canonical ticket mirrors nothing.
         async with session_maker() as session, session.begin():
             canonical = await session.get(ValidatorTicket, (agent_id, 16, "5B2V2"))

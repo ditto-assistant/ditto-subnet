@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 
 from ditto.api_models.continual_retest_settings import CROWN_DUEL_PROTOCOL
 from ditto.api_server.confirmation_seed_anchor import (
@@ -43,11 +43,11 @@ from ditto.api_server.confirmation_seed_anchor import (
 )
 from ditto.api_server.onchain_seed import derive_validator_seed
 from ditto.api_server.season_duel import season_duel_seed_count, season_duel_seeds
-from ditto.db.models import ConfirmationSeedAnchor, Score
+from ditto.db.models import ConfirmationSeedAnchor, Score, ScoreAuditEntry
 from ditto.db.queries.audit import (
     EVENT_SCORE_RETEST_QUEUED,
     EVENT_SCORE_RETEST_REQUESTED,
-    get_latest_score_retest_event,
+    SCORE_RETEST_EVENTS,
 )
 from ditto.db.queries.confirmation_scores import (
     ConfirmationSeedScore,
@@ -236,6 +236,8 @@ async def mirror_season_seeded_score(
     dueling_season_id: UUID | None,
     dueling: dict | None,
     created_at: datetime,
+    v9_efficiency_token_total: int | None = None,
+    v9_efficiency_cost_eligible: bool | None = None,
 ) -> bool:
     """Append an accepted season-seeded quorum score as its confirmation record.
 
@@ -257,6 +259,10 @@ async def mirror_season_seeded_score(
                 signature=signature,
                 dueling_season_id=dueling_season_id,
                 dueling=dueling,
+                # The run's audited cost evidence, exactly as a continual
+                # single-seed retest records it, so efficiency keeps it.
+                v9_efficiency_token_total=v9_efficiency_token_total,
+                v9_efficiency_cost_eligible=v9_efficiency_cost_eligible,
             )
         ],
         bench_version=int(ticket.bench_version),
@@ -277,26 +283,43 @@ async def agents_with_pending_rotation(
     While a member's season-seeded rotation is pending, the continual lane owes
     it no duel seed (the rotation will cover them); once every rotation entry
     for the season closed, any seed it did not cover is ordinary duel work.
+    One read: the latest re-test lifecycle event of every ``(agent,
+    validator)`` pair the agents have a score from at the version.
     """
-    pending: set[UUID] = set()
-    wanted = str(season_id)
-    for agent_id in dict.fromkeys(agent_ids):
-        scorers = await session.scalars(
-            select(Score.validator_hotkey).where(
-                Score.agent_id == agent_id, Score.bench_version == bench_version
-            )
+    ids = list(dict.fromkeys(agent_ids))
+    if not ids:
+        return frozenset()
+    latest_seq = (
+        select(
+            ScoreAuditEntry.agent_id,
+            ScoreAuditEntry.validator_hotkey,
+            func.max(ScoreAuditEntry.seq).label("seq"),
         )
-        for validator_hotkey in scorers.all():
-            latest = await get_latest_score_retest_event(
-                session, agent_id=agent_id, validator_hotkey=validator_hotkey
-            )
-            if (
-                latest is not None
-                and latest.event
-                in (EVENT_SCORE_RETEST_QUEUED, EVENT_SCORE_RETEST_REQUESTED)
-                and latest.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
-                and latest.payload.get("dueling_season_id") == wanted
-            ):
-                pending.add(agent_id)
-                break
-    return frozenset(pending)
+        .join(
+            Score,
+            and_(
+                Score.agent_id == ScoreAuditEntry.agent_id,
+                Score.validator_hotkey == ScoreAuditEntry.validator_hotkey,
+                Score.bench_version == bench_version,
+            ),
+        )
+        .where(
+            ScoreAuditEntry.agent_id.in_(ids),
+            ScoreAuditEntry.event.in_(SCORE_RETEST_EVENTS),
+        )
+        .group_by(ScoreAuditEntry.agent_id, ScoreAuditEntry.validator_hotkey)
+        .subquery()
+    )
+    latest = await session.scalars(
+        select(ScoreAuditEntry).join(
+            latest_seq, ScoreAuditEntry.seq == latest_seq.c.seq
+        )
+    )
+    wanted = str(season_id)
+    return frozenset(
+        entry.agent_id
+        for entry in latest
+        if entry.event in (EVENT_SCORE_RETEST_QUEUED, EVENT_SCORE_RETEST_REQUESTED)
+        and entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
+        and entry.payload.get("dueling_season_id") == wanted
+    )
