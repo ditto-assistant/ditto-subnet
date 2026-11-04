@@ -4156,6 +4156,24 @@ describe('continual retest write contract', () => {
     season_duel_seeds: 3,
   }
 
+  it('refuses a season duel that could never carry a dethrone case', () => {
+    const starved = continualRetestSettingsWriteSchema.safeParse({
+      ...complete,
+      retest_mode: 'season_duel',
+      season_duel_seeds: 2,
+      min_dethrone_confirmations: 3,
+    })
+    expect(starved.success).toBe(false)
+    expect(starved.error?.issues[0]?.path).toEqual(['season_duel_seeds'])
+    expect(
+      continualRetestSettingsWriteSchema.safeParse({
+        ...complete,
+        retest_mode: 'season_duel',
+        season_duel_seeds: 3,
+      }).success,
+    ).toBe(true)
+  })
+
   it('refuses a body missing any field a revision would overwrite', () => {
     expect(continualRetestSettingsWriteSchema.parse(complete)).toEqual(complete)
 

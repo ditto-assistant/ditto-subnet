@@ -6619,6 +6619,10 @@ async def request_top5_confirmation_job(
         duel_seed_count = season_duel_seed_count(
             continual_settings, bench_version=canonical_version
         )
+        if duel_seed_count is not None:
+            # Elect the season's anchor under the fairness lock, so two claims
+            # racing a crown change cannot each create a family for one season.
+            await _lock_top5_fairness(session)
         anchor_champion_id = (
             await season_duel_anchor_champion(
                 session,

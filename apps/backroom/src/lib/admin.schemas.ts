@@ -2388,6 +2388,28 @@ const checkCohortCeiling = (
   }
 }
 
+// A season duel holding fewer seeds than the crown gate asks for could never
+// move the crown; mirrors the platform's write-time check.
+const checkSeasonDuelSeeds = (
+  settings: {
+    retest_mode: string
+    season_duel_seeds: number
+    min_dethrone_confirmations: number
+  },
+  ctx: z.RefinementCtx,
+) => {
+  if (
+    settings.retest_mode === 'season_duel' &&
+    settings.season_duel_seeds < settings.min_dethrone_confirmations
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['season_duel_seeds'],
+      message: `season_duel_seeds (${settings.season_duel_seeds}) cannot be below min_dethrone_confirmations (${settings.min_dethrone_confirmations}): a season duel would then never carry a full dethrone case`,
+    })
+  }
+}
+
 // Every field is defaulted on the read path so this page keeps rendering against
 // a platform that predates it; the platform owns the contract and ships each
 // field first. Defaults mirror the platform's, so a defaulted read reports what
@@ -2515,6 +2537,7 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
       .max(MAX_RETEST_COHORT_SIZE),
   })
   .superRefine(checkCohortCeiling)
+  .superRefine(checkSeasonDuelSeeds)
 
 export const continualRetestSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
