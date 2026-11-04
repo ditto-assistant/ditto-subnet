@@ -64,10 +64,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # A skipped round cannot be expressed without the status: it never ran,
-    # so it reads as void on the way down.
-    op.execute(
-        "UPDATE generator_rounds SET status = 'void', "
-        "void_reason = 'skipped_unchanged (downgraded)' WHERE status = 'skipped'"
-    )
-    _swap(_WITHOUT_SKIPPED, "disallow skipped generator rounds")
+    # A skipped round cannot be expressed without the status: it never ran, so
+    # it reads as void on the way down. One transaction under an exclusive
+    # lock, so the round driver cannot skip another round between the backfill
+    # and the narrower check (the lock is retried on contention like the swap).
+    bind = op.get_bind()
+    with op.get_context().autocommit_block():
+        run_with_retry(
+            bind,
+            [
+                "LOCK TABLE generator_rounds IN ACCESS EXCLUSIVE MODE",
+                "UPDATE generator_rounds SET status = 'void', "
+                "void_reason = 'skipped_unchanged (downgraded)' "
+                "WHERE status = 'skipped'",
+                "ALTER TABLE generator_rounds "
+                f"DROP CONSTRAINT IF EXISTS {_LEGACY_CHECK}, "
+                f"DROP CONSTRAINT IF EXISTS {_CHECK}, "
+                f"ADD CONSTRAINT {_CHECK} CHECK ({_WITHOUT_SKIPPED})",
+            ],
+            "disallow skipped generator rounds",
+        )
