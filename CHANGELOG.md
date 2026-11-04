@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.455.0 (2026-11-04)
+
+### Features
+
+- **platform,backroom,dashboard**: Show the v16 dueling and priced-cost breakdown on score reads
+  ([#3389](https://github.com/ditto-assistant/ditto-subnet/pull/3389),
+  [`e0a5179`](https://github.com/ditto-assistant/ditto-subnet/commit/e0a5179c65869d6c1aeb112bfbaa668ece1ea9d8))
+
+
 ## v0.454.1 (2026-11-04)
 
 ### Bug Fixes
