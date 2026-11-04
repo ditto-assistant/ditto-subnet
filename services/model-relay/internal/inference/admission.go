@@ -75,6 +75,14 @@ func isUniqueViolation(err error) bool {
 }
 
 // allowedModels parses the grant's allowed_models JSONB array.
+// Grant inference modes (inference_grants.inference_mode). InferenceModeChat
+// is every grant minted before the no-inference mode; InferenceModeNoChat
+// refuses chat as model_not_permitted and keeps embeddings and decisions.
+const (
+	InferenceModeChat   = "chat"
+	InferenceModeNoChat = "no_chat"
+)
+
 func allowedModels(grant *postgres.InferenceGrant) []string {
 	var models []string
 	if err := json.Unmarshal(grant.AllowedModels, &models); err != nil {
@@ -176,8 +184,13 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	if !grant.ExpiresAt.Time.After(p.now) {
 		return decline(relayhttp.DeclineLeaseExpired)
 	}
-	// Step 7: model gate.
+	// Step 7: model gate. A no-chat grant (docs/no-inference-mode.md)
+	// permits no chat model at all; embeddings and the decision lane keep
+	// their own gates below.
 	if p.kind == kindChat {
+		if grant.InferenceMode == InferenceModeNoChat {
+			return decline(relayhttp.DeclineModelNotPermitted)
+		}
 		permitted := false
 		for _, m := range allowedModels(&grant) {
 			if m == p.model {

@@ -347,6 +347,11 @@ async def test_exact_agent_diagnostic_preserves_seeds_and_owner_reason(
     assert claim.claimable_seed_available
     assert claim.live_lease_count == 0
     assert claim.decision == "claimable"
+    # Season duels are off by default and say so rather than guessing.
+    assert claim.retest_mode == "continual"
+    assert claim.season_duel_seed_count is None
+    assert claim.season_duel_anchor_champion_id is None
+    assert claim.season_duel_held_seed_count is None
     # Outstanding work is a count. No seed value reaches the claim projection.
     assert all(
         str(seed) not in claim.model_dump_json() for seed in (_SEEDS[0], _SEEDS[1])

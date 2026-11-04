@@ -2352,6 +2352,11 @@ export const MAX_RETEST_ELIGIBILITY_Z = 3
 export const MAX_WAVE_CADENCE_TEMPOS = 24
 export const MAX_WAVE_SEEDS_PER_WINDOW = 16
 export const DEFAULT_WAVE_SEEDS_PER_WINDOW = 3
+// Season title duels (docs/title-duels.md): mirrors MIN_SEASON_DUEL_SEEDS,
+// MAX_SEASON_DUEL_SEEDS and DEFAULT_SEASON_DUEL_SEEDS in the platform.
+export const MIN_SEASON_DUEL_SEEDS = 2
+export const MAX_SEASON_DUEL_SEEDS = 5
+export const DEFAULT_SEASON_DUEL_SEEDS = 3
 export const DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 // Not `strict`. The platform ships `participants` deliberately, and `strict` is
 // kept as the audited rollback path rather than as the default.
@@ -2379,6 +2384,28 @@ const checkCohortCeiling = (
       code: 'custom',
       path: ['retest_cohort_max_size'],
       message: `retest_cohort_max_size (${settings.retest_cohort_max_size}) cannot be below retest_cohort_size (${settings.retest_cohort_size}): the ceiling would cut into the cohort the fixed rank already admitted`,
+    })
+  }
+}
+
+// A season duel holding fewer seeds than the crown gate asks for could never
+// move the crown; mirrors the platform's write-time check.
+const checkSeasonDuelSeeds = (
+  settings: {
+    retest_mode: string
+    season_duel_seeds: number
+    min_dethrone_confirmations: number
+  },
+  ctx: z.RefinementCtx,
+) => {
+  if (
+    settings.retest_mode === 'season_duel' &&
+    settings.season_duel_seeds < settings.min_dethrone_confirmations
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['season_duel_seeds'],
+      message: `season_duel_seeds (${settings.season_duel_seeds}) cannot be below min_dethrone_confirmations (${settings.min_dethrone_confirmations}): a season duel would then never carry a full dethrone case`,
     })
   }
 }
@@ -2463,6 +2490,16 @@ const continualRetestSettingsBaseSchema = z.object({
     .min(1)
     .max(MAX_WAVE_SEEDS_PER_WINDOW)
     .default(DEFAULT_WAVE_SEEDS_PER_WINDOW),
+  // Season title duels: `continual` walks every cohort member to the elastic
+  // target; `season_duel` runs one K-seed duel per dueling season for the top
+  // five (bench v16+ only; inert below the dueling floor).
+  retest_mode: z.enum(['continual', 'season_duel']).default('continual'),
+  season_duel_seeds: z
+    .number()
+    .int()
+    .min(MIN_SEASON_DUEL_SEEDS)
+    .max(MAX_SEASON_DUEL_SEEDS)
+    .default(DEFAULT_SEASON_DUEL_SEEDS),
 })
 
 export const continualRetestSettingsSchema =
@@ -2488,6 +2525,8 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
     wave_cadence_tempos: z.number().int().min(0).max(MAX_WAVE_CADENCE_TEMPOS),
     wave_seeds_per_window: z.number().int().min(1).max(MAX_WAVE_SEEDS_PER_WINDOW),
+    retest_mode: z.enum(['continual', 'season_duel']),
+    season_duel_seeds: z.number().int().min(MIN_SEASON_DUEL_SEEDS).max(MAX_SEASON_DUEL_SEEDS),
     retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
     retest_eligibility_mode: z.enum(['fixed', 'statistical']),
     retest_eligibility_z: z.number().min(0).max(MAX_RETEST_ELIGIBILITY_Z),
@@ -2498,6 +2537,7 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
       .max(MAX_RETEST_COHORT_SIZE),
   })
   .superRefine(checkCohortCeiling)
+  .superRefine(checkSeasonDuelSeeds)
 
 export const continualRetestSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -2727,6 +2767,19 @@ export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExte
     label: 'a per-window wave seed budget',
     legacyValue: () => DEFAULT_WAVE_SEEDS_PER_WINDOW,
     legacyBehaviour: () => 'waves are not paced per window',
+  },
+  {
+    field: 'retest_mode',
+    label: 'season title duels',
+    legacyValue: () => 'continual',
+    legacyBehaviour: () =>
+      'the lane walks every cohort member to the elastic shared-seed target',
+  },
+  {
+    field: 'season_duel_seeds',
+    label: 'a season duel seed count',
+    legacyValue: () => DEFAULT_SEASON_DUEL_SEEDS,
+    legacyBehaviour: () => 'there are no season duels',
   },
 ]
 
@@ -9146,6 +9199,12 @@ export const retestClaimabilitySchema = z.object({
   provider_gate_closed: z.boolean().default(false),
   // Tempo-aligned wave pacing: the window this lane is in and whether its
   // fresh-seed budget is spent. Counts only; seed values stay server-side.
+  // Season title duels: the mode, the season's K, the champion its family is
+  // anchored on (the season opener) and how many duel seeds this agent holds.
+  retest_mode: z.enum(['continual', 'season_duel']).default('continual'),
+  season_duel_seed_count: z.number().int().positive().nullable().default(null),
+  season_duel_anchor_champion_id: z.string().uuid().nullable().default(null),
+  season_duel_held_seed_count: z.number().int().nonnegative().nullable().default(null),
   wave_cadence_tempos: z.number().int().nonnegative().default(0),
   wave_seeds_per_window: z.number().int().positive().nullable().default(null),
   wave_window_epoch: z.number().int().nonnegative().nullable().default(null),
@@ -9579,6 +9638,41 @@ export const inferenceCostSummarySchema = z.object({
   mean_factor_bps: gateBpsSchema.nullish().default(null),
 })
 
+// Bench v16+ priced inference cost (`details.priced_cost`): whole-run tokens
+// priced at the contract's locked public rates, the 350-case-normalised cost,
+// and the factor the composite carries (inside `details.dueling.datagen_gate`).
+// `rule_consistent` is Platform's own recomputation of the factor.
+export const pricedCostSummarySchema = z.object({
+  contract_id: z.string().nullish().default(null),
+  posture: gatePostureSchema.nullish().default(null),
+  applied: z.boolean().default(false),
+  result: z.enum(['priced', 'insufficient_evidence']).nullish().default(null),
+  window: z.string().nullish().default(null),
+  source: z.string().nullish().default(null),
+  cases: gateCountSchema,
+  prompt_tokens: gateCountSchema,
+  completion_tokens: gateCountSchema,
+  embedding_tokens: gateCountSchema,
+  decision_calls: gateCountSchema,
+  decision_input_tokens: gateCountSchema,
+  decision_output_tokens: gateCountSchema,
+  prompt_cost_nano_usd: gateCountSchema,
+  completion_cost_nano_usd: gateCountSchema,
+  embedding_cost_nano_usd: gateCountSchema,
+  decision_cost_nano_usd: gateCountSchema,
+  cost_nano_usd: gateCountSchema,
+  normalization_cases: gateCountSchema,
+  normalized_cost_nano_usd: gateCountSchema,
+  reference_nano_usd: gateCountSchema,
+  ratio_bps: z.number().int().min(0).max(100_000).default(0),
+  floor_bps: gateBpsSchema.nullish().default(null),
+  factor_bps: gateBpsSchema.nullish().default(null),
+  applied_factor_bps: gateBpsSchema.nullish().default(null),
+  cost_usd: z.number().nonnegative().nullish().default(null),
+  normalized_cost_usd: z.number().nonnegative().nullish().default(null),
+  rule_consistent: z.boolean().nullish().default(null),
+})
+
 export const publicGateEvidenceSchema = z.object({
   bench_version: z.number().int().positive(),
   // The most severe posture any gate ran under: `enforce` means a gate moved
@@ -9588,6 +9682,7 @@ export const publicGateEvidenceSchema = z.object({
   claim_provenance: claimProvenanceSummarySchema.nullish().default(null),
   twin_post_pass: twinPostPassSummarySchema.nullish().default(null),
   inference_cost: inferenceCostSummarySchema.nullish().default(null),
+  priced_cost: pricedCostSummarySchema.nullish().default(null),
   catalog_suppression_rate: gateUnitSchema.nullish().default(null),
   // Cases a gate would zero at enforce (or did), plus cases the shadow cost
   // factor would discount, and that count over the cases the run scored.
@@ -9801,6 +9896,10 @@ export const agentScoreHistoryVersionSchema = z.object({
   // share of cases the gates would zero. Null for versions below v13.
   gate_posture: gatePostureSchema.nullable().default(null),
   median_flagged_case_share: z.number().min(0).max(1).nullable().default(null),
+  // Bench v16+: median 350-case-normalised priced inference cost (USD) and
+  // median applied priced-cost factor (bps) over the rows that priced a run.
+  median_priced_cost_usd: z.number().nonnegative().nullable().default(null),
+  median_priced_cost_factor_bps: z.number().min(0).max(10_000).nullable().default(null),
 })
 
 export const agentScoreHistorySchema = z.object({
