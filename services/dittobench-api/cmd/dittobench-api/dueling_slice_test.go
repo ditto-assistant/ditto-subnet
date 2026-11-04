@@ -336,6 +336,7 @@ func TestPracticeAdmitsALocalDuelingSliceOnly(t *testing.T) {
 		{"local v16 partial", true, `{"bench_version":16,"seed":7,"dueling_owner_key":""}`, "dueling slice required"},
 		{"local v15 with a slice", true, `{"bench_version":15,"seed":7,` + full + `}`, "only on a canonical"},
 		{"local v16 without a slice", true, `{"bench_version":16,"seed":7}`, ""},
+		{"local v16 scored", true, `{"bench_version":16,"seed":7,"dataset_sha256":"` + sha + `",` + full + `}`, "cannot be a scored run"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var req submitRequest

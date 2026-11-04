@@ -151,6 +151,21 @@ class LocalRehearsalTest(unittest.TestCase):
                 )
         self.assertEqual(build.call_args.kwargs["timeout"], 5)
 
+    def test_local_slice_spawn_failure_is_a_rehearsal_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            LOCAL.subprocess, "run"
+        ), patch.object(
+            LOCAL, "_run_local_slice", side_effect=PermissionError("noexec")
+        ):
+            with self.assertRaisesRegex(LOCAL.RehearsalError, "could not start.*--no-slice"):
+                LOCAL.build_local_slice(
+                    Path(directory),
+                    run_seed=7,
+                    bench_version=16,
+                    sandbox="local",
+                    timeout=5,
+                )
+
     def test_local_slice_scorer_build_failure_is_a_rehearsal_error(self) -> None:
         failure = subprocess.CalledProcessError(1, ["go"], stderr="undefined: x")
         with tempfile.TemporaryDirectory() as directory, patch.object(

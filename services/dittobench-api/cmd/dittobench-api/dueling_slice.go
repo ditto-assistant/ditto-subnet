@@ -110,6 +110,12 @@ func validatePracticeDuelingSlice(req submitRequest, localScorer bool) string {
 	if !localScorer {
 		return "dueling slices are not accepted on practice"
 	}
+	// A practice slice is never a scored run: a scored /v1/submit (an expected
+	// dataset digest) with a slice would skip /v2/score's ticket and inference
+	// checks, so refuse it here.
+	if runScope(req) == scorer.ScopeScored {
+		return "a local dueling slice rehearsal cannot be a scored run (omit dataset_sha256)"
+	}
 	if req.Seed == 0 {
 		return "a local dueling slice rehearsal requires an explicit seed (the slice is built for it)"
 	}

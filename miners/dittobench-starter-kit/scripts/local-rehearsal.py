@@ -542,12 +542,12 @@ def build_local_slice(
     try:
         result = _run_local_slice(
             local_slice_command(
-            challenge_scorer,
-            pins_path=pins_path,
-            out_path=out_path,
-            run_seed=run_seed,
-            bench_version=bench_version,
-            sandbox=sandbox,
+                challenge_scorer,
+                pins_path=pins_path,
+                out_path=out_path,
+                run_seed=run_seed,
+                bench_version=bench_version,
+                sandbox=sandbox,
                 season_secret=secrets.token_hex(32),
                 anchor_block_hash="0x" + secrets.token_hex(32),
             ),
@@ -557,6 +557,12 @@ def build_local_slice(
         raise RehearsalError(
             f"building the local dueling slice did not finish within {int(timeout)} "
             "seconds; rerun with --no-slice to score the datagen half only"
+        ) from exc
+    except OSError as exc:
+        raise RehearsalError(
+            "could not start challenge-scorer for the local dueling slice "
+            f"({redact(str(exc))}); rerun with --no-slice to score the datagen "
+            "half only"
         ) from exc
     if result.returncode != 0:
         raise RehearsalError(
