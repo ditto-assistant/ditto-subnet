@@ -4,6 +4,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
+  publicDethroneDecisionSchema,
   SCREENING_SUBMISSION_AGENT_STATUSES,
   competitionFeesInputSchema,
   submissionSettingsRevisionSchema,
@@ -3975,6 +3976,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     ledger_pin_mode: false,
     crown_incumbent_mode: false,
     crown_gate_mode: false,
+    crown_duel_mode: false,
     min_dethrone_confirmations: false,
     champion_standing_rank: false,
     retest_cohort_size: false,
@@ -3999,6 +4001,7 @@ describe('continual retest cohort sizing against an older platform', () => {
     ledger_pin_mode: 'live' as const,
     crown_incumbent_mode: 'disabled' as const,
     crown_gate_mode: 'disabled' as const,
+    crown_duel_mode: 'disabled' as const,
     min_dethrone_confirmations: 3,
     champion_standing_rank: 3,
     idle_retests_enabled: true,
@@ -4117,6 +4120,7 @@ describe('continual retest cohort sizing against an older platform', () => {
       ledger_pin_mode: false,
       crown_incumbent_mode: false,
       crown_gate_mode: false,
+      crown_duel_mode: false,
       min_dethrone_confirmations: false,
       champion_standing_rank: false,
       retest_cohort_size: false,
@@ -4141,6 +4145,7 @@ describe('continual retest write contract', () => {
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'fleet_ready' as const,
     crown_gate_mode: 'fleet_ready' as const,
+    crown_duel_mode: 'disabled' as const,
     min_dethrone_confirmations: 3,
     champion_standing_rank: 3,
     idle_retests_enabled: false,
@@ -4186,6 +4191,7 @@ describe('continual retest write contract', () => {
       'ledger_pin_mode',
       'crown_incumbent_mode',
       'crown_gate_mode',
+      'crown_duel_mode',
       'min_dethrone_confirmations',
       'champion_standing_rank',
       'wave_membership',
@@ -4262,6 +4268,7 @@ describe('continual retest write contract', () => {
       ledger_pin_mode: 'epoch',
       crown_incumbent_mode: 'disabled',
       crown_gate_mode: 'disabled',
+      crown_duel_mode: 'disabled',
       min_dethrone_confirmations: 3,
       champion_standing_rank: 3,
       idle_retests_enabled: false,
@@ -5843,5 +5850,22 @@ describe('benchmark rollout qualification detail', () => {
       blocking_reason: 'no benchmark rollout is open',
     })
     expect(parsed.source_bench_version).toBeNull()
+  })
+})
+
+describe('publicDethroneDecisionSchema', () => {
+  it('parses a protocol-35 title-duel decision', () => {
+    const parsed = publicDethroneDecisionSchema.parse({
+      challenger_lead: 0.03,
+      required_lead: 0.0085,
+      margin_lead: 0.0057,
+      statistical_lead: 0.0085,
+      method: 'duel',
+      dethrones: true,
+      paired_standard_error: 0.0032,
+      shared_seed_count: 15,
+      seed_differences: [0.03],
+    })
+    expect(parsed.method).toBe('duel')
   })
 })
