@@ -13,6 +13,7 @@ answerability / completion (noul). Retrieval is BM25 (no embeddings), so this
 is a conservative floor for the mode.
 
 Env:
+  HOST                 bind address (default 127.0.0.1)
   PORT                 listen port (default 7070)
   DECISIONS_URL        System One endpoint (default OpenRouter systemone)
   OPENROUTER_API_KEY   only for the direct OpenRouter path (local prototype)
@@ -596,4 +597,6 @@ class H(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "7070"))
-    ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
+    # Loopback by default: /seed and /run are unauthenticated and spend decision
+    # credits. Set HOST only inside an isolated container network.
+    ThreadingHTTPServer((os.environ.get("HOST", "127.0.0.1"), port), H).serve_forever()
