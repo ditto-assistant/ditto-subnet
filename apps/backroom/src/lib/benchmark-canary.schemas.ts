@@ -32,8 +32,55 @@ export const cancelBenchmarkCanaryInputSchema = getBenchmarkCanaryInputSchema.ex
   }
 })
 
+const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
+const bps = z.number().int().min(0).max(10_000)
+
+// Bench v16+ `details.priced_cost`: numbers only (token counts, nano-USD
+// costs, ratio and factor), so a canary can be checked against the published
+// priced-cost rule without the raw report. Strict picks: no other key passes.
+const canaryPricedCostSchema = z.object({
+  contract_id: z.string().max(64),
+  posture: z.enum(['enforce', 'shadow']),
+  applied: z.boolean(),
+  result: z.enum(['priced', 'insufficient_evidence']),
+  window: z.string().max(32),
+  source: z.string().max(32).optional(),
+  cases: count,
+  prompt_tokens: count,
+  completion_tokens: count,
+  embedding_tokens: count,
+  decision_calls: count,
+  decision_input_tokens: count,
+  decision_output_tokens: count,
+  cost_nano_usd: count,
+  normalization_cases: count,
+  normalized_cost_nano_usd: count,
+  reference_nano_usd: count,
+  ratio_bps: z.number().int().min(0).max(100_000),
+  floor_bps: bps,
+  factor_bps: bps,
+  applied_factor_bps: bps,
+})
+
+// Bench v16+ `details.dueling` aggregates: the datagen half and gate the fold
+// recomputes from, and each column's case statistics. Never case text.
+const canaryDuelingSchema = z.object({
+  season_id: z.string().max(64),
+  datagen_raw: z.number().min(0).max(1),
+  datagen_gate: z.number().min(0).max(1),
+  column_weight: z.number().min(0).max(1),
+  composite_stderr: z.number().nonnegative().optional(),
+  columns: z.array(z.object({
+    column_id: z.string().max(32),
+    n: count,
+    sum: z.number().nonnegative(),
+    substituted: z.boolean(),
+  })).max(16),
+})
+
 // Never forward arbitrary scorer details, source, traces or capabilities through
-// a read-scoped tool. This is a summary of non-authoritative reported results.
+// a read-scoped tool. This is a summary of non-authoritative reported results;
+// from bench 16 it adds the priced-cost and dueling aggregates above.
 export const benchmarkCanarySchema = z.object({
   canary_id: z.uuid(), agent_id: z.uuid(), bench_version: z.number().int(),
   validator_hotkey: z.string(), slot_id: z.string(), artifact_sha256: digest,
@@ -46,6 +93,14 @@ export const benchmarkCanarySchema = z.object({
     run_id: z.string(), bench_version: z.number().int().nullable().optional(),
     composite: z.number(), tool_mean: z.number(), memory_mean: z.number(),
     n: z.number().int(), generated_at: z.string(),
+    details: z.object({
+      priced_cost: canaryPricedCostSchema.nullish().catch(null),
+      dueling: canaryDuelingSchema.nullish().catch(null),
+    }).nullish().catch(null).transform((d) =>
+      d && (d.priced_cost || d.dueling)
+        ? { priced_cost: d.priced_cost ?? null, dueling: d.dueling ?? null }
+        : undefined,
+    ),
   }).nullable(),
 })
 
