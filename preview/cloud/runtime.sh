@@ -47,10 +47,12 @@ if [ "$PREVIEW_PROFILE" = stack-copy ]; then
       -U ditto -d ditto_platform_preview < preview/state/sanitized.dump
 fi
 
-docker compose -f preview/cloud/compose.yml up -d platform dashboard backroom preview-control gateway
+docker compose -f preview/cloud/compose.yml up -d platform dashboard backroom preview-control
 if [ "$PREVIEW_PR" = 3359 ] && [ "$PREVIEW_PROFILE" = stack ]; then
+  # The fixture initializes the shared volume with node-owned permissions.
   docker compose -f preview/cloud/compose.yml up -d oauth-fixture
 fi
+docker compose -f preview/cloud/compose.yml up -d gateway
 docker compose -f preview/cloud/compose.yml ps
 docker compose -f preview/cloud/compose.yml --profile oauth-fixture ps oauth-fixture
 trap - EXIT
