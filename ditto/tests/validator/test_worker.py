@@ -64,6 +64,7 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
     SandboxOomError,
     ValidatorInfrastructureError,
 )
@@ -6876,3 +6877,159 @@ class TestJobHeartbeatFreshness:
         assert polls.count("slot-0") == settled
         release.set()
         await asyncio.wait_for(sweep, timeout=2)
+
+
+def _retry_later(seconds: float = 15.0) -> PlatformRetryLaterError:
+    return PlatformRetryLaterError(
+        "job request deferred (503): dueling slice preparation pending",
+        retry_after_seconds=seconds,
+    )
+
+
+class TestJobRetryLater:
+    """A 503 + Retry-After job refusal waits and re-polls the same slot.
+
+    Platform answers a bench v16+ seed's first lease this way while it prepares
+    the dueling slice. Isolating the slot instead idled it until the longest
+    sibling lease finished, stalling every fresh v16 seed for a whole sweep.
+    """
+
+    @staticmethod
+    def _recording_sleep(
+        worker: ValidatorWorker, monkeypatch: pytest.MonkeyPatch
+    ) -> list[float]:
+        waits: list[float] = []
+
+        async def sleep(seconds: float, *_events: asyncio.Event | None) -> None:
+            waits.append(seconds)
+            await asyncio.sleep(0)
+
+        monkeypatch.setattr(worker, "_sleep_or_interrupt", sleep)
+        return waits
+
+    async def test_deferred_claim_leases_on_the_same_slot_in_the_sweep(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        first = _job("5MinerA" + "x" * 41, slot_id="slot-0")
+        second = _job("5MinerB" + "x" * 41, slot_id="slot-0")
+        cap = worker_mod._JOB_RETRY_LATER_MAX_CONSECUTIVE
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        # A full run of deferrals before each lease: the bound counts
+        # consecutive refusals, so a lease in between resets it.
+        platform.request_job = AsyncMock(
+            side_effect=[
+                *(_retry_later(15.0) for _ in range(cap)),
+                first,
+                *(_retry_later(4.0) for _ in range(cap)),
+                second,
+                None,
+            ]
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+        scored: list[JobResponse] = []
+
+        async def score(job: JobResponse) -> ScoreReport:
+            scored.append(job)
+            return _report(f"run-{len(scored)}", 0.7)
+
+        monkeypatch.setattr(worker, "_score_job", score)
+
+        outcome = await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+
+        assert scored == [first, second]
+        assert outcome.queue_depth == 2
+        assert waits[: 2 * cap] == [15.0] * cap + [4.0] * cap
+        assert "slot-0" in worker._healthy_slots
+
+    async def test_consecutive_deferrals_are_bounded_then_isolate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cap = worker_mod._JOB_RETRY_LATER_MAX_CONSECUTIVE
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=lambda **_: _raise_retry_later())
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+
+        assert platform.request_job.await_count == cap + 1
+        assert waits == [15.0] * cap
+
+    async def test_stop_cuts_the_retry_wait_short(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=[_retry_later(120.0)])
+        worker = _heartbeat_worker(platform)
+        stop = asyncio.Event()
+        waiting = asyncio.Event()
+        real_sleep = worker._sleep_or_interrupt
+
+        async def sleep(seconds: float, *events: asyncio.Event | None) -> None:
+            if seconds == 120.0:
+                waiting.set()
+            await real_sleep(seconds, *events)
+
+        worker._sleep_or_interrupt = sleep  # type: ignore[method-assign]
+        sweep = asyncio.create_task(
+            worker.run_once(set_weights=False, stop_requested=stop)
+        )
+        await asyncio.wait_for(waiting.wait(), timeout=2)
+        stop.set()
+        await asyncio.wait_for(sweep, timeout=2)
+
+        assert platform.request_job.await_count == 1
+
+    async def test_plain_refusal_still_isolates_without_waiting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(
+            side_effect=PlatformError("job request rejected (503): unavailable")
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+
+        assert platform.request_job.await_count == 1
+        assert waits == []
+
+    async def test_confirmation_claim_deferral_repolls_the_same_slot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_top5_confirmation_job = AsyncMock(
+            side_effect=[_retry_later(15.0), _retry_later(15.0), None]
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        assert await worker._run_top5_confirmation_lane() is False
+
+        assert [
+            call.kwargs["slot_id"]
+            for call in platform.request_top5_confirmation_job.await_args_list
+        ] == ["slot-0"] * 3
+        assert waits == [15.0, 15.0]
+
+    async def test_confirmation_claim_deferrals_are_bounded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cap = worker_mod._JOB_RETRY_LATER_MAX_CONSECUTIVE
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_top5_confirmation_job = AsyncMock(
+            side_effect=lambda **_: _raise_retry_later()
+        )
+        worker = _heartbeat_worker(platform)
+        waits = self._recording_sleep(worker, monkeypatch)
+
+        assert await worker._run_top5_confirmation_lane() is False
+
+        assert platform.request_top5_confirmation_job.await_count == cap + 1
+        assert waits == [15.0] * cap
+        # Nothing was leased, so nothing is handed back against the agent.
+        platform.report_ticket_failed.assert_not_awaited()
+
+
+def _raise_retry_later() -> None:
+    raise _retry_later(15.0)
