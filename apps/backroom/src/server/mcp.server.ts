@@ -4377,7 +4377,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   }, async (input) => result(await listBenchmarkCanaries(input)))
   registerTool('get_benchmark_canary', {
     title: 'Get benchmark canary',
-    description: 'Read one exact diagnostic receipt. Completed means a signed result was recorded, not calibration or activation readiness. Scorer details and traces are not exposed. Requires backroom:read.',
+    description: 'Read one exact diagnostic receipt. Completed means a signed result was recorded, not calibration or activation readiness. Scorer details and traces are not exposed; from bench 16 `result.details` carries only the priced-cost numbers (`priced_cost`: tokens, nano-USD cost, normalized cost, ratio, factor, applied factor) and the dueling aggregates (`dueling`: datagen_raw, datagen_gate, column n/sum). Requires backroom:read.',
     inputSchema: getBenchmarkCanaryInputSchema,
     annotations: toolAnnotations('read'),
   }, async (input) => result(await getBenchmarkCanary(input)))
