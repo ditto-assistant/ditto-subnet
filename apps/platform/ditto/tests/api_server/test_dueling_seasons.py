@@ -640,10 +640,12 @@ class TestIdleSeasonExtension:
         )
         _active(monkeypatch, 16)
         incumbent = await _seed_agent(session_maker, 1)
+        runner_up = await _seed_agent(session_maker, 3)
         queued: list[UUID] = []
+        board = [incumbent, runner_up]
 
         async def _cohort(*_args: Any) -> tuple[list[UUID], str]:
-            return [incumbent], "continual_cohort"
+            return list(board), "continual_cohort"
 
         async def _queue(*_args: Any, season_id: UUID, **_kwargs: Any) -> dict:
             queued.append(season_id)
@@ -698,8 +700,11 @@ class TestIdleSeasonExtension:
             assert not await season_duel_entrant_excluded(
                 session, bench_version=16, member_agent_id=incumbent
             )
-        # Idle again at round 13: extended once more. Had season 11 closed at
-        # round 12 it would reveal at epoch 48 + 6; extended, it stays private.
+        # Idle again at round 13 even though the board reordered the same
+        # cohort: membership, not rank order, decides. Extended once more.
+        # Had season 11 closed at round 12 it would reveal at epoch 48 + 6;
+        # extended, it stays private.
+        board.reverse()
         assert await _pass_batteries(client) == 1
         notes = await _tick(session_maker, 13 * _EPOCHS)
         assert any("season 11 v16: extended to round 14" in n for n in notes)

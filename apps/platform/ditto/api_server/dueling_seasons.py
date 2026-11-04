@@ -673,7 +673,11 @@ async def queue_rotation_retests(
 IDLE_EXTENSIONS_KEY = "idle_extensions"
 """``DuelingSeason.detail`` key: how often, and when, the season was extended."""
 MAX_RECORDED_IDLE_EXTENSIONS = 20
-IDLE_ELIGIBLE_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
+IDLE_ELIGIBLE_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE, AgentStatus.EVALUATING)
+"""An agent created since the season opened in one of these statuses is a
+change: scored, or being scored right now (it reaches the board within the
+season). A long operator hold (``ath_pending_review``) is not, or one held
+agent would force a paid rotation every boundary; its release is."""
 
 
 def _pin_identity(columns: Any) -> list[list[Any]]:
@@ -719,8 +723,10 @@ async def idle_season_extension(
 
     a. the committed season that would open now freezes the same generator
        pins (submission, source digest, grading policy, default flag);
-    b. the rotation cohort is the one this season re-scored when it opened;
-    c. no agent created since the season opened is scored or live;
+    b. the rotation cohort has the members this season re-scored when it
+       opened;
+    c. no agent created since the season opened is scored, live or being
+       scored;
     d. no rotation was requested (checked by the caller).
     """
     if not resolved.settings.skip_unchanged_rounds:
@@ -746,9 +752,11 @@ async def idle_season_extension(
     rotation = (season.detail or {}).get("rotation") or {}
     if rotation.get("error") or "cohort" not in rotation:
         return None
-    opened_cohort = [str(member.get("agent_id")) for member in rotation["cohort"]]
+    # Membership, not rank order: the same agents re-scored on the same pins
+    # buy the same evidence whatever order the board lists them in.
+    opened_cohort = sorted(str(member.get("agent_id")) for member in rotation["cohort"])
     cohort, _source = await _rotation_cohort(session, season)
-    if [str(agent_id) for agent_id in cohort] != opened_cohort:
+    if sorted(str(agent_id) for agent_id in cohort) != opened_cohort:
         return None
     entrant = await session.scalar(
         select(Agent.agent_id)
