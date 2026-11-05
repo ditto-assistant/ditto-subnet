@@ -196,6 +196,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "crown_duel_mode",
                 "retest_mode",
                 "season_duel_seeds",
+                "season_duel_rotation_seeds",
                 "min_dethrone_confirmations",
                 "champion_standing_rank",
                 "wave_membership",

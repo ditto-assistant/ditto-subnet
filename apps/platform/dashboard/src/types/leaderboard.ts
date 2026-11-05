@@ -462,7 +462,7 @@ export interface V9AuthoritativeToolGate {
  * protocol package (`ditto/tests/test_bench_version_pins.py` diffs it).
  */
 export interface V9BaseEvidence {
-  bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+  bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
   score_gates: {
     rollout_mode: "shadow" | "enforce";
     model_use: V9ModelUseGate;
@@ -568,6 +568,48 @@ export interface PricedCostSummary {
   cost_usd?: number | null;
   normalized_cost_usd?: number | null;
   rule_consistent?: boolean | null;
+}
+
+/** One generator-slice column of a bench v16+ run (aggregates only: no
+ * owner key, no generator submission id, no case text). `self_masked` means
+ * the column's generator belongs to the scored agent's own owner, so the
+ * composite dropped it. Mirrors `PublicDuelingColumn`. */
+export interface DuelingColumn {
+  column_id: string;
+  grading_bench_version?: number | null;
+  n: number;
+  sum: number;
+  mean: number;
+  substituted: boolean;
+  public_default: boolean;
+  self_masked: boolean;
+  contribution: number;
+}
+
+/** Bench v16+ dueling arithmetic, `gate x ((1 - w x |U|) x datagen + w x sum
+ * col)`, projected by Platform from the stored aggregates and the priced-cost
+ * gate evidence. Omitted below v16. Mirrors `PublicDuelingBreakdown`. */
+export interface DuelingBreakdown {
+  formula: string;
+  season_id: string;
+  season_index: number;
+  datagen_raw: number;
+  datagen_gate: number;
+  column_weight: number;
+  counted_columns: number;
+  datagen_share: number;
+  generator_sum: number;
+  pre_gate_composite: number;
+  composite: number;
+  composite_stderr?: number | null;
+  priced_cost_applied_factor_bps?: number | null;
+  priced_cost_factor_bps?: number | null;
+  priced_cost_factor?: number | null;
+  priced_cost_posture?: string | null;
+  priced_cost_result?: string | null;
+  priced_cost_window?: string | null;
+  other_gate_factor?: number | null;
+  columns: DuelingColumn[];
 }
 
 /** Run-level bench v13+ gate verdict published beside a validator's score.

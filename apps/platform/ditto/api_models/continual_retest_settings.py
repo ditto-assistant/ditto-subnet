@@ -298,6 +298,22 @@ class ContinualRetestSettings(BaseModel):
     carries a full dethrone case; the run budget is about this many runs per
     top-five member per season."""
 
+    season_duel_rotation_seeds: bool = False
+    """Run season rotation re-scores on the season's duel seeds (phase B2).
+
+    Only under ``retest_mode = season_duel`` at a dueling version. Off (the
+    default, and the exact rollback) keeps every rotation re-score on its
+    validator's canonical seed, so a season costs rotation plus duel runs. On,
+    quorum validator ``i`` of a rotating member re-scores on duel seed
+    ``i mod season_duel_seeds`` and the accepted score is also recorded as that
+    seed's confirmation, so one run is level and duel evidence and the
+    continual lane owes nothing for a member whose rotation covers its seeds
+    (about half the runs of a season). Only protocol-35 validators, which
+    verify a season-scoped seed, are given one; anyone else, or a season whose
+    anchor has not pinned within a short grace, keeps the canonical seed. No
+    fleet gate: the fold reads ordinary seeds and records either way.
+    """
+
     rollout_standdown: Literal["off", "capable_validators", "all"] = (
         "capable_validators"
     )

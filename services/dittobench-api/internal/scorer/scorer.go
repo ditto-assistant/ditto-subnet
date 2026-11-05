@@ -400,6 +400,18 @@ func CanaryIntegrityFactor(perCase []protocol.CaseScore) float64 {
 // (nothing to measure). The raw rate is advisory; the derived
 // MetamorphicConsistencyFactor is what folds into the composite.
 func MetamorphicConsistency(perCase []protocol.CaseScore) *float64 {
+	consistent, total := metamorphicGroupCounts(perCase)
+	if total == 0 {
+		return nil
+	}
+	v := round6(float64(consistent) / float64(total))
+	return &v
+}
+
+// metamorphicGroupCounts returns how many invariance twin groups the harness
+// answered consistently and how many groups were measured, under exactly the
+// membership rules MetamorphicConsistency documents.
+func metamorphicGroupCounts(perCase []protocol.CaseScore) (consistent, total int) {
 	groups := map[string][]bool{}
 	undelivered := map[string]bool{}
 	for _, cs := range perCase {
@@ -444,10 +456,6 @@ func MetamorphicConsistency(perCase []protocol.CaseScore) *float64 {
 	for g := range undelivered {
 		delete(groups, g)
 	}
-	if len(groups) == 0 {
-		return nil
-	}
-	consistent := 0
 	for _, verdicts := range groups {
 		all, none := true, true
 		for _, v := range verdicts {
@@ -461,8 +469,7 @@ func MetamorphicConsistency(perCase []protocol.CaseScore) *float64 {
 			consistent++
 		}
 	}
-	v := round6(float64(consistent) / float64(len(groups)))
-	return &v
+	return consistent, len(groups)
 }
 
 // auditHalf classifies a case as the base or the transformed side of an audit

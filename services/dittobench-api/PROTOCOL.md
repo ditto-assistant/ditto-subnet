@@ -374,7 +374,12 @@ post-passes, v13 shadow telemetry, token accounting and the signed v9 base
 evidence all read the **datagen half only** (relay usage is read at the
 datagen/slice boundary; the whole run still decides relay health). The one
 deliberate exception is the bench 16 priced cost factor (above), which prices
-the whole run. The composite is
+the whole run. The composite gate's metamorphic-consistency tier is charged
+per split twin group against the v15 full-profile reference of 13 groups
+(`scorer.MetamorphicReferenceGroups`): `1 - 0.40 x split / max(groups, 13)`.
+The 125-case datagen half measures only 5 groups, so the v15 rate rule would
+have charged one split group 8% instead of v15's 3.1%. At 13 or more groups
+the v15 rule applies byte-identically. The composite is
 
 ```
 composite = gate x ((1 - w x |U|) x datagen_raw + w x sum_{c in U} col_c)

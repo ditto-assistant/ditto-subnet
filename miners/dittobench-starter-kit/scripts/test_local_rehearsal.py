@@ -2169,9 +2169,11 @@ class PricedCostEstimateTest(unittest.TestCase):
             summary = vector["summary"]
             if summary is None or summary["result"] != "priced":
                 continue
-            got = COST.priced_cost(cases=vector["cases"], **{
-                k: v for k, v in vector["usage"].items() if k != "decision_calls"
-            })
+            got = COST.priced_cost(
+                cases=vector["cases"],
+                bench_version=vector.get("bench_version", 16),
+                **{k: v for k, v in vector["usage"].items() if k != "decision_calls"},
+            )
             with self.subTest(vector=vector["name"]):
                 self.assertEqual(got["cost_nano_usd"], summary["cost_nano_usd"])
                 self.assertEqual(

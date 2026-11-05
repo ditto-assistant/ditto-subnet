@@ -27,6 +27,7 @@ const (
 	BenchVersionV14 = 14
 	BenchVersionV15 = 15
 	BenchVersionV16 = 16
+	BenchVersionV17 = 17
 	BasisPointScale = 10_000
 	MaxCaseCount    = 10_000_000
 	MaxUsageCount   = uint64(9_007_199_254_740_991)
@@ -49,9 +50,11 @@ const (
 // before the cross-layer PR raises the shared ceiling and moves the bound.
 // v16 (the dueling bench) gates its datagen half with the inherited stack
 // unchanged; generator slice cases never enter gate evidence.
+// v17 inherits v16's gate stack unchanged; its own change is a steeper
+// priced-cost-v2 cost curve (priced_cost.go).
 func SupportedBenchVersion(benchVersion int) bool {
 	return benchVersion >= BenchVersionV9 &&
-		(benchVersion <= BenchVersionV16 || protocol.StagedBenchVersion(benchVersion))
+		(benchVersion <= BenchVersionV17 || protocol.StagedBenchVersion(benchVersion))
 }
 
 var (

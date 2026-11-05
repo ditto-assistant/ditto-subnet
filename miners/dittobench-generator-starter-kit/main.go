@@ -48,7 +48,7 @@ const (
 // dueling slice. Policy 15 is deliberately absent: a v15 round (window
 // {14, 15}) keeps getting the v14 pack this kit has always emitted there, so
 // the public default generator's live v15 columns do not move.
-var GradingBenchVersions = []int{challenge.GradingBenchVersion, challenge.GradingBenchVersionV14, challenge.GradingBenchVersionV16}
+var GradingBenchVersions = []int{challenge.GradingBenchVersion, challenge.GradingBenchVersionV14, challenge.GradingBenchVersionV16, challenge.GradingBenchVersionV17}
 
 // MaxCases is the most cases the starter pools can fill without reusing a
 // value (twenty rounds of the four default families). It matches the pack
