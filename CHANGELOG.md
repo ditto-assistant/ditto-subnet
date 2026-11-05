@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.457.4 (2026-11-05)
+
+### Bug Fixes
+
+- **deps**: Patch backroom proxy and shell dependencies
+  ([#3358](https://github.com/ditto-assistant/ditto-subnet/pull/3358),
+  [`aeb01ef`](https://github.com/ditto-assistant/ditto-subnet/commit/aeb01ef8a0908dad456bc1e02967828e22e2499e))
+
+
 ## v0.457.3 (2026-11-05)
 
 ### Bug Fixes
