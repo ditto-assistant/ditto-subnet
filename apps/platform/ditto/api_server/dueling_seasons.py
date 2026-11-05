@@ -179,7 +179,11 @@ async def dueling_target(
     )
     version: int | None = None
     shadow = False
-    if is_dueling_bench_version(active):
+    if desired is not None and is_dueling_bench_version(desired) and desired > active:
+        # Rollout to a higher dueling version: shadow the desired version so
+        # rollout scoring can begin while the authoritative board is still active.
+        version, shadow = desired, True
+    elif is_dueling_bench_version(active):
         version = active
     elif desired is not None and is_dueling_bench_version(desired):
         version, shadow = desired, True
