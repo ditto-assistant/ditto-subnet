@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v0.457.4 (2026-11-05)
+
+### Bug Fixes
+
+- **deps**: Patch backroom proxy and shell dependencies
+  ([#3358](https://github.com/ditto-assistant/ditto-subnet/pull/3358),
+  [`aeb01ef`](https://github.com/ditto-assistant/ditto-subnet/commit/aeb01ef8a0908dad456bc1e02967828e22e2499e))
+
+
+## v0.457.3 (2026-11-05)
+
+### Bug Fixes
+
+- **security**: Patch Seroval across subnet web apps [DITTO-1747]
+  ([#3324](https://github.com/ditto-assistant/ditto-subnet/pull/3324),
+  [`39ab024`](https://github.com/ditto-assistant/ditto-subnet/commit/39ab024459c3ad8c5a79721a3bd802b0a77a3b21))
+
+
+## v0.457.2 (2026-11-05)
+
+### Bug Fixes
+
+- **security**: Bound Backroom MCP inputs and patch SDK [DITTO-1747]
+  ([#3323](https://github.com/ditto-assistant/ditto-subnet/pull/3323),
+  [`ba65075`](https://github.com/ditto-assistant/ditto-subnet/commit/ba65075161e117ab6196dbbb3782f76a0f59101d))
+
+### Chores
+
+- **deps**: Bump golang.org/x/crypto from 0.45.0 to 0.58.0 in /services/dittobench-api
+  ([#2953](https://github.com/ditto-assistant/ditto-subnet/pull/2953),
+  [`c5ea921`](https://github.com/ditto-assistant/ditto-subnet/commit/c5ea921b93e8738578cbcbad5cecbc1e9602350c))
+
+
 ## v0.457.1 (2026-11-05)
 
 ### Bug Fixes
