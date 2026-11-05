@@ -42,8 +42,13 @@ import (
 // zeroing gate: dueling-bench.md section 4 ("generator cases never feed a
 // zeroing gate") holds.
 
+// PricedCostV2MinBenchVersion is the first bench version that uses the
+// priced-cost-v2 contract (steeper curve, $0.50 reference, 0.3 floor).
+const PricedCostV2MinBenchVersion = BenchVersionV17
+
 const (
-	PricedCostContractID = "priced-cost-v1"
+	PricedCostContractID   = "priced-cost-v1"
+	PricedCostV2ContractID = "priced-cost-v2"
 
 	// Locked public per-token rates, nano-USD per token (1 nano-USD per token
 	// = $1 per 1B tokens = $0.001 per 1M tokens).
@@ -67,12 +72,23 @@ const (
 	// PricedCostNormalizationCases is the run size costs are reported at: the
 	// v15/v16 full run (350 cases).
 	PricedCostNormalizationCases = 350
-	// PricedCostReferenceNanoUSD is the full-factor reference: $1.00 per
-	// 350-case run equivalent, the cheapest competitive pruned-catalog v15
-	// harness priced at the locked rates.
+	// PricedCostReferenceNanoUSD is the full-factor reference for v16: $1.00
+	// per 350-case run equivalent.
 	PricedCostReferenceNanoUSD = uint64(1_000_000_000)
-	// PricedCostFloorBPS is the deepest the factor falls (0.6).
+	// PricedCostFloorBPS is the deepest the v16 factor falls (0.6).
 	PricedCostFloorBPS = 6000
+
+	// PricedCostV2ReferenceNanoUSD is the full-factor reference for v17+:
+	// $0.50 per 350-case run equivalent (halved from v1 to incentivize cost
+	// reduction further). The reference halving doubles the effective sensitivity
+	// of the curve: an agent that costs $0.50 per run scores full factor, while
+	// the same $1.00 cost that was full-factor under v1 is now 2x the reference.
+	PricedCostV2ReferenceNanoUSD = uint64(500_000_000)
+	// PricedCostV2FloorBPS is the deepest the v17+ factor falls (0.3), down
+	// from 0.6 in v1. Combined with the lower reference this creates a much
+	// steeper penalty for high-cost harnesses.
+	PricedCostV2FloorBPS = 3000
+
 	// PricedCostMaxRatioBPS caps the reported ratio (10x the reference); the
 	// factor is already at the floor long before it.
 	PricedCostMaxRatioBPS = 100_000
@@ -84,14 +100,57 @@ const (
 	PricedCostSourceBrokerSession        = "broker_session"
 )
 
-// PricedCostCurve is the published curve, ratio ascending. A copy is returned
-// so callers cannot mutate the contract.
+// PricedCostCurve is the published v1 curve, ratio ascending. A copy is
+// returned so callers cannot mutate the contract.
 func PricedCostCurve() []protocol.PricedCostCurvePoint {
 	return []protocol.PricedCostCurvePoint{
 		{RatioBPS: 10_000, FactorBPS: 10_000},
 		{RatioBPS: 15_000, FactorBPS: 8_000},
 		{RatioBPS: 20_000, FactorBPS: PricedCostFloorBPS},
 	}
+}
+
+// PricedCostV2Curve is the published v2 curve, ratio ascending. A copy is
+// returned so callers cannot mutate the contract. The v2 curve is steeper:
+// at 2x the reference ($1.00 for a 350-case run) the factor hits 0.3.
+func PricedCostV2Curve() []protocol.PricedCostCurvePoint {
+	return []protocol.PricedCostCurvePoint{
+		{RatioBPS: 10_000, FactorBPS: 10_000},
+		{RatioBPS: 15_000, FactorBPS: 6_500},
+		{RatioBPS: 20_000, FactorBPS: PricedCostV2FloorBPS},
+	}
+}
+
+// pricedCostCurveForVersion returns the curve for the given bench version.
+func pricedCostCurveForVersion(benchVersion int) []protocol.PricedCostCurvePoint {
+	if benchVersion >= PricedCostV2MinBenchVersion {
+		return PricedCostV2Curve()
+	}
+	return PricedCostCurve()
+}
+
+// pricedCostContractIDForVersion returns the contract id for the given bench version.
+func pricedCostContractIDForVersion(benchVersion int) string {
+	if benchVersion >= PricedCostV2MinBenchVersion {
+		return PricedCostV2ContractID
+	}
+	return PricedCostContractID
+}
+
+// pricedCostReferenceForVersion returns the reference nano-USD for the given bench version.
+func pricedCostReferenceForVersion(benchVersion int) uint64 {
+	if benchVersion >= PricedCostV2MinBenchVersion {
+		return PricedCostV2ReferenceNanoUSD
+	}
+	return PricedCostReferenceNanoUSD
+}
+
+// pricedCostFloorForVersion returns the floor BPS for the given bench version.
+func pricedCostFloorForVersion(benchVersion int) int {
+	if benchVersion >= PricedCostV2MinBenchVersion {
+		return PricedCostV2FloorBPS
+	}
+	return PricedCostFloorBPS
 }
 
 // PricedCostPrices returns the locked rates as published in the report.
@@ -171,9 +230,14 @@ func satMul(a, b uint64) uint64 {
 }
 
 // PricedCostFactorBPS maps a ratio (normalized cost over the reference, in
-// basis points) through the published curve.
+// basis points) through the v1 published curve. For version-aware callers use
+// PricedCostFactorBPSForCurve with the curve from pricedCostCurveForVersion.
 func PricedCostFactorBPS(ratioBPS int) int {
-	curve := PricedCostCurve()
+	return PricedCostFactorBPSForCurve(ratioBPS, PricedCostCurve())
+}
+
+// PricedCostFactorBPSForCurve maps a ratio through any published curve.
+func PricedCostFactorBPSForCurve(ratioBPS int, curve []protocol.PricedCostCurvePoint) int {
 	if ratioBPS <= curve[0].RatioBPS {
 		return curve[0].FactorBPS
 	}
@@ -192,6 +256,8 @@ func PricedCostFactorBPS(ratioBPS int) int {
 
 // BuildPricedCost prices one run. It returns nil below
 // PricedCostMinBenchVersion so earlier details keep their exact shape.
+// bench_version >= PricedCostV2MinBenchVersion (v17+) uses priced-cost-v2:
+// $0.50 reference, 0.3 floor, steeper curve.
 func BuildPricedCost(benchVersion int, posture PricedCostPosture, cases int, usage PricedCostUsage) *protocol.PricedCostSummary {
 	if !protocol.PricedCostBenchVersion(benchVersion) {
 		return nil
@@ -200,8 +266,12 @@ func BuildPricedCost(benchVersion int, posture PricedCostPosture, cases int, usa
 		posture = PricedCostEnforce
 	}
 	prices := PricedCostPrices()
+	contractID := pricedCostContractIDForVersion(benchVersion)
+	referenceNanoUSD := pricedCostReferenceForVersion(benchVersion)
+	floorBPS := pricedCostFloorForVersion(benchVersion)
+	curve := pricedCostCurveForVersion(benchVersion)
 	summary := &protocol.PricedCostSummary{
-		ContractID:           PricedCostContractID,
+		ContractID:           contractID,
 		Posture:              string(posture),
 		Window:               PricedCostWindowWholeRun,
 		Source:               usage.Source,
@@ -214,9 +284,9 @@ func BuildPricedCost(benchVersion int, posture PricedCostPosture, cases int, usa
 		DecisionOutputTokens: clampTokens(usage.DecisionOutputTokens),
 		Prices:               prices,
 		NormalizationCases:   PricedCostNormalizationCases,
-		ReferenceNanoUSD:     PricedCostReferenceNanoUSD,
-		Curve:                PricedCostCurve(),
-		FloorBPS:             PricedCostFloorBPS,
+		ReferenceNanoUSD:     referenceNanoUSD,
+		Curve:                curve,
+		FloorBPS:             floorBPS,
 		FactorBPS:            BasisPointScale,
 		AppliedFactorBPS:     BasisPointScale,
 	}
@@ -235,12 +305,12 @@ func BuildPricedCost(benchVersion int, posture PricedCostPosture, cases int, usa
 	}
 	summary.Result = PricedCostResultPriced
 	summary.NormalizedCostNanoUSD = satMul(summary.CostNanoUSD, PricedCostNormalizationCases) / uint64(cases)
-	ratio := satMul(summary.NormalizedCostNanoUSD, BasisPointScale) / PricedCostReferenceNanoUSD
+	ratio := satMul(summary.NormalizedCostNanoUSD, BasisPointScale) / referenceNanoUSD
 	if ratio > PricedCostMaxRatioBPS {
 		ratio = PricedCostMaxRatioBPS
 	}
 	summary.RatioBPS = int(ratio)
-	summary.FactorBPS = PricedCostFactorBPS(summary.RatioBPS)
+	summary.FactorBPS = PricedCostFactorBPSForCurve(summary.RatioBPS, curve)
 	if posture == PricedCostEnforce {
 		summary.Applied = true
 		summary.AppliedFactorBPS = summary.FactorBPS

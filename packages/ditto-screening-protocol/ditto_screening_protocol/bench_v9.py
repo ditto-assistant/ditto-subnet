@@ -137,7 +137,7 @@ def _apply_gate_factor_micros(ordinary_micros: int, factor_bps: int) -> int:
 
 
 
-V9EvidenceBenchVersion = Literal[9, 10, 11, 12, 13, 14, 15, 16]
+V9EvidenceBenchVersion = Literal[9, 10, 11, 12, 13, 14, 15, 16, 17]
 """Benchmark epochs whose scores carry the signed v9 base-evidence stack.
 
 Every layer that parses, re-derives, or *projects* that evidence must pin this

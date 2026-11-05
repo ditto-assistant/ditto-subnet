@@ -29,6 +29,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 PRICED_COST_MIN_BENCH_VERSION = 16
+# Bench v17+ uses the priced-cost-v2 contract ($0.50 reference, 0.3 floor, steeper curve).
+PRICED_COST_V2_MIN_BENCH_VERSION = 17
 PROMPT_NANO_USD = 70
 COMPLETION_NANO_USD = 150
 EMBEDDING_NANO_USD = 4
@@ -36,11 +38,17 @@ DECISION_INPUT_NANO_USD = 42
 DECISION_OUTPUT_NANO_USD = 0
 NORMALIZATION_CASES = 350
 REFERENCE_NANO_USD = 1_000_000_000
+REFERENCE_NANO_USD_V2 = 500_000_000
 MAX_RATIO_BPS = 100_000
 CURVE: tuple[tuple[int, int], ...] = (
     (10_000, 10_000),
     (15_000, 8_000),
     (20_000, 6_000),
+)
+CURVE_V2: tuple[tuple[int, int], ...] = (
+    (10_000, 10_000),
+    (15_000, 6_500),
+    (20_000, 3_000),
 )
 _UINT64_MAX = (1 << 64) - 1
 _MAX_TOKENS = 9_007_199_254_740_991
@@ -51,7 +59,7 @@ _BODY_LIMIT = 32 << 20
 
 
 def factor_bps(ratio_bps: int) -> int:
-    """The published curve: 1.0 to the reference, 0.8 at 1.5x, 0.6 from 2x."""
+    """The published v1 curve: 1.0 to the reference, 0.8 at 1.5x, 0.6 from 2x."""
     if ratio_bps <= CURVE[0][0]:
         return CURVE[0][1]
     for (lo_r, lo_f), (hi_r, hi_f) in zip(CURVE, CURVE[1:], strict=False):
@@ -60,9 +68,19 @@ def factor_bps(ratio_bps: int) -> int:
     return CURVE[-1][1]
 
 
+def _factor_bps_for_curve(ratio_bps: int, curve: tuple[tuple[int, int], ...]) -> int:
+    if ratio_bps <= curve[0][0]:
+        return curve[0][1]
+    for (lo_r, lo_f), (hi_r, hi_f) in zip(curve, curve[1:], strict=False):
+        if ratio_bps <= hi_r:
+            return lo_f - (lo_f - hi_f) * (ratio_bps - lo_r) // (hi_r - lo_r)
+    return curve[-1][1]
+
+
 def priced_cost(
     *,
     cases: int,
+    bench_version: int = PRICED_COST_MIN_BENCH_VERSION,
     prompt_tokens: int,
     completion_tokens: int,
     embedding_tokens: int = 0,
@@ -97,13 +115,16 @@ def priced_cost(
             "ratio_bps": 0,
             "factor_bps": 10_000,
         }
+    v2 = bench_version >= PRICED_COST_V2_MIN_BENCH_VERSION
+    reference = REFERENCE_NANO_USD_V2 if v2 else REFERENCE_NANO_USD
+    curve = CURVE_V2 if v2 else CURVE
     normalized = sat(cost * NORMALIZATION_CASES) // cases
-    ratio = min(sat(normalized * 10_000) // REFERENCE_NANO_USD, MAX_RATIO_BPS)
+    ratio = min(sat(normalized * 10_000) // reference, MAX_RATIO_BPS)
     return {
         "cost_nano_usd": cost,
         "normalized_cost_nano_usd": normalized,
         "ratio_bps": ratio,
-        "factor_bps": factor_bps(ratio),
+        "factor_bps": _factor_bps_for_curve(ratio, curve),
     }
 
 

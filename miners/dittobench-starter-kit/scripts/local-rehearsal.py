@@ -49,7 +49,7 @@ MIN_BENCH_VERSION = 8
 # stays 9.
 # Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
 # ditto/tests/test_bench_version_pins.py diffs across every layer.
-MAX_BENCH_VERSION = 16
+MAX_BENCH_VERSION = 17
 # Bench 16+ canonical runs are a datagen half plus a five-column generator
 # slice (research/dittobench-datagen/docs/dueling-bench.md). A local rehearsal
 # at 16+ builds its own slice from the PUBLIC default generator only: miner
