@@ -271,7 +271,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"{policy_version} is not implemented by this build "
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
-    if policy_version == 13:
+    if policy_version in {13, 14}:
         return "adjudicator-v22-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 

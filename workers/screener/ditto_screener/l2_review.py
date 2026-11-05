@@ -155,35 +155,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
-    if policy_version == 13:
+    if policy_version in {13, 14}:
         return "l2-terra-source-review-v63-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
-    if policy_version == 13:
+    if policy_version in {13, 14}:
         return "l3-sol-adversarial-critic-v35-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
-    if policy_version == 13:
+    if policy_version in {13, 14}:
         return "l3-sol-violation-cause-v40-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
-    if policy_version == 13:
+    if policy_version in {13, 14}:
         return "l3-sol-cause-disagreement-v20-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
-    if policy_version == 13:
+    if policy_version in {13, 14}:
         return "l3-sol-safety-adjudicator-v38-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
@@ -2874,7 +2874,7 @@ def _signed_runtime_lease_rejection(
     """
     if lease is None:
         return "missing" if policy_version >= 13 and required else None
-    if policy_version != 13 or lease.policy_version != policy_version:
+    if policy_version not in {13, 14} or lease.policy_version not in {13, 14}:
         return "policy"
     if lease.attempt_id != attempt_id:
         return "attempt_id"
@@ -2900,7 +2900,7 @@ def _missing_lease_is_fleet_owned(
     its own; retrying it would only loop, so it keeps the inconclusive hold. A
     present lease that fails identity or freshness is always that hold too.
     """
-    return clause == "missing" and policy_version == 13 and bench_version == 13
+    return clause == "missing" and policy_version >= 13 and bench_version == 13
 
 
 def _log_runtime_lease_hold(
@@ -3159,7 +3159,7 @@ class TerraSolSourceReviewAgent:
                     f"I1-I{'8' if policy_version >= 13 else '7'} independently."
                 ),
             }
-        elif policy_version == 13 and (
+        elif policy_version >= 13 and (
             self._scorer_capabilities_url or self._expected_scorer_revision
         ):
             try:
@@ -4796,7 +4796,7 @@ class TerraSolSourceReviewAgent:
             } <= set(raw_categories)
             task = (
                 _V13_SAFETY_ADJUDICATOR_TASK
-                if policy_version == 13
+                if policy_version >= 13
                 else _SAFETY_ADJUDICATOR_TASK
             ) + (
                 _MIXED_SCORER_SAFETY_TASK
@@ -6243,7 +6243,7 @@ class LayeredSourceReviewAgent:
             self._l2, "_signed_runtime_lease_max_age_seconds", 300
         )
         review_disabled = (
-            policy_version == 13 and requires_lease and self._mode == "off"
+            policy_version >= 13 and requires_lease and self._mode == "off"
         )
         clause = (
             "review_disabled"
@@ -6545,7 +6545,7 @@ class LayeredSourceReviewAgent:
             if review_deadline is None and self._adjudicator:
                 review_deadline = derived_deadline
         always_escalate = (
-            (policy_version == 13 and requires_lease)
+            (policy_version >= 13 and requires_lease)
             or self._always_escalate
             or os.environ.get("SCREENER_L2_ALWAYS_ESCALATE", "").strip().lower()
             in {"1", "true", "yes", "on"}

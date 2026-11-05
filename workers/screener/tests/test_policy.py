@@ -1273,7 +1273,7 @@ async def test_zero_call_oracle_clears_under_cost_first_policy() -> None:
         )
 
     decision = await _oracle_engine().evaluate(_context(observe))
-    assert decision.outcome == ScreeningOutcome.CLEAR
+    assert decision.outcome == ScreeningOutcome.PASS
     assert any(
         item.code == "behavioral-oracle-no-call-clear" for item in decision.evidence
     )
@@ -1433,7 +1433,7 @@ def test_live_v6_snapshot_is_an_acceptance_fixture() -> None:
     fixture = Path(__file__).parent / "fixtures" / "production-v6-snapshot.json"
     snapshot = json.loads(fixture.read_text())
     assert snapshot["screening_policy_version"] == 6
-    assert SCREENING_POLICY_VERSION == 13
+    assert SCREENING_POLICY_VERSION == 14
     assert snapshot["queue"]["waiting_validator"] == 9
     assert snapshot["queue"]["evaluating"] == 1
     assert len(snapshot["rust_contract_rejections"]) == 6

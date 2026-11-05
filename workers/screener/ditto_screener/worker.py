@@ -880,7 +880,7 @@ class ScreenerWorker:
             async def record_mechanical_verification(
                 check_code: str, *, image_sha256: str | None = None
             ) -> None:
-                if policy_version != 13:
+                if policy_version < 13:
                     return
                 try:
                     await self._platform.record_verification_receipt(
@@ -947,7 +947,7 @@ class ScreenerWorker:
             async def record_runtime_verification(
                 check_code: str, evidence_sha256: str
             ) -> None:
-                if policy_version != 13:
+                if policy_version < 13:
                     return
                 try:
                     await self._platform.record_verification_receipt(
