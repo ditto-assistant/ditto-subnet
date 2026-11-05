@@ -173,6 +173,8 @@ def test_stack_preview_controller_is_dispatch_only_and_caps_slots() -> None:
     assert "--max-time, '5', --cacert, /run/preview-backroom-cert/cert.pem" in compose
     assert "https://backroom:3000/" in compose
     services = yaml.safe_load(compose)["services"]
+    assert "preview-oauth-socket:/run/preview-oauth:ro" in services["gateway"]["volumes"]
+    assert "preview-oauth-socket:/run/preview-oauth" in services["oauth-fixture"]["volumes"]
     assert (
         "preview-backroom-cert:/run/preview-backroom-cert:ro"
         in services["gateway"]["volumes"]

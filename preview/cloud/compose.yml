@@ -187,7 +187,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - preview-caddy-data:/data
       - preview-backroom-cert:/run/preview-backroom-cert:ro
-      - preview-oauth-socket:/run/preview-oauth
+      - preview-oauth-socket:/run/preview-oauth:ro
 
 volumes:
   preview-postgres:
