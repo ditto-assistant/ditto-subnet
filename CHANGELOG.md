@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.457.1 (2026-11-05)
+
+### Bug Fixes
+
+- **platform**: Target rollout's desired version for dueling season when active is also dueling
+  ([`f5b8eec`](https://github.com/ditto-assistant/ditto-subnet/commit/f5b8eec76373ae83fbb3bf876720215b7ca8cb89))
+
+
 ## v0.457.0 (2026-11-05)
 
 ### Bug Fixes
