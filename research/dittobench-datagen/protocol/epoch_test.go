@@ -88,8 +88,8 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 		}
 	}
 	newest := NewestSupportedBenchVersion()
-	if newest != versions[len(versions)-1] || newest != BenchVersionV16 {
-		t.Fatalf("newest supported version = %d, want %d (last of %v)", newest, BenchVersionV16, versions)
+	if newest != versions[len(versions)-1] || newest != BenchVersionV17 {
+		t.Fatalf("newest supported version = %d, want %d (last of %v)", newest, BenchVersionV17, versions)
 	}
 	for _, v := range versions {
 		if !SupportedBenchVersion(v) {
@@ -114,7 +114,7 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 	if _, err := RotateSeedForVersion(1, beyond); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("rotation error must render the derived list %q: %v", want, err)
 	}
-	if got := SupportedBenchVersionList(); got != "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16" {
+	if got := SupportedBenchVersionList(); got != "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17" {
 		t.Fatalf("SupportedBenchVersionList() = %q", got)
 	}
 	// Epochs advance monotonically with the version so no two contracts share a
@@ -170,5 +170,12 @@ func TestStagedBenchVersionsAreGeneratableNotSupported(t *testing.T) {
 	}
 	if got, _ := DatasetEpochForVersion(BenchVersionV16); got.Format(time.RFC3339) != "2027-08-01T00:00:00Z" {
 		t.Fatalf("v16 epoch = %s", got)
+	}
+	// v17 is the priced-cost-v2 contract.
+	if !SupportedBenchVersion(BenchVersionV17) || StagedBenchVersion(BenchVersionV17) {
+		t.Fatal("v17 must be supported and not staged")
+	}
+	if got, _ := DatasetEpochForVersion(BenchVersionV17); got.Format(time.RFC3339) != "2027-09-01T00:00:00Z" {
+		t.Fatalf("v17 epoch = %s", got)
 	}
 }

@@ -35,7 +35,12 @@ from ditto.db.queries.audit import (
     append_audit_entry,
     get_latest_score_retest_event,
 )
-from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
+from ditto.db.queries.benchmark_rollout import (
+    MIN_SCOREABLE_BENCH_VERSION,
+    ActivationBlockingQuorum,
+    activation_blocking_quorum,
+    blocking_quorum_lease_available,
+)
 from ditto.db.queries.lease_liveness import (
     LeaseLiveness,
     lease_liveness,
@@ -53,7 +58,9 @@ DUELING_ROTATION_RETEST_BASIS = "dueling_season_rotation"
 """Bench v16+: a season rotation re-runs the champion and the retest cohort on
 the new generator set (``dueling-bench.md`` section 3, "Rotation is a
 mini-rollout"). Queued by Platform at season open, champion first, then by
-rank; promoted ahead of every other re-test, on any free slot."""
+rank; promoted ahead of every other re-test, on any free slot. During an open
+rollout a re-score that cannot add a quorum score waits while the validator
+can lease an activation-blocking member's missing score instead."""
 PARALLEL_RETEST_BASES = frozenset(
     {V9_CONTRACT_RETEST_BASIS, DUELING_ROTATION_RETEST_BASIS}
 )
@@ -274,19 +281,69 @@ async def _rollout_member_positions(
     return dict(rows.tuples().all())
 
 
-async def _ordered_queued_retests(
-    session: AsyncSession,
-    *,
-    latest: dict[UUID, ScoreAuditEntry],
-    required_basis: str | None,
+def _queued_entries(
+    latest: dict[UUID, ScoreAuditEntry], *, required_basis: str | None
 ) -> list[ScoreAuditEntry]:
-    """Use one ordering contract for issuance and operator-visible positions."""
-    queued = [
+    return [
         entry
         for entry in latest.values()
         if entry.event == EVENT_SCORE_RETEST_QUEUED
         and (required_basis is None or entry.payload.get("basis") == required_basis)
     ]
+
+
+async def _rotation_blocking_quorums(
+    session: AsyncSession, entries: list[ScoreAuditEntry]
+) -> dict[int, ActivationBlockingQuorum]:
+    """The open rollout's blocking members, keyed by its desired version when
+    rotation re-tests wait at it; empty outside an open rollout (ordering
+    unchanged)."""
+    blocking = await activation_blocking_quorum(
+        session,
+        bench_versions={
+            int(entry.payload.get("bench_version", -1))
+            for entry in entries
+            if entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
+        },
+    )
+    if blocking is None:
+        return {}
+    return {blocking.rollout.desired_version: blocking}
+
+
+def _rotation_supplies_missing_score(
+    entry: ScoreAuditEntry,
+    blocking: dict[int, ActivationBlockingQuorum],
+    *,
+    score_season_id: UUID | None,
+) -> bool:
+    """Whether a rotation re-test restores a blocking member's quorum score."""
+    quorum = blocking.get(int(entry.payload.get("bench_version", -1)))
+    return quorum is not None and quorum.supplies_missing_score(
+        entry.agent_id, score_season_id=score_season_id
+    )
+
+
+def _queued_score_season(entry: ScoreAuditEntry) -> UUID | None:
+    """The accepted score's season when the rotation re-test was queued (a
+    score that changed since closes the re-test stale at promotion)."""
+    raw = entry.payload.get("previous_dueling_season_id")
+    return None if raw is None else UUID(str(raw))
+
+
+async def _ordered_queued_retests(
+    session: AsyncSession,
+    *,
+    latest: dict[UUID, ScoreAuditEntry],
+    required_basis: str | None,
+    blocking: dict[int, ActivationBlockingQuorum] | None = None,
+) -> list[ScoreAuditEntry]:
+    """Use one ordering contract for issuance and operator-visible positions.
+
+    ``blocking`` (:func:`_rotation_blocking_quorums` of the same entries) is
+    read when omitted; issuance passes the one it also defers against.
+    """
+    queued = _queued_entries(latest, required_basis=required_basis)
     contract_versions = {
         int(entry.payload.get("bench_version", -1))
         for entry in queued
@@ -297,14 +354,28 @@ async def _ordered_queued_retests(
         rollout_positions.update(
             await _rollout_member_positions(session, bench_version=bench_version)
         )
+    if blocking is None:
+        blocking = await _rotation_blocking_quorums(session, queued)
 
-    def order(entry: ScoreAuditEntry) -> tuple[int, int, int]:
-        # A season rotation re-test goes first, champion (rank 0) first.
+    def order(entry: ScoreAuditEntry) -> tuple[int, int, int, int]:
+        # A season rotation re-test goes first, champion (rank 0) first --
+        # except that, during an open rollout, a rotation re-score that
+        # restores an activation-blocking member's missing quorum score goes
+        # ahead of re-scores that only re-buy evidence.
         if entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS:
-            return (0, int(entry.payload.get("rotation_rank", 0)), entry.seq)
+            return (
+                0,
+                0
+                if _rotation_supplies_missing_score(
+                    entry, blocking, score_season_id=_queued_score_season(entry)
+                )
+                else 1,
+                int(entry.payload.get("rotation_rank", 0)),
+                entry.seq,
+            )
         if entry.agent_id in rollout_positions:
-            return (1, rollout_positions[entry.agent_id], entry.seq)
-        return (2, entry.seq, entry.seq)
+            return (1, 0, rollout_positions[entry.agent_id], entry.seq)
+        return (2, 0, entry.seq, entry.seq)
 
     return sorted(queued, key=order)
 
@@ -483,11 +554,18 @@ async def activate_next_score_retest(
         else:
             return None
 
+    blocking = await _rotation_blocking_quorums(
+        session, _queued_entries(latest, required_basis=required_basis)
+    )
     queued = await _ordered_queued_retests(
         session,
         latest=latest,
         required_basis=required_basis,
+        blocking=blocking,
     )
+    # Per open-rollout version: may this validator lease a blocking member's
+    # missing quorum score right now? Read once, only if a re-score asks.
+    blocking_lease_here: dict[int, bool] = {}
     for entry in queued:
         bench_version = int(entry.payload.get("bench_version", -1))
         # The floor comes first, and it is a different KIND of check from the
@@ -549,6 +627,32 @@ async def activate_next_score_retest(
                 session, entry=entry, now=now, reason=stale_reason
             )
             continue
+        if (
+            entry.payload.get("basis") == DUELING_ROTATION_RETEST_BASIS
+            and bench_version in blocking
+            and not _rotation_supplies_missing_score(
+                entry,
+                blocking,
+                score_season_id=None if score is None else score.dueling_season_id,
+            )
+        ):
+            # An open rollout's activation waits on priority members that
+            # still lack a quorum score. A re-score of a member whose row
+            # already counts cannot move that gate, so it never takes a slot
+            # this validator could give a blocking member's missing score:
+            # it stays queued and runs once that lease is out (the rollout
+            # lane issues it on this same poll).
+            if bench_version not in blocking_lease_here:
+                blocking_lease_here[
+                    bench_version
+                ] = await blocking_quorum_lease_available(
+                    session,
+                    blocking=blocking[bench_version],
+                    validator_hotkey=validator_hotkey,
+                    now=now,
+                )
+            if blocking_lease_here[bench_version]:
+                continue
 
         assert ticket is not None
         deadline = now + ttl

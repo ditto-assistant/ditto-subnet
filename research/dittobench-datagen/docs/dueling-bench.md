@@ -384,6 +384,10 @@ Agents scored against different generator sets are not comparable, so the
   (`db/queries/confirmation_seed_anchors.py`). Previous-season scores stay
   visible as provisional for one season, then expire from the authoritative
   ledger. The crown carries over until a same-season challenger beats it.
+  While a benchmark rollout is open, a rotation re-score that cannot add a
+  quorum score waits on any validator that could instead lease a missing score
+  for an activation-blocking priority member. Re-scores that restore an expired
+  quorum row for such a member go first (`db/queries/score_retests.py`).
 - A ban or copy ruling against a pinned generator mid-season triggers an early
   rotation, not an in-place swap.
 - **Idle seasons extend instead of rotating** (`skip_unchanged_rounds`, on by

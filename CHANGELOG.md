@@ -2,6 +2,117 @@
 
 <!-- version list -->
 
+## v0.457.1 (2026-11-05)
+
+### Bug Fixes
+
+- **platform**: Target rollout's desired version for dueling season when active is also dueling
+  ([`f5b8eec`](https://github.com/ditto-assistant/ditto-subnet/commit/f5b8eec76373ae83fbb3bf876720215b7ca8cb89))
+
+
+## v0.457.0 (2026-11-05)
+
+### Bug Fixes
+
+- **platform**: Add v17 to GENERATOR_ROUND_BENCH_VERSIONS
+  ([`7790710`](https://github.com/ditto-assistant/ditto-subnet/commit/77907100ca028d1f9a03110a5fd4a47e6cc9652b))
+
+- **platform**: Update replay process identity test fixture for policy ceiling v14
+  ([`b2e133e`](https://github.com/ditto-assistant/ditto-subnet/commit/b2e133ebaebca129cb82158f2c0afd6daac93c3f))
+
+- **platform**: Update tests for v17 generator round contract and policy ceiling
+  ([`d86e89b`](https://github.com/ditto-assistant/ditto-subnet/commit/d86e89b766b1c5887e9c82cc8d85d3cd5cb16468))
+
+### Features
+
+- **screener**: Raise activation ceiling to policy v14
+  ([`0184fde`](https://github.com/ditto-assistant/ditto-subnet/commit/0184fde1512bf3b479ff4efb975048b5706c4863))
+
+
+## v0.456.0 (2026-11-05)
+
+### Bug Fixes
+
+- **ci**: Remove remaining dittobench_coding_starter_kit references from release workflow and tests
+  ([#3394](https://github.com/ditto-assistant/ditto-subnet/pull/3394),
+  [`306c2da`](https://github.com/ditto-assistant/ditto-subnet/commit/306c2da56fdea0dd4fb5ce291477cca296dc1fe6))
+
+- **ci**: Remove unused source_gate assignment in test_release_workflow
+  ([`9e662ba`](https://github.com/ditto-assistant/ditto-subnet/commit/9e662ba7f664c26317b14d6c00e663f016cc610e))
+
+- **ci**: Update Docker build count assertions after removing coding starter kit
+  ([`725f5b0`](https://github.com/ditto-assistant/ditto-subnet/commit/725f5b0673a36b4bfa23b743a8baa1185eb56d34))
+
+### Continuous Integration
+
+- Remove verify-dittobench-coding-starter-kit from release workflow
+  ([#3393](https://github.com/ditto-assistant/ditto-subnet/pull/3393),
+  [`724ed85`](https://github.com/ditto-assistant/ditto-subnet/commit/724ed850dd12e4b68b8aa46af7de7d001a985c45))
+
+### Features
+
+- **bench**: Add bench_version 17 with priced-cost-v2 scoring contract
+  ([`0656fea`](https://github.com/ditto-assistant/ditto-subnet/commit/0656fea42e4b757e9b906e2174628fce4b022ba6))
+
+- **screener**: Screening policy v14 — zero-call agents CLEAR behavioral oracle
+  ([`45b0e44`](https://github.com/ditto-assistant/ditto-subnet/commit/45b0e44288db48f2b5ba7a152eb512de1657fb22))
+
+
+## v0.455.1 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Lease activation-blocking rollout quorum work ahead of season re-scores
+  ([#3390](https://github.com/ditto-assistant/ditto-subnet/pull/3390),
+  [`c4b5c1c`](https://github.com/ditto-assistant/ditto-subnet/commit/c4b5c1c05b247a846aacd3e52c9c7ee8d26913bb))
+
+
+## v0.455.0 (2026-11-04)
+
+### Features
+
+- **platform,backroom,dashboard**: Show the v16 dueling and priced-cost breakdown on score reads
+  ([#3389](https://github.com/ditto-assistant/ditto-subnet/pull/3389),
+  [`e0a5179`](https://github.com/ditto-assistant/ditto-subnet/commit/e0a5179c65869d6c1aeb112bfbaa668ece1ea9d8))
+
+
+## v0.454.1 (2026-11-04)
+
+### Bug Fixes
+
+- **bench**: Charge v16 metamorphic splits against the v15 group count
+  ([#3388](https://github.com/ditto-assistant/ditto-subnet/pull/3388),
+  [`409572c`](https://github.com/ditto-assistant/ditto-subnet/commit/409572c24206f102d91799cccc12b1fbd892addb))
+
+
+## v0.454.0 (2026-11-04)
+
+### Features
+
+- **platform,backroom**: Run season rotation re-scores on the duel seeds
+  ([#3382](https://github.com/ditto-assistant/ditto-subnet/pull/3382),
+  [`b31f9b8`](https://github.com/ditto-assistant/ditto-subnet/commit/b31f9b89d51dfc511a77f8935e3a86f1af416e26))
+
+
+## v0.453.0 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Skip unchanged rounds whichever column is counted
+  ([#3386](https://github.com/ditto-assistant/ditto-subnet/pull/3386),
+  [`af9e5b5`](https://github.com/ditto-assistant/ditto-subnet/commit/af9e5b570356cfeff995a2502980b925b95e4248))
+
+### Features
+
+- **backroom**: Decompose a canary's composite gate
+  ([#3387](https://github.com/ditto-assistant/ditto-subnet/pull/3387),
+  [`c0915f0`](https://github.com/ditto-assistant/ditto-subnet/commit/c0915f0b691137f24fcc0b3045d5cfa3e21619cb))
+
+- **platform,backroom**: Extend idle dueling seasons instead of rotating
+  ([#3383](https://github.com/ditto-assistant/ditto-subnet/pull/3383),
+  [`eefead9`](https://github.com/ditto-assistant/ditto-subnet/commit/eefead98d768dfdfc12ea3bf2558f4c4e37804e0))
+
+
 ## v0.452.0 (2026-11-04)
 
 ### Bug Fixes

@@ -65,4 +65,4 @@ the concern as unresolved until the adjudicator traces it in original source.
 
 
 def fanout_policy_guidance(policy_version: int) -> str:
-    return f"{I5_INVESTIGATION}\n\n{I4_INVESTIGATION}" if policy_version == 13 else ""
+    return f"{I5_INVESTIGATION}\n\n{I4_INVESTIGATION}" if policy_version >= 13 else ""

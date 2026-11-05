@@ -454,6 +454,7 @@ type capabilitiesResponse struct {
 	V14ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v14_scored_runtime_env,omitempty"`
 	V15ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v15_scored_runtime_env,omitempty"`
 	V16ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v16_scored_runtime_env,omitempty"`
+	V17ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v17_scored_runtime_env,omitempty"`
 }
 
 type scoredRuntimeEnvEvidence struct {
@@ -489,7 +490,7 @@ func (s *server) scoredRuntimeEnvEvidenceForVersion(version int) *scoredRuntimeE
 // Platform's reviewed rollout and exact scorer packet govern scheduling.
 const (
 	advertisedMinBenchVersion = protocol.BenchVersionV8
-	advertisedMaxBenchVersion = protocol.BenchVersionV16
+	advertisedMaxBenchVersion = protocol.BenchVersionV17
 )
 
 // supportedBenchVersions is the capability set this build can administer. It is
@@ -573,6 +574,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		V14ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV14),
 		V15ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV15),
 		V16ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV16),
+		V17ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV17),
 	})
 }
 
@@ -2570,6 +2572,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// details blob so it survives the platform wire alongside the other factors).
 	report.Details.ConversationalSanity = report.ConversationalSanity
 	report.Details.MetamorphicConsistency = scorer.MetamorphicConsistency(perCase)
+	report.Details.Metamorphic = scorer.MetamorphicTierForVersion(perCase, req.BenchVersion)
 	// The memory over-call multiplier the composite gate applied (issue #533):
 	// the same function AggregateForVersion folds in, so a published composite
 	// decomposes into its factors from the record alone.

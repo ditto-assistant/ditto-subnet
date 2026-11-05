@@ -25,7 +25,7 @@ def _fixture():
     public_hex = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     registration = ReplayProcessRegistration(NODE, INSTANCE, public_hex)
     heartbeat = VerifiedReplayProcessHeartbeat(
-        NODE, INSTANCE, registration.key_sha256, NOW, 13, (0, 301, 0)
+        NODE, INSTANCE, registration.key_sha256, NOW, 14, (0, 301, 0)
     )
     proof = V13ReplayProcessProof(
         purpose="claim",
