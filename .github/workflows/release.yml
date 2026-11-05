@@ -57,7 +57,6 @@ jobs:
       release_base: ${{ steps.release-base.outputs.sha }}
       miner_cli: ${{ steps.components.outputs.miner_cli }}
       miner_starter_kit: ${{ steps.components.outputs.miner_starter_kit }}
-      dittobench_coding_starter_kit: ${{ steps.components.outputs.dittobench_coding_starter_kit }}
       validator_stack: ${{ steps.components.outputs.validator_stack }}
       dittobench_api: ${{ steps.components.outputs.dittobench_api }}
       dittobench_datagen: ${{ steps.components.outputs.dittobench_datagen }}
@@ -128,7 +127,6 @@ jobs:
     if: >-
       needs.plan.outputs.miner_cli == 'true' ||
       needs.plan.outputs.miner_starter_kit == 'true' ||
-      needs.plan.outputs.dittobench_coding_starter_kit == 'true' ||
       needs.plan.outputs.validator_stack == 'true' ||
       needs.plan.outputs.dittobench_api == 'true' ||
       needs.plan.outputs.dittobench_datagen == 'true' ||
@@ -184,7 +182,6 @@ jobs:
       (
         needs.plan.outputs.miner_cli == 'true' ||
         needs.plan.outputs.miner_starter_kit == 'true' ||
-        needs.plan.outputs.dittobench_coding_starter_kit == 'true' ||
         needs.plan.outputs.validator_stack == 'true' ||
         needs.plan.outputs.dittobench_api == 'true' ||
         needs.plan.outputs.dittobench_datagen == 'true' ||
