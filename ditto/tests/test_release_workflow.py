@@ -124,10 +124,6 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         "../../packages/dittobench-coding-contract/"
         "generate_inference_vectors.py --check" in coding_release_run
     )
-    source_gate = _step(
-        jobs["verify-source"]["steps"],
-        "Require every selected exact-source gate",
-    )
     for job_name, job in jobs.items():
         if job_name in {
             "plan",
