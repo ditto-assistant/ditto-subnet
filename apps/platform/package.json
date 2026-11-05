@@ -6,7 +6,7 @@
   },
   "devDependencies": {
     "@faircopy/astro": "1.21.1",
-    "faircopy": "1.15.0"
+    "faircopy": "1.26.0"
   },
   "engines": {
     "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
