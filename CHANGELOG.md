@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.457.0 (2026-11-05)
+
+### Bug Fixes
+
+- **platform**: Add v17 to GENERATOR_ROUND_BENCH_VERSIONS
+  ([`7790710`](https://github.com/ditto-assistant/ditto-subnet/commit/77907100ca028d1f9a03110a5fd4a47e6cc9652b))
+
+- **platform**: Update replay process identity test fixture for policy ceiling v14
+  ([`b2e133e`](https://github.com/ditto-assistant/ditto-subnet/commit/b2e133ebaebca129cb82158f2c0afd6daac93c3f))
+
+- **platform**: Update tests for v17 generator round contract and policy ceiling
+  ([`d86e89b`](https://github.com/ditto-assistant/ditto-subnet/commit/d86e89b766b1c5887e9c82cc8d85d3cd5cb16468))
+
+### Features
+
+- **screener**: Raise activation ceiling to policy v14
+  ([`0184fde`](https://github.com/ditto-assistant/ditto-subnet/commit/0184fde1512bf3b479ff4efb975048b5706c4863))
+
+
 ## v0.456.0 (2026-11-05)
 
 ### Bug Fixes
