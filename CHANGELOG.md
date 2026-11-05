@@ -2,6 +2,35 @@
 
 <!-- version list -->
 
+## v0.456.0 (2026-11-05)
+
+### Bug Fixes
+
+- **ci**: Remove remaining dittobench_coding_starter_kit references from release workflow and tests
+  ([#3394](https://github.com/ditto-assistant/ditto-subnet/pull/3394),
+  [`306c2da`](https://github.com/ditto-assistant/ditto-subnet/commit/306c2da56fdea0dd4fb5ce291477cca296dc1fe6))
+
+- **ci**: Remove unused source_gate assignment in test_release_workflow
+  ([`9e662ba`](https://github.com/ditto-assistant/ditto-subnet/commit/9e662ba7f664c26317b14d6c00e663f016cc610e))
+
+- **ci**: Update Docker build count assertions after removing coding starter kit
+  ([`725f5b0`](https://github.com/ditto-assistant/ditto-subnet/commit/725f5b0673a36b4bfa23b743a8baa1185eb56d34))
+
+### Continuous Integration
+
+- Remove verify-dittobench-coding-starter-kit from release workflow
+  ([#3393](https://github.com/ditto-assistant/ditto-subnet/pull/3393),
+  [`724ed85`](https://github.com/ditto-assistant/ditto-subnet/commit/724ed850dd12e4b68b8aa46af7de7d001a985c45))
+
+### Features
+
+- **bench**: Add bench_version 17 with priced-cost-v2 scoring contract
+  ([`0656fea`](https://github.com/ditto-assistant/ditto-subnet/commit/0656fea42e4b757e9b906e2174628fce4b022ba6))
+
+- **screener**: Screening policy v14 — zero-call agents CLEAR behavioral oracle
+  ([`45b0e44`](https://github.com/ditto-assistant/ditto-subnet/commit/45b0e44288db48f2b5ba7a152eb512de1657fb22))
+
+
 ## v0.455.1 (2026-11-04)
 
 ### Bug Fixes
