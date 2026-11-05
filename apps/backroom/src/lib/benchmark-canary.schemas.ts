@@ -62,6 +62,16 @@ const canaryPricedCostSchema = z.object({
   applied_factor_bps: bps,
 })
 
+// One slice column's case statistics. Never the owner key, the generator's
+// submission id, sum_sq or case text: the public score reads' dueling
+// breakdown (admin.schemas.ts) extends exactly this disclosure.
+export const duelingColumnAggregateSchema = z.object({
+  column_id: z.string().max(32),
+  n: count,
+  sum: z.number().nonnegative(),
+  substituted: z.boolean(),
+})
+
 // Bench v16+ `details.dueling` aggregates: the datagen half and gate the fold
 // recomputes from, and each column's case statistics. Never case text.
 const canaryDuelingSchema = z.object({
@@ -70,12 +80,52 @@ const canaryDuelingSchema = z.object({
   datagen_gate: z.number().min(0).max(1),
   column_weight: z.number().min(0).max(1),
   composite_stderr: z.number().nonnegative().optional(),
-  columns: z.array(z.object({
-    column_id: z.string().max(32),
-    n: count,
-    sum: z.number().nonnegative(),
-    substituted: z.boolean(),
-  })).max(16),
+  columns: z.array(duelingColumnAggregateSchema).max(16),
+})
+
+const unit = z.number().min(0).max(1)
+// The closed verdict tokens the scoregates package signs (scoregates.Result*).
+const v9GateResultSchema = z.enum([
+  'passed', 'below_threshold', 'zero_inference', 'insufficient_evidence', 'not_applicable',
+  'latency_implausible', 'answer_stuffed', 'review_required', 'claim_provenance_flagged',
+])
+const v9GateSchema = z.object({ result: v9GateResultSchema, factor_bps: bps })
+  .nullish().catch(null)
+
+// The factors that multiply a run's composite gate, so a canary's
+// details.dueling.datagen_gate decomposes without the raw report: the v7+
+// composite-gate tiers the scorer publishes, the token-efficiency multiplier,
+// and the signed v9 base evidence's ordinary/effective composites, applied and
+// semantic factors, rollout mode and per-gate verdicts. Numbers and closed
+// verdict tokens only.
+const canaryGateFactorsSchema = z.object({
+  tool_efficiency: unit.nullish().catch(null),
+  memory_over_call: unit.nullish().catch(null),
+  metamorphic_consistency: unit.nullish().catch(null),
+  metamorphic: z.object({
+    groups: count, split_groups: count, reference_groups: count, factor: unit,
+  }).nullish().catch(null),
+  conversational_sanity: unit.nullish().catch(null),
+  transform_robustness: unit.nullish().catch(null),
+  audit_pairs: z.object({
+    both_correct: count, base_only: count, transform_only: count, both_wrong: count,
+  }).nullish().catch(null),
+  token_efficiency: z.object({ multiplier: unit }).nullish().catch(null),
+  v9_base: z.object({
+    ordinary_composite_micros: count,
+    effective_composite_micros: count,
+    semantic_gate_factor_bps: bps,
+    applied_gate_factor_bps: bps,
+    score_gates: z.object({
+      rollout_mode: z.enum(['shadow', 'enforce']),
+      model_use: v9GateSchema,
+      authoritative_tool: v9GateSchema,
+      model_dependence: v9GateSchema,
+      inference_latency: v9GateSchema,
+      answer_stuffing: v9GateSchema,
+      claim_provenance: v9GateSchema,
+    }).nullish().catch(null),
+  }).nullish().catch(null),
 })
 
 // Never forward arbitrary scorer details, source, traces or capabilities through
@@ -96,11 +146,11 @@ export const benchmarkCanarySchema = z.object({
     details: z.object({
       priced_cost: canaryPricedCostSchema.nullish().catch(null),
       dueling: canaryDuelingSchema.nullish().catch(null),
-    }).nullish().catch(null).transform((d) =>
-      d && (d.priced_cost || d.dueling)
-        ? { priced_cost: d.priced_cost ?? null, dueling: d.dueling ?? null }
-        : undefined,
-    ),
+    }).and(canaryGateFactorsSchema).nullish().catch(null).transform((d) => {
+      if (!d || !(d.priced_cost || d.dueling)) return undefined
+      const { priced_cost, dueling, ...gates } = d
+      return { priced_cost: priced_cost ?? null, dueling: dueling ?? null, gate_factors: gates }
+    }),
   }).nullable(),
 })
 

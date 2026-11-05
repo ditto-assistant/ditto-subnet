@@ -30,7 +30,7 @@ func TestGeneratorRoundAdmission(t *testing.T) {
 	}
 	for _, edit := range []func(*submitRequest){
 		func(r *submitRequest) { r.BenchVersion = 12 },
-		func(r *submitRequest) { r.BenchVersion = 17 },
+		func(r *submitRequest) { r.BenchVersion = 18 },
 		func(r *submitRequest) { r.PrivateDatasetBytes = nil },
 		func(r *submitRequest) { r.ExpectedDatasetSHA256 = "ABC" },
 		func(r *submitRequest) { r.PrivateDatasetBytes = make([]byte, challenge.MaxRoundDatasetBytes+1) },
@@ -57,7 +57,7 @@ func TestGeneratorRoundMaxCasesFeatureNamesThePackContractBound(t *testing.T) {
 // advertises n: the spelling is a cross-component contract.
 func TestGeneratorRoundBenchFeaturesNameEverySupportedPolicy(t *testing.T) {
 	got := generatorRoundBenchFeatures()
-	want := []string{"generator-round-bench-13", "generator-round-bench-14", "generator-round-bench-15", "generator-round-bench-16"}
+	want := []string{"generator-round-bench-13", "generator-round-bench-14", "generator-round-bench-15", "generator-round-bench-16", "generator-round-bench-17"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("features %v, want %v", got, want)
 	}
@@ -66,7 +66,7 @@ func TestGeneratorRoundBenchFeaturesNameEverySupportedPolicy(t *testing.T) {
 			t.Fatalf("v%d is a pack policy but not a round version", v)
 		}
 	}
-	if runsGeneratorRoundAt(12) || runsGeneratorRoundAt(17) {
+	if runsGeneratorRoundAt(12) || runsGeneratorRoundAt(18) {
 		t.Fatal("round versions outside the pack policies")
 	}
 }

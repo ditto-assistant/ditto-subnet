@@ -1458,7 +1458,7 @@ class BuildGate:
                     detail=contract_error,
                 )
             source_digest, source_paths = self._source_metadata(tmp_path)
-            if policy_version == 13 and record_archive_verification is not None:
+            if policy_version >= 13 and record_archive_verification is not None:
                 # The streamed archive digest and its bounded container
                 # contract have both been verified. Record before a later L4
                 # hold can skip the build/runtime path.

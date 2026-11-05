@@ -19,10 +19,11 @@ from ditto_screener.source_review import _source_review_system_prompt
 )
 def test_decision_path_guidance_is_version_scoped(render) -> None:
     assert DECISION_PATH_GUIDANCE in render(13)
+    assert DECISION_PATH_GUIDANCE in render(14)
     for historical in (10, 11, 12):
         assert DECISION_PATH_GUIDANCE not in render(historical)
     with pytest.raises(ValueError, match="not implemented"):
-        render(14)
+        render(15)
 
 
 def test_v13_does_not_inherit_area_count_stop_instruction() -> None:

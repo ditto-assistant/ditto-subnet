@@ -27,7 +27,12 @@ import (
 // catalog ledger) and datagen/v16.go, whose quoted payloads join a per-seed
 // coined stem to a noun, so no payload is a pool value. Generator slice cases
 // come from Platform, not this module.
-const poolLedgerAuditedThrough = protocol.BenchVersionV16
+//
+// v17 audit: gen/ and universe/ add nothing new. ProfileForVersion routes v17
+// to profilesV16 (same run-size envelope, same generator path). The v17 contract
+// change is entirely in the scorer's priced-cost-v2 gate; no data-generation
+// pool is touched.
+const poolLedgerAuditedThrough = protocol.BenchVersionV17
 
 // TestPoolCardinalityCanary is the generator's pool-cardinality canary (#492,
 // item 4). A closed pool small enough to copy into a dispatch table is a

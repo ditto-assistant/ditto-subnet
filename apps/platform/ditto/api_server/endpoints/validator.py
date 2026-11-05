@@ -151,6 +151,7 @@ from ditto.api_server.confirmation_candidate_reconciliation import (
 )
 from ditto.api_server.confirmation_seed_anchor import (
     LEGACY_PLANNING,
+    anchor_season_key,
     bind_confirmation_seed,
     list_reign_seed_anchors,
     prefetch_finalized_anchor_hashes,
@@ -247,6 +248,14 @@ from ditto.api_server.retest_wave_window import (
     current_wave_window,
     first_retest_issue_by_seed,
     growth_open,
+)
+from ditto.api_server.rotation_duel_seeds import (
+    agents_with_pending_rotation,
+    assign_rotation_seed,
+    defer_for_season_anchor,
+    mirror_season_seeded_score,
+    rotation_seeds_active,
+    season_seed_binding,
 )
 from ditto.api_server.scoring_gate import (
     PublicSourceRelease,
@@ -2581,6 +2590,14 @@ async def _dueling_lease_fields(
     }
 
 
+async def _continual_settings(request: Request) -> ContinualRetestSettings:
+    """The cached continual-retest policy (short-TTL resolver)."""
+    resolver: ContinualRetestSettingsResolver = (
+        request.app.state.continual_retest_settings
+    )
+    return await resolver.resolve(getattr(request.app.state, "session_maker", None))
+
+
 async def _activate_dueling_rotation_retest(
     session: AsyncSession,
     *,
@@ -2591,6 +2608,8 @@ async def _activate_dueling_rotation_retest(
     validator_running_benchmark: bool,
     slot_id: str,
     ttl: timedelta,
+    settings: ContinualRetestSettings | None = None,
+    season_seeds: bool = True,
 ) -> ValidatorTicket | None:
     """Promote this validator's next dueling season rotation re-test, if any.
 
@@ -2598,8 +2617,41 @@ async def _activate_dueling_rotation_retest(
     (which, at v16+, includes forwarding the version's dueling slices). Runs
     beside ordinary work on free slots, like activation-critical contract
     repair: rotation is the season's mini-rollout.
+
+    ``settings`` (authoritative seasons only) enables phase-B2 season-seeded
+    re-scores (:mod:`ditto.api_server.rotation_duel_seeds`): the promoted
+    ticket moves onto its duel seed, or back to its canonical seed.
     """
-    return await activate_next_score_retest(
+    protocol = heartbeat.protocol_version if heartbeat is not None else None
+    if (
+        season_seeds
+        and settings is not None
+        and rotation_seeds_active(settings, bench_version=bench_version)
+    ):
+        from ditto.api_server.dueling_seasons import open_season
+
+        if await defer_for_season_anchor(
+            session,
+            settings=settings,
+            bench_version=bench_version,
+            protocol_version=protocol,
+            season=await open_season(session, bench_version),
+            now=now,
+        ):
+            return None
+    # Live rotation leases this slot already holds: re-polling one resumes it,
+    # and a resumed lease must keep the seed its validator is already running.
+    resumable = set(
+        await session.scalars(
+            select(ValidatorTicket.agent_id).where(
+                ValidatorTicket.validator_hotkey == validator_hotkey,
+                ValidatorTicket.bench_version == bench_version,
+                ValidatorTicket.slot_id == slot_id,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+            )
+        )
+    )
+    ticket = await activate_next_score_retest(
         session,
         validator_hotkey=validator_hotkey,
         now=now,
@@ -2615,6 +2667,15 @@ async def _activate_dueling_rotation_retest(
         allow_parallel_contract_retests=True,
         ttl=ttl,
     )
+    if ticket is not None and settings is not None and ticket.agent_id not in resumable:
+        await assign_rotation_seed(
+            session,
+            ticket,
+            settings=settings,
+            protocol_version=protocol,
+            allow_season_seed=season_seeds,
+        )
+    return ticket
 
 
 async def _dueling_evidence(
@@ -4281,6 +4342,8 @@ async def request_job(
             ):
                 # A shadow dueling season rotation re-scores the frozen cohort
                 # on the new generator set before any other desired-era work.
+                # Settings pass too, so a stale season binding is always reset
+                # (season seeds themselves only apply at the active version).
                 ticket = await _activate_dueling_rotation_retest(
                     session,
                     validator_hotkey=payload.validator_hotkey,
@@ -4290,6 +4353,8 @@ async def request_job(
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
                     ttl=ticket_ttl,
+                    settings=await _continual_settings(request),
+                    season_seeds=False,
                 )
             # The activation boundary waits for every frozen member, not just
             # the first-five authority subset.  Give that bounded cohort first
@@ -4565,6 +4630,7 @@ async def request_job(
                         validator_running_benchmark=slot_running_benchmark,
                         slot_id=slot_id,
                         ttl=ticket_ttl,
+                        settings=await _continual_settings(request),
                     )
                 ticket = (
                     ticket
@@ -4716,7 +4782,27 @@ async def request_job(
                         f"deterministic V{ticket.bench_version} seed binding "
                         "is unavailable",
                     )
-            if seed_block_hash is not None and generator.run_size is not None:
+            # Phase B2: a season-seeded rotation re-score keeps its duel seed
+            # and the season anchor's binding; the validator re-derives it.
+            season_binding = await season_seed_binding(session, ticket)
+            if season_binding is not None:
+                if ticket.dataset_sha256 is None:
+                    if generator.run_size is None:
+                        # Never pair a season seed with a digest derived for
+                        # another seed: fail closed until generation returns.
+                        raise HTTPException(
+                            503,
+                            f"season seed binding for V{ticket.bench_version} "
+                            "is unavailable",
+                        )
+                    assert ticket.seed is not None
+                    ticket.dataset_sha256 = await lease_dataset_sha(
+                        request,
+                        generator,
+                        seed=ticket.seed,
+                        bench_version=ticket.bench_version,
+                    )
+            elif seed_block_hash is not None and generator.run_size is not None:
                 expected_seed = derive_validator_seed(
                     seed_block_hash, agent.agent_id, payload.validator_hotkey
                 )
@@ -4801,7 +4887,21 @@ async def request_job(
                     if ticket.seed is not None
                     else (dataset.seed if dataset is not None else agent.dataset_seed)
                 ),
-                seed_scope="validator" if ticket.seed is not None else "agent",
+                seed_scope=(
+                    "season"
+                    if season_binding is not None
+                    else "validator"
+                    if ticket.seed is not None
+                    else "agent"
+                ),
+                seed_anchor_agent_id=(
+                    season_binding.anchor_agent_id
+                    if season_binding is not None
+                    else None
+                ),
+                seed_index=(
+                    season_binding.seed_index if season_binding is not None else None
+                ),
                 dataset_sha256=(
                     ticket.dataset_sha256
                     if ticket.dataset_sha256 is not None
@@ -5494,6 +5594,7 @@ async def _top5_confirmation_seed_plan(
     wave_window: WaveWindow | None = None,
     duel_seed_count: int | None = None,
     duel_history: Mapping[UUID, Mapping[int, float]] | None = None,
+    pending_rotation: Collection[UUID] = frozenset(),
 ) -> tuple[int, ...]:
     """Every seed this member still owes: its backlog first, then wave growth.
 
@@ -5534,6 +5635,9 @@ async def _top5_confirmation_seed_plan(
     variance-sized from the emission set and hard-capped, so a completed target
     stops introducing datasets instead of growing forever.
     """
+    if duel_seed_count is not None and member_agent_id in pending_rotation:
+        # Phase B2: its season-seeded rotation re-scores cover the duel seeds.
+        return ()
     if duel_seed_count is not None:
         if await season_duel_entrant_excluded(
             session, bench_version=canonical_version, member_agent_id=member_agent_id
@@ -5710,6 +5814,7 @@ async def _unserved_catchup_members(
     now: datetime,
     duel_seed_count: int | None = None,
     duel_history: Mapping[UUID, Mapping[int, float]] | None = None,
+    pending_rotation: Collection[UUID] = frozenset(),
 ) -> frozenset[UUID]:
     """Emission members and bounded owner challengers with unserved backlog.
 
@@ -5722,7 +5827,11 @@ async def _unserved_catchup_members(
     champion), so a duel never waits on the reign-backoff round cadence.
     """
     if duel_seed_count is not None:
-        duel_members = tuple(dict.fromkeys((*wave_member_ids, *emission_member_ids)))
+        duel_members = tuple(
+            member_id
+            for member_id in dict.fromkeys((*wave_member_ids, *emission_member_ids))
+            if member_id not in pending_rotation
+        )
         # An entrant sitting out an extended season's duel owes no seed, so it
         # never takes catch-up route priority (see _top5_confirmation_seed_plan).
         excluded = await season_duel_excluded_entrants(
@@ -6716,6 +6825,21 @@ async def request_top5_confirmation_job(
             if duel_seed_count is not None
             else None
         )
+        # Phase B2: members whose season-seeded rotation is still pending owe
+        # the continual lane no duel seed this season.
+        pending_rotation = (
+            await agents_with_pending_rotation(
+                session,
+                agent_ids=tuple(dict.fromkeys((*member_ids, *wave_member_ids))),
+                season_id=await anchor_season_key(session, canonical_version),
+                bench_version=canonical_version,
+            )
+            if duel_seed_count is not None
+            and rotation_seeds_active(
+                continual_settings, bench_version=canonical_version
+            )
+            else frozenset()
+        )
         catchup_member_ids = await _unserved_catchup_members(
             session,
             champion_agent_id=anchor_champion_id,
@@ -6726,6 +6850,7 @@ async def request_top5_confirmation_job(
             now=now,
             duel_seed_count=duel_seed_count,
             duel_history=duel_history,
+            pending_rotation=pending_rotation,
         )
         candidate_member_ids: tuple[UUID, ...]
         if requested_member_id is not None:
@@ -6815,6 +6940,7 @@ async def request_top5_confirmation_job(
                 wave_window=wave_window,
                 duel_seed_count=duel_seed_count,
                 duel_history=duel_history,
+                pending_rotation=pending_rotation,
             )
             if not seeds:
                 legacy_decline = (
@@ -8280,6 +8406,33 @@ async def submit_score(
             gate_evidence=gate_evidence,
             dueling_season_id=dueling_season_id,
             dueling=dueling,
+        )
+        # Phase B2: a season-seeded rotation re-score is also that duel
+        # seed's confirmation record (no-op for every canonical ticket), with
+        # the run's audited cost evidence as a single-seed retest records it.
+        cost_versioned = supports_confirmation(ticket.bench_version)
+        mirrored_tokens = (
+            audited_v9_run_token_total(
+                report.details, base_evidence_sha256=report.base_evidence_sha256
+            )
+            if cost_versioned
+            else None
+        )
+        await mirror_season_seeded_score(
+            session,
+            ticket,
+            validator_hotkey=payload.validator_hotkey,
+            seed=report.seed,
+            composite=report.composite,
+            run_id=report.run_id,
+            signature=payload.signature,
+            dueling_season_id=dueling_season_id,
+            dueling=dueling,
+            created_at=audit_now,
+            v9_efficiency_token_total=mirrored_tokens,
+            v9_efficiency_cost_eligible=(
+                mirrored_tokens is not None if cost_versioned else None
+            ),
         )
         await record_ticket_route_quality(
             session,

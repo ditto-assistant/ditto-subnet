@@ -1085,9 +1085,9 @@ class TestFleetReadiness:
         response = await client.get(_URL, headers=_HEADERS)
         assert response.status_code == 200, response.text
         fleet = response.json()["fleet"]
-        # Every worker announces builtin 13 and the published ceiling is 13, so
-        # the board presents v13 as safe to schedule.
-        assert fleet["safe_to_schedule_up_to"] == 13
+        # Every worker announces builtin == SCREENING_POLICY_VERSION and the
+        # ceiling matches, so the board presents that version as safe to schedule.
+        assert fleet["safe_to_schedule_up_to"] == SCREENING_POLICY_VERSION
         assert (
             fleet["safe_to_schedule_up_to"]
             == SCREENING_ACTIVATION_CEILING_POLICY_VERSION

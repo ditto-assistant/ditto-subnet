@@ -60,6 +60,7 @@ import { CasesSection } from "./Cases";
 import { ScreeningDispute } from "./DisputeForm";
 import { ScreeningReview } from "./ScreeningReview";
 import { TelemetryLoader } from "./Telemetry";
+import { DuelingBreakdownPanel } from "./DuelingBreakdown";
 import { GateEvidencePanel } from "./GateEvidence";
 import { V9GateEvidence } from "./V9GateEvidence";
 import {
@@ -477,6 +478,7 @@ function AcceptedScoreView(props: {
         </Show>
         <Show when={score().v9_base}>{(evidence) => <V9GateEvidence evidence={evidence()} />}</Show>
         <GateEvidencePanel evidence={score().gate_evidence} />
+        <DuelingBreakdownPanel breakdown={score().dueling_breakdown} />
       </div>
       <CasesSection caseResults={score().case_results} glossary={props.glossary} />
     </div>

@@ -39,7 +39,7 @@ pub const MIN_SUPPORTED_BENCH_VERSION: u32 = 8;
 /// directly. Bench 16 (the dueling bench) adds generator-slice cases to the
 /// run; they reach the harness as ordinary memory `/seed` + `/run` calls. `ditto/tests/test_bench_version_pins.py` diffs this ceiling against
 /// the shared `MAX_SUPPORTED_BENCH_VERSION` every other layer derives from.
-pub const MAX_SUPPORTED_BENCH_VERSION: u32 = 16;
+pub const MAX_SUPPORTED_BENCH_VERSION: u32 = 17;
 
 pub fn supports_bench_version(version: u32) -> bool {
     (MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION).contains(&version)

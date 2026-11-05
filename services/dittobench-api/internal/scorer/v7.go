@@ -203,6 +203,49 @@ func MemoryOverCallFactorForVersion(perCase []protocol.CaseScore, benchVersion i
 	}
 }
 
+// MetamorphicReferenceGroups is the number of invariance twin groups a v15
+// full-profile run measures (13 on every seed). From
+// MetamorphicReferenceMinBenchVersion a run that measures fewer groups is
+// charged per split group against this reference instead of its own group
+// count. Bench 16's 125-case datagen half measures 5 groups, so under the
+// v15 rule one split group cost 0.40 x 1/5 = 8% instead of v15's
+// 0.40 x 1/13 = 3.1%: a granularity change, not a new contract. At or above
+// the reference the v15 rule applies unchanged (byte-identical).
+const (
+	MetamorphicReferenceGroups          = 13
+	MetamorphicReferenceMinBenchVersion = protocol.DuelingMinBenchVersion
+)
+
+// metamorphicConsistencyFactorForVersion is the composite-gate metamorphic
+// tier under the bench version's contract.
+func metamorphicConsistencyFactorForVersion(perCase []protocol.CaseScore, maxPenalty float64, benchVersion int) float64 {
+	if benchVersion >= MetamorphicReferenceMinBenchVersion {
+		consistent, total := metamorphicGroupCounts(perCase)
+		if total > 0 && total < MetamorphicReferenceGroups {
+			split := float64(total-consistent) / float64(MetamorphicReferenceGroups)
+			return round6(1.0 - maxPenalty*split)
+		}
+	}
+	return metamorphicConsistencyFactorWith(perCase, maxPenalty)
+}
+
+// MetamorphicTierForVersion publishes the applied metamorphic tier for
+// details.metamorphic. nil below MetamorphicReferenceMinBenchVersion and when
+// no twin group ran.
+func MetamorphicTierForVersion(perCase []protocol.CaseScore, benchVersion int) *protocol.MetamorphicTier {
+	if benchVersion < MetamorphicReferenceMinBenchVersion {
+		return nil
+	}
+	consistent, total := metamorphicGroupCounts(perCase)
+	if total == 0 {
+		return nil
+	}
+	return &protocol.MetamorphicTier{
+		Groups: total, SplitGroups: total - consistent, ReferenceGroups: MetamorphicReferenceGroups,
+		Factor: metamorphicConsistencyFactorForVersion(perCase, v7MetamorphicMaxPenalty, benchVersion),
+	}
+}
+
 // metamorphicConsistencyFactorWith is MetamorphicConsistencyFactor with an
 // explicit max penalty.
 func metamorphicConsistencyFactorWith(perCase []protocol.CaseScore, maxPenalty float64) float64 {
@@ -269,7 +312,7 @@ func transformAuditFactorWith(perCase []protocol.CaseScore, enforced bool, maxPe
 func compositeGateV7(perCase []protocol.CaseScore, benchVersion int) float64 {
 	memoryOverCall, _ := MemoryOverCallFactorForVersion(perCase, benchVersion)
 	bounded := toolEfficiencyFactorWith(perCase, v7EffParams) *
-		metamorphicConsistencyFactorWith(perCase, v7MetamorphicMaxPenalty) *
+		metamorphicConsistencyFactorForVersion(perCase, v7MetamorphicMaxPenalty, benchVersion) *
 		memoryOverCall
 	if bounded < v7BoundedGateFloor {
 		bounded = v7BoundedGateFloor

@@ -10144,7 +10144,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Case Set Sha256 */
             case_set_sha256: string;
             /** Contract Version */
@@ -21333,7 +21333,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -21378,7 +21378,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Checksum */
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
@@ -21855,6 +21855,11 @@ export interface components {
              * @enum {string}
              */
             rollout_standdown: "off" | "capable_validators" | "all";
+            /**
+             * Season Duel Rotation Seeds
+             * @default false
+             */
+            season_duel_rotation_seeds: boolean;
             /**
              * Season Duel Seeds
              * @default 3
@@ -28839,7 +28844,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Case Set Digest */
             case_set_digest: string;
             /** Dataset Revision */
@@ -32719,7 +32724,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /**
              * Bundle Id
              * Format: uuid
@@ -33000,6 +33005,146 @@ export interface components {
             shared_seed_count?: number | null;
             /** Statistical Lead */
             statistical_lead?: number | null;
+        };
+        /**
+         * PublicDuelingBreakdown
+         * @description Bench v16+ arithmetic from the datagen half and slice to the composite.
+         *
+         *     Projected by Platform from the stored, ingestion-validated
+         *     ``scores.dueling`` aggregates and the ``priced_cost`` gate evidence. It is
+         *     a read-side explanation only: the signed composite is authoritative and
+         *     nothing here feeds ranking, weights or ingestion.
+         */
+        PublicDuelingBreakdown: {
+            /**
+             * Column Weight
+             * @description ``w``.
+             */
+            column_weight: number;
+            /** Columns */
+            columns?: components["schemas"]["PublicDuelingColumn"][];
+            /**
+             * Composite
+             * @description ``datagen_gate x pre_gate_composite``, recomputed from the aggregates; it reproduces the signed composite.
+             */
+            composite: number;
+            /** Composite Stderr */
+            composite_stderr?: number | null;
+            /**
+             * Counted Columns
+             * @description ``|U|``: columns not self-masked.
+             */
+            counted_columns: number;
+            /**
+             * Datagen Gate
+             * @description The run's whole composite gate (quality gates times the applied priced-cost factor).
+             */
+            datagen_gate: number;
+            /**
+             * Datagen Raw
+             * @description The datagen half's raw mean.
+             */
+            datagen_raw: number;
+            /**
+             * Datagen Share
+             * @description ``1 - w x |U|``.
+             */
+            datagen_share: number;
+            /**
+             * Formula
+             * @default gate x ((1 - w x |U|) x datagen + w x sum col)
+             */
+            formula: string;
+            /**
+             * Generator Sum
+             * @description ``w x sum col`` over ``U``.
+             */
+            generator_sum: number;
+            /**
+             * Other Gate Factor
+             * @description ``datagen_gate / priced_cost_factor``: every other gate combined. Null when the run recorded no priced cost or its factor is 0.
+             */
+            other_gate_factor?: number | null;
+            /**
+             * Pre Gate Composite
+             * @description ``datagen_share x datagen + generator_sum``.
+             */
+            pre_gate_composite: number;
+            /**
+             * Priced Cost Applied Factor Bps
+             * @description The priced-cost factor inside ``datagen_gate`` (10000 under shadow or without complete accounting). Null when the run recorded no priced cost.
+             */
+            priced_cost_applied_factor_bps?: number | null;
+            /**
+             * Priced Cost Factor
+             * @description ``priced_cost_applied_factor_bps / 10000``.
+             */
+            priced_cost_factor?: number | null;
+            /**
+             * Priced Cost Factor Bps
+             * @description The factor the published curve gives, applied or not.
+             */
+            priced_cost_factor_bps?: number | null;
+            /** Priced Cost Posture */
+            priced_cost_posture?: string | null;
+            /** Priced Cost Result */
+            priced_cost_result?: string | null;
+            /** Priced Cost Window */
+            priced_cost_window?: string | null;
+            /** Season Id */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+        };
+        /**
+         * PublicDuelingColumn
+         * @description One generator-slice column of a bench v16+ run, as aggregates only.
+         *
+         *     Mirrors the Backroom canary read: no owner key, no generator submission
+         *     id, no case text. ``self_masked`` says the column's generator belongs to
+         *     the scored agent's own owner, so the composite dropped it (its weight
+         *     returned to the datagen half).
+         */
+        PublicDuelingColumn: {
+            /** Column Id */
+            column_id: string;
+            /**
+             * Contribution
+             * @description ``w x mean`` when counted, 0 when self-masked.
+             */
+            contribution: number;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
+            /**
+             * Mean
+             * @description ``sum / n`` (0 with no cases).
+             */
+            mean: number;
+            /**
+             * N
+             * @description Executed cases in this column.
+             */
+            n: number;
+            /**
+             * Public Default
+             * @description The column's pinned generator is the public default.
+             */
+            public_default: boolean;
+            /**
+             * Self Masked
+             * @description Owned by the scored agent's own owner, so excluded from ``U`` (an agent never scores on its owner's generator).
+             */
+            self_masked: boolean;
+            /**
+             * Substituted
+             * @description The pinned generator failed and the public default generator filled this column.
+             */
+            substituted: boolean;
+            /**
+             * Sum
+             * @description Sum of the column's case scores.
+             */
+            sum: number;
         };
         /**
          * PublicDuelingPin
@@ -34908,6 +35053,8 @@ export interface components {
              * @description Pinned hash of the exact generated dataset, when recorded.
              */
             dataset_sha256?: string | null;
+            /** @description Bench v16+ dueling arithmetic: datagen half, generator-slice columns (self-masked columns flagged) and the priced-cost factor inside the composite gate. Aggregates only; omitted below v16. */
+            dueling_breakdown?: components["schemas"]["PublicDuelingBreakdown"] | null;
             /** @description Bench v13+ run-level gate verdict (aggregates only); see ``PublicValidatorScore.gate_evidence``. */
             gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             model_use?: components["schemas"]["PublicModelUse"] | null;
@@ -36261,7 +36408,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**
@@ -36646,6 +36793,8 @@ export interface components {
              * @description Weakest-link pass rate across the conversational-sanity slices, the input to the conversational-sanity gate factor. Null when no conversational case ran.
              */
             conversational_sanity?: number | null;
+            /** @description Bench v16+ dueling arithmetic: datagen half, generator-slice columns (self-masked columns flagged) and the priced-cost factor inside the composite gate. Aggregates only; omitted below v16. */
+            dueling_breakdown?: components["schemas"]["PublicDuelingBreakdown"] | null;
             /** @description Bench v13+ gate verdict for this run: posture, composite with and without the gates, the gate-induced loss and per-gate counts. Aggregates only -- the per-case notes are owner-only (``GET /me/agents/{agent_id}/gate-notes``). Null below v13 and for a scorer that emitted no gate telemetry. */
             gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             /**
@@ -38745,7 +38894,7 @@ export interface components {
          * @example {
          *       "detail": "",
          *       "passed": true,
-         *       "policy_version": 13,
+         *       "policy_version": 14,
          *       "screener_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
          *       "signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
          *     }
@@ -41233,7 +41382,7 @@ export interface components {
             notes_considered: number;
             /**
              * Policy Version
-             * @default 13
+             * @default 14
              */
             policy_version: number;
             /** Prompt Revision */
@@ -44582,7 +44731,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -44675,7 +44824,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -44770,7 +44919,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /**
              * Bundle Id
              * Format: uuid
@@ -45083,7 +45232,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             claim_provenance?: components["schemas"]["V13ClaimProvenanceGate"] | null;
             inference_latency?: components["schemas"]["V12InferenceLatencyGate"] | null;
             model_dependence?: components["schemas"]["V12ModelDependenceGate"] | null;
