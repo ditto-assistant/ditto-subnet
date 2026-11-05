@@ -710,9 +710,10 @@ def _system_prompt(policy_version: int) -> str:
             f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
             f"{_POLICY_V12_PROMPT_TAIL}"
         )
-    if policy_version == 13:
+    if policy_version in {13, 14}:
         # W3 permits summarized context in these specific legacy clauses;
         # I4's advisory/authority and finalized-field boundaries still apply.
+        # v14 adds zero-call CLEAR to the oracle module; court doctrine unchanged.
         return (
             (
                 f"{_POLICY_V13_BASE_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
