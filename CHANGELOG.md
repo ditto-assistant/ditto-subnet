@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.457.3 (2026-11-05)
+
+### Bug Fixes
+
+- **security**: Patch Seroval across subnet web apps [DITTO-1747]
+  ([#3324](https://github.com/ditto-assistant/ditto-subnet/pull/3324),
+  [`39ab024`](https://github.com/ditto-assistant/ditto-subnet/commit/39ab024459c3ad8c5a79721a3bd802b0a77a3b21))
+
+
 ## v0.457.2 (2026-11-05)
 
 ### Bug Fixes
