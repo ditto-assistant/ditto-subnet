@@ -57,6 +57,15 @@ function request(name: string) {
 }
 
 describe('MCP startup loading', () => {
+  it('rejects oversized requests from an ordinary read grant before dispatch', async () => {
+    const response = await handler().fetch(new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: 'x'.repeat(1024 * 1024 + 1),
+    }))
+    expect(response.status).toBe(413)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+  })
+
   it('keeps the registry and transport unloaded for rejected sessions and scopes', async () => {
     expect(loaded.registry).not.toHaveBeenCalled()
     expect(loaded.transport).not.toHaveBeenCalled()

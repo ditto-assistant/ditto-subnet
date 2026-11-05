@@ -1100,6 +1100,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     { name: 'SN118 Backroom', version: '1.0.0' },
     {
       capabilities: { tools: {} },
+      maxToolInputElements: 10_000,
       instructions:
         'Backroom reads and controls SN118 production on ditto-platform. Source requires backroom:artifact:read; mutations require backroom:write. List pages are losslessly compacted: fields shared by every returned row move to `<list>_shared`; reconstruct each row as `{ ...shared, ...row }`. Pagination omits only rows outside the requested page. Settings history is newest-first and opt-in with historyLimit. Call get_backroom_tool_help for detailed operational semantics before an unfamiliar or destructive action.',
     },
