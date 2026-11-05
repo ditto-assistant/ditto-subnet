@@ -24,6 +24,7 @@ from ditto.db.models import (
     ScreenerReplayProcessKey,
     ScreenerReplayProcessNonce,
 )
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 from ditto_screening_protocol.v13_replay_process_identity import V13ReplayProcessProof
 
 NODE = "subnet-screener-2"
@@ -159,12 +160,12 @@ async def test_readiness_requires_exact_fresh_signed_worker_and_release(
             instance_id=INSTANCE,
             software_version="0.21.2",
             protocol_version=7,
-            policy_version=13,
+            policy_version=SCREENING_POLICY_VERSION,
             state="polling",
             system_metrics={
                 "replay_process": {"key_sha256": key_sha},
                 "release": {
-                    "builtin_policy_version": 13,
+                    "builtin_policy_version": SCREENING_POLICY_VERSION,
                     "revision": "a" * 40,
                     "version": "0.301.0",
                     "activated_at": int(now.timestamp()) - 60,
@@ -191,7 +192,7 @@ async def test_readiness_requires_exact_fresh_signed_worker_and_release(
             instance_id=f"{NODE}-worker-2",
             software_version="0.21.2",
             protocol_version=7,
-            policy_version=13,
+            policy_version=SCREENING_POLICY_VERSION,
             state="polling",
             system_metrics={},
             reported_at=now,
@@ -243,12 +244,12 @@ async def test_signed_claim_requires_exact_heartbeat_and_once_only_nonce(
             instance_id=INSTANCE,
             software_version="0.21.2",
             protocol_version=7,
-            policy_version=13,
+            policy_version=SCREENING_POLICY_VERSION,
             state="polling",
             system_metrics={
                 "replay_process": {"key_sha256": key_sha},
                 "release": {
-                    "builtin_policy_version": 13,
+                    "builtin_policy_version": SCREENING_POLICY_VERSION,
                     "revision": "a" * 40,
                     "version": "0.301.0",
                     "activated_at": int(now.timestamp()) - 60,
@@ -303,12 +304,12 @@ async def test_signed_claim_rejects_healthy_sibling_heartbeat(session, monkeypat
             instance_id=f"{NODE}-worker-2",
             software_version="0.21.2",
             protocol_version=7,
-            policy_version=13,
+            policy_version=SCREENING_POLICY_VERSION,
             state="polling",
             system_metrics={
                 "replay_process": {"key_sha256": key_sha},
                 "release": {
-                    "builtin_policy_version": 13,
+                    "builtin_policy_version": SCREENING_POLICY_VERSION,
                     "revision": "a" * 40,
                     "version": "0.301.0",
                     "activated_at": int(now.timestamp()) - 60,

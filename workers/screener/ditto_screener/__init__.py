@@ -12,4 +12,4 @@ the platform only over the ``/screener/*`` API + signs with a chain hotkey), no
 DB, one process per hotkey. The build gate itself lives in :mod:`ditto_screener.gate`.
 """
 
-__version__ = "0.21.2"
+__version__ = "0.22.0"
