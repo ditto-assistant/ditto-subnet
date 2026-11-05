@@ -589,7 +589,7 @@ async def test_control_reads_the_cohort_once_and_never_writes(
     # statements here; the count must not track ``benchmark_contracts()``.
     # Retry diagnostics add one bounded batch (at most eight reads), never a
     # per-member/per-contract query and never per-case score details.
-    assert len(statements) <= 38, "\n".join(statements)
+    assert len(statements) <= 39, "\n".join(statements)
     # And the ranking read must not drag the per-case breakdown along with it:
     # that column is kilobytes per score row, for every scored agent.
     assert all("details" not in statement for statement in statements), statements

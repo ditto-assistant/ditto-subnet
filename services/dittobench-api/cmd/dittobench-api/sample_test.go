@@ -223,7 +223,7 @@ func TestPracticeDatasetAndCatalogRejectUnsupportedVersions(t *testing.T) {
 	s := &server{allowPrivate: true}
 	for _, path := range []string{
 		"/v1/dataset?bench_version=7",
-		"/v1/catalog?bench_version=17",
+		"/v1/catalog?bench_version=18",
 		"/v1/dataset?bench_version=not-a-number",
 	} {
 		rr := httptest.NewRecorder()
