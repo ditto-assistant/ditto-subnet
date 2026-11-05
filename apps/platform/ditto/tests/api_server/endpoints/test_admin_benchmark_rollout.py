@@ -475,7 +475,7 @@ async def test_control_discovery_is_authenticated_read_only_and_dynamic(
     # Nothing is offered. A target must be both above the active version and at
     # or above the floor. V8 through v11 are discoverable but remain inert until
     # an authenticated operator starts one.
-    assert body["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14, 15, 16]
+    assert body["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     # Still derived from the shipped registry, which is what "dynamic" means
     # here: the floor filters what may be STARTED, not what exists.
     assert [contract["version"] for contract in body["contracts"]] == [
@@ -494,6 +494,7 @@ async def test_control_discovery_is_authenticated_read_only_and_dynamic(
         14,
         15,
         16,
+        17,
     ]
     assert all(
         contract["capable_validator_count"] == 0 for contract in body["contracts"]
@@ -527,15 +528,15 @@ async def test_control_offers_newer_contracts_without_moving_active_v8_authority
     assert body["active_version"] == 8
     assert body["desired_version"] == 8
     assert body["status"] == "activated"
-    assert body["available_target_versions"] == [9, 10, 11, 12, 13, 14, 15, 16]
+    assert body["available_target_versions"] == [9, 10, 11, 12, 13, 14, 15, 16, 17]
     assert body["contracts"][-1] == {
-        "version": 16,
+        "version": 17,
         "minimum_screening_policy_version": 9,
         "requires_screened_image": True,
         "capable_validator_count": 0,
         "start_ready": False,
         "start_blockers": [
-            "benchmark v16 rollout requires the decision lane enabled with a "
+            "benchmark v17 rollout requires the decision lane enabled with a "
             "pinned model (set_inference_concurrency_settings decision_lane)"
         ],
     }
@@ -588,7 +589,7 @@ async def test_control_reads_the_cohort_once_and_never_writes(
     # statements here; the count must not track ``benchmark_contracts()``.
     # Retry diagnostics add one bounded batch (at most eight reads), never a
     # per-member/per-contract query and never per-case score details.
-    assert len(statements) <= 38, "\n".join(statements)
+    assert len(statements) <= 39, "\n".join(statements)
     # And the ranking read must not drag the per-case breakdown along with it:
     # that column is kilobytes per score row, for every scored agent.
     assert all("details" not in statement for statement in statements), statements
@@ -642,7 +643,7 @@ async def test_v15_start_blocker_clears_once_the_decision_lane_pins_a_model(
     response = await client.get("/api/v1/admin/benchmark-rollout", headers=_HEADERS)
 
     assert response.status_code == 200, response.text
-    contract = response.json()["contracts"][-2]
+    contract = response.json()["contracts"][-3]
     assert contract["version"] == 15
     assert contract["start_blockers"] == [
         "benchmark v15 rollout requires at least 1 fresh, identity-matched "
@@ -693,7 +694,7 @@ async def test_v16_start_blocker_clears_once_dueling_is_enabled(
     async def _v16_blockers() -> list[str]:
         response = await client.get("/api/v1/admin/benchmark-rollout", headers=_HEADERS)
         assert response.status_code == 200, response.text
-        contract = response.json()["contracts"][-1]
+        contract = response.json()["contracts"][-2]
         assert contract["version"] == 16
         return contract["start_blockers"]
 
@@ -839,6 +840,7 @@ async def test_control_degrades_the_slow_section_instead_of_hanging(
         14,
         15,
         16,
+        17,
     ]
     # Fail closed on what could not be proven: no candidate is offered for
     # activation, and the omission is named rather than mistaken for "none".
@@ -903,12 +905,12 @@ async def test_start_requires_full_guard_payload_and_exact_confirmation(
     assert "START BENCHMARK V4" in wrong.json()["message"]
 
     unsupported = await client.post(
-        "/api/v1/admin/benchmark-rollout/17",
+        "/api/v1/admin/benchmark-rollout/18",
         headers=_HEADERS,
         json={
             "reason": "attempt an unshipped contract",
             "actor": "backroom:test",
-            "confirmation": "START BENCHMARK V17",
+            "confirmation": "START BENCHMARK V18",
             "expected_active_version": 2,
         },
     )

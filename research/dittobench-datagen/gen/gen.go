@@ -177,10 +177,12 @@ func ProfileForVersion(runSize string, benchVersion int) (Profile, bool) {
 		// v15 scales the tool surface and opens the decision lane, not the
 		// run size.
 		profiles = profilesV13
-	case protocol.BenchVersionV16:
+	case protocol.BenchVersionV16, protocol.BenchVersionV17:
 		// v16 is the dueling contract: this module generates only the
 		// datagen half (gen/v16_envelope.go); Platform delivers the
 		// generator slice columns.
+		// v17 inherits v16's dataset profile unchanged; its own contract
+		// change is the priced-cost-v2 scoring curve in the scorer.
 		profiles = profilesV16
 	default:
 		return Profile{}, false

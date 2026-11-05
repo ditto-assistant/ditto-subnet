@@ -1173,7 +1173,7 @@
         "decision_output_tokens": 0
       },
       "summary": {
-        "contract_id": "priced-cost-v1",
+        "contract_id": "priced-cost-v2",
         "posture": "enforce",
         "applied": true,
         "result": "priced",
@@ -1204,8 +1204,8 @@
         "cost_nano_usd": 1175000000,
         "normalization_cases": 350,
         "normalized_cost_nano_usd": 1175000000,
-        "reference_nano_usd": 1000000000,
-        "ratio_bps": 11750,
+        "reference_nano_usd": 500000000,
+        "ratio_bps": 23500,
         "curve": [
           {
             "ratio_bps": 10000,
@@ -1213,16 +1213,16 @@
           },
           {
             "ratio_bps": 15000,
-            "factor_bps": 8000
+            "factor_bps": 6500
           },
           {
             "ratio_bps": 20000,
-            "factor_bps": 6000
+            "factor_bps": 3000
           }
         ],
-        "floor_bps": 6000,
-        "factor_bps": 9300,
-        "applied_factor_bps": 9300
+        "floor_bps": 3000,
+        "factor_bps": 3000,
+        "applied_factor_bps": 3000
       }
     }
   ],

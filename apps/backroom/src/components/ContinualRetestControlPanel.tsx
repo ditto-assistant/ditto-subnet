@@ -450,6 +450,9 @@ export function ContinualRetestControlPanel({
             season_duel_seeds: state.field_support.season_duel_seeds
               ? effective.settings.season_duel_seeds
               : DEFAULT_SEASON_DUEL_SEEDS,
+            season_duel_rotation_seeds: state.field_support.season_duel_rotation_seeds
+              ? effective.settings.season_duel_rotation_seeds
+              : false,
           },
           reason,
           confirmation,
