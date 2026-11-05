@@ -28,10 +28,10 @@ STRICT_TWO_OUTCOME_POLICY_VERSION = 13
 # builtin policy 13 on release 0.264.0, and fleet adoption was verified on
 # 2026-09-14; the ceiling then moved to 13 so the operator can schedule the
 # v13 activation window.
-# V14 ships the cost-first (zero-call permitted) oracle behaviour; ceiling stays
-# at 13 until both screeners report builtin policy 14 and fleet adoption is
-# verified — then the operator moves the ceiling to 14 to schedule activation.
-SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 13
+# V14 ships the cost-first (zero-call permitted) oracle behaviour; ceiling moved
+# to 14 on 2026-11-05 after all 12 fleet workers reported builtin policy 14 on
+# release 0.456.0 (81176e2e) and fleet adoption was verified — PR #3391.
+SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 14
 # The oldest policy version a mixed-fleet platform may require during a
 # scheduled activation window. v10 stays the floor while the v13 activation is
 # scheduled but not yet governing; raise it only after every older-policy
