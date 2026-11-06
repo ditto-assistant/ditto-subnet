@@ -7142,6 +7142,248 @@ class TestQuarantineAdmin:
             assert agent.screening_reason == detailed_reason
             assert agent.screening_reason_code == expected_code
 
+    @staticmethod
+    async def _seed_quarantined_scored_rescreen(
+        maker: async_sessionmaker[AsyncSession],
+        *,
+        active_scores: int,
+        released: bool,
+    ) -> tuple[UUID, UUID]:
+        """A scored agent whose policy rescreen was quarantined.
+
+        ``released`` reproduces the pre-fix outcome: an operator release that
+        left the agent in ``evaluating`` beside a complete active-era quorum.
+        """
+        agent_id = await _seed_agent(
+            maker,
+            status=AgentStatus.EVALUATING if released else AgentStatus.QUARANTINED,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        now = datetime.now(UTC)
+        attempt_id = uuid4()
+        quarantine_id = uuid4()
+        async with maker() as session, session.begin():
+            bench_version = await active_bench_version(session)
+            for index in range(active_scores):
+                session.add(
+                    Score(
+                        agent_id=agent_id,
+                        bench_version=bench_version,
+                        validator_hotkey=f"5ScoredRescreenValidator{index}",
+                        run_id=str(uuid4()),
+                        signature=None,
+                        seed=1,
+                        composite=0.6,
+                        tool_mean=0.6,
+                        memory_mean=0.6,
+                        median_ms=100,
+                        n=1,
+                        details=None,
+                        generated_at=now - timedelta(days=1),
+                    )
+                )
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=_SHA256,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="quarantined",
+                    started_at=now - timedelta(minutes=30),
+                    deadline=now + timedelta(minutes=10),
+                    finished_at=now - timedelta(minutes=10),
+                    public_reason="Held for source review",
+                    reason_code="agentic-source-review-tripwire",
+                )
+            )
+            await session.flush()
+            session.add(
+                ScreeningQuarantine(
+                    quarantine_id=quarantine_id,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    manifest_digest="56" * 32,
+                    reason_code="agentic-source-review-tripwire",
+                    status="resolved" if released else "active",
+                    resolution="release" if released else None,
+                    resolved_at=now - timedelta(minutes=5) if released else None,
+                    resolved_by="backroom:first-reviewer" if released else None,
+                    resolution_reason="Released" if released else None,
+                )
+            )
+            await session.flush()
+            # The screener's hold snapshots the status it displaced.
+            session.add(
+                ScreeningReviewEvent(
+                    event_id=uuid4(),
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    quarantine_id=quarantine_id,
+                    event_kind="automated",
+                    artifact_sha256=_SHA256,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    actor=f"screener:{_SCREENER_HOTKEY}",
+                    reviewer_model=None,
+                    outcome="quarantine",
+                    effective_decision="hold",
+                    reason_code="agentic-source-review-tripwire",
+                    reason="Held for source review",
+                    prior_agent_status=AgentStatus.SCORED,
+                    next_agent_status=AgentStatus.QUARANTINED,
+                    evidence={},
+                    created_at=now - timedelta(minutes=10),
+                )
+            )
+        return agent_id, quarantine_id
+
+    @staticmethod
+    def _quarantine_admin(app: FastAPI) -> dict[str, str]:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        return {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+            "X-Admin-Actor": "backroom:test-user",
+        }
+
+    async def test_release_of_a_quarantined_scored_rescreen_restores_scored(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A released policy rescreen returns to the ledger, not the queue.
+
+        The agent already holds a complete active-era quorum, so ``evaluating``
+        would strand it: no lane leases a full-quorum agent in that status.
+        """
+        headers = self._quarantine_admin(app)
+        agent_id, quarantine_id = await self._seed_quarantined_scored_rescreen(
+            session_maker, active_scores=3, released=False
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        released = await client.post(
+            f"/api/v1/admin/screening-quarantines/{quarantine_id}/resolve",
+            headers=headers,
+            json={"resolution": "release", "reason": "False positive on rescreen"},
+        )
+
+        assert released.status_code == 200
+        assert released.json()["agent_status"] == AgentStatus.SCORED
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.SCORED
+            manual = await session.scalar(
+                select(ScreeningReviewEvent).where(
+                    ScreeningReviewEvent.agent_id == agent_id,
+                    ScreeningReviewEvent.event_kind == "manual",
+                )
+            )
+            assert manual is not None
+            assert manual.prior_agent_status == AgentStatus.QUARANTINED
+            assert manual.next_agent_status == AgentStatus.SCORED
+
+    async def test_release_without_an_active_quorum_still_requeues(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Below quorum the release must reach validators, so it requeues."""
+        headers = self._quarantine_admin(app)
+        _agent_id, quarantine_id = await self._seed_quarantined_scored_rescreen(
+            session_maker, active_scores=2, released=False
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        released = await client.post(
+            f"/api/v1/admin/screening-quarantines/{quarantine_id}/resolve",
+            headers=headers,
+            json={"resolution": "release", "reason": "False positive on rescreen"},
+        )
+
+        assert released.status_code == 200
+        assert released.json()["agent_status"] == AgentStatus.EVALUATING
+
+    async def test_stranded_release_can_be_corrected_once(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Repair for a release that already stranded a scored rescreen.
+
+        Re-applying ``release`` restores the displaced status with a new audited
+        resolution; once restored, the fence refuses a repeat.
+        """
+        headers = self._quarantine_admin(app)
+        agent_id, quarantine_id = await self._seed_quarantined_scored_rescreen(
+            session_maker, active_scores=3, released=True
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        corrected = await client.post(
+            f"/api/v1/admin/screening-quarantines/{quarantine_id}/resolve",
+            headers=headers,
+            json={
+                "resolution": "release",
+                "reason": "Restore scored status stranded by the earlier release",
+            },
+        )
+        repeated = await client.post(
+            f"/api/v1/admin/screening-quarantines/{quarantine_id}/resolve",
+            headers=headers,
+            json={"resolution": "release", "reason": "Release it again"},
+        )
+
+        assert corrected.status_code == 200
+        assert corrected.json()["agent_status"] == AgentStatus.SCORED
+        assert repeated.status_code == 409
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.SCORED
+            manual = await session.scalar(
+                select(ScreeningReviewEvent).where(
+                    ScreeningReviewEvent.agent_id == agent_id,
+                    ScreeningReviewEvent.event_kind == "manual",
+                )
+            )
+            assert manual is not None
+            assert manual.prior_agent_status == AgentStatus.EVALUATING
+            assert manual.next_agent_status == AgentStatus.SCORED
+
+    async def test_release_correction_refuses_a_below_quorum_agent(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """An ``evaluating`` agent still short of quorum is not stranded."""
+        headers = self._quarantine_admin(app)
+        _agent_id, quarantine_id = await self._seed_quarantined_scored_rescreen(
+            session_maker, active_scores=2, released=True
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        refused = await client.post(
+            f"/api/v1/admin/screening-quarantines/{quarantine_id}/resolve",
+            headers=headers,
+            json={"resolution": "release", "reason": "Release it again"},
+        )
+
+        assert refused.status_code == 409
+
     async def test_rejected_quarantine_can_be_corrected_to_release_with_history(
         self,
         app: FastAPI,
