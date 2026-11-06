@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.457.7 (2026-11-06)
+
+### Bug Fixes
+
+- Update OpenClaw adapter dependency
+  ([#3395](https://github.com/ditto-assistant/ditto-subnet/pull/3395),
+  [`d7034a4`](https://github.com/ditto-assistant/ditto-subnet/commit/d7034a41b260e692c75bc1a18ad24d1315542a26))
+
+
 ## v0.457.6 (2026-11-06)
 
 ### Bug Fixes
