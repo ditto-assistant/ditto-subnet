@@ -1,6 +1,6 @@
 import '@tanstack/react-start/server-only'
 
-import { getRequest, getRequestHeader, getResponseHeaders } from '@tanstack/react-start/server'
+import { appendResponseHeader, getRequest, getRequestHeader } from '@tanstack/react-start/server'
 import type { BackroomSession, BackroomUser, OAuthAttempt } from '../lib/auth.types'
 import { accessLevelForEmail, SESSION_MAX_AGE_SECONDS } from '../lib/auth.policy'
 import { sealToken, unsealToken } from './crypto.server'
@@ -41,7 +41,7 @@ function readCookie(...names: Array<string>) {
 function writeCookie(name: string, value: string, maxAge: number) {
   const attributes = [`${name}=${value}`, 'HttpOnly', 'SameSite=Lax', 'Path=/', `Max-Age=${maxAge}`]
   if (isSecureRequest()) attributes.push('Secure')
-  getResponseHeaders().append('Set-Cookie', attributes.join('; '))
+  appendResponseHeader('Set-Cookie', attributes.join('; '))
 }
 
 function validSession(value: BackroomSession | null): value is BackroomSession {

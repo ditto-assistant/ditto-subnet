@@ -52,12 +52,12 @@ function CopyReviewPending() {
   )
 }
 
-function CopyReviewError({ error }: { error: Error }) {
+function CopyReviewError({ error }: { error: unknown }) {
   return (
     <div className="mx-auto max-w-2xl rounded-xl border border-[var(--red)]/25 bg-[var(--red-dim)] p-6">
       <AlertTriangle className="h-6 w-6 text-[var(--red)]" />
       <h2 className="mt-4 text-lg font-semibold">Operator reviews are unavailable</h2>
-      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error.message}</p>
+      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error instanceof Error ? error.message : 'An unexpected error occurred'}</p>
       <p className="mt-3 text-xs text-[var(--muted)]">
         The copy-review endpoints require a platform deploy that includes the
         admin copy-review API and the shared admin token.

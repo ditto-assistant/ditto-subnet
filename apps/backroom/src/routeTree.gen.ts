@@ -9,140 +9,50 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as OauthConsentRouteImport } from './routes/oauth.consent'
-import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
-import { Route as AuthenticatedValidatorSlotsRouteImport } from './routes/_authenticated/validator-slots'
-import { Route as AuthenticatedSubmissionSettingsRouteImport } from './routes/_authenticated/submission-settings'
-import { Route as AuthenticatedScreeningQuarantineRouteImport } from './routes/_authenticated/screening-quarantine'
-import { Route as AuthenticatedScreenerReviewSettingsRouteImport } from './routes/_authenticated/screener-review-settings'
-import { Route as AuthenticatedScreenerCapacityRouteImport } from './routes/_authenticated/screener-capacity'
-import { Route as AuthenticatedScoreOutliersRouteImport } from './routes/_authenticated/score-outliers'
-import { Route as AuthenticatedMinerFeesRouteImport } from './routes/_authenticated/miner-fees'
-import { Route as AuthenticatedInferenceRoutingRouteImport } from './routes/_authenticated/inference-routing'
-import { Route as AuthenticatedInferenceConcurrencyRouteImport } from './routes/_authenticated/inference-concurrency'
-import { Route as AuthenticatedGammaRouteImport } from './routes/_authenticated/gamma'
-import { Route as AuthenticatedCopyReviewRouteImport } from './routes/_authenticated/copy-review'
-import { Route as AuthenticatedContinualRetestsRouteImport } from './routes/_authenticated/continual-retests'
-import { Route as AuthenticatedConfirmationBundlesRouteImport } from './routes/_authenticated/confirmation-bundles'
-import { Route as AuthenticatedBurnRouteImport } from './routes/_authenticated/burn'
-import { Route as AuthenticatedBenchmarkRolloutRouteImport } from './routes/_authenticated/benchmark-rollout'
-import { Route as AuthenticatedArtifactReleaseRouteImport } from './routes/_authenticated/artifact-release'
+import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedAgentAccessRouteImport } from './routes/_authenticated/agent-access'
+import { Route as AuthenticatedArtifactReleaseRouteImport } from './routes/_authenticated/artifact-release'
+import { Route as AuthenticatedBenchmarkRolloutRouteImport } from './routes/_authenticated/benchmark-rollout'
+import { Route as AuthenticatedBurnRouteImport } from './routes/_authenticated/burn'
+import { Route as AuthenticatedConfirmationBundlesRouteImport } from './routes/_authenticated/confirmation-bundles'
+import { Route as AuthenticatedContinualRetestsRouteImport } from './routes/_authenticated/continual-retests'
+import { Route as AuthenticatedCopyReviewRouteImport } from './routes/_authenticated/copy-review'
+import { Route as AuthenticatedGammaRouteImport } from './routes/_authenticated/gamma'
+import { Route as AuthenticatedInferenceConcurrencyRouteImport } from './routes/_authenticated/inference-concurrency'
+import { Route as AuthenticatedInferenceRoutingRouteImport } from './routes/_authenticated/inference-routing'
+import { Route as AuthenticatedMinerFeesRouteImport } from './routes/_authenticated/miner-fees'
+import { Route as AuthenticatedScoreOutliersRouteImport } from './routes/_authenticated/score-outliers'
+import { Route as AuthenticatedScreenerCapacityRouteImport } from './routes/_authenticated/screener-capacity'
+import { Route as AuthenticatedScreenerReviewSettingsRouteImport } from './routes/_authenticated/screener-review-settings'
+import { Route as AuthenticatedScreeningQuarantineRouteImport } from './routes/_authenticated/screening-quarantine'
+import { Route as AuthenticatedSubmissionSettingsRouteImport } from './routes/_authenticated/submission-settings'
+import { Route as AuthenticatedValidatorSlotsRouteImport } from './routes/_authenticated/validator-slots'
+import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
+import { Route as OauthConsentRouteImport } from './routes/oauth.consent'
 import { Route as AuthenticatedScreeningQuarantineIndexRouteImport } from './routes/_authenticated/screening-quarantine.index'
-import { Route as AuthenticatedScreeningQuarantineHistoryRouteImport } from './routes/_authenticated/screening-quarantine.history'
 import { Route as AuthenticatedScreeningQuarantineDisputesRouteImport } from './routes/_authenticated/screening-quarantine.disputes'
+import { Route as AuthenticatedScreeningQuarantineHistoryRouteImport } from './routes/_authenticated/screening-quarantine.history'
 
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const OauthConsentRoute = OauthConsentRouteImport.update({
-  id: '/oauth/consent',
-  path: '/oauth/consent',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthCallbackRoute = AuthCallbackRouteImport.update({
-  id: '/auth/callback',
-  path: '/auth/callback',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthenticatedValidatorSlotsRoute =
-  AuthenticatedValidatorSlotsRouteImport.update({
-    id: '/validator-slots',
-    path: '/validator-slots',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedSubmissionSettingsRoute =
-  AuthenticatedSubmissionSettingsRouteImport.update({
-    id: '/submission-settings',
-    path: '/submission-settings',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedScreeningQuarantineRoute =
-  AuthenticatedScreeningQuarantineRouteImport.update({
-    id: '/screening-quarantine',
-    path: '/screening-quarantine',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedScreenerReviewSettingsRoute =
-  AuthenticatedScreenerReviewSettingsRouteImport.update({
-    id: '/screener-review-settings',
-    path: '/screener-review-settings',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedScreenerCapacityRoute =
-  AuthenticatedScreenerCapacityRouteImport.update({
-    id: '/screener-capacity',
-    path: '/screener-capacity',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedScoreOutliersRoute =
-  AuthenticatedScoreOutliersRouteImport.update({
-    id: '/score-outliers',
-    path: '/score-outliers',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedMinerFeesRoute = AuthenticatedMinerFeesRouteImport.update({
-  id: '/miner-fees',
-  path: '/miner-fees',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedInferenceRoutingRoute =
-  AuthenticatedInferenceRoutingRouteImport.update({
-    id: '/inference-routing',
-    path: '/inference-routing',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedInferenceConcurrencyRoute =
-  AuthenticatedInferenceConcurrencyRouteImport.update({
-    id: '/inference-concurrency',
-    path: '/inference-concurrency',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedGammaRoute = AuthenticatedGammaRouteImport.update({
-  id: '/gamma',
-  path: '/gamma',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedCopyReviewRoute = AuthenticatedCopyReviewRouteImport.update({
-  id: '/copy-review',
-  path: '/copy-review',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedContinualRetestsRoute =
-  AuthenticatedContinualRetestsRouteImport.update({
-    id: '/continual-retests',
-    path: '/continual-retests',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedConfirmationBundlesRoute =
-  AuthenticatedConfirmationBundlesRouteImport.update({
-    id: '/confirmation-bundles',
-    path: '/confirmation-bundles',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedBurnRoute = AuthenticatedBurnRouteImport.update({
-  id: '/burn',
-  path: '/burn',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedBenchmarkRolloutRoute =
-  AuthenticatedBenchmarkRolloutRouteImport.update({
-    id: '/benchmark-rollout',
-    path: '/benchmark-rollout',
+const AuthenticatedAgentAccessRoute =
+  AuthenticatedAgentAccessRouteImport.update({
+    id: '/agent-access',
+    path: '/agent-access',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedArtifactReleaseRoute =
@@ -151,28 +61,118 @@ const AuthenticatedArtifactReleaseRoute =
     path: '/artifact-release',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedAgentAccessRoute =
-  AuthenticatedAgentAccessRouteImport.update({
-    id: '/agent-access',
-    path: '/agent-access',
+const AuthenticatedBenchmarkRolloutRoute =
+  AuthenticatedBenchmarkRolloutRouteImport.update({
+    id: '/benchmark-rollout',
+    path: '/benchmark-rollout',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedBurnRoute = AuthenticatedBurnRouteImport.update({
+  id: '/burn',
+  path: '/burn',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedConfirmationBundlesRoute =
+  AuthenticatedConfirmationBundlesRouteImport.update({
+    id: '/confirmation-bundles',
+    path: '/confirmation-bundles',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedContinualRetestsRoute =
+  AuthenticatedContinualRetestsRouteImport.update({
+    id: '/continual-retests',
+    path: '/continual-retests',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedCopyReviewRoute = AuthenticatedCopyReviewRouteImport.update({
+  id: '/copy-review',
+  path: '/copy-review',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedGammaRoute = AuthenticatedGammaRouteImport.update({
+  id: '/gamma',
+  path: '/gamma',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedInferenceConcurrencyRoute =
+  AuthenticatedInferenceConcurrencyRouteImport.update({
+    id: '/inference-concurrency',
+    path: '/inference-concurrency',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedInferenceRoutingRoute =
+  AuthenticatedInferenceRoutingRouteImport.update({
+    id: '/inference-routing',
+    path: '/inference-routing',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedMinerFeesRoute = AuthenticatedMinerFeesRouteImport.update({
+  id: '/miner-fees',
+  path: '/miner-fees',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedScoreOutliersRoute =
+  AuthenticatedScoreOutliersRouteImport.update({
+    id: '/score-outliers',
+    path: '/score-outliers',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedScreenerCapacityRoute =
+  AuthenticatedScreenerCapacityRouteImport.update({
+    id: '/screener-capacity',
+    path: '/screener-capacity',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedScreenerReviewSettingsRoute =
+  AuthenticatedScreenerReviewSettingsRouteImport.update({
+    id: '/screener-review-settings',
+    path: '/screener-review-settings',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedScreeningQuarantineRoute =
+  AuthenticatedScreeningQuarantineRouteImport.update({
+    id: '/screening-quarantine',
+    path: '/screening-quarantine',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedSubmissionSettingsRoute =
+  AuthenticatedSubmissionSettingsRouteImport.update({
+    id: '/submission-settings',
+    path: '/submission-settings',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedValidatorSlotsRoute =
+  AuthenticatedValidatorSlotsRouteImport.update({
+    id: '/validator-slots',
+    path: '/validator-slots',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthCallbackRoute = AuthCallbackRouteImport.update({
+  id: '/auth/callback',
+  path: '/auth/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthConsentRoute = OauthConsentRouteImport.update({
+  id: '/oauth/consent',
+  path: '/oauth/consent',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthenticatedScreeningQuarantineIndexRoute =
   AuthenticatedScreeningQuarantineIndexRouteImport.update({
     id: '/',
     path: '/',
     getParentRoute: () => AuthenticatedScreeningQuarantineRoute,
   } as any)
-const AuthenticatedScreeningQuarantineHistoryRoute =
-  AuthenticatedScreeningQuarantineHistoryRouteImport.update({
-    id: '/history',
-    path: '/history',
-    getParentRoute: () => AuthenticatedScreeningQuarantineRoute,
-  } as any)
 const AuthenticatedScreeningQuarantineDisputesRoute =
   AuthenticatedScreeningQuarantineDisputesRouteImport.update({
     id: '/disputes',
     path: '/disputes',
+    getParentRoute: () => AuthenticatedScreeningQuarantineRoute,
+  } as any)
+const AuthenticatedScreeningQuarantineHistoryRoute =
+  AuthenticatedScreeningQuarantineHistoryRouteImport.update({
+    id: '/history',
+    path: '/history',
     getParentRoute: () => AuthenticatedScreeningQuarantineRoute,
   } as any)
 
@@ -346,11 +346,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated': {
@@ -360,130 +360,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/oauth/consent': {
-      id: '/oauth/consent'
-      path: '/oauth/consent'
-      fullPath: '/oauth/consent'
-      preLoaderRoute: typeof OauthConsentRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth/callback': {
-      id: '/auth/callback'
-      path: '/auth/callback'
-      fullPath: '/auth/callback'
-      preLoaderRoute: typeof AuthCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_authenticated/validator-slots': {
-      id: '/_authenticated/validator-slots'
-      path: '/validator-slots'
-      fullPath: '/validator-slots'
-      preLoaderRoute: typeof AuthenticatedValidatorSlotsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/submission-settings': {
-      id: '/_authenticated/submission-settings'
-      path: '/submission-settings'
-      fullPath: '/submission-settings'
-      preLoaderRoute: typeof AuthenticatedSubmissionSettingsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/screening-quarantine': {
-      id: '/_authenticated/screening-quarantine'
-      path: '/screening-quarantine'
-      fullPath: '/screening-quarantine'
-      preLoaderRoute: typeof AuthenticatedScreeningQuarantineRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/screener-review-settings': {
-      id: '/_authenticated/screener-review-settings'
-      path: '/screener-review-settings'
-      fullPath: '/screener-review-settings'
-      preLoaderRoute: typeof AuthenticatedScreenerReviewSettingsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/screener-capacity': {
-      id: '/_authenticated/screener-capacity'
-      path: '/screener-capacity'
-      fullPath: '/screener-capacity'
-      preLoaderRoute: typeof AuthenticatedScreenerCapacityRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/score-outliers': {
-      id: '/_authenticated/score-outliers'
-      path: '/score-outliers'
-      fullPath: '/score-outliers'
-      preLoaderRoute: typeof AuthenticatedScoreOutliersRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/miner-fees': {
-      id: '/_authenticated/miner-fees'
-      path: '/miner-fees'
-      fullPath: '/miner-fees'
-      preLoaderRoute: typeof AuthenticatedMinerFeesRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/inference-routing': {
-      id: '/_authenticated/inference-routing'
-      path: '/inference-routing'
-      fullPath: '/inference-routing'
-      preLoaderRoute: typeof AuthenticatedInferenceRoutingRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/inference-concurrency': {
-      id: '/_authenticated/inference-concurrency'
-      path: '/inference-concurrency'
-      fullPath: '/inference-concurrency'
-      preLoaderRoute: typeof AuthenticatedInferenceConcurrencyRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/gamma': {
-      id: '/_authenticated/gamma'
-      path: '/gamma'
-      fullPath: '/gamma'
-      preLoaderRoute: typeof AuthenticatedGammaRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/copy-review': {
-      id: '/_authenticated/copy-review'
-      path: '/copy-review'
-      fullPath: '/copy-review'
-      preLoaderRoute: typeof AuthenticatedCopyReviewRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/continual-retests': {
-      id: '/_authenticated/continual-retests'
-      path: '/continual-retests'
-      fullPath: '/continual-retests'
-      preLoaderRoute: typeof AuthenticatedContinualRetestsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/confirmation-bundles': {
-      id: '/_authenticated/confirmation-bundles'
-      path: '/confirmation-bundles'
-      fullPath: '/confirmation-bundles'
-      preLoaderRoute: typeof AuthenticatedConfirmationBundlesRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/burn': {
-      id: '/_authenticated/burn'
-      path: '/burn'
-      fullPath: '/burn'
-      preLoaderRoute: typeof AuthenticatedBurnRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/benchmark-rollout': {
-      id: '/_authenticated/benchmark-rollout'
-      path: '/benchmark-rollout'
-      fullPath: '/benchmark-rollout'
-      preLoaderRoute: typeof AuthenticatedBenchmarkRolloutRouteImport
+    '/_authenticated/agent-access': {
+      id: '/_authenticated/agent-access'
+      path: '/agent-access'
+      fullPath: '/agent-access'
+      preLoaderRoute: typeof AuthenticatedAgentAccessRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/artifact-release': {
@@ -493,12 +381,124 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedArtifactReleaseRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/agent-access': {
-      id: '/_authenticated/agent-access'
-      path: '/agent-access'
-      fullPath: '/agent-access'
-      preLoaderRoute: typeof AuthenticatedAgentAccessRouteImport
+    '/_authenticated/benchmark-rollout': {
+      id: '/_authenticated/benchmark-rollout'
+      path: '/benchmark-rollout'
+      fullPath: '/benchmark-rollout'
+      preLoaderRoute: typeof AuthenticatedBenchmarkRolloutRouteImport
       parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/burn': {
+      id: '/_authenticated/burn'
+      path: '/burn'
+      fullPath: '/burn'
+      preLoaderRoute: typeof AuthenticatedBurnRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/confirmation-bundles': {
+      id: '/_authenticated/confirmation-bundles'
+      path: '/confirmation-bundles'
+      fullPath: '/confirmation-bundles'
+      preLoaderRoute: typeof AuthenticatedConfirmationBundlesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/continual-retests': {
+      id: '/_authenticated/continual-retests'
+      path: '/continual-retests'
+      fullPath: '/continual-retests'
+      preLoaderRoute: typeof AuthenticatedContinualRetestsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/copy-review': {
+      id: '/_authenticated/copy-review'
+      path: '/copy-review'
+      fullPath: '/copy-review'
+      preLoaderRoute: typeof AuthenticatedCopyReviewRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/gamma': {
+      id: '/_authenticated/gamma'
+      path: '/gamma'
+      fullPath: '/gamma'
+      preLoaderRoute: typeof AuthenticatedGammaRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/inference-concurrency': {
+      id: '/_authenticated/inference-concurrency'
+      path: '/inference-concurrency'
+      fullPath: '/inference-concurrency'
+      preLoaderRoute: typeof AuthenticatedInferenceConcurrencyRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/inference-routing': {
+      id: '/_authenticated/inference-routing'
+      path: '/inference-routing'
+      fullPath: '/inference-routing'
+      preLoaderRoute: typeof AuthenticatedInferenceRoutingRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/miner-fees': {
+      id: '/_authenticated/miner-fees'
+      path: '/miner-fees'
+      fullPath: '/miner-fees'
+      preLoaderRoute: typeof AuthenticatedMinerFeesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/score-outliers': {
+      id: '/_authenticated/score-outliers'
+      path: '/score-outliers'
+      fullPath: '/score-outliers'
+      preLoaderRoute: typeof AuthenticatedScoreOutliersRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/screener-capacity': {
+      id: '/_authenticated/screener-capacity'
+      path: '/screener-capacity'
+      fullPath: '/screener-capacity'
+      preLoaderRoute: typeof AuthenticatedScreenerCapacityRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/screener-review-settings': {
+      id: '/_authenticated/screener-review-settings'
+      path: '/screener-review-settings'
+      fullPath: '/screener-review-settings'
+      preLoaderRoute: typeof AuthenticatedScreenerReviewSettingsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/screening-quarantine': {
+      id: '/_authenticated/screening-quarantine'
+      path: '/screening-quarantine'
+      fullPath: '/screening-quarantine'
+      preLoaderRoute: typeof AuthenticatedScreeningQuarantineRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/submission-settings': {
+      id: '/_authenticated/submission-settings'
+      path: '/submission-settings'
+      fullPath: '/submission-settings'
+      preLoaderRoute: typeof AuthenticatedSubmissionSettingsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/validator-slots': {
+      id: '/_authenticated/validator-slots'
+      path: '/validator-slots'
+      fullPath: '/validator-slots'
+      preLoaderRoute: typeof AuthenticatedValidatorSlotsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/auth/callback': {
+      id: '/auth/callback'
+      path: '/auth/callback'
+      fullPath: '/auth/callback'
+      preLoaderRoute: typeof AuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/consent': {
+      id: '/oauth/consent'
+      path: '/oauth/consent'
+      fullPath: '/oauth/consent'
+      preLoaderRoute: typeof OauthConsentRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_authenticated/screening-quarantine/': {
       id: '/_authenticated/screening-quarantine/'
@@ -507,18 +507,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedScreeningQuarantineIndexRouteImport
       parentRoute: typeof AuthenticatedScreeningQuarantineRoute
     }
-    '/_authenticated/screening-quarantine/history': {
-      id: '/_authenticated/screening-quarantine/history'
-      path: '/history'
-      fullPath: '/screening-quarantine/history'
-      preLoaderRoute: typeof AuthenticatedScreeningQuarantineHistoryRouteImport
-      parentRoute: typeof AuthenticatedScreeningQuarantineRoute
-    }
     '/_authenticated/screening-quarantine/disputes': {
       id: '/_authenticated/screening-quarantine/disputes'
       path: '/disputes'
       fullPath: '/screening-quarantine/disputes'
       preLoaderRoute: typeof AuthenticatedScreeningQuarantineDisputesRouteImport
+      parentRoute: typeof AuthenticatedScreeningQuarantineRoute
+    }
+    '/_authenticated/screening-quarantine/history': {
+      id: '/_authenticated/screening-quarantine/history'
+      path: '/history'
+      fullPath: '/screening-quarantine/history'
+      preLoaderRoute: typeof AuthenticatedScreeningQuarantineHistoryRouteImport
       parentRoute: typeof AuthenticatedScreeningQuarantineRoute
     }
   }
@@ -602,13 +602,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
