@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.458.0 (2026-11-06)
+
+### Bug Fixes
+
+- **deps**: Update vulnerable virtualenv locks
+  ([#3396](https://github.com/ditto-assistant/ditto-subnet/pull/3396),
+  [`1516bf9`](https://github.com/ditto-assistant/ditto-subnet/commit/1516bf9ff74d3e284c8707bd6fbcaa979989773b))
+
+### Features
+
+- **generator-starter-kit**: Bump to version 6, add bench v17 support
+  ([`a02145f`](https://github.com/ditto-assistant/ditto-subnet/commit/a02145f37550be6cac8133c434046085a93676eb))
+
+
 ## v0.457.7 (2026-11-06)
 
 ### Bug Fixes
