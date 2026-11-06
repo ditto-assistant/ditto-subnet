@@ -160,7 +160,7 @@ class ScreenerConfig:
     """Per-request timeout for platform HTTP calls + artifact download."""
 
     policy_manifest_file: str | None
-    """Private rotating policy manifest. ``None`` activates production v7."""
+    """Private rotating policy manifest. ``None`` loads the built-in profile."""
 
     review_journal_file: str | None
     """Mode-0600 append-only journal for quarantine/inconclusive outcomes."""

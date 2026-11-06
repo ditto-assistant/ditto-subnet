@@ -7958,6 +7958,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/screener-review-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Screener Review Settings
+         * @description Publish the live review limits so a local screen can match production.
+         *
+         *     Each scope's latest revision is returned through the public allowlist in
+         *     :class:`PublicScreenerReviewPosture`; the private policy-manifest rotation
+         *     and operator reason/actor stay server-side. A worker resolves its own
+         *     instance scope, then its node scope, then ``*`` (an ``inherit`` revision
+         *     falls through), so the ``global`` posture is what an unpinned worker runs.
+         */
+        get: operations["public_screener_review_settings_api_v1_public_screener_review_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/screeners": {
         parameters: {
             query?: never;
@@ -35342,6 +35368,127 @@ export interface components {
             started_at: string;
         };
         /**
+         * PublicScreenerReviewPosture
+         * @description One scope's latest review limits, published so miners can match them.
+         *
+         *     This is an allowlist over :class:`ScreenerReviewSettings`: it carries the
+         *     models, step caps, timeouts and budgets a local screen needs, and omits
+         *     the private policy-manifest rotation and operator reason/actor. Add a
+         *     field here deliberately; a new settings field is not public by default.
+         *     Each value maps onto the ``SCREENER_*`` env var noted beside it, which a
+         *     local ``python -m ditto_screener`` run reads.
+         */
+        PublicScreenerReviewPosture: {
+            /** Adjudicator Max Completion Tokens */
+            adjudicator_max_completion_tokens: number | null;
+            /** Adjudicator Max Steps */
+            adjudicator_max_steps: number;
+            /**
+             * Adjudicator Mode
+             * @enum {string}
+             */
+            adjudicator_mode: "off" | "shadow" | "enforce";
+            /**
+             * Adjudicator Model
+             * @constant
+             */
+            adjudicator_model: "z-ai/glm-5.3-flash";
+            /** Adjudicator Timeout Seconds */
+            adjudicator_timeout_seconds: number;
+            /** Checksum */
+            checksum: string;
+            /** Clear Min Notes */
+            clear_min_notes: number;
+            /** Concern Hold Count */
+            concern_hold_count: number;
+            /** Created At */
+            created_at: string | null;
+            /**
+             * Critic Reasoning Effort
+             * @enum {string}
+             */
+            critic_reasoning_effort: "low" | "medium" | "high";
+            /** L2 Always Escalate */
+            l2_always_escalate: boolean;
+            /** L2 Fallback Models */
+            l2_fallback_models: ("openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
+            /**
+             * L2 Model
+             * @enum {string}
+             */
+            l2_model: "openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol";
+            /** L3 Enabled */
+            l3_enabled: boolean;
+            /**
+             * L3 Model
+             * @enum {string}
+             */
+            l3_model: "openai/gpt-5.6-sol" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra";
+            /** Max Completion Tokens */
+            max_completion_tokens: number;
+            /** Max Cost Usd */
+            max_cost_usd: number;
+            /** Max Input Tokens */
+            max_input_tokens: number;
+            /** Max Output Tokens */
+            max_output_tokens: number;
+            /** Max Steps */
+            max_steps: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce" | "inherit";
+            /** Revision */
+            revision: number;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "global" | "node_or_worker" | "integrity_double_check" | "l2_report_canary";
+            /** Scope */
+            scope: string;
+            /** Source Review Max Completion Tokens */
+            source_review_max_completion_tokens: number;
+            /** Source Review Max Read Bytes */
+            source_review_max_read_bytes: number;
+            /** Source Review Max Steps */
+            source_review_max_steps: number;
+            /**
+             * Source Review Model
+             * @enum {string}
+             */
+            source_review_model: "openai/gpt-5.6-luna" | "openai/gpt-6-luna";
+            /**
+             * Source Review Reasoning Effort
+             * @enum {string}
+             */
+            source_review_reasoning_effort: "low" | "medium" | "high";
+            /** Source Review Timeout Seconds */
+            source_review_timeout_seconds: number;
+            /** Timeout Seconds */
+            timeout_seconds: number;
+        };
+        /**
+         * PublicScreenerReviewSettingsResponse
+         * @description Latest review posture per scope plus the active screening policy.
+         */
+        PublicScreenerReviewSettingsResponse: {
+            /** Postures */
+            postures: components["schemas"]["PublicScreenerReviewPosture"][];
+            /** Required Policy Version */
+            required_policy_version: number;
+            /**
+             * Resolution Order
+             * @default [
+             *       "worker",
+             *       "node",
+             *       "*"
+             *     ]
+             */
+            resolution_order: string[];
+        };
+        /**
          * PublicScreenerWatchdogResponse
          * @description Minimal signal used by the independent GCE scale-out watchdog.
          */
@@ -62157,6 +62304,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_screener_review_settings_api_v1_public_screener_review_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicScreenerReviewSettingsResponse"];
                 };
             };
         };

@@ -477,3 +477,105 @@ def integrity_double_check_posture_error(
     if settings.critic_reasoning_effort not in ("low", "medium"):
         return "posture critic_reasoning_effort must be low or medium"
     return None
+
+
+PublicReviewScopeRole = Literal[
+    "global", "node_or_worker", "integrity_double_check", "l2_report_canary"
+]
+
+
+def public_review_scope_role(scope: str) -> PublicReviewScopeRole:
+    """Classify a settings scope so miners can tell which posture screens them."""
+    if scope in {"*", "builtin-default"}:
+        return "global"
+    if scope == INTEGRITY_DOUBLE_CHECK_SCOPE:
+        return "integrity_double_check"
+    if is_l2_report_canary_scope(scope):
+        return "l2_report_canary"
+    return "node_or_worker"
+
+
+class PublicScreenerReviewPosture(BaseModel):
+    """One scope's latest review limits, published so miners can match them.
+
+    This is an allowlist over :class:`ScreenerReviewSettings`: it carries the
+    models, step caps, timeouts and budgets a local screen needs, and omits
+    the private policy-manifest rotation and operator reason/actor. Add a
+    field here deliberately; a new settings field is not public by default.
+    Each value maps onto the ``SCREENER_*`` env var noted beside it, which a
+    local ``python -m ditto_screener`` run reads.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    revision: int
+    scope: str
+    role: PublicReviewScopeRole
+    checksum: str
+    created_at: datetime | None
+    mode: ReviewMode  # SCREENER_L2_REVIEW_MODE
+    # L1 source review
+    source_review_model: SourceReviewModel  # SCREENER_SOURCE_REVIEW_MODEL
+    source_review_max_steps: int  # SCREENER_SOURCE_REVIEW_MAX_STEPS
+    source_review_timeout_seconds: int  # SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS
+    source_review_max_read_bytes: int  # SCREENER_SOURCE_REVIEW_MAX_READ_BYTES
+    source_review_max_completion_tokens: int
+    source_review_reasoning_effort: ReasoningEffort
+    # L2 analyst / L3 critic
+    l2_model: ReviewModel  # SCREENER_L2_REVIEW_MODEL
+    l2_fallback_models: tuple[ReviewModel, ...]  # SCREENER_L2_FALLBACK_MODELS
+    l3_enabled: bool  # SCREENER_L3_REVIEW_ENABLED
+    l3_model: L3ReviewModel  # SCREENER_L3_REVIEW_MODEL
+    max_steps: int  # SCREENER_L2_MAX_STEPS
+    timeout_seconds: int  # SCREENER_L2_TIMEOUT_SECONDS
+    max_input_tokens: int  # SCREENER_L2_MAX_INPUT_TOKENS
+    max_output_tokens: int  # SCREENER_L2_MAX_OUTPUT_TOKENS
+    max_completion_tokens: int  # SCREENER_L2_MAX_COMPLETION_TOKENS
+    max_cost_usd: float  # SCREENER_L2_MAX_COST_USD
+    critic_reasoning_effort: ReasoningEffort  # SCREENER_L2_CRITIC_REASONING_EFFORT
+    l2_always_escalate: bool  # SCREENER_L2_ALWAYS_ESCALATE
+    concern_hold_count: int  # SCREENER_REVIEW_CONCERN_HOLD_COUNT
+    clear_min_notes: int  # SCREENER_REVIEW_CLEAR_MIN_NOTES
+    # L4 adjudicator
+    adjudicator_mode: Literal["off", "shadow", "enforce"]
+    adjudicator_model: AdjudicatorModel  # SCREENER_ADJUDICATOR_MODEL
+    adjudicator_max_steps: int  # SCREENER_ADJUDICATOR_MAX_STEPS
+    adjudicator_timeout_seconds: int  # SCREENER_ADJUDICATOR_TIMEOUT_SECONDS
+    adjudicator_max_completion_tokens: int | None
+
+    @classmethod
+    def from_settings(
+        cls,
+        *,
+        revision: int,
+        scope: str,
+        checksum: str,
+        created_at: datetime | None,
+        settings: ScreenerReviewSettings,
+    ) -> PublicScreenerReviewPosture:
+        public_fields = set(cls.model_fields) - {
+            "revision",
+            "scope",
+            "role",
+            "checksum",
+            "created_at",
+        }
+        return cls(
+            revision=revision,
+            scope=scope,
+            role=public_review_scope_role(scope),
+            checksum=checksum,
+            created_at=created_at,
+            **settings.model_dump(include=public_fields),
+        )
+
+
+class PublicScreenerReviewSettingsResponse(BaseModel):
+    """Latest review posture per scope plus the active screening policy."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    required_policy_version: int
+    """Screening policy version the queue currently requires (scheduled)."""
+    resolution_order: tuple[str, ...] = ("worker", "node", "*")
+    postures: list[PublicScreenerReviewPosture]

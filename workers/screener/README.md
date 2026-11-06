@@ -172,6 +172,15 @@ build/health and isolated L2 coding-harness integration suite runs in
 that workflow before merging changes to the real Docker gate or L2 analyzer
 boundary when waiting for the next scheduled signal would be too risky.
 
+## Running a production-parity screen locally
+
+Miners: every screener line is in this directory. To replay the production
+L1→L2→L3 source review under the live review posture, read the live step caps
+and models (`GET /api/v1/public/screener-review-settings`), and see which
+production inputs a local run cannot reproduce (lineage diff scope,
+cross-submission copy checks, L4), use
+[`docs/local-production-parity.md`](docs/local-production-parity.md).
+
 ## Runtime configuration
 
 Required values are supplied through the production host's protected
@@ -185,7 +194,9 @@ Required values are supplied through the production host's protected
 - `SCREENER_GH_TOKEN_FILE`: optional path to a read-only token used only as a
   BuildKit secret for a private harness dependency.
 - `SCREENER_POLICY_MANIFEST_FILE`: optional protected private manifest. When
-  absent, the worker runs the production v8 Luna policy with no `/run` call.
+  absent, the worker loads the built-in Luna (`l1`) or Luna-then-Terra/Sol
+  (`l1_l2`) profile at the build's `SCREENING_POLICY_VERSION`, with no `/run`
+  call.
 - `SCREENER_REVIEW_JOURNAL_FILE`: optional protected append-only journal path
   for quarantine and inconclusive evidence.
 - `SCREENER_AUDIT_SEED`: secret seed read only when a configured random-control
