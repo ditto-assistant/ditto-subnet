@@ -59,10 +59,10 @@ built-in name on the visible surface.
 
 ## Reproducibility
 
-The lockfile pins OpenClaw `2026.7.1`, whose upstream tag resolves to:
+The lockfile pins OpenClaw `2026.7.33`, whose upstream tag resolves to:
 
 ```text
-2d2ddc43d0dcf71f31283d780f9fe9ff4cc04fe4
+b60a4e9fa97cddf1869a1866d879b3051783cf12
 ```
 
 The runtime reads the validator's normal model-lock variables:
@@ -101,8 +101,9 @@ completed without a provider error or harness no-response.
 
 ## Claim boundary
 
-Report this subject as “OpenClaw 2026.7.1 built-in `memory-core`, FTS-only,
-through the DittoBench adapter.” It is not a result for every optional OpenClaw
-memory plugin. Two paired runs on one seed are illustrative evidence, not a
-multi-seed confidence interval, and production miner medians use independent
-seeds and a different deployment route.
+The recorded v6 results above are for “OpenClaw 2026.7.1 built-in `memory-core`,
+FTS-only, through the DittoBench adapter.” The current adapter uses 2026.7.33;
+the earlier scores do not establish its performance. Neither result represents
+every optional OpenClaw memory plugin. Two paired runs on one seed are
+illustrative evidence, not a multi-seed confidence interval, and production
+miner medians use independent seeds and a different deployment route.
