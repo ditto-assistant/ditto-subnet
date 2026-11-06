@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.457.6 (2026-11-06)
+
+### Bug Fixes
+
+- **deps**: Patch Python security dependencies [DITTO-1747]
+  ([#3325](https://github.com/ditto-assistant/ditto-subnet/pull/3325),
+  [`60cb801`](https://github.com/ditto-assistant/ditto-subnet/commit/60cb8016d36e53384cfc7b2880acbf14b85ae10f))
+
+
 ## v0.457.5 (2026-11-06)
 
 ### Bug Fixes
