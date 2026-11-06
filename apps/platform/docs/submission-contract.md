@@ -89,9 +89,11 @@ uploaded ──screener claims lease──▶ screening ──pass──▶ eval
                                         │                        signal──▶ ath_pending_review
                                         ├──deterministic fail──▶ rejected (terminal)
                                         ├──infra fail / lease expiry──▶ screening_failed
-                                        │                               (retryable: a new
-                                        │                                claim returns it
-                                        │                                to screening)
+                                        │                               (retryable: an exact-
+                                        │                                attempt grant from an
+                                        │                                operator or the owning
+                                        │                                miner returns it to
+                                        │                                screening)
                                         └──private-signal hit──▶ quarantined
 
 (banned is terminal and is per-agent — distinct from the hotkey-level ban in

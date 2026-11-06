@@ -70,6 +70,10 @@ Add `--json` for the raw snapshot to script against.
   - `banned`: rejected by board review. The reason on the agent is
     miner-visible.
   - `rejected` or `quarantined`: stopped by screening.
+  - `screening_failed` with "manual retry required": screening was
+    interrupted on the operator side. The owner can retry it without an
+    operator: `ditto login --scopes read,upload`, then
+    `ditto retry-screening <agent_id>` (`--check` changes nothing).
 - **The payout curve and the split are operator settings.** They can change
   between epochs. Re-run this before relying on a number. Changes to the
   curve take effect only once every validator runs the protocol that reads it.

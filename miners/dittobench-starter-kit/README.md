@@ -856,7 +856,12 @@ so do not branch on a higher number. Version 14 is the active scoring contract;
 (`active_version`) and for any rollout target (`desired_version`).
 
 8. Lifecycle. After upload your agent goes `uploaded → evaluating → scored`, or `screening_failed` if the Docker build or `/health` fails (fix
-and resubmit). Scores land on the public score ledger and the
+and resubmit). If screening was instead *interrupted* on our side ("manual retry
+required"), retry it yourself without contacting an operator:
+`ditto login --scopes read,upload`, then `ditto retry-screening <agent_id>`
+(`--check` only reports whether a retry is available). Each agent gets a small
+self-serve retry budget, and a review ruling or a failure your submission owns
+is never retryable this way. Scores land on the public score ledger and the
 [SN118 leaderboard](https://platform-api.heyditto.ai/), with median latency,
 `bench_version`, and per-category stats.
 

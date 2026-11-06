@@ -554,6 +554,176 @@ describe("screening review outcome (#1249)", () => {
   });
 });
 
+describe("self-serve screening retry (SN-456)", () => {
+  const agentId = "c8d87951-e0d5-4120-b9cf-b13d510294c6";
+  const attemptId = "a76fde0f-fcb2-49fd-9495-77fb756182cd";
+  const sha = "46fd5efe273958482649b359bf7a62a7ec36aa0f92716282819f5218011ebfc7";
+
+  function retryStatus(overrides: Record<string, unknown> = {}) {
+    return {
+      agent_id: agentId,
+      agent_status: "screening_failed",
+      artifact_sha256: sha,
+      latest_attempt_id: attemptId,
+      latest_attempt_status: "failed",
+      reason_code: "source-review-model-tool-call-invalid",
+      public_reason: "Screening was interrupted; manual retry required.",
+      eligible: true,
+      blocker: null,
+      already_authorized: false,
+      retries_used: 0,
+      retries_allowed: 1,
+      cost_notice: "A retry starts a new full screening. It costs no TAO.",
+      ...overrides,
+    };
+  }
+
+  async function openRetry(scopes: string[], status: Record<string, unknown>) {
+    const session = {
+      token: "ditto_ms_abc",
+      hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      scopes,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
+    localStorage.setItem("ditto.miner.session.v1", JSON.stringify(session));
+    const { setMinerSession } = await import("../stores/sessionStore");
+    setMinerSession(session);
+    let current = status;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me")) {
+        return json({
+          session: {
+            miner_hotkey: session.hotkey,
+            scopes,
+            expires_at: session.expiresAt,
+            expires_in: 3600,
+          },
+          profile: {},
+          profile_url: "/miner/" + session.hotkey,
+          commands: [],
+        });
+      }
+      if (url.endsWith("/me/submissions")) {
+        return json([
+          {
+            agent_id: agentId,
+            name: "kgmin1105",
+            status: "screening_failed",
+            created_at: "2026-11-06",
+          },
+        ]);
+      }
+      if (url.endsWith("/me/reviews")) return json({ reviews: [] });
+      if (url.endsWith("/screening-feedback")) {
+        return json({ agent_id: agentId, agent_status: "screening_failed", attempts: [] });
+      }
+      if (url.endsWith("/screening-retry")) {
+        if (init?.method === "POST") {
+          current = { ...current, eligible: false, already_authorized: true, retries_used: 1 };
+          return json({
+            override_id: "0b8c4d1e-0000-4000-8000-000000000009",
+            agent_id: agentId,
+            attempt_id: attemptId,
+            agent_status: "screening_failed",
+            created_at: "2026-11-06T00:00:00Z",
+            idempotent: false,
+            authorized_by_operator: false,
+            retries_used: 1,
+            retries_allowed: 1,
+          });
+        }
+        return json(current);
+      }
+      return new Response("[]", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(() => <ReviewsPage />);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Signed in");
+    });
+    const submissionsTab = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "submissions",
+    );
+    fireEvent.click(submissionsTab as HTMLButtonElement);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("kgmin1105");
+    });
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (item) => item.textContent?.trim() === "Screening feedback",
+    );
+    fireEvent.click(button as HTMLButtonElement);
+    return fetchMock;
+  }
+
+  it("confirms the cost, posts the exact guards, then shows the queued retry", async () => {
+    const confirm = vi.fn((_message?: string) => true);
+    vi.stubGlobal("confirm", confirm);
+    const fetchMock = await openRetry(["read", "upload"], retryStatus());
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("It costs no TAO.");
+    });
+    const retry = Array.from(document.querySelectorAll("button")).find(
+      (item) => item.textContent?.trim() === "Retry screening",
+    );
+    fireEvent.click(retry as HTMLButtonElement);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Retry queued (1 of 1 used)");
+    });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(String(confirm.mock.calls[0]?.[0])).toContain("It costs no TAO.");
+    const post = fetchMock.mock.calls.find(
+      (c) => String(c[0]).endsWith("/screening-retry") && c[1]?.method === "POST",
+    );
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      expected_attempt_id: attemptId,
+      expected_sha256: sha,
+      acknowledge_cost: true,
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("A retry of this screening is queued.");
+    });
+  });
+
+  it("sends nothing when the miner cancels the confirmation", async () => {
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => false),
+    );
+    const fetchMock = await openRetry(["read", "upload"], retryStatus());
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Retry screening");
+    });
+    const retry = Array.from(document.querySelectorAll("button")).find(
+      (item) => item.textContent?.trim() === "Retry screening",
+    );
+    fireEvent.click(retry as HTMLButtonElement);
+    expect(fetchMock.mock.calls.some((c) => c[1]?.method === "POST")).toBe(false);
+  });
+
+  it("asks a read-only session for the upload scope instead of offering the button", async () => {
+    await openRetry(["read"], retryStatus());
+    await waitFor(() => {
+      expect(document.body.textContent).toContain(`ditto retry-screening ${agentId}`);
+    });
+    const retry = Array.from(document.querySelectorAll("button")).find(
+      (item) => item.textContent?.trim() === "Retry screening",
+    );
+    expect(retry).toBeUndefined();
+  });
+
+  it("explains an exhausted budget without a button", async () => {
+    await openRetry(
+      ["read", "upload"],
+      retryStatus({ eligible: false, blocker: "budget_exhausted", retries_used: 1 }),
+    );
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("used its self-serve retries");
+    });
+    expect(document.body.textContent).not.toContain("Retry screening");
+  });
+});
+
 describe("Ditto account link", () => {
   const session = {
     token: "ditto_ms_abc",

@@ -31,6 +31,7 @@ from ditto.miner_cli.errors import (
     NameClaimCancelledError,
     PaymentCancelledError,
     RegistrationCancelledError,
+    ScreeningRetryCancelledError,
 )
 from ditto.miner_cli.models import RegistrationQuote
 
@@ -353,3 +354,50 @@ def confirm_login_action(
         raise LoginCancelledError(f"login cancelled (response={response!r})")
 
     print("login confirmed", file=sys.stderr)
+
+
+def confirm_screening_retry(
+    *,
+    agent_id: str,
+    attempt_id: str,
+    reason: str,
+    retries_used: int,
+    retries_allowed: int,
+    cost_notice: str,
+    skip: bool,
+) -> None:
+    """Show what a self-serve screening retry spends and prompt for it.
+
+    The retry moves no TAO, but it starts paid screening work and spends one
+    of a small per-agent budget, so the preview says both before asking.
+
+    Raises:
+        ScreeningRetryCancelledError: When the user does not answer ``y``.
+    """
+    print()
+    print("Screening retry")
+    print(f"  Agent:    {agent_id}")
+    print(f"  Attempt:  {attempt_id}")
+    print(f"  Failure:  {reason}")
+    print(
+        f"  Budget:   {retries_used} of {retries_allowed} self-serve "
+        "retries used for this agent; this retry uses one more."
+    )
+    print()
+    print(cost_notice)
+    print()
+
+    if skip:
+        logger.debug("screening retry confirmation bypassed via --yes")
+        return
+
+    try:
+        response = prompt_input("Retry this screening? [y/N]: ").strip().lower()
+    except EOFError as e:
+        raise ScreeningRetryCancelledError(
+            "screening retry cancelled: EOF on stdin"
+        ) from e
+    if response != "y":
+        raise ScreeningRetryCancelledError(
+            f"screening retry cancelled (response={response!r})"
+        )

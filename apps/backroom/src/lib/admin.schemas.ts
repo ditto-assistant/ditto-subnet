@@ -5287,6 +5287,58 @@ export const setScoringLeaseSettingsInputSchema = z
     }
   })
 
+// Miner self-serve screening retry (SN-456). An owning miner may authorize one
+// exact-attempt retry of an interrupted screening without an operator; each
+// grant is a normal screening_retry_overrides row whose actor starts with
+// "miner-self-serve:". Operators pause the route or change the per-agent
+// budget here. The platform stays the authority and its 409 text is verbatim.
+export const MINER_SCREENING_RETRY_MAX_PER_AGENT = 3
+
+export const minerScreeningRetrySettingsRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  max_retries_per_agent: z.number().int().min(0).max(MINER_SCREENING_RETRY_MAX_PER_AGENT),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string().nullable(),
+})
+
+export const minerScreeningRetrySettingsControlSchema = z.object({
+  current: minerScreeningRetrySettingsRevisionSchema,
+  history: z.array(minerScreeningRetrySettingsRevisionSchema),
+  recent_self_serve_retries_24h: z.number().int().nonnegative(),
+})
+
+export function minerScreeningRetryConfirmation(enabled: boolean, maxRetriesPerAgent: number) {
+  return enabled
+    ? `ENABLE MINER SCREENING RETRY MAX ${maxRetriesPerAgent}`
+    : 'DISABLE MINER SCREENING RETRY'
+}
+
+export const setMinerScreeningRetrySettingsInputSchema = z
+  .object({
+    expectedRevision: z.number().int().nonnegative(),
+    enabled: z.boolean(),
+    maxRetriesPerAgent: z.number().int().min(0).max(MINER_SCREENING_RETRY_MAX_PER_AGENT),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = minerScreeningRetryConfirmation(input.enabled, input.maxRetriesPerAgent)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export type MinerScreeningRetrySettingsControl = z.infer<
+  typeof minerScreeningRetrySettingsControlSchema
+>
+
 export type ScoringLeaseSettings = z.infer<typeof scoringLeaseSettingsSchema>
 export type ScoringLeaseSettingsControl = z.infer<typeof scoringLeaseSettingsControlSchema>
 export type SetScoringLeaseSettingsInput = z.infer<typeof setScoringLeaseSettingsInputSchema>

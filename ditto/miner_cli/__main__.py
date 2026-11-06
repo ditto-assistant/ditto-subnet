@@ -27,6 +27,7 @@ from ditto.miner_cli.commands import login as login_cmd
 from ditto.miner_cli.commands import logs as logs_cmd
 from ditto.miner_cli.commands import name_claim as name_claim_cmd
 from ditto.miner_cli.commands import practice as practice_cmd
+from ditto.miner_cli.commands import retry_screening as retry_screening_cmd
 from ditto.miner_cli.commands import status as status_cmd
 from ditto.miner_cli.commands import upload as upload_cmd
 from ditto.miner_cli.commands import verify as verify_cmd
@@ -141,6 +142,7 @@ def _build_parser() -> argparse.ArgumentParser:
     practice_cmd.add_subparser(subparsers, parents=[sub_parent])
     status_cmd.add_subparser(subparsers, parents=[sub_parent])
     logs_cmd.add_subparser(subparsers, parents=[sub_parent])
+    retry_screening_cmd.add_subparser(subparsers, parents=[sub_parent])
     verify_cmd.add_subparser(subparsers, parents=[sub_parent])
     attest_cmd.add_subparser(subparsers, parents=[sub_parent])
     name_claim_cmd.add_subparser(subparsers, parents=[sub_parent])

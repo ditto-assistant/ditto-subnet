@@ -89,6 +89,9 @@ from ditto.api_server.endpoints.admin_lease_revocations import (
 from ditto.api_server.endpoints.admin_miner_fees import (
     router as admin_miner_fees_router,
 )
+from ditto.api_server.endpoints.admin_miner_screening_retry_settings import (
+    router as admin_miner_screening_retry_settings_router,
+)
 from ditto.api_server.endpoints.admin_outlier_escalation import (
     router as admin_outlier_escalation_router,
 )
@@ -226,6 +229,7 @@ __all__ = [
     "health_router",
     "inference_router",
     "admin_artifact_release_settings_router",
+    "admin_miner_screening_retry_settings_router",
     "admin_transcript_mirror_settings_router",
     "admin_ath_review_queue_slo_router",
     "admin_ath_rulings_router",

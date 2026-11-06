@@ -219,6 +219,7 @@ import {
   setContinualRetestSettingsInputSchema,
   setInferenceConcurrencySettingsInputSchema,
   setScoringLeaseSettingsInputSchema,
+  setMinerScreeningRetrySettingsInputSchema,
   runtimeProfileCaptureInputSchema,
   runtimeProfileLookupInputSchema,
   listInferenceTracesInputSchema,
@@ -370,6 +371,7 @@ import {
   fetchInferenceConcurrencySettings,
   fetchDecisionLane,
   fetchScoringLeaseSettings,
+  fetchMinerScreeningRetrySettings,
   fetchInferenceRuntimeMetrics,
   fetchInferenceGrantCosts,
   fetchSourceReviewQueueSlo,
@@ -425,6 +427,7 @@ import {
   rotateScreenerPolicyManifest,
   setInferenceConcurrencySettings,
   setScoringLeaseSettings,
+  setMinerScreeningRetrySettings,
   setQueuePolicySettings,
   fetchValidatorSlotSettings,
   fetchValidatorFleetObservability,
@@ -940,6 +943,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read the scoring ticket TTL for new leases, bounds, and history.',
   set_scoring_lease_settings:
     'Set the scoring TTL for NEW leases only; live deadlines never change.',
+  get_miner_screening_retry_settings:
+    'Read the miner self-serve screening retry switch, budget, use, and history.',
+  set_miner_screening_retry_settings:
+    'Pause/resume miner self-serve screening retries or set the per-agent cap.',
   list_validator_assignments:
     'Active validator leases.',
   get_validator_capacity:
@@ -2687,6 +2694,41 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => setContinualRetestSettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_miner_screening_retry_settings',
+    {
+      title: 'Get miner screening retry settings',
+      description:
+        'Read the operator control for miner self-serve screening retries (SN-456). An owning miner with an upload-scoped session can authorize one exact-attempt retry of their own screening_failed agent (latest attempt failed or expired, never a rejection, quarantine, ATH hold, agent-fault or policy code) from `ditto retry-screening` or the dashboard. Each grant is an ordinary screening_retry_overrides row whose actor starts with "miner-self-serve:" and is honoured by the screener claim exactly like retry_failed_screening_now. Returns current.enabled, current.max_retries_per_agent (miner grants per agent; operator grants never count), recent_self_serve_retries_24h fleet-wide, and opt-in newest-first history. Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(
+            await fetchMinerScreeningRetrySettings(),
+            historyLimit,
+            historyOffset,
+          ),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
+    'set_miner_screening_retry_settings',
+    {
+      title: 'Set miner screening retry settings',
+      description:
+        'Apply one append-only revision of the miner self-serve screening retry control (SN-456). enabled=false pauses the miner route fleet-wide, e.g. while a reviewer or provider bug fails every attempt and a retry would only spend capacity; miners then see "paused by operators". maxRetriesPerAgent (0-3) is how many grants an owning miner may create per agent. Already-created grants are never revoked; use the screening tools for those. Supply expectedRevision exactly as get_miner_screening_retry_settings reports it, a reason of at least 8 characters, and the exact confirmation "DISABLE MINER SCREENING RETRY" or "ENABLE MINER SCREENING RETRY MAX <n>". Requires backroom:write.',
+      inputSchema: setMinerScreeningRetrySettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => setMinerScreeningRetrySettings(input, props.session.email)),
   )
 
   registerTool(

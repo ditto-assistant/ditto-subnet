@@ -80,6 +80,11 @@ from ditto.api_models.miner_ditto_link import (
 from ditto.api_models.miner_logs import (
     MinerHarnessLogsResponse,
 )
+from ditto.api_models.miner_screening_retry import (
+    MinerScreeningRetryRequest,
+    MinerScreeningRetryResponse,
+    MinerScreeningRetryStatus,
+)
 from ditto.miner_cli.errors import (
     AgentNotFoundError,
     ApiResponseError,
@@ -94,6 +99,7 @@ from ditto.miner_cli.errors import (
     PaymentRecoveryExpiredError,
     PaymentReplayedError,
     PreCheckRejectedError,
+    ScreeningRetryRejectedError,
     SubmissionCooldownError,
     TransientApiError,
     UploadAgentRejectedError,
@@ -897,6 +903,64 @@ class ApiClient:
         if response.status_code != 200:
             raise ApiResponseError(_format_error(response, prefix="harness-logs"))
         return MinerHarnessLogsResponse.model_validate(response.json())
+
+    # ---- /me/agents/{id}/screening-retry --------------------------------
+
+    def get_screening_retry_status(
+        self, *, agent_id: UUID, token: str
+    ) -> MinerScreeningRetryStatus:
+        """Read whether this signed-in miner may retry the agent's screening.
+
+        Raises:
+            LoginRequiredError: On 401.
+            AgentNotFoundError: On 404 (unknown agent or another miner's).
+            ApiResponseError: On any other non-200.
+        """
+        response = self._request(
+            "GET",
+            f"/api/v1/me/agents/{agent_id}/screening-retry",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        if response.status_code == 401:
+            raise LoginRequiredError("miner session is invalid or expired")
+        if response.status_code == 404:
+            raise AgentNotFoundError(f"no agent {agent_id} for this signed-in hotkey")
+        if response.status_code != 200:
+            raise ApiResponseError(_format_error(response, prefix="screening-retry"))
+        return MinerScreeningRetryStatus.model_validate(response.json())
+
+    def retry_screening(
+        self, *, agent_id: UUID, token: str, body: MinerScreeningRetryRequest
+    ) -> MinerScreeningRetryResponse:
+        """Authorize one retry of the exact attempt in ``body``.
+
+        Safe to resend: Platform returns the existing grant with
+        ``idempotent=True`` and spends no budget.
+
+        Raises:
+            LoginRequiredError: On 401.
+            AgentNotFoundError: On 404.
+            ScreeningRetryRejectedError: On 403 (missing ``upload`` scope),
+                409 (stale guards or not eligible), or 422.
+            ApiResponseError: On any other non-200.
+        """
+        response = self._request(
+            "POST",
+            f"/api/v1/me/agents/{agent_id}/screening-retry",
+            headers={"authorization": f"Bearer {token}"},
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code == 401:
+            raise LoginRequiredError("miner session is invalid or expired")
+        if response.status_code == 404:
+            raise AgentNotFoundError(f"no agent {agent_id} for this signed-in hotkey")
+        if response.status_code in (403, 409, 422):
+            raise ScreeningRetryRejectedError(
+                _format_error(response, prefix="screening-retry")
+            )
+        if response.status_code != 200:
+            raise ApiResponseError(_format_error(response, prefix="screening-retry"))
+        return MinerScreeningRetryResponse.model_validate(response.json())
 
     # ---- /retrieval/agent/{id}/status -----------------------------------
 

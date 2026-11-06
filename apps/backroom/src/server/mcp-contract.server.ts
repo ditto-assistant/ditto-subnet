@@ -134,6 +134,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_validator_slot_settings',
   'set_validator_issuance_pause',
   'set_scoring_lease_settings',
+  'set_miner_screening_retry_settings',
   'activate_v13_scorer_cohort',
   'rotate_v13_scorer_cohort',
   'apply_copy_court_settings',

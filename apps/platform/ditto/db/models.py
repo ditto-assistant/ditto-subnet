@@ -6946,6 +6946,51 @@ class TranscriptMirrorSettingsRevision(Base):
     )
 
 
+class MinerScreeningRetrySettingsRevision(Base):
+    """Append-only operator control for miner self-serve screening retries.
+
+    ``enabled`` pauses the miner route fleet-wide (e.g. while a reviewer bug
+    is failing every attempt). ``max_retries_per_agent`` bounds how many
+    exact-attempt retry grants an owning miner may create for one agent; an
+    operator retry never counts against it.
+    """
+
+    __tablename__ = "miner_screening_retry_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    max_retries_per_agent: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="miner_screening_retry_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "max_retries_per_agent BETWEEN 0 AND 3",
+            name="miner_screening_retry_settings_max_retries_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="miner_screening_retry_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="miner_screening_retry_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="miner_screening_retry_settings_parent_revision_key",
+        ),
+    )
+
+
 class SubmissionSettingsRevision(Base):
     """Append-only, operator-audited miner submission settings revision."""
 
