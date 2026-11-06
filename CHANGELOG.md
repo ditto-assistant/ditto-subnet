@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.457.5 (2026-11-06)
+
+### Bug Fixes
+
+- **backroom**: Update TanStack Start security dependencies
+  ([#3359](https://github.com/ditto-assistant/ditto-subnet/pull/3359),
+  [`77274ad`](https://github.com/ditto-assistant/ditto-subnet/commit/77274adcbbbe217fb7b4a288329e696f2d91a297))
+
+
 ## v0.457.4 (2026-11-05)
 
 ### Bug Fixes
