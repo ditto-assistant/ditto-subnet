@@ -9,8 +9,8 @@
 //	cd ../../research/dittobench-datagen
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -seeds 3 -cases 80
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -sandbox docker
-//	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 15
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 16
+//	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 17
 //
 // and submit the source with `uv run ditto generator upload --dir .`.
 //
@@ -31,10 +31,10 @@ import (
 
 // Name and Version identify this generator in the pack's provenance.
 // Version 4 declares the newest grading policy the request accepts; version 5
-// adds policy 16.
+// adds policy 16; version 6 adds policy 17.
 const (
 	Name    = "starter-kit"
-	Version = "5"
+	Version = "6"
 )
 
 // GradingBenchVersions are the pack grading policies the default families are
