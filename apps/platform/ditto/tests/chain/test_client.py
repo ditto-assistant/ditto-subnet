@@ -382,6 +382,109 @@ class TestGetExtrinsic:
                 await client.get_extrinsic(block_number=100, extrinsic_index=7)
 
 
+# Decoded shape of finney block 9446185 extrinsic 12 (SN-455): the
+# confirmed 0.1 TAO upload payment Pylon reported as not found.
+_SN455_BLOCK_HASH = "0x3481dbf84b248f8c082014637df7733a3b5214c0dc027c989bbe32c9669c3fb3"
+_SN455_EXTRINSIC = {
+    "extrinsic_hash": (
+        "0x1d7d3bb3ea8f21af561a5bd131e41e973e2185d8f175d4e91fd6e738d76b4a3e"
+    ),
+    "address": "5FezHVXfg3nUYSQCVEDg2SCDwNJqnqLfaZ2f5aXBMNtmpkgg",
+    "call": {
+        "call_index": "0x0503",
+        "call_function": "transfer_keep_alive",
+        "call_module": "Balances",
+        "call_args": [
+            {
+                "name": "dest",
+                "type": "AccountIdLookupOf",
+                "value": "5Ecr5EGwvg2Xue2MdeJeCVSMLYWYuGcFb7y41eo7rQy3mGDN",
+            },
+            {"name": "value", "type": "Balance", "value": 100_000_000},
+        ],
+    },
+}
+
+
+@pytest.mark.usefixtures("install_pylon_module")
+class TestGetExtrinsicAtBlockHash:
+    """Archive read used when Pylon cannot see a payment extrinsic."""
+
+    async def test_decodes_extrinsic_from_archive_block(
+        self, install_substrate_module: AsyncMock
+    ):
+        filler = MagicMock(value={"call": {"call_module": "Timestamp"}})
+        install_substrate_module.get_block = AsyncMock(
+            return_value={
+                "extrinsics": [filler] * 12 + [MagicMock(value=_SN455_EXTRINSIC)]
+            }
+        )
+        async with ChainClient(make_chain_config()) as client:
+            ext = await client.get_extrinsic_at_block_hash(
+                9446185, _SN455_BLOCK_HASH, 12
+            )
+
+        install_substrate_module.get_block.assert_awaited_with(
+            block_hash=_SN455_BLOCK_HASH
+        )
+        assert ext.block_number == 9446185
+        assert ext.extrinsic_index == 12
+        assert ext.call_module == "Balances"
+        assert ext.call_function == "transfer_keep_alive"
+        assert ext.call_args == {
+            "dest": "5Ecr5EGwvg2Xue2MdeJeCVSMLYWYuGcFb7y41eo7rQy3mGDN",
+            "value": 100_000_000,
+        }
+        assert ext.signer_address == "5FezHVXfg3nUYSQCVEDg2SCDwNJqnqLfaZ2f5aXBMNtmpkgg"
+
+    async def test_index_past_block_end_is_not_found(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.get_block = AsyncMock(
+            return_value={"extrinsics": [MagicMock(value=_SN455_EXTRINSIC)]}
+        )
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ExtrinsicNotFoundError):
+                await client.get_extrinsic_at_block_hash(9446185, _SN455_BLOCK_HASH, 12)
+
+    async def test_provider_failure_falls_through_to_next_archive(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.get_block = AsyncMock(
+            side_effect=[
+                RuntimeError("Block not found"),
+                {"extrinsics": [MagicMock(value=_SN455_EXTRINSIC)]},
+            ]
+        )
+        config = make_chain_config(
+            public_archive_rpc_urls=("wss://a.example", "wss://b.example")
+        )
+        async with ChainClient(config) as client:
+            ext = await client.get_extrinsic_at_block_hash(
+                9446185, _SN455_BLOCK_HASH, 0
+            )
+
+        assert ext.call_function == "transfer_keep_alive"
+
+    async def test_every_archive_failing_is_a_connection_error(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.get_block = AsyncMock(
+            side_effect=RuntimeError("Block not found")
+        )
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainConnectionError):
+                await client.get_extrinsic_at_block_hash(9446185, _SN455_BLOCK_HASH, 12)
+
+    async def test_every_archive_timing_out_is_a_timeout(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.get_block = AsyncMock(side_effect=TimeoutError())
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainTimeoutError):
+                await client.get_extrinsic_at_block_hash(9446185, _SN455_BLOCK_HASH, 12)
+
+
 class TestPutWeights:
     """Tests for ChainClient.put_weights."""
 

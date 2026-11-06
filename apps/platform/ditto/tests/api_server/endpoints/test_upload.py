@@ -1498,6 +1498,123 @@ class TestUploadAgentPaymentVerifierBranches:
         assert response.json()["error_code"] == expected_code
 
 
+class TestUploadAgentSn455PylonMiss:
+    """SN-455: a confirmed payment Pylon reports missing must not 402/3201.
+
+    Runs the real :class:`PaymentVerifier` over a chain whose Pylon read
+    misses (lagging or pruned backend) while the archive providers hold the
+    block, mirroring finney block 9446185 extrinsic 12.
+    """
+
+    _FEE_RAO = 100_000_000
+    _COLDKEY = "5FezHVXfg3nUYSQCVEDg2SCDwNJqnqLfaZ2f5aXBMNtmpkgg"
+    _SEND = "5Ecr5EGwvg2Xue2MdeJeCVSMLYWYuGcFb7y41eo7rQy3mGDN"
+
+    def _wire(
+        self,
+        app: FastAPI,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        archive: Any,
+    ) -> MagicMock:
+        from ditto.api_server.dependencies import get_payment_verifier
+        from ditto.api_server.payment_verifier import PaymentVerifier
+        from ditto.chain.errors import ExtrinsicNotFoundError
+        from ditto.chain.models import ExtrinsicInfo
+
+        _wire_full_stack(app)
+        chain = MagicMock()
+        chain.get_block_hash = AsyncMock(return_value=_GOOD_BLOCK_HASH)
+        chain.get_extrinsic = AsyncMock(
+            side_effect=ExtrinsicNotFoundError("get_extrinsic not found: 404")
+        )
+        if isinstance(archive, Exception):
+            chain.get_extrinsic_at_block_hash = AsyncMock(side_effect=archive)
+        else:
+            chain.get_extrinsic_at_block_hash = AsyncMock(
+                return_value=ExtrinsicInfo(
+                    block_number=13579,
+                    extrinsic_index=7,
+                    extrinsic_hash="0x" + "cd" * 32,
+                    call_module="Balances",
+                    call_function="transfer_keep_alive",
+                    call_args={"dest": self._SEND, "value": self._FEE_RAO},
+                    signer_address=self._COLDKEY,
+                )
+            )
+        chain.check_extrinsic_success = AsyncMock(return_value=True)
+        chain.get_block_timestamp = AsyncMock(return_value=int(time.time()))
+        chain.get_coldkey_for_hotkey = AsyncMock(return_value=self._COLDKEY)
+        oracle = MagicMock()
+        oracle.get_tao_usd = AsyncMock(return_value=Decimal("400"))
+        verifier = PaymentVerifier(chain=chain, oracle=oracle, send_address=self._SEND)
+
+        async def _real_verifier() -> PaymentVerifier:
+            return verifier
+
+        app.dependency_overrides[get_payment_verifier] = _real_verifier
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    fee_amount_rao=self._FEE_RAO, payment_address=self._SEND
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        return chain
+
+    async def test_archive_confirmed_payment_is_accepted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        chain = self._wire(app, monkeypatch, archive=None)
+        data, files = _upload_agent_form()
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        chain.get_extrinsic_at_block_hash.assert_awaited_once_with(
+            13579, _GOOD_BLOCK_HASH, 7
+        )
+
+    async def test_archive_absent_extrinsic_still_returns_3201(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from ditto.chain.errors import ExtrinsicNotFoundError
+
+        self._wire(
+            app, monkeypatch, archive=ExtrinsicNotFoundError("index past block end")
+        )
+        data, files = _upload_agent_form()
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 402
+        assert response.json()["error_code"] == ERROR_CODE_PAYMENT_NOT_FOUND
+
+    async def test_archive_outage_is_retryable_not_3201(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        self._wire(app, monkeypatch, archive=ChainConnectionError("archives down"))
+        data, files = _upload_agent_form()
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 503
+
+
 class TestUploadAgentReplayHandling:
     async def test_exact_retry_returns_original_without_reprocessing(
         self,
