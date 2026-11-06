@@ -1343,6 +1343,47 @@ async def test_submit_admission_failure_is_validator_infrastructure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("respond", "code"),
+    [
+        (lambda: httpx.Response(500, text="panic"), "scorer_submit_unavailable"),
+        (lambda: httpx.Response(502, text="bad gateway"), "scorer_submit_unavailable"),
+        (
+            lambda: (_ for _ in ()).throw(httpx.ConnectError("connection refused")),
+            "scorer_unreachable",
+        ),
+    ],
+    ids=["500", "502", "transport-error"],
+)
+async def test_submit_scorer_fault_is_infrastructure_not_miner_fault(
+    respond: Callable[[], httpx.Response], code: str
+) -> None:
+    """A down or crashing local scorer is ours, not the miner's (SN-445)."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return respond()
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test", run_size="full"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
+                tarball_url="https://example.test/agent.tgz",
+                bench_version=8,
+                dataset_sha256="12" * 32,
+                screened_image_url="https://example.test/image.tar",
+                screened_image_sha256="34" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "56" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
+            )
+    assert caught.value.code == code
+
+
+@pytest.mark.asyncio
 async def test_submit_parks_transient_scorer_capacity_inside_live_lease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1708,15 +1749,11 @@ async def test_timeout_tolerates_older_scorer_without_cancel_route() -> None:
 @pytest.mark.parametrize(
     ("poll", "match"),
     [
-        (lambda: httpx.Response(503, text="scorer restarting"), "poll rejected"),
+        (lambda: httpx.Response(400, text="bad run id"), "poll rejected"),
         (lambda: httpx.Response(200, json=["running"]), "not a JSON object"),
         (lambda: httpx.Response(200, text="<html>bad gateway"), "not a JSON object"),
-        (
-            lambda: (_ for _ in ()).throw(httpx.ConnectError("connection reset")),
-            "poll failed",
-        ),
     ],
-    ids=["non-200", "non-object", "invalid-json", "transport-error"],
+    ids=["non-200", "non-object", "invalid-json"],
 )
 async def test_unreadable_poll_cancels_background_run(
     poll: Callable[[], httpx.Response], match: str
@@ -1740,6 +1777,76 @@ async def test_unreadable_poll_cancels_background_run(
             await client._poll("run-1", expected_bench_version=8)
 
     assert methods == ["GET", "DELETE"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "poll",
+    [
+        lambda: httpx.Response(503, text="scorer restarting"),
+        lambda: httpx.Response(502, text="bad gateway"),
+        lambda: httpx.Response(404, text="run not found"),
+        lambda: (_ for _ in ()).throw(httpx.ConnectError("connection reset")),
+    ],
+    ids=["503", "502", "lost-run-404", "transport-error"],
+)
+async def test_unavailable_scorer_poll_is_infrastructure_not_miner_fault(
+    poll: Callable[[], httpx.Response],
+) -> None:
+    """Our scorer restarting must not spend the miner's attempt (SN-445)."""
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "DELETE":
+            return httpx.Response(202, json={"status": "failed"})
+        return poll()
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=60,
+        dittobench_poll_seconds=0.01,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await client._poll("run-1", expected_bench_version=8)
+
+    assert caught.value.code == "scorer_poll_unavailable"
+    assert methods == ["GET", "GET", "GET", "DELETE"]
+
+
+@pytest.mark.asyncio
+async def test_scorer_poll_blip_recovers_without_failing_the_run() -> None:
+    responses = iter(
+        [
+            httpx.Response(503, text="scorer restarting"),
+            httpx.Response(502, text="bad gateway"),
+        ]
+    )
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "DELETE":
+            return httpx.Response(202, json={"status": "failed"})
+        try:
+            return next(responses)
+        except StopIteration:
+            return httpx.Response(400, text="stop here")
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=60,
+        dittobench_poll_seconds=0.01,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        # Two blips are ridden out; the third, readable poll decides the run.
+        with pytest.raises(DittobenchError, match="poll rejected"):
+            await client._poll("run-1", expected_bench_version=8)
+
+    assert methods == ["GET", "GET", "GET", "DELETE"]
 
 
 @pytest.mark.asyncio
