@@ -28,6 +28,7 @@ from sqlalchemy import (
     column,
     func,
     literal,
+    literal_column,
     null,
     or_,
     select,
@@ -75,6 +76,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.sql.selectable import LateralFromClause
 
 
 # A run must administer the *full* benchmark to be ranked on the leaderboard and
@@ -1286,8 +1288,10 @@ whitelist that function publishes, and the public score projection below keeps
 only these keys of each case."""
 
 
-def public_score_details_column() -> ColumnElement[Any]:
+def public_score_details_projection() -> tuple[LateralFromClause, ColumnElement[Any]]:
     """``scores.details`` with each ``per_case`` entry cut to the public keys.
+
+    Returns a LATERAL source to join onto ``scores`` and the projected column.
 
     ``per_case`` is almost all of a score's telemetry: on bench v15-v17 it is
     about 1.8 MB of JSON per row, most of it each case's tool ``catalog``, while
@@ -1297,9 +1301,26 @@ def public_score_details_column() -> ColumnElement[Any]:
     returned unchanged, so the public projections that read them see the same
     values. Non-object cases and non-array or absent ``per_case`` values pass
     through as they are; case order is preserved.
+
+    Each reference to a TOASTed column decompresses it again, so the document
+    is read once in the LATERAL (``#> '{}'`` returns any JSON value unchanged;
+    ``OFFSET 0`` stops the planner from inlining it back into each reference).
+    Measured on prod for six v17 rows: 336 ms with four references, 51-66 ms
+    this way, the same as serializing the full blob for the client.
     """
+    document = (
+        select(
+            Score.details.op("#>", return_type=JSONB)(
+                literal_column("'{}'::text[]")
+            ).label("doc")
+        )
+        .correlate(Score)
+        .offset(0)
+        .lateral("public_details_source")
+    )
+    doc = document.c.doc
     cases = (
-        func.jsonb_array_elements(Score.details["per_case"])
+        func.jsonb_array_elements(doc.op("->", return_type=JSONB)(literal("per_case")))
         .table_valued("value", with_ordinality="ordinality")
         .alias("public_case")
     )
@@ -1327,21 +1348,23 @@ def public_score_details_column() -> ColumnElement[Any]:
         .scalar_subquery()
     )
     has_case_array = and_(
-        func.jsonb_typeof(Score.details) == literal("object"),
-        func.jsonb_typeof(Score.details["per_case"]) == literal("array"),
+        func.jsonb_typeof(doc) == literal("object"),
+        func.jsonb_typeof(doc.op("->", return_type=JSONB)(literal("per_case")))
+        == literal("array"),
     )
-    return type_coerce(
+    projected = type_coerce(
         case(
             (
                 has_case_array,
-                Score.details.op("-")(literal("per_case")).op("||")(
-                    func.jsonb_build_object(literal("per_case"), reduced_cases)
-                ),
+                doc.op("-", return_type=JSONB)(literal("per_case")).op(
+                    "||", return_type=JSONB
+                )(func.jsonb_build_object(literal("per_case"), reduced_cases)),
             ),
-            else_=Score.details,
+            else_=doc,
         ),
         JSONB,
     )
+    return document, projected
 
 
 async def list_public_agent_scores(
@@ -1349,12 +1372,14 @@ async def list_public_agent_scores(
 ) -> list[Score]:
     """One agent's score rows for a public page, oldest first.
 
-    ``details`` holds :func:`public_score_details_column`, set as the loaded
+    ``details`` holds :func:`public_score_details_projection`, set as the loaded
     value (not a pending change, so nothing is written back). Use these rows for
     public responses only: the per-case answer-key fields are not present.
     """
+    document, public_details = public_score_details_projection()
     result = await session.execute(
-        select(Score, public_score_details_column().label("public_details"))
+        select(Score, public_details.label("public_details"))
+        .join(document, true())
         .where(Score.agent_id == agent_id)
         .order_by(Score.created_at, Score.validator_hotkey)
         .options(defer(Score.details, raiseload=True))

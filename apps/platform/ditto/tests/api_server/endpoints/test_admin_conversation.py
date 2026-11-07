@@ -24,6 +24,14 @@ BASE = "/api/v1/admin/conversation-assessments"
 pytestmark = pytest.mark.asyncio
 
 
+def _pass_idle_cooldown(monkeypatch) -> None:
+    """Move the admission gate's clock past the post-idle cooldown."""
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    later = module.monotonic() + module.ADMISSION_IDLE_COOLDOWN_SECONDS + 1
+    monkeypatch.setattr(module, "monotonic", lambda: later)
+
+
 async def install(app, session_maker, monkeypatch, *, enabled=True, count=6):
     app.state.config = replace(
         app.state.config, conversation_shadow_enabled=enabled, admin_api_token=TOKEN
@@ -258,10 +266,7 @@ async def test_overlapping_idle_polls_build_one_board_and_expose_diagnostics(
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
     assert reader.await_count == 1
     # Once the cooldown has passed, a sequential read rebuilds it fresh.
-    from ditto.api_server.endpoints import admin_conversation as module
-
-    later = module.monotonic() + module.ADMISSION_IDLE_COOLDOWN_SECONDS + 1
-    monkeypatch.setattr(module, "monotonic", lambda: later)
+    _pass_idle_cooldown(monkeypatch)
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
     assert reader.await_count == 2
     final = (await client.get(BASE, headers=HEADERS)).json()["admission_diagnostics"]
@@ -527,6 +532,8 @@ async def test_cap_admits_one_extra_retry_then_waits_without_erasing_reservation
     async with session_maker() as db, db.begin():
         parent = await db.get(ConversationAssessment, UUID(original["assessment_id"]))
         parent.created_at = datetime.now(UTC) - timedelta(days=1, seconds=1)
+    # A day has passed for the reservation, so the idle cooldown has too.
+    _pass_idle_cooldown(monkeypatch)
     retried = (await client.post(BASE + "/claim", headers=HEADERS)).json()
     assert retried["seed"] == second["seed"]
     listing = (await client.get(BASE, headers=HEADERS)).json()
