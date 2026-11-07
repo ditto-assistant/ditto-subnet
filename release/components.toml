@@ -321,6 +321,7 @@ paths = [
   "Dockerfile.pylon",
   "services/pylon/**",
   "scripts/test-pylon-epoch-schedule.sh",
+  "scripts/test-pylon-ca-downgrade.sh",
   ".github/workflows/pylon-epoch-schedule.yml",
   "Dockerfile.stack-release",
   "docker-compose.yml",

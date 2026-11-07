@@ -16,6 +16,30 @@ from anyio.streams.tls import TLSStream
 
 
 class TLSImageTests(unittest.IsolatedAsyncioTestCase):
+    def test_uv_tools(self):
+        for tool in ("uv", "uvx"):
+            with self.subTest(tool=tool):
+                version = subprocess.check_output([tool, "--version"], text=True)
+                self.assertIn("0.13.7", version)
+
+    def test_debian_security_packages(self):
+        # linux-libc-dev supplies headers; it does not update the host kernel.
+        for package, minimum in {
+            "libbrotli1": "1.1.0-2+deb13u1",
+            "perl": "5.40.1-6+deb13u1",
+            "perl-base": "5.40.1-6+deb13u1",
+            "perl-modules-5.40": "5.40.1-6+deb13u1",
+            "libperl5.40": "5.40.1-6+deb13u1",
+            "linux-libc-dev": "6.12.115-2",
+        }.items():
+            with self.subTest(package=package):
+                installed = subprocess.check_output(
+                    ["dpkg-query", "-W", "-f=${Version}", package], text=True
+                )
+                subprocess.run(
+                    ["dpkg", "--compare-versions", installed, "ge", minimum], check=True
+                )
+
     def _check_ca_fingerprints(self, fingerprints: set[str]):
         # Debian DSA-6572-1 removed both cross-signing trust anchors.
         affected = {

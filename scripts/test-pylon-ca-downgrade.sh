@@ -19,10 +19,14 @@ RUN mkdir -p /tmp/synthetic-ca/DEBIAN \
     && dpkg -i /tmp/synthetic-ca.deb \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" gt 20250419+deb13u1
 EOF
-docker buildx build --load --platform linux/amd64 -f "$tmp/Dockerfile" \
-  --build-arg "BASE_IMAGE=$image" -t "$tag" "$tmp" >"$tmp/base.log" 2>&1
+if ! docker buildx build --builder default --load --platform linux/amd64 -f "$tmp/Dockerfile" \
+  --build-arg "BASE_IMAGE=$image" -t "$tag" "$tmp" >"$tmp/base.log" 2>&1; then
+  cat "$tmp/base.log" >&2
+  echo "failed to build the synthetic newer-CA base image" >&2
+  exit 1
+fi
 
-if docker buildx build --platform linux/amd64 --progress plain \
+if docker buildx build --builder default --platform linux/amd64 --progress plain \
   --build-arg "PYLON_BASE_IMAGE=$tag" --build-context "turbobt=$context" \
   -f "$repo_root/Dockerfile.pylon" "$repo_root" >"$tmp/negative.log" 2>&1; then
   echo "Pylon build unexpectedly accepted a newer CA package" >&2

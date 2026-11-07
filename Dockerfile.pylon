@@ -5,19 +5,42 @@ FROM ${PYLON_BASE_IMAGE}
 
 # The base image's system and Certifi stores trust a root with compromised
 # intermediate CA keys, and its AnyIO uses IDNA 2003 for TLS hostname checks.
-# Pin the Debian security update and wheels rather than resolving mutable
+# Pin the Debian security updates and wheels rather than resolving mutable
 # versions during the validator-stack build. The content-addressed Debian
 # snapshot retains this package when the security suite publishes a newer one.
 ADD --checksum=sha256:c10585ac22c7f617a73d394eea29ba71d0356f350ae973b19043d1b017f80f54 \
   https://snapshot.debian.org/file/5f7c51c2ab8fb7a6d49f2cd774e6ac19a692414d \
   /tmp/ca-certificates_20250419+deb13u1_all.deb
-RUN installed="$(dpkg-query -W -f='${Version}' ca-certificates)" \
-    && if dpkg --compare-versions "$installed" gt '20250419+deb13u1'; then \
-         echo "refusing to downgrade ca-certificates from $installed to 20250419+deb13u1" >&2; exit 1; \
-       fi \
+ADD --checksum=sha256:db46824c60fee46aff3cc0be3e5f736bc606cae669b1fb17516a41e8073251a9 https://snapshot.debian.org/file/23b8a33dc62caec5673405e9f3c205bbf4e990b1 /tmp/libbrotli1.deb
+ADD --checksum=sha256:ef145c247787d6f40dcdefd5b417502484827cde0d555998c17fd5b27ec1e1dd https://snapshot.debian.org/file/5a70387ff0f86c1336fe17ce0c6adb1620d20a6c /tmp/perl.deb
+ADD --checksum=sha256:b795464137a0f4d443fc9284f4b93e883fb83883cb533adf300ac660807a352a https://snapshot.debian.org/file/e08e47a606c27af0d1f47901b1d75beec5282bbb /tmp/perl-base.deb
+ADD --checksum=sha256:4c46cdd8f3135aa1c95f07e817f8e5d9be590687441ac1c27e3a8c49400f35ce https://snapshot.debian.org/file/c2434b7c6d75e490cbf036fce4d99970f50ce44f /tmp/perl-modules.deb
+ADD --checksum=sha256:e44777ff47ad248d1debd57e1f96ab5e89061a341008ae39880ba3b5fc15f273 https://snapshot.debian.org/file/af4cd0adb0e67e6e30e04a39ff617d94cc05fc77 /tmp/libperl.deb
+ADD --checksum=sha256:235ba2cb2ea677f4acaf402b027e76d305342870f6d80d822d7ee9713e2f0ff5 https://snapshot.debian.org/file/55e3db6fe5ef3dee1e75082087a5aaeb0511e720 /tmp/linux-libc-dev.deb
+RUN for spec in ca-certificates=20250419+deb13u1 libbrotli1=1.1.0-2+deb13u1 \
+        perl=5.40.1-6+deb13u1 perl-base=5.40.1-6+deb13u1 \
+        perl-modules-5.40=5.40.1-6+deb13u1 libperl5.40=5.40.1-6+deb13u1 \
+        linux-libc-dev=6.12.115-2; do \
+        package="${spec%%=*}"; target="${spec#*=}"; \
+        installed="$(dpkg-query -W -f='${Version}' "$package")" || exit 1; \
+        if dpkg --compare-versions "$installed" gt "$target"; then \
+          echo "refusing to downgrade $package from $installed to $target" >&2; exit 1; \
+        fi; \
+    done \
     && DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/ca-certificates_20250419+deb13u1_all.deb \
+       /tmp/libbrotli1.deb /tmp/perl-base.deb /tmp/perl-modules.deb /tmp/libperl.deb /tmp/perl.deb /tmp/linux-libc-dev.deb \
     && test -z "$(dpkg --audit)" \
-    && rm /tmp/ca-certificates_20250419+deb13u1_all.deb
+    && rm /tmp/ca-certificates_20250419+deb13u1_all.deb /tmp/libbrotli1.deb \
+       /tmp/perl-base.deb /tmp/perl-modules.deb /tmp/libperl.deb /tmp/perl.deb /tmp/linux-libc-dev.deb
+
+# The base uv embeds an affected Rust zip crate. Preserve both uv and uvx
+# with the upstream x86-64 release that removed that dependency.
+ADD --checksum=sha256:287491da03f2a785c70fa75b13e1f849918c2f2b5415fe84876b8214eeb792f9 \
+  https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-unknown-linux-musl.tar.gz \
+  /tmp/uv.tar.gz
+RUN tar -xzf /tmp/uv.tar.gz --strip-components=1 -C /usr/bin \
+      uv-x86_64-unknown-linux-musl/uv uv-x86_64-unknown-linux-musl/uvx \
+    && rm /tmp/uv.tar.gz
 
 ADD --checksum=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1 \
   https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl \
