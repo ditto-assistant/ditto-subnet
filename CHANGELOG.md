@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.458.1 (2026-11-07)
+
+### Bug Fixes
+
+- **platform**: Hold rollout leases until a member passes the required screening policy
+  ([#3406](https://github.com/ditto-assistant/ditto-subnet/pull/3406),
+  [`9f07e7c`](https://github.com/ditto-assistant/ditto-subnet/commit/9f07e7c89f4e22e29633f6e2f20f8b7177dd56d1))
+
+
 ## v0.458.0 (2026-11-06)
 
 ### Bug Fixes
