@@ -116,6 +116,7 @@ from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
 )
+from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 pytestmark = pytest.mark.asyncio
@@ -471,7 +472,7 @@ async def _seed_rollout(
                 name=f"agent-{position}",
                 sha256=f"{position:x}" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256=f"{position:x}" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + f"{position:x}" * 64,
@@ -774,7 +775,7 @@ async def test_historical_rescore_cohort_fills_from_exactly_two_prior_eras(
                         name=f"agent-v{version}-{rank}",
                         sha256=f"{version:x}" * 64,
                         status=AgentStatus.SCORED,
-                        screening_policy_version=9,
+                        screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                         created_at=now + timedelta(seconds=version * 100 + rank),
                     )
                 )
@@ -840,7 +841,7 @@ async def test_historical_rescore_cohort_collapses_attested_owner_family(
                     name=hotkey,
                     sha256=f"{index + 1:x}" * 64,
                     status=AgentStatus.SCORED,
-                    screening_policy_version=9,
+                    screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                     created_at=now + timedelta(seconds=index),
                 )
             )
@@ -916,7 +917,7 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
                 name="sixth",
                 sha256="e" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="e" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "e" * 64,
@@ -974,7 +975,7 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
                 name="leaked-outsider",
                 sha256="d" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=2),
             )
         )
@@ -1102,7 +1103,7 @@ async def test_source_backfill_gate_waits_for_full_inherited_top_ten(
                     name=f"agent-{position}",
                     sha256=f"{position:x}" * 64,
                     status=AgentStatus.SCORED,
-                    screening_policy_version=9,
+                    screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                     screened_image_sha256=f"{position:x}" * 64,
                     screened_image_size_bytes=1024,
                     screened_image_id="sha256:" + f"{position:x}" * 64,
@@ -1213,7 +1214,7 @@ async def test_frozen_top_five_barrier_remains_raw_three_of_three(
                 name="sixth-smoke",
                 sha256="e" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="e" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "e" * 64,
@@ -1266,6 +1267,60 @@ async def test_frozen_top_five_barrier_remains_raw_three_of_three(
         )
         assert ticket is not None
         assert ticket.agent_id == sixth_id
+
+
+async def test_rollout_lease_waits_for_member_to_pass_the_required_policy(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A rollout lease is issued only when its score can be accepted.
+
+    ``POST /validator/score`` rejects any agent below the effective required
+    screening policy ("agent is not evaluatable"). Before this guard the rollout
+    lane checked only the contract floor, so after a scheduled activation it
+    kept leasing members that were mid-rescreen; every score bounced and each
+    bounce spent one of the member's fail-once slots (bench v17, 2026-11-06).
+    """
+    from ditto.screener_policy_state import (
+        effective_screening_policy_version,
+        update_effective_screener_policy,
+    )
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_rollout_session(session_maker, now) as (
+        session,
+        priority_ids,
+        _rollout,
+    ):
+        floor = effective_screening_policy_version()
+        for agent_id in priority_ids:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.screening_policy_version = floor
+        await session.flush()
+        # A scheduled activation raises the requirement: every member is now
+        # stale and re-entering screening, so no lease can produce a score.
+        update_effective_screener_policy(floor + 1, rescreen_scored=False)
+        stale = await issue_rollout_ticket(
+            session,
+            validator_hotkey="validator-a",
+            now=now,
+            ttl=timedelta(minutes=90),
+        )
+        assert stale is None
+
+        # The first member passes the new policy; only it is leasable.
+        rescreened = await session.get(Agent, priority_ids[0])
+        assert rescreened is not None
+        rescreened.screening_policy_version = floor + 1
+        await session.flush()
+        ticket = await issue_rollout_ticket(
+            session,
+            validator_hotkey="validator-a",
+            now=now,
+            ttl=timedelta(minutes=90),
+        )
+        assert ticket is not None
+        assert ticket.agent_id == priority_ids[0]
 
 
 async def test_parallel_rollout_slots_stay_distinct_inside_frozen_priority_five(
@@ -1395,7 +1450,7 @@ async def test_five_agents_remain_v2_at_two_of_three_then_activate_atomically(
                 name="v2-only",
                 sha256="e" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=1),
             )
         )
@@ -2017,7 +2072,7 @@ async def test_rollout_preempts_idle_source_lease_only_when_target_work_exists(
                 name="ordinary-v2-work",
                 sha256="ab" * 32,
                 status=AgentStatus.EVALUATING,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=1),
             )
         )
@@ -2078,7 +2133,7 @@ async def test_rollout_preempts_idle_source_lease_only_when_target_work_exists(
                 name="expired-deadline-v2-work",
                 sha256="bc" * 32,
                 status=AgentStatus.EVALUATING,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=2),
             )
         )
@@ -2174,7 +2229,7 @@ async def test_rollout_never_preempts_a_lease_behind_a_frozen_capacity_blob(
                 name="ordinary-v2-work",
                 sha256="ab" * 32,
                 status=AgentStatus.EVALUATING,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=1),
             )
         )
@@ -2240,7 +2295,7 @@ async def test_rollout_does_not_serve_or_preempt_noncanonical_lease(
                 name=f"ordinary-{purpose}",
                 sha256="fa" * 32,
                 status=AgentStatus.EVALUATING,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now,
             )
         )
@@ -2472,7 +2527,7 @@ async def test_legacy_scored_top_five_recovers_seed_and_converges_idempotently(
             )
             rising_attempt.status = "passed"
             rising_attempt.finished_at = now + timedelta(seconds=4)
-            legacy.screening_policy_version = 9
+            legacy.screening_policy_version = SCREENING_FLOOR_POLICY_VERSION
             legacy.screened_image_sha256 = "1" * 64
             legacy.screened_image_size_bytes = 1024
             legacy.screened_image_id = "sha256:" + "2" * 64
@@ -2853,7 +2908,7 @@ async def test_capable_validator_cannot_automatically_seed_rollout_work(
                     name=f"auto-{position}",
                     sha256=f"{position:x}" * 64,
                     status=AgentStatus.SCORED,
-                    screening_policy_version=9,
+                    screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                     screened_image_sha256=f"{position:x}" * 64,
                     screened_image_size_bytes=1024,
                     screened_image_id="sha256:" + f"{position:x}" * 64,
@@ -3701,7 +3756,7 @@ async def _seed_members(
                 name=f"agent-{position}",
                 sha256=f"{position:x}" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256=f"{position:x}" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + f"{position:x}" * 64,
@@ -4054,7 +4109,7 @@ async def _seed_non_member_ranked_agent(
             name=f"outsider-{index}",
             sha256=digest,
             status=AgentStatus.SCORED,
-            screening_policy_version=9,
+            screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
             screened_image_sha256=digest,
             screened_image_size_bytes=1024,
             screened_image_id="sha256:" + digest,
@@ -4101,7 +4156,7 @@ async def _append_scoreless_rollout_tail(
             name=f"tail-{suffix}",
             sha256="e" * 64,
             status=AgentStatus.SCORED,
-            screening_policy_version=9,
+            screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
             screened_image_sha256="e" * 64,
             screened_image_size_bytes=1024,
             screened_image_id="sha256:" + "e" * 64,
@@ -4495,7 +4550,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
                 name="agent-tail",
                 sha256="f" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="f" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "f" * 64,
@@ -4521,7 +4576,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
                 name="agent-unfinished",
                 sha256="e" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="e" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "e" * 64,
@@ -4688,7 +4743,7 @@ async def test_activation_recovers_legacy_cohort_with_linked_priority_family(
                 name="agent-6",
                 sha256="6" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(seconds=6),
             )
         )
@@ -5086,7 +5141,7 @@ async def _seed_eligible_v2_era(session, now: datetime, *, count: int) -> None:
                 name=f"cohort-{position}",
                 sha256=f"{position:064x}",
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256=f"{position:064x}",
                 screened_image_size_bytes=1024,
                 screened_image_id=f"sha256:{position:064x}",
@@ -5302,7 +5357,7 @@ async def test_stranded_admission_is_leased_by_the_activated_topup_lane(
                 name="agent-stranded",
                 sha256="f" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="f" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "f" * 64,

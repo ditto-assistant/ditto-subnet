@@ -14,6 +14,7 @@ from sqlalchemy import exists, func, select, true
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import (
+    BenchmarkContract,
     benchmark_contract,
     latest_benchmark_contract,
 )
@@ -41,6 +42,7 @@ from ditto.db.queries.dueling_season_window import (
     dueling_season_window,
     season_scope_predicate,
 )
+from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
@@ -1795,6 +1797,28 @@ async def _desired_season_scope(
     )
 
 
+def rollout_member_policy_predicate(
+    contract: BenchmarkContract,
+) -> ColumnElement[bool]:
+    """Screening-policy gate shared by every rollout-member lease path.
+
+    A lease is only worth issuing if ``POST /validator/score`` will accept the
+    result, and that endpoint requires the platform's *effective* screening
+    policy, not merely the contract's floor. After a scheduled activation raises
+    the required version, members still on the old version re-enter screening;
+    leasing them during that window produced scores that were all rejected with
+    ``agent is not evaluatable`` and burned their fail-once retry budget (bench
+    v17, 2026-11-06: crown-v210 and dan0l exhausted inside the v14 rescreen
+    window). Hold the member until it passes the required policy instead.
+
+    Read at statement-build time, matching ``queue_candidate_predicate``.
+    """
+    return Agent.screening_policy_version >= max(
+        contract.minimum_screening_policy_version,
+        effective_screening_policy_version(),
+    )
+
+
 def _rollout_member_candidates(
     *,
     rollout: BenchmarkRollout,
@@ -1894,7 +1918,7 @@ def _rollout_member_candidates(
         .where(
             BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
             Agent.status.in_(ROLLOUT_SCOREABLE_STATUSES),
-            Agent.screening_policy_version >= contract.minimum_screening_policy_version,
+            rollout_member_policy_predicate(contract),
             complete_screened_image,
             ~already_scored,
             ~already_ticketed,
@@ -2077,7 +2101,7 @@ async def _issue_rollout_member_ticket(
     )
     existing_statement = existing_statement.where(
         Agent.status.in_(ROLLOUT_SCOREABLE_STATUSES),
-        Agent.screening_policy_version >= contract.minimum_screening_policy_version,
+        rollout_member_policy_predicate(contract),
         complete_screened_image,
     )
     existing = await session.scalar(existing_statement)
