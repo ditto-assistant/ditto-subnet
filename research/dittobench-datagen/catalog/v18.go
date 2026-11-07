@@ -1,243 +1,391 @@
 package catalog
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"sort"
 	"strings"
 	"sync"
+	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-// Bench v18 production-sized connector catalog.
+// Bench v18 production catalog.
 //
-// A real Ditto workspace with its connectors enabled offers far more than the
-// v15/v16 surface (about 235 tools). Measured read-only in production on
-// 2026-11-07 for one owner account: 128 first-party tools plus 1,282 enabled
-// toolkit tools across 15 toolkits, with a steep skew (the two largest
-// toolkits hold 328 and 314 tools, the smallest 7), plus custom MCP servers.
-// A harness that hands the whole menu to the model on every turn cannot keep
-// that up; one that defers or searches tools can, which is what Ditto's own
-// harness does. V18 therefore splices V18BulkToolkits into every seed's v16
-// surface: 1,282 more connector tools at the production toolkit sizes, so
-// tool search becomes part of the run's priced cost as it is in the product.
+// A real Ditto workspace offers its first-party tools plus every tool of every
+// toolkit the user enables. V18 builds each seed's menu from a PINNED snapshot
+// of real toolkits (the production Composio mirror) and of Ditto's
+// first-party tool catalog. The seed picks whole toolkits at random until the
+// seed's menu holds between V18MinTools and V18MaxTools tools, so the skew
+// stays realistic: a few huge toolkits, many small ones. A harness that hands
+// the whole menu to the model on every turn cannot keep that up; one that
+// defers or searches tools can, which is what Ditto's own harness does.
 //
-// The toolkits reuse the production SIZES, not the production apps. The
-// largest production toolkits (email, calendar, project boards, issue
-// trackers, wikis) are either capabilities the product tools own or apps a
-// v16 seed can link, and a bulk tool there would either be a defensible answer
-// to a generated request or contradict the app's linked state. Every bulk
-// toolkit is an app no v16 seed links (v16ConnectorScripts) and whose
-// capability no product tool or coined decoy owns. Like every unlinked
-// connector, each bulk tool is answered "not connected" by the mock endpoint,
-// performs nothing, and is never expected by a scored case, so calling one is
-// an ordinary extra call. Descriptions carry no link-state wording
-// (HasLinkStatePhrase) and run 140 to 280 characters, the production range.
+// Contract rules:
 //
-// The bank is frozen: changing a toolkit, a noun, a verb or a template
-// changes v18 bytes and needs a new bench version. Membership is the same on
-// every seed (the production size is the point); the description variants and
-// the splice positions are seeded.
+//   - The snapshot is never read live. Generation loads a snapshot file whose
+//     SHA-256 must equal V18CatalogSnapshotSHA256 and fails closed otherwise,
+//     so every validator generates identical datasets. Changing the snapshot
+//     is a new bench version.
+//   - Graded cases stay on tools the datagen simulates (the v16 surface).
+//     Snapshot tools are realistic bulk: every one is refused by the mock
+//     endpoint and performs nothing, and no case expects one.
+//   - Toolkits whose capability a product tool owns (email, calendar, web
+//     search, maps, weather, translation, images, video) are never sampled, so
+//     a snapshot tool is never a defensible answer to a generated request. A
+//     toolkit for an app the seed links (V16ConnectorPlanForSeed) is skipped
+//     on that seed, so a linked app never shows tools that say "not connected".
+//   - Descriptions are paraphrased per seed (v18Paraphrase), so a published
+//     catalog cannot simply be memorized.
+//
+// The snapshot carries no input schemas for toolkit tools (the production
+// mirror stores none), so each renders one optional free-form argument.
+// First-party tools keep their own schemas.
 
-// V18BulkToolkit is one production-sized connector toolkit.
-type V18BulkToolkit struct {
-	Slug string
-	Name string
-	// Size is the number of tools the toolkit contributes.
-	Size int
-	// Space names where the toolkit's objects live ("workspace", "account").
-	Space string
-	// Objects are the top-level resources, in tool order; Aspects are the
-	// sub-resources each object carries.
-	Objects []string
-	Aspects []string
+// V18MinTools and V18MaxTools bound one seed's whole menu.
+const (
+	V18MinTools = 1400
+	V18MaxTools = 5000
+)
+
+// V18CatalogSnapshotSHA256 pins the snapshot every v18 dataset is built
+// from. Empty until the production snapshot is pinned: v18 generation fails
+// closed until then (V18SnapshotReady).
+const V18CatalogSnapshotSHA256 = ""
+
+// V18CatalogSnapshotEnv names the snapshot file a process loads.
+const V18CatalogSnapshotEnv = "DITTOBENCH_V18_CATALOG_SNAPSHOT"
+
+// V18Snapshot is the pinned catalog snapshot (gzip-compressed JSON).
+type V18Snapshot struct {
+	Source     string                 `json:"source"`
+	CapturedAt string                 `json:"captured_at"`
+	Toolkits   []V18SnapshotToolkit   `json:"toolkits"`
+	FirstParty []V18SnapshotFirstTool `json:"first_party"`
 }
 
-// V18BulkToolkits are the frozen v18 toolkits, largest first, at the
-// production toolkit sizes (sum 1,282).
-var V18BulkToolkits = []V18BulkToolkit{
-	{"smartsheet", "Smartsheet", 328, "workspace", []string{"sheet", "row", "column", "report", "dashboard", "workspace folder", "form", "automation rule", "proof", "update request", "template", "cross-sheet reference"}, []string{"attachment", "comment", "share", "cell history", "summary field", "discussion", "filter"}},
-	{"zendesk", "Zendesk", 314, "help center", []string{"ticket", "requester", "organization", "agent group", "macro", "view", "trigger", "help center article", "satisfaction rating", "ticket field", "brand", "SLA policy"}, []string{"tag", "attachment", "audit", "custom field", "follower", "internal note", "metric"}},
-	{"bitbucket", "Bitbucket", 127, "workspace", []string{"repository", "pull request", "pipeline", "branch restriction", "deploy key", "snippet", "project"}, []string{"comment", "permission", "webhook"}},
-	{"dropbox", "Dropbox", 92, "account", []string{"file", "folder", "shared link", "file request", "team folder"}, []string{"revision", "member", "lock"}},
-	{"coda", "Coda", 70, "workspace", []string{"doc", "table", "formula", "control", "pack"}, []string{"permission", "row"}},
-	{"intercom", "Intercom", 61, "workspace", []string{"contact", "company", "segment", "help article", "data attribute"}, []string{"tag", "note"}},
-	{"quip", "Quip", 57, "site", []string{"document", "spreadsheet", "folder", "live app"}, []string{"member", "section"}},
-	{"sheets", "Google Sheets", 50, "account", []string{"spreadsheet", "worksheet", "named range", "pivot table"}, []string{"protection", "filter view"}},
-	{"box", "Box", 47, "enterprise account", []string{"file", "folder", "collaboration", "retention policy"}, []string{"version", "metadata"}},
-	{"excel", "Excel Online", 46, "OneDrive", []string{"workbook", "worksheet", "table", "chart"}, []string{"range", "format"}},
-	{"airtable", "Airtable", 26, "workspace", []string{"base", "table", "field", "view"}, []string{"record"}},
-	{"zoom", "Zoom", 25, "account", []string{"webinar", "recording", "room", "phone queue"}, []string{"registrant"}},
-	{"evernote", "Evernote", 16, "account", []string{"notebook", "note", "tag"}, nil},
-	{"hootsuite", "Hootsuite", 16, "dashboard", []string{"social profile", "scheduled post", "stream"}, nil},
-	{"figma", "Figma", 7, "team", []string{"design file", "component library"}, nil},
+// V18SnapshotToolkit is one real toolkit, whole.
+type V18SnapshotToolkit struct {
+	Slug  string            `json:"slug"`
+	Name  string            `json:"name"`
+	Tools []V18SnapshotTool `json:"tools"`
 }
 
-// v18Verb is one action every bulk object offers.
-type v18Verb struct {
-	Key string
-	// Does renders the first sentence: %[1]s = resource, %[2]s = app,
-	// %[3]s = space.
-	Does string
-	// Needs is the required parameter shape: "id", "name" or "query".
-	Needs string
+// V18SnapshotTool is one toolkit tool: its slug and description.
+type V18SnapshotTool struct {
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
 }
 
-// v18Verbs are the bulk actions, in tool order.
-var v18Verbs = []v18Verb{
-	{"list", "List every %[1]s in the user's %[2]s %[3]s, newest first", "query"},
-	{"get", "Fetch one %[1]s from the user's %[2]s %[3]s by its identifier", "id"},
-	{"create", "Create a new %[1]s in the user's %[2]s %[3]s", "name"},
-	{"update", "Change the fields of an existing %[1]s in the user's %[2]s %[3]s", "id"},
-	{"delete", "Permanently delete a %[1]s from the user's %[2]s %[3]s", "id"},
-	{"search", "Search the %[1]s records of the user's %[2]s %[3]s by keyword", "query"},
-	{"archive", "Archive a %[1]s in the user's %[2]s %[3]s so it stops appearing in lists", "id"},
-	{"restore", "Restore an archived %[1]s in the user's %[2]s %[3]s", "id"},
-	{"export", "Export a %[1]s from the user's %[2]s %[3]s as a downloadable file", "id"},
-	{"copy", "Duplicate a %[1]s inside the user's %[2]s %[3]s", "id"},
+// V18SnapshotFirstTool is one Ditto first-party tool with its schema.
+type V18SnapshotFirstTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
 }
 
-// v18DetailTemplates are the second sentence of a bulk description, seeded
-// per tool: %[1]s = resource, %[2]s = app.
-var v18DetailTemplates = []string{
-	"Returns the %[1]s's identifier, title, owner and last-modified time exactly as %[2]s reports them.",
-	"Pass identifiers exactly as %[2]s shows them; the response echoes the %[1]s's id and its current state.",
-	"Results follow %[2]s's own field names and page in batches of fifty, with a cursor for the next page of %[1]s data.",
-	"Only fields the user can already see in %[2]s are returned, and the %[1]s's audit trail records the call.",
-	"The call is applied with the user's own %[2]s permissions and fails if the %[1]s is outside their access.",
-	"Use the %[1]s id from an earlier %[2]s list or search result; display names are not accepted here.",
-}
+var (
+	v18SnapshotMu     sync.RWMutex
+	v18SnapshotLoaded *V18Snapshot
+	v18SnapshotErr    = errors.New("v18 catalog snapshot not loaded: set " + V18CatalogSnapshotEnv)
+	v18SnapshotOnce   sync.Once
+	v18Index          map[string]string
+)
 
-// v18BulkTool is one rendered bulk tool before seeding.
-type v18BulkTool struct {
-	kit      V18BulkToolkit
-	verb     v18Verb
-	resource string // display form ("sheet comment")
-	key      string // tool-name form ("sheet_comment")
-}
-
-func (t v18BulkTool) name() string { return t.kit.Slug + "_" + t.verb.Key + "_" + t.key }
-
-// v18BulkUniverse enumerates every toolkit's tools in frozen order: objects
-// first (every verb), then each object's aspects (every verb), until the
-// toolkit reaches its Size. Names that collide with the v15 connector pool are
-// skipped so a bulk tool never shares a name with a pool tool.
-func v18BulkUniverse() []v18BulkTool {
-	pool := map[string]bool{}
-	for _, t := range connectorUniverse() {
-		pool[t.name()] = true
+// LoadV18Snapshot verifies raw against want and decodes it.
+func LoadV18Snapshot(raw []byte, want string) (*V18Snapshot, error) {
+	sum := sha256.Sum256(raw)
+	if got := hex.EncodeToString(sum[:]); want == "" || got != want {
+		return nil, fmt.Errorf("v18 catalog snapshot sha256 %s does not match the pinned %q", got, want)
 	}
-	out := make([]v18BulkTool, 0, 1300)
-	for _, kit := range V18BulkToolkits {
-		var resources [][2]string
-		for _, object := range kit.Objects {
-			resources = append(resources, [2]string{object, v18Key(object)})
-		}
-		for _, aspect := range kit.Aspects {
-			for _, object := range kit.Objects {
-				resources = append(resources, [2]string{object + " " + aspect, v18Key(object + " " + aspect)})
-			}
-		}
-		count := 0
-		for _, resource := range resources {
-			for _, verb := range v18Verbs {
-				if count == kit.Size {
-					break
-				}
-				t := v18BulkTool{kit: kit, verb: verb, resource: resource[0], key: resource[1]}
-				if pool[t.name()] {
-					continue
-				}
-				out = append(out, t)
-				count++
-			}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("v18 catalog snapshot: %w", err)
+	}
+	decoded, err := io.ReadAll(zr)
+	if err != nil {
+		return nil, fmt.Errorf("v18 catalog snapshot: %w", err)
+	}
+	var snap V18Snapshot
+	if err := json.Unmarshal(decoded, &snap); err != nil {
+		return nil, fmt.Errorf("v18 catalog snapshot: %w", err)
+	}
+	return &snap, nil
+}
+
+// useV18Snapshot installs a verified snapshot for the process.
+func useV18Snapshot(snap *V18Snapshot) {
+	v18SnapshotMu.Lock()
+	defer v18SnapshotMu.Unlock()
+	v18SnapshotLoaded, v18SnapshotErr = snap, nil
+	index := map[string]string{}
+	for _, kit := range snap.Toolkits {
+		for _, tool := range kit.Tools {
+			index[tool.Slug] = kit.Name
 		}
 	}
-	return out
+	for _, tool := range snap.FirstParty {
+		index[tool.Name] = "Ditto"
+	}
+	v18Index = index
 }
 
-func v18Key(display string) string {
-	return strings.NewReplacer(" ", "_", "-", "_").Replace(strings.ToLower(display))
+// V18SnapshotReady loads the pinned snapshot from V18CatalogSnapshotEnv once
+// and reports whether v18 generation can run. Nothing below v18 calls it.
+func V18SnapshotReady() error {
+	v18SnapshotOnce.Do(func() {
+		path := os.Getenv(V18CatalogSnapshotEnv)
+		if path == "" {
+			if testing.Testing() {
+				// Test binaries without a snapshot use the deterministic
+				// fixture, so suites stay hermetic. Production binaries never
+				// reach this branch.
+				useV18Snapshot(V18FixtureSnapshot())
+			}
+			return
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			v18SnapshotMu.Lock()
+			v18SnapshotErr = fmt.Errorf("v18 catalog snapshot: %w", err)
+			v18SnapshotMu.Unlock()
+			return
+		}
+		snap, err := LoadV18Snapshot(raw, V18CatalogSnapshotSHA256)
+		if err != nil {
+			v18SnapshotMu.Lock()
+			v18SnapshotErr = err
+			v18SnapshotMu.Unlock()
+			return
+		}
+		useV18Snapshot(snap)
+	})
+	v18SnapshotMu.RLock()
+	defer v18SnapshotMu.RUnlock()
+	return v18SnapshotErr
 }
 
-// V18BulkToolCount is the number of bulk tools every v18 seed carries.
-func V18BulkToolCount() int { return len(v18BulkUniverse()) }
+func v18Snapshot() *V18Snapshot {
+	if err := V18SnapshotReady(); err != nil {
+		// Generation entry points check V18SnapshotReady first; reaching here
+		// means a caller skipped it, and silently serving the v16 menu would
+		// be a different dataset.
+		panic(err)
+	}
+	v18SnapshotMu.RLock()
+	defer v18SnapshotMu.RUnlock()
+	return v18SnapshotLoaded
+}
 
-// v18BulkDefinition renders one bulk tool for a seed.
-func v18BulkDefinition(seed int64, t v18BulkTool) protocol.ToolDefinition {
-	does := fmt.Sprintf(t.verb.Does, t.resource, t.kit.Name, t.kit.Space)
-	detail := v18DetailTemplates[v13Pick(seed, "v18-bulk-desc:"+t.name(), len(v18DetailTemplates))]
-	description := does + ". " + fmt.Sprintf(detail, t.resource, t.kit.Name)
-	idParam := t.key + "_id"
-	var parameters []byte
-	switch t.verb.Needs {
-	case "id":
-		parameters = schema([]string{idParam},
-			prop{name: idParam, typ: "string", desc: fmt.Sprintf("%s %s identifier", t.kit.Name, t.resource)})
-	case "name":
-		parameters = schema([]string{"name"},
-			prop{name: "name", typ: "string", desc: fmt.Sprintf("name of the new %s", t.resource)},
-			prop{name: "parent_id", typ: "string", desc: "optional identifier of the containing item"})
+// v18ExcludedCapabilities are toolkit slug fragments whose capability a
+// product tool or coined decoy owns. Matching toolkits are never sampled.
+var v18ExcludedCapabilities = []string{
+	"gmail", "outlook", "mail", "calendar", "calendly", "cal_com",
+	"search", "serp", "tavily", "exa", "perplexity", "brave", "bing", "duckduckgo",
+	"maps", "weather", "translat", "deepl", "image", "dalle", "midjourney", "stability",
+	"youtube", "vimeo", "video", "memory", "reminder",
+}
+
+// v18ToolkitEligible reports whether a toolkit may be sampled on any seed.
+func v18ToolkitEligible(kit V18SnapshotToolkit) bool {
+	if len(kit.Tools) == 0 {
+		return false
+	}
+	slug := strings.ToLower(kit.Slug)
+	for _, fragment := range v18ExcludedCapabilities {
+		if strings.Contains(slug, fragment) {
+			return false
+		}
+	}
+	return true
+}
+
+// v18SampledToolkits returns the toolkits one seed offers, in sampled order,
+// and the target menu size the seed drew. base is the size of the rest of the
+// menu (the v16 surface plus first-party tools).
+func v18SampledToolkits(seed int64, snap *V18Snapshot, base int) ([]V18SnapshotToolkit, int) {
+	linked := map[string]bool{}
+	for _, app := range V16ConnectorPlanForSeed(seed).Linked {
+		linked[strings.ToLower(app.Slug)] = true
+	}
+	var eligible []V18SnapshotToolkit
+	for _, kit := range snap.Toolkits {
+		if v18ToolkitEligible(kit) && !linked[strings.ToLower(kit.Slug)] {
+			eligible = append(eligible, kit)
+		}
+	}
+	target := V18MinTools + v13Pick(seed, "v18-catalog-target", V18MaxTools-V18MinTools+1)
+	total := base
+	var out []V18SnapshotToolkit
+	for _, index := range v13Perm(seed, "v18-toolkit-order", len(eligible)) {
+		if total >= target {
+			break
+		}
+		kit := eligible[index]
+		if total+len(kit.Tools) > V18MaxTools {
+			continue
+		}
+		out = append(out, kit)
+		total += len(kit.Tools)
+	}
+	return out, target
+}
+
+// v18Paraphrase rewrites a snapshot description for one seed: a seeded subset
+// of v18Synonyms and a seeded framing. The meaning is unchanged.
+func v18Paraphrase(seed int64, key, toolkit, description string) string {
+	text := strings.TrimSpace(description)
+	for i, pair := range v18Synonyms {
+		if v13Pick(seed, fmt.Sprintf("v18-syn:%s:%d", key, i), 2) == 1 {
+			text = v18ReplaceWord(text, pair[0], pair[1])
+		}
+	}
+	if text != "" && !strings.HasSuffix(text, ".") {
+		text += "."
+	}
+	switch v13Pick(seed, "v18-frame:"+key, 3) {
+	case 1:
+		return toolkit + ": " + text
+	case 2:
+		return text + " (" + toolkit + ")"
 	default:
-		parameters = schema(nil,
-			prop{name: "query", typ: "string", desc: "optional keyword filter"},
-			prop{name: "cursor", typ: "string", desc: "optional cursor from the previous page"})
+		return text
 	}
-	return protocol.ToolDefinition{Name: t.name(), Description: description, Parameters: parameters}
 }
 
-// V18BulkConnectorsForSeed returns the seed's bulk tools in toolkit order.
-func V18BulkConnectorsForSeed(seed int64) []protocol.ToolDefinition {
-	universe := v18BulkUniverse()
-	out := make([]protocol.ToolDefinition, 0, len(universe))
-	for _, t := range universe {
-		out = append(out, v18BulkDefinition(seed, t))
+// v18Synonyms are meaning-preserving word swaps (word, replacement).
+var v18Synonyms = [][2]string{
+	{"Retrieves", "Fetches"}, {"retrieves", "fetches"}, {"Creates", "Adds"}, {"creates", "adds"},
+	{"Updates", "Modifies"}, {"updates", "modifies"}, {"Deletes", "Removes"}, {"deletes", "removes"},
+	{"Lists", "Returns"}, {"specified", "given"}, {"existing", "current"}, {"information", "details"},
+	{"identifier", "ID"}, {"user's", "account's"}, {"using", "with"}, {"allows", "lets"},
+}
+
+// v18ReplaceWord replaces whole-word occurrences of from with to.
+func v18ReplaceWord(text, from, to string) string {
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		j := strings.Index(text[i:], from)
+		if j < 0 {
+			b.WriteString(text[i:])
+			break
+		}
+		j += i
+		before := j == 0 || !isWordByte(text[j-1])
+		after := j+len(from) >= len(text) || !isWordByte(text[j+len(from)])
+		b.WriteString(text[i:j])
+		if before && after {
+			b.WriteString(to)
+		} else {
+			b.WriteString(from)
+		}
+		i = j + len(from)
+	}
+	return b.String()
+}
+
+func isWordByte(c byte) bool {
+	return c == '_' || c == '\'' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// v18ToolkitSchema is the input schema every snapshot toolkit tool renders.
+var v18ToolkitSchema = schema(nil, prop{name: "input", typ: "string", desc: "optional request for the tool"})
+
+// V18ProductionToolsForSeed returns the snapshot tools one seed offers:
+// first-party tools that the v16 surface does not already carry, then the
+// sampled toolkits' tools, each with its seeded description.
+func V18ProductionToolsForSeed(seed int64) []protocol.ToolDefinition {
+	snap := v18Snapshot()
+	surface := map[string]bool{}
+	for _, def := range v16SeededCatalog(seed) {
+		surface[def.Name] = true
+	}
+	var out []protocol.ToolDefinition
+	for _, tool := range snap.FirstParty {
+		if surface[tool.Name] {
+			continue
+		}
+		surface[tool.Name] = true
+		out = append(out, protocol.ToolDefinition{
+			Name:        tool.Name,
+			Description: v18Paraphrase(seed, tool.Name, "Ditto", tool.Description),
+			Parameters:  append(json.RawMessage(nil), tool.Parameters...),
+		})
+	}
+	kits, _ := v18SampledToolkits(seed, snap, len(surface))
+	for _, kit := range kits {
+		tools := append([]V18SnapshotTool(nil), kit.Tools...)
+		sort.Slice(tools, func(a, b int) bool { return tools[a].Slug < tools[b].Slug })
+		for _, tool := range tools {
+			if surface[tool.Slug] {
+				continue
+			}
+			surface[tool.Slug] = true
+			out = append(out, protocol.ToolDefinition{
+				Name:        tool.Slug,
+				Description: v18Paraphrase(seed, tool.Slug, kit.Name, tool.Description),
+				Parameters:  v18ToolkitSchema,
+			})
+		}
 	}
 	return out
 }
 
-// IsV18BulkConnectorTool reports whether name is a v18 bulk tool, with its
-// toolkit's display name. It is seed-independent, as IsConnectorTool is.
-func IsV18BulkConnectorTool(name string) (appName string, ok bool) {
-	appName, ok = v18BulkIndex()[name]
+// CatalogForSeedChecked is CatalogForSeed for callers that must fail cleanly
+// instead of panicking when a v18 snapshot is missing.
+func CatalogForSeedChecked(benchVersion int, seed int64) ([]protocol.ToolDefinition, error) {
+	if benchVersion >= protocol.BenchVersionV18 {
+		if err := V18SnapshotReady(); err != nil {
+			return nil, err
+		}
+	}
+	return CatalogForSeed(benchVersion, seed), nil
+}
+
+// IsV18ProductionTool reports whether name is a snapshot tool (first-party or
+// toolkit), with its toolkit's display name. It is seed-independent: the mock
+// refuses every snapshot name, offered on this seed or not.
+func IsV18ProductionTool(name string) (appName string, ok bool) {
+	if V18SnapshotReady() != nil {
+		return "", false
+	}
+	v18SnapshotMu.RLock()
+	defer v18SnapshotMu.RUnlock()
+	appName, ok = v18Index[name]
 	return appName, ok
 }
 
-// v18BulkIndex maps every bulk tool name to its toolkit's display name. The
-// bank is frozen, so it is built once.
-var v18BulkIndex = sync.OnceValue(func() map[string]string {
-	index := map[string]string{}
-	for _, t := range v18BulkUniverse() {
-		index[t.name()] = t.kit.Name
-	}
-	return index
-})
-
 // IsConnectorToolForVersion is IsConnectorTool under an explicit contract:
-// from v18 the bulk toolkits are connectors too.
+// from v18 every snapshot tool is refused like an unlinked connector.
 func IsConnectorToolForVersion(name string, benchVersion int) (appName string, ok bool) {
 	if appName, ok := IsConnectorTool(name); ok {
 		return appName, true
 	}
 	if benchVersion >= protocol.BenchVersionV18 {
-		return IsV18BulkConnectorTool(name)
+		return IsV18ProductionTool(name)
 	}
 	return "", false
 }
 
-// v18SeededCatalog is the v16 surface with the bulk toolkits spliced in at
-// seeded positions (their own slot keys, so the v16 order is kept).
+// v18SeededCatalog is the v16 surface with the seed's snapshot tools spliced
+// in at seeded positions (their own slot keys, so the v16 order is kept).
 func v18SeededCatalog(seed int64) []protocol.ToolDefinition {
 	base := v16SeededCatalog(seed)
-	bulk := V18BulkConnectorsForSeed(seed)
-	slots := make([]int, len(bulk))
-	for i := range bulk {
-		slots[i] = v13Pick(seed, fmt.Sprintf("v18-bulk-slot:%d", i), len(base)+1)
-	}
+	extra := V18ProductionToolsForSeed(seed)
 	byPos := make([][]protocol.ToolDefinition, len(base)+1)
-	for i, def := range bulk {
-		byPos[slots[i]] = append(byPos[slots[i]], def)
+	for i, def := range extra {
+		pos := v13Pick(seed, fmt.Sprintf("v18-slot:%d", i), len(base)+1)
+		byPos[pos] = append(byPos[pos], def)
 	}
-	out := make([]protocol.ToolDefinition, 0, len(base)+len(bulk))
+	out := make([]protocol.ToolDefinition, 0, len(base)+len(extra))
 	for pos := 0; pos <= len(base); pos++ {
 		out = append(out, byPos[pos]...)
 		if pos < len(base) {

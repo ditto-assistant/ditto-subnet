@@ -90,6 +90,13 @@ func GenerateDataset(seed int64, prof Profile, benchVersion int) (DatasetArtifac
 // bench_version >= 13 surfaces (see V13ApplyArtifactSurfacePass) and is
 // ignored below v13.
 func GenerateDatasetWithSurface(seed int64, prof Profile, benchVersion int, surface SurfaceOptions) (DatasetArtifact, error) {
+	if benchVersion >= protocol.BenchVersionV18 {
+		// v18's tool menu is built from the pinned production catalog
+		// snapshot; without it the dataset cannot be generated (fail closed).
+		if err := catalog.V18SnapshotReady(); err != nil {
+			return DatasetArtifact{}, fmt.Errorf("bench_version %d: %w", benchVersion, err)
+		}
+	}
 	// v2 is a FROZEN contract, served from a snapshot of the generator as it
 	// stood when v2 shipped (internal/v2gen). It is not a conditional through
 	// the live generator: the v3 anti-gaming work perturbs the shared rng stream
