@@ -202,3 +202,22 @@ func TestValidatePricedCostRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// Bench v18 is the accuracy contract: it must price a run exactly as v17
+// (priced-cost-v2). A cost-rule change is a separate contract decision.
+func TestV18PricesLikeV17(t *testing.T) {
+	for _, usage := range []PricedCostUsage{
+		{ChatComplete: true, Source: PricedCostSourceRelay, PromptTokens: 6_883_894, CompletionTokens: 589_071, EmbeddingTokens: 440_684},
+		{ChatComplete: true, Source: PricedCostSourceRelay, PromptTokens: 22_000_000, CompletionTokens: 1_700_000},
+		{ChatComplete: true, Source: PricedCostSourceRelay},
+	} {
+		v17 := BuildPricedCost(BenchVersionV17, PricedCostEnforce, 350, usage)
+		v18 := BuildPricedCost(BenchVersionV18, PricedCostEnforce, 350, usage)
+		if v17 == nil || v18 == nil {
+			t.Fatal("priced cost missing")
+		}
+		if *v17 != *v18 || v18.ContractID != PricedCostV2ContractID {
+			t.Fatalf("v18 priced cost %+v differs from v17 %+v", *v18, *v17)
+		}
+	}
+}

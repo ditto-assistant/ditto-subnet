@@ -104,6 +104,11 @@ _CONTRACTS = {
     # floor (down from 0.6), and a steeper piecewise-linear penalty curve.
     # Zero-cost (zero-LLM-call) agents receive full factor 1.0 as before.
     17: BenchmarkContract(17, 9, True, False),
+    # v18 is the accuracy contract: the v17 dueling contract with a hardened
+    # first-party datagen half and the unlinked-connector reply rule (review
+    # posture). Scoring is priced-cost-v2 unchanged. Availability is not
+    # activation.
+    18: BenchmarkContract(18, 9, True, False),
 }
 
 

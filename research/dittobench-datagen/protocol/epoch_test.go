@@ -88,8 +88,8 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 		}
 	}
 	newest := NewestSupportedBenchVersion()
-	if newest != versions[len(versions)-1] || newest != BenchVersionV17 {
-		t.Fatalf("newest supported version = %d, want %d (last of %v)", newest, BenchVersionV17, versions)
+	if newest != versions[len(versions)-1] || newest != BenchVersionV18 {
+		t.Fatalf("newest supported version = %d, want %d (last of %v)", newest, BenchVersionV18, versions)
 	}
 	for _, v := range versions {
 		if !SupportedBenchVersion(v) {
@@ -114,7 +114,7 @@ func TestSupportedBenchVersionsAreOneDerivedList(t *testing.T) {
 	if _, err := RotateSeedForVersion(1, beyond); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("rotation error must render the derived list %q: %v", want, err)
 	}
-	if got := SupportedBenchVersionList(); got != "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17" {
+	if got := SupportedBenchVersionList(); got != "2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18" {
 		t.Fatalf("SupportedBenchVersionList() = %q", got)
 	}
 	// Epochs advance monotonically with the version so no two contracts share a
@@ -178,9 +178,9 @@ func TestStagedBenchVersionsAreGeneratableNotSupported(t *testing.T) {
 	if got, _ := DatasetEpochForVersion(BenchVersionV17); got.Format(time.RFC3339) != "2027-09-01T00:00:00Z" {
 		t.Fatalf("v17 epoch = %s", got)
 	}
-	// v18 (the accuracy contract) is staged until the cross-layer PR.
-	if SupportedBenchVersion(BenchVersionV18) || !StagedBenchVersion(BenchVersionV18) || NewestGeneratableBenchVersion() != BenchVersionV18 {
-		t.Fatal("v18 must be staged, generatable and not supported")
+	// v18 (the accuracy contract) left staging with the epoch it was staged with.
+	if !SupportedBenchVersion(BenchVersionV18) || StagedBenchVersion(BenchVersionV18) || NewestGeneratableBenchVersion() != BenchVersionV18 {
+		t.Fatal("v18 must be supported and no longer staged")
 	}
 	if got, _ := DatasetEpochForVersion(BenchVersionV18); got.Format(time.RFC3339) != "2027-10-01T00:00:00Z" {
 		t.Fatalf("v18 epoch = %s", got)

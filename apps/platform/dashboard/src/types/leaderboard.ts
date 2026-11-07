@@ -462,7 +462,7 @@ export interface V9AuthoritativeToolGate {
  * protocol package (`ditto/tests/test_bench_version_pins.py` diffs it).
  */
 export interface V9BaseEvidence {
-  bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
+  bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
   score_gates: {
     rollout_mode: "shadow" | "enforce";
     model_use: V9ModelUseGate;

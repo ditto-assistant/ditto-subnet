@@ -2179,10 +2179,10 @@ jobs:
               .source_revision == $sha and
               .software_version == $version and
               (.source_revision_mismatch | not) and
-              (.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+              (.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
             ' >/dev/null
-          # 17 is the newest advertised contract (priced-cost-v2 cost curve).
-          for bench_version in 8 9 17; do
+          # 18 is the newest advertised contract (the accuracy contract).
+          for bench_version in 8 9 18; do
             headers_file="$(mktemp)"
             body_file="$(mktemp)"
             trap 'rm -f "$headers_file" "$body_file"' EXIT
