@@ -906,7 +906,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   reject_screening_submission:
     'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
   amend_screening_reject_reason:
-    'Correct the public reason on a resolved reject; the reject stands. Confirmation: AMEND PUBLIC REJECT REASON. Requires backroom:write.',
+    'Amend reject reason; decision unchanged. Confirm AMEND PUBLIC REJECT REASON. backroom:write.',
   release_verified_v13_court_clear:
     'Release a held V13 court clear after Platform re-verifies its signed receipt. Confirmation: RELEASE VERIFIED V13 COURT CLEAR. Requires backroom:write.',
   get_queue_policy_settings:
