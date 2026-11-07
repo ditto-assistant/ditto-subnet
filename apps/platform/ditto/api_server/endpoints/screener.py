@@ -5888,6 +5888,11 @@ async def submit_result(
         ):
             raise ScreenerAuthError("completion receipt signature did not verify")
 
+    # Every attempt is build-only once source review is retired; the legacy
+    # deferred marker only distinguishes the signed execution mode below.
+    mechanical_attempt = bool(
+        reported_attempt is not None and reported_attempt.build_only
+    )
     deferred_mechanical_admission = bool(
         reported_attempt is not None
         and reported_attempt.build_only
@@ -5973,7 +5978,7 @@ async def submit_result(
         target = AgentStatus.EVALUATING
         public_reason = (
             MECHANICAL_ADMISSION_PUBLIC_REASON
-            if deferred_mechanical_admission
+            if mechanical_attempt
             else "Bounded source review exhausted; admitted for scoring"
         )
     elif (
@@ -6643,7 +6648,7 @@ async def submit_result(
                             else "Evidence retained on the score-qualified ATH review"
                             if deferred_attempt_lifecycle
                             else MECHANICAL_ADMISSION_PUBLIC_REASON
-                            if deferred_mechanical_admission
+                            if mechanical_attempt
                             else (
                                 "Source-review evidence retained on an admitted "
                                 "submission"
