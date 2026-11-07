@@ -23,10 +23,13 @@ import (
 //     status, order and next-action oracles reach a run.
 //   - business programs: v16/v17 render one family group per seed, always
 //     owner-after-correction (0.973 / 1.000), and three enterprise groups
-//     (0.979 / 0.991). V18 renders three family groups drawn per seed from the
-//     v14 temporal, state-fold and role families (universe.V18FamilyFor) and
-//     one enterprise group.
-//   - personal programs 0.946 / 0.917 over 112 cases: one group -> two.
+//     (0.979 / 0.991). V18 renders three family groups and one enterprise
+//     group: group 0 is holder-vs-actor, the one v14 business family the top
+//     owners still missed on their v15 rows (0.906), and groups 1-2 are drawn
+//     per seed from the other v14 temporal, state-fold and role families
+//     (universe.V18FamilyFor).
+//   - personal programs 0.946 / 0.917 over 112 cases: one group -> two, the
+//     first always subscriptions-renewals (0.850 on v17, 0.891 on v15).
 //   - point-in-time contact 0.946, trip leg 0.964: 3 -> 4 of the world's six
 //     as-of pairs.
 //   - abstention: the probes, not their answerable twins, are where agents

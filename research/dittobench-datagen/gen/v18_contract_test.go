@@ -11,7 +11,7 @@ import (
 // v18KnownVectorWant is the v18 accuracy contract's datagen-half vector (seed
 // 123456789, full profile, public surface salt 0). docs/bench-versions.md and
 // the README publish the same string.
-const v18KnownVectorWant = "46b82f49f6dd56defdcf887d4d242a6dac242168bdace83b6801899e28e2e414"
+const v18KnownVectorWant = "9029ef85b86ac44832ae5f3d7dadd0475cd14fb4271c00db2a6f78c8c5dc46d3"
 
 // V18 is staged: generatable with its own epoch and seed domain, not yet
 // supported. Every lever is gated on bench_version >= 18; the v2..v17 vectors
@@ -112,6 +112,9 @@ func TestV18MemoryMixAcrossSeeds(t *testing.T) {
 			if got := counts[QTAbsence+family]; got != want {
 				t.Fatalf("seed %d: %d %s probes, want %d", seed, got, family, want)
 			}
+		}
+		if f := universe.V13FamilyOfVersion(seed, 0, protocol.BenchVersionV18); f != universe.V14FamilyHolderVsActor {
+			t.Fatalf("seed %d business group 0 is %s, want holder-vs-actor", seed, f)
 		}
 		groups := map[universe.V13Family]bool{}
 		for g := 0; g < 3; g++ {

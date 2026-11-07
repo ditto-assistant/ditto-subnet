@@ -29,7 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
-| 18 (staged) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; no token levers. Known vector `46b82f49f6dd56defdcf887d4d242a6dac242168bdace83b6801899e28e2e414` (`TestV18KnownVector`). |
+| 18 (staged) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; no token levers. Known vector `9029ef85b86ac44832ae5f3d7dadd0475cd14fb4271c00db2a6f78c8c5dc46d3` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1514,8 +1514,8 @@ averaged at least 0.99. The levers below cite the categories they move.
 | --- | ---: | ---: | --- |
 | Story | 36 (6 arcs x 6) | 35 (7 arcs x 5; lesson-claims, status-current, order, x-owner-email dropped first while an arc is over its slot) | lesson-claims 1.000, status-current 0.985; status-disagree 0.879 |
 | Ordinary world | 20 | 19 | 12 answerable twins and 6 staged corrections kept |
-| Business programs | 16 (1 family group, always owner-after-correction, + 12 enterprise) | 16 (3 family groups drawn per seed from `universe.V18BusinessFamilies`, + 4 enterprise) | open program 0.973 / 1.000, enterprise 0.979 / 0.991 |
-| Personal programs | 4 | 8 | 0.946 / 0.917 |
+| Business programs | 16 (1 family group, always owner-after-correction, + 12 enterprise) | 16 (holder-vs-actor + 2 groups drawn per seed from the other `universe.V18BusinessFamilies`, + 4 enterprise) | open program 0.973 / 1.000, enterprise 0.979 / 0.991; holder-vs-actor 0.906 on the top owners' v15 rows |
+| Personal programs | 4 | 8 (subscriptions-renewals + 1 drawn) | 0.946 / 0.917; subscriptions-renewals 0.850 (v17), 0.891 (v15) |
 | Abstention | 12 (2/2/1/1/3/3) | 12 (pure 2, near miss 1, stale-removed 2, cross-user 2, false premise 3, insufficient 2) | probes 0.821-0.946, every answerable twin >= 0.95 |
 | Point-in-time | 6 (3 of 6 pairs) | 8 (4 of 6) | contact 0.946, trip leg 0.964 |
 | Isolation | 9 | 5 | 1.000 over 252 cases |
@@ -1556,7 +1556,7 @@ the v14 families stay `pending-panel` in `universe.V14FamilyMix`.
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV18KnownVector` pins
-`46b82f49f6dd56defdcf887d4d242a6dac242168bdace83b6801899e28e2e414`, with
+`9029ef85b86ac44832ae5f3d7dadd0475cd14fb4271c00db2a6f78c8c5dc46d3`, with
 epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
 `datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
 
