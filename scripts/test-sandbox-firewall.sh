@@ -110,6 +110,41 @@ until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null
 done
 docker rm -f "$name" >/dev/null
 
+# Pause a snapshot writer after it emits partial output. Health must continue
+# reading the previous complete snapshot until the new file is renamed.
+cat > "$tmp/iptables" <<'EOF'
+#!/bin/sh
+if [ "$*" = '-w 5 -S DITTO-SANDBOX-EGRESS' ] && [ -f /run/test-snapshot-pause ]; then
+  rules=$(/usr/sbin/iptables "$@") || exit 1
+  printf '%s\n' "$rules" | sed -n '1p'
+  touch /run/test-snapshot-paused
+  while [ ! -f /run/test-snapshot-resume ]; do /bin/sleep 0.1; done
+  printf '%s\n' "$rules" | sed '1d'
+  exit 0
+fi
+exec /usr/sbin/iptables "$@"
+EOF
+chmod 755 "$tmp/iptables"
+docker run -d --name "$name" --privileged --network none -e DOCKER_TLS_CERTDIR= \
+  -e DOCKER_IPTABLES_LEGACY= -v "$tmp/sleep:/usr/local/bin/sleep:ro" \
+  -v "$tmp/iptables:/usr/local/sbin/iptables:ro" "$image" >/dev/null
+n=0
+until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
+  n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+done
+docker exec "$name" sh -c 'rm /run/test-reconcile-paused; touch /run/test-snapshot-pause /run/test-resume-reconcile'
+n=0
+until docker exec "$name" test -f /run/test-snapshot-paused; do n=$((n + 1)); [ "$n" -lt 90 ] || exit 1; sleep 1; done
+if ! docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then
+  printf 'health failed while a snapshot write was paused\n' >&2; exit 1
+fi
+docker exec "$name" sh -c 'rm /run/test-snapshot-pause; touch /run/test-snapshot-resume'
+n=0
+until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
+  n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+done
+docker rm -f "$name" >/dev/null
+
 docker run -d --name "$name" --privileged --network none -e DOCKER_TLS_CERTDIR= \
   -v "$tmp/iptables-restore:/usr/local/bin/iptables-restore:ro" -v "$tmp/sleep:/usr/local/bin/sleep:ro" \
   -e DOCKER_IPTABLES_LEGACY= --entrypoint sh "$image" -c 'touch /run/test-pause-restore; exec /usr/local/bin/sandbox-docker-entrypoint' >/dev/null

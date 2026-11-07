@@ -168,8 +168,10 @@ maintain_sandbox() {
       sleep 2
     done
     check_forward_hook || fail_closed
-    iptables -w 5 -S DITTO-SANDBOX-EGRESS > "$filter_snapshot" || fail_closed
-    iptables -w 5 -t nat -S DITTO-OPENROUTER-SHIM > "$nat_snapshot" || fail_closed
+    iptables -w 5 -S DITTO-SANDBOX-EGRESS > "$filter_snapshot.tmp" || fail_closed
+    mv -f "$filter_snapshot.tmp" "$filter_snapshot" || fail_closed
+    iptables -w 5 -t nat -S DITTO-OPENROUTER-SHIM > "$nat_snapshot.tmp" || fail_closed
+    mv -f "$nat_snapshot.tmp" "$nat_snapshot" || fail_closed
     touch "$ready" || fail_closed
 
     # Never prune networks; the scorer needs the stable bridge between runs.
