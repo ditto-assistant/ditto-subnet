@@ -204,6 +204,7 @@ from ditto.db.queries.benchmark_rollout import (
 from ditto.db.queries.benchmark_rollout import (
     DatasetPin as RolloutDatasetPin,
 )
+from ditto.db.queries.dueling_season_window import season_scope_predicate
 from ditto.db.queries.moderation_audit import (
     ACTION_PROVENANCE_REVOCATION,
     ACTION_REJECT,
@@ -2094,13 +2095,20 @@ async def _released_agent_status(
     if displaced not in (AgentStatus.SCORED.value, AgentStatus.LIVE.value):
         return AgentStatus.EVALUATING
     bench_version = await active_bench_version(session)
+    # Count the quorum the ranked ledger counts: distinct validators, and on a
+    # dueling version (v16+) only rows inside the current season window, so
+    # an expired season's scores cannot restore a ledger position.
     active_scores = int(
         await session.scalar(
-            select(func.count())
-            .select_from(Score)
-            .where(
+            select(func.count(func.distinct(Score.validator_hotkey))).where(
                 Score.agent_id == agent.agent_id,
                 Score.bench_version == bench_version,
+                await season_scope_predicate(
+                    session,
+                    version_column=Score.bench_version,
+                    season_column=Score.dueling_season_id,
+                    bench_versions=(bench_version,),
+                ),
             )
         )
         or 0

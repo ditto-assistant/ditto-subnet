@@ -7148,6 +7148,7 @@ class TestQuarantineAdmin:
         *,
         active_scores: int,
         released: bool,
+        score_season_id: UUID | None = None,
     ) -> tuple[UUID, UUID]:
         """A scored agent whose policy rescreen was quarantined.
 
@@ -7170,6 +7171,7 @@ class TestQuarantineAdmin:
                         agent_id=agent_id,
                         bench_version=bench_version,
                         validator_hotkey=f"5ScoredRescreenValidator{index}",
+                        dueling_season_id=score_season_id,
                         run_id=str(uuid4()),
                         signature=None,
                         seed=1,
@@ -7312,6 +7314,71 @@ class TestQuarantineAdmin:
 
         assert released.status_code == 200
         assert released.json()["agent_status"] == AgentStatus.EVALUATING
+
+    @pytest.mark.parametrize(
+        ("score_season_index", "expected_status"),
+        [(1, AgentStatus.EVALUATING), (4, AgentStatus.SCORED)],
+    )
+    async def test_release_counts_only_the_current_dueling_season_quorum(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        score_season_index: int,
+        expected_status: AgentStatus,
+    ) -> None:
+        """On a dueling era an expired season's scores restore no ledger slot.
+
+        Four seasons exist and the window is the latest two, so a quorum scored
+        in season 1 counts for nothing while one in season 4 is complete.
+        """
+        from ditto.db.models import DuelingSeason
+        from ditto.tests.legacy_era import grandfather_active_era
+
+        headers = self._quarantine_admin(app)
+        now = datetime.now(UTC)
+        season_ids = [uuid4() for _ in range(4)]
+        async with session_maker() as session, session.begin():
+            await grandfather_active_era(
+                session, version=16, now=now - timedelta(days=30)
+            )
+            for index, season_id in enumerate(season_ids, start=1):
+                session.add(
+                    DuelingSeason(
+                        id=season_id,
+                        bench_version=16,
+                        season_index=index,
+                        shadow=False,
+                        status="closed" if index < 4 else "open",
+                        commitment="ab" * 32,
+                        secret=bytes(32),
+                        committed_at=now,
+                        rounds_per_season=1,
+                        anchor_block=index,
+                        anchor_block_hash="0x" + "ef" * 32,
+                        season_seed=f"{index:02x}" * 32,
+                        columns=[],
+                    )
+                )
+        async with session_maker() as session:
+            assert await active_bench_version(session) == 16
+        _agent_id, quarantine_id = await self._seed_quarantined_scored_rescreen(
+            session_maker,
+            active_scores=3,
+            released=False,
+            score_season_id=season_ids[score_season_index - 1],
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        released = await client.post(
+            f"/api/v1/admin/screening-quarantines/{quarantine_id}/resolve",
+            headers=headers,
+            json={"resolution": "release", "reason": "False positive on rescreen"},
+        )
+
+        assert released.status_code == 200
+        assert released.json()["agent_status"] == expected_status
 
     async def test_stranded_release_can_be_corrected_once(
         self,
