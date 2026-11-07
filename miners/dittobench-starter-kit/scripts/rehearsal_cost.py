@@ -348,9 +348,14 @@ def route_harness_through(meter: CostMeter, env: dict[str, str]) -> dict[str, st
     return routed
 
 
-def estimate(meter: CostMeter | None, report: dict[str, Any]) -> dict[str, Any] | None:
+def estimate(
+    meter: CostMeter | None,
+    report: dict[str, Any],
+    bench_version: int = PRICED_COST_MIN_BENCH_VERSION,
+) -> dict[str, Any] | None:
     """The estimate for a finished run: the scorer's own ``details.priced_cost``
-    when it priced the run, else the meter's chat totals under the same rule."""
+    when it priced the run, else the meter's chat totals under the same rule
+    (the rehearsed ``bench_version`` picks the v1 or v2 contract)."""
     details = report.get("details") or {}
     scored = details.get("priced_cost")
     if isinstance(scored, dict) and scored.get("result") == "priced":
@@ -376,6 +381,7 @@ def estimate(meter: CostMeter | None, report: dict[str, Any]) -> dict[str, Any] 
     out.update(
         priced_cost(
             cases=cases,
+            bench_version=bench_version,
             prompt_tokens=totals.prompt_tokens,
             completion_tokens=totals.completion_tokens,
         )
@@ -397,6 +403,11 @@ def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str
     cost = estimate_["cost_nano_usd"] / 1e9
     normalized = estimate_["normalized_cost_nano_usd"] / 1e9
     factor = estimate_["factor_bps"] / 10_000
+    reference_usd = (
+        REFERENCE_NANO_USD_V2
+        if bench_version >= PRICED_COST_V2_MIN_BENCH_VERSION
+        else REFERENCE_NANO_USD
+    ) / 1e9
     applies = bench_version >= PRICED_COST_MIN_BENCH_VERSION
     lines = [
         "",
@@ -406,7 +417,7 @@ def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str
         f"prompt_tokens:       {estimate_.get('prompt_tokens', 0)}",
         f"completion_tokens:   {estimate_.get('completion_tokens', 0)}",
         f"estimated cost:      ${cost:.4f} this run",
-        f"per 350 cases:       ${normalized:.4f} (reference $1.00)",
+        f"per 350 cases:       ${normalized:.4f} (reference ${reference_usd:.2f})",
         f"cost factor:         {factor:.4f}"
         + (
             ""
@@ -422,8 +433,14 @@ def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str
     lines += [
         "Validators price prompt $0.07/M, completion (reasoning included) $0.15/M,",
         "embeddings $0.004/M and decision-lane input $0.042/M at locked rates, and",
-        "multiply the composite by 1.0 up to $1.00 per 350 cases, 0.8 at $1.50 and",
-        "0.6 from $2.00. Fewer, shorter prompts (for example a pruned tool catalog)",
-        "raise the factor. Local chat may differ from the validators' gpt-oss-20b.",
+        (
+            "multiply the composite by 1.0 up to $0.50 per 350 cases, 0.65 at $0.75"
+            " and 0.3 from $1.00 (bench 17+)."
+            if bench_version >= PRICED_COST_V2_MIN_BENCH_VERSION
+            else "multiply the composite by 1.0 up to $1.00 per 350 cases, 0.8 at"
+            " $1.50 and 0.6 from $2.00 (bench 16)."
+        ),
+        "Fewer, shorter prompts (for example a pruned tool catalog) raise the",
+        "factor. Local chat may differ from the validators' gpt-oss-20b.",
     ]
     return "\n".join(lines)

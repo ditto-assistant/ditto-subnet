@@ -61,7 +61,7 @@ def add_subparser(
         "--no-slice",
         action="store_true",
         help=(
-            "At bench 16+ (the dueling bench, shadow), score the datagen half "
+            "At bench 16+ (the dueling bench), score the datagen half "
             "only instead of building a local generator slice from the public "
             "default generator."
         ),
