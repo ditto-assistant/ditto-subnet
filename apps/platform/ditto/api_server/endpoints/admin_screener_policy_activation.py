@@ -149,7 +149,9 @@ async def get_v13_review_clock(
     return await _review_clock_schedule(session)
 
 
-@router.post("/review-clock", status_code=410, responses=_RETIRED_RESPONSES)
+@router.post(
+    "/review-clock", status_code=410, responses=_RETIRED_RESPONSES, response_model=None
+)
 async def schedule_v13_review_clock(
     _admin: AdminDep,
 ) -> NoReturn:
@@ -382,7 +384,12 @@ async def get_scored_rescreen(
     )
 
 
-@router.post("/advance-scored-rescreen", status_code=410, responses=_RETIRED_RESPONSES)
+@router.post(
+    "/advance-scored-rescreen",
+    status_code=410,
+    responses=_RETIRED_RESPONSES,
+    response_model=None,
+)
 async def advance_scored_rescreen(
     _admin: AdminDep,
 ) -> NoReturn:
@@ -390,7 +397,7 @@ async def advance_scored_rescreen(
     raise _source_review_retired()
 
 
-@router.post("", status_code=410, responses=_RETIRED_RESPONSES)
+@router.post("", status_code=410, responses=_RETIRED_RESPONSES, response_model=None)
 async def schedule_activation(
     _admin: AdminDep,
 ) -> NoReturn:
