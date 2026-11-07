@@ -29,7 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
-| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; the one token lever is a per-seed production catalog of 1,400-5,000 real tools (pinned snapshot). Known vector `9a570c4e4c325a458df996c561ddf972424c568485a6af2b42c4979543f7eb91` (`TestV18KnownVector`). |
+| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; the one token lever is a per-seed production catalog of 1,400-5,000 real tools (pinned snapshot). Known vector `eff3ea59240e6dab043c15be41e5ffb93c32aa682f1fb367eee01060a92d2ae7` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1547,13 +1547,13 @@ production Composio mirror, 1,718 enabled toolkits and 77,953 tools on
 2026-11-07) plus Ditto's first-party tool catalog. This is the one lever in
 v18 that adds tokens; the cost rule is unchanged.
 
-- *Pinned, never live.* Generation loads the file named by
-  `DITTOBENCH_V18_CATALOG_SNAPSHOT` and requires its SHA-256 to equal
-  `catalog.V18CatalogSnapshotSHA256`. Changing the snapshot is a new bench
-  version. Until the production snapshot is pinned the constant is empty:
-  v18 generation fails closed, and a scorer without a matching snapshot does
-  not advertise v18, so Platform never leases it v18 work. Test binaries load
-  the deterministic `catalog.V18FixtureSnapshot`.
+- *Pinned, never live.* The snapshot
+  (`catalog/v18snapshot/catalog-2026-11-07.json.gz`, 1,717 enabled toolkits,
+  77,948 enabled non-deprecated tools and 128 first-party tools, read-only on
+  2026-11-07) is embedded in the module, and its SHA-256 must equal
+  `catalog.V18CatalogSnapshotSHA256`
+  (`2f38d1bf046ed60b53d11d54a0b8ab69c042d17eed3bd27d1e161e385fa06756`), so every
+  validator generates identical datasets. Changing it is a new bench version.
 - *Sampled per seed, whole toolkits.* The seed draws a target menu size in
   the contract's range (`catalog.CatalogSizeForVersion`; v18: 1,400 to 2,000
   tools) and adds whole toolkits in a seeded order, skipping any that would
@@ -1567,7 +1567,11 @@ v18 that adds tokens; the cost rule is unchanged.
   product tool owns (email, calendar, web search, maps, weather, translation,
   images, video, memory, reminders) are never sampled, so a snapshot tool is
   never a defensible answer. A toolkit for an app the seed links is skipped on
-  that seed, so a linked app never shows "not connected" tools.
+  that seed (`v18LinkedToolkitAliases` maps each linkable app to its
+  snapshot toolkits, e.g. `teams` to `microsoft_teams`), so a linked app never
+  shows "not connected" tools. A snapshot name that is also a simulated tool
+  (seven first-party names are the bench's own product tools) keeps its
+  simulated behaviour and appears once.
 - *Paraphrased per seed.* Descriptions get seeded meaning-preserving word
   swaps and framing (`v18Paraphrase`), so a public catalog cannot simply be
   memorized.
@@ -1588,10 +1592,10 @@ nine agents, and 234 for the tenth. The scorer's catalog capture keeps up to
 8,192 tools per completion, so a harness that forwards everything is still
 captured completely.
 
-**Open question for the owner (not decided here):** whether redistributing
-Composio's tool names and descriptions in the public bench, in its dataset
-reveals and in the pinned snapshot is allowed under Composio's terms. The
-snapshot is not committed to this public repository until that is settled.
+**Flagged for the owner (not blocking):** the owner's view is that the
+Composio list is a public API listing; whether its tool names and descriptions
+may be redistributed in the public bench, its dataset reveals and the pinned
+snapshot remains the owner's call.
 
 **`conversational-chitchat` is a grading ceiling, not difficulty.** Its
 0.500 on all 84 v17 cases is the fixed chitchat credit (`gradingPolicy.chitchatCredit`,
@@ -1612,7 +1616,7 @@ the v14 families stay `pending-panel` in `universe.V14FamilyMix`.
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV18KnownVector` pins
-`9a570c4e4c325a458df996c561ddf972424c568485a6af2b42c4979543f7eb91`, with
+`eff3ea59240e6dab043c15be41e5ffb93c32aa682f1fb367eee01060a92d2ae7`, with
 epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
 `datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
 
