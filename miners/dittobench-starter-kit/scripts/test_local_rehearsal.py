@@ -2310,6 +2310,21 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertIsNone(COST.meter_for_environment({"DITTOBENCH_PROVIDER": "unknown"}))
         # A meter that never started binds nothing and stops cleanly.
         idle = COST.CostMeter("http://127.0.0.1:9/v1", None)
+        # A local-meter estimate prices the run under the rehearsed bench's
+        # contract: $0.75 per 350 cases is full factor on v16 and 0.65 on v17.
+        idle.totals = COST.MeterTotals(
+            completions=1, prompt_tokens=10_714_286, completion_tokens=0
+        )
+        v16 = COST.estimate(idle, {"n": 350}, 16)
+        v17 = COST.estimate(idle, {"n": 350}, 17)
+        assert v16 is not None and v17 is not None
+        self.assertEqual(v16["factor_bps"], 10_000)
+        self.assertEqual(v17["factor_bps"], 6_500)
+        v17_text = COST.format_estimate(v17, 17)
+        self.assertIn("(reference $0.50)", v17_text)
+        self.assertIn("0.3 from $1.00 (bench 17+)", v17_text)
+        self.assertNotIn("$2.00", v17_text)
+        self.assertIn("0.6 from $2.00 (bench 16)", COST.format_estimate(v16, 16))
         idle.stop()
         with self.assertRaises(RuntimeError):
             _ = idle.base_url

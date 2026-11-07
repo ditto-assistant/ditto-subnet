@@ -1528,7 +1528,9 @@ def run(args: argparse.Namespace) -> int:
                 if dueling_summary:
                     print(dueling_summary)
                 combined = dict(completed)
-                cost = rehearsal_cost.estimate(cost_meter, completed.get("report") or {})
+                cost = rehearsal_cost.estimate(
+                    cost_meter, completed.get("report") or {}, args.bench_version
+                )
                 combined["priced_cost_estimate"] = cost
                 print(rehearsal_cost.format_estimate(cost, args.bench_version))
                 if args.gates:
