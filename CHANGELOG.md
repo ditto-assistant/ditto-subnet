@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.460.0 (2026-11-07)
+
+### Features
+
+- **platform**: Lease on the screened-image contract floor, not the review policy
+  ([#3426](https://github.com/ditto-assistant/ditto-subnet/pull/3426),
+  [`8aef2c5`](https://github.com/ditto-assistant/ditto-subnet/commit/8aef2c5f79c3d6988662c6f14e8f5a030ea4e6f0))
+
+- **platform,backroom**: Retire review-policy activation, review-clock and scored-rescreen
+  scheduling ([#3427](https://github.com/ditto-assistant/ditto-subnet/pull/3427),
+  [`cfbd8e4`](https://github.com/ditto-assistant/ditto-subnet/commit/cfbd8e4ce207d80562f5009da0124ea4b352aacb))
+
+- **screener,platform**: Run the static malicious-source check on the build-only lane
+  ([#3424](https://github.com/ditto-assistant/ditto-subnet/pull/3424),
+  [`22538ef`](https://github.com/ditto-assistant/ditto-subnet/commit/22538ef2a6166afa43d17147e155940fed3f0c72))
+
+
 ## v0.459.0 (2026-11-07)
 
 ### Features
