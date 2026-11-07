@@ -28,16 +28,20 @@ from sqlalchemy import (
     column,
     func,
     literal,
+    literal_column,
     null,
     or_,
     select,
     true,
     tuple_,
+    type_coerce,
     union,
 )
 from sqlalchemy import cast as sql_cast
-from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
+from sqlalchemy.dialects.postgresql import JSONB, JSONPATH, aggregate_order_by
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
+from sqlalchemy.orm import defer
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.orm.util import AliasedClass
 
 from ditto.api_models.agent_status import AgentStatus
@@ -72,6 +76,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.sql.selectable import LateralFromClause
 
 
 # A run must administer the *full* benchmark to be ranked on the leaderboard and
@@ -1252,11 +1257,7 @@ async def get_submission_scores(
     # Every version's rows, not just the active bench version: the public record
     # covers older + current runs (each row is version-labeled downstream), and
     # the submissions index batch-fetch is unfiltered the same way.
-    scores = list(
-        (await session.execute(select(Score).where(Score.agent_id == agent_id)))
-        .scalars()
-        .all()
-    )
+    scores = await list_public_agent_scores(session, agent_id=agent_id)
     last_scored_at = _as_utc(max(s.generated_at for s in scores)) if scores else None
     return SubmissionRow(
         agent_id=agent.agent_id,
@@ -1270,6 +1271,124 @@ async def get_submission_scores(
         last_scored_at=last_scored_at,
         scores=sorted(scores, key=lambda s: s.validator_hotkey),
     )
+
+
+PUBLIC_CASE_RESULT_KEYS: tuple[str, ...] = (
+    "category",
+    "kind",
+    "score",
+    "correct",
+    "latency_ms",
+    "notes",
+)
+"""The ``details.per_case`` keys the public case view reads.
+
+Keep this aligned with ``endpoints.public._safe_case_results``: it is the
+whitelist that function publishes, and the public score projection below keeps
+only these keys of each case."""
+
+
+def public_score_details_projection() -> tuple[LateralFromClause, ColumnElement[Any]]:
+    """``scores.details`` with each ``per_case`` entry cut to the public keys.
+
+    Returns a LATERAL source to join onto ``scores`` and the projected column.
+
+    ``per_case`` is almost all of a score's telemetry: on bench v15-v17 it is
+    about 1.8 MB of JSON per row, most of it each case's tool ``catalog``, while
+    the public pages publish six small fields per case. Decoding the whole blob
+    in the API process for every public score read is what saturated it, so
+    PostgreSQL builds the reduced document instead. Every other top-level key is
+    returned unchanged, so the public projections that read them see the same
+    values. Non-object cases and non-array or absent ``per_case`` values pass
+    through as they are; case order is preserved.
+
+    Each reference to a TOASTed column decompresses it again, so the document
+    is read once in the LATERAL (``#> '{}'`` returns any JSON value unchanged;
+    ``OFFSET 0`` stops the planner from inlining it back into each reference).
+    Measured on prod for six v17 rows: 336 ms with four references, 51-66 ms
+    this way, the same as serializing the full blob for the client.
+    """
+    document = (
+        select(
+            Score.details.op("#>", return_type=JSONB)(
+                literal_column("'{}'::text[]")
+            ).label("doc")
+        )
+        .correlate(Score)
+        .offset(0)
+        .lateral("public_details_source")
+    )
+    doc = document.c.doc
+    cases = (
+        func.jsonb_array_elements(doc.op("->", return_type=JSONB)(literal("per_case")))
+        .table_valued("value", with_ordinality="ordinality")
+        .alias("public_case")
+    )
+    reduced_case = case(
+        (
+            func.jsonb_typeof(cases.c.value) == literal("object"),
+            func.jsonb_build_object(
+                *(
+                    part
+                    for key in PUBLIC_CASE_RESULT_KEYS
+                    for part in (literal(key), cases.c.value.op("->")(literal(key)))
+                )
+            ),
+        ),
+        else_=cases.c.value,
+    )
+    reduced_cases = (
+        select(
+            func.coalesce(
+                func.jsonb_agg(aggregate_order_by(reduced_case, cases.c.ordinality)),
+                func.jsonb_build_array(),
+            )
+        )
+        .select_from(cases)
+        .scalar_subquery()
+    )
+    has_case_array = and_(
+        func.jsonb_typeof(doc) == literal("object"),
+        func.jsonb_typeof(doc.op("->", return_type=JSONB)(literal("per_case")))
+        == literal("array"),
+    )
+    projected = type_coerce(
+        case(
+            (
+                has_case_array,
+                doc.op("-", return_type=JSONB)(literal("per_case")).op(
+                    "||", return_type=JSONB
+                )(func.jsonb_build_object(literal("per_case"), reduced_cases)),
+            ),
+            else_=doc,
+        ),
+        JSONB,
+    )
+    return document, projected
+
+
+async def list_public_agent_scores(
+    session: AsyncSession, *, agent_id: UUID
+) -> list[Score]:
+    """One agent's score rows for a public page, oldest first.
+
+    ``details`` holds :func:`public_score_details_projection`, set as the loaded
+    value (not a pending change, so nothing is written back). Use these rows for
+    public responses only: the per-case answer-key fields are not present.
+    """
+    document, public_details = public_score_details_projection()
+    result = await session.execute(
+        select(Score, public_details.label("public_details"))
+        .join(document, true())
+        .where(Score.agent_id == agent_id)
+        .order_by(Score.created_at, Score.validator_hotkey)
+        .options(defer(Score.details, raiseload=True))
+    )
+    scores: list[Score] = []
+    for score, details in result:
+        set_committed_value(score, "details", details)
+        scores.append(score)
+    return scores
 
 
 async def list_public_submissions(
@@ -1300,8 +1419,20 @@ async def list_public_submissions(
     if not rows:
         return []
     agent_ids = [agent.agent_id for agent, _ in rows]
+    # The index publishes counts, versions and median composites only, so the
+    # score telemetry (up to ~2 MB of JSON per row) is never loaded. A future
+    # read of it fails loudly instead of lazily reloading it.
     score_rows = (
-        (await session.execute(select(Score).where(Score.agent_id.in_(agent_ids))))
+        (
+            await session.execute(
+                select(Score)
+                .where(Score.agent_id.in_(agent_ids))
+                .options(
+                    defer(Score.details, raiseload=True),
+                    defer(Score.gate_evidence, raiseload=True),
+                )
+            )
+        )
         .scalars()
         .all()
     )

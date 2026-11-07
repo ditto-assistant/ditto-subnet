@@ -64,6 +64,8 @@ class ConversationAdmissionDiagnostics(WireModel):
     in_flight: bool = False
     attempts: Annotated[int, Field(ge=0)] = 0
     busy_skips: Annotated[int, Field(ge=0)] = 0
+    idle_skips: Annotated[int, Field(ge=0)] = 0
+    """Attempts answered without a rebuild during the post-idle cooldown."""
     last_outcome: Literal["not_attempted", "claimed", "idle", "failed", "cancelled"] = (
         "not_attempted"
     )

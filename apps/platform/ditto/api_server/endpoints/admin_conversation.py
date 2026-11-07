@@ -49,6 +49,13 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 DAILY_BUDGET_MICROUSD = 180_000_000
 RUN_RESERVATION_MICROUSD = 30_000_000
+ADMISSION_IDLE_COOLDOWN_SECONDS = 30.0
+"""How long a process waits after a no-work admission before rebuilding.
+
+Each attempt rebuilds the public leaderboard, and on 2026-11-06 the gate was
+busy 67% of the time while finding nothing to admit. A write in this process
+that can create work (settings, a retry authorization, a posted result) clears
+the wait."""
 logger = logging.getLogger(__name__)
 
 
@@ -58,6 +65,15 @@ class _AdmissionGate:
     diagnostics: ConversationAdmissionDiagnostics = field(
         default_factory=ConversationAdmissionDiagnostics
     )
+    idle_until: float = 0.0
+    """``monotonic()`` time before which an attempt returns no work at once."""
+    work_writes: int = 0
+    """Count of writes that may have created work; an attempt that overlapped
+    one does not arm the cooldown from its now-stale no-work answer."""
+
+    def clear_idle_cooldown(self) -> None:
+        self.work_writes += 1
+        self.idle_until = 0.0
 
 
 def _admission_gate(request: Request) -> _AdmissionGate:
@@ -107,6 +123,7 @@ async def set_settings(
         )
     )
     await session.commit()
+    _admission_gate(request).clear_idle_cooldown()
     return await observations(request, None, session)
 
 
@@ -284,6 +301,7 @@ async def authorize_retry(
         expires_at=now + timedelta(hours=48),
     ).model_dump(mode="json")
     await session.commit()
+    _admission_gate(request).clear_idle_cooldown()
     return await observations(request, None, session)
 
 
@@ -304,13 +322,25 @@ async def claim_assessment(
     if gate.lock.locked():
         gate.diagnostics.busy_skips += 1
         return None
+    if monotonic() < gate.idle_until:
+        gate.diagnostics.idle_skips += 1
+        return None
     # No await occurs between the locked check and acquiring an unlocked lock.
     async with gate.lock:
         gate.diagnostics.attempts += 1
         started = monotonic()
+        writes_before = gate.work_writes
         try:
             result = await _claim_assessment(request, session, worker_hotkey)
             gate.diagnostics.last_outcome = "claimed" if result is not None else "idle"
+            # A write that cleared the cooldown while this attempt ran may have
+            # created the work it did not see, so only an undisturbed idle
+            # answer starts the wait.
+            gate.idle_until = (
+                monotonic() + ADMISSION_IDLE_COOLDOWN_SECONDS
+                if result is None and gate.work_writes == writes_before
+                else 0.0
+            )
             return result
         except asyncio.CancelledError:
             gate.diagnostics.last_outcome = "cancelled"
@@ -324,10 +354,12 @@ async def claim_assessment(
             )
             gate.diagnostics.last_completed_at = datetime.now(UTC)
             logger.info(
-                "conversation_admission outcome=%s elapsed_ms=%d busy_skips=%d",
+                "conversation_admission outcome=%s elapsed_ms=%d busy_skips=%d "
+                "idle_skips=%d",
                 gate.diagnostics.last_outcome,
                 gate.diagnostics.last_elapsed_ms,
                 gate.diagnostics.busy_skips,
+                gate.diagnostics.idle_skips,
             )
 
 
@@ -453,6 +485,7 @@ async def _claim_assessment(
 
 @router.post("/{assessment_id}/result", response_model=ConversationObservation)
 async def submit_result(
+    request: Request,
     assessment_id: UUID,
     payload: ConversationResultRequest,
     _admin: AdminDep,
@@ -501,6 +534,8 @@ async def submit_result(
         raise HTTPException(409, "conversation lease expired")
     row.report = document
     await session.commit()
+    # The single global assessment slot is free again.
+    _admission_gate(request).clear_idle_cooldown()
     return _observation(row, now)
 
 

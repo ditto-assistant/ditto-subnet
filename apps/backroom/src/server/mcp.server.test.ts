@@ -3474,7 +3474,7 @@ describe('Backroom MCP tools', () => {
   it.each(['both', 'elapsed', 'completed', 'neither'] as const)('retains admission diagnostics with %s timestamps in the read tool', async (timestamps) => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const diagnostics = {
-      scope: 'process', in_flight: true, attempts: 9, busy_skips: 15,
+      scope: 'process', in_flight: true, attempts: 9, busy_skips: 15, idle_skips: 4,
       last_outcome: 'idle',
       ...(timestamps === 'both' || timestamps === 'elapsed' ? { last_elapsed_ms: 1740 } : {}),
       ...(timestamps === 'both' || timestamps === 'completed' ? { last_completed_at: '2026-10-09T03:00:00Z' } : {}),

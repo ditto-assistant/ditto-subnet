@@ -24,6 +24,14 @@ BASE = "/api/v1/admin/conversation-assessments"
 pytestmark = pytest.mark.asyncio
 
 
+def _pass_idle_cooldown(monkeypatch) -> None:
+    """Move the admission gate's clock past the post-idle cooldown."""
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    later = module.monotonic() + module.ADMISSION_IDLE_COOLDOWN_SECONDS + 1
+    monkeypatch.setattr(module, "monotonic", lambda: later)
+
+
 async def install(app, session_maker, monkeypatch, *, enabled=True, count=6):
     app.state.config = replace(
         app.state.config, conversation_shadow_enabled=enabled, admin_api_token=TOKEN
@@ -253,13 +261,19 @@ async def test_overlapping_idle_polls_build_one_board_and_expose_diagnostics(
     finally:
         release.set()
         await first
-    # Sequential reads are fresh; neither ranks nor a no-work decision are cached.
+    # A no-work answer holds for the idle cooldown: the next poll does not
+    # rebuild the board. Ranks are never cached, only the wait.
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    assert reader.await_count == 1
+    # Once the cooldown has passed, a sequential read rebuilds it fresh.
+    _pass_idle_cooldown(monkeypatch)
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
     assert reader.await_count == 2
     final = (await client.get(BASE, headers=HEADERS)).json()["admission_diagnostics"]
     assert final["scope"] == "process"
     assert final["in_flight"] is False
     assert final["attempts"] == 2
+    assert final["idle_skips"] == 1
     assert final["last_outcome"] == "idle"
     assert final["last_elapsed_ms"] >= 0
     assert final["last_completed_at"] is not None
@@ -518,6 +532,8 @@ async def test_cap_admits_one_extra_retry_then_waits_without_erasing_reservation
     async with session_maker() as db, db.begin():
         parent = await db.get(ConversationAssessment, UUID(original["assessment_id"]))
         parent.created_at = datetime.now(UTC) - timedelta(days=1, seconds=1)
+    # A day has passed for the reservation, so the idle cooldown has too.
+    _pass_idle_cooldown(monkeypatch)
     retried = (await client.post(BASE + "/claim", headers=HEADERS)).json()
     assert retried["seed"] == second["seed"]
     listing = (await client.get(BASE, headers=HEADERS)).json()
@@ -568,3 +584,54 @@ async def test_authorized_retry_rechecks_admission_guards(
             else:
                 parent.report = {**parent.report, "output_tokens": 999}
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+
+
+async def test_writes_that_can_create_work_end_the_idle_cooldown(
+    app, client, session_maker, monkeypatch
+):
+    await install(app, session_maker, monkeypatch, enabled=False)
+    # Off: the attempt is idle and starts the cooldown.
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    diagnostics = (await client.get(BASE, headers=HEADERS)).json()[
+        "admission_diagnostics"
+    ]
+    assert diagnostics["idle_skips"] == 1
+    payload = {
+        "mode": "shadow",
+        "expected_revision": 0,
+        "actor": "operator@example.com",
+        "reason": "Start the bounded shadow canary",
+        "confirmation": "APPLY CONVERSATION SHADOW SETTINGS",
+    }
+    changed = await client.post(BASE + "/settings", headers=HEADERS, json=payload)
+    assert changed.status_code == 200, changed.text
+    # Turning admission on is seen at once, not after the cooldown.
+    claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    assert claim is not None
+
+
+async def test_a_write_during_an_idle_attempt_does_not_arm_the_cooldown(
+    app, monkeypatch
+):
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    request = Request({"type": "http", "app": app})
+    gate = module._admission_gate(request)
+
+    async def raced(*_args):
+        # Saw no work, then an operator write enabled admission mid-attempt.
+        gate.clear_idle_cooldown()
+        return None
+
+    monkeypatch.setattr(module, "_claim_assessment", raced)
+    assert await module.claim_assessment(request, None) is None
+    assert gate.idle_until == 0.0
+
+    next_attempt = AsyncMock(return_value=None)
+    monkeypatch.setattr(module, "_claim_assessment", next_attempt)
+    assert await module.claim_assessment(request, None) is None
+    next_attempt.assert_awaited_once()
+    assert gate.diagnostics.idle_skips == 0
+    # That undisturbed idle answer does start the wait.
+    assert gate.idle_until > 0.0

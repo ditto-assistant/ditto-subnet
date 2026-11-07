@@ -9139,6 +9139,11 @@ export interface paths {
         /**
          * Queue
          * @description List completion-lane contenders, then least-scored pending agents.
+         *
+         *     ``policy_only=true`` answers just ``required_policy_version`` with no items.
+         *     Workers read the policy before every claim, and running the full priority
+         *     query (with its per-agent score aggregates) only to discard the rows was a
+         *     standing load on the API at a two-second poll interval.
          */
         get: operations["queue_api_v1_screener_queue_get"];
         put?: never;
@@ -21939,6 +21944,11 @@ export interface components {
              * @default 0
              */
             busy_skips: number;
+            /**
+             * Idle Skips
+             * @default 0
+             */
+            idle_skips: number;
             /**
              * In Flight
              * @default false
@@ -64239,6 +64249,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                policy_only?: boolean;
             };
             header?: {
                 "x-screener-hotkey"?: string | null;

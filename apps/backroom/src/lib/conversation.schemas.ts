@@ -11,6 +11,7 @@ export const conversationObservationsSchema = z.object({
     in_flight: z.boolean(),
     attempts: z.number().int().nonnegative(),
     busy_skips: z.number().int().nonnegative(),
+    idle_skips: z.number().int().nonnegative().default(0),
     last_outcome: z.enum(['not_attempted', 'claimed', 'idle', 'failed', 'cancelled']),
     last_elapsed_ms: z.number().int().nonnegative().nullable().optional(),
     last_completed_at: z.string().nullable().optional(),
