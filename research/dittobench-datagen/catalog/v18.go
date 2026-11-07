@@ -4,16 +4,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"sync"
-	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -31,10 +30,10 @@ import (
 //
 // Contract rules:
 //
-//   - The snapshot is never read live. Generation loads a snapshot file whose
-//     SHA-256 must equal V18CatalogSnapshotSHA256 and fails closed otherwise,
-//     so every validator generates identical datasets. Changing the snapshot
-//     is a new bench version.
+//   - The snapshot is never read live. It is embedded in the module and its
+//     SHA-256 must equal V18CatalogSnapshotSHA256 (generation fails closed
+//     otherwise), so every validator generates identical datasets. Changing
+//     the snapshot is a new bench version.
 //   - Graded cases stay on tools the datagen simulates (the v16 surface).
 //     Snapshot tools are realistic bulk: every one is refused by the mock
 //     endpoint and performs nothing, and no case expects one.
@@ -91,10 +90,15 @@ func MaxCatalogTools() int {
 // V18CatalogSnapshotSHA256 pins the snapshot every v18 dataset is built
 // from. Empty until the production snapshot is pinned: v18 generation fails
 // closed until then (V18SnapshotReady).
-const V18CatalogSnapshotSHA256 = ""
+const V18CatalogSnapshotSHA256 = "2f38d1bf046ed60b53d11d54a0b8ab69c042d17eed3bd27d1e161e385fa06756"
 
-// V18CatalogSnapshotEnv names the snapshot file a process loads.
-const V18CatalogSnapshotEnv = "DITTOBENCH_V18_CATALOG_SNAPSHOT"
+// v18SnapshotGzip is the pinned snapshot, embedded so every binary built from
+// this module generates from the same bytes: the production Composio mirror
+// (1,717 enabled toolkits, 77,948 enabled non-deprecated tools) and Ditto's
+// 128 first-party tools, read-only on 2026-11-07.
+//
+//go:embed v18snapshot/catalog-2026-11-07.json.gz
+var v18SnapshotGzip []byte
 
 // V18Snapshot is the pinned catalog snapshot (gzip-compressed JSON).
 type V18Snapshot struct {
@@ -127,7 +131,7 @@ type V18SnapshotFirstTool struct {
 var (
 	v18SnapshotMu     sync.RWMutex
 	v18SnapshotLoaded *V18Snapshot
-	v18SnapshotErr    = errors.New("v18 catalog snapshot not loaded: set " + V18CatalogSnapshotEnv)
+	v18SnapshotErr    = errors.New("v18 catalog snapshot not loaded")
 	v18SnapshotOnce   sync.Once
 	v18Index          map[string]string
 )
@@ -158,40 +162,38 @@ func useV18Snapshot(snap *V18Snapshot) {
 	v18SnapshotMu.Lock()
 	defer v18SnapshotMu.Unlock()
 	v18SnapshotLoaded, v18SnapshotErr = snap, nil
+	// A snapshot name that is also a product tool or a v15 pool connector is
+	// the simulated tool itself (Ditto's first-party catalog shares names
+	// with the bench's product tools): it must keep its simulated behaviour,
+	// so it never enters the refusal index.
+	reserved := map[string]bool{}
+	for _, def := range v13ProductionCatalog() {
+		reserved[def.Name] = true
+	}
+	for _, t := range connectorUniverse() {
+		reserved[t.name()] = true
+	}
 	index := map[string]string{}
 	for _, kit := range snap.Toolkits {
 		for _, tool := range kit.Tools {
-			index[tool.Slug] = kit.Name
+			if !reserved[tool.Slug] {
+				index[tool.Slug] = kit.Name
+			}
 		}
 	}
 	for _, tool := range snap.FirstParty {
-		index[tool.Name] = "Ditto"
+		if !reserved[tool.Name] {
+			index[tool.Name] = "Ditto"
+		}
 	}
 	v18Index = index
 }
 
-// V18SnapshotReady loads the pinned snapshot from V18CatalogSnapshotEnv once
-// and reports whether v18 generation can run. Nothing below v18 calls it.
+// V18SnapshotReady verifies and decodes the embedded snapshot once and
+// reports whether v18 generation can run. Nothing below v18 calls it.
 func V18SnapshotReady() error {
 	v18SnapshotOnce.Do(func() {
-		path := os.Getenv(V18CatalogSnapshotEnv)
-		if path == "" {
-			if testing.Testing() {
-				// Test binaries without a snapshot use the deterministic
-				// fixture, so suites stay hermetic. Production binaries never
-				// reach this branch.
-				useV18Snapshot(V18FixtureSnapshot())
-			}
-			return
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			v18SnapshotMu.Lock()
-			v18SnapshotErr = fmt.Errorf("v18 catalog snapshot: %w", err)
-			v18SnapshotMu.Unlock()
-			return
-		}
-		snap, err := LoadV18Snapshot(raw, V18CatalogSnapshotSHA256)
+		snap, err := LoadV18Snapshot(v18SnapshotGzip, V18CatalogSnapshotSHA256)
 		if err != nil {
 			v18SnapshotMu.Lock()
 			v18SnapshotErr = err
@@ -226,6 +228,30 @@ var v18ExcludedCapabilities = []string{
 	"youtube", "vimeo", "video", "memory", "reminder",
 }
 
+// v18LinkedToolkitAliases maps a v16 linkable app to the snapshot toolkits
+// that are the same product, so a seed that links the app never shows those
+// toolkits' "not connected" tools. Read from the 2026-11-07 snapshot; an app
+// not listed maps to its own slug and "<slug>_mcp".
+var v18LinkedToolkitAliases = map[string][]string{
+	"slack":       {"slack", "slackbot"},
+	"github":      {"github", "github_mcp"},
+	"teams":       {"microsoft_teams"},
+	"discord":     {"discord", "discordbot"},
+	"wordpress":   {"wordpress", "wordpress_com"},
+	"salesforce":  {"salesforce", "salesforce_data_360", "salesforce_service_cloud"},
+	"googledrive": {"googledrive", "google_drive"},
+	"statuspage":  {"statuspage", "atlassian_statuspage"},
+}
+
+// v18LinkedToolkitSlugs returns the snapshot toolkit slugs one v16 app covers.
+func v18LinkedToolkitSlugs(app string) []string {
+	app = strings.ToLower(app)
+	if aliases, ok := v18LinkedToolkitAliases[app]; ok {
+		return aliases
+	}
+	return []string{app, app + "_mcp"}
+}
+
 // v18ToolkitEligible reports whether a toolkit may be sampled on any seed.
 func v18ToolkitEligible(kit V18SnapshotToolkit) bool {
 	if len(kit.Tools) == 0 {
@@ -247,7 +273,9 @@ func v18SampledToolkits(seed int64, benchVersion int, snap *V18Snapshot, base in
 	size, _ := CatalogSizeForVersion(benchVersion)
 	linked := map[string]bool{}
 	for _, app := range V16ConnectorPlanForSeed(seed).Linked {
-		linked[strings.ToLower(app.Slug)] = true
+		for _, slug := range v18LinkedToolkitSlugs(app.Slug) {
+			linked[slug] = true
+		}
 	}
 	var eligible []V18SnapshotToolkit
 	for _, kit := range snap.Toolkits {

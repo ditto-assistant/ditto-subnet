@@ -1,11 +1,8 @@
 package catalog
 
 import (
-	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,38 +10,28 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-func fixtureBytes(t *testing.T) ([]byte, string) {
-	t.Helper()
-	raw, err := json.Marshal(V18FixtureSnapshot())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(raw); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(buf.Bytes())
-	return buf.Bytes(), hex.EncodeToString(sum[:])
-}
-
 // The snapshot is pinned by hash: a wrong or missing pin fails closed.
 func TestV18SnapshotIsHashPinned(t *testing.T) {
-	raw, sum := fixtureBytes(t)
-	if _, err := LoadV18Snapshot(raw, sum); err != nil {
-		t.Fatalf("pinned fixture rejected: %v", err)
+	sum := sha256.Sum256(v18SnapshotGzip)
+	if got := hex.EncodeToString(sum[:]); got != V18CatalogSnapshotSHA256 {
+		t.Fatalf("embedded snapshot sha256 %s, pinned %s", got, V18CatalogSnapshotSHA256)
 	}
-	if _, err := LoadV18Snapshot(raw, strings.Repeat("0", 64)); err == nil {
+	if _, err := LoadV18Snapshot(v18SnapshotGzip, V18CatalogSnapshotSHA256); err != nil {
+		t.Fatalf("pinned snapshot rejected: %v", err)
+	}
+	if _, err := LoadV18Snapshot(v18SnapshotGzip, strings.Repeat("0", 64)); err == nil {
 		t.Fatal("a snapshot whose hash differs from the pin was accepted")
 	}
-	if _, err := LoadV18Snapshot(raw, ""); err == nil {
+	if _, err := LoadV18Snapshot(v18SnapshotGzip, ""); err == nil {
 		t.Fatal("an unpinned snapshot was accepted")
 	}
-	if V18CatalogSnapshotSHA256 == "" {
-		t.Log("V18CatalogSnapshotSHA256 is not pinned yet: production v18 generation fails closed until it is")
+	snap := v18Snapshot()
+	tools := 0
+	for _, kit := range snap.Toolkits {
+		tools += len(kit.Tools)
+	}
+	if len(snap.Toolkits) != 1717 || tools != 77948 || len(snap.FirstParty) != 128 {
+		t.Fatalf("snapshot holds %d toolkits, %d tools, %d first-party tools", len(snap.Toolkits), tools, len(snap.FirstParty))
 	}
 }
 
@@ -91,12 +78,26 @@ func TestV18CatalogPerSeed(t *testing.T) {
 		if !reflect.DeepEqual(kept, v16) {
 			t.Fatalf("seed %d: v18 reorders or changes the v16 surface", seed)
 		}
-		if first != len(snap.FirstParty) {
-			t.Fatalf("seed %d: %d first-party tools, want %d", seed, first, len(snap.FirstParty))
+		// First-party tools the v16 surface already carries (the bench's own
+		// simulated product tools) appear once, as the simulated tool.
+		onSurface := map[string]bool{}
+		for _, def := range v16 {
+			onSurface[def.Name] = true
+		}
+		wantFirst := 0
+		for _, tool := range snap.FirstParty {
+			if !onSurface[tool.Name] {
+				wantFirst++
+			}
+		}
+		if first != wantFirst {
+			t.Fatalf("seed %d: %d first-party tools, want %d", seed, first, wantFirst)
 		}
 		linked := map[string]bool{}
 		for _, app := range V16ConnectorPlanForSeed(seed).Linked {
-			linked[app.Slug] = true
+			for _, slug := range v18LinkedToolkitSlugs(app.Slug) {
+				linked[slug] = true
+			}
 		}
 		for kit, n := range perKit {
 			if n != kitSize[kit] {
@@ -159,5 +160,18 @@ func TestV18ConnectorRecognitionIsVersionGated(t *testing.T) {
 	}
 	if !reflect.DeepEqual(CatalogForSeed(protocol.BenchVersionV17, 9), v16SeededCatalog(9)) {
 		t.Fatal("v17 surface moved")
+	}
+}
+
+// A snapshot name that is also a simulated tool keeps its simulated
+// behaviour: the refusal index never contains a product or pool tool.
+func TestV18RefusalIndexNeverShadowsSimulatedTools(t *testing.T) {
+	if err := V18SnapshotReady(); err != nil {
+		t.Fatal(err)
+	}
+	for _, def := range v13ProductionCatalog() {
+		if _, refused := IsConnectorToolForVersion(def.Name, protocol.BenchVersionV18); refused {
+			t.Fatalf("product tool %s is refused at v18", def.Name)
+		}
 	}
 }

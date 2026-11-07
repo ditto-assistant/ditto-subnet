@@ -507,10 +507,10 @@ func supportedBenchVersions() []int {
 			continue
 		}
 		if version >= protocol.BenchVersionV18 && catalog.V18SnapshotReady() != nil {
-			// v18 builds its tool menu from the pinned catalog snapshot
-			// (DITTOBENCH_V18_CATALOG_SNAPSHOT). A scorer without it cannot
-			// generate a v18 dataset, so it does not advertise v18 and
-			// Platform never leases it v18 work.
+			// v18 builds its tool menu from the catalog snapshot embedded in
+			// the datagen module and pinned by hash. A build whose snapshot
+			// fails that check cannot generate a v18 dataset, so it does not
+			// advertise v18 and Platform never leases it v18 work.
 			continue
 		}
 		if efficiency.ProductionReadyForVersion(version) {
