@@ -2163,6 +2163,28 @@ PRICED_COST_VECTORS = (
 class PricedCostEstimateTest(unittest.TestCase):
     """The rehearsal's copy of the bench 16 priced cost rule and its meter."""
 
+    def test_bench_18_run_budget_and_stop_case(self) -> None:
+        # $1.00 per 350 cases: the cost at which the v2 factor reaches 0.3.
+        self.assertIsNone(COST.run_budget_nano_usd(17, 350))
+        self.assertEqual(COST.run_budget_nano_usd(18, 350), 1_000_000_000)
+        self.assertEqual(COST.run_budget_nano_usd(18, 175), 500_000_000)
+        under = COST._with_budget({"cases": 350, "cost_nano_usd": 600_000_000}, 18)
+        self.assertFalse(under["budget_exhausted"])
+        self.assertIsNone(under["budget_stop_case"])
+        over = COST._with_budget({"cases": 350, "cost_nano_usd": 2_000_000_000}, 18)
+        self.assertTrue(over["budget_exhausted"])
+        self.assertEqual(over["budget_stop_case"], 175)
+        text = COST.format_estimate(
+            {"source": "local_meter", "cost_nano_usd": 2_000_000_000, "normalized_cost_nano_usd": 2_000_000_000,
+             "factor_bps": 3000, **over}, 18)
+        self.assertIn("EXCEEDED", text)
+        self.assertIn("case 175 of 350", text)
+        scored = COST._with_budget(
+            {"cases": 350, "cost_nano_usd": 1_200_000_000,
+             "run_budget": {"exhausted": True, "admitted_cases": 291}}, 18)
+        self.assertEqual(scored["budget_stop_case"], 291)
+        self.assertNotIn("budget_nano_usd", COST._with_budget({"cases": 350, "cost_nano_usd": 1}, 17))
+
     def test_rule_matches_the_shared_go_vectors(self) -> None:
         vectors = json.loads(PRICED_COST_VECTORS.read_text(encoding="utf-8"))
         for vector in vectors["vectors"]:

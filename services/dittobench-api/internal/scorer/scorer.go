@@ -1095,9 +1095,28 @@ func datagenHalf(perCase []protocol.CaseScore, benchVersion int) DatagenHalf {
 	// (CompositeGateForVersion); pre-v5 versions get exactly the v3 gate.
 	half.Gate = 1.0
 	if benchVersion >= protocol.BenchVersionV3 {
-		half.Gate = CompositeGateForVersion(perCase, benchVersion)
+		half.Gate = CompositeGateForVersion(gatedPopulation(perCase, benchVersion), benchVersion)
 	}
 	return half
+}
+
+// gatedPopulation is the population the composite gate reads. From the v18
+// run budget a case the budget refused never ran: it already scores 0 in the
+// means above, and the multiplicative gates (conversational sanity, transform
+// audit, metamorphic consistency, over-call, canary) must not charge it a
+// second time as if the harness had answered badly. Below v18 no case carries
+// the flag and the population is unchanged.
+func gatedPopulation(perCase []protocol.CaseScore, benchVersion int) []protocol.CaseScore {
+	if !protocol.RunBudgetBenchVersion(benchVersion) {
+		return perCase
+	}
+	out := make([]protocol.CaseScore, 0, len(perCase))
+	for _, cs := range perCase {
+		if !cs.BudgetExhausted {
+			out = append(out, cs)
+		}
+	}
+	return out
 }
 
 // AggregateForVersion folds per-case scores into a ScoreReport under an explicit

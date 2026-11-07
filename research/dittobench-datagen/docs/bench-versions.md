@@ -29,7 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
-| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; the one token lever is a per-seed production catalog of 1,400-5,000 real tools (pinned snapshot). Known vector `9a570c4e4c325a458df996c561ddf972424c568485a6af2b42c4979543f7eb91` (`TestV18KnownVector`). |
+| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17, plus a per-run cost budget ($1.00 per 350 cases; unrun cases score 0); the one token lever is a per-seed production catalog of 1,400-5,000 real tools (pinned snapshot). Known vector `9a570c4e4c325a458df996c561ddf972424c568485a6af2b42c4979543f7eb91` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1592,6 +1592,27 @@ captured completely.
 Composio's tool names and descriptions in the public bench, in its dataset
 reveals and in the pinned snapshot is allowed under Composio's terms. The
 snapshot is not committed to this public repository until that is settled.
+
+**Per-run cost budget (scorer, `run-budget-v1`).** A v18 canonical run stops
+admitting cases once its priced cost reaches $1.00 per 350 cases (the cost at
+which the priced-cost-v2 factor already sits on its 0.3 floor), and scores every
+unrun case 0 (`budget_exhausted`, `details.run_budget`; full rule in
+[PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). It is metered at
+the priced-cost rates over the whole run, datagen half and slice. Replayed on
+the 28 v17 production rows (per-case cost estimated from each case's
+completions and output tokens, slice cases sharing the remainder):
+
+| Agent (v17 rows) | Priced cost per run | Budget reached | Cutoff (of 350) |
+| --- | ---: | :---: | ---: |
+| DrPresident v35, dan0l v43, Tessellate v2/v6, DrPresident v34, dan0l v42 | $0.47-$0.95 | no | - |
+| crown-v210 v1, beast-d35 v1 | $1.29-$1.36 | yes | 272-280 |
+| nanodevs v14 | $1.55-$1.63 | yes | 224-234 |
+| logan v11 | $1.85-$1.91 | yes | 190-195 |
+
+Dispatch order puts every cutoff inside the generator slice, so those runs keep
+their datagen accuracy and lose most of their slice score. The three validators'
+cutoffs for one agent differ by at most 10 cases, so the median composite
+moves little across validators.
 
 **`conversational-chitchat` is a grading ceiling, not difficulty.** Its
 0.500 on all 84 v17 cases is the fixed chitchat credit (`gradingPolicy.chitchatCredit`,

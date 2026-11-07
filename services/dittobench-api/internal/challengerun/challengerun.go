@@ -70,6 +70,10 @@ type Options struct {
 	// A dueling slice uses it to drop a case another column already claimed
 	// (challenge.SliceExecutionCases).
 	Include func(packCaseID string) bool
+	// Admit, when set, is asked before each included case starts. A case it
+	// refuses is not sent to the harness and comes back BudgetExhausted
+	// (bench v18 per-run cost budget). Rounds and qualification leave it nil.
+	Admit func() bool
 }
 
 // CaseOutcome is one graded case: the panel result the scorer submits plus the
@@ -77,6 +81,8 @@ type Options struct {
 type CaseOutcome struct {
 	challenge.PanelCaseResult
 	Notes []string `json:"notes,omitempty"`
+	// BudgetExhausted marks a case Options.Admit refused: it never ran.
+	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 }
 
 // ErrHarnessUnavailable wraps a failure that prevents grading any case: the
@@ -132,6 +138,14 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 			}
 			runBounded(len(run), concurrency, func(j int) {
 				i := run[j]
+				if opts.Admit != nil && !opts.Admit() {
+					outcomes[i] = CaseOutcome{
+						PanelCaseResult: challenge.PanelCaseResult{CaseID: p.Cases[i].ID},
+						Notes:           []string{protocol.RunBudgetExhaustedReason},
+						BudgetExhausted: true,
+					}
+					return
+				}
 				outcomes[i] = runCase(ctx, harnessURL, p.Cases[i], p.GradingCase(i), proj, opts)
 			})
 			return ctx.Err()
