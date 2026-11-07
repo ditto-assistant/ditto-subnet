@@ -46,6 +46,12 @@ for backend in nft legacy; do
     printf '%s: health missed displaced hook\n' "$backend" >&2; exit 1
   fi
   printf '%s: allowed and denied ports and hook drift checked\n' "$backend"
+  docker exec "$name" sh -c 'kill -KILL "$(cat /run/ditto-sandbox-firewall-worker)"' || :
+  n=0
+  while [ "$(docker inspect -f '{{.State.Running}}' "$name")" = true ]; do
+    n=$((n + 1)); if [ "$n" -ge 30 ]; then docker logs "$name"; exit 1; fi; sleep 1
+  done
+  docker logs "$name" 2>&1 | grep -q 'sandbox firewall maintenance worker exited; stopping daemon'
   docker rm -f "$name" >/dev/null
 done
 
@@ -66,11 +72,29 @@ cat > "$tmp/sleep" <<'EOF'
 if [ "${1-}" = 21600 ]; then
   touch /run/test-reconcile-paused
   while [ ! -f /run/test-resume-reconcile ]; do /bin/sleep 0.1; done
+  rm -f /run/test-resume-reconcile
   exit 0
 fi
 exec /bin/sleep "$@"
 EOF
 chmod 755 "$tmp/iptables-restore" "$tmp/sleep"
+# Remove one hook while the worker is paused and verify the actual reconcile
+# repairs it without reversing the required hook priority.
+docker run -d --name "$name" --privileged --network none -e DOCKER_TLS_CERTDIR= \
+  -e DOCKER_IPTABLES_LEGACY= -v "$tmp/sleep:/usr/local/bin/sleep:ro" "$image" >/dev/null
+n=0
+until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
+  n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+done
+docker exec "$name" iptables -w 5 -D INPUT -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS
+if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then echo 'health missed missing hook' >&2; exit 1; fi
+docker exec "$name" sh -c 'rm /run/test-reconcile-paused; touch /run/test-resume-reconcile'
+n=0
+until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
+  n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+done
+docker rm -f "$name" >/dev/null
+
 docker run -d --name "$name" --privileged --network none -e DOCKER_TLS_CERTDIR= \
   -v "$tmp/iptables-restore:/usr/local/bin/iptables-restore:ro" -v "$tmp/sleep:/usr/local/bin/sleep:ro" \
   -e DOCKER_IPTABLES_LEGACY= --entrypoint sh "$image" -c 'touch /run/test-pause-restore; exec /usr/local/bin/sandbox-docker-entrypoint' >/dev/null

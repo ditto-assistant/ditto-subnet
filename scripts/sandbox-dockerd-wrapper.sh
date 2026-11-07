@@ -5,6 +5,7 @@ ready=/run/ditto-sandbox-firewall-ready
 backend_file=/run/ditto-sandbox-firewall-backend
 filter_snapshot=/run/ditto-sandbox-filter-policy
 nat_snapshot=/run/ditto-sandbox-nat-policy
+worker_file=/run/ditto-sandbox-firewall-worker
 
 select_saved_backend() {
   case "$(cat "$backend_file")" in
@@ -39,6 +40,11 @@ check_forward_hook() {
 
 healthcheck() {
   test -f "$ready" || return 1
+  worker="$(cat "$worker_file")" || return 1
+  case "$worker" in '' | *[!0-9]*) return 1 ;; esac
+  kill -0 "$worker" 2>/dev/null || return 1
+  state="$(awk '{print $3}' "/proc/$worker/stat")" || return 1
+  [ -n "$state" ] && [ "$state" != Z ] || return 1
   select_saved_backend || return 1
   docker info >/dev/null 2>&1 || return 1
   check_hooks || return 1
@@ -71,7 +77,7 @@ fi
 # invoking this wrapper. Use the same PATH for the worker and record it for the
 # separate healthcheck process. A stale readiness marker must never survive a
 # daemon restart.
-rm -f "$ready"
+rm -f "$ready" "$worker_file"
 case "$(iptables --version)" in
   *legacy*) printf 'legacy\n' > "$backend_file" ;;
   *nf_tables*) printf 'nft\n' > "$backend_file" ;;
@@ -105,7 +111,12 @@ EOF
   for chain in DOCKER-USER INPUT; do
     for bridge in ditto-sandbox0 'dtj+'; do
       if [ "${1-}" = initial ] || ! iptables -w 5 -C "$chain" -i "$bridge" -j DITTO-SANDBOX-EGRESS >/dev/null 2>&1; then
-        iptables -w 5 -I "$chain" 1 -i "$bridge" -j DITTO-SANDBOX-EGRESS || return 1
+        position=1
+        if [ "${1-}" != initial ] && [ "$bridge" = ditto-sandbox0 ] && \
+          iptables -w 5 -C "$chain" -i 'dtj+' -j DITTO-SANDBOX-EGRESS >/dev/null 2>&1; then
+          position=2
+        fi
+        iptables -w 5 -I "$chain" "$position" -i "$bridge" -j DITTO-SANDBOX-EGRESS || return 1
       fi
     done
   done
@@ -175,4 +186,16 @@ maintain_sandbox() {
 install_firewall initial
 daemon_pid=$$
 maintain_sandbox &
+worker_pid=$!
+printf '%s\n' "$worker_pid" > "$worker_file"
+(
+  while kill -0 "$worker_pid" 2>/dev/null; do
+    state="$(awk '{print $3}' "/proc/$worker_pid/stat")" || break
+    [ -n "$state" ] && [ "$state" != Z ] || break
+    sleep 1
+  done
+  rm -f "$ready"
+  printf 'sandbox firewall maintenance worker exited; stopping daemon\n' >&2
+  kill -TERM "$daemon_pid" 2>/dev/null || :
+) &
 exec /usr/local/bin/dockerd "$@"
