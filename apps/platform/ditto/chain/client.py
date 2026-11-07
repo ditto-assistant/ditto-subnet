@@ -32,6 +32,7 @@ from ditto.chain.models import (
     EpochSchedule,
     ExtrinsicInfo,
     NeuronInfo,
+    _call_args_to_dict,
 )
 from ditto.chain.treasury_read_trace import TreasuryReadTrace
 from ditto.chain.treasury_runtime_cache import TreasuryRuntimeCache
@@ -401,6 +402,75 @@ class ChainClient:
                 f"get_extrinsic(block={block_number}, idx={extrinsic_index})",
             ) from e
         return ExtrinsicInfo.from_pylon(response)
+
+    async def get_extrinsic_at_block_hash(
+        self, block_number: int, block_hash: str, extrinsic_index: int
+    ) -> ExtrinsicInfo:
+        """Read one extrinsic from the archive providers by its block hash.
+
+        Pylon's :meth:`get_extrinsic` is a single backend. When it lags the
+        chain head, or no longer serves an older block body, it answers
+        not-found for a payment that executed (SN-455). This read uses the
+        archive providers, which already serve every other payment check, so
+        a confirmed extrinsic is reported missing only when an archive that
+        holds the block has no extrinsic at ``extrinsic_index``.
+
+        Args:
+            block_number: Block number, copied onto the returned info.
+            block_hash: Canonical hash of that block, already bound to
+                ``block_number`` by the caller.
+            extrinsic_index: Zero-based index of the extrinsic within the block.
+
+        Raises:
+            ExtrinsicNotFoundError: When an archive returned the block and it
+                has no extrinsic at ``extrinsic_index``.
+            ChainTimeoutError: When every archive provider timed out.
+            ChainConnectionError: When no archive provider returned the block.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        failures: list[tuple[str, Exception]] = []
+        for url in self._historical_substrate_urls():
+            provider = urlsplit(url).hostname or "configured archive"
+            try:
+                async with asyncio.timeout(self._config.archive_rpc_timeout_seconds):
+                    async with AsyncSubstrateInterface(url=url) as substrate:
+                        block = await substrate.get_block(block_hash=block_hash)
+            except Exception as error:
+                failures.append((provider, error))
+                logger.warning(
+                    "archive extrinsic read failed provider=%s block=%s error=%s",
+                    provider,
+                    block_hash,
+                    self._safe_rpc_error(error),
+                )
+                continue
+            extrinsics = (block or {}).get("extrinsics")
+            # Every canonical block carries at least the timestamp inherent, so
+            # an empty body is a bad provider answer, not proof of absence.
+            if not extrinsics:
+                failures.append((provider, RuntimeError("block body unavailable")))
+                continue
+            if not 0 <= extrinsic_index < len(extrinsics):
+                raise ExtrinsicNotFoundError(
+                    f"block {block_hash} has {len(extrinsics)} extrinsics; "
+                    f"index {extrinsic_index} does not exist"
+                )
+            return _extrinsic_info_from_substrate(
+                extrinsics[extrinsic_index], block_number, extrinsic_index
+            )
+
+        summary = "; ".join(
+            f"{provider}: {self._safe_rpc_error(error)}" for provider, error in failures
+        )
+        if failures and all(isinstance(error, TimeoutError) for _, error in failures):
+            raise ChainTimeoutError(
+                f"get_extrinsic_at_block_hash({block_hash}) timed out: {summary}"
+            )
+        raise ChainConnectionError(
+            f"get_extrinsic_at_block_hash({block_hash}) failed: "
+            f"{summary or 'no archive endpoint configured'}"
+        )
 
     async def get_block_hash(self, block_number: int) -> str:
         """Resolve the canonical hash for ``block_number`` from Substrate.
@@ -1833,6 +1903,33 @@ def _translate_pylon_error(exc: Exception, op: str) -> Exception:
     if isinstance(exc, TimeoutError):
         return ChainTimeoutError(f"{op} timed out: {exc}")
     return ChainConnectionError(f"{op} failed: {exc}")
+
+
+def _extrinsic_info_from_substrate(
+    raw: Any, block_number: int, extrinsic_index: int
+) -> ExtrinsicInfo:
+    """Build an :class:`ExtrinsicInfo` from an async-substrate block extrinsic.
+
+    ``get_block`` yields scale-codec ``GenericExtrinsic`` objects whose
+    ``value`` is ``{"extrinsic_hash", "address", "call": {"call_module",
+    "call_function", "call_args": [{"name", "type", "value"}]}}`` -- the same
+    call shape Pylon returns, so the verifier reads both identically.
+    """
+    value = getattr(raw, "value", raw)
+    if not isinstance(value, dict):
+        value = {}
+    call = value.get("call")
+    if not isinstance(call, dict):
+        call = {}
+    return ExtrinsicInfo(
+        block_number=block_number,
+        extrinsic_index=extrinsic_index,
+        extrinsic_hash=str(value.get("extrinsic_hash") or ""),
+        call_module=str(call.get("call_module") or ""),
+        call_function=str(call.get("call_function") or ""),
+        call_args=_call_args_to_dict(call.get("call_args")),
+        signer_address=str(value.get("address") or ""),
+    )
 
 
 def _block_number_from_header(header: Any) -> int:
