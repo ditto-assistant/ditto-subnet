@@ -4577,7 +4577,7 @@ async def _screened_image_rebuild_detail(
         blocking_reason = "submission already has an accepted active-version score"
     elif screening_attempt_active:
         blocking_reason = "screening attempt is active"
-    elif agent.screening_policy_version < lease_screening_policy_floor():
+    elif agent.screening_policy_version < lease_screening_policy_floor(bench_version):
         blocking_reason = "submission is not on the current screening policy"
     elif agent.screened_image_sha256 is None or agent.screened_image_upload_id is None:
         blocking_reason = "submission has no complete screened image to replace"

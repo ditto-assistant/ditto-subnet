@@ -58,16 +58,28 @@ def effective_screening_policy_version() -> int:
     return _required_policy_version
 
 
-LEASE_SCREENING_POLICY_FLOOR = 9
-"""Policy 9 introduced the verified screened-image handoff, and every
-screened-image benchmark contract names it as
-``minimum_screening_policy_version``. It is the only screening-policy gate on
-leasing, scoring, retries and public projections."""
+def lease_screening_policy_floor(bench_version: int | None = None) -> int:
+    """The lowest screening policy whose pass makes an agent leasable.
 
+    With a ``bench_version`` it is that benchmark contract's
+    ``minimum_screening_policy_version``, the exact gate the lease allocator
+    and ``POST /validator/score`` apply. Without one (a projection that is not
+    tied to an era) it is the lowest minimum across the screened-image
+    contracts. It is never a later review-policy activation: source review is
+    retired (2026-11-07).
+    """
+    from ditto.api_models.benchmark_contract import (  # noqa: PLC0415
+        benchmark_contract,
+        benchmark_contracts,
+    )
 
-def lease_screening_policy_floor() -> int:
-    """The lowest screening policy whose pass makes an agent leasable."""
-    return LEASE_SCREENING_POLICY_FLOOR
+    if bench_version is not None:
+        return benchmark_contract(bench_version).minimum_screening_policy_version
+    return min(
+        contract.minimum_screening_policy_version
+        for contract in benchmark_contracts()
+        if contract.requires_screened_image
+    )
 
 
 def effective_rescreen_scored() -> bool:

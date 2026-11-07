@@ -220,7 +220,8 @@ async def stranded_prev_gen_candidates(
         .where(
             Agent.status == AgentStatus.EVALUATING,
             Agent.created_at < rollout.created_at,
-            Agent.screening_policy_version >= lease_screening_policy_floor(),
+            Agent.screening_policy_version
+            >= lease_screening_policy_floor(int(rollout.desired_version)),
             prev_score_count >= settings.min_score_count,
             prev_score_count < SCORING_QUORUM,
             ~already_member,

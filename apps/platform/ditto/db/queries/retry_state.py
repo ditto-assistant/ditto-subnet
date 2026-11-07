@@ -386,7 +386,7 @@ def recovery_gate(
     )
     if not waiting_for_scores:
         return False, False, "submission is not waiting for validator scores", []
-    if agent.screening_policy_version < lease_screening_policy_floor():
+    if agent.screening_policy_version < lease_screening_policy_floor(bench_version):
         return False, False, "submission is not on the current screening policy", []
     if score_count >= SCORING_QUORUM:
         return False, False, "submission already reached scoring quorum", []
@@ -479,7 +479,7 @@ def withdrawal_gate(
 
     if agent.status != AgentStatus.EVALUATING:
         return False, "submission is not waiting for validator scores"
-    if agent.screening_policy_version < lease_screening_policy_floor():
+    if agent.screening_policy_version < lease_screening_policy_floor(bench_version):
         return False, "submission is not on the current screening policy"
     if len(scores) >= SCORING_QUORUM:
         return False, "submission already reached scoring quorum"
@@ -624,7 +624,7 @@ def reinstatement_gate(
         )
     if agent.status != AgentStatus.EVALUATING:
         return False, "submission is not waiting for validator scores"
-    if agent.screening_policy_version < lease_screening_policy_floor():
+    if agent.screening_policy_version < lease_screening_policy_floor(bench_version):
         return False, "submission is not on the current screening policy"
     if len(scores) >= SCORING_QUORUM:
         return False, "submission already reached scoring quorum"

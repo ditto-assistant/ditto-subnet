@@ -227,7 +227,7 @@ async def desired_era_work_outstanding(
 
     statement = select(Agent.agent_id).where(
         Agent.status == AgentStatus.EVALUATING,
-        Agent.screening_policy_version >= lease_screening_policy_floor(),
+        Agent.screening_policy_version >= lease_screening_policy_floor(bench_version),
         validator_queue_admission_predicate(bench_version=bench_version),
         benchmark_admission_predicate(rollout=rollout, bench_version=bench_version),
         versioned_dataset,
