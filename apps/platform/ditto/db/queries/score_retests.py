@@ -107,20 +107,25 @@ async def try_lock_validator(session: AsyncSession, validator_hotkey: str) -> bo
 async def latest_retest_events_for_validator(
     session: AsyncSession, *, validator_hotkey: str
 ) -> dict[UUID, ScoreAuditEntry]:
-    """Return the latest lifecycle entry for every queued/recent agent."""
-    entries = list(
-        (
-            await session.scalars(
-                select(ScoreAuditEntry)
-                .where(
-                    ScoreAuditEntry.validator_hotkey == validator_hotkey,
-                    ScoreAuditEntry.event.in_(SCORE_RETEST_EVENTS),
-                )
-                .order_by(ScoreAuditEntry.seq.asc())
+    """Return the latest lifecycle entry for every queued/recent agent.
+
+    One row per agent, selected in PostgreSQL: the audit log is append-only,
+    and re-reading a validator's whole re-test history on every job poll cost
+    the API up to 1.1 MB/s of decoded payloads. Entries come back in ``seq``
+    order; every consumer orders by ``seq`` itself.
+    """
+    entries = (
+        await session.scalars(
+            select(ScoreAuditEntry)
+            .where(
+                ScoreAuditEntry.validator_hotkey == validator_hotkey,
+                ScoreAuditEntry.event.in_(SCORE_RETEST_EVENTS),
             )
-        ).all()
-    )
-    return {entry.agent_id: entry for entry in entries}
+            .distinct(ScoreAuditEntry.agent_id)
+            .order_by(ScoreAuditEntry.agent_id, ScoreAuditEntry.seq.desc())
+        )
+    ).all()
+    return {entry.agent_id: entry for entry in sorted(entries, key=lambda e: e.seq)}
 
 
 async def score_retest_queue_positions(

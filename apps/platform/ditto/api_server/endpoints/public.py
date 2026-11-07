@@ -459,6 +459,7 @@ from ditto.db.queries.scores import (
     list_eligible_ledger,
     list_memory_leader_timeline,
     list_provisional_ledger,
+    list_public_agent_scores,
     list_public_submissions,
     list_scored_bench_versions,
     list_scores_for_bench_version,
@@ -8324,13 +8325,9 @@ async def agent_pipeline(
         (work.ticket.validator_hotkey, work.ticket.bench_version): work
         for work in active_work
     }
-    accepted_scores = list(
-        await session.scalars(
-            select(Score)
-            .where(Score.agent_id == agent_id)
-            .order_by(Score.created_at, Score.validator_hotkey)
-        )
-    )
+    # Public projection: ``per_case`` carries only the published case fields,
+    # which is all ``_safe_case_results`` reads. The full blob is ~1.8 MB a row.
+    accepted_scores = await list_public_agent_scores(session, agent_id=agent_id)
     canonical_version = await active_bench_version(session)
     # The same classification the operations feed publishes, for one agent. A
     # submission that is finalized, withdrawn, or has no validator work yet is

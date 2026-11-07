@@ -253,13 +253,22 @@ async def test_overlapping_idle_polls_build_one_board_and_expose_diagnostics(
     finally:
         release.set()
         await first
-    # Sequential reads are fresh; neither ranks nor a no-work decision are cached.
+    # A no-work answer holds for the idle cooldown: the next poll does not
+    # rebuild the board. Ranks are never cached, only the wait.
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    assert reader.await_count == 1
+    # Once the cooldown has passed, a sequential read rebuilds it fresh.
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    later = module.monotonic() + module.ADMISSION_IDLE_COOLDOWN_SECONDS + 1
+    monkeypatch.setattr(module, "monotonic", lambda: later)
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
     assert reader.await_count == 2
     final = (await client.get(BASE, headers=HEADERS)).json()["admission_diagnostics"]
     assert final["scope"] == "process"
     assert final["in_flight"] is False
     assert final["attempts"] == 2
+    assert final["idle_skips"] == 1
     assert final["last_outcome"] == "idle"
     assert final["last_elapsed_ms"] >= 0
     assert final["last_completed_at"] is not None
@@ -568,3 +577,28 @@ async def test_authorized_retry_rechecks_admission_guards(
             else:
                 parent.report = {**parent.report, "output_tokens": 999}
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+
+
+async def test_writes_that_can_create_work_end_the_idle_cooldown(
+    app, client, session_maker, monkeypatch
+):
+    await install(app, session_maker, monkeypatch, enabled=False)
+    # Off: the attempt is idle and starts the cooldown.
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    diagnostics = (await client.get(BASE, headers=HEADERS)).json()[
+        "admission_diagnostics"
+    ]
+    assert diagnostics["idle_skips"] == 1
+    payload = {
+        "mode": "shadow",
+        "expected_revision": 0,
+        "actor": "operator@example.com",
+        "reason": "Start the bounded shadow canary",
+        "confirmation": "APPLY CONVERSATION SHADOW SETTINGS",
+    }
+    changed = await client.post(BASE + "/settings", headers=HEADERS, json=payload)
+    assert changed.status_code == 200, changed.text
+    # Turning admission on is seen at once, not after the cooldown.
+    claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    assert claim is not None

@@ -3779,6 +3779,32 @@ class TestQueue:
             str(current_id),
         }
 
+    async def test_policy_only_queue_read_returns_no_items(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING_FAILED,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        _install_db(app, session_maker)
+
+        full = await client.get("/api/v1/screener/queue", params={"limit": 1})
+        policy = await client.get(
+            "/api/v1/screener/queue", params={"limit": 1, "policy_only": "true"}
+        )
+
+        assert full.status_code == policy.status_code == 200
+        assert full.json()["count"] == 1
+        assert policy.json() == {
+            "items": [],
+            "count": 0,
+            "required_policy_version": full.json()["required_policy_version"],
+        }
+
     async def test_missing_auth_header_returns_401(
         self,
         app: FastAPI,

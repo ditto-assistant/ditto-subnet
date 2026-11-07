@@ -2533,16 +2533,21 @@ async def _resolve_effective_review_settings(
         scopes.append(enrolled_node_id)
     scopes = [scope for scope in scopes if not is_l2_report_canary_scope(scope)]
     scopes.append("*")
-    rows = list(
-        await session.scalars(
+    # Only each scope's newest revision is used. Workers resolve this on every
+    # claim, so read one row per scope rather than the whole append-only
+    # history (192 KB a call on prod in 2026-11).
+    latest_by_scope: dict[str, ScreenerReviewSettingsRevision] = {
+        revision.scope: revision
+        for revision in await session.scalars(
             select(ScreenerReviewSettingsRevision)
             .where(ScreenerReviewSettingsRevision.scope.in_(scopes))
-            .order_by(ScreenerReviewSettingsRevision.revision.desc())
+            .distinct(ScreenerReviewSettingsRevision.scope)
+            .order_by(
+                ScreenerReviewSettingsRevision.scope,
+                ScreenerReviewSettingsRevision.revision.desc(),
+            )
         )
-    )
-    latest_by_scope: dict[str, ScreenerReviewSettingsRevision] = {}
-    for revision in rows:
-        latest_by_scope.setdefault(revision.scope, revision)
+    }
     row: ScreenerReviewSettingsRevision | None = None
     for scope in scopes:
         scoped_revision = latest_by_scope.get(scope)
@@ -3723,11 +3728,22 @@ async def queue(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    policy_only: Annotated[bool, Query()] = False,
 ) -> ScreenerQueueResponse:
-    """List completion-lane contenders, then least-scored pending agents."""
+    """List completion-lane contenders, then least-scored pending agents.
+
+    ``policy_only=true`` answers just ``required_policy_version`` with no items.
+    Workers read the policy before every claim, and running the full priority
+    query (with its per-agent score aggregates) only to discard the rows was a
+    standing load on the API at a two-second poll interval.
+    """
     response.headers["Cache-Control"] = "no-store"
     screener_policy = await _required_policy(session)
     required_policy = screener_policy.required_policy_version
+    if policy_only:
+        return ScreenerQueueResponse(
+            items=[], count=0, required_policy_version=required_policy
+        )
     rolling_qualified = exists(
         select(BenchmarkRolloutMember.agent_id)
         .join(BenchmarkRollout)

@@ -48,6 +48,7 @@ async def claim(
 
 @router.post("/{assessment_id}/result", response_model=ConversationObservation)
 async def result(
+    request: Request,
     assessment_id: UUID,
     payload: ConversationResultRequest,
     worker: ScreenerDep,
@@ -63,4 +64,4 @@ async def result(
         raise HTTPException(
             422, "completed conversation requires verified harness usage"
         )
-    return await submit_result(assessment_id, payload, None, session)
+    return await submit_result(request, assessment_id, payload, None, session)
