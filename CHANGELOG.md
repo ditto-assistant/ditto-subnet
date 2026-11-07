@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.460.1 (2026-11-07)
+
+### Bug Fixes
+
+- **platform**: Read payment extrinsics from archives when Pylon misses them
+  ([`75ddb2c`](https://github.com/ditto-assistant/ditto-subnet/commit/75ddb2c36cc546c48a76f7e26fbe0394da7cd010))
+
+- **platform**: Try the next archive when one returns an empty block body
+  ([`5e6d941`](https://github.com/ditto-assistant/ditto-subnet/commit/5e6d9419ff84e0c91981d2bacbb2cd96f5f2af85))
+
+### Testing
+
+- **platform**: Name the SN-455 owner address so gitleaks reads it as public
+  ([`ac8dcc4`](https://github.com/ditto-assistant/ditto-subnet/commit/ac8dcc46cc01f9d93b29c9754c19d46af6fa8c5c))
+
+
 ## v0.460.0 (2026-11-07)
 
 ### Features
