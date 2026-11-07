@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.458.5 (2026-11-07)
+
+### Bug Fixes
+
+- Update vulnerable Pylon image dependencies
+  ([#3408](https://github.com/ditto-assistant/ditto-subnet/pull/3408),
+  [`c59d7bf`](https://github.com/ditto-assistant/ditto-subnet/commit/c59d7bf9d63c9ed5aaed8e51c8d2008d78b031df))
+
+### Chores
+
+- **tests**: Pin the bench v17 datagen known vector
+  ([#3411](https://github.com/ditto-assistant/ditto-subnet/pull/3411),
+  [`8541c0a`](https://github.com/ditto-assistant/ditto-subnet/commit/8541c0ad225bb99da86802818c88ba043bab45bf))
+
+
 ## v0.458.4 (2026-11-07)
 
 ### Bug Fixes
