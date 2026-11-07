@@ -1804,7 +1804,6 @@ def _due_activation(*, rescreen_scored: bool):
         )
 
 
-@contextmanager
 def _scored_agent(*, hotkey: str, name: str, created_at: datetime | None = None):
     agent = Agent(
         agent_id=uuid4(),
