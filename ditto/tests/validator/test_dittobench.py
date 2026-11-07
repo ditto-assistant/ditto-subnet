@@ -1838,6 +1838,7 @@ async def test_scorer_outage_that_outlasts_the_budget_is_infrastructure() -> Non
             await client._poll("run-1", expected_bench_version=8)
 
     assert caught.value.code == "scorer_poll_unavailable"
+    assert "last 503: scorer restarting" in str(caught.value)
     assert methods[-1] == "DELETE"
     assert methods.count("GET") < 3
 

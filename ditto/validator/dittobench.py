@@ -2098,6 +2098,7 @@ class DittobenchClient:
         # monotonicity guard accordingly.
         run_token = hashlib.sha256(run_id.encode()).hexdigest()[:16]
         unavailable_polls = 0
+        detail = ""
         try:
             while time.monotonic() - started <= budget:
                 # The scorer is validator-owned. A transport error, 5xx, or a
@@ -2365,7 +2366,7 @@ class DittobenchClient:
             # The budget ran out while the scorer was still unreadable.
             raise ValidatorInfrastructureError(
                 f"scorer unavailable while polling run {run_id} when its budget "
-                f"ran out ({unavailable_polls} consecutive polls)",
+                f"ran out ({unavailable_polls} consecutive polls; last {detail})",
                 code="scorer_poll_unavailable",
             )
         elapsed = time.monotonic() - started
