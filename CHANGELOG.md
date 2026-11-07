@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.458.6 (2026-11-07)
+
+### Bug Fixes
+
+- **backroom**: Close stranded ATH holds and amend reject reasons
+  ([#3356](https://github.com/ditto-assistant/ditto-subnet/pull/3356),
+  [`e0c6ddd`](https://github.com/ditto-assistant/ditto-subnet/commit/e0c6ddd7a1aac8729d3a5557048cc436a8214eab))
+
+
 ## v0.458.5 (2026-11-07)
 
 ### Bug Fixes
