@@ -1,5 +1,13 @@
 # The ATH review queue
 
+> **Automatic source-review holds are retired (2026-11-07).** Score
+> finalization no longer opens a deferred source review, top-five integrity
+> double-check, outlier escalation or transform-audit hold. The queue now
+> holds copy holds (still automatic: they are copy protection), holds an
+> operator opens by hand with `open_ath_review` or a rulings batch, and rows
+> opened before the retirement. The double-check and outlier sections below
+> describe that historical machinery.
+
 The operator queue for SN118 is **`ath_reviews` rows with `status = 'pending'`**.
 Nothing else is. This document exists because two other surfaces look like the
 queue and are not, and because the queue's two status columns can disagree.
