@@ -14,6 +14,8 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import UUID
 
+import httpx
+
 from ditto_screener.calibration import classification_metrics
 from ditto_screener.causal_evidence import causal_audit_fields
 from ditto_screener.l2_review import (
@@ -25,6 +27,7 @@ from ditto_screener.l2_review import (
     L2_STARTER_MANIFESTS,
     L2_STATIC_HOLD_REVISION,
     L3_MODEL,
+    L3_PROVIDER,
     IsolatedCodingHarness,
     L2AuditJournal,
     TerraSolSourceReviewAgent,
@@ -40,9 +43,139 @@ from ditto_screening_protocol import (
     ScoredRuntimeEvidenceLease,
 )
 
+PUBLIC_REVIEW_SETTINGS_URL = (
+    "https://dittobench.ai/api/v1/public/screener-review-settings"
+)
+# Public posture field -> this script's argument. Applying a posture replaces
+# every listed limit so a local replay runs under the live review settings.
+_POSTURE_ARGS = {
+    "timeout_seconds": "timeout_seconds",
+    "max_steps": "max_steps",
+    "max_input_tokens": "max_input_tokens",
+    "max_output_tokens": "max_output_tokens",
+    "max_completion_tokens": "max_completion_tokens",
+    "max_cost_usd": "max_cost_usd",
+    "l2_model": "l2_model",
+    "l3_model": "l3_model",
+    "l3_enabled": "l3_enabled",
+    "critic_reasoning_effort": "critic_reasoning_effort",
+    "concern_hold_count": "concern_hold_count",
+    "clear_min_notes": "clear_min_notes",
+    "source_review_model": "l1_model",
+    "source_review_timeout_seconds": "l1_timeout_seconds",
+    "source_review_max_steps": "l1_max_steps",
+    "source_review_max_read_bytes": "l1_max_read_bytes",
+    "source_review_max_completion_tokens": "l1_max_completion_tokens",
+    "source_review_reasoning_effort": "l1_reasoning_effort",
+}
+
+
+def _load_posture(source: str, scope: str | None) -> dict[str, object]:
+    """Read the published review posture from a URL or a saved JSON file."""
+    if source.startswith(("https://", "http://")):
+        response = httpx.get(source, timeout=30.0)
+        response.raise_for_status()
+        body = response.json()
+    else:
+        body = json.loads(Path(source).read_text())
+    postures = body.get("postures") if isinstance(body, dict) else None
+    if not isinstance(postures, list) or not postures:
+        raise SystemExit("production settings carry no postures")
+    for posture in postures:
+        if not isinstance(posture, dict):
+            continue
+        if (scope is None and posture.get("role") == "global") or (
+            scope is not None and posture.get("scope") == scope
+        ):
+            if posture.get("mode") == "inherit":
+                raise SystemExit(
+                    f"scope {posture.get('scope')} inherits; pick the global posture"
+                )
+            # A report-only canary posture never decides a production screen,
+            # so replaying it cannot claim production parity.
+            if posture.get("role") == "l2_report_canary":
+                raise SystemExit(
+                    f"scope {posture.get('scope')} is a report-only canary, "
+                    "not a production posture"
+                )
+            return posture
+    raise SystemExit(f"no posture for scope {scope or 'global'}")
+
+
+def _apply_posture(args: argparse.Namespace, posture: dict[str, object]) -> None:
+    for field, attribute in _POSTURE_ARGS.items():
+        if field not in posture or posture[field] is None:
+            continue
+        value = posture[field]
+        # Match the type of the argparse default so a malformed saved posture
+        # fails here with a clear message, not as a TypeError in a bound check.
+        current = getattr(args, attribute)
+        if isinstance(current, bool):
+            valid = isinstance(value, bool)
+        elif isinstance(current, int):
+            valid = isinstance(value, int) and not isinstance(value, bool)
+        elif isinstance(current, float):
+            valid = isinstance(value, int | float) and not isinstance(value, bool)
+        else:
+            valid = isinstance(value, str)
+        if not valid:
+            raise SystemExit(f"posture {field} has an unexpected type")
+        setattr(args, attribute, value)
+    # A saved posture bypasses argparse choices; reject it at startup instead
+    # of at the first provider request.
+    for attribute in ("critic_reasoning_effort", "l1_reasoning_effort"):
+        if getattr(args, attribute) not in ("low", "medium", "high"):
+            raise SystemExit(f"posture {attribute} must be low, medium, or high")
+    fallbacks = posture.get("l2_fallback_models")
+    if isinstance(fallbacks, list):
+        args.l2_fallback_models = tuple(str(model) for model in fallbacks)
+    args.production_posture = {
+        "revision": posture.get("revision"),
+        "scope": posture.get("scope"),
+        "checksum": posture.get("checksum"),
+        "mode": posture.get("mode"),
+    }
+
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--production-settings",
+        nargs="?",
+        const=PUBLIC_REVIEW_SETTINGS_URL,
+        help=(
+            "apply the live review posture (models, step caps, timeouts, "
+            "budgets) from the public Platform endpoint, or from a saved copy "
+            "of its JSON; it overrides the matching flags"
+        ),
+    )
+    parser.add_argument(
+        "--production-scope",
+        help="posture scope to apply instead of the global one",
+    )
+    parser.add_argument("--l2-model", default=L2_MODEL)
+    parser.add_argument(
+        "--l2-fallback-models",
+        type=lambda raw: tuple(m.strip() for m in raw.split(",") if m.strip()),
+        default=L2_FALLBACK_MODELS,
+    )
+    parser.add_argument("--l3-model", default=L3_MODEL)
+    parser.add_argument(
+        "--no-l3",
+        dest="l3_enabled",
+        action="store_false",
+        help="skip the L3 critic (only matches production when it is disabled)",
+    )
+    parser.add_argument(
+        "--critic-reasoning-effort",
+        choices=("low", "medium", "high"),
+        default="medium",
+    )
+    parser.add_argument("--concern-hold-count", type=int, default=3)
+    parser.add_argument("--clear-min-notes", type=int, default=3)
+    parser.add_argument(
+        "--l1-reasoning-effort", choices=("low", "medium", "high"), default="high"
+    )
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--api-key-file", type=Path, required=True)
@@ -158,6 +291,13 @@ def _report_only_audit_cost(path: Path, *, started_at: float) -> float:
 
 async def _main() -> None:
     args = _arguments()
+    args.production_posture = None
+    if args.production_settings:
+        _apply_posture(
+            args, _load_posture(args.production_settings, args.production_scope)
+        )
+    elif args.production_scope:
+        raise SystemExit("--production-scope requires --production-settings")
     if not 1 <= args.concurrency <= 8:
         raise SystemExit("--concurrency must be between 1 and 8")
     if not 30 <= args.analyzer_timeout_seconds <= 300:
@@ -172,8 +312,10 @@ async def _main() -> None:
         raise SystemExit("--max-input-tokens must be between 1 and 5000000")
     if not 1 <= args.max_output_tokens <= 1_000_000:
         raise SystemExit("--max-output-tokens must be between 1 and 1000000")
-    if not 1 <= args.max_completion_tokens <= 16_000:
-        raise SystemExit("--max-completion-tokens must be between 1 and 16000")
+    if not 1 <= args.max_completion_tokens <= min(128_000, args.max_output_tokens):
+        raise SystemExit(
+            "--max-completion-tokens must be between 1 and min(128000, output budget)"
+        )
     if not 0 < args.max_cost_usd <= 25:
         raise SystemExit("--max-cost-usd must be between 0 and 25")
     if args.turn_timeout_seconds is not None and not (
@@ -192,12 +334,18 @@ async def _main() -> None:
         raise SystemExit("--compact-review-packet is report-only Sol mode")
     if not 30 <= args.l1_timeout_seconds <= 3_600:
         raise SystemExit("--l1-timeout-seconds must be between 30 and 3600")
-    if not 1 <= args.l1_max_steps <= 160:
-        raise SystemExit("--l1-max-steps must be between 1 and 160")
-    if not 1 <= args.l1_max_read_bytes <= 8_000_000:
-        raise SystemExit("--l1-max-read-bytes must be between 1 and 8000000")
-    if not 1 <= args.l1_max_completion_tokens <= 8_000:
-        raise SystemExit("--l1-max-completion-tokens must be between 1 and 8000")
+    # Same ceilings as the worker's SCREENER_SOURCE_REVIEW_* settings, so a
+    # local replay can run the production posture rather than a smaller one.
+    if not 1 <= args.l1_max_steps <= 240:
+        raise SystemExit("--l1-max-steps must be between 1 and 240")
+    if not 32_000 <= args.l1_max_read_bytes <= 16_000_000:
+        raise SystemExit("--l1-max-read-bytes must be between 32000 and 16000000")
+    if not 2_000 <= args.l1_max_completion_tokens <= 32_000:
+        raise SystemExit("--l1-max-completion-tokens must be between 2000 and 32000")
+    if not 1 <= args.concern_hold_count <= 16:
+        raise SystemExit("--concern-hold-count must be between 1 and 16")
+    if not 1 <= args.clear_min_notes <= 32:
+        raise SystemExit("--clear-min-notes must be between 1 and 32")
     if bool(args.scorer_capabilities_url) != bool(args.expected_scorer_revision):
         raise SystemExit("scorer capabilities URL and revision must be set together")
     if args.local_cohort_packet_file and args.scorer_capabilities_url:
@@ -231,7 +379,15 @@ async def _main() -> None:
     cache_dir = args.cache_dir or args.results_file.parent / "cache"
     audit_file = args.audit_file or args.results_file.parent / "audit.jsonl"
     run_started_at = time.time()
-    analyst_model = "openai/gpt-6-sol" if args.single_layer_sol else L2_MODEL
+    analyst_model = "openai/gpt-6-sol" if args.single_layer_sol else args.l2_model
+    analyst_fallbacks = () if args.single_layer_sol else args.l2_fallback_models
+    l3_enabled = args.l3_enabled and not args.single_layer_sol
+    # The production worker always retries one relayed provider fault in the
+    # same turn (gate.py); mirror it when replaying the live posture, and record
+    # the effective value in the run metadata.
+    retry_provider_body_fault_once = (
+        args.retry_provider_body_once or args.production_posture is not None
+    )
     agent = TerraSolSourceReviewAgent(
         api_key_file=str(args.api_key_file),
         base_url="https://openrouter.ai/api/v1",
@@ -253,12 +409,17 @@ async def _main() -> None:
         max_completion_request_seconds=args.turn_timeout_seconds,
         independent_analyst=args.omit_l1,
         terminal_verdict_required=args.single_layer_sol,
-        retry_provider_body_fault_once=args.retry_provider_body_once,
+        # The production worker always retries one relayed provider fault in
+        # the same turn (gate.py); mirror it when replaying the live posture.
+        retry_provider_body_fault_once=retry_provider_body_fault_once,
         analyst_provider=args.sol_provider,
         compact_review_packet=args.compact_review_packet,
         model=analyst_model,
-        fallback_models=() if args.single_layer_sol else L2_FALLBACK_MODELS,
-        l3_enabled=not args.single_layer_sol,
+        fallback_models=analyst_fallbacks,
+        l3_enabled=l3_enabled,
+        critic_model=args.l3_model,
+        critic_provider=L3_PROVIDER,
+        critic_reasoning_effort=args.critic_reasoning_effort,
         scorer_capabilities_url=args.scorer_capabilities_url,
         expected_scorer_revision=args.expected_scorer_revision,
         # Local IPv6 paths to OpenRouter can be unstable on some developer
@@ -275,10 +436,10 @@ async def _main() -> None:
             max_steps=args.l1_max_steps,
             max_read_bytes=args.l1_max_read_bytes,
             max_completion_tokens=args.l1_max_completion_tokens,
-            reasoning_effort="high",
+            reasoning_effort=args.l1_reasoning_effort,
             static_preflight_v2_mode="off",
-            concern_hold_count=3,
-            clear_min_notes=3,
+            concern_hold_count=args.concern_hold_count,
+            clear_min_notes=args.clear_min_notes,
         )
         if args.run_l1
         else None
@@ -286,18 +447,18 @@ async def _main() -> None:
     metadata = {
         "models": {
             "analyst": analyst_model,
-            "analyst_fallbacks": (
-                [] if args.single_layer_sol else list(L2_FALLBACK_MODELS)
-            ),
-            "critic": None if args.single_layer_sol else L3_MODEL,
+            "analyst_fallbacks": list(analyst_fallbacks),
+            "critic": args.l3_model if l3_enabled else None,
+            "l1": args.l1_model if args.run_l1 else None,
         },
+        "production_posture": args.production_posture,
         "review_mode": (
             "report_only_single_layer_sol"
             if args.single_layer_sol
             else "production_multilayer"
         ),
         "terminal_verdict_required": args.single_layer_sol,
-        "retry_provider_body_fault_once": args.retry_provider_body_once,
+        "retry_provider_body_fault_once": retry_provider_body_fault_once,
         "sol_provider": args.sol_provider,
         "compact_review_packet": args.compact_review_packet,
         "revisions": {

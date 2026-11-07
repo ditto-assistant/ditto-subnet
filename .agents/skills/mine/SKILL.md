@@ -156,6 +156,10 @@ lighter miner bar.
 | Mixed / source missing | Do not upload. Say what is missing. |
 
 A local pass is not a production clearance. Screening and ATH still apply.
+To replay the production L1→L2→L3 source review under the live review posture
+(`--production-settings`), and for every local-vs-production screening and
+grading gap, see
+[`local-production-parity.md`](../../../workers/screener/docs/local-production-parity.md).
 
 ## Iterate vs certify
 

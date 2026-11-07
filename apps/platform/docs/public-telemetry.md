@@ -263,8 +263,8 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   It does **not** associate a provisional number with a validator identity and
   never returns signatures, leases, run ids, secrets, or scorer internals.
   Finalized top-five agents may also carry `confirmation_scores`: completed,
-  append-only shared-seed retest results with composite, exact decimal seed,
-  public validator hotkey, benchmark version, and acceptance time. These rows
+  append-only shared-seed retest results with composite (the shared retest
+  seed itself is never published, #2595), public validator hotkey, benchmark version, and acceptance time. These rows
   are explicitly separate from `provisional_scores` and never change the fixed
   three-score canonical median. Each validation attempt has an additive
   `purpose` (`canonical_quorum`, `continual_retest`, or the bounded rolling-

@@ -206,7 +206,12 @@ from ditto.api_models.screener_policy_activation import (
     PublicV13ReviewClockRevision,
     PublicV13ReviewClockSchedule,
 )
-from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.screener_review_settings import (
+    PublicScreenerReviewPosture,
+    PublicScreenerReviewSettingsResponse,
+    ScreenerReviewSettings,
+    review_settings_checksum,
+)
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import (
     HostSpecs,
@@ -316,6 +321,9 @@ from ditto.api_server.ledger_pin import (
 )
 from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.model_use import model_use_factor, model_use_policy
+from ditto.api_server.screener_policy_activation import (
+    resolve_screener_policy_activation,
+)
 from ditto.api_server.storage import ObjectDownloadFailedError, ObjectNotFoundError
 from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
@@ -5844,6 +5852,65 @@ async def public_v13_review_clock(
             )
             for row in configured
         ],
+    )
+
+
+@router.get(
+    "/screener-review-settings",
+    response_model=PublicScreenerReviewSettingsResponse,
+)
+async def public_screener_review_settings(
+    response: Response,
+    session: SessionDep,
+) -> PublicScreenerReviewSettingsResponse:
+    """Publish the live review limits so a local screen can match production.
+
+    Each scope's latest revision is returned through the public allowlist in
+    :class:`PublicScreenerReviewPosture`; the private policy-manifest rotation
+    and operator reason/actor stay server-side. A worker resolves its own
+    instance scope, then its node scope, then ``*`` (an ``inherit`` revision
+    falls through), so the ``global`` posture is what an unpinned worker runs.
+    """
+    response.headers["Cache-Control"] = "public, max-age=60"
+    rows = await session.scalars(
+        select(ScreenerReviewSettingsRevision)
+        .distinct(ScreenerReviewSettingsRevision.scope)
+        .order_by(
+            ScreenerReviewSettingsRevision.scope,
+            ScreenerReviewSettingsRevision.revision.desc(),
+        )
+    )
+    latest = {row.scope: row for row in rows}
+    # A global ``inherit`` revision has nothing to fall through to: workers then
+    # run the built-in defaults, so publish those as the global posture.
+    if latest.get("*") is not None and latest["*"].settings.get("mode") == "inherit":
+        del latest["*"]
+    postures = [
+        PublicScreenerReviewPosture.from_settings(
+            revision=row.revision,
+            scope=row.scope,
+            checksum=row.checksum,
+            created_at=row.created_at,
+            settings=ScreenerReviewSettings.model_validate(row.settings),
+        )
+        for row in sorted(latest.values(), key=lambda row: row.scope)
+    ]
+    if "*" not in latest:
+        default = ScreenerReviewSettings()
+        postures.insert(
+            0,
+            PublicScreenerReviewPosture.from_settings(
+                revision=0,
+                scope="builtin-default",
+                checksum=review_settings_checksum(default),
+                created_at=None,
+                settings=default,
+            ),
+        )
+    policy = await resolve_screener_policy_activation(session)
+    return PublicScreenerReviewSettingsResponse(
+        required_policy_version=policy.required_policy_version,
+        postures=postures,
     )
 
 
