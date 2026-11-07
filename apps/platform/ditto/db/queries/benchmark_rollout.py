@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
@@ -14,6 +14,7 @@ from sqlalchemy import exists, func, select, true
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import (
+    BenchmarkContract,
     benchmark_contract,
     latest_benchmark_contract,
 )
@@ -36,7 +37,12 @@ from ditto.db.models import (
     ValidatorHeartbeat,
     ValidatorTicket,
 )
-from ditto.db.queries.dueling_season_window import season_scope_predicate
+from ditto.db.queries.dueling_season_window import (
+    DuelingSeasonWindow,
+    dueling_season_window,
+    season_scope_predicate,
+)
+from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
@@ -1791,6 +1797,28 @@ async def _desired_season_scope(
     )
 
 
+def rollout_member_policy_predicate(
+    contract: BenchmarkContract,
+) -> ColumnElement[bool]:
+    """Screening-policy gate shared by every rollout-member lease path.
+
+    A lease is only worth issuing if ``POST /validator/score`` will accept the
+    result, and that endpoint requires the platform's *effective* screening
+    policy, not merely the contract's floor. After a scheduled activation raises
+    the required version, members still on the old version re-enter screening;
+    leasing them during that window produced scores that were all rejected with
+    ``agent is not evaluatable`` and burned their fail-once retry budget (bench
+    v17, 2026-11-06: crown-v210 and dan0l exhausted inside the v14 rescreen
+    window). Hold the member until it passes the required policy instead.
+
+    Read at statement-build time, matching ``queue_candidate_predicate``.
+    """
+    return Agent.screening_policy_version >= max(
+        contract.minimum_screening_policy_version,
+        effective_screening_policy_version(),
+    )
+
+
 def _rollout_member_candidates(
     *,
     rollout: BenchmarkRollout,
@@ -1890,7 +1918,7 @@ def _rollout_member_candidates(
         .where(
             BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
             Agent.status.in_(ROLLOUT_SCOREABLE_STATUSES),
-            Agent.screening_policy_version >= contract.minimum_screening_policy_version,
+            rollout_member_policy_predicate(contract),
             complete_screened_image,
             ~already_scored,
             ~already_ticketed,
@@ -2026,7 +2054,7 @@ async def _issue_rollout_member_ticket(
     """Lease one frozen ``rollout`` member to ``validator_hotkey``'s slot."""
     from ditto.db.queries.tickets import (
         expire_overdue_tickets,
-        release_generator_round_dataset_pin,
+        release_foreign_dataset_pin,
         ticket_attempt_cap,
     )
 
@@ -2073,7 +2101,7 @@ async def _issue_rollout_member_ticket(
     )
     existing_statement = existing_statement.where(
         Agent.status.in_(ROLLOUT_SCOREABLE_STATUSES),
-        Agent.screening_policy_version >= contract.minimum_screening_policy_version,
+        rollout_member_policy_predicate(contract),
         complete_screened_image,
     )
     existing = await session.scalar(existing_statement)
@@ -2253,7 +2281,7 @@ async def _issue_rollout_member_ticket(
             ticket.seed_block_hash = None
             ticket.provider_outage_epoch = None
             ticket.provider_outage_attempted_epoch = None
-        release_generator_round_dataset_pin(ticket)
+        release_foreign_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -2271,6 +2299,122 @@ async def _issue_rollout_member_ticket(
         ticket.first_reported_at = None
     await session.flush()
     return ticket
+
+
+@dataclass(frozen=True)
+class ActivationBlockingQuorum:
+    """An open rollout's priority members still short of the 3/3 barrier.
+
+    These are the members ``rollout_retry_diagnostics`` reports as
+    ``blocks_activation`` that :func:`rollout_cohort_score_complete` still
+    waits for: the same frozen ``priority_cohort_target`` width and the same
+    season-scoped raw score count. Re-score lanes read it to decide whether
+    their work supplies a missing quorum score or would only re-buy evidence
+    while an activation-blocking member waits for the slot.
+    """
+
+    rollout: BenchmarkRollout
+    members: frozenset[UUID]
+    window: DuelingSeasonWindow | None
+
+    def supplies_missing_score(
+        self, agent_id: UUID, *, score_season_id: UUID | None
+    ) -> bool:
+        """Whether re-scoring this member's row from one validator adds a
+        quorum score: the member blocks, and that row no longer counts
+        (at bench v16+, its season left the comparable window)."""
+        if agent_id not in self.members:
+            return False
+        if self.window is None:
+            return False
+        return score_season_id not in self.window.comparable
+
+
+async def activation_blocking_quorum(
+    session: AsyncSession, *, bench_versions: Collection[int]
+) -> ActivationBlockingQuorum | None:
+    """The open rollout's blocking members, if it targets one of
+    ``bench_versions``; otherwise ``None``.
+
+    ``None`` outside an open rollout, at another version, or once every
+    priority member holds its raw quorum, so callers leave non-rollout and
+    post-barrier ordering untouched. One rollout read however many versions
+    the caller holds work for: only the open rollout's target can block.
+    """
+    if not bench_versions:
+        return None
+    rollout = await open_rollout(session)
+    if rollout is None or rollout.desired_version not in bench_versions:
+        return None
+    score_count = (
+        select(func.count(Score.validator_hotkey))
+        .where(
+            Score.agent_id == BenchmarkRolloutMember.agent_id,
+            Score.bench_version == rollout.desired_version,
+            await _desired_season_scope(session, rollout),
+        )
+        .correlate(BenchmarkRolloutMember)
+        .scalar_subquery()
+    )
+    members = frozenset(
+        await session.scalars(
+            select(BenchmarkRolloutMember.agent_id)
+            .join(Agent, Agent.agent_id == BenchmarkRolloutMember.agent_id)
+            .where(
+                BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
+                BenchmarkRolloutMember.position <= rollout.priority_cohort_target,
+                Agent.status.not_in(tuple(PERMANENTLY_INELIGIBLE_MEMBER_STATUSES)),
+                score_count < SCORING_QUORUM,
+            )
+        )
+    )
+    if not members:
+        return None
+    return ActivationBlockingQuorum(
+        rollout=rollout,
+        members=members,
+        window=await dueling_season_window(session, rollout.desired_version),
+    )
+
+
+async def blocking_quorum_lease_available(
+    session: AsyncSession,
+    *,
+    blocking: ActivationBlockingQuorum,
+    validator_hotkey: str,
+    now: datetime,
+) -> bool:
+    """Whether ``validator_hotkey`` could lease a blocking member's missing
+    quorum score right now through :func:`issue_rollout_ticket`.
+
+    The rollout lane's own gates, narrowed to the priority positions: a fresh
+    heartbeat that serves the desired version (as
+    :func:`_issue_rollout_member_ticket` requires), and a distinct validator
+    that has not scored, does not hold, and is not cooling down on a member
+    whose scores plus live leases are below quorum. A member whose third score
+    is already leased elsewhere, or that this validator cannot advance, does
+    not hold the slot.
+    """
+    rollout = blocking.rollout
+    heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
+    if heartbeat is None or not heartbeat_supports_version(
+        heartbeat, now=now, version=rollout.desired_version
+    ):
+        return False
+    statement, _occupancy = _rollout_member_candidates(
+        rollout=rollout,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        extra_predicates=(
+            BenchmarkRolloutMember.position <= rollout.priority_cohort_target,
+        ),
+        score_season_scope=await _desired_season_scope(session, rollout),
+    )
+    return (
+        await session.scalar(
+            statement.with_only_columns(BenchmarkRolloutMember.agent_id).limit(1)
+        )
+    ) is not None
 
 
 async def _terminal_exhausted_rollout_tail(

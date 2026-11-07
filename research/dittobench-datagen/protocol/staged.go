@@ -25,20 +25,12 @@ import (
 // RotateSeedForVersion and DatasetEpochForVersion already serve staged
 // versions with the same epoch and the same mixing function.
 
-// BenchVersionV16 is the DUELING contract (docs/dueling-bench.md). The
-// canonical run is a datagen half generated here (the v15 contract at the
-// dueling profile, with connector tools that no longer self-identify, a
-// seeded set of linked connectors that some cases need, and wording decoys)
-// plus generator slice columns that Platform delivers (dueling-slice-v1).
-// Every lever is gated on bench_version >= 16, so v2..v15 regenerate
-// byte-identically. Staged until the cross-layer PR supports it.
-const BenchVersionV16 = 16
-
-var datasetEpochV16 = time.Date(2027, 8, 1, 0, 0, 0, 0, time.UTC)
-
 // stagedBenchVersions are the generatable-but-unsupported contracts, in order.
 // Each is exactly one past the previous entry (or past the supported ceiling).
-var stagedBenchVersions = []int{BenchVersionV16}
+// Empty while every generatable contract is supported: v16 (the dueling
+// contract) was staged here and promoted into epoch.go by the cross-layer PR
+// that raised the shared ceiling to 16.
+var stagedBenchVersions []int
 
 // StagedBenchVersions returns a copy of the staged versions.
 func StagedBenchVersions() []int {
@@ -73,10 +65,10 @@ func NewestGeneratableBenchVersion() int {
 	return NewestSupportedBenchVersion()
 }
 
+// stagedDatasetEpoch returns a staged contract's epoch. Add a case per staged
+// version; promotion moves the case into DatasetEpochForVersion.
 func stagedDatasetEpoch(version int) (time.Time, bool) {
 	switch version {
-	case BenchVersionV16:
-		return datasetEpochV16, true
 	default:
 		return time.Time{}, false
 	}

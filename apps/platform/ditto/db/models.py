@@ -8303,6 +8303,16 @@ class InferenceGrant(Base):
     decision_active_requests: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    inference_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default="chat", server_default=text("'chat'")
+    )
+    """Which hosted lanes the grant may use: ``chat`` or ``no_chat``.
+
+    ``chat`` is every grant minted before the no-inference mode existed.
+    ``no_chat`` (docs/no-inference-mode.md) refuses every chat call as
+    ``model_not_permitted`` while embeddings and the decision lane stay open,
+    so it requires a decision pin. Stamped at mint, immutable for the lease.
+    """
     request_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
@@ -8401,6 +8411,11 @@ class InferenceGrant(Base):
             "AND (decision_model IS NULL OR "
             "(decision_request_budget > 0 AND decision_token_budget > 0))",
             name="inference_grants_decision_accounting",
+        ),
+        CheckConstraint(
+            "inference_mode IN ('chat', 'no_chat') "
+            "AND (inference_mode = 'chat' OR decision_model IS NOT NULL)",
+            name="inference_grants_inference_mode",
         ),
         Index("inference_grants_expiry_idx", "expires_at"),
     )
@@ -14365,8 +14380,11 @@ class GeneratorRound(Base):
     and panel frozen, ``seed`` derived from the secret and the open block),
     then ``running`` once the scorer posts the round dataset, ``scoring``
     when the round closes, and ``scored``. A round that cannot finish is
-    ``void`` with a reason. ``secret`` and the dataset are private until
-    ``revealed_at`` (the privacy window).
+    ``void`` with a reason. A round that would only repeat the last scored
+    round is ``skipped`` when it opens (``generation.skipped_unchanged``
+    names the scored round it carries forward): no dataset, no panel runs.
+    ``secret`` and the dataset are private until ``revealed_at`` (the
+    privacy window).
     """
 
     __tablename__ = "generator_rounds"
@@ -14417,7 +14435,7 @@ class GeneratorRound(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('committed', 'generating', 'running', 'scoring', "
-            "'scored', 'void')",
+            "'scored', 'skipped', 'void')",
             name="generator_rounds_status_check",
         ),
         CheckConstraint(
@@ -14660,6 +14678,21 @@ class DuelingSeason(Base):
     rotation_immediate: Mapped[bool | None] = mapped_column(Boolean)
     rotation_actor: Mapped[str | None] = mapped_column(Text)
     rotation_reason: Mapped[str | None] = mapped_column(Text)
+    # On-chain ``dds1:{season_index}:{commitment}`` publication by elected
+    # validators (``dueling_season_commitments``): ``pending`` while the season
+    # is committed and ``onchain_commitment`` is on, then ``published`` (at
+    # least one validator confirmed it), ``failed`` (none before the season
+    # left ``committed``) or ``disabled``. ``commitment_block`` and
+    # ``commitment_extrinsic_hash`` are the first confirmed publication's.
+    commitment_publication: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="disabled"
+    )
+    commitment_published_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    commitment_block: Mapped[int | None] = mapped_column(BigInteger)
+    commitment_extrinsic_hash: Mapped[str | None] = mapped_column(Text)
+    commitment_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -14667,6 +14700,10 @@ class DuelingSeason(Base):
     __table_args__ = (
         UniqueConstraint(
             "bench_version", "season_index", name="dueling_seasons_index_key"
+        ),
+        CheckConstraint(
+            "commitment_publication IN ('pending', 'published', 'failed', 'disabled')",
+            name="dueling_seasons_commitment_publication_check",
         ),
         # A floor, never an enumeration: every later bench version duels too.
         CheckConstraint("bench_version >= 16", name="dueling_seasons_bench_floor"),
@@ -14720,6 +14757,46 @@ class DuelingSeason(Base):
             postgresql_where=text("status = 'committed'"),
         ),
         Index("dueling_seasons_status_idx", "status", "season_index"),
+    )
+
+
+class DuelingSeasonCommitmentPublication(Base):
+    """One validator's publication of a committed dueling season's commitment.
+
+    The dueling twin of :class:`GeneratorRoundCommitmentPublication`: Platform
+    elects a few validators advertising ``season_commitments`` to publish
+    ``dds1:{season_index}:{commitment}`` with ``Commitments.set_commitment``.
+    A row is ``claimed`` when the job is handed out, then ``confirmed`` (read
+    back on chain at ``block_number``) or ``failed``.
+    """
+
+    __tablename__ = "dueling_season_commitment_publications"
+
+    season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    commitment: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    claim_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    reported_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    block_number: Mapped[int | None] = mapped_column(BigInteger)
+    extrinsic_hash: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["season_id"], ["dueling_seasons.id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "status IN ('claimed', 'confirmed', 'failed')",
+            name="season_publication_status_check",
+        ),
+        CheckConstraint(
+            "status <> 'confirmed' OR block_number IS NOT NULL",
+            name="season_publication_block_check",
+        ),
     )
 
 

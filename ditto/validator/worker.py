@@ -96,6 +96,7 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
     SandboxOomError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
@@ -283,7 +284,19 @@ def _ledger_crown_gate(ledger: LedgerResponse) -> CrownGate | None:
         or not 1 <= standing <= 5
     ):
         return None
-    return CrownGate(min_shared_seeds=min_seeds, standing_rank=standing)
+    # Protocol 35: a served title-duel window. Out of range reads as absent, so
+    # every validator falls back to the protocol-34 gate identically.
+    window = getattr(served, "duel_window_pairs", None)
+    duel_window = (
+        window
+        if isinstance(window, int)
+        and not isinstance(window, bool)
+        and 2 <= window <= TOP5_MAX_CONFIRMATION_SEEDS
+        else None
+    )
+    return CrownGate(
+        min_shared_seeds=min_seeds, standing_rank=standing, duel_window=duel_window
+    )
 
 
 def _ledger_rank_shares(
@@ -576,6 +589,33 @@ def _confirmation_pin_binding_mismatch(
     return None
 
 
+def _season_seed_matches(job: object) -> bool:
+    """Whether a season-scoped quorum seed (protocol 35) re-derives.
+
+    A title-duel quorum run scores a dueling season's shared seed, the same
+    champion-anchored CRN family a confirmation pin names, so it is verified
+    the same way: ``seed == crn_seed([seed_anchor_agent_id],
+    version=bench_version, k=seed_index, block_hash=dataset_seed_block_hash)``.
+    Any missing binding field is a mismatch: a season seed is never accepted
+    unverified, unlike a pre-derivation agent seed.
+    """
+    seed = getattr(job, "seed", None)
+    anchor = getattr(job, "seed_anchor_agent_id", None)
+    index = getattr(job, "seed_index", None)
+    block_hash = getattr(job, "dataset_seed_block_hash", None)
+    version = getattr(job, "bench_version", None)
+    if seed is None or anchor is None or index is None or not block_hash:
+        return False
+    if version is None or not crn_block_binding_active(int(version)):
+        return False
+    return (
+        crn_seed(
+            [str(anchor)], version=int(version), k=int(index), block_hash=block_hash
+        )
+        == seed
+    )
+
+
 def confirmation_failure_class(error: BaseException) -> str:
     """Map an exception to an allowlisted, low-cardinality failure slug.
 
@@ -637,6 +677,12 @@ _JOB_HEARTBEAT_REFRESH_SECONDS = 120.0
 # never re-dispatches its once-per-sweep retest lane. Until the heartbeat refresh
 # above, the stale-heartbeat 428 ended these sweeps at about this age.
 _IDLE_SWEEP_MAX_SECONDS = 300.0
+# How many consecutive 503 + ``Retry-After`` job refusals one slot rides out in
+# a sweep before isolating itself as for any other refusal. Platform answers a
+# bench v16+ seed's first lease this way while it prepares the dueling slice
+# (normally seconds, Retry-After 15s), so a few waits cover a fresh seed, while
+# a preparation stuck behind operator review cannot keep the slot spinning.
+_JOB_RETRY_LATER_MAX_CONSECUTIVE = 6
 
 # Must stay exhaustive over ``BenchmarkProgressStage``: a missing stage raises
 # KeyError in ``_publish_benchmark_progress``, which the fail-open telemetry
@@ -1313,6 +1359,7 @@ class ValidatorWorker:
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
+                retry_laters = 0
                 token = _CURRENT_SLOT.set(slot_id)
                 try:
                     while not self._new_work_blocked(stop_requested, drain_requested):
@@ -1323,6 +1370,42 @@ class ValidatorWorker:
                             pending_claims += 1
                         try:
                             job = await self._request_job_with_fresh_heartbeat(slot_id)
+                        except PlatformRetryLaterError as error:
+                            async with budget_lock:
+                                claimed -= 1
+                                pending_claims -= 1
+                                lease_state_changed.set()
+                            retry_laters += 1
+                            if retry_laters > _JOB_RETRY_LATER_MAX_CONSECUTIVE:
+                                logger.warning(
+                                    "job request for %s deferred %d times in a "
+                                    "row; slot is isolated: %s",
+                                    slot_id,
+                                    retry_laters,
+                                    error,
+                                )
+                                slot_failed += 1
+                                break
+                            # Not a failure: Platform is preparing what this
+                            # claim needs and named when to ask again. Wait on
+                            # the same slot (stop/drain cut the wait short and
+                            # the loop guard then ends it) instead of idling it
+                            # until the longest sibling lease finishes.
+                            logger.info(
+                                "job request for %s deferred; retrying in %gs "
+                                "(%d/%d): %s",
+                                slot_id,
+                                error.retry_after_seconds,
+                                retry_laters,
+                                _JOB_RETRY_LATER_MAX_CONSECUTIVE,
+                                error,
+                            )
+                            await self._sleep_or_interrupt(
+                                error.retry_after_seconds,
+                                stop_requested,
+                                drain_requested,
+                            )
+                            continue
                         except PlatformError as error:
                             async with budget_lock:
                                 claimed -= 1
@@ -1335,6 +1418,7 @@ class ValidatorWorker:
                             )
                             slot_failed += 1
                             break
+                        retry_laters = 0
                         if job is None:
                             async with budget_lock:
                                 claimed -= 1
@@ -2002,6 +2086,7 @@ class ValidatorWorker:
                     "scorer_benchmarks": scorer_benchmarks,
                     "treasury_weights": await self._treasury_weight_capability(),
                     "round_commitments": self._round_commitments.supported(),
+                    "season_commitments": (self._round_commitments.supports_seasons()),
                 }
             )
             # v9: per-component runtime health. A collector failure (or no
@@ -3444,13 +3529,41 @@ class ValidatorWorker:
         slot_token = None
         ticket_claimed = False
         try:
-            try:
-                job = await self._platform.request_top5_confirmation_job(
-                    slot_id=_slot_id
-                )
-            finally:
-                if _claim_resolved is not None:
-                    _claim_resolved.set()
+            retry_laters = 0
+            while True:
+                try:
+                    job = await self._platform.request_top5_confirmation_job(
+                        slot_id=_slot_id
+                    )
+                except PlatformRetryLaterError as error:
+                    # Platform is preparing this lease's dueling slice. The
+                    # lane runs once per sweep, so giving up here would defer
+                    # the retest a whole sweep; wait it out, bounded like the
+                    # canonical slot loop. Siblings' claims proceed meanwhile.
+                    retry_laters += 1
+                    if retry_laters > _JOB_RETRY_LATER_MAX_CONSECUTIVE:
+                        raise
+                    if _claim_resolved is not None:
+                        _claim_resolved.set()
+                    logger.info(
+                        "top-five confirmation claim for %s deferred; retrying "
+                        "in %gs (%d/%d): %s",
+                        _slot_id,
+                        error.retry_after_seconds,
+                        retry_laters,
+                        _JOB_RETRY_LATER_MAX_CONSECUTIVE,
+                        error,
+                    )
+                    await self._sleep_or_interrupt(
+                        error.retry_after_seconds, stop_requested, drain_requested
+                    )
+                    if self._new_work_blocked(stop_requested, drain_requested):
+                        return False
+                    continue
+                finally:
+                    if _claim_resolved is not None:
+                        _claim_resolved.set()
+                break
             if job is None:
                 return False
             # Mirrors the canonical path's slot-mismatch guard: binding an
@@ -4785,8 +4898,15 @@ class ValidatorWorker:
                 f"benchmark v{job.bench_version} ticket did not declare its "
                 "policy-9 screened-image contract"
             )
+        if job.seed_scope == "season" and not _season_seed_matches(job):
+            raise ValidatorInfrastructureError(
+                f"season-scoped ticket seed {job.seed} for agent {job.agent_id} "
+                "does not re-derive from its season anchor; refusing to score",
+                code="seed_binding_mismatch",
+            )
         if (
-            job.seed is not None
+            job.seed_scope != "season"
+            and job.seed is not None
             and job.dataset_seed_block_hash
             and not seed_matches(
                 job.dataset_seed_block_hash,

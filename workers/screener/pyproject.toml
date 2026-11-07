@@ -11,6 +11,9 @@ license = "MIT"
 requires-python = ">=3.12,<3.14"
 authors = [{ name = "heyDitto" }]
 dependencies = [
+    # Patched floors apply to pip consumers as well as the uv lock.
+    "anyio>=4.14.2",
+    "msgpack>=1.2.3",
     "bittensor>=10.2.1",
     "bittensor-wallet>=4.1.0",
     "cryptography>=42",
@@ -25,6 +28,13 @@ ditto-screener = "ditto_screener.__main__:main"
 ditto-screener-enroll = "ditto_screener.enrollment:main"
 ditto-conversation-assess = "ditto_screener.conversation_cli:main"
 ditto-screener-replay = "ditto_screener.replay_main:main"
+
+[tool.uv]
+# Security floors also cover dependencies pulled in through Bittensor and tooling.
+constraint-dependencies = [
+    "anyio>=4.14.2",
+    "msgpack>=1.2.3",
+]
 
 [tool.uv.sources]
 ditto-screening-protocol = { path = "../../packages/ditto-screening-protocol" }

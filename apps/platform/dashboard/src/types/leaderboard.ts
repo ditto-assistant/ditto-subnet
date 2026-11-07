@@ -60,7 +60,7 @@ export interface RewardEligibility {
 }
 
 export interface RawLeaderDecision {
-  /** "paired" | "unpaired" | anything else reads as the fixed margin. */
+  /** "paired" | "duel" | "unpaired" | anything else reads as the fixed margin. */
   method?: string;
   challenger_lead: number;
   required_lead: number;
@@ -462,7 +462,7 @@ export interface V9AuthoritativeToolGate {
  * protocol package (`ditto/tests/test_bench_version_pins.py` diffs it).
  */
 export interface V9BaseEvidence {
-  bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+  bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
   score_gates: {
     rollout_mode: "shadow" | "enforce";
     model_use: V9ModelUseGate;
@@ -535,6 +535,83 @@ export interface InferenceCostSummary {
   mean_factor_bps?: number | null;
 }
 
+/** Bench v16+ priced inference cost (`details.priced_cost`): whole-run
+ * tokens priced at the contract's locked public rates, normalised to a
+ * 350-case run, and the factor the composite carries. `rule_consistent` is
+ * Platform's own recomputation of the factor. Mirrors `PricedCostSummary`. */
+export interface PricedCostSummary {
+  contract_id?: string | null;
+  posture?: GatePosture | null;
+  applied?: boolean;
+  result?: "priced" | "insufficient_evidence" | null;
+  window?: string | null;
+  source?: string | null;
+  cases?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  embedding_tokens?: number;
+  decision_calls?: number;
+  decision_input_tokens?: number;
+  decision_output_tokens?: number;
+  prompt_cost_nano_usd?: number;
+  completion_cost_nano_usd?: number;
+  embedding_cost_nano_usd?: number;
+  decision_cost_nano_usd?: number;
+  cost_nano_usd?: number;
+  normalization_cases?: number;
+  normalized_cost_nano_usd?: number;
+  reference_nano_usd?: number;
+  ratio_bps?: number;
+  floor_bps?: number | null;
+  factor_bps?: number | null;
+  applied_factor_bps?: number | null;
+  cost_usd?: number | null;
+  normalized_cost_usd?: number | null;
+  rule_consistent?: boolean | null;
+}
+
+/** One generator-slice column of a bench v16+ run (aggregates only: no
+ * owner key, no generator submission id, no case text). `self_masked` means
+ * the column's generator belongs to the scored agent's own owner, so the
+ * composite dropped it. Mirrors `PublicDuelingColumn`. */
+export interface DuelingColumn {
+  column_id: string;
+  grading_bench_version?: number | null;
+  n: number;
+  sum: number;
+  mean: number;
+  substituted: boolean;
+  public_default: boolean;
+  self_masked: boolean;
+  contribution: number;
+}
+
+/** Bench v16+ dueling arithmetic, `gate x ((1 - w x |U|) x datagen + w x sum
+ * col)`, projected by Platform from the stored aggregates and the priced-cost
+ * gate evidence. Omitted below v16. Mirrors `PublicDuelingBreakdown`. */
+export interface DuelingBreakdown {
+  formula: string;
+  season_id: string;
+  season_index: number;
+  datagen_raw: number;
+  datagen_gate: number;
+  column_weight: number;
+  counted_columns: number;
+  datagen_share: number;
+  generator_sum: number;
+  pre_gate_composite: number;
+  composite: number;
+  composite_stderr?: number | null;
+  priced_cost_applied_factor_bps?: number | null;
+  priced_cost_factor_bps?: number | null;
+  priced_cost_factor?: number | null;
+  priced_cost_posture?: string | null;
+  priced_cost_result?: string | null;
+  priced_cost_window?: string | null;
+  other_gate_factor?: number | null;
+  columns: DuelingColumn[];
+}
+
 /** Run-level bench v13+ gate verdict published beside a validator's score.
  *
  * Aggregates only: the per-case notes behind these counts are owner-only
@@ -550,6 +627,7 @@ export interface GateEvidence {
   claim_provenance?: ClaimProvenanceSummary | null;
   twin_post_pass?: TwinPostPassSummary | null;
   inference_cost?: InferenceCostSummary | null;
+  priced_cost?: PricedCostSummary | null;
   catalog_suppression_rate?: number | null;
   flagged_case_count?: number;
   flagged_case_share?: number | null;

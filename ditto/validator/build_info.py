@@ -161,7 +161,18 @@ from ditto import __version__
 # different champion, and so a different weight vector -- so Platform must
 # withhold it until every recently-live weight setter reports v34+. Heartbeat
 # signing bytes are unchanged.
-HEARTBEAT_PROTOCOL_VERSION = 34
+# v35 consumes ``crown_gate.duel_window_pairs`` and ``LedgerEntry.duel_history``
+# (docs/title-duels.md): two bench >= 16 rows dethrone on the sequential title
+# duel, the newest pair-masked (season, seed) pairs across dueling seasons
+# against a frozen boundary, instead of one season's capped fixed-z test. A
+# v34 validator ignores both additive fields and keeps the single-season test
+# -- a different champion -- so Platform withholds them until every
+# recently-live weight setter reports v35+. v35 also verifies a
+# ``seed_scope: "season"`` quorum lease (a dueling season's shared seed, so a
+# rotation re-score doubles as duel evidence) by re-deriving its CRN binding;
+# Platform issues those only to v35+ validators. Heartbeat signing bytes are
+# unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 35
 
 
 @dataclass(frozen=True)

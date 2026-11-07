@@ -301,6 +301,7 @@ type InferenceGrant struct {
 	DecisionTokens               int64              `json:"decisionTokens"`
 	DecisionCostMicrousd         int64              `json:"decisionCostMicrousd"`
 	DecisionActiveRequests       int32              `json:"decisionActiveRequests"`
+	InferenceMode                string             `json:"inferenceMode"`
 }
 
 type InferenceProviderRoute struct {

@@ -824,6 +824,61 @@ the King, each challenger's shared seeds vs `min_dethrone_confirmations`, the
 paired lead or deficit, and what it still needs, under `emissions.king` and
 `emissions.challengers`.
 
+### Title duel (protocol 35)
+
+The gate above still decides each bench v16 crown on one season's three
+shared seeds. It uses a fixed z = 1.64 band, capped at twice the margin and
+decayed near the top. A challenger exactly as good as the King passes that
+test about half the time, so the crown changed 2–3 times a day on noise
+(`docs/title-duels.md`).
+
+Under `crown_duel_mode: fleet_ready`, a served crown gate also carries
+`duel_window_pairs` (15), and each entry carries `duel_history`: its
+confirmation records, with their signed `details.dueling`, from the five
+newest dueling seasons that hold any confirmation record. A season that ran no
+duel (idle skip) is passed over, so evidence carries forward. For two bench v16
+rows the fold then works as follows:
+
+1. **Pairs.** A pair is a `(season, seed)` that both agents scored in that
+   season. Each side is the median across validators, with both owners'
+   columns masked. Pairs are kept across seasons: levels are not comparable
+   across generator sets, but within-season differences are.
+2. **Window.** It takes the newest 15 pairs, ordered by
+   `(season_index desc, season_id, seed)`.
+3. **Test.** A challenger dethrones only if it holds at least
+   `min_dethrone_confirmations` pairs and its mean paired lead strictly
+   exceeds `max(KOTH_MARGIN × decay, c(n) × se)`. `c(n)` is the frozen
+   Student-t table in `ditto_screening_protocol.title_duel` (per-look level
+   0.01, 6.965 at n = 3 down to 2.624 at n = 15). The statistical term is never
+   capped. The served ceiling clamp still bounds the lead.
+4. **Standing.** Standing replacement counts duel pairs instead of shared
+   seeds. Ranking, tail order and tie pooling stay same-season.
+
+Activation follows the gate. Platform serves the marker only together with
+the gate, and only after every recently-live weight setter reports protocol
+35. A requester below 35 gets 428 while it is served. `crown_duel_mode:
+disabled` is the exact rollback. Both folds call the shared arithmetic and run
+the shared `crown_gate_cases.json` duel cases.
+
+### Continual retest seed budget
+
+Platform owns how many shared seeds the continual retest lane buys. Each round
+targets the variance-sized count between `TOP5_MIN_CONFIRMATION_SEEDS` (8) and
+the work cap `TOP5_MAX_CONFIRMATION_SEEDS` (10) in
+`apps/platform/ditto/api_server/koth.py`, and the ledger serves each entry only
+the active window of at most that many most-shared seeds. Accepted rows stay
+append-only; a deeper window recorded under an older cap simply stops folding.
+
+The validator's own `TOP5_MAX_CONFIRMATION_SEEDS` (15, `ditto/validator/config.py`)
+is a separate, frozen fold ceiling: it truncates whatever a malformed Platform
+might serve and bounds a served `min_dethrone_confirmations`. Platform mirrors
+it as `CONFIRMATION_SEED_CEILING` for its pin projection, served-gate parsing
+and seed binding, and the shared `crown_gate_cases.json` ceiling case fails if
+either fold moves it. Lowering the work cap therefore needs no validator
+release or fleet gate: every validator folds the bounded window it is served.
+Lowering the ceiling itself would; a validator that truncated below a pin's
+served window would crown a different King and fail `ledger_pin_mismatch`.
+
 ### Provisional incumbent (protocol 28)
 
 Holding the crown and being paid are separate facts. When the operator's

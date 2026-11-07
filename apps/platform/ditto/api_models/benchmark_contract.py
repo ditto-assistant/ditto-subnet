@@ -93,6 +93,17 @@ _CONTRACTS = {
     # (connector tools the workspace has not linked) and opens the locked
     # decision lane to scored runs. Availability is not activation.
     15: BenchmarkContract(15, 9, True, False),
+    # v16 is the dueling contract (docs/dueling-bench.md): a datagen half (the
+    # v15 surface at the dueling profile) plus a five-column generator slice
+    # delivered through dueling-slice-v1. Its tickets lease only with a ready
+    # slice from an open dueling season, and only to validators that forward
+    # 16 in dueling_slice_bench_versions. Availability is not activation.
+    16: BenchmarkContract(16, 9, True, False),
+    # v17 inherits the v16 dueling contract unchanged. Its own change is the
+    # priced-cost-v2 scoring contract: $0.50 reference (down from $1.00), 0.3
+    # floor (down from 0.6), and a steeper piecewise-linear penalty curve.
+    # Zero-cost (zero-LLM-call) agents receive full factor 1.0 as before.
+    17: BenchmarkContract(17, 9, True, False),
 }
 
 

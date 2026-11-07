@@ -32,8 +32,105 @@ export const cancelBenchmarkCanaryInputSchema = getBenchmarkCanaryInputSchema.ex
   }
 })
 
+const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
+const bps = z.number().int().min(0).max(10_000)
+
+// Bench v16+ `details.priced_cost`: numbers only (token counts, nano-USD
+// costs, ratio and factor), so a canary can be checked against the published
+// priced-cost rule without the raw report. Strict picks: no other key passes.
+const canaryPricedCostSchema = z.object({
+  contract_id: z.string().max(64),
+  posture: z.enum(['enforce', 'shadow']),
+  applied: z.boolean(),
+  result: z.enum(['priced', 'insufficient_evidence']),
+  window: z.string().max(32),
+  source: z.string().max(32).optional(),
+  cases: count,
+  prompt_tokens: count,
+  completion_tokens: count,
+  embedding_tokens: count,
+  decision_calls: count,
+  decision_input_tokens: count,
+  decision_output_tokens: count,
+  cost_nano_usd: count,
+  normalization_cases: count,
+  normalized_cost_nano_usd: count,
+  reference_nano_usd: count,
+  ratio_bps: z.number().int().min(0).max(100_000),
+  floor_bps: bps,
+  factor_bps: bps,
+  applied_factor_bps: bps,
+})
+
+// One slice column's case statistics. Never the owner key, the generator's
+// submission id, sum_sq or case text: the public score reads' dueling
+// breakdown (admin.schemas.ts) extends exactly this disclosure.
+export const duelingColumnAggregateSchema = z.object({
+  column_id: z.string().max(32),
+  n: count,
+  sum: z.number().nonnegative(),
+  substituted: z.boolean(),
+})
+
+// Bench v16+ `details.dueling` aggregates: the datagen half and gate the fold
+// recomputes from, and each column's case statistics. Never case text.
+const canaryDuelingSchema = z.object({
+  season_id: z.string().max(64),
+  datagen_raw: z.number().min(0).max(1),
+  datagen_gate: z.number().min(0).max(1),
+  column_weight: z.number().min(0).max(1),
+  composite_stderr: z.number().nonnegative().optional(),
+  columns: z.array(duelingColumnAggregateSchema).max(16),
+})
+
+const unit = z.number().min(0).max(1)
+// The closed verdict tokens the scoregates package signs (scoregates.Result*).
+const v9GateResultSchema = z.enum([
+  'passed', 'below_threshold', 'zero_inference', 'insufficient_evidence', 'not_applicable',
+  'latency_implausible', 'answer_stuffed', 'review_required', 'claim_provenance_flagged',
+])
+const v9GateSchema = z.object({ result: v9GateResultSchema, factor_bps: bps })
+  .nullish().catch(null)
+
+// The factors that multiply a run's composite gate, so a canary's
+// details.dueling.datagen_gate decomposes without the raw report: the v7+
+// composite-gate tiers the scorer publishes, the token-efficiency multiplier,
+// and the signed v9 base evidence's ordinary/effective composites, applied and
+// semantic factors, rollout mode and per-gate verdicts. Numbers and closed
+// verdict tokens only.
+const canaryGateFactorsSchema = z.object({
+  tool_efficiency: unit.nullish().catch(null),
+  memory_over_call: unit.nullish().catch(null),
+  metamorphic_consistency: unit.nullish().catch(null),
+  metamorphic: z.object({
+    groups: count, split_groups: count, reference_groups: count, factor: unit,
+  }).nullish().catch(null),
+  conversational_sanity: unit.nullish().catch(null),
+  transform_robustness: unit.nullish().catch(null),
+  audit_pairs: z.object({
+    both_correct: count, base_only: count, transform_only: count, both_wrong: count,
+  }).nullish().catch(null),
+  token_efficiency: z.object({ multiplier: unit }).nullish().catch(null),
+  v9_base: z.object({
+    ordinary_composite_micros: count,
+    effective_composite_micros: count,
+    semantic_gate_factor_bps: bps,
+    applied_gate_factor_bps: bps,
+    score_gates: z.object({
+      rollout_mode: z.enum(['shadow', 'enforce']),
+      model_use: v9GateSchema,
+      authoritative_tool: v9GateSchema,
+      model_dependence: v9GateSchema,
+      inference_latency: v9GateSchema,
+      answer_stuffing: v9GateSchema,
+      claim_provenance: v9GateSchema,
+    }).nullish().catch(null),
+  }).nullish().catch(null),
+})
+
 // Never forward arbitrary scorer details, source, traces or capabilities through
-// a read-scoped tool. This is a summary of non-authoritative reported results.
+// a read-scoped tool. This is a summary of non-authoritative reported results;
+// from bench 16 it adds the priced-cost and dueling aggregates above.
 export const benchmarkCanarySchema = z.object({
   canary_id: z.uuid(), agent_id: z.uuid(), bench_version: z.number().int(),
   validator_hotkey: z.string(), slot_id: z.string(), artifact_sha256: digest,
@@ -46,6 +143,14 @@ export const benchmarkCanarySchema = z.object({
     run_id: z.string(), bench_version: z.number().int().nullable().optional(),
     composite: z.number(), tool_mean: z.number(), memory_mean: z.number(),
     n: z.number().int(), generated_at: z.string(),
+    details: z.object({
+      priced_cost: canaryPricedCostSchema.nullish().catch(null),
+      dueling: canaryDuelingSchema.nullish().catch(null),
+    }).and(canaryGateFactorsSchema).nullish().catch(null).transform((d) => {
+      if (!d || !(d.priced_cost || d.dueling)) return undefined
+      const { priced_cost, dueling, ...gates } = d
+      return { priced_cost: priced_cost ?? null, dueling: dueling ?? null, gate_factors: gates }
+    }),
   }).nullable(),
 })
 

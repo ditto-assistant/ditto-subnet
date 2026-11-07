@@ -273,7 +273,7 @@ The command requires Rust and Go, plus the same local provider setup as
 `serve`: Ollama `embeddinggemma` is required for memory, and chat uses the
 provider selected in `.env`. It builds both binaries, uses an isolated temporary
 database, selects free loopback ports, submits a run on the live scoring bench
-(read from the public rollout endpoint at start; currently 15, with the
+(read from the public rollout endpoint at start; currently 17, with the
 script's `LIVE_SCORING_BENCH_VERSION` as the offline fallback),
 displays progress and the final score/provenance counts, and cleans up on exit.
 `--run-size small` is a smoke profile. `--run-size full` is the on-chain-shaped
@@ -772,6 +772,24 @@ produces a container serving that protocol on :8080.
 > locked decision model (TypeSafe Jev) choice or score questions, for example
 > which tools to offer the chat model. Use it however you like; it is metered
 > like chat. This kit accepts `bench_version` 15 on `/run`.
+>
+> **Bench v16 (shipped, shadow only, not live)** is the dueling bench: a
+> canonical run becomes a 175-case datagen half (the v15 surface at a smaller
+> profile, with connector tools that no longer say whether they are linked)
+> plus a 175-case generator slice, 5 columns of 35 cases from the top
+> generator-competition miners, scored as one composite
+> (`0.5 x datagen + 0.1 per column`). Slice cases reach your harness as
+> ordinary memory `/seed` and `/run` calls. This kit accepts `bench_version` 16
+> on `/run`. Rehearse it locally with
+> `uv run ditto practice --bench-version 16`: the rehearsal builds a local slice
+> from the **public default generator** only
+> (`miners/dittobench-generator-starter-kit`, all five columns, owner `""`, on
+> a throwaway season), sends it to the local scorer, and prints the composite
+> plus each column's mean. Live seasons pin miner generators whose cases stay
+> private until their source is released, so live columns differ.
+> `--no-slice` scores the datagen half alone. v16 does not set weights until
+> the operator activates it; see
+> [`benchmark-v16-rollout.md`](../../docs/benchmark-v16-rollout.md).
 
 1. Registration. You need a hotkey registered on subnet netuid 118 and TAO for
 the registration cost plus per-submission eval fees. `ditto upload` offers to
@@ -1006,10 +1024,11 @@ Everything below is `bench_version >= 13`; v12 and earlier are unchanged.
 The wire stays at version 9 — no `protocol.rs` change is required to *parse*
 v13 traffic, only `MAX_SUPPORTED_BENCH_VERSION` moves to 13 with the v13
 wiring sweep (#1519) so `/run` accepts the new number when a validator
-rehearses it. Bench 15, which keeps this v13 surface and these gates and adds
-the production-scale catalog and decision lane, is now the live scoring
-contract; `local-rehearsal.py` defaults to the live version and falls back to
-`LIVE_SCORING_BENCH_VERSION` 15 offline.
+rehearses it. Bench 15 kept this v13 surface and these gates and added the
+production-scale catalog and decision lane. Bench 17, the dueling bench with
+the priced-cost-v2 factor, is now the live scoring contract;
+`local-rehearsal.py` defaults to the live version and falls back to
+`LIVE_SCORING_BENCH_VERSION` 17 offline.
 
 - **Tool catalog is per seed** (#1843, #1842, #1580, #1840): paraphrased
   descriptions, `enum` on `set_theme`/`set_reasoning_effort`,

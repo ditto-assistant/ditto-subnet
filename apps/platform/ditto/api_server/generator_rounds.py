@@ -27,7 +27,11 @@ below rounds that already ran. The lifecycle (:func:`advance_rounds`, driven by
    only thing missing is validator capacity (heartbeats absent, stale, or
    mid-update), the round stays committed and later ticks of its opening
    epoch retry for :data:`ROUND_OPEN_CAPACITY_GRACE`; only then is it void,
-   with an ``infra:`` reason.
+   with an ``infra:`` reason. With ``skip_unchanged_rounds`` (the default), a
+   round whose frozen columns and panel match the last scored round is
+   ``skipped`` instead (:func:`unchanged_round_source`): no generation, no
+   panel runs, no inference. The ledger keeps paying that scored round, and
+   the skip keeps it fresh (:func:`build_round_ledger`).
 3. **Generate.** The scorer builds each column generator and runs it on its
    column seed; Platform stores the canonical round dataset.
 4. **Run.** Validators lease each panel agent on a ``generator_round`` ticket
@@ -41,7 +45,7 @@ below rounds that already ran. The lifecycle (:func:`advance_rounds`, driven by
    agents. A round with fewer than ``min_panel`` results that answered at
    least one case is void instead (see :class:`PanelTally`).
 6. **Reveal.** ``privacy_window_rounds`` subnet epochs after a round opens
-   (and once it is scored or void), its secret, seed, and dataset become
+   (and once it is scored, skipped or void), its secret, seed, and dataset become
    public so anyone can re-derive every case. The window is counted in
    epochs, not in rounds of the current cadence, so it keeps the same
    wall-clock length when ``epochs_per_round`` changes.
@@ -57,6 +61,7 @@ import base64
 import binascii
 import contextlib
 import hashlib
+import json
 import logging
 import secrets
 import struct
@@ -97,6 +102,7 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundResultView,
     GeneratorRoundSchedule,
     GeneratorRoundScoreResult,
+    GeneratorRoundSkipView,
     GeneratorRoundStandingView,
     GeneratorRoundSummary,
     GeneratorRoundWork,
@@ -600,6 +606,213 @@ def active_panel(row: GeneratorRound) -> list[dict[str, Any]]:
     return [slot for slot in row.panel or () if not slot.get("dropped_reason")]
 
 
+# --- skip unchanged rounds ----------------------------------------------------
+
+SKIPPED_UNCHANGED = "skipped_unchanged"
+"""The reason (and ``generation`` key) of a round skipped because nothing it
+could measure changed since the last scored round."""
+FINAL_ROUND_STATUSES = ("scored", "skipped", "void")
+"""Statuses a round never leaves."""
+
+
+def _round_signature(
+    *,
+    columns: Iterable[dict[str, Any]],
+    panel: Iterable[dict[str, Any]],
+    bench_version: int | None,
+    cases_per_column: int | None,
+    score_params: dict[str, float | int],
+) -> str:
+    """Everything a round measures, order-free: which generator sources hold a
+    column, which agents sit on the panel (and which is the champion), the
+    bench contract, the column size and the score params.
+
+    Column labels, seat order and whether a column is counted or a challenger
+    are left out. Every column is scored the same way against the whole panel,
+    and generator pay reads only column scores. ``counted`` is re-derived from
+    the latest round scores, so the 5th and 6th best generators trade it after
+    almost every scored round; keying on it would rerun the same matrix
+    forever."""
+    document = {
+        "columns": sorted(
+            [
+                str(column["submission_id"]),
+                str(column.get("source_sha256") or ""),
+                bool(column.get("public_default")),
+            ]
+            for column in columns
+        ),
+        "panel": sorted(
+            [
+                str(slot["agent_id"]),
+                bool(slot.get("champion")),
+                bool(slot.get("reference")),
+            ]
+            for slot in panel
+        ),
+        "bench_version": bench_version,
+        "cases_per_column": cases_per_column,
+        "score_params": score_params,
+    }
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def skipped_round_source(generation: dict[str, Any] | None) -> int | None:
+    """The scored round a ``skipped`` round carried forward, if any."""
+    skip = (generation or {}).get(SKIPPED_UNCHANGED)
+    if not isinstance(skip, dict):
+        return None
+    source = skip.get("carried_from_round")
+    return source if isinstance(source, int) else None
+
+
+async def round_carry_freshness(
+    session: AsyncSession, *, since: datetime
+) -> dict[int, datetime]:
+    """Per scored round, when the latest skip since ``since`` carried it.
+
+    A skipped round re-measures nothing, so its source round's column scores
+    are still the latest evidence: the ledger dates them from the latest skip
+    that carried them, not from when they were scored."""
+    carried: dict[int, datetime] = {}
+    for generation, closed_at in await session.execute(
+        select(GeneratorRound.generation, GeneratorRound.closed_at).where(
+            GeneratorRound.status == "skipped",
+            GeneratorRound.closed_at >= since,
+        )
+    ):
+        source = skipped_round_source(generation)
+        if source is None or closed_at is None:
+            continue
+        prior = carried.get(source)
+        carried[source] = closed_at if prior is None else max(prior, closed_at)
+    return carried
+
+
+@dataclass(frozen=True)
+class UnchangedRound:
+    """The scored round an opening round would only repeat."""
+
+    source_round: int
+    signature: str
+
+
+async def unchanged_round_source(
+    session: AsyncSession,
+    row: GeneratorRound,
+    *,
+    settings: GeneratorCompetitionSettings,
+    now: datetime,
+) -> UnchangedRound | None:
+    """The last scored round, when ``row`` (just frozen) would repeat it.
+
+    ``row`` repeats it when its columns, panel, bench version, column size and
+    score params all match, and the scored round is a complete measurement:
+    every column generated, no panel agent dropped, every seated agent
+    reported. It must also still be inside ``window_days`` (counting earlier
+    skips that carried it), so a skip never revives a lapsed ledger entry.
+    ``None`` means run the round."""
+    from ditto.api_server.generator_competition import settings_at
+
+    if not settings.skip_unchanged_rounds:
+        return None
+    source = await session.scalar(
+        select(GeneratorRound)
+        .options(defer(GeneratorRound.dataset_bytes))
+        .where(
+            GeneratorRound.status == "scored",
+            GeneratorRound.round_index < row.round_index,
+        )
+        .order_by(GeneratorRound.round_index.desc())
+        .limit(1)
+    )
+    if source is None or source.scored_at is None:
+        return None
+    since = now - timedelta(days=settings.window_days)
+    fresh = max(
+        source.scored_at,
+        (await round_carry_freshness(session, since=since)).get(
+            source.round_index, source.scored_at
+        ),
+    )
+    if fresh < since:
+        return None
+    seated = active_panel(source)
+    if len(seated) != len(source.panel or ()):
+        return None
+    if set(source.column_cases or {}) != {c["column_id"] for c in source.columns or ()}:
+        return None
+    tally = await panel_tally(session, source)
+    if tally.reported < tally.seated:
+        return None
+    source_settings = await settings_at(session, source.settings_revision)
+    before = _round_signature(
+        columns=source.columns or (),
+        panel=seated,
+        bench_version=source.bench_version,
+        cases_per_column=source.cases_per_column,
+        score_params=source_settings.score_params(),
+    )
+    after = _round_signature(
+        columns=row.columns or (),
+        panel=row.panel or (),
+        bench_version=row.bench_version,
+        cases_per_column=row.cases_per_column,
+        score_params=settings.score_params(),
+    )
+    if before != after:
+        return None
+    return UnchangedRound(source_round=source.round_index, signature=after)
+
+
+async def skipped_round_views(
+    session: AsyncSession, *, limit: int
+) -> list[GeneratorRoundSkipView]:
+    """The newest ``limit`` skipped rounds, newest first."""
+    rows = await session.execute(
+        select(
+            GeneratorRound.round_index,
+            GeneratorRound.generation,
+            GeneratorRound.closed_at,
+        )
+        .where(GeneratorRound.status == "skipped")
+        .order_by(GeneratorRound.round_index.desc())
+        .limit(limit)
+    )
+    return [
+        GeneratorRoundSkipView(
+            round_index=int(index),
+            reason=SKIPPED_UNCHANGED,
+            carried_from_round=skipped_round_source(generation),
+            skipped_at=closed_at,
+        )
+        for index, generation, closed_at in rows
+    ]
+
+
+def skip_round(
+    row: GeneratorRound, unchanged: UnchangedRound, *, now: datetime
+) -> None:
+    """Close a just-frozen round as ``skipped`` (caller commits).
+
+    The columns, panel and seed stay recorded, so the round still shows what
+    it would have run; nothing is generated, leased or scored."""
+    row.status = "skipped"
+    row.closed_at = now
+    row.lease_id = None
+    row.lease_expires_at = None
+    row.generation = {
+        **(row.generation or {}),
+        SKIPPED_UNCHANGED: {
+            "reason": SKIPPED_UNCHANGED,
+            "carried_from_round": unchanged.source_round,
+            "signature": unchanged.signature,
+            "skipped_at": now.isoformat(),
+        },
+    }
+
+
 @dataclass(frozen=True)
 class PanelTally:
     """What the round's still-seated panel reported.
@@ -933,6 +1146,11 @@ async def advance_rounds(
                     f"{deferral.get('attempts')}, until {deferral.get('until')}): "
                     f"{deferral.get('reason')}"
                 )
+            elif opening.status == "skipped":
+                out.note(
+                    f"round {current}: skipped ({SKIPPED_UNCHANGED}: same columns "
+                    f"and panel as round {skipped_round_source(opening.generation)})"
+                )
             else:
                 out.note(f"round {current}: {opening.status}")
 
@@ -950,7 +1168,7 @@ async def advance_rounds(
         .where(
             GeneratorRound.first_epoch_index
             <= position.subnet_epoch_index - settings.privacy_window_rounds,
-            GeneratorRound.status.in_(("scored", "void")),
+            GeneratorRound.status.in_(FINAL_ROUND_STATUSES),
             GeneratorRound.revealed_at.is_(None),
         )
         .order_by(GeneratorRound.round_index)
@@ -1347,6 +1565,11 @@ async def open_round(
             now=now,
         )
         return
+    # Nothing to measure: the last scored round already ran exactly this
+    # matrix. Skipping costs no generation and no panel inference.
+    unchanged = await unchanged_round_source(session, row, settings=settings, now=now)
+    if unchanged is not None:
+        skip_round(row, unchanged, now=now)
 
 
 # --- scorer work ------------------------------------------------------------
@@ -2066,6 +2289,10 @@ def _summary(
         closed_at=row.closed_at,
         scored_at=row.scored_at,
         void_reason=row.void_reason,
+        skip_reason=SKIPPED_UNCHANGED if row.status == "skipped" else None,
+        carried_from_round=(
+            skipped_round_source(row.generation) if row.status == "skipped" else None
+        ),
         revealed_at=row.revealed_at,
         secret_hex=row.secret.hex() if revealed else None,
         seed=row.seed if revealed else None,
@@ -2374,6 +2601,9 @@ async def build_round_ledger(
             count=0, mode="off", window_days=settings.window_days
         )
     since = now - timedelta(days=settings.window_days)
+    # A round skipped as unchanged carries its source round's scores forward:
+    # the source counts as fresh from the latest skip that carried it.
+    carried = await round_carry_freshness(session, since=since)
     # Only the columns the fold reads. Loading whole rows pulled every
     # ledgered generator's source archive and, once per submission, its
     # round's full dataset through the event loop on each read; aggregating
@@ -2383,6 +2613,8 @@ async def build_round_ledger(
             GeneratorRound.status == "scored", GeneratorRound.scored_at >= since
         )
     )
+    if carried:
+        first = min(carried) if first is None else min(first, min(carried))
     if first is None:
         return _ledger_response([], settings=settings, now=now)
     # Every scored round from the window's first on: a generator whose latest
@@ -2415,10 +2647,18 @@ async def build_round_ledger(
             .group_by(GeneratorRoundCaseVerdict.submission_id)
         )
     }
+
+    def fresh_at(index: int) -> datetime | None:
+        scored_at = rounds[index].scored_at
+        carry = carried.get(index)
+        if scored_at is None or carry is None:
+            return scored_at or carry
+        return max(scored_at, carry)
+
     latest = {
         submission_id: index
         for submission_id, index in latest.items()
-        if rounds[index].scored_at is not None and rounds[index].scored_at >= since
+        if (fresh := fresh_at(index)) is not None and fresh >= since
     }
     subs: Sequence[Any] = (
         (
@@ -2875,7 +3115,8 @@ async def settle_commitment_publications(session: AsyncSession) -> list[str]:
         if confirmations > 0:
             row.commitment_publication = "published"
             row.commitment_error = None
-        elif row.status == "void":
+        elif row.status in ("void", "skipped"):
+            # Nobody needs the on-chain copy of a round that never ran.
             row.commitment_publication = "disabled"
         else:
             row.commitment_publication = "failed"

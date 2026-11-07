@@ -26,7 +26,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from pydantic import BaseModel
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -3597,7 +3597,9 @@ class TestPublicLeaderboard:
         )
         # A reign this board never had: seeds anchored on some other agent, the
         # way a dethroned champion's trail survives in the append-only table.
-        stale_seeds = _anchor_seeds(str(uuid4()), count=8)
+        # Seven stale seeds plus the three live ones fill exactly the 10-seed
+        # board-wide active window, so the work cap trims nothing here.
+        stale_seeds = _anchor_seeds(str(uuid4()), count=7)
         live_seeds = _anchor_seeds(champion_id)
         assert not set(stale_seeds) & set(live_seeds)
 
@@ -3680,14 +3682,14 @@ class TestPublicLeaderboard:
         # The stale-only member permanently retains its own accepted samples.
         # They affect its mean but cannot become paired evidence against either
         # live member because the seed identities do not intersect.
-        assert entries[stale_only_id]["completed_wave_count"] == 8
-        assert entries[stale_only_id]["retained_sample_count"] == 8
+        assert entries[stale_only_id]["completed_wave_count"] == 7
+        assert entries[stale_only_id]["retained_sample_count"] == 7
         assert entries[stale_only_id]["aggregate_method"] == "continual_mean"
         assert entries[stale_only_id]["official_composite"] == pytest.approx(
-            (0.70 * 3 + 0.10 * 8) / 11
+            (0.70 * 3 + 0.10 * 7) / 10
         )
         # ...but the append-only audit trail is still reported in full.
-        assert entries[stale_only_id]["confirmation_seed_depth"] == 8
+        assert entries[stale_only_id]["confirmation_seed_depth"] == 7
 
     async def test_a_dethrone_keeps_the_evidence_the_cohort_already_shares(
         self,
@@ -11043,6 +11045,9 @@ class TestPublicSubmissionScores:
         ).json()["provisional_scores"]
 
         assert [score["v9_base"] for score in scores] == [dashboard_fixture] * 3
+        # Below the dueling floor the v16 breakdown is omitted, not null.
+        assert not any("dueling_breakdown" in score for score in scores)
+        assert not any("dueling_breakdown" in score for score in pipeline_scores)
         assert [score["v9_base"] for score in pipeline_scores] == [
             dashboard_fixture
         ] * 3
@@ -11058,6 +11063,60 @@ class TestPublicSubmissionScores:
             "excluded",
         ):
             assert private_field not in public_json
+
+    async def test_v16_dueling_breakdown_reaches_public_score_reads_masked(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.tests.api_server.test_dueling_breakdown import (
+            OTHER,
+            OWNER,
+            RIVAL,
+            dueling_report,
+            priced_gate_evidence,
+        )
+
+        agent_id = await _seed_k3(
+            session_maker,
+            miner=_MINER_A,
+            composites=[0.614706, 0.614706, 0.614706],
+            details={"bench_version": 16},
+        )
+        async with session_maker() as s, s.begin():
+            await s.execute(
+                update(Score)
+                .where(Score.agent_id == UUID(agent_id))
+                .values(
+                    dueling_season_id=UUID(dueling_report()["season_id"]),
+                    dueling=dueling_report(),
+                    gate_evidence=priced_gate_evidence(),
+                )
+            )
+        _install_db(app, session_maker)
+
+        scores_body = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/scores")
+        ).json()
+        pipeline_body = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        ).json()
+        for rows in (scores_body["scores"], pipeline_body["provisional_scores"]):
+            assert len(rows) == 3
+            for row in rows:
+                breakdown = row["dueling_breakdown"]
+                assert breakdown["priced_cost_applied_factor_bps"] == 9392
+                assert breakdown["counted_columns"] == 4
+                masked = [
+                    c["column_id"] for c in breakdown["columns"] if c["self_masked"]
+                ]
+                assert masked == ["c1"]
+        for body in (scores_body, pipeline_body):
+            published = json.dumps(body)
+            for owner in (OWNER, RIVAL, OTHER):
+                assert owner not in published
+            assert '"owner_key"' not in published
 
     async def test_detail_404_for_provisional_agent(
         self,

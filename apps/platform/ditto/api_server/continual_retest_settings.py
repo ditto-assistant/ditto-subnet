@@ -5,13 +5,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_models.continual_retest_settings import (
+    MAX_MIN_DETHRONE_CONFIRMATIONS,
+    ContinualRetestSettings,
+)
 from ditto.api_server.koth import CrownGate
+from ditto_screening_protocol.title_duel import TITLE_DUEL_WINDOW_PAIRS
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -68,16 +72,45 @@ def statistical_band_cap_is_active(
     return settings.statistical_band_mode == "fleet_ready" and fleet_protocol_ready
 
 
-def crown_gate_for(
-    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
-) -> CrownGate | None:
-    """The protocol-34 crown rules to serve, or ``None`` for the pre-34 walk."""
-    if settings.crown_gate_mode != "fleet_ready" or not fleet_protocol_ready:
-        return None
+def configured_crown_gate(settings: ContinualRetestSettings) -> CrownGate:
+    """The operator's protocol-34 crown rules, active or not.
+
+    A revision stored under the former 15-seed cap is clamped here: no
+    challenger holds more shared seeds than the 10-seed work cap.
+    """
     return CrownGate(
-        min_shared_seeds=settings.min_dethrone_confirmations,
+        min_shared_seeds=min(
+            settings.min_dethrone_confirmations, MAX_MIN_DETHRONE_CONFIRMATIONS
+        ),
         standing_rank=settings.champion_standing_rank,
     )
+
+
+def crown_gate_for(
+    settings: ContinualRetestSettings,
+    *,
+    fleet_protocol_ready: bool,
+    duel_fleet_ready: bool = False,
+) -> CrownGate | None:
+    """The protocol-34 crown rules to serve, or ``None`` for the pre-34 walk.
+
+    The protocol-35 title duel rides on the gate (``duel_window``): served only
+    with the gate, only under ``crown_duel_mode = fleet_ready`` and only once
+    every recently-live weight setter reports protocol 35.
+    """
+    if settings.crown_gate_mode != "fleet_ready" or not fleet_protocol_ready:
+        return None
+    gate = configured_crown_gate(settings)
+    if crown_duel_is_active(settings, fleet_protocol_ready=duel_fleet_ready):
+        return replace(gate, duel_window=TITLE_DUEL_WINDOW_PAIRS)
+    return gate
+
+
+def crown_duel_is_active(
+    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
+) -> bool:
+    """Whether the operator selected the title duel and the fleet folds it."""
+    return settings.crown_duel_mode == "fleet_ready" and fleet_protocol_ready
 
 
 def crown_incumbent_is_active(

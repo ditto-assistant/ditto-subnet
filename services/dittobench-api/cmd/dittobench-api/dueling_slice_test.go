@@ -225,6 +225,9 @@ func TestDatasetFeaturesAdvertiseDuelingExactlyForRunVersions(t *testing.T) {
 	s := &server{allowDuelingSlices: true}
 	features := s.datasetFeatures()
 	runsDueling := slices.ContainsFunc(supportedBenchVersions(), protocol.DuelingBenchVersion)
+	if !runsDueling || !slices.Contains(features, "dueling-slice-bench-16") {
+		t.Fatalf("the flip advertises bench 16 with its slice mode: %v / %v", supportedBenchVersions(), features)
+	}
 	if slices.Contains(features, duelingSliceMode) != runsDueling {
 		t.Fatalf("dueling-slice-v1 advertised=%v, but the scorer runs a dueling version=%v (%v)",
 			slices.Contains(features, duelingSliceMode), runsDueling, supportedBenchVersions())
@@ -312,6 +315,45 @@ func TestScoreAndPracticeRefuseMisplacedDuelingSlices(t *testing.T) {
 	rr = submitOn(newPracticeTestServer(), `{"bench_version":15,"run_size":"small","harness_url":"http://127.0.0.1:9","dueling_owner_key":""}`)
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "dueling slices are not accepted on practice") {
 		t.Fatalf("practice with a slice field = %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+// Only a local private-harness scorer (the miner kit's slice rehearsal) takes
+// a slice on practice, complete and bound to an explicit seed; hosted
+// practice refuses one at any version.
+func TestPracticeAdmitsALocalDuelingSliceOnly(t *testing.T) {
+	sha := strings.Repeat("b", 64)
+	full := `"dueling_slice_mode":"dueling-slice-v1","dueling_slice_bytes":"e30=","expected_slice_sha256":"` + sha + `","dueling_owner_key":""`
+	for _, tc := range []struct {
+		name  string
+		local bool
+		body  string
+		want  string
+	}{
+		{"hosted v16", false, `{"bench_version":16,"seed":7,` + full + `}`, "dueling slices are not accepted on practice"},
+		{"local v16 complete", true, `{"bench_version":16,"seed":7,` + full + `}`, ""},
+		{"local v16 without a seed", true, `{"bench_version":16,` + full + `}`, "explicit seed"},
+		{"local v16 partial", true, `{"bench_version":16,"seed":7,"dueling_owner_key":""}`, "dueling slice required"},
+		{"local v15 with a slice", true, `{"bench_version":15,"seed":7,` + full + `}`, "only on a canonical"},
+		{"local v16 without a slice", true, `{"bench_version":16,"seed":7}`, ""},
+		{"local v16 scored", true, `{"bench_version":16,"seed":7,"dataset_sha256":"` + sha + `",` + full + `}`, "cannot be a scored run"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var req submitRequest
+			if err := json.Unmarshal([]byte(tc.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			got := validatePracticeDuelingSlice(req, tc.local)
+			if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+				t.Fatalf("validatePracticeDuelingSlice = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if (&server{}).practiceBodyBytes() != maxSubmitBody {
+		t.Fatal("hosted practice keeps the tiny body cap")
+	}
+	if (&server{allowPrivate: true}).practiceBodyBytes() < int64(challenge.MaxRoundDatasetBytes) {
+		t.Fatal("a local scorer must accept a full base64 slice body")
 	}
 }
 
@@ -748,6 +790,13 @@ func TestRunSizeJobRunsTheSliceAfterTheDatagenHalf(t *testing.T) {
 	}
 	if sliceRows != len(slice.cases) || report.N != len(report.PerCase) {
 		t.Fatalf("slice rows %d (want %d), n=%d per_case=%d", sliceRows, len(slice.cases), report.N, len(report.PerCase))
+	}
+	// The priced cost covers the whole run (both halves). This practice run
+	// meters no inference, so it reports insufficient evidence and the gate
+	// above stays exactly the datagen composite gate.
+	if pc := report.Details.PricedCost; pc == nil || pc.Window != "whole_run" || pc.Cases != report.N ||
+		pc.Result != "insufficient_evidence" || pc.AppliedFactorBPS != 10000 {
+		t.Fatalf("details.priced_cost = %+v", report.Details.PricedCost)
 	}
 	aggs := duelingAggregates(d.Columns)
 	self := challenge.DuelingComposite(d.DatagenRaw, d.DatagenGate, aggs, map[string]bool{d.OwnerKey: true})

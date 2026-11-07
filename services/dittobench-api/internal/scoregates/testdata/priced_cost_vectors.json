@@ -1,0 +1,1279 @@
+{
+  "contract_id": "priced-cost-v1",
+  "vectors": [
+    {
+      "name": "v15_pruned_catalog_cheapest",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 12457068,
+        "completion_tokens": 677405,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 12457068,
+        "completion_tokens": 677405,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 871994760,
+        "completion_cost_nano_usd": 101610750,
+        "embedding_cost_nano_usd": 1176000,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 974781510,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 974781510,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 9747,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 10000,
+        "applied_factor_bps": 10000
+      }
+    },
+    {
+      "name": "v15_pruned_catalog",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 14147828,
+        "completion_tokens": 1332110,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 14147828,
+        "completion_tokens": 1332110,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 990347960,
+        "completion_cost_nano_usd": 199816500,
+        "embedding_cost_nano_usd": 1176000,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 1191340460,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 1191340460,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 11913,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 9235,
+        "applied_factor_bps": 9235
+      }
+    },
+    {
+      "name": "v15_fleet_mean",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 17484979,
+        "completion_tokens": 1422919,
+        "embedding_tokens": 294086,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 17484979,
+        "completion_tokens": 1422919,
+        "embedding_tokens": 294086,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 1223948530,
+        "completion_cost_nano_usd": 213437850,
+        "embedding_cost_nano_usd": 1176344,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 1438562724,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 1438562724,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 14385,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 8246,
+        "applied_factor_bps": 8246
+      }
+    },
+    {
+      "name": "v15_full_catalog",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 22318268,
+        "completion_tokens": 1690233,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 22318268,
+        "completion_tokens": 1690233,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 1562278760,
+        "completion_cost_nano_usd": 253534950,
+        "embedding_cost_nano_usd": 1176000,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 1816989710,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 1816989710,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 18169,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 6733,
+        "applied_factor_bps": 6733
+      }
+    },
+    {
+      "name": "v15_full_catalog_dearest",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 26000000,
+        "completion_tokens": 3018488,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 26000000,
+        "completion_tokens": 3018488,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 1820000000,
+        "completion_cost_nano_usd": 452773200,
+        "embedding_cost_nano_usd": 1176000,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 2273949200,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 2273949200,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 22739,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 6000,
+        "applied_factor_bps": 6000
+      }
+    },
+    {
+      "name": "exactly_reference",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 10000000,
+        "completion_tokens": 2000000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 10000000,
+        "completion_tokens": 2000000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 700000000,
+        "completion_cost_nano_usd": 300000000,
+        "embedding_cost_nano_usd": 0,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 1000000000,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 1000000000,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 10000,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 10000,
+        "applied_factor_bps": 10000
+      }
+    },
+    {
+      "name": "one_and_a_half_reference",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 15000000,
+        "completion_tokens": 3000000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 15000000,
+        "completion_tokens": 3000000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 1050000000,
+        "completion_cost_nano_usd": 450000000,
+        "embedding_cost_nano_usd": 0,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 1500000000,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 1500000000,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 15000,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 8000,
+        "applied_factor_bps": 8000
+      }
+    },
+    {
+      "name": "twice_reference_floor",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 20000000,
+        "completion_tokens": 4000000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 20000000,
+        "completion_tokens": 4000000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 1400000000,
+        "completion_cost_nano_usd": 600000000,
+        "embedding_cost_nano_usd": 0,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 2000000000,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 2000000000,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 20000,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 6000,
+        "applied_factor_bps": 6000
+      }
+    },
+    {
+      "name": "ten_times_reference_capped",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 200000000,
+        "completion_tokens": 40000000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 200000000,
+        "completion_tokens": 40000000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 14000000000,
+        "completion_cost_nano_usd": 6000000000,
+        "embedding_cost_nano_usd": 0,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 20000000000,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 20000000000,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 100000,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 6000,
+        "applied_factor_bps": 6000
+      }
+    },
+    {
+      "name": "decision_lane_and_embeddings",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 9000000,
+        "completion_tokens": 1000000,
+        "embedding_tokens": 500000,
+        "decision_calls": 700,
+        "decision_input_tokens": 3500000,
+        "decision_output_tokens": 70000
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 9000000,
+        "completion_tokens": 1000000,
+        "embedding_tokens": 500000,
+        "decision_calls": 700,
+        "decision_input_tokens": 3500000,
+        "decision_output_tokens": 70000,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 630000000,
+        "completion_cost_nano_usd": 150000000,
+        "embedding_cost_nano_usd": 2000000,
+        "decision_cost_nano_usd": 147000000,
+        "cost_nano_usd": 929000000,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 929000000,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 9290,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 10000,
+        "applied_factor_bps": 10000
+      }
+    },
+    {
+      "name": "dueling_small_run_normalized",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 35,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 1600000,
+        "completion_tokens": 140000,
+        "embedding_tokens": 30000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 35,
+        "prompt_tokens": 1600000,
+        "completion_tokens": 140000,
+        "embedding_tokens": 30000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 112000000,
+        "completion_cost_nano_usd": 21000000,
+        "embedding_cost_nano_usd": 120000,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 133120000,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 1331200000,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 13312,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 8676,
+        "applied_factor_bps": 8676
+      }
+    },
+    {
+      "name": "odd_case_count_floor_division",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 349,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 17000001,
+        "completion_tokens": 1400003,
+        "embedding_tokens": 7,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 349,
+        "prompt_tokens": 17000001,
+        "completion_tokens": 1400003,
+        "embedding_tokens": 7,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 1190000070,
+        "completion_cost_nano_usd": 210000450,
+        "embedding_cost_nano_usd": 28,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 1400000548,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 1404012010,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 14040,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 8384,
+        "applied_factor_bps": 8384
+      }
+    },
+    {
+      "name": "shadow_reports_not_applies",
+      "bench_version": 16,
+      "posture": "shadow",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 22318268,
+        "completion_tokens": 1690233,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "shadow",
+        "applied": false,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 22318268,
+        "completion_tokens": 1690233,
+        "embedding_tokens": 294000,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 1562278760,
+        "completion_cost_nano_usd": 253534950,
+        "embedding_cost_nano_usd": 1176000,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 1816989710,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 1816989710,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 18169,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 6733,
+        "applied_factor_bps": 10000
+      }
+    },
+    {
+      "name": "incomplete_chat_accounting",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": false,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 22318268,
+        "completion_tokens": 1690233,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": false,
+        "result": "insufficient_evidence",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 22318268,
+        "completion_tokens": 1690233,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 1562278760,
+        "completion_cost_nano_usd": 253534950,
+        "embedding_cost_nano_usd": 0,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 1815813710,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 0,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 0,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 10000,
+        "applied_factor_bps": 10000
+      }
+    },
+    {
+      "name": "zero_cases",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 0,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": false,
+        "result": "insufficient_evidence",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 0,
+        "completion_cost_nano_usd": 0,
+        "embedding_cost_nano_usd": 0,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 0,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 0,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 0,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 10000,
+        "applied_factor_bps": 10000
+      }
+    },
+    {
+      "name": "zero_inference",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 0,
+        "completion_cost_nano_usd": 0,
+        "embedding_cost_nano_usd": 0,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 0,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 0,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 0,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 10000,
+        "applied_factor_bps": 10000
+      }
+    },
+    {
+      "name": "saturating_counts",
+      "bench_version": 16,
+      "posture": "enforce",
+      "cases": 1,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 9007199254740991,
+        "completion_tokens": 9007199254740991,
+        "embedding_tokens": 9007199254740991,
+        "decision_calls": 0,
+        "decision_input_tokens": 9007199254740991,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v1",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 1,
+        "prompt_tokens": 9007199254740991,
+        "completion_tokens": 9007199254740991,
+        "embedding_tokens": 9007199254740991,
+        "decision_calls": 0,
+        "decision_input_tokens": 9007199254740991,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 630503947831869370,
+        "completion_cost_nano_usd": 1351079888211148650,
+        "embedding_cost_nano_usd": 36028797018963964,
+        "decision_cost_nano_usd": 378302368699121622,
+        "cost_nano_usd": 2395915001761103606,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 18446744073709551615,
+        "reference_nano_usd": 1000000000,
+        "ratio_bps": 100000,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 8000
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 6000
+          }
+        ],
+        "floor_bps": 6000,
+        "factor_bps": 6000,
+        "applied_factor_bps": 6000
+      }
+    },
+    {
+      "name": "v17_inherits",
+      "bench_version": 17,
+      "posture": "enforce",
+      "cases": 350,
+      "chat_complete": true,
+      "source": "relay",
+      "usage": {
+        "prompt_tokens": 14000000,
+        "completion_tokens": 1300000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0
+      },
+      "summary": {
+        "contract_id": "priced-cost-v2",
+        "posture": "enforce",
+        "applied": true,
+        "result": "priced",
+        "window": "whole_run",
+        "source": "relay",
+        "cases": 350,
+        "prompt_tokens": 14000000,
+        "completion_tokens": 1300000,
+        "embedding_tokens": 0,
+        "decision_calls": 0,
+        "decision_input_tokens": 0,
+        "decision_output_tokens": 0,
+        "prices": {
+          "chat_model": "openai/gpt-oss-20b",
+          "prompt_token": 70,
+          "completion_token": 150,
+          "embedding_model": "perplexity/pplx-embed-v1-0.6b",
+          "embedding_token": 4,
+          "decision_model": "typesafe/jev-1.14",
+          "decision_input_token": 42,
+          "decision_output_token": 0,
+          "completion_includes_reasoning": true
+        },
+        "prompt_cost_nano_usd": 980000000,
+        "completion_cost_nano_usd": 195000000,
+        "embedding_cost_nano_usd": 0,
+        "decision_cost_nano_usd": 0,
+        "cost_nano_usd": 1175000000,
+        "normalization_cases": 350,
+        "normalized_cost_nano_usd": 1175000000,
+        "reference_nano_usd": 500000000,
+        "ratio_bps": 23500,
+        "curve": [
+          {
+            "ratio_bps": 10000,
+            "factor_bps": 10000
+          },
+          {
+            "ratio_bps": 15000,
+            "factor_bps": 6500
+          },
+          {
+            "ratio_bps": 20000,
+            "factor_bps": 3000
+          }
+        ],
+        "floor_bps": 3000,
+        "factor_bps": 3000,
+        "applied_factor_bps": 3000
+      }
+    }
+  ],
+  "factors": [
+    {
+      "ratio_bps": 0,
+      "factor_bps": 10000
+    },
+    {
+      "ratio_bps": 5000,
+      "factor_bps": 10000
+    },
+    {
+      "ratio_bps": 10000,
+      "factor_bps": 10000
+    },
+    {
+      "ratio_bps": 10001,
+      "factor_bps": 10000
+    },
+    {
+      "ratio_bps": 11000,
+      "factor_bps": 9600
+    },
+    {
+      "ratio_bps": 12345,
+      "factor_bps": 9062
+    },
+    {
+      "ratio_bps": 15000,
+      "factor_bps": 8000
+    },
+    {
+      "ratio_bps": 17500,
+      "factor_bps": 7000
+    },
+    {
+      "ratio_bps": 19999,
+      "factor_bps": 6001
+    },
+    {
+      "ratio_bps": 20000,
+      "factor_bps": 6000
+    },
+    {
+      "ratio_bps": 30000,
+      "factor_bps": 6000
+    },
+    {
+      "ratio_bps": 100000,
+      "factor_bps": 6000
+    }
+  ]
+}

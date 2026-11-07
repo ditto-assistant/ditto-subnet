@@ -95,6 +95,17 @@ class RetestClaimability(BaseModel):
     """The provider-outage gate admits no new lease right now (open circuit
     cooling down, or its one half-open probe already claimed). The lane then
     issues nothing on any route and the decision is ``provider_outage``."""
+    retest_mode: Literal["continual", "season_duel"] = "continual"
+    """The lane's retest mode (``docs/title-duels.md``)."""
+    season_duel_seed_count: int | None = None
+    """Shared seeds in the current season's duel, or null when season duels do
+    not govern this version (``continual`` mode, or below the dueling floor)."""
+    season_duel_anchor_champion_id: UUID | None = None
+    """The champion the season's duel family is anchored on: the one that
+    opened the season, which a mid-season crown change does not move."""
+    season_duel_held_seed_count: int | None = None
+    """Duel seeds this agent already ran this season (a count; seeds stay
+    private). Equal to ``season_duel_seed_count`` once its duel is complete."""
     wave_cadence_tempos: int = 0
     """Tempo-aligned wave pacing in force (0: historical pacing)."""
     wave_seeds_per_window: int | None = None
@@ -203,6 +214,15 @@ class AdminContinualRetestDiagnostic(BaseModel):
     """Observations behind the official continual composite (quorum + waves)."""
     raw_confirmation_depth: int = 0
     """Distinct accepted shared seeds, including any not yet fold-eligible."""
+    confirmation_seed_floor: int = 0
+    """Shared seeds the lane gathers before variance may stop it (minimum)."""
+    confirmation_seed_cap: int = 0
+    """The continual-retest work cap: the most shared seeds the lane ever
+    targets and the size of the active window the official composite folds."""
+    confirmation_seed_target: int | None = None
+    """The variance-sized seed target the lane is planning toward right now,
+    between floor and cap, from the raw emission set's recorded composites;
+    ``None`` when there is no current emission set."""
     composite_stderr: float | None = None
     aggregate_mode: Literal["disabled", "fleet_ready", "enabled"] = "fleet_ready"
     wave_membership: WaveMembership = "participants"

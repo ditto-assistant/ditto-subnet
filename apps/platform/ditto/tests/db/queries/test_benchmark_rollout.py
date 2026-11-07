@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.admin_quarantine import AdminBenchmarkQualificationRequest
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_contract import benchmark_contracts
 from ditto.api_models.public import PublicBenchRolloutResponse
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
@@ -66,7 +67,9 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import (
-    CANARY_BENCH_VERSION,
+    CANARY_BENCH_VERSION as _NEWEST_SHIPPED_BENCH_VERSION,
+)
+from ditto.db.queries.benchmark_rollout import (
     DEFAULT_BENCH_VERSION,
     DEFAULT_RESCORE_COHORT_SIZE,
     DESIRED_AUTHORITY_EARNED_EVENT,
@@ -113,8 +116,21 @@ from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
 )
+from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 pytestmark = pytest.mark.asyncio
+
+# The generic rollout lifecycle is exercised at the newest NON-dueling
+# contract. From bench 16 a score counts on the ledger only with its dueling
+# season and aggregates (season-isolated KOTH, #3351), which these fixtures do
+# not build; dueling rollouts are covered by the dueling season tests.
+CANARY_BENCH_VERSION = max(
+    contract.version
+    for contract in benchmark_contracts()
+    if not is_dueling_bench_version(contract.version)
+)
+assert CANARY_BENCH_VERSION < _NEWEST_SHIPPED_BENCH_VERSION
 
 _Seeded = TypeVar("_Seeded")
 
@@ -225,7 +241,18 @@ async def test_admin_status_read_does_not_start_rollout(
         # A target must be both above the active version and at or above the
         # floor. Shipping v8 through v11 makes each discoverable as a target but
         # does not create or activate a rollout.
-        assert control["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14, 15]
+        assert control["available_target_versions"] == [
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+        ]
         contracts = control["contracts"]
         assert isinstance(contracts, list)
         assert [item["version"] for item in contracts] == [
@@ -243,6 +270,8 @@ async def test_admin_status_read_does_not_start_rollout(
             13,
             14,
             15,
+            16,
+            17,
         ]
         assert control["status"] == "inactive"
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
@@ -266,7 +295,7 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
             # Model a current scorer that retains every shipped rollout
             # contract. Individual tests narrow this list when they need to
             # exercise a missing-version boundary.
-            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
             "deterministic_v13_datasets": True,
             "v14_scored_runtime_env": {
                 "bench_version": 14,
@@ -299,6 +328,27 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
                     ).encode()
                 ).hexdigest(),
             },
+            "v16_scored_runtime_env": {
+                "bench_version": 16,
+                "scope": "scorer-injected-env-only",
+                "source_revision": revision,
+                "injected_keys": [
+                    "DITTOBENCH_DB",
+                    "DITTOBENCH_DECISIONS_URL",
+                    "DITTOBENCH_MODEL",
+                ],
+                "sha256": hashlib.sha256(
+                    (
+                        "scored-runtime-env-v1\n16\n"
+                        + revision
+                        + "\nDITTOBENCH_DB\nDITTOBENCH_DECISIONS_URL"
+                        + "\nDITTOBENCH_MODEL"
+                    ).encode()
+                ).hexdigest(),
+            },
+            # A v16+ (dueling) scorer forwards its slice versions; Platform
+            # leases 16+ only to validators that list the version here.
+            "dueling_slice_bench_versions": [16, 17],
             "observed_at": int(now.timestamp()),
             "software_version": "1.3.0",
             "source_revision": revision,
@@ -422,7 +472,7 @@ async def _seed_rollout(
                 name=f"agent-{position}",
                 sha256=f"{position:x}" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256=f"{position:x}" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + f"{position:x}" * 64,
@@ -725,7 +775,7 @@ async def test_historical_rescore_cohort_fills_from_exactly_two_prior_eras(
                         name=f"agent-v{version}-{rank}",
                         sha256=f"{version:x}" * 64,
                         status=AgentStatus.SCORED,
-                        screening_policy_version=9,
+                        screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                         created_at=now + timedelta(seconds=version * 100 + rank),
                     )
                 )
@@ -791,7 +841,7 @@ async def test_historical_rescore_cohort_collapses_attested_owner_family(
                     name=hotkey,
                     sha256=f"{index + 1:x}" * 64,
                     status=AgentStatus.SCORED,
-                    screening_policy_version=9,
+                    screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                     created_at=now + timedelta(seconds=index),
                 )
             )
@@ -867,7 +917,7 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
                 name="sixth",
                 sha256="e" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="e" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "e" * 64,
@@ -925,7 +975,7 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
                 name="leaked-outsider",
                 sha256="d" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=2),
             )
         )
@@ -1053,7 +1103,7 @@ async def test_source_backfill_gate_waits_for_full_inherited_top_ten(
                     name=f"agent-{position}",
                     sha256=f"{position:x}" * 64,
                     status=AgentStatus.SCORED,
-                    screening_policy_version=9,
+                    screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                     screened_image_sha256=f"{position:x}" * 64,
                     screened_image_size_bytes=1024,
                     screened_image_id="sha256:" + f"{position:x}" * 64,
@@ -1164,7 +1214,7 @@ async def test_frozen_top_five_barrier_remains_raw_three_of_three(
                 name="sixth-smoke",
                 sha256="e" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="e" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "e" * 64,
@@ -1217,6 +1267,60 @@ async def test_frozen_top_five_barrier_remains_raw_three_of_three(
         )
         assert ticket is not None
         assert ticket.agent_id == sixth_id
+
+
+async def test_rollout_lease_waits_for_member_to_pass_the_required_policy(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A rollout lease is issued only when its score can be accepted.
+
+    ``POST /validator/score`` rejects any agent below the effective required
+    screening policy ("agent is not evaluatable"). Before this guard the rollout
+    lane checked only the contract floor, so after a scheduled activation it
+    kept leasing members that were mid-rescreen; every score bounced and each
+    bounce spent one of the member's fail-once slots (bench v17, 2026-11-06).
+    """
+    from ditto.screener_policy_state import (
+        effective_screening_policy_version,
+        update_effective_screener_policy,
+    )
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_rollout_session(session_maker, now) as (
+        session,
+        priority_ids,
+        _rollout,
+    ):
+        floor = effective_screening_policy_version()
+        for agent_id in priority_ids:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.screening_policy_version = floor
+        await session.flush()
+        # A scheduled activation raises the requirement: every member is now
+        # stale and re-entering screening, so no lease can produce a score.
+        update_effective_screener_policy(floor + 1, rescreen_scored=False)
+        stale = await issue_rollout_ticket(
+            session,
+            validator_hotkey="validator-a",
+            now=now,
+            ttl=timedelta(minutes=90),
+        )
+        assert stale is None
+
+        # The first member passes the new policy; only it is leasable.
+        rescreened = await session.get(Agent, priority_ids[0])
+        assert rescreened is not None
+        rescreened.screening_policy_version = floor + 1
+        await session.flush()
+        ticket = await issue_rollout_ticket(
+            session,
+            validator_hotkey="validator-a",
+            now=now,
+            ttl=timedelta(minutes=90),
+        )
+        assert ticket is not None
+        assert ticket.agent_id == priority_ids[0]
 
 
 async def test_parallel_rollout_slots_stay_distinct_inside_frozen_priority_five(
@@ -1346,7 +1450,7 @@ async def test_five_agents_remain_v2_at_two_of_three_then_activate_atomically(
                 name="v2-only",
                 sha256="e" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=1),
             )
         )
@@ -1968,7 +2072,7 @@ async def test_rollout_preempts_idle_source_lease_only_when_target_work_exists(
                 name="ordinary-v2-work",
                 sha256="ab" * 32,
                 status=AgentStatus.EVALUATING,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=1),
             )
         )
@@ -2029,7 +2133,7 @@ async def test_rollout_preempts_idle_source_lease_only_when_target_work_exists(
                 name="expired-deadline-v2-work",
                 sha256="bc" * 32,
                 status=AgentStatus.EVALUATING,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=2),
             )
         )
@@ -2125,7 +2229,7 @@ async def test_rollout_never_preempts_a_lease_behind_a_frozen_capacity_blob(
                 name="ordinary-v2-work",
                 sha256="ab" * 32,
                 status=AgentStatus.EVALUATING,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(minutes=1),
             )
         )
@@ -2191,7 +2295,7 @@ async def test_rollout_does_not_serve_or_preempt_noncanonical_lease(
                 name=f"ordinary-{purpose}",
                 sha256="fa" * 32,
                 status=AgentStatus.EVALUATING,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now,
             )
         )
@@ -2423,7 +2527,7 @@ async def test_legacy_scored_top_five_recovers_seed_and_converges_idempotently(
             )
             rising_attempt.status = "passed"
             rising_attempt.finished_at = now + timedelta(seconds=4)
-            legacy.screening_policy_version = 9
+            legacy.screening_policy_version = SCREENING_FLOOR_POLICY_VERSION
             legacy.screened_image_sha256 = "1" * 64
             legacy.screened_image_size_bytes = 1024
             legacy.screened_image_id = "sha256:" + "2" * 64
@@ -2750,6 +2854,23 @@ async def test_only_one_open_rollout_across_collecting_and_blocked_states(
         await session.rollback()
 
 
+async def _enable_dueling_for_the_latest_contract(session: AsyncSession) -> None:
+    """The newest shipped contract is a dueling version (16+), whose rollout
+    start needs the dueling lane on (``_dueling_start_blocker``)."""
+    from ditto.api_models.generator import GeneratorCompetitionSettings
+    from ditto.db.queries.generator import insert_generator_settings_revision
+
+    settings = GeneratorCompetitionSettings(mode="enforce", dueling_enabled=True)
+    await insert_generator_settings_revision(
+        session,
+        parent_revision=0,
+        settings=settings.model_dump(mode="json"),
+        checksum="f" * 64,
+        reason="open the dueling lane for the newest contract",
+        actor="backroom:test",
+    )
+
+
 async def test_capable_validator_cannot_automatically_seed_rollout_work(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -2777,6 +2898,7 @@ async def test_capable_validator_cannot_automatically_seed_rollout_work(
         await grandfather_active_era(
             session, version=DEFAULT_BENCH_VERSION, now=now - timedelta(days=30)
         )
+        await _enable_dueling_for_the_latest_contract(session)
         for position in range(1, 6):
             agent_id = uuid4()
             session.add(
@@ -2786,7 +2908,7 @@ async def test_capable_validator_cannot_automatically_seed_rollout_work(
                     name=f"auto-{position}",
                     sha256=f"{position:x}" * 64,
                     status=AgentStatus.SCORED,
-                    screening_policy_version=9,
+                    screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                     screened_image_sha256=f"{position:x}" * 64,
                     screened_image_size_bytes=1024,
                     screened_image_id="sha256:" + f"{position:x}" * 64,
@@ -3167,22 +3289,13 @@ def _heartbeat(
         capabilities["scorer_benchmarks"].pop("v14_scored_runtime_env", None)
     if 15 not in versions:
         capabilities["scorer_benchmarks"].pop("v15_scored_runtime_env", None)
-    if 16 in versions:
-        # A v16 (dueling) scorer carries its version-bound packet and forwards
-        # its slice versions; Platform leases 16+ only with both.
-        revision = capabilities["scorer_benchmarks"]["source_revision"]
-        keys = ["DITTOBENCH_DB", "DITTOBENCH_DECISIONS_URL", "DITTOBENCH_MODEL"]
-        material = f"scored-runtime-env-v1\n16\n{revision}\n" + "\n".join(keys)
-        capabilities["scorer_benchmarks"]["v16_scored_runtime_env"] = {
-            "bench_version": 16,
-            "scope": "scorer-injected-env-only",
-            "source_revision": revision,
-            "injected_keys": keys,
-            "sha256": hashlib.sha256(material.encode()).hexdigest(),
-        }
-        capabilities["scorer_benchmarks"]["dueling_slice_bench_versions"] = [
-            v for v in versions if v >= 16
-        ]
+    if 16 not in versions:
+        capabilities["scorer_benchmarks"].pop("v16_scored_runtime_env", None)
+    dueling = [v for v in versions if v >= 16]
+    if dueling:
+        capabilities["scorer_benchmarks"]["dueling_slice_bench_versions"] = dueling
+    else:
+        capabilities["scorer_benchmarks"].pop("dueling_slice_bench_versions", None)
     if 7 not in versions:
         capabilities["scorer_benchmarks"].pop("v7_calibration", None)
         capabilities["ticket_inference"] = False
@@ -3643,7 +3756,7 @@ async def _seed_members(
                 name=f"agent-{position}",
                 sha256=f"{position:x}" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256=f"{position:x}" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + f"{position:x}" * 64,
@@ -3924,7 +4037,7 @@ async def test_admin_start_route_is_parameterised_by_version(
 
         # An unshipped version fails closed rather than opening a bad rollout.
         with pytest.raises(HTTPException) as exc_info:
-            await get_rollout(None, session, "16")
+            await get_rollout(None, session, "18")
         assert exc_info.value.status_code == 409
         with pytest.raises(HTTPException) as not_found:
             await get_rollout(None, session, "banana")
@@ -3996,7 +4109,7 @@ async def _seed_non_member_ranked_agent(
             name=f"outsider-{index}",
             sha256=digest,
             status=AgentStatus.SCORED,
-            screening_policy_version=9,
+            screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
             screened_image_sha256=digest,
             screened_image_size_bytes=1024,
             screened_image_id="sha256:" + digest,
@@ -4043,7 +4156,7 @@ async def _append_scoreless_rollout_tail(
             name=f"tail-{suffix}",
             sha256="e" * 64,
             status=AgentStatus.SCORED,
-            screening_policy_version=9,
+            screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
             screened_image_sha256="e" * 64,
             screened_image_size_bytes=1024,
             screened_image_id="sha256:" + "e" * 64,
@@ -4437,7 +4550,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
                 name="agent-tail",
                 sha256="f" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="f" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "f" * 64,
@@ -4463,7 +4576,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
                 name="agent-unfinished",
                 sha256="e" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="e" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "e" * 64,
@@ -4630,7 +4743,7 @@ async def test_activation_recovers_legacy_cohort_with_linked_priority_family(
                 name="agent-6",
                 sha256="6" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 created_at=now + timedelta(seconds=6),
             )
         )
@@ -5028,7 +5141,7 @@ async def _seed_eligible_v2_era(session, now: datetime, *, count: int) -> None:
                 name=f"cohort-{position}",
                 sha256=f"{position:064x}",
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256=f"{position:064x}",
                 screened_image_size_bytes=1024,
                 screened_image_id=f"sha256:{position:064x}",
@@ -5093,6 +5206,7 @@ async def _start_for_cohort_size(
         session.begin(),
     ):
         await _seed_eligible_v2_era(session, now, count=12)
+        await _enable_dueling_for_the_latest_contract(session)
         if configured is not None:
             await insert_queue_policy_settings_revision(
                 session,
@@ -5243,7 +5357,7 @@ async def test_stranded_admission_is_leased_by_the_activated_topup_lane(
                 name="agent-stranded",
                 sha256="f" * 64,
                 status=AgentStatus.SCORED,
-                screening_policy_version=9,
+                screening_policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 screened_image_sha256="f" * 64,
                 screened_image_size_bytes=1024,
                 screened_image_id="sha256:" + "f" * 64,

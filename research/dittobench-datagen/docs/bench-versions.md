@@ -27,7 +27,8 @@ applied to an existing version. It ships as a new one.
 | 13 (pre-activation) | `2027-05-01` | Deterministic typed worlds and compositional enterprise records; model-authored private wording deferred to V14. A published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Same seed and generator revision reproduce the dataset. Activation follows exact-candidate qualification and canary evidence. |
 | 14 | `2027-06-01` | Action-scoped declarative over-call scoring, rendered-reply grading, supersession chains, point-in-time, relative-sequence, process-step and role families. Activated 2026-10-28. |
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
-| 16 (staged) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. Generatable and vector-pinned, not yet in the supported set. |
+| 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
+| 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1357,7 +1358,7 @@ epoch `2027-07-01T00:00:00Z`. Every v2–v14 generation and grading vector
 remains unchanged. Supporting v15 does not change Platform's active version;
 see [the rollout plan](../../../docs/benchmark-v15-rollout.md).
 
-## Bench v16 dueling contract, datagen half (staged)
+## Bench v16 dueling contract, datagen half
 
 V16 is the dueling contract ([dueling-bench.md](dueling-bench.md)): a
 canonical run is a 175-case datagen half generated here plus five generator
@@ -1367,16 +1368,16 @@ composite. This module ships only the datagen half. It inherits v15 exactly
 `answerPoolFixBenchVersion` moves to 17) except for the profile and the
 connector changes below. Every lever is gated on `bench_version >= 16`.
 
-**Staged, not supported.** `protocol.BenchVersionV16` lives in
-`protocol/staged.go`: it has its own epoch (`2027-08-01`) and rotate seed and
-generates through `GenerateDataset`, but it is outside
-`supportedBenchVersions`, so `SupportedBenchVersion`,
-`NewestSupportedBenchVersion`, the scorer's advertised window and efficiency
-readiness all stay at 15, matching the shared ceiling in
-`ditto/tests/contract/bench_versions.json`. Offline tools (`cmd/generate`,
-`cmd/mixaudit`, `cmd/parserprobe`, `cmd/toolprobe`) accept staged versions.
-The cross-layer PR that raises the shared ceiling moves the constant and epoch
-into `epoch.go` and the supported list; generation bytes do not change.
+**Supported, not active.** `protocol.BenchVersionV16` was first staged in
+`protocol/staged.go` (generatable with its own epoch `2027-08-01` and rotate
+seed, outside `supportedBenchVersions`) so the datagen half could land and be
+vector-pinned before the rest of the stack. The cross-layer flip moved the
+constant and epoch into `epoch.go` and the supported list, raised the shared
+ceiling in `ditto/tests/contract/bench_versions.json` to 16, and made the
+scorer advertise 16 with `dueling-slice-v1`; generation bytes did not change.
+Pack policy 16 (`challenge.GradingBenchVersionV16`) shipped with it and grades
+like 15. Supporting v16 does not change Platform's active version; see
+[the rollout plan](../../../docs/benchmark-v16-rollout.md).
 
 **Dueling profile** (`gen/v16_envelope.go`, `gen.ProfileForVersion(_, 16)`).
 

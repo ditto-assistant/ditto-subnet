@@ -1237,7 +1237,31 @@ async def test_explicit_private_oracle_fails_closed_when_skipped() -> None:
     assert any(item.code == "challenge-inconclusive" for item in decision.evidence)
 
 
-async def test_single_call_oracle_is_inconclusive_without_causal_evidence() -> None:
+async def test_single_call_oracle_is_inconclusive_without_causal_evidence_v13() -> None:
+    """Under policy v13 a zero-call agent routes to operator-escalation inconclusive."""
+
+    async def observe(*_):  # type: ignore[no-untyped-def]
+        return ChallengeObservation(
+            "v8-behavioral-oracle",
+            True,
+            "cd" * 32,
+            elapsed_ms=900,
+            gateway_calls=0,
+            oracle_answer_correct=False,
+        )
+
+    decision = await _oracle_engine().evaluate(_context(observe, policy_version=13))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert not decision.submits_verdict
+    assert any(
+        item.code == "behavioral-oracle-insufficient-round-trips"
+        for item in decision.evidence
+    )
+
+
+async def test_zero_call_oracle_clears_under_cost_first_policy() -> None:
+    """Under policy v14+ a zero-call agent clears — LLM use is not required."""
+
     async def observe(*_):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
             "v8-behavioral-oracle",
@@ -1249,11 +1273,9 @@ async def test_single_call_oracle_is_inconclusive_without_causal_evidence() -> N
         )
 
     decision = await _oracle_engine().evaluate(_context(observe))
-    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
-    assert not decision.submits_verdict
+    assert decision.outcome == ScreeningOutcome.PASS
     assert any(
-        item.code == "behavioral-oracle-insufficient-round-trips"
-        for item in decision.evidence
+        item.code == "behavioral-oracle-no-call-clear" for item in decision.evidence
     )
 
 
@@ -1360,7 +1382,7 @@ def test_manifest_rotation_changes_digest_not_policy_or_signature_contract(
         )
     )
     engine = load_policy_engine(str(manifest))
-    assert engine.manifest.policy_version == SCREENING_POLICY_VERSION == 13
+    assert engine.manifest.policy_version == SCREENING_POLICY_VERSION
     assert engine.manifest.digest != CORE_ONLY_MANIFEST.digest
 
 
@@ -1411,7 +1433,7 @@ def test_live_v6_snapshot_is_an_acceptance_fixture() -> None:
     fixture = Path(__file__).parent / "fixtures" / "production-v6-snapshot.json"
     snapshot = json.loads(fixture.read_text())
     assert snapshot["screening_policy_version"] == 6
-    assert SCREENING_POLICY_VERSION == 13
+    assert SCREENING_POLICY_VERSION == 14
     assert snapshot["queue"]["waiting_validator"] == 9
     assert snapshot["queue"]["evaluating"] == 1
     assert len(snapshot["rust_contract_rejections"]) == 6

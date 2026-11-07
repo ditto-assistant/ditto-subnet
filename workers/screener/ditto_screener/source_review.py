@@ -2207,6 +2207,10 @@ retry and review states remain processing evidence, not those final outcomes.
 _POLICY_TAILS[13] = (
     _POLICY_TAILS[12] + _POLICY_V13_ADDENDUM + "\n" + DECISION_PATH_GUIDANCE
 )
+# V14 source-review invariants are identical to v13.  The only v14 change is
+# in the runtime oracle (zero-call agents now clear rather than escalate);
+# that is a runtime signal, not a source-code invariant.
+_POLICY_TAILS[14] = _POLICY_TAILS[13]
 
 
 # Historical L1 throughput guidance. V13 uses path-complete guidance instead

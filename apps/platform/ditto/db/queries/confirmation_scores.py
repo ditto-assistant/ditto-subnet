@@ -685,3 +685,91 @@ async def confirmation_depths(
         .group_by(ConfirmationScore.agent_id)
     )
     return {agent_id: int(depth) for agent_id, depth in rows}
+
+
+async def duel_history_by_agent(
+    session: AsyncSession,
+    *,
+    agent_ids: Iterable[UUID],
+    bench_version: int,
+    seasons: int,
+) -> dict[UUID, list[ConfirmationHistoryRow]]:
+    """Protocol-35 title-duel evidence: rows of the newest ``seasons`` seasons.
+
+    Unlike :func:`confirmation_history_by_agent` (the current and provisional
+    season only, which score levels read), the title duel accumulates paired
+    differences across dueling seasons, so this serves every not-voided row
+    with signed ``details.dueling`` from the ``seasons`` most recent seasons of
+    ``bench_version`` that hold any not-voided confirmation row. Seasons that
+    ran no duel (idle skip) are passed over, so evidence carries forward.
+    Empty below the dueling floor. Same row shape and deterministic
+    ``(seed, validator_hotkey)`` order.
+    """
+    from ditto.db.models import DuelingSeason
+    from ditto_screening_protocol.dueling import is_dueling_bench_version
+
+    ids = list(dict.fromkeys(agent_ids))
+    if not ids or seasons <= 0 or not is_dueling_bench_version(bench_version):
+        return {}
+    season_ids = list(
+        await session.scalars(
+            select(DuelingSeason.id)
+            .where(
+                DuelingSeason.bench_version == bench_version,
+                DuelingSeason.status.in_(("open", "closed", "revealed")),
+                # Seasons holding evidence, not merely opened ones: an idle
+                # season that skipped its duel must not push a real one out.
+                exists(
+                    select(ConfirmationScore.agent_id).where(
+                        ConfirmationScore.dueling_season_id == DuelingSeason.id,
+                        ConfirmationScore.bench_version == bench_version,
+                        not_voided(),
+                    )
+                ),
+            )
+            .order_by(DuelingSeason.season_index.desc())
+            .limit(int(seasons))
+        )
+    )
+    if not season_ids:
+        return {}
+    rows = await session.execute(
+        select(
+            ConfirmationScore.agent_id,
+            ConfirmationScore.seed,
+            ConfirmationScore.composite,
+            ConfirmationScore.validator_hotkey,
+            ConfirmationScore.bench_version,
+            ConfirmationScore.signature,
+            ConfirmationScore.dueling,
+        )
+        .where(
+            ConfirmationScore.agent_id.in_(ids),
+            ConfirmationScore.bench_version == bench_version,
+            ConfirmationScore.dueling_season_id.in_(season_ids),
+            not_voided(),
+        )
+        .order_by(ConfirmationScore.seed, ConfirmationScore.validator_hotkey)
+    )
+    history: dict[UUID, list[ConfirmationHistoryRow]] = {}
+    for (
+        agent_id,
+        seed,
+        composite,
+        validator_hotkey,
+        version,
+        signature,
+        dueling,
+    ) in rows:
+        history.setdefault(agent_id, []).append(
+            ConfirmationHistoryRow(
+                agent_id=agent_id,
+                seed=seed,
+                composite=composite,
+                validator_hotkey=validator_hotkey,
+                bench_version=version,
+                signature=signature,
+                dueling=dueling,
+            )
+        )
+    return history

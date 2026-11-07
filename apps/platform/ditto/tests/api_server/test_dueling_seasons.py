@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.dueling_seasons as dueling_mod
+import ditto.api_server.generator_source_releases as releases_mod
 from ditto.api_models.generator import generator_settings_confirmation
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -39,8 +40,13 @@ from ditto.api_server.dueling_seasons import (
 )
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import ChainPosition
-from ditto.api_server.generator_source_releases import sync_generator_source_releases
+from ditto.api_server.generator_source_releases import (
+    prune_released_slice_bytes,
+    sync_generator_source_releases,
+)
 from ditto.db.models import (
+    BenchmarkRollout,
+    BenchmarkRolloutMember,
     DuelingSeason,
     DuelingSeasonBattery,
     DuelingSlicePreparation,
@@ -61,6 +67,7 @@ from ditto.db.queries.score_retests import (
     DUELING_ROTATION_RETEST_BASIS,
     activate_next_score_retest,
     queue_dueling_rotation_retests,
+    score_retest_queue_positions,
 )
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
@@ -584,6 +591,242 @@ class TestDuelingSeasons:
             )
             assert prep is not None and prep.status == "failed"
             assert "tree digest mismatch" in (prep.error or "")
+
+
+async def _pass_batteries(client: httpx.AsyncClient) -> int:
+    """Pass every queued battery candidate; returns how many batteries ran."""
+    ran = 0
+    while True:
+        work = (await client.get(_WORK, headers=_SCORER, params=_POLL)).json()["work"]
+        if work is None or work["kind"] != "battery":
+            return ran
+        posted = await client.post(
+            "/api/v1/generator-scorer/dueling-battery",
+            headers=_SCORER,
+            json={
+                "lease_id": work["lease_id"],
+                "season_id": work["season_id"],
+                "scorer_version": "challenge-scorer/9",
+                "candidates": [
+                    {
+                        "submission_id": c["submission_id"],
+                        "ok": True,
+                        "grading_bench_version": 15,
+                    }
+                    for c in work["candidates"]
+                ],
+            },
+        )
+        assert posted.status_code == 200, posted.text
+        ran += 1
+
+
+class TestIdleSeasonExtension:
+    async def test_an_idle_boundary_extends_the_season_and_a_change_rotates(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server.season_duel import (
+            season_duel_entrant_excluded,
+            season_duel_excluded_entrants,
+        )
+
+        _install(app, session_maker)
+        await _open_lane(
+            client,
+            epochs_per_round=_EPOCHS,
+            dueling_enabled=True,
+            privacy_window_rounds=6,
+        )
+        _active(monkeypatch, 16)
+        incumbent = await _seed_agent(session_maker, 1)
+        runner_up = await _seed_agent(session_maker, 3)
+        queued: list[UUID] = []
+        board = [incumbent, runner_up]
+
+        async def _cohort(*_args: Any) -> tuple[list[UUID], str]:
+            return list(board), "continual_cohort"
+
+        async def _queue(*_args: Any, season_id: UUID, **_kwargs: Any) -> dict:
+            queued.append(season_id)
+            return {"queued": 1}
+
+        monkeypatch.setattr(dueling_mod, "_rotation_cohort", _cohort)
+        import ditto.db.queries.score_retests as retests_mod
+
+        monkeypatch.setattr(retests_mod, "queue_dueling_rotation_retests", _queue)
+        await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:a", salt="a"
+        )
+        await _scored_round(session_maker, [(miner, 0.4, 0.1)])
+
+        # Season 11 commits, batteries, and opens with one rotation.
+        await _tick(session_maker, _ROUND * _EPOCHS + 1)
+        assert await _pass_batteries(client) == 1
+        await _tick(session_maker, 11 * _EPOCHS)
+        [opened] = [s for s in await _seasons(session_maker) if s.season_index == 11]
+        assert opened.status == "open" and opened.closes_at_round == 12
+        assert queued == [opened.id]
+        async with session_maker() as session:
+            window = await dueling_season_window(session, 16)
+        assert window is not None and window.current == opened.id
+
+        # Season 12's batteries pass on the same generators. Nothing else
+        # changed, so its boundary extends season 11: no rotation, no new
+        # season, the score window does not move and nothing reveals.
+        assert await _pass_batteries(client) == 1
+        notes = await _tick(session_maker, 12 * _EPOCHS)
+        assert any("season 11 v16: extended to round 13 (idle" in n for n in notes)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "open" and seasons[11].closes_at_round == 13
+        assert seasons[12].status == "void" and seasons[12].opened_at is None
+        assert seasons[13].status == "committed"
+        extensions = (seasons[11].detail or {})["idle_extensions"]
+        assert extensions["count"] == 1
+        assert extensions["recent"][0]["at_round"] == 12
+        assert queued == [opened.id]
+        async with session_maker() as session:
+            window = await dueling_season_window(session, 16)
+            assert window is not None
+            assert (window.current, window.previous) == (opened.id, None)
+            # Present since before the extension: still owes the duel seeds.
+            assert not await season_duel_entrant_excluded(
+                session, bench_version=16, member_agent_id=incumbent
+            )
+        # Idle again at round 13 even though the board reordered the same
+        # cohort: membership, not rank order, decides. Extended once more.
+        # Had season 11 closed at round 12 it would reveal at epoch 48 + 6;
+        # extended, it stays private.
+        board.reverse()
+        assert await _pass_batteries(client) == 1
+        notes = await _tick(session_maker, 13 * _EPOCHS)
+        assert any("season 11 v16: extended to round 14" in n for n in notes)
+        await _tick(session_maker, 12 * _EPOCHS + 6)
+        [still] = [s for s in await _seasons(session_maker) if s.season_index == 11]
+        assert still.status == "open" and still.revealed_at is None
+        assert still.reveal_at_epoch is None
+        assert (still.detail or {})["idle_extensions"]["count"] == 2
+        assert queued == [opened.id]
+        view = (
+            await client.get(
+                f"/api/v1/admin/generator-competition/dueling/seasons/{opened.id}",
+                headers=_ADMIN,
+            )
+        ).json()
+        assert view["detail"]["idle_extensions"]["count"] == 2
+
+        # A new eligible upload makes the next boundary rotate: season 11
+        # closes, its privacy window counts from the extended close, and
+        # season 14 opens with a rotation.
+        entrant = await _seed_agent(session_maker, 2)
+        async with session_maker() as session:
+            # Uploaded after the first extension: no duel seeds this season,
+            # and no catch-up priority either (the batch form the catch-up
+            # planner reads).
+            assert await season_duel_entrant_excluded(
+                session, bench_version=16, member_agent_id=entrant
+            )
+            assert await season_duel_excluded_entrants(
+                session, bench_version=16, agent_ids=[incumbent, entrant]
+            ) == frozenset({entrant})
+        assert await _pass_batteries(client) == 1
+        await _tick(session_maker, 14 * _EPOCHS)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "closed"
+        assert seasons[11].reveal_at_epoch == 14 * _EPOCHS + 6
+        assert seasons[14].status == "open"
+        assert queued == [opened.id, seasons[14].id]
+        async with session_maker() as session:
+            window = await dueling_season_window(session, 16)
+            assert window is not None
+            assert (window.current, window.previous) == (seasons[14].id, opened.id)
+            # The new season was never extended: nobody is excluded.
+            assert not await season_duel_entrant_excluded(
+                session, bench_version=16, member_agent_id=entrant
+            )
+        await _tick(session_maker, 14 * _EPOCHS + 5)
+        assert (
+            next(
+                s for s in await _seasons(session_maker) if s.season_index == 11
+            ).status
+            == "closed"
+        )
+        await _tick(session_maker, 14 * _EPOCHS + 6)
+        assert (
+            next(
+                s for s in await _seasons(session_maker) if s.season_index == 11
+            ).status
+            == "revealed"
+        )
+
+    async def test_skip_off_rotates_an_idle_boundary(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(
+            client,
+            epochs_per_round=_EPOCHS,
+            dueling_enabled=True,
+            skip_unchanged_rounds=False,
+        )
+        _active(monkeypatch, 16)
+
+        async def _cohort(*_args: Any) -> tuple[list[UUID], str]:
+            return [], "continual_cohort"
+
+        monkeypatch.setattr(dueling_mod, "_rotation_cohort", _cohort)
+        await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:a", salt="a"
+        )
+        await _scored_round(session_maker, [(miner, 0.4, 0.1)])
+        await _tick(session_maker, _ROUND * _EPOCHS + 1)
+        await _pass_batteries(client)
+        await _tick(session_maker, 11 * _EPOCHS)
+        await _pass_batteries(client)
+        await _tick(session_maker, 12 * _EPOCHS)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "closed" and seasons[12].status == "open"
+
+
+def test_first_extension_time_is_always_timezone_aware() -> None:
+    """Compared with Agent.created_at (TIMESTAMPTZ): never naive."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from ditto.api_server.dueling_seasons import season_first_extended_at
+
+    def season(first: object) -> Any:
+        return SimpleNamespace(detail={"idle_extensions": {"first_extended_at": first}})
+
+    aware = season_first_extended_at(season("2026-11-04T06:00:00+00:00"))
+    naive = season_first_extended_at(season("2026-11-04T06:00:00"))
+    assert aware == naive == datetime(2026, 11, 4, 6, tzinfo=UTC)
+    assert aware is not None and aware.tzinfo is not None
+    assert naive is not None and naive.tzinfo is not None
+    assert season_first_extended_at(None) is None
+    assert season_first_extended_at(cast(Any, SimpleNamespace(detail=None))) is None
+    assert season_first_extended_at(season(None)) is None
 
 
 class TestDuelingAdmin:
@@ -1295,6 +1538,211 @@ class TestDuelingSeasonRotation:
         assert [a.season_key for a in legacy] == [NIL_SEASON_KEY]
 
 
+class TestRolloutBlockingRotationOrder:
+    """An open rollout's activation-blocking quorum work leases ahead of
+    season rotation re-scores of members whose quorum already counts.
+
+    Position 1 holds a complete in-window quorum (V1, V2, V3). Position 2
+    blocks activation: its V1 score is from an expired season and it has
+    never been scored by V3, so V3 is a distinct validator it still needs.
+    """
+
+    async def _seed(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        *,
+        rollout_status: str | None,
+        v16_validators: tuple[str, ...] = ("5BlkV1", "5BlkV2", "5BlkV3"),
+    ) -> tuple[UUID, UUID]:
+        from ditto.tests.db.queries.test_benchmark_rollout import _heartbeat
+
+        default = await _generator(
+            maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        expired, provisional, current = await _season_sequence(maker, default)
+        complete = await _seed_agent(maker, 1)
+        blocking = await _seed_agent(maker, 2)
+        now = datetime.now(UTC)
+        rows = {
+            complete: {"5BlkV1": provisional, "5BlkV2": provisional},
+            blocking: {"5BlkV1": expired, "5BlkV2": provisional},
+        }
+        rows[complete]["5BlkV3"] = provisional
+        async with maker() as session, session.begin():
+            for validator in ("5BlkV1", "5BlkV2", "5BlkV3"):
+                versions = list(range(7, 17 if validator in v16_validators else 16))
+                session.add(
+                    _heartbeat(validator, now, versions=versions, protocol_version=18)
+                )
+            for agent_id, scores in rows.items():
+                for validator, season_id in scores.items():
+                    session.add(
+                        _v16_score(agent_id, validator, season_id, composite=0.6)
+                    )
+                    session.add(
+                        ValidatorTicket(
+                            agent_id=agent_id,
+                            validator_hotkey=validator,
+                            bench_version=16,
+                            slot_id="slot-0",
+                            status=TicketStatus.SCORED,
+                            purpose=TicketPurpose.CANONICAL_QUORUM,
+                            purpose_revision=1,
+                            issued_at=now,
+                            deadline=now + timedelta(minutes=90),
+                            attempt_count=1,
+                            manual_retry_grants=0,
+                            infra_retry_grants=0,
+                            dueling_season_id=season_id,
+                            slice_sha256="ab" * 32,
+                        )
+                    )
+            if rollout_status is not None:
+                rollout_id = uuid4()
+                session.add(
+                    BenchmarkRollout(
+                        rollout_id=rollout_id,
+                        from_version=15,
+                        desired_version=16,
+                        status=rollout_status,
+                        cohort_size=5,
+                        rescore_cohort_target=5,
+                        priority_cohort_target=5,
+                        created_at=now - timedelta(hours=1),
+                        activated_at=(now if rollout_status == "activated" else None),
+                    )
+                )
+                await session.flush()
+                for position, agent_id in enumerate((complete, blocking), start=1):
+                    session.add(
+                        BenchmarkRolloutMember(
+                            rollout_id=rollout_id,
+                            agent_id=agent_id,
+                            position=position,
+                            frozen_miner_hotkey=f"5PanelMiner{position}",
+                            frozen_composite=0.6,
+                        )
+                    )
+        # The shadow season's rotation: the frozen cohort in position order.
+        async with maker() as session, session.begin():
+            await queue_dueling_rotation_retests(
+                session,
+                season_id=current,
+                bench_version=16,
+                cohort=[complete, blocking],
+                now=now,
+            )
+        return complete, blocking
+
+    @staticmethod
+    async def _promote(
+        maker: async_sessionmaker[AsyncSession], validator: str, slot_id: str
+    ) -> ValidatorTicket | None:
+        async with maker() as session, session.begin():
+            return await activate_next_score_retest(
+                session,
+                validator_hotkey=validator,
+                now=datetime.now(UTC),
+                supports_version=lambda version: version == 16,
+                slot_id=slot_id,
+                required_basis=DUELING_ROTATION_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+            )
+
+    async def test_a_rescore_never_takes_the_blocking_members_third_validator(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        complete, blocking = await self._seed(
+            session_maker, rollout_status="collecting"
+        )
+        # V3 is the only validator left that can add the blocking member's
+        # missing score; the complete member's re-score waits, still queued.
+        assert await self._promote(session_maker, "5BlkV3", "slot-0") is None
+        async with session_maker() as session:
+            assert await score_retest_queue_positions(
+                session, validator_hotkey="5BlkV3"
+            ) == {complete: 1}
+
+        # Once the blocking member's quorum lease is out on V3 the re-score
+        # runs on the next free slot.
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=blocking,
+                    validator_hotkey="5BlkV3",
+                    bench_version=16,
+                    slot_id="slot-0",
+                    status=TicketStatus.ISSUED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    purpose_revision=1,
+                    issued_at=now,
+                    deadline=now + timedelta(minutes=90),
+                    attempt_count=1,
+                    manual_retry_grants=0,
+                    infra_retry_grants=0,
+                )
+            )
+        ticket = await self._promote(session_maker, "5BlkV3", "slot-1")
+        assert ticket is not None and ticket.agent_id == complete
+
+    async def test_a_validator_that_cannot_serve_the_rollout_does_not_defer(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        # V3's heartbeat no longer serves v16, so it cannot take the blocking
+        # member's lease; a caller that can still run the re-score (operator
+        # promotion) is not held behind work this validator cannot lease.
+        complete, _blocking = await self._seed(
+            session_maker,
+            rollout_status="collecting",
+            v16_validators=("5BlkV1", "5BlkV2"),
+        )
+        ticket = await self._promote(session_maker, "5BlkV3", "slot-0")
+        assert ticket is not None and ticket.agent_id == complete
+
+    async def test_blocking_quorum_rescores_order_before_complete_members(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        complete, blocking = await self._seed(
+            session_maker, rollout_status="collecting"
+        )
+        # On V1 the blocking member's row expired, so its rotation re-score
+        # restores a quorum score and goes ahead of the champion-rank re-score.
+        async with session_maker() as session:
+            assert await score_retest_queue_positions(
+                session, validator_hotkey="5BlkV1"
+            ) == {blocking: 1, complete: 2}
+        ticket = await self._promote(session_maker, "5BlkV1", "slot-0")
+        assert ticket is not None and ticket.agent_id == blocking
+        # V2 can add nothing for the blocking member (both rows count), so
+        # rotation keeps its rank order there.
+        ticket = await self._promote(session_maker, "5BlkV2", "slot-0")
+        assert ticket is not None and ticket.agent_id == complete
+
+    @pytest.mark.parametrize("rollout_status", [None, "activated"])
+    async def test_no_change_outside_an_open_rollout(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        rollout_status: str | None,
+    ) -> None:
+        complete, blocking = await self._seed(
+            session_maker, rollout_status=rollout_status
+        )
+        async with session_maker() as session:
+            assert await score_retest_queue_positions(
+                session, validator_hotkey="5BlkV1"
+            ) == {complete: 1, blocking: 2}
+        ticket = await self._promote(session_maker, "5BlkV3", "slot-0")
+        assert ticket is not None and ticket.agent_id == complete
+        ticket = await self._promote(session_maker, "5BlkV1", "slot-0")
+        assert ticket is not None and ticket.agent_id == complete
+
+
 class TestDuelingReveal:
     async def test_revealed_season_publishes_pins_slices_and_released_sources(
         self,
@@ -1435,3 +1883,424 @@ class TestDuelingReveal:
             )
         ).json()
         assert board["counts"] == {"released": 1, "waiting_close": 1}
+
+    async def test_slice_bytes_are_pruned_once_every_source_is_public(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:eve", salt="miner"
+        )
+        season_id = await _open_season(session_maker, default, season_index=60)
+        now = datetime.now(UTC)
+        raw = b'{"slice":1}'
+        prep_id = uuid4()
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, season_id)
+            assert season is not None
+            season.columns = [
+                {
+                    **(season.columns or [])[0],
+                    "submission_id": str(miner.submission_id),
+                    "public_default": False,
+                },
+                *(season.columns or [])[1:],
+            ]
+            season.status = "revealed"
+            season.closed_at = now - timedelta(days=30)
+            season.revealed_at = now - timedelta(days=10)
+            session.add(
+                DuelingSlicePreparation(
+                    id=prep_id,
+                    season_id=season_id,
+                    run_seed=9,
+                    status="ready",
+                    attempts=1,
+                    slice_sha256=hashlib.sha256(raw).hexdigest(),
+                    slice_bytes=raw,
+                    ready_at=now,
+                )
+            )
+
+        async def _prune(at: datetime) -> list[str]:
+            async with session_maker() as session, session.begin():
+                return await prune_released_slice_bytes(session, now=at)
+
+        # The pinned miner source is not released: the bytes stay.
+        assert await _prune(now) == []
+        async with session_maker() as session, session.begin():
+            await sync_generator_source_releases(session, now=now)
+        # Released just now: still inside the score dispute window.
+        assert await _prune(now) == []
+
+        # A withholding policy keeps every byte: nobody else can regenerate.
+        async def _withheld(*_args: Any, **_kwargs: Any) -> ArtifactReleasePolicy:
+            return ArtifactReleasePolicy(
+                disclosure=SourceDisclosure.NEVER, embargo_hours=48
+            )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(releases_mod, "artifact_release_policy", _withheld)
+            assert await _prune(now + timedelta(days=8)) == []
+        notes = await _prune(now + timedelta(days=8))
+        assert notes == ["season 60 v16: pruned 1 slice(s); digests kept"]
+        async with session_maker() as session:
+            row = await session.get(DuelingSlicePreparation, prep_id)
+            assert row is not None
+            assert row.slice_bytes is None and row.bytes_pruned_at is not None
+            assert row.slice_sha256 == hashlib.sha256(raw).hexdigest()
+
+
+class TestSeasonSeededRotation:
+    """Phase B2 (docs/title-duels.md): rotation re-scores on the duel seeds."""
+
+    async def _board(
+        self, maker: async_sessionmaker[AsyncSession], *, pin: bool = True
+    ) -> tuple[UUID, UUID, list[str]]:
+        """An open season, its anchor (pinned or waiting) and one member whose
+        three quorum scores are queued for rotation. Returns
+        ``(season_id, agent_id, validators)``."""
+        default = await _generator(
+            maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        previous = await _open_season(maker, default, season_index=60)
+        async with maker() as session, session.begin():
+            season = await session.get(DuelingSeason, previous)
+            assert season is not None
+            season.status = "closed"
+        current = await _open_season(maker, default, season_index=61)
+        agent_id = await _seed_agent(maker, 1)
+        validators = ["5B2V1", "5B2V2", "5B2V3"]
+        now = datetime.now(UTC)
+        async with maker() as session, session.begin():
+            season = await session.get(DuelingSeason, current)
+            assert season is not None
+            season.opened_at = now
+            for validator in validators:
+                session.add(_v16_score(agent_id, validator, previous, composite=0.6))
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=validator,
+                        bench_version=16,
+                        slot_id="slot-0",
+                        status=TicketStatus.SCORED,
+                        purpose=TicketPurpose.CANONICAL_QUORUM,
+                        purpose_revision=1,
+                        issued_at=now,
+                        deadline=now + timedelta(minutes=90),
+                        attempt_count=1,
+                        manual_retry_grants=0,
+                        infra_retry_grants=0,
+                        seed=3,
+                        dueling_season_id=previous,
+                        slice_sha256="ab" * 32,
+                    )
+                )
+            await queue_dueling_rotation_retests(
+                session, season_id=current, bench_version=16, cohort=[agent_id], now=now
+            )
+            await resolve_reign_seed_anchor(
+                session,
+                champion_agent_id=agent_id,
+                bench_version=16,
+                ready_block=100,
+                now=now,
+                finalized_hashes=(
+                    {(agent_id, 16, current): "0x" + "5e" * 32} if pin else None
+                ),
+            )
+        return current, agent_id, validators
+
+    @staticmethod
+    def _settings(**overrides: Any) -> Any:
+        from ditto.api_models.continual_retest_settings import (
+            ContinualRetestSettings,
+        )
+
+        fields: dict[str, Any] = {
+            "retest_mode": "season_duel",
+            "season_duel_rotation_seeds": True,
+            **overrides,
+        }
+        return ContinualRetestSettings(**fields)
+
+    async def test_each_quorum_validator_takes_its_own_duel_seed(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from ditto.api_server.crn import champion_anchored_seeds
+        from ditto.api_server.rotation_duel_seeds import (
+            assign_rotation_seed,
+            season_seed_binding,
+        )
+
+        _season, agent_id, validators = await self._board(session_maker)
+        duel = champion_anchored_seeds(
+            agent_id, version=16, max_seeds=3, block_hash="0x" + "5e" * 32
+        )
+        assigned: list[int] = []
+        for validator in validators:
+            async with session_maker() as session, session.begin():
+                ticket = await activate_next_score_retest(
+                    session,
+                    validator_hotkey=validator,
+                    now=datetime.now(UTC),
+                    supports_version=lambda version: version == 16,
+                    required_basis=DUELING_ROTATION_RETEST_BASIS,
+                    allow_parallel_ordinary=True,
+                    allow_parallel_contract_retests=True,
+                )
+                assert ticket is not None
+                seed = await assign_rotation_seed(
+                    session, ticket, settings=self._settings(), protocol_version=35
+                )
+                assert seed is not None and ticket.seed == seed
+                assert ticket.dataset_sha256 is None
+                binding = await season_seed_binding(session, ticket)
+                assert binding is not None
+                assert binding.anchor_agent_id == agent_id
+                assert duel[binding.seed_index] == seed
+                assigned.append(seed)
+        # The three rotation re-scores cover the season's three duel seeds.
+        assert sorted(assigned) == sorted(duel)
+
+    async def test_older_validators_and_the_setting_off_keep_canonical_seeds(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from ditto.api_server.rotation_duel_seeds import (
+            assign_rotation_seed,
+            season_seed_binding,
+        )
+
+        await self._board(session_maker)
+        async with session_maker() as session, session.begin():
+            ticket = await activate_next_score_retest(
+                session,
+                validator_hotkey="5B2V1",
+                now=datetime.now(UTC),
+                supports_version=lambda version: version == 16,
+                required_basis=DUELING_ROTATION_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+            )
+            assert ticket is not None
+            # A protocol-34 validator cannot verify a season seed.
+            assert (
+                await assign_rotation_seed(
+                    session, ticket, settings=self._settings(), protocol_version=34
+                )
+                is None
+            )
+            assert ticket.seed == 3
+            # Season-scoped, then the setting goes off: back to canonical.
+            assert await assign_rotation_seed(
+                session, ticket, settings=self._settings(), protocol_version=35
+            )
+            assert await season_seed_binding(session, ticket) is not None
+            off = self._settings(season_duel_rotation_seeds=False)
+            assert (
+                await assign_rotation_seed(
+                    session, ticket, settings=off, protocol_version=35
+                )
+                is None
+            )
+            assert ticket.seed is None and ticket.seed_block_hash is None
+            assert await season_seed_binding(session, ticket) is None
+
+    async def test_an_accepted_season_score_is_mirrored_and_ends_the_pending_rotation(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from ditto.api_server.rotation_duel_seeds import (
+            agents_with_pending_rotation,
+            assign_rotation_seed,
+            mirror_season_seeded_score,
+        )
+        from ditto.db.models import ConfirmationScore, ValidatorHeartbeat
+        from ditto.db.queries.audit import (
+            EVENT_SCORE_RETEST_RELEASED,
+            append_audit_entry,
+        )
+
+        season, agent_id, validators = await self._board(session_maker)
+
+        async def pending_now() -> frozenset[UUID]:
+            async with session_maker() as session:
+                return await agents_with_pending_rotation(
+                    session, agent_ids=[agent_id], season_id=season, bench_version=16
+                )
+
+        # Queued for validators that cannot run a season seed: those re-scores
+        # cover no duel seed, so they must not hold the member's duel work.
+        assert await pending_now() == frozenset()
+        async with session_maker() as session, session.begin():
+            for validator in validators:
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=validator,
+                        software_version="0.451.0",
+                        protocol_version=35,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=datetime.now(UTC),
+                        seen_at=datetime.now(UTC),
+                        signature="cd" * 64,
+                    )
+                )
+        assert await pending_now() == frozenset({agent_id})
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            ticket = await activate_next_score_retest(
+                session,
+                validator_hotkey="5B2V1",
+                now=now,
+                supports_version=lambda version: version == 16,
+                required_basis=DUELING_ROTATION_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+            )
+            assert ticket is not None
+            seed = await assign_rotation_seed(
+                session, ticket, settings=self._settings(), protocol_version=35
+            )
+            assert seed is not None
+            report = {"season_id": str(season), "columns": []}
+            assert await mirror_season_seeded_score(
+                session,
+                ticket,
+                validator_hotkey="5B2V1",
+                seed=seed,
+                composite=0.71,
+                run_id="b2-run",
+                signature=None,
+                dueling_season_id=season,
+                dueling=report,
+                created_at=now,
+                v9_efficiency_token_total=1234,
+                v9_efficiency_cost_eligible=True,
+            )
+        async with session_maker() as session:
+            mirrored = (
+                await session.scalars(
+                    select(ConfirmationScore).where(
+                        ConfirmationScore.agent_id == agent_id
+                    )
+                )
+            ).all()
+        assert [
+            (
+                row.seed,
+                row.composite,
+                row.dueling_season_id,
+                row.v9_efficiency_token_total,
+                row.v9_efficiency_cost_eligible,
+            )
+            for row in mirrored
+        ] == [(seed, 0.71, season, 1234, True)]
+        # A canonical ticket mirrors nothing.
+        async with session_maker() as session, session.begin():
+            canonical = await session.get(ValidatorTicket, (agent_id, 16, "5B2V2"))
+            assert canonical is not None
+            assert not await mirror_season_seeded_score(
+                session,
+                canonical,
+                validator_hotkey="5B2V2",
+                seed=3,
+                composite=0.5,
+                run_id="canonical",
+                signature=None,
+                dueling_season_id=season,
+                dueling=report,
+                created_at=now,
+            )
+        # Once every rotation entry closes the member is no longer pending.
+        async with session_maker() as session, session.begin():
+            for validator in validators:
+                await append_audit_entry(
+                    session,
+                    agent_id=agent_id,
+                    validator_hotkey=validator,
+                    event=EVENT_SCORE_RETEST_RELEASED,
+                    payload={"request_id": str(uuid4()), "reason": "test close"},
+                    recorded_at=now,
+                )
+        assert await pending_now() == frozenset()
+
+    async def test_rotation_waits_briefly_for_an_unpinned_anchor(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from ditto.api_server.rotation_duel_seeds import (
+            ROTATION_ANCHOR_GRACE,
+            defer_for_season_anchor,
+        )
+
+        season_id, _agent, _validators = await self._board(session_maker, pin=False)
+        async with session_maker() as session:
+            season = await session.get(DuelingSeason, season_id)
+            assert season is not None and season.opened_at is not None
+            opened = season.opened_at
+
+            async def defer(**kwargs: Any) -> bool:
+                return await defer_for_season_anchor(
+                    session, bench_version=16, season=season, **kwargs
+                )
+
+            assert await defer(
+                settings=self._settings(), protocol_version=35, now=opened
+            )
+            # Older validators never wait; they keep canonical seeds anyway.
+            assert not await defer(
+                settings=self._settings(), protocol_version=34, now=opened
+            )
+            assert not await defer(
+                settings=self._settings(season_duel_rotation_seeds=False),
+                protocol_version=35,
+                now=opened,
+            )
+            # Past the grace the season's quorum is not held any longer.
+            assert not await defer(
+                settings=self._settings(),
+                protocol_version=35,
+                now=opened + ROTATION_ANCHOR_GRACE,
+            )
+
+    async def test_an_unpinned_anchor_leaves_queued_rotations_uncovering(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Queued rotations cover duel seeds only once the anchor is pinned."""
+        from ditto.api_server.rotation_duel_seeds import agents_with_pending_rotation
+        from ditto.db.models import ValidatorHeartbeat
+
+        season, agent_id, validators = await self._board(session_maker, pin=False)
+        async with session_maker() as session, session.begin():
+            for validator in validators:
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=validator,
+                        software_version="0.451.0",
+                        protocol_version=35,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=datetime.now(UTC),
+                        seen_at=datetime.now(UTC),
+                        signature="cd" * 64,
+                    )
+                )
+        async with session_maker() as session:
+            assert (
+                await agents_with_pending_rotation(
+                    session, agent_ids=[agent_id], season_id=season, bench_version=16
+                )
+                == frozenset()
+            )

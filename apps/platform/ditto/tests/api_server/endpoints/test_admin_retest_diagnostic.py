@@ -347,6 +347,11 @@ async def test_exact_agent_diagnostic_preserves_seeds_and_owner_reason(
     assert claim.claimable_seed_available
     assert claim.live_lease_count == 0
     assert claim.decision == "claimable"
+    # Season duels are off by default and say so rather than guessing.
+    assert claim.retest_mode == "continual"
+    assert claim.season_duel_seed_count is None
+    assert claim.season_duel_anchor_champion_id is None
+    assert claim.season_duel_held_seed_count is None
     # Outstanding work is a count. No seed value reaches the claim projection.
     assert all(
         str(seed) not in claim.model_dump_json() for seed in (_SEEDS[0], _SEEDS[1])
@@ -413,6 +418,11 @@ async def test_stronger_successor_is_outside_the_cohort_it_outscores(
     assert incumbent_result.official_sample_count == 18
     assert incumbent_result.representative_selection == "self"
     assert incumbent_result.representative_margin == 0
+    # The lane's seed budget is visible: floor 8, work cap 10, and the live
+    # variance target (no recorded wave variance here, so the floor).
+    assert incumbent_result.confirmation_seed_floor == 8
+    assert incumbent_result.confirmation_seed_cap == 10
+    assert incumbent_result.confirmation_seed_target == 8
 
 
 def _decide(

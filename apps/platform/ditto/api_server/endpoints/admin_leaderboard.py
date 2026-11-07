@@ -27,7 +27,11 @@ from ditto.api_models.continual_retest_diagnostic import (
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.public import PublicLeaderboardResponse
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
-from ditto.api_server.confirmation_seed_anchor import read_reign_seed_anchor
+from ditto.api_server.confirmation_seed_anchor import (
+    read_reign_seed_anchor,
+    reign_seed_planning,
+)
+from ditto.api_server.crn import elastic_confirmation_seed_ceiling
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.public import (
     _LEADERBOARD_DETAIL_FIELDS,
@@ -49,6 +53,8 @@ from ditto.api_server.endpoints.validator import (
     _void_rerun_debts,
 )
 from ditto.api_server.koth import (
+    TOP5_MAX_CONFIRMATION_SEEDS,
+    TOP5_MIN_CONFIRMATION_SEEDS,
     KothEntry,
     effective_composite,
     project_koth,
@@ -61,6 +67,11 @@ from ditto.api_server.retest_wave_window import (
     seeds_opened_in_window,
 )
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
+from ditto.api_server.season_duel import (
+    season_duel_anchor_champion,
+    season_duel_seed_count,
+    season_duel_seeds,
+)
 from ditto.chain import ChainClient
 from ditto.db.models import Agent, ConfirmationScore, ValidatorTicket
 from ditto.db.queries.benchmark_rollout import active_bench_version
@@ -350,38 +361,70 @@ async def _claimability(
         now=now,
         ticket_ttl=await resolve_scoring_ticket_ttl(request.app.state),
     )
+    duel_seed_count = season_duel_seed_count(settings, bench_version=version)
+    anchor_champion_id = (
+        await season_duel_anchor_champion(
+            session, bench_version=version, champion_agent_id=champion_agent_id
+        )
+        if duel_seed_count is not None and champion_agent_id is not None
+        else champion_agent_id
+    )
     catchup_ids = (
         await _unserved_catchup_members(
             session,
-            champion_agent_id=champion_agent_id,
+            champion_agent_id=anchor_champion_id,
             wave_member_ids=wave_member_ids,
             emission_member_ids=tuple(member.agent_id for member in emission),
             challenger_member_ids=tuple(challenger_ids),
             canonical_version=version,
             now=now,
+            duel_seed_count=duel_seed_count,
         )
-        if champion_agent_id is not None
+        if anchor_champion_id is not None
         else frozenset()
     )
     wave_window = await current_wave_window(
         session,
-        cadence_tempos=settings.wave_cadence_tempos,
+        # Season duels replace wave pacing: the season is the window, so no
+        # pacing window is reported (or applied) under them.
+        cadence_tempos=0
+        if duel_seed_count is not None
+        else settings.wave_cadence_tempos,
         seeds_per_window=settings.wave_seeds_per_window,
         netuid=getattr(getattr(config, "chain", None), "netuid", None),
     )
     plan = (
         await _top5_confirmation_seed_plan(
             session,
-            champion_agent_id=champion_agent_id,
+            champion_agent_id=anchor_champion_id,
             member_agent_id=agent_id,
             wave_member_ids=wave_member_ids,
             cohort_member_ids=member_ids,
             canonical_version=version,
             wave_window=wave_window,
+            duel_seed_count=duel_seed_count,
         )
-        if champion_agent_id is not None
+        if anchor_champion_id is not None
         else ()
     )
+    duel_held: int | None = None
+    if duel_seed_count is not None and anchor_champion_id is not None:
+        duel_hash, duel_fresh = await reign_seed_planning(
+            session, champion_agent_id=anchor_champion_id, bench_version=version
+        )
+        duel_seeds = season_duel_seeds(
+            anchor_champion_id,
+            version=version,
+            count=duel_seed_count,
+            block_hash=duel_hash,
+            allow_fresh_seeds=duel_fresh,
+        )
+        held = (
+            await confirmation_composites_by_seed(
+                session, agent_ids=(agent_id,), bench_version=version, planning=True
+            )
+        ).get(agent_id, {})
+        duel_held = sum(1 for seed in duel_seeds if seed in held)
     opened_in_window: int | None = None
     if wave_window.paced and champion_agent_id is not None:
         assert wave_window.window_start is not None  # paced implies a start
@@ -500,6 +543,12 @@ async def _claimability(
         void_rerun_claimable=void_rerun_claimable,
         provider_outage_active=provider_outage,
         provider_gate_closed=gate_closed,
+        retest_mode=settings.retest_mode,
+        season_duel_seed_count=duel_seed_count,
+        season_duel_anchor_champion_id=(
+            anchor_champion_id if duel_seed_count is not None else None
+        ),
+        season_duel_held_seed_count=duel_held,
         wave_cadence_tempos=wave_window.cadence_tempos,
         wave_seeds_per_window=(
             wave_window.seeds_per_window if wave_window.cadence_tempos else None
@@ -625,6 +674,34 @@ async def continual_retest_diagnostic(
     ]
     raw = await confirmation_composites_by_seed(
         session, agent_ids=[agent_id], bench_version=version
+    )
+    # The same variance-sized target the lane plans growth toward: planning
+    # history over the raw wave plus the folded emission set, deduplicated, as
+    # ``_top5_confirmation_seed_plan`` receives ``wave_member_ids``.
+    planning_ids = tuple(
+        dict.fromkeys(
+            (
+                *(member.agent_id for member in wave),
+                *(member.agent_id for member in emission),
+            )
+        )
+    )
+    planning_history = (
+        await confirmation_composites_by_seed(
+            session,
+            agent_ids=list(planning_ids),
+            bench_version=version,
+            planning=True,
+        )
+        if planning_ids
+        else {}
+    )
+    seed_target = (
+        elastic_confirmation_seed_ceiling(
+            {agent_id: planning_history.get(agent_id, {}) for agent_id in planning_ids}
+        )
+        if planning_ids
+        else None
     )
     ticket_rows = await session.execute(
         select(
@@ -773,6 +850,9 @@ async def continual_retest_diagnostic(
             else 0
         ),
         raw_confirmation_depth=len(raw.get(agent_id, {})),
+        confirmation_seed_floor=TOP5_MIN_CONFIRMATION_SEEDS,
+        confirmation_seed_cap=TOP5_MAX_CONFIRMATION_SEEDS,
+        confirmation_seed_target=seed_target,
         composite_stderr=entry.composite_stderr if entry is not None else None,
         aggregate_mode=settings.aggregate_mode,
         wave_membership=settings.wave_membership,

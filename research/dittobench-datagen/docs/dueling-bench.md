@@ -278,6 +278,8 @@ v16 adds a third work kind beside `generate` and `score` in `round.go`:
   1-3 MiB) are kept in Platform-owned private storage until every contributing
   generator's source is released and the score-dispute window has passed. After
   that, only digests are kept, because anyone can regenerate the bytes.
+  Platform prunes on the season tick, 7 days after the later of the reveal
+  and the last pinned source release.
 
 ### Transport
 
@@ -382,8 +384,31 @@ Agents scored against different generator sets are not comparable, so the
   (`db/queries/confirmation_seed_anchors.py`). Previous-season scores stay
   visible as provisional for one season, then expire from the authoritative
   ledger. The crown carries over until a same-season challenger beats it.
+  While a benchmark rollout is open, a rotation re-score that cannot add a
+  quorum score waits on any validator that could instead lease a missing score
+  for an activation-blocking priority member. Re-scores that restore an expired
+  quorum row for such a member go first (`db/queries/score_retests.py`).
 - A ban or copy ruling against a pinned generator mid-season triggers an early
   rotation, not an in-place swap.
+- **Idle seasons extend instead of rotating** (`skip_unchanged_rounds`, on by
+  default). At a due boundary the open season is extended by
+  `rounds_per_season` when all of these hold:
+  1. the waiting season would pin the same generators (submission, source
+     digest, grading policy and default flag);
+  2. the rotation cohort is the one the season re-scored when it opened;
+  3. no agent created since the season opened is scored or live;
+  4. no rotation was requested.
+
+  No season opens, so the two-season window does not advance: no score
+  expires and nobody is re-tested. The skip is all or nothing for the cohort,
+  and the fold reads exactly the rows it read before. The waiting season is
+  voided and recommitted at the new boundary, because its commitment binds its
+  index. `detail.idle_extensions` records every extension
+  (`get_dueling_season`). The privacy window counts from the extended close,
+  so the secret is never revealed early. An agent uploaded after the first
+  extension owes no season duel seeds in that season, because those seeds
+  have been public since the anchor. It joins at the next rotation, which its
+  upload triggers.
 
 ### Rotation cost at 4.8 h, and the minimum safe season
 
@@ -446,6 +471,19 @@ cohort above 10 needs at least 4 epochs. At 25 it needs a longer season or
   calibration, because 35-case columns are noisier per seed.
 - **LongMem confirmation.** An instrument, not a per-epoch contract. The
   existing profile confirms v16 unchanged (bench-version-bump skill, section 1b).
+  **Decided 2026-11-03: the v9 confirmation-bundle lane carries no dueling
+  slice.** A bundle is one LongMem and ablation execution per artifact,
+  profile and generation, with no run seed and no datagen half, so there is
+  nothing to slice. A v16 bundle needs no dueling fields; the lane admits 16
+  once the shared evidence set (`V9EvidenceBenchVersion`) includes it.
+- **Priced inference cost.** The one input that reads the whole run. The
+  scorer prices the run's chat, embedding and decision-lane tokens at locked
+  public rates and multiplies the composite by a factor floored at 0.6. The
+  factor rides inside `details.dueling.datagen_gate`, so it scales both halves
+  and leaves the column statistics raw. A generator's column means never move
+  with the agent's spend, and no generator case feeds a zeroing gate. See
+  `services/dittobench-api/PROTOCOL.md`, "Bench v16 priced inference cost
+  factor".
 - **Efficiency, outlier escalation, deferred source review, ATH anomaly.**
   Efficiency and gates use the datagen half only in v16.0. Outlier and anomaly
   thresholds are recalibrated on the v16 shadow distribution before

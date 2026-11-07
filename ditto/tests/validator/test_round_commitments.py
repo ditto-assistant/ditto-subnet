@@ -13,12 +13,15 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
 import pytest
 
 from ditto.api_models.generator_round_validator import (
+    DuelingSeasonCommitmentJobResponse,
     GeneratorRoundCommitmentJobResponse,
     round_commitment_payload,
+    season_commitment_payload,
 )
 from ditto.chain import ChainError
 from ditto.tests.validator.test_worker import _BURN_HOTKEY, _config
@@ -50,6 +53,9 @@ def _platform(job: Any = None) -> MagicMock:
         return_value=_job() if job is None else job
     )
     platform.report_generator_round_commitment = AsyncMock()
+    # No dueling season waits for publication unless a test says so.
+    platform.request_dueling_season_commitment_job = AsyncMock(return_value=None)
+    platform.report_dueling_season_commitment = AsyncMock()
     return platform
 
 
@@ -235,3 +241,123 @@ async def test_a_hung_publication_never_holds_the_weight_loop() -> None:
     stop.set()
     # Stopping cancels the hung publication instead of waiting on it.
     await asyncio.wait_for(task, timeout=1.0)
+
+
+# --- dueling season commitments (dds1) ---------------------------------------
+
+_SEASON_ID = UUID(int=16)
+
+
+def _season_job(season_index: int = 9) -> DuelingSeasonCommitmentJobResponse:
+    return DuelingSeasonCommitmentJobResponse(
+        season_id=_SEASON_ID,
+        season_index=season_index,
+        bench_version=16,
+        shadow=True,
+        commitment=_COMMITMENT,
+        payload=season_commitment_payload(season_index, _COMMITMENT),
+        claim_expires_at=datetime.now(UTC) + timedelta(minutes=10),
+    )
+
+
+def _season_platform(job: Any = None) -> MagicMock:
+    platform = _platform()
+    platform.request_generator_round_commitment_job = AsyncMock(return_value=None)
+    platform.request_dueling_season_commitment_job = AsyncMock(
+        return_value=_season_job() if job is None else job
+    )
+    return platform
+
+
+async def test_publishes_a_season_commitment_when_no_round_needs_it() -> None:
+    platform = _season_platform()
+    payload = f"dds1:9:{_COMMITMENT}".encode()
+    chain = _chain([None, (5150, payload)])
+    assert await _publisher(platform, chain).run_once() == "confirmed"
+    chain.set_commitment.assert_awaited_once_with(payload)
+    platform.report_generator_round_commitment.assert_not_awaited()
+    args = platform.report_dueling_season_commitment.await_args
+    assert args.args[0].season_id == _SEASON_ID
+    assert args.kwargs["outcome"] == "confirmed"
+    assert args.kwargs["block_number"] == 5150
+
+
+async def test_a_round_job_goes_first_and_one_value_is_published_per_poll() -> None:
+    platform = _season_platform()
+    platform.request_generator_round_commitment_job = AsyncMock(return_value=_job())
+    chain = _chain()
+    assert await _publisher(platform, chain).run_once() == "confirmed"
+    chain.set_commitment.assert_awaited_once_with(_payload())
+    platform.request_dueling_season_commitment_job.assert_not_awaited()
+
+
+async def test_refuses_any_payload_but_the_season_commitment() -> None:
+    forged = DuelingSeasonCommitmentJobResponse.model_construct(
+        season_id=_SEASON_ID,
+        season_index=9,
+        bench_version=16,
+        shadow=False,
+        commitment=_COMMITMENT,
+        payload=f"dgr1:9:{_COMMITMENT}",
+        claim_expires_at=datetime.now(UTC),
+    )
+    platform = _season_platform(forged)
+    chain = _chain()
+    assert await _publisher(platform, chain).run_once() == "failed"
+    chain.set_commitment.assert_not_awaited()
+    args = platform.report_dueling_season_commitment.await_args
+    assert args.kwargs["outcome"] == "failed"
+    assert "refused payload" in args.kwargs["detail"]
+
+
+async def test_season_failures_are_reported_and_never_raised() -> None:
+    platform = _season_platform()
+    chain = _chain()
+    chain.set_commitment = AsyncMock(side_effect=ChainError("rate limited"))
+    assert await _publisher(platform, chain).run_once() == "failed"
+    assert (
+        "rate limited"
+        in (platform.report_dueling_season_commitment.await_args.kwargs["detail"])
+    )
+
+    platform = _season_platform()
+    platform.request_dueling_season_commitment_job = AsyncMock(
+        side_effect=PlatformError("platform down")
+    )
+    assert await _publisher(platform, _chain()).run_once() == "error"
+
+
+def test_season_job_model_rejects_a_payload_that_is_not_the_commitment() -> None:
+    with pytest.raises(ValueError, match="not this season's commitment"):
+        DuelingSeasonCommitmentJobResponse(
+            season_id=_SEASON_ID,
+            season_index=9,
+            bench_version=16,
+            shadow=False,
+            commitment=_COMMITMENT,
+            payload=f"dds1:10:{_COMMITMENT}",
+            claim_expires_at=datetime.now(UTC),
+        )
+
+
+def test_supports_seasons_needs_the_round_lane_and_its_own_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _publisher(_platform(), _chain()).supports_seasons()
+    assert not _publisher(_platform(), None).supports_seasons()
+    legacy = _platform()
+    del legacy.request_dueling_season_commitment_job
+    assert not _publisher(legacy, _chain()).supports_seasons()
+    assert _publisher(legacy, _chain()).supported()
+    monkeypatch.setenv("VALIDATOR_SEASON_COMMITMENTS", "off")
+    assert not _publisher(_platform(), _chain()).supports_seasons()
+    assert _publisher(_platform(), _chain()).supported()
+
+
+async def test_a_season_off_host_never_asks_for_season_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VALIDATOR_SEASON_COMMITMENTS", "0")
+    platform = _season_platform()
+    assert await _publisher(platform, _chain()).run_once() == "idle"
+    platform.request_dueling_season_commitment_job.assert_not_awaited()

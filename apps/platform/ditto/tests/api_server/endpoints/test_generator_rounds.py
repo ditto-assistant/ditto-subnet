@@ -595,7 +595,10 @@ class TestRoundLifecycle:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         chain = _install(app, session_maker)
-        await _apply_settings(client, validator_rounds_enabled=True)
+        # Round 4 reruns round 3's matrix on purpose (fingerprint claims).
+        await _apply_settings(
+            client, validator_rounds_enabled=True, skip_unchanged_rounds=False
+        )
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
         _patch_panel(monkeypatch, agents)
         _patch_lane(monkeypatch)
@@ -832,7 +835,7 @@ class TestRoundLifecycle:
         assert held["grading_bench_version"] == 13
         # ``enforce`` marks the same qualified miner generators eligible and
         # changes nothing else about the ledger.
-        await _apply_settings(client, mode="enforce")
+        await _apply_settings(client, mode="enforce", skip_unchanged_rounds=False)
         enforced = (await client.get("/api/v1/generator/board")).json()
         assert enforced["mode"] == "enforce"
         assert [(e["miner_hotkey"], e["score"]) for e in enforced["entries"]] == [
@@ -868,7 +871,7 @@ class TestRoundLifecycle:
             assert row is not None
             row.scored_at = scored_at
             await session.commit()
-        await _apply_settings(client, mode="shadow")
+        await _apply_settings(client, mode="shadow", skip_unchanged_rounds=False)
         public = (await client.get("/api/v1/generator/rounds/3")).json()
         assert len(public["standings"]) == 3
         assert public["columns"][2]["miner_hotkey"] is None
@@ -1693,7 +1696,10 @@ class TestFaultOnlyRounds:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _install(app, session_maker)
-        await _apply_settings(client, validator_rounds_enabled=True)
+        # Round 2 reruns round 1's matrix on purpose (an infra-faulted rerun).
+        await _apply_settings(
+            client, validator_rounds_enabled=True, skip_unchanged_rounds=False
+        )
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
         _patch_panel(monkeypatch, agents)
         _patch_lane(monkeypatch)
@@ -1761,6 +1767,211 @@ class TestFaultOnlyRounds:
                     )
                 )
             ).all()
+
+
+async def _run_and_score_round(client: httpx.AsyncClient) -> None:
+    """Generate the open round, run every panel agent, score the matrix."""
+    case_ids = await _generate_round(client)
+    while (job := await _lease_job(client)) is not None:
+        await _report(client, job, case_ids)
+    work = (
+        await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+    ).json()["work"]
+    assert work["kind"] == "score"
+    resp = await client.post(
+        "/api/v1/generator-scorer/round-score",
+        headers=_SCORER,
+        json=_matrix_score(work),
+    )
+    assert resp.status_code == 200, resp.text
+
+
+class TestSkipUnchangedRounds:
+    async def test_an_unchanged_round_is_skipped_and_keeps_paying(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        app.state.generator_round_loop = None
+        await _apply_settings(client, validator_rounds_enabled=True)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(4)]
+        _patch_panel(monkeypatch, agents[:3])
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+        )
+        await _qualify_all(session_maker)
+
+        # Round 1 is the first measurement: it runs and scores.
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        await _run_and_score_round(client)
+        scored = (await client.get("/api/v1/generator/board")).json()["entries"]
+        assert [(e["miner_hotkey"], e["round_index"]) for e in scored] == [
+            ("5GenMinerA", 1)
+        ]
+
+        # Round 2 would rerun the same generators on the same panel: skipped
+        # at opening, with nothing to generate and nothing to lease.
+        actions = await _advance(session_maker, 8)
+        assert (
+            "round 2: skipped (skipped_unchanged: same columns and panel as "
+            "round 1)" in actions
+        )
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "skipped"
+            assert row.seed is not None and row.dataset_sha256 is None
+            assert row.void_reason is None and row.closed_at is not None
+            source = await get_round(session, 1)
+            assert source is not None and len(row.panel or []) == 3
+            assert row.columns == source.columns
+            assert (row.generation or {})["skipped_unchanged"][
+                "carried_from_round"
+            ] == 1
+            assert not (
+                await session.scalars(
+                    select(GeneratorRoundAttempt).where(
+                        GeneratorRoundAttempt.round_index == 2
+                    )
+                )
+            ).all()
+        assert (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"] is None
+        assert await _lease_job(client) is None
+
+        detail = (await client.get(f"{_ROUNDS_URL}/2", headers=_ADMIN)).json()
+        assert detail["summary"]["status"] == "skipped"
+        assert detail["summary"]["skip_reason"] == "skipped_unchanged"
+        assert detail["summary"]["carried_from_round"] == 1
+        loop = (await client.get(f"{_ROUNDS_URL}/loop", headers=_ADMIN)).json()
+        assert loop["skip_unchanged_rounds"] is True
+        assert loop["skipped_rounds"] == 1
+        assert loop["last_skipped_round"]["round_index"] == 2
+        assert loop["last_skipped_round"]["reason"] == "skipped_unchanged"
+        assert loop["last_skipped_round"]["carried_from_round"] == 1
+
+        # The ledger keeps paying round 1, byte for byte.
+        carried = (await client.get("/api/v1/generator/board")).json()["entries"]
+        assert [(e["miner_hotkey"], e["round_index"], e["score"]) for e in carried] == [
+            (e["miner_hotkey"], e["round_index"], e["score"]) for e in scored
+        ]
+        # Round 1 scored before the window still pays: the skip re-dated it.
+        async with session_maker() as session:
+            source = await get_round(session, 1)
+            assert source is not None and source.scored_at is not None
+            source.scored_at -= timedelta(days=8)
+            await session.commit()
+        stale_source = (await client.get("/api/v1/generator/board")).json()
+        assert [e["round_index"] for e in stale_source["entries"]] == [1]
+        # ...and a skip older than the window does not.
+        async with session_maker() as session:
+            skipped = await get_round(session, 2)
+            assert skipped is not None and skipped.closed_at is not None
+            skipped.closed_at -= timedelta(days=8)
+            await session.commit()
+        assert (await client.get("/api/v1/generator/board")).json()["entries"] == []
+        async with session_maker() as session:
+            source = await get_round(session, 1)
+            skipped = await get_round(session, 2)
+            assert source is not None and skipped is not None
+            assert source.scored_at is not None and skipped.closed_at is not None
+            source.scored_at += timedelta(days=8)
+            skipped.closed_at += timedelta(days=8)
+            await session.commit()
+
+        # Round 3 is still unchanged: skipped again, carrying round 1.
+        assert any("round 3: skipped" in a for a in await _advance(session_maker, 12))
+
+        # A panel change (a new upload seated) re-measures: round 4 runs.
+        _patch_panel(monkeypatch, [agents[3], *agents[1:3]])
+        await _advance(session_maker, 16)
+        async with session_maker() as session:
+            row = await get_round(session, 4)
+            assert row is not None and row.status == "generating"
+        await _run_and_score_round(client)
+
+        # A new generator column re-measures too.
+        await _advance(session_maker, 20)
+        async with session_maker() as session:
+            row = await get_round(session, 5)
+            assert row is not None and row.status == "skipped"
+        await _seed_generator(
+            session_maker, hotkey="5GenMinerB", owner="coldkey:gb", salt="b"
+        )
+        await _advance(session_maker, 24)
+        async with session_maker() as session:
+            row = await get_round(session, 6)
+            assert row is not None and row.status == "generating"
+
+        # Skipped rounds reveal on the round schedule like any other.
+        await _advance(session_maker, 32)
+        public = (await client.get("/api/v1/generator/rounds/2")).json()
+        assert public["summary"]["status"] == "skipped"
+        assert public["summary"]["secret_hex"] is not None
+
+    async def test_skip_off_reruns_an_unchanged_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(
+            client, validator_rounds_enabled=True, skip_unchanged_rounds=False
+        )
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        await _run_and_score_round(client)
+        await _advance(session_maker, 8)
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "generating"
+        loop = (await client.get(f"{_ROUNDS_URL}/loop", headers=_ADMIN)).json()
+        assert loop["skip_unchanged_rounds"] is False
+        assert loop["last_skipped_round"] is None
+
+    async def test_an_incomplete_measurement_is_never_carried(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A scored round that dropped a panel agent measured less than the
+        next round would: the next round runs."""
+        _install(app, session_maker)
+        await _apply_settings(client, validator_rounds_enabled=True, panel_size=4)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(4)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        async with session_maker() as session, session.begin():
+            row = await get_round(session, 1, for_update=True)
+            assert row is not None and row.panel is not None
+            row.panel = [
+                {**slot, "dropped_reason": "test drop"} if i == 3 else slot
+                for i, slot in enumerate(row.panel)
+            ]
+        await _run_and_score_round(client)
+        await _advance(session_maker, 8)
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "generating"
 
 
 class TestOperatorControls:
@@ -2319,3 +2530,46 @@ def test_round_seconds_left_tracks_the_closing_boundary() -> None:
     # Past the closing epoch no time is left; before the round, no estimate.
     assert round_seconds_left(row, _head(epoch=32, last_epoch_block=0, block=1)) == 0
     assert round_seconds_left(row, _head(epoch=27, last_epoch_block=0, block=1)) is None
+
+
+def test_round_signature_ignores_labels_order_and_counted() -> None:
+    """The same generator sources on the same panel measure the same thing,
+    whichever column is counted; a different source or champion does not."""
+    from ditto.api_server.generator_rounds import _round_signature
+
+    a = {"submission_id": "a", "source_sha256": "1", "public_default": False}
+    b = {"submission_id": "b", "source_sha256": "2", "public_default": False}
+    panel = [
+        {"agent_id": "x", "champion": True},
+        {"agent_id": "y", "champion": False},
+    ]
+    params: dict[str, float | int] = {"min_panel": 3, "target_cases": 70}
+
+    def signature(columns: list[dict], seats: list[dict] = panel) -> str:
+        return _round_signature(
+            columns=columns,
+            panel=seats,
+            bench_version=15,
+            cases_per_column=70,
+            score_params=params,
+        )
+
+    base = signature(
+        [
+            {**a, "column_id": "c0", "counted": True},
+            {**b, "column_id": "c1", "counted": False},
+        ]
+    )
+    assert base == signature(
+        [
+            {**b, "column_id": "c0", "counted": True},
+            {**a, "column_id": "c1", "counted": False},
+        ]
+    )
+    assert base != signature(
+        [{**a, "column_id": "c0"}, {**b, "column_id": "c1", "source_sha256": "3"}]
+    )
+    assert base != signature(
+        [{**a, "column_id": "c0"}, {**b, "column_id": "c1"}],
+        [{"agent_id": "x", "champion": False}, {"agent_id": "y", "champion": True}],
+    )

@@ -7,7 +7,8 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.db.errors import IntegrityError as DbIntegrityError
@@ -24,8 +25,11 @@ from ditto.db.queries.score_ranking import official_composites
 from ditto.db.queries.scores import (
     MIN_ELIGIBLE_CASES,
     count_ranked_quorum_agents,
+    get_submission_scores,
     list_eligible_ledger,
     list_provisional_ledger,
+    list_public_agent_scores,
+    list_public_submissions,
     list_scores_for_agent,
     quorum_composites,
     quorum_ledger_proof_rows,
@@ -1762,3 +1766,126 @@ class TestQuorumScoreRows:
             details_keys=("token_usage", "v9_base"),
         )
         assert rows[agent.agent_id][0].details is None
+
+
+_DIGEST = "d" * 64
+_FULL_CASE = {
+    "category": "tool",
+    "kind": "single",
+    "score": 1.0,
+    "correct": True,
+    "latency_ms": 12,
+    "notes": ["wrong_tool"],
+    "expected": "ANSWER-KEY",
+    "case_id": "seed-derived-id",
+    "called": ["lookup"],
+    "catalog": [{"name": f"tool_{i}", "schema": "x" * 64} for i in range(40)],
+}
+
+
+async def _seed_public_agent(session: AsyncSession) -> Agent:
+    agent = await _seed_agent(session)
+    async with session.begin():
+        await session.execute(
+            update(Agent)
+            .where(Agent.agent_id == agent.agent_id)
+            .values(status=AgentStatus.SCORED)
+        )
+    return agent
+
+
+class TestPublicScoreProjection:
+    """Public score reads never ship the per-case answer key or tool catalog."""
+
+    async def test_cases_keep_only_published_fields_in_order(
+        self,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent = await _seed_public_agent(session)
+        details = {
+            "bench_version": _BENCH_VERSION,
+            "transcript_sha256": _DIGEST,
+            "token_usage": {"prompt_tokens": 10, "completion_tokens": 2},
+            "raw_composite": 0.71,
+            "per_case": [
+                _FULL_CASE,
+                "not-a-case",
+                {"category": "memory", "score": 0.5},
+            ],
+        }
+        await _upsert(session, agent.agent_id, details=details)
+
+        async with session_maker() as fresh:
+            row = await get_submission_scores(fresh, agent_id=agent.agent_id)
+            assert row is not None
+            (score,) = row.scores
+            projected = score.details
+            # A loaded value, not a pending change: nothing is written back.
+            assert not fresh.dirty
+            await fresh.commit()
+
+        assert projected == {
+            **{k: v for k, v in details.items() if k != "per_case"},
+            "per_case": [
+                {
+                    "category": "tool",
+                    "kind": "single",
+                    "score": 1.0,
+                    "correct": True,
+                    "latency_ms": 12,
+                    "notes": ["wrong_tool"],
+                },
+                "not-a-case",
+                {
+                    "category": "memory",
+                    "kind": None,
+                    "score": 0.5,
+                    "correct": None,
+                    "latency_ms": None,
+                    "notes": None,
+                },
+            ],
+        }
+        async with session_maker() as fresh:
+            stored = await fresh.scalar(
+                select(Score.details).where(Score.agent_id == agent.agent_id)
+            )
+        assert stored == details
+
+    @pytest.mark.parametrize(
+        "details",
+        [None, {"per_case": "not-a-list"}, {"bench_version": _BENCH_VERSION}],
+        ids=["null", "per-case-not-array", "no-per-case"],
+    )
+    async def test_details_without_a_case_array_pass_through(
+        self,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+        details: dict | None,
+    ) -> None:
+        agent = await _seed_public_agent(session)
+        await _upsert(session, agent.agent_id, details=details)
+
+        async with session_maker() as fresh:
+            (score,) = await list_public_agent_scores(fresh, agent_id=agent.agent_id)
+        assert score.details == details
+
+    async def test_submission_index_never_loads_score_details(
+        self,
+        session: AsyncSession,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent = await _seed_public_agent(session)
+        await _upsert(
+            session,
+            agent.agent_id,
+            details={"bench_version": _BENCH_VERSION, "per_case": [_FULL_CASE]},
+        )
+
+        async with session_maker() as fresh:
+            (row,) = await list_public_submissions(fresh, limit=10)
+            (score,) = row.scores
+            assert score.composite == pytest.approx(0.7)
+            with pytest.raises(InvalidRequestError):
+                _ = score.details

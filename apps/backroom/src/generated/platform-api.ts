@@ -1889,6 +1889,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/dueling/seasons/{season_id}/republish-commitment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Republish Dueling Season Commitment
+         * @description Ask elected validators to publish a committed season's commitment again.
+         *
+         *     Platform never publishes a commitment itself. This reopens publication
+         *     (``pending``) and forgets every failed or unconfirmed validator claim, so
+         *     the season's publisher order elects again from the validators fresh now.
+         *     Confirmed publications are kept and still count toward the target.
+         */
+        post: operations["admin_republish_dueling_season_commitment_api_v1_admin_generator_competition_dueling_seasons__season_id__republish_commitment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/dueling/slices": {
         parameters: {
             query?: never;
@@ -2046,7 +2071,8 @@ export interface paths {
         };
         /**
          * Admin Round Loop
-         * @description The round driver's last tick: actions taken, errors, chain position.
+         * @description The round driver's last tick: actions taken, errors, chain position,
+         *     and whether (and when last) it skipped an unchanged round.
          */
         get: operations["admin_round_loop_api_v1_admin_generator_competition_rounds_loop_get"];
         put?: never;
@@ -9140,6 +9166,11 @@ export interface paths {
         /**
          * Queue
          * @description List completion-lane contenders, then least-scored pending agents.
+         *
+         *     ``policy_only=true`` answers just ``required_policy_version`` with no items.
+         *     Workers read the policy before every claim, and running the full priority
+         *     query (with its per-agent score aggregates) only to discard the rows was a
+         *     standing load on the API at a two-second poll interval.
          */
         get: operations["queue_api_v1_screener_queue_get"];
         put?: never;
@@ -9638,6 +9669,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/dueling-season-commitment-job": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Dueling Season Commitment Job
+         * @description Claim a committed dueling season's on-chain commitment if elected.
+         */
+        post: operations["request_dueling_season_commitment_job_api_v1_validator_dueling_season_commitment_job_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/dueling-season-commitment-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report Dueling Season Commitment
+         * @description Record a claimed season commitment publication's signed outcome.
+         */
+        post: operations["report_dueling_season_commitment_api_v1_validator_dueling_season_commitment_report_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/generator-round-commitment-job": {
         parameters: {
             query?: never;
@@ -10105,7 +10176,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Case Set Sha256 */
             case_set_sha256: string;
             /** Contract Version */
@@ -11481,6 +11552,18 @@ export interface components {
             /** Configured Max Size */
             configured_max_size: number;
             /**
+             * Confirmation Seed Cap
+             * @default 0
+             */
+            confirmation_seed_cap: number;
+            /**
+             * Confirmation Seed Floor
+             * @default 0
+             */
+            confirmation_seed_floor: number;
+            /** Confirmation Seed Target */
+            confirmation_seed_target?: number | null;
+            /**
              * Eligibility Mode
              * @enum {string}
              */
@@ -12244,6 +12327,21 @@ export interface components {
             triggers: ("top_five" | "composite_anomaly" | "tool_anomaly" | "memory_anomaly")[];
         };
         /**
+         * AdminDuelingCommitmentRepublishRequest
+         * @description Re-elect validators to publish a committed season's commitment.
+         */
+        AdminDuelingCommitmentRepublishRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
          * AdminDuelingRotateRequest
          * @description Close an open dueling season early (an audited mini-rollout).
          */
@@ -12728,7 +12826,7 @@ export interface components {
              * Expected Status
              * @enum {string}
              */
-            expected_status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            expected_status: "committed" | "generating" | "running" | "scoring" | "scored" | "skipped" | "void";
             /** Reason */
             reason: string;
         };
@@ -21326,7 +21424,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -21371,7 +21469,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Checksum */
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
@@ -21782,6 +21880,12 @@ export interface components {
              */
             champion_standing_rank: number;
             /**
+             * Crown Duel Mode
+             * @default disabled
+             * @enum {string}
+             */
+            crown_duel_mode: "disabled" | "fleet_ready";
+            /**
              * Crown Gate Mode
              * @default disabled
              * @enum {string}
@@ -21831,11 +21935,27 @@ export interface components {
              */
             retest_eligibility_z: number;
             /**
+             * Retest Mode
+             * @default continual
+             * @enum {string}
+             */
+            retest_mode: "continual" | "season_duel";
+            /**
              * Rollout Standdown
              * @default capable_validators
              * @enum {string}
              */
             rollout_standdown: "off" | "capable_validators" | "all";
+            /**
+             * Season Duel Rotation Seeds
+             * @default false
+             */
+            season_duel_rotation_seeds: boolean;
+            /**
+             * Season Duel Seeds
+             * @default 3
+             */
+            season_duel_seeds: number;
             /**
              * Statistical Band Mode
              * @default disabled
@@ -21910,6 +22030,11 @@ export interface components {
              * @default 0
              */
             busy_skips: number;
+            /**
+             * Idle Skips
+             * @default 0
+             */
+            idle_skips: number;
             /**
              * In Flight
              * @default false
@@ -22366,6 +22491,11 @@ export interface components {
              * @description Only an entry inside this many places of the fold's official ranking may hold or take the crown.
              */
             champion_standing_rank: number;
+            /**
+             * Duel Window Pairs
+             * @description Protocol-35 title duel. When present, two bench >= 16 rows are compared on the newest this-many pair-masked (season, seed) pairs of duel_history across dueling seasons, and the challenger dethrones only past the frozen sequential boundary (docs/title-duels.md). Absent is the protocol-34 gate.
+             */
+            duel_window_pairs?: number | null;
             /**
              * Min Dethrone Confirmations
              * @description Shared-seed confirmations a challenger must hold against the champion before the paired comparison may move the crown.
@@ -22941,6 +23071,131 @@ export interface components {
              */
             standing: "current" | "provisional" | "expired" | "not_opened";
         };
+        /**
+         * DuelingSeasonCommitmentJobRequest
+         * @description Ask Platform whether this validator should publish a season commitment.
+         */
+        DuelingSeasonCommitmentJobRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * DuelingSeasonCommitmentJobResponse
+         * @description One committed dueling season this validator is elected to publish.
+         *
+         *     ``payload`` is exactly ``season_commitment_payload(season_index,
+         *     commitment)``; a validator refuses any other value. ``claim_expires_at`` is
+         *     when Platform stops waiting for this validator's report.
+         */
+        DuelingSeasonCommitmentJobResponse: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Claim Expires At
+             * Format: date-time
+             */
+            claim_expires_at: string;
+            /** Commitment */
+            commitment: string;
+            /** Payload */
+            payload: string;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /** Shadow */
+            shadow: boolean;
+        };
+        /**
+         * DuelingSeasonCommitmentReportRequest
+         * @description Signed outcome of one elected season-commitment publication.
+         *
+         *     Same semantics as :class:`GeneratorRoundCommitmentReportRequest`:
+         *     ``confirmed`` names the block the validator read its own commitment back
+         *     at; ``failed`` means the submission or the read-back did not succeed.
+         */
+        DuelingSeasonCommitmentReportRequest: {
+            /** Block Number */
+            block_number?: number | null;
+            /** Commitment */
+            commitment: string;
+            /** Detail */
+            detail?: string | null;
+            /** Extrinsic Hash */
+            extrinsic_hash?: string | null;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "confirmed" | "failed";
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /**
+             * Signature
+             * @default 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+             */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** DuelingSeasonCommitmentReportResponse */
+        DuelingSeasonCommitmentReportResponse: {
+            /** Accepted */
+            accepted: boolean;
+            /**
+             * Confirmations
+             * @default 0
+             */
+            confirmations: number;
+            /**
+             * Duplicate
+             * @default false
+             */
+            duplicate: boolean;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /**
+             * Target
+             * @default 0
+             */
+            target: number;
+        };
         /** DuelingSeasonView */
         DuelingSeasonView: {
             /** Anchor Block */
@@ -22963,6 +23218,24 @@ export interface components {
             }[] | null;
             /** Commitment */
             commitment: string;
+            /** Commitment Block */
+            commitment_block?: number | null;
+            /** Commitment Error */
+            commitment_error?: string | null;
+            /** Commitment Extrinsic Hash */
+            commitment_extrinsic_hash?: string | null;
+            /**
+             * Commitment Publication
+             * @default disabled
+             * @enum {string}
+             */
+            commitment_publication: "pending" | "published" | "failed" | "disabled";
+            /** Commitment Publications */
+            commitment_publications?: components["schemas"]["GeneratorRoundCommitmentPublicationView"][];
+            /** Commitment Published At */
+            commitment_published_at?: string | null;
+            /** Commitment Publishers Elected */
+            commitment_publishers_elected?: string[];
             /**
              * Committed At
              * Format: date-time
@@ -23358,6 +23631,21 @@ export interface components {
             aggregate_active: boolean;
             /** Checksum */
             checksum: string;
+            /**
+             * Crown Duel Active
+             * @default false
+             */
+            crown_duel_active: boolean;
+            /**
+             * Crown Duel Fleet Ready
+             * @default false
+             */
+            crown_duel_fleet_ready: boolean;
+            /**
+             * Crown Duel Required Protocol
+             * @default 35
+             */
+            crown_duel_required_protocol: number;
             /**
              * Crown Gate Active
              * @default false
@@ -24761,6 +25049,11 @@ export interface components {
              */
             seeds_per_run: number;
             /**
+             * Skip Unchanged Rounds
+             * @default true
+             */
+            skip_unchanged_rounds: boolean;
+            /**
              * Solve Threshold
              * @default 0.5
              */
@@ -24980,7 +25273,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            status: "committed" | "generating" | "running" | "scoring" | "scored" | "skipped" | "void";
         };
         /** GeneratorRoundAttemptView */
         GeneratorRoundAttemptView: {
@@ -25441,7 +25734,15 @@ export interface components {
         GeneratorRoundLoopResponse: {
             /** Available */
             available: boolean;
+            last_skipped_round?: components["schemas"]["GeneratorRoundSkipView"] | null;
             schedule: components["schemas"]["GeneratorRoundSchedule"] | null;
+            /** Skip Unchanged Rounds */
+            skip_unchanged_rounds?: boolean | null;
+            /**
+             * Skipped Rounds
+             * @default 0
+             */
+            skipped_rounds: number;
             status: components["schemas"]["GeneratorRoundLoopStatus"] | null;
         };
         /**
@@ -25613,6 +25914,20 @@ export interface components {
             scorer_version: string;
         };
         /**
+         * GeneratorRoundSkipView
+         * @description One round skipped because it would only repeat the last scored round.
+         */
+        GeneratorRoundSkipView: {
+            /** Carried From Round */
+            carried_from_round: number | null;
+            /** Reason */
+            reason: string;
+            /** Round Index */
+            round_index: number;
+            /** Skipped At */
+            skipped_at: string | null;
+        };
+        /**
          * GeneratorRoundSkippedAgent
          * @description A ranked owner passed over when the panel froze: its agent could not
          *     run, so the next eligible owner took the seat.
@@ -25674,6 +25989,8 @@ export interface components {
              * @default 0
              */
             answered_results: number;
+            /** Carried From Round */
+            carried_from_round?: number | null;
             /** Closed At */
             closed_at?: string | null;
             /**
@@ -25735,11 +26052,13 @@ export interface components {
             secret_hex?: string | null;
             /** Seed */
             seed?: string | null;
+            /** Skip Reason */
+            skip_reason?: string | null;
             /**
              * Status
              * @enum {string}
              */
-            status: "committed" | "generating" | "running" | "scoring" | "scored" | "void";
+            status: "committed" | "generating" | "running" | "scoring" | "scored" | "skipped" | "void";
             /** Void Reason */
             void_reason?: string | null;
         };
@@ -27743,12 +28062,22 @@ export interface components {
              */
             seed?: number | null;
             /**
+             * Seed Anchor Agent Id
+             * @description Season scope: champion the season's family is anchored on.
+             */
+            seed_anchor_agent_id?: string | null;
+            /**
+             * Seed Index
+             * @description Season scope: replicate index of the shared seed.
+             */
+            seed_index?: number | null;
+            /**
              * Seed Scope
-             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey.
+             * @description Inputs used by the on-chain seed derivation. Validator scope additionally binds the ticket holder's hotkey. Season scope (protocol 35, title duels) is a dueling season's shared seed: ``crn_seed([seed_anchor_agent_id], bench_version, seed_index, dataset_seed_block_hash)``. Issued only to protocol-35 validators.
              * @default agent
              * @enum {string}
              */
-            seed_scope: "agent" | "validator";
+            seed_scope: "agent" | "validator" | "season";
             /**
              * Sha256
              * @description SHA-256 of the uploaded tarball, lowercase hex.
@@ -28163,6 +28492,11 @@ export interface components {
              * @description Activation marker for validator protocol v14+. When present, the weight fold uses the arithmetic mean of the three signed quorum scores plus one aggregate per completed continual cohort wave. Older validators ignore this additive field.
              */
             continual_aggregate_method?: "mean_after_quorum" | null;
+            /**
+             * Duel History
+             * @description Protocol-35 title duel evidence: this agent's bench >= 16 confirmation records from the newest dueling seasons, each with its signed details.dueling. Served only with crown_gate.duel_window_pairs; the dethrone test pairs them by (season, seed). Levels never read it.
+             */
+            duel_history?: components["schemas"]["ConfirmationScoreRecord"][] | null;
             /** @description Bench >= 16 only: the authoritative score's signed ``details.dueling`` aggregates (owner key, datagen half, slice columns). A v16 row without them never ranks or pays. */
             dueling?: components["schemas"]["DuelingReport"] | null;
             /**
@@ -28606,7 +28940,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Case Set Digest */
             case_set_digest: string;
             /** Dataset Revision */
@@ -29195,6 +29529,7 @@ export interface components {
             inference_cost?: components["schemas"]["InferenceCostSummary"] | null;
             /** Posture */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            priced_cost?: components["schemas"]["PricedCostSummary"] | null;
             /** Run Id */
             run_id: string;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
@@ -30499,6 +30834,129 @@ export interface components {
              * @default true
              */
             require_desired_era_drained: boolean;
+        };
+        /**
+         * PricedCostSummary
+         * @description Run-level bench v16+ priced inference cost (``details.priced_cost``).
+         *
+         *     The scorer prices the WHOLE run (datagen half and generator slice) at the
+         *     contract's locked public per-token rates, normalises it to a 350-case run
+         *     and maps it to ``factor_bps`` through the published curve
+         *     (``ditto_screening_protocol.priced_cost``). ``applied_factor_bps`` is what
+         *     the composite carries (inside ``details.dueling.datagen_gate``): the factor
+         *     under ``enforce``, 10000 under ``shadow`` or without complete accounting.
+         *     ``rule_consistent`` is Platform's own recomputation of the factor from the
+         *     reported token counts; ``False`` means the scorer's block disagrees with
+         *     the published rule.
+         */
+        PricedCostSummary: {
+            /**
+             * Applied
+             * @default false
+             */
+            applied: boolean;
+            /** Applied Factor Bps */
+            applied_factor_bps?: number | null;
+            /**
+             * Cases
+             * @default 0
+             */
+            cases: number;
+            /**
+             * Completion Cost Nano Usd
+             * @default 0
+             */
+            completion_cost_nano_usd: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /** Contract Id */
+            contract_id?: string | null;
+            /**
+             * Cost Nano Usd
+             * @default 0
+             */
+            cost_nano_usd: number;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /**
+             * Decision Calls
+             * @default 0
+             */
+            decision_calls: number;
+            /**
+             * Decision Cost Nano Usd
+             * @default 0
+             */
+            decision_cost_nano_usd: number;
+            /**
+             * Decision Input Tokens
+             * @default 0
+             */
+            decision_input_tokens: number;
+            /**
+             * Decision Output Tokens
+             * @default 0
+             */
+            decision_output_tokens: number;
+            /**
+             * Embedding Cost Nano Usd
+             * @default 0
+             */
+            embedding_cost_nano_usd: number;
+            /**
+             * Embedding Tokens
+             * @default 0
+             */
+            embedding_tokens: number;
+            /** Factor Bps */
+            factor_bps?: number | null;
+            /** Floor Bps */
+            floor_bps?: number | null;
+            /**
+             * Normalization Cases
+             * @default 0
+             */
+            normalization_cases: number;
+            /**
+             * Normalized Cost Nano Usd
+             * @default 0
+             */
+            normalized_cost_nano_usd: number;
+            /** Normalized Cost Usd */
+            normalized_cost_usd?: number | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /**
+             * Prompt Cost Nano Usd
+             * @default 0
+             */
+            prompt_cost_nano_usd: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Ratio Bps
+             * @default 0
+             */
+            ratio_bps: number;
+            /**
+             * Reference Nano Usd
+             * @default 0
+             */
+            reference_nano_usd: number;
+            /** Result */
+            result?: ("priced" | "insufficient_evidence") | null;
+            /** Rule Consistent */
+            rule_consistent?: boolean | null;
+            /** Source */
+            source?: string | null;
+            /** Window */
+            window?: string | null;
         };
         /** PrivateDatasetRequest */
         PrivateDatasetRequest: {
@@ -32362,7 +32820,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /**
              * Bundle Id
              * Format: uuid
@@ -32619,7 +33077,7 @@ export interface components {
              * Method
              * @enum {string}
              */
-            method: "flat" | "unpaired" | "paired";
+            method: "flat" | "unpaired" | "paired" | "duel";
             /**
              * Paired Standard Error
              * @description Standard error of the per-seed challenger-minus-champion differences. Present only on a paired comparison. The statistical term is dethrone_z times this value, before high-score decay and the ceiling cap.
@@ -32643,6 +33101,146 @@ export interface components {
             shared_seed_count?: number | null;
             /** Statistical Lead */
             statistical_lead?: number | null;
+        };
+        /**
+         * PublicDuelingBreakdown
+         * @description Bench v16+ arithmetic from the datagen half and slice to the composite.
+         *
+         *     Projected by Platform from the stored, ingestion-validated
+         *     ``scores.dueling`` aggregates and the ``priced_cost`` gate evidence. It is
+         *     a read-side explanation only: the signed composite is authoritative and
+         *     nothing here feeds ranking, weights or ingestion.
+         */
+        PublicDuelingBreakdown: {
+            /**
+             * Column Weight
+             * @description ``w``.
+             */
+            column_weight: number;
+            /** Columns */
+            columns?: components["schemas"]["PublicDuelingColumn"][];
+            /**
+             * Composite
+             * @description ``datagen_gate x pre_gate_composite``, recomputed from the aggregates; it reproduces the signed composite.
+             */
+            composite: number;
+            /** Composite Stderr */
+            composite_stderr?: number | null;
+            /**
+             * Counted Columns
+             * @description ``|U|``: columns not self-masked.
+             */
+            counted_columns: number;
+            /**
+             * Datagen Gate
+             * @description The run's whole composite gate (quality gates times the applied priced-cost factor).
+             */
+            datagen_gate: number;
+            /**
+             * Datagen Raw
+             * @description The datagen half's raw mean.
+             */
+            datagen_raw: number;
+            /**
+             * Datagen Share
+             * @description ``1 - w x |U|``.
+             */
+            datagen_share: number;
+            /**
+             * Formula
+             * @default gate x ((1 - w x |U|) x datagen + w x sum col)
+             */
+            formula: string;
+            /**
+             * Generator Sum
+             * @description ``w x sum col`` over ``U``.
+             */
+            generator_sum: number;
+            /**
+             * Other Gate Factor
+             * @description ``datagen_gate / priced_cost_factor``: every other gate combined. Null when the run recorded no priced cost or its factor is 0.
+             */
+            other_gate_factor?: number | null;
+            /**
+             * Pre Gate Composite
+             * @description ``datagen_share x datagen + generator_sum``.
+             */
+            pre_gate_composite: number;
+            /**
+             * Priced Cost Applied Factor Bps
+             * @description The priced-cost factor inside ``datagen_gate`` (10000 under shadow or without complete accounting). Null when the run recorded no priced cost.
+             */
+            priced_cost_applied_factor_bps?: number | null;
+            /**
+             * Priced Cost Factor
+             * @description ``priced_cost_applied_factor_bps / 10000``.
+             */
+            priced_cost_factor?: number | null;
+            /**
+             * Priced Cost Factor Bps
+             * @description The factor the published curve gives, applied or not.
+             */
+            priced_cost_factor_bps?: number | null;
+            /** Priced Cost Posture */
+            priced_cost_posture?: string | null;
+            /** Priced Cost Result */
+            priced_cost_result?: string | null;
+            /** Priced Cost Window */
+            priced_cost_window?: string | null;
+            /** Season Id */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+        };
+        /**
+         * PublicDuelingColumn
+         * @description One generator-slice column of a bench v16+ run, as aggregates only.
+         *
+         *     Mirrors the Backroom canary read: no owner key, no generator submission
+         *     id, no case text. ``self_masked`` says the column's generator belongs to
+         *     the scored agent's own owner, so the composite dropped it (its weight
+         *     returned to the datagen half).
+         */
+        PublicDuelingColumn: {
+            /** Column Id */
+            column_id: string;
+            /**
+             * Contribution
+             * @description ``w x mean`` when counted, 0 when self-masked.
+             */
+            contribution: number;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
+            /**
+             * Mean
+             * @description ``sum / n`` (0 with no cases).
+             */
+            mean: number;
+            /**
+             * N
+             * @description Executed cases in this column.
+             */
+            n: number;
+            /**
+             * Public Default
+             * @description The column's pinned generator is the public default.
+             */
+            public_default: boolean;
+            /**
+             * Self Masked
+             * @description Owned by the scored agent's own owner, so excluded from ``U`` (an agent never scores on its owner's generator).
+             */
+            self_masked: boolean;
+            /**
+             * Substituted
+             * @description The pinned generator failed and the public default generator filled this column.
+             */
+            substituted: boolean;
+            /**
+             * Sum
+             * @description Sum of the column's case scores.
+             */
+            sum: number;
         };
         /**
          * PublicDuelingPin
@@ -33060,8 +33658,9 @@ export interface components {
          * PublicGateEvidence
          * @description Run-level v13 gate verdict, published beside a validator's score.
          *
-         *     Aggregates only: the posture the gates ran under, the four gate summaries
-         *     (counts and rates), how many cases the gates would zero, and per-finding
+         *     Aggregates only: the posture the gates ran under, the gate summaries
+         *     (counts and rates), the bench 16+ priced inference cost and its factor,
+         *     how many cases the gates would zero, and per-finding
          *     counts. The per-case notes behind these counts are owner-only
          *     (``GET /me/agents/{agent_id}/gate-notes``).
          */
@@ -33099,6 +33698,7 @@ export interface components {
              * @description The most severe posture any v13 gate ran under: ``enforce`` means at least one gate changed scores; ``shadow`` means every gate only recorded what it would have done. Per-gate postures are on the gate summaries.
              */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            priced_cost?: components["schemas"]["PricedCostSummary"] | null;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
         };
         /**
@@ -34549,6 +35149,8 @@ export interface components {
              * @description Pinned hash of the exact generated dataset, when recorded.
              */
             dataset_sha256?: string | null;
+            /** @description Bench v16+ dueling arithmetic: datagen half, generator-slice columns (self-masked columns flagged) and the priced-cost factor inside the composite gate. Aggregates only; omitted below v16. */
+            dueling_breakdown?: components["schemas"]["PublicDuelingBreakdown"] | null;
             /** @description Bench v13+ run-level gate verdict (aggregates only); see ``PublicValidatorScore.gate_evidence``. */
             gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             model_use?: components["schemas"]["PublicModelUse"] | null;
@@ -35902,7 +36504,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**
@@ -36287,6 +36889,8 @@ export interface components {
              * @description Weakest-link pass rate across the conversational-sanity slices, the input to the conversational-sanity gate factor. Null when no conversational case ran.
              */
             conversational_sanity?: number | null;
+            /** @description Bench v16+ dueling arithmetic: datagen half, generator-slice columns (self-masked columns flagged) and the priced-cost factor inside the composite gate. Aggregates only; omitted below v16. */
+            dueling_breakdown?: components["schemas"]["PublicDuelingBreakdown"] | null;
             /** @description Bench v13+ gate verdict for this run: posture, composite with and without the gates, the gate-induced loss and per-gate counts. Aggregates only -- the per-case notes are owner-only (``GET /me/agents/{agent_id}/gate-notes``). Null below v13 and for a scorer that emitted no gate telemetry. */
             gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             /**
@@ -36909,6 +37513,12 @@ export interface components {
              * @default false
              */
             provider_outage_active: boolean;
+            /**
+             * Retest Mode
+             * @default continual
+             * @enum {string}
+             */
+            retest_mode: "continual" | "season_duel";
             /** Route Position */
             route_position: number | null;
             /**
@@ -36918,6 +37528,12 @@ export interface components {
             route_priority: "champion" | "void_rerun" | "catchup" | "emission" | "extended" | "not_routed";
             /** Scheduled Round */
             scheduled_round: boolean | null;
+            /** Season Duel Anchor Champion Id */
+            season_duel_anchor_champion_id?: string | null;
+            /** Season Duel Held Seed Count */
+            season_duel_held_seed_count?: number | null;
+            /** Season Duel Seed Count */
+            season_duel_seed_count?: number | null;
             /** Spare Capacity Window */
             spare_capacity_window: boolean;
             /**
@@ -38374,7 +38990,7 @@ export interface components {
          * @example {
          *       "detail": "",
          *       "passed": true,
-         *       "policy_version": 13,
+         *       "policy_version": 14,
          *       "screener_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
          *       "signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
          *     }
@@ -40862,7 +41478,7 @@ export interface components {
             notes_considered: number;
             /**
              * Policy Version
-             * @default 13
+             * @default 14
              */
             policy_version: number;
             /** Prompt Revision */
@@ -44211,7 +44827,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -44304,7 +44920,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -44399,7 +45015,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             /**
              * Bundle Id
              * Format: uuid
@@ -44712,7 +45328,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15;
+            bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17;
             claim_provenance?: components["schemas"]["V13ClaimProvenanceGate"] | null;
             inference_latency?: components["schemas"]["V12InferenceLatencyGate"] | null;
             model_dependence?: components["schemas"]["V12ModelDependenceGate"] | null;
@@ -44824,6 +45440,11 @@ export interface components {
             scorer_benchmarks?: components["schemas"]["ScorerBenchmarkCapability"] | null;
             /** Screened Images */
             screened_images: boolean;
+            /**
+             * Season Commitments
+             * @default false
+             */
+            season_commitments: boolean;
             /**
              * Signed Score Quorum
              * @default false
@@ -50383,6 +51004,43 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_republish_dueling_season_commitment_api_v1_admin_generator_competition_dueling_seasons__season_id__republish_commitment_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                season_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDuelingCommitmentRepublishRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -63715,6 +64373,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                policy_only?: boolean;
             };
             header?: {
                 "x-screener-hotkey"?: string | null;
@@ -64574,6 +65233,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmitTranscriptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_dueling_season_commitment_job_api_v1_validator_dueling_season_commitment_job_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingSeasonCommitmentJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonCommitmentJobResponse"];
+                };
+            };
+            /** @description No season commitment needs this validator. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_dueling_season_commitment_api_v1_validator_dueling_season_commitment_report_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingSeasonCommitmentReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonCommitmentReportResponse"];
                 };
             };
             /** @description Validation Error */

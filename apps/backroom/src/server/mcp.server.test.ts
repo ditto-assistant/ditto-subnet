@@ -563,6 +563,7 @@ describe('Backroom MCP tools', () => {
         'list_dueling_slices',
         'list_generator_source_releases',
         'rotate_dueling_season',
+        'republish_dueling_season_commitment',
         'retry_dueling_slice_preparation',
         'get_generator_round_loop',
         'tick_generator_rounds',
@@ -999,10 +1000,9 @@ describe('Backroom MCP tools', () => {
     // summary, detail in tool help) measures 232,562 bytes; keep about 0.5 KB.
     // The generator source release read (status, uuid, limit, offset; one-line
     // summary, detail in tool help) measures 233,483 bytes; keep about 0.5 KB.
-    // The guarded reject-reason amendment (SN-439: four guards, reason and
-    // confirmation; one-line summary, detail in tool help) measures 235,102
-    // bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(235_600)
+    // Allow the guarded dueling season republish and reject-reason amendment
+    // controls, with about 0.5 KB of headroom for the combined catalog.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(236_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -3474,7 +3474,7 @@ describe('Backroom MCP tools', () => {
   it.each(['both', 'elapsed', 'completed', 'neither'] as const)('retains admission diagnostics with %s timestamps in the read tool', async (timestamps) => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const diagnostics = {
-      scope: 'process', in_flight: true, attempts: 9, busy_skips: 15,
+      scope: 'process', in_flight: true, attempts: 9, busy_skips: 15, idle_skips: 4,
       last_outcome: 'idle',
       ...(timestamps === 'both' || timestamps === 'elapsed' ? { last_elapsed_ms: 1740 } : {}),
       ...(timestamps === 'both' || timestamps === 'completed' ? { last_completed_at: '2026-10-09T03:00:00Z' } : {}),
@@ -12367,6 +12367,9 @@ describe('Backroom MCP tools', () => {
       completed_wave_depth: 0,
       official_sample_count: 3,
       raw_confirmation_depth: 1,
+      confirmation_seed_floor: 8,
+      confirmation_seed_cap: 10,
+      confirmation_seed_target: 9,
       composite_stderr: 0.01,
       aggregate_mode: 'fleet_ready',
       wave_membership: 'participants',

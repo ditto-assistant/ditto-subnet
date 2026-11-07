@@ -1,0 +1,7 @@
+# github.com/ditto-assistant/dittobench-datagen v0.0.0 => ../../research/dittobench-datagen
+## explicit; go 1.23
+github.com/ditto-assistant/dittobench-datagen/challenge
+github.com/ditto-assistant/dittobench-datagen/grade
+github.com/ditto-assistant/dittobench-datagen/internal/multilingual
+github.com/ditto-assistant/dittobench-datagen/protocol
+# github.com/ditto-assistant/dittobench-datagen => ../../research/dittobench-datagen

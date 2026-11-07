@@ -2339,6 +2339,7 @@ describe('continual retest administration', () => {
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'disabled' as const,
     crown_gate_mode: 'disabled' as const,
+    crown_duel_mode: 'disabled' as const,
     min_dethrone_confirmations: 3,
     champion_standing_rank: 3,
     wave_membership: 'participants',
@@ -2348,6 +2349,9 @@ describe('continual retest administration', () => {
     retest_cohort_max_size: 25,
     wave_cadence_tempos: 0,
     wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
+    season_duel_rotation_seeds: false,
   }
   const legacyEquivalent = {
     ...readDefaults,
@@ -2383,6 +2387,9 @@ describe('continual retest administration', () => {
       crown_gate_fleet_ready: false,
       crown_gate_active: false,
       crown_gate_required_protocol: 34,
+      crown_duel_fleet_ready: false,
+      crown_duel_active: false,
+      crown_duel_required_protocol: 35,
       ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
@@ -2400,6 +2407,7 @@ describe('continual retest administration', () => {
     ledger_pin_mode: carried,
     crown_incumbent_mode: carried,
     crown_gate_mode: carried,
+    crown_duel_mode: carried,
     min_dethrone_confirmations: carried,
     champion_standing_rank: carried,
     retest_cohort_size: carried,
@@ -2409,6 +2417,9 @@ describe('continual retest administration', () => {
     retest_cohort_max_size: carried,
     wave_cadence_tempos: carried,
     wave_seeds_per_window: carried,
+    retest_mode: carried,
+    season_duel_seeds: carried,
+    season_duel_rotation_seeds: carried,
   })
   // The platform carries every field, so reads and writes both keep them.
   const supported = {
@@ -2426,6 +2437,7 @@ describe('continual retest administration', () => {
       ledger_pin_mode: 'epoch' as const,
       crown_incumbent_mode: 'disabled' as const,
       crown_gate_mode: 'disabled' as const,
+      crown_duel_mode: 'disabled' as const,
       min_dethrone_confirmations: 3,
       champion_standing_rank: 3,
       idle_retests_enabled: true,
@@ -2437,6 +2449,9 @@ describe('continual retest administration', () => {
       retest_cohort_max_size: 25,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: 3,
+      retest_mode: 'continual' as const,
+      season_duel_seeds: 3,
+      season_duel_rotation_seeds: false,
     }
     const enabled = {
       ...control,
@@ -4249,6 +4264,9 @@ describe('production score reads', () => {
     completed_wave_depth: 0,
     official_sample_count: 3,
     raw_confirmation_depth: 1,
+    confirmation_seed_floor: 8,
+    confirmation_seed_cap: 10,
+    confirmation_seed_target: 9,
     composite_stderr: 0.01,
     aggregate_mode: 'fleet_ready',
     wave_membership: 'participants',
@@ -4291,6 +4309,10 @@ describe('production score reads', () => {
       void_rerun_claimable: false,
       provider_outage_active: false,
       provider_gate_closed: false,
+      retest_mode: 'continual' as const,
+      season_duel_seed_count: null,
+      season_duel_anchor_champion_id: null,
+      season_duel_held_seed_count: null,
       wave_cadence_tempos: 0,
       wave_seeds_per_window: null,
       wave_window_epoch: null,
@@ -5375,6 +5397,120 @@ describe('production score reads', () => {
       gate_posture: null,
       median_flagged_case_share: null,
     })
+  })
+
+  it('carries the bench v16 priced inference cost and folds its medians into history', async () => {
+    const pricedCost = (normalizedUsd: number, factorBps: number) => ({
+      contract_id: 'priced-cost-v1',
+      posture: 'enforce',
+      applied: true,
+      result: 'priced',
+      window: 'whole_run',
+      source: 'relay',
+      cases: 350,
+      prompt_tokens: 22_318_268,
+      completion_tokens: 1_690_233,
+      embedding_tokens: 294_000,
+      cost_nano_usd: Math.round(normalizedUsd * 1e9),
+      normalization_cases: 350,
+      normalized_cost_nano_usd: Math.round(normalizedUsd * 1e9),
+      reference_nano_usd: 1_000_000_000,
+      ratio_bps: Math.floor(normalizedUsd * 10_000),
+      floor_bps: 6000,
+      factor_bps: factorBps,
+      applied_factor_bps: factorBps,
+      cost_usd: normalizedUsd,
+      normalized_cost_usd: normalizedUsd,
+      rule_consistent: true,
+    })
+    const v16Scores = {
+      ...agentScores,
+      score_count: 9,
+      scores: [
+        ...agentScores.scores,
+        scoreRow({ validator_hotkey: '5ValA', composite: 0.61, bench_version: 16, seed: 999, run_id: 'run-a16', generated_at: '2026-11-13T00:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: pricedCost(1.81699, 6733) }) }),
+        scoreRow({ validator_hotkey: '5ValB', composite: 0.62, bench_version: 16, seed: 999, run_id: 'run-b16', generated_at: '2026-11-13T01:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: pricedCost(1.70001, 7200) }) }),
+        // A row that could not price its run carries no cost into the medians.
+        scoreRow({ validator_hotkey: '5ValC', composite: 0.9, bench_version: 16, seed: 999, run_id: 'run-c16', generated_at: '2026-11-13T02:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: { ...pricedCost(0, 10_000), result: 'insufficient_evidence' } }) }),
+      ],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(v16Scores)))
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    const v16 = history.versions.find((version) => version.bench_version === 16)
+    expect(v16?.median_priced_cost_usd).toBeCloseTo((1.81699 + 1.70001) / 2, 10)
+    expect(v16?.median_priced_cost_factor_bps).toBe((6733 + 7200) / 2)
+    expect(history.versions.find((version) => version.bench_version === 7)).toMatchObject({
+      median_priced_cost_usd: null,
+      median_priced_cost_factor_bps: null,
+    })
+  })
+
+  it('carries the bench v16 dueling breakdown through get_agent_scores without owner keys', async () => {
+    const column = (id: string, extra: Record<string, unknown> = {}) => ({
+      column_id: id, grading_bench_version: 16, n: 35, sum: 28, mean: 0.8,
+      substituted: false, public_default: false, self_masked: false, contribution: 0.08,
+      ...extra,
+    })
+    const breakdown = {
+      formula: 'gate x ((1 - w x |U|) x datagen + w x sum col)',
+      season_id: '8f2b6a52-3b7f-4a55-9d0c-0d6c7d2a9e11',
+      season_index: 3,
+      datagen_raw: 0.9,
+      datagen_gate: 0.79832,
+      column_weight: 0.1,
+      counted_columns: 4,
+      datagen_share: 0.6,
+      generator_sum: 0.23,
+      pre_gate_composite: 0.77,
+      composite: 0.6147064,
+      composite_stderr: 0.0125,
+      priced_cost_applied_factor_bps: 9392,
+      priced_cost_factor_bps: 9392,
+      priced_cost_factor: 0.9392,
+      priced_cost_posture: 'enforce',
+      priced_cost_result: 'priced',
+      priced_cost_window: 'whole_run',
+      other_gate_factor: 0.85,
+      columns: [
+        column('c0', { public_default: true }),
+        // A field Platform never sends is stripped, never forwarded.
+        column('c1', { self_masked: true, contribution: 0, owner_key: '5SecretOwner' }),
+        column('c2'),
+        column('c3', { substituted: true }),
+        column('c4'),
+      ],
+    }
+    const v16Scores = {
+      ...agentScores,
+      score_count: 4,
+      scores: [
+        ...agentScores.scores,
+        scoreRow({ validator_hotkey: '5ValA', composite: 0.614706, bench_version: 16, seed: 999, run_id: 'run-a16', generated_at: '2026-11-13T00:00:00Z', dueling_breakdown: breakdown }),
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(Response.json(leaderboard))
+        .mockResolvedValueOnce(Response.json(v16Scores)),
+    )
+
+    const detail = await fetchAgentScores({ agentId: topAgentId, benchVersion: 16 })
+    const [row] = detail.scores
+    expect(row?.dueling_breakdown).toMatchObject({
+      priced_cost_applied_factor_bps: 9392,
+      priced_cost_window: 'whole_run',
+      counted_columns: 4,
+    })
+    expect(row?.dueling_breakdown?.columns.map((c) => c.self_masked)).toEqual([
+      false, true, false, false, false,
+    ])
+    expect(JSON.stringify(detail)).not.toContain('5SecretOwner')
+    expect(JSON.stringify(detail)).not.toContain('owner_key')
+    // Pre-v16 rows carry no breakdown at all.
+    const v7 = detail.other_bench_versions.find((group) => group.bench_version === 7)
+    expect(v7?.scores.every((score) => score.dueling_breakdown === undefined)).toBe(true)
   })
 
   it('reports a mixed bench v13 gate posture as null instead of picking one', async () => {

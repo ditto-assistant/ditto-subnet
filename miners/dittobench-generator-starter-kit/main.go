@@ -9,7 +9,8 @@
 //	cd ../../research/dittobench-datagen
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -seeds 3 -cases 80
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -sandbox docker
-//	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 14
+//	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 16
+//	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 17
 //
 // and submit the source with `uv run ditto generator upload --dir .`.
 //
@@ -29,10 +30,11 @@ import (
 )
 
 // Name and Version identify this generator in the pack's provenance.
-// Version 4 declares the newest grading policy the request accepts.
+// Version 4 declares the newest grading policy the request accepts; version 5
+// adds policy 16; version 6 adds policy 17.
 const (
 	Name    = "starter-kit"
-	Version = "4"
+	Version = "6"
 )
 
 // GradingBenchVersions are the pack grading policies the default families are
@@ -40,7 +42,13 @@ const (
 // as plain text, so its cases pass the v14 answer-text rule unchanged. A v13
 // round's request accepts only v13 and gets exactly the v13 pack; a v14
 // round's request also accepts v14, and the kit declares v14.
-var GradingBenchVersions = []int{challenge.GradingBenchVersion, challenge.GradingBenchVersionV14}
+//
+// Policy 16 (the dueling bench) grades like 15 and adds no pack rule, so the
+// same cases declare it in a v16 round, whose window is {15, 16}, and in a v16
+// dueling slice. Policy 15 is deliberately absent: a v15 round (window
+// {14, 15}) keeps getting the v14 pack this kit has always emitted there, so
+// the public default generator's live v15 columns do not move.
+var GradingBenchVersions = []int{challenge.GradingBenchVersion, challenge.GradingBenchVersionV14, challenge.GradingBenchVersionV16, challenge.GradingBenchVersionV17}
 
 // MaxCases is the most cases the starter pools can fill without reusing a
 // value (twenty rounds of the four default families). It matches the pack

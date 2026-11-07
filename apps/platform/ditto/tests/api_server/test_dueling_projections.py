@@ -107,6 +107,20 @@ def _case_rows(
     return rows, by_seed, history, names
 
 
+def _expected_from_stored_rows(case: dict[str, Any]) -> tuple[str, str]:
+    """``(ungated, gated)`` King for a projection built from stored rows.
+
+    These paths apply Platform's active seed window (the 10-seed work cap)
+    before folding, exactly as the served ledger does. A case whose rows hold
+    more seeds than that names the windowed King in ``work_cap_champion``;
+    every other case folds the same here as on the pinned ledger.
+    """
+    windowed = case.get("work_cap_champion")
+    if windowed is not None:
+        return windowed, windowed
+    return case["ungated_champion"], case["gated_champion"]
+
+
 @pytest.mark.parametrize("case", _V16_CASES, ids=[case["name"] for case in _V16_CASES])
 def test_public_board_folds_the_shared_dueling_cases(case: dict[str, Any]) -> None:
     rows, by_seed, history, names = _case_rows(case)
@@ -123,11 +137,9 @@ def test_public_board_folds_the_shared_dueling_cases(case: dict[str, Any]) -> No
         assert emissions is not None
         return emissions
 
-    assert names[board(None).champion_agent_id] == case["ungated_champion"]
-    assert (
-        names[board(CrownGate(**case["gate"])).champion_agent_id]
-        == case["gated_champion"]
-    )
+    ungated, gated = _expected_from_stored_rows(case)
+    assert names[board(None).champion_agent_id] == ungated
+    assert names[board(CrownGate(**case["gate"])).champion_agent_id] == gated
     if "tail" in case:
         recipients = [names[recipient.agent_id] for recipient in board(None).recipients]
         assert recipients[1:] == case["tail"]
@@ -165,8 +177,9 @@ async def test_retest_lane_folds_the_shared_dueling_cases(
         assert projection is not None
         return names[projection.champion.agent_id]
 
-    assert fold(None) == case["ungated_champion"]
-    assert fold(CrownGate(**case["gate"])) == case["gated_champion"]
+    ungated, gated = _expected_from_stored_rows(case)
+    assert fold(None) == ungated
+    assert fold(CrownGate(**case["gate"])) == gated
     if "tail" in case:
         projection = project_koth(entries, incumbent_agent_id=incumbent)
         assert projection is not None

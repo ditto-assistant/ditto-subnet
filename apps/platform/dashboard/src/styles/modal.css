@@ -98,6 +98,30 @@
   color: var(--good, #2e8b57);
 }
 
+/* Bench v16+ dueling breakdown: one row per generator-slice column. */
+.dueling-breakdown code {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.dueling-columns {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.dueling-columns th,
+.dueling-columns td {
+  padding: 2px 6px 2px 0;
+  text-align: left;
+  color: var(--text-dim);
+}
+.dueling-columns th {
+  font-weight: 600;
+}
+.dueling-columns tr[data-self-masked="true"] td {
+  color: var(--text-faint);
+}
+
 /* Drawer: redacted per-case results (collapsible). */
 details.cases {
   margin-top: 14px;

@@ -2,6 +2,389 @@
 
 <!-- version list -->
 
+## v0.458.5 (2026-11-07)
+
+### Bug Fixes
+
+- Update vulnerable Pylon image dependencies
+  ([#3408](https://github.com/ditto-assistant/ditto-subnet/pull/3408),
+  [`c59d7bf`](https://github.com/ditto-assistant/ditto-subnet/commit/c59d7bf9d63c9ed5aaed8e51c8d2008d78b031df))
+
+### Chores
+
+- **tests**: Pin the bench v17 datagen known vector
+  ([#3411](https://github.com/ditto-assistant/ditto-subnet/pull/3411),
+  [`8541c0a`](https://github.com/ditto-assistant/ditto-subnet/commit/8541c0ad225bb99da86802818c88ba043bab45bf))
+
+
+## v0.458.4 (2026-11-07)
+
+### Bug Fixes
+
+- **starter-kit**: Rehearse and describe Bench v17 as the live bench
+  ([#3410](https://github.com/ditto-assistant/ditto-subnet/pull/3410),
+  [`b6b0169`](https://github.com/ditto-assistant/ditto-subnet/commit/b6b0169c2fe0623adf583d9ed32ba4e79f7bfd02))
+
+
+## v0.458.3 (2026-11-07)
+
+### Performance Improvements
+
+- **platform**: Stop decoding unused score telemetry on public reads
+  ([#3409](https://github.com/ditto-assistant/ditto-subnet/pull/3409),
+  [`d0d06e6`](https://github.com/ditto-assistant/ditto-subnet/commit/d0d06e6dcdcfd569c112fef9245e9c0659e2f300))
+
+
+## v0.458.2 (2026-11-07)
+
+### Bug Fixes
+
+- **platform**: A quarantine release restores a scored rescreen instead of stranding it
+  ([#3407](https://github.com/ditto-assistant/ditto-subnet/pull/3407),
+  [`3575817`](https://github.com/ditto-assistant/ditto-subnet/commit/35758176b320f067b06248c73f8b2cf2fc8fe411))
+
+
+## v0.458.1 (2026-11-07)
+
+### Bug Fixes
+
+- **platform**: Hold rollout leases until a member passes the required screening policy
+  ([#3406](https://github.com/ditto-assistant/ditto-subnet/pull/3406),
+  [`9f07e7c`](https://github.com/ditto-assistant/ditto-subnet/commit/9f07e7c89f4e22e29633f6e2f20f8b7177dd56d1))
+
+
+## v0.458.0 (2026-11-06)
+
+### Bug Fixes
+
+- **deps**: Update vulnerable virtualenv locks
+  ([#3396](https://github.com/ditto-assistant/ditto-subnet/pull/3396),
+  [`1516bf9`](https://github.com/ditto-assistant/ditto-subnet/commit/1516bf9ff74d3e284c8707bd6fbcaa979989773b))
+
+### Features
+
+- **generator-starter-kit**: Bump to version 6, add bench v17 support
+  ([`a02145f`](https://github.com/ditto-assistant/ditto-subnet/commit/a02145f37550be6cac8133c434046085a93676eb))
+
+
+## v0.457.7 (2026-11-06)
+
+### Bug Fixes
+
+- Update OpenClaw adapter dependency
+  ([#3395](https://github.com/ditto-assistant/ditto-subnet/pull/3395),
+  [`d7034a4`](https://github.com/ditto-assistant/ditto-subnet/commit/d7034a41b260e692c75bc1a18ad24d1315542a26))
+
+
+## v0.457.6 (2026-11-06)
+
+### Bug Fixes
+
+- **deps**: Patch Python security dependencies [DITTO-1747]
+  ([#3325](https://github.com/ditto-assistant/ditto-subnet/pull/3325),
+  [`60cb801`](https://github.com/ditto-assistant/ditto-subnet/commit/60cb8016d36e53384cfc7b2880acbf14b85ae10f))
+
+
+## v0.457.5 (2026-11-06)
+
+### Bug Fixes
+
+- **backroom**: Update TanStack Start security dependencies
+  ([#3359](https://github.com/ditto-assistant/ditto-subnet/pull/3359),
+  [`77274ad`](https://github.com/ditto-assistant/ditto-subnet/commit/77274adcbbbe217fb7b4a288329e696f2d91a297))
+
+
+## v0.457.4 (2026-11-05)
+
+### Bug Fixes
+
+- **deps**: Patch backroom proxy and shell dependencies
+  ([#3358](https://github.com/ditto-assistant/ditto-subnet/pull/3358),
+  [`aeb01ef`](https://github.com/ditto-assistant/ditto-subnet/commit/aeb01ef8a0908dad456bc1e02967828e22e2499e))
+
+
+## v0.457.3 (2026-11-05)
+
+### Bug Fixes
+
+- **security**: Patch Seroval across subnet web apps [DITTO-1747]
+  ([#3324](https://github.com/ditto-assistant/ditto-subnet/pull/3324),
+  [`39ab024`](https://github.com/ditto-assistant/ditto-subnet/commit/39ab024459c3ad8c5a79721a3bd802b0a77a3b21))
+
+
+## v0.457.2 (2026-11-05)
+
+### Bug Fixes
+
+- **security**: Bound Backroom MCP inputs and patch SDK [DITTO-1747]
+  ([#3323](https://github.com/ditto-assistant/ditto-subnet/pull/3323),
+  [`ba65075`](https://github.com/ditto-assistant/ditto-subnet/commit/ba65075161e117ab6196dbbb3782f76a0f59101d))
+
+### Chores
+
+- **deps**: Bump golang.org/x/crypto from 0.45.0 to 0.58.0 in /services/dittobench-api
+  ([#2953](https://github.com/ditto-assistant/ditto-subnet/pull/2953),
+  [`c5ea921`](https://github.com/ditto-assistant/ditto-subnet/commit/c5ea921b93e8738578cbcbad5cecbc1e9602350c))
+
+
+## v0.457.1 (2026-11-05)
+
+### Bug Fixes
+
+- **platform**: Target rollout's desired version for dueling season when active is also dueling
+  ([`f5b8eec`](https://github.com/ditto-assistant/ditto-subnet/commit/f5b8eec76373ae83fbb3bf876720215b7ca8cb89))
+
+
+## v0.457.0 (2026-11-05)
+
+### Bug Fixes
+
+- **platform**: Add v17 to GENERATOR_ROUND_BENCH_VERSIONS
+  ([`7790710`](https://github.com/ditto-assistant/ditto-subnet/commit/77907100ca028d1f9a03110a5fd4a47e6cc9652b))
+
+- **platform**: Update replay process identity test fixture for policy ceiling v14
+  ([`b2e133e`](https://github.com/ditto-assistant/ditto-subnet/commit/b2e133ebaebca129cb82158f2c0afd6daac93c3f))
+
+- **platform**: Update tests for v17 generator round contract and policy ceiling
+  ([`d86e89b`](https://github.com/ditto-assistant/ditto-subnet/commit/d86e89b766b1c5887e9c82cc8d85d3cd5cb16468))
+
+### Features
+
+- **screener**: Raise activation ceiling to policy v14
+  ([`0184fde`](https://github.com/ditto-assistant/ditto-subnet/commit/0184fde1512bf3b479ff4efb975048b5706c4863))
+
+
+## v0.456.0 (2026-11-05)
+
+### Bug Fixes
+
+- **ci**: Remove remaining dittobench_coding_starter_kit references from release workflow and tests
+  ([#3394](https://github.com/ditto-assistant/ditto-subnet/pull/3394),
+  [`306c2da`](https://github.com/ditto-assistant/ditto-subnet/commit/306c2da56fdea0dd4fb5ce291477cca296dc1fe6))
+
+- **ci**: Remove unused source_gate assignment in test_release_workflow
+  ([`9e662ba`](https://github.com/ditto-assistant/ditto-subnet/commit/9e662ba7f664c26317b14d6c00e663f016cc610e))
+
+- **ci**: Update Docker build count assertions after removing coding starter kit
+  ([`725f5b0`](https://github.com/ditto-assistant/ditto-subnet/commit/725f5b0673a36b4bfa23b743a8baa1185eb56d34))
+
+### Continuous Integration
+
+- Remove verify-dittobench-coding-starter-kit from release workflow
+  ([#3393](https://github.com/ditto-assistant/ditto-subnet/pull/3393),
+  [`724ed85`](https://github.com/ditto-assistant/ditto-subnet/commit/724ed850dd12e4b68b8aa46af7de7d001a985c45))
+
+### Features
+
+- **bench**: Add bench_version 17 with priced-cost-v2 scoring contract
+  ([`0656fea`](https://github.com/ditto-assistant/ditto-subnet/commit/0656fea42e4b757e9b906e2174628fce4b022ba6))
+
+- **screener**: Screening policy v14 — zero-call agents CLEAR behavioral oracle
+  ([`45b0e44`](https://github.com/ditto-assistant/ditto-subnet/commit/45b0e44288db48f2b5ba7a152eb512de1657fb22))
+
+
+## v0.455.1 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Lease activation-blocking rollout quorum work ahead of season re-scores
+  ([#3390](https://github.com/ditto-assistant/ditto-subnet/pull/3390),
+  [`c4b5c1c`](https://github.com/ditto-assistant/ditto-subnet/commit/c4b5c1c05b247a846aacd3e52c9c7ee8d26913bb))
+
+
+## v0.455.0 (2026-11-04)
+
+### Features
+
+- **platform,backroom,dashboard**: Show the v16 dueling and priced-cost breakdown on score reads
+  ([#3389](https://github.com/ditto-assistant/ditto-subnet/pull/3389),
+  [`e0a5179`](https://github.com/ditto-assistant/ditto-subnet/commit/e0a5179c65869d6c1aeb112bfbaa668ece1ea9d8))
+
+
+## v0.454.1 (2026-11-04)
+
+### Bug Fixes
+
+- **bench**: Charge v16 metamorphic splits against the v15 group count
+  ([#3388](https://github.com/ditto-assistant/ditto-subnet/pull/3388),
+  [`409572c`](https://github.com/ditto-assistant/ditto-subnet/commit/409572c24206f102d91799cccc12b1fbd892addb))
+
+
+## v0.454.0 (2026-11-04)
+
+### Features
+
+- **platform,backroom**: Run season rotation re-scores on the duel seeds
+  ([#3382](https://github.com/ditto-assistant/ditto-subnet/pull/3382),
+  [`b31f9b8`](https://github.com/ditto-assistant/ditto-subnet/commit/b31f9b89d51dfc511a77f8935e3a86f1af416e26))
+
+
+## v0.453.0 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Skip unchanged rounds whichever column is counted
+  ([#3386](https://github.com/ditto-assistant/ditto-subnet/pull/3386),
+  [`af9e5b5`](https://github.com/ditto-assistant/ditto-subnet/commit/af9e5b570356cfeff995a2502980b925b95e4248))
+
+### Features
+
+- **backroom**: Decompose a canary's composite gate
+  ([#3387](https://github.com/ditto-assistant/ditto-subnet/pull/3387),
+  [`c0915f0`](https://github.com/ditto-assistant/ditto-subnet/commit/c0915f0b691137f24fcc0b3045d5cfa3e21619cb))
+
+- **platform,backroom**: Extend idle dueling seasons instead of rotating
+  ([#3383](https://github.com/ditto-assistant/ditto-subnet/pull/3383),
+  [`eefead9`](https://github.com/ditto-assistant/ditto-subnet/commit/eefead98d768dfdfc12ea3bf2558f4c4e37804e0))
+
+
+## v0.452.0 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Drop a continual retest's wave seed when scoring reuses its row
+  ([#3385](https://github.com/ditto-assistant/ditto-subnet/pull/3385),
+  [`716b0cc`](https://github.com/ditto-assistant/ditto-subnet/commit/716b0cca8841ba09c150aa39559e5aa0bdce5fbf))
+
+- **validator**: Retry a job request that Platform asks to retry later instead of isolating the slot
+  ([#3381](https://github.com/ditto-assistant/ditto-subnet/pull/3381),
+  [`39c14e2`](https://github.com/ditto-assistant/ditto-subnet/commit/39c14e28af855f061238daa1ec83aa590482f462))
+
+### Features
+
+- **backroom**: Show bench v16 priced cost and dueling aggregates on canaries
+  ([#3384](https://github.com/ditto-assistant/ditto-subnet/pull/3384),
+  [`61354cd`](https://github.com/ditto-assistant/ditto-subnet/commit/61354cd9af9d314e0a3eee0d374d3c48607467e8))
+
+- **platform,backroom**: Skip generator rounds that change nothing
+  ([#3380](https://github.com/ditto-assistant/ditto-subnet/pull/3380),
+  [`6562ccc`](https://github.com/ditto-assistant/ditto-subnet/commit/6562ccccaa0fb9a581f76b32053af6501f11ca19))
+
+
+## v0.451.1 (2026-11-04)
+
+### Bug Fixes
+
+- **platform**: Serve title-duel evidence from seasons that ran a duel
+  ([#3379](https://github.com/ditto-assistant/ditto-subnet/pull/3379),
+  [`7387d6b`](https://github.com/ditto-assistant/ditto-subnet/commit/7387d6b6064333a24cb14bc8aa4426ad0158c38b))
+
+
+## v0.451.0 (2026-11-04)
+
+### Features
+
+- **validator,platform**: Decide v16 crowns by a sequential title duel
+  ([#3378](https://github.com/ditto-assistant/ditto-subnet/pull/3378),
+  [`2b188c6`](https://github.com/ditto-assistant/ditto-subnet/commit/2b188c6647616dec6ac0b8faffdb4a2887fe1f77))
+
+
+## v0.450.0 (2026-11-04)
+
+### Documentation
+
+- **benchmark**: Design the no-inference (decision-only) competition mode
+  ([#3377](https://github.com/ditto-assistant/ditto-subnet/pull/3377),
+  [`3170cab`](https://github.com/ditto-assistant/ditto-subnet/commit/3170cab8a0b234854ffe4266e16bf6856ddb3e49))
+
+### Features
+
+- **platform,backroom**: Run season title duels instead of continual walks
+  ([#3376](https://github.com/ditto-assistant/ditto-subnet/pull/3376),
+  [`09f6a2e`](https://github.com/ditto-assistant/ditto-subnet/commit/09f6a2e9312c3699ba764e24c1cc795dad9670b4))
+
+
+## v0.449.0 (2026-11-04)
+
+### Features
+
+- **platform,model-relay**: Refuse chat on no-chat inference grants
+  ([#3375](https://github.com/ditto-assistant/ditto-subnet/pull/3375),
+  [`b008a5d`](https://github.com/ditto-assistant/ditto-subnet/commit/b008a5d90a10ed5d33210417cf769f951d7fbddd))
+
+
+## v0.448.0 (2026-11-04)
+
+### Features
+
+- **bench**: Enforce a priced inference cost factor in bench v16
+  ([#3369](https://github.com/ditto-assistant/ditto-subnet/pull/3369),
+  [`86bc89e`](https://github.com/ditto-assistant/ditto-subnet/commit/86bc89e773d63b81a4109985aacf659d89ccd35e))
+
+
+## v0.447.0 (2026-11-04)
+
+### Features
+
+- **miner**: Rehearse bench 16 locally with a public default generator slice
+  ([#3360](https://github.com/ditto-assistant/ditto-subnet/pull/3360),
+  [`4552730`](https://github.com/ditto-assistant/ditto-subnet/commit/455273058b194223638f212ce67f2fe3f1cd2c10))
+
+
+## v0.446.0 (2026-11-04)
+
+### Features
+
+- **bench**: Support and advertise bench v16 (dueling) across scorer, validator and Platform
+  ([#3354](https://github.com/ditto-assistant/ditto-subnet/pull/3354),
+  [`bd36b08`](https://github.com/ditto-assistant/ditto-subnet/commit/bd36b0882b847a2101a25f49d8cf85e454839985))
+
+
+## v0.445.0 (2026-11-03)
+
+### Features
+
+- **infra**: Prepare DaniLabs relay trial secret binding
+  ([#3373](https://github.com/ditto-assistant/ditto-subnet/pull/3373),
+  [`6fa7394`](https://github.com/ditto-assistant/ditto-subnet/commit/6fa739445b67a3812f176e4299031e9d7b56db28))
+
+
+## v0.444.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: Cap continual retests at 10 shared seeds
+  ([#3367](https://github.com/ditto-assistant/ditto-subnet/pull/3367),
+  [`94f9710`](https://github.com/ditto-assistant/ditto-subnet/commit/94f9710b721fa4191f1aec63ae579590f5d1ad70))
+
+
+## v0.443.0 (2026-11-03)
+
+### Bug Fixes
+
+- **miner-cli**: Retire a saved payment proof that already funded an upload
+  ([#3078](https://github.com/ditto-assistant/ditto-subnet/pull/3078),
+  [`48db910`](https://github.com/ditto-assistant/ditto-subnet/commit/48db910cdbd6432ed626ba5ad9cfef5e44a557b8))
+
+### Features
+
+- **validator,platform,backroom**: Publish dueling season commitments on chain
+  ([#3366](https://github.com/ditto-assistant/ditto-subnet/pull/3366),
+  [`42940c5`](https://github.com/ditto-assistant/ditto-subnet/commit/42940c59bd146b69e0e94ff8bfef23a5bacabaab))
+
+
+## v0.442.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: Prune released dueling slice bytes and tidy follow-ups
+  ([#3365](https://github.com/ditto-assistant/ditto-subnet/pull/3365),
+  [`073b6ef`](https://github.com/ditto-assistant/ditto-subnet/commit/073b6efbee4735785e67d1f0e47274cad41904f3))
+
+
+## v0.441.0 (2026-11-03)
+
+### Features
+
+- **inference**: Prepare DaniLabs trial routing
+  ([#3363](https://github.com/ditto-assistant/ditto-subnet/pull/3363),
+  [`7bf02ed`](https://github.com/ditto-assistant/ditto-subnet/commit/7bf02edc71bc9289654ba77ea7a13c1941163a59))
+
+- **platform,backroom**: Release pinned generator sources and publish revealed dueling seasons
+  ([#3364](https://github.com/ditto-assistant/ditto-subnet/pull/3364),
+  [`d0302c7`](https://github.com/ditto-assistant/ditto-subnet/commit/d0302c7f058cd2a80966e275af735dfb0f2378b8))
+
+
 ## v0.440.0 (2026-11-03)
 
 ### Features

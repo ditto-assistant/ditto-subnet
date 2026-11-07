@@ -167,6 +167,8 @@ from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.continual_retest_settings import (
+    CROWN_DUEL_PROTOCOL,
+    CROWN_DUEL_SEASONS,
     CROWN_GATE_PROTOCOL,
     DEFAULT_CHAMPION_STANDING_RANK,
     DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
@@ -233,6 +235,7 @@ from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retir
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
+    configured_crown_gate,
     crown_gate_for,
     crown_incumbent_is_active,
     statistical_band_cap_is_active,
@@ -247,6 +250,7 @@ from ditto.api_server.deferred_source_review import (
     public_review_reason,
     verified_review_notes,
 )
+from ditto.api_server.dueling_breakdown import public_dueling_breakdown
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
     ensure_current_efficiency_state,
@@ -295,6 +299,7 @@ from ditto.api_server.koth import (
     bounded_efficiency_adjusted_quality,
     champion_defense,
     crown_standings,
+    duel_seed_records,
     dueling_seed_records,
     emission_allocation,
     koth_entries_from_ledger,
@@ -393,6 +398,7 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     confirmation_depths,
     confirmation_history_by_agent,
+    duel_history_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import prev_generation_agent_ids
 from ditto.db.queries.emission_eligibility import (
@@ -453,6 +459,7 @@ from ditto.db.queries.scores import (
     list_eligible_ledger,
     list_memory_leader_timeline,
     list_provisional_ledger,
+    list_public_agent_scores,
     list_public_submissions,
     list_scored_bench_versions,
     list_scores_for_bench_version,
@@ -2978,6 +2985,7 @@ def _public_koth_emissions(
     rank_shares: Sequence[float] | None = None,
     crown_gate: CrownGate | None = None,
     crown_rules: CrownGate | None = None,
+    duel_history: Mapping[UUID, Sequence[Any]] | None = None,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool.
 
@@ -3080,6 +3088,11 @@ def _public_koth_emissions(
                         (dueling_history or {}).get(row.agent_id, ()),
                         seeds=merged_confirmations.keys(),
                     )
+                ),
+                duel_records=(
+                    None
+                    if v9_confirmed
+                    else duel_seed_records((duel_history or {}).get(row.agent_id, ()))
                 ),
             )
         )
@@ -3720,16 +3733,19 @@ async def build_public_leaderboard(
     # The protocol-34 crown rules: configured by the operator, folded only
     # once every recently-live weight setter reports v34 -- the same gate the
     # validator ledger applies, so the board's King is the fleet's King.
-    crown_rules = CrownGate(
-        min_shared_seeds=continual_settings.min_dethrone_confirmations,
-        standing_rank=continual_settings.champion_standing_rank,
-    )
+    crown_rules = configured_crown_gate(continual_settings)
     crown_gate_active_rules = (
         crown_gate_for(
             continual_settings,
             fleet_protocol_ready=await live_weight_setter_fleet_supports_protocol(
                 session,
                 minimum_protocol=CROWN_GATE_PROTOCOL,
+                now=now,
+                freshness=_VALIDATOR_STALE_WINDOW,
+            ),
+            duel_fleet_ready=await live_weight_setter_fleet_supports_protocol(
+                session,
+                minimum_protocol=CROWN_DUEL_PROTOCOL,
                 now=now,
                 freshness=_VALIDATOR_STALE_WINDOW,
             ),
@@ -4568,6 +4584,18 @@ async def build_public_leaderboard(
                 rank_shares=board_rank_shares,
                 crown_gate=crown_gate_active_rules,
                 crown_rules=crown_rules,
+                duel_history=(
+                    await duel_history_by_agent(
+                        session,
+                        agent_ids=[row.agent_id for row in finalized_rows],
+                        bench_version=active_version,
+                        seasons=CROWN_DUEL_SEASONS,
+                    )
+                    if crown_gate_active_rules is not None
+                    and crown_gate_active_rules.duel_window is not None
+                    and active_version is not None
+                    else {}
+                ),
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
@@ -6132,6 +6160,11 @@ def _public_validator_score(s) -> PublicValidatorScore:
             memory_mean=s.memory_mean,
             final_composite=s.composite,
             details=details,
+        ),
+        dueling_breakdown=public_dueling_breakdown(
+            bench_version=bench_version,
+            dueling=getattr(s, "dueling", None),
+            gate_evidence=getattr(s, "gate_evidence", None),
         ),
         v9_base=(_safe_public_v9_base(details) if (bench_version or 0) >= 9 else None),
         median_ms=s.median_ms,
@@ -8292,13 +8325,9 @@ async def agent_pipeline(
         (work.ticket.validator_hotkey, work.ticket.bench_version): work
         for work in active_work
     }
-    accepted_scores = list(
-        await session.scalars(
-            select(Score)
-            .where(Score.agent_id == agent_id)
-            .order_by(Score.created_at, Score.validator_hotkey)
-        )
-    )
+    # Public projection: ``per_case`` carries only the published case fields,
+    # which is all ``_safe_case_results`` reads. The full blob is ~1.8 MB a row.
+    accepted_scores = await list_public_agent_scores(session, agent_id=agent_id)
     canonical_version = await active_bench_version(session)
     # The same classification the operations feed publishes, for one agent. A
     # submission that is finalized, withdrawn, or has no validator work yet is
@@ -8610,6 +8639,11 @@ async def agent_pipeline(
                     memory_mean=score.memory_mean,
                     final_composite=score.composite,
                     details=(score.details if isinstance(score.details, dict) else {}),
+                ),
+                dueling_breakdown=public_dueling_breakdown(
+                    bench_version=_score_bench_version(score),
+                    dueling=getattr(score, "dueling", None),
+                    gate_evidence=getattr(score, "gate_evidence", None),
                 ),
                 v9_base=(
                     _safe_public_v9_base(score.details)

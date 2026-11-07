@@ -74,12 +74,12 @@ function ScoreOutliersPending() {
   return <div className="mt-6 h-64 animate-pulse rounded-xl bg-white/[0.035]" aria-label="Loading score outliers" />
 }
 
-function ScoreOutliersError({ error }: { error: Error }) {
+function ScoreOutliersError({ error }: { error: unknown }) {
   return (
     <div className="mx-auto mt-6 max-w-2xl rounded-xl border border-[var(--red)]/25 bg-[var(--red-dim)] p-6">
       <AlertTriangle className="h-6 w-6 text-[var(--red)]" />
       <h2 className="mt-4 text-lg font-semibold">Score outliers are unavailable</h2>
-      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error.message}</p>
+      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error instanceof Error ? error.message : 'An unexpected error occurred'}</p>
     </div>
   )
 }

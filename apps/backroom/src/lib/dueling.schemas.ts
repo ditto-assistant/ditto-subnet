@@ -8,6 +8,7 @@ import { auditReasonSchema } from './admin.schemas'
 // revealed.
 
 export const ROTATE_DUELING_SEASON_CONFIRMATION = 'ROTATE DUELING SEASON'
+export const REPUBLISH_DUELING_COMMITMENT_CONFIRMATION = 'REPUBLISH DUELING SEASON COMMITMENT'
 
 const uuid = z.string().uuid()
 const nullableString = z.string().nullable()
@@ -96,6 +97,24 @@ export const duelingSeasonSchema = z.object({
   column_means: z.array(columnMeanSchema).default([]),
   slices: z.record(z.string(), z.number().int()).default({}),
   rotation: rotationSchema.nullable().optional().default(null),
+  // On-chain dds1:{season_index}:{commitment} publication by elected
+  // validators, and the first confirmed block and extrinsic.
+  commitment_publication: z.enum(['pending', 'published', 'failed', 'disabled']).default('disabled'),
+  commitment_published_at: nullableString.optional().default(null),
+  commitment_block: nullableInt.optional().default(null),
+  commitment_extrinsic_hash: nullableString.optional().default(null),
+  commitment_error: nullableString.optional().default(null),
+  commitment_publications: z.array(z.object({
+    validator_hotkey: z.string(),
+    status: z.enum(['claimed', 'confirmed', 'failed', 'expired']),
+    claimed_at: z.string(),
+    claim_expires_at: z.string(),
+    reported_at: nullableString.optional().default(null),
+    block_number: nullableInt.optional().default(null),
+    extrinsic_hash: nullableString.optional().default(null),
+    detail: nullableString.optional().default(null),
+  })).default([]),
+  commitment_publishers_elected: z.array(z.string()).default([]),
 })
 
 export const duelingSeasonsSchema = z.object({
@@ -210,6 +229,22 @@ export const rotateDuelingSeasonInputSchema = z
       context.addIssue({
         code: 'custom',
         message: `confirmation must be exactly ${ROTATE_DUELING_SEASON_CONFIRMATION}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
+export const republishDuelingCommitmentInputSchema = z
+  .object({
+    seasonId: uuid,
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    if (input.confirmation !== REPUBLISH_DUELING_COMMITMENT_CONFIRMATION) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${REPUBLISH_DUELING_COMMITMENT_CONFIRMATION}`,
         path: ['confirmation'],
       })
     }

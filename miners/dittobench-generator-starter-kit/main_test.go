@@ -151,7 +151,7 @@ func TestV13OutputIsUnchanged(t *testing.T) {
 		if err := run(bytes.NewReader(request(c.seed, c.cases).Bytes()), &out); err != nil {
 			t.Fatal(err)
 		}
-		v3 := bytes.Replace(out.Bytes(), []byte(`"version":"4"`), []byte(`"version":"3"`), 1)
+		v3 := bytes.Replace(out.Bytes(), []byte(`"version":"5"`), []byte(`"version":"3"`), 1)
 		if got := challenge.Digest(v3); got != c.digest {
 			t.Fatalf("seed %d cases %d: v13 pack digest %s, want the version 3 pack %s", c.seed, c.cases, got, c.digest)
 		}
@@ -184,6 +184,63 @@ func TestV14RequestDeclaresV14(t *testing.T) {
 			again, _ := json.Marshal(legacy)
 			if !bytes.Equal(raw, again) {
 				t.Fatalf("seed %d cases %d: v14 pack differs from the v13 pack beyond its policy", seed, cases)
+			}
+		}
+	}
+}
+
+// A v15 round's request (window {14, 15}) still gets exactly the version 4
+// pack: the kit does not declare policy 15, so the public default generator's
+// v15 columns are byte-identical apart from the version string. The digests
+// were recorded from version 4 of the kit.
+func TestV15OutputIsUnchanged(t *testing.T) {
+	for _, c := range []struct {
+		seed   int64
+		cases  int
+		digest string
+	}{
+		{1, 80, "02be0604da3ea4e50e04e72c183aba65a4708f81c64a23623ebf5e5726df68c4"},
+		{2, 16, "4506dc42d9f8e6b74d9b2c8f66949e644e9ed12bbad90886be9dfa9387c4a92d"},
+		{3, 47, "cfef4dbac655d7be9c3213c1c60f6a386c3206671b8fe6918bb912a755e20989"},
+	} {
+		req := challenge.NewGenerateRequestFor(challenge.SeedFromInt64(c.seed), testHotkey, c.cases, challenge.GradingBenchVersionV15)
+		var out bytes.Buffer
+		if err := run(bytes.NewReader(req.Bytes()), &out); err != nil {
+			t.Fatal(err)
+		}
+		v4 := bytes.Replace(out.Bytes(), []byte(`"version":"5"`), []byte(`"version":"4"`), 1)
+		if got := challenge.Digest(v4); got != c.digest {
+			t.Fatalf("seed %d cases %d: v15-round pack digest %s, want the version 4 pack %s", c.seed, c.cases, got, c.digest)
+		}
+	}
+}
+
+// A v16 round's request (and a v16 dueling slice column, 35 cases) gets a v16
+// pack that passes every rule, with the same cases as the v13 pack.
+func TestV16RequestDeclaresV16(t *testing.T) {
+	for _, seed := range []int64{1, 2, 3} {
+		for _, cases := range []int{challenge.MinCases, 35, MaxCases} {
+			req := challenge.NewGenerateRequestFor(challenge.SeedFromInt64(seed), testHotkey, cases, challenge.GradingBenchVersionV16)
+			pack, err := Generate(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pack.GradingBenchVersion != challenge.GradingBenchVersionV16 {
+				t.Fatalf("seed %d: declared v%d", seed, pack.GradingBenchVersion)
+			}
+			raw, _ := json.Marshal(pack)
+			if r := challenge.ValidateGenerated(raw, req); !r.Valid {
+				b, _ := json.MarshalIndent(r.Issues, "", "  ")
+				t.Fatalf("seed %d cases %d invalid at v16:\n%s", seed, cases, b)
+			}
+			legacy, err := Generate(request(seed, cases))
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy.GradingBenchVersion = pack.GradingBenchVersion
+			again, _ := json.Marshal(legacy)
+			if !bytes.Equal(raw, again) {
+				t.Fatalf("seed %d cases %d: v16 pack differs from the v13 pack beyond its policy", seed, cases)
 			}
 		}
 	}

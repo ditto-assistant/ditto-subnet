@@ -175,6 +175,7 @@ from ditto.api_server.endpoints.verification_replay import (
     screener_router as screener_verification_replay_router,
 )
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
+from ditto.api_server.gc_tuning import apply_gc_tuning, parse_gc_tuning_from_env
 from ditto.api_server.generator_round_reservation import (
     GeneratorRoundReservationResolver,
 )
@@ -609,6 +610,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 f"failed to open dependencies during startup: {e}"
             ) from e
 
+        # Last, so the frozen generation holds the whole warmed-up startup heap.
+        apply_gc_tuning(parse_gc_tuning_from_env())
         logger.info(
             f"api server ready on {config.host}:{config.port} "
             f"commit={config.commit_hash}"

@@ -165,4 +165,64 @@ describe('dueling season tools', () => {
       await readOnly.server.close()
     }
   })
+
+  it('shows the on-chain commitment and guards its republish', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const committed = {
+      ...season, status: 'committed', opened_at: null, anchor_block: null, anchor_block_hash: null,
+      commitment_publication: 'failed', commitment_block: null, commitment_extrinsic_hash: null,
+      commitment_error: 'pylon outage', commitment_publications: [{
+        validator_hotkey: '5Validator', status: 'failed', claimed_at: '2026-11-03T00:00:00Z',
+        claim_expires_at: '2026-11-03T00:10:00Z', reported_at: '2026-11-03T00:01:00Z',
+        block_number: null, extrinsic_hash: null, detail: 'rate limited',
+      }],
+      commitment_publishers_elected: [],
+    }
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith(`/seasons/${SEASON}/republish-commitment`) && init?.method === 'POST') {
+        return Response.json({
+          ...committed, commitment_publication: 'pending', commitment_error: null,
+          commitment_publications: [], commitment_publishers_elected: ['5Other'],
+        })
+      }
+      if (url.endsWith(`/seasons/${SEASON}`)) return Response.json(committed)
+      return new Response('not found', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      expect(json(await client.callTool({ name: 'get_dueling_season', arguments: { seasonId: SEASON } })))
+        .toMatchObject({
+          commitment_publication: 'failed', commitment_error: 'pylon outage',
+          commitment_publications: [{ status: 'failed', detail: 'rate limited' }],
+        })
+
+      fetchMock.mockClear()
+      const wrong = await client.callTool({
+        name: 'republish_dueling_season_commitment',
+        arguments: { seasonId: SEASON, reason: 'pylon outage recovered', confirmation: 'REPUBLISH' },
+      })
+      expect(wrong.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const reopened = json(await client.callTool({
+        name: 'republish_dueling_season_commitment',
+        arguments: {
+          seasonId: SEASON, reason: 'pylon outage recovered',
+          confirmation: 'REPUBLISH DUELING SEASON COMMITMENT',
+        },
+      })) as { commitment_publication: string, commitment_publishers_elected: Array<string> }
+      expect(reopened).toMatchObject({
+        commitment_publication: 'pending', commitment_publishers_elected: ['5Other'],
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain(`/dueling/seasons/${SEASON}/republish-commitment`)
+      expect(JSON.parse(String(init.body))).toEqual({
+        reason: 'pylon outage recovered', actor: session.email,
+        confirmation: 'REPUBLISH DUELING SEASON COMMITMENT',
+      })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
 })
