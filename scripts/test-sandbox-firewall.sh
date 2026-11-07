@@ -129,6 +129,20 @@ for backend in nft legacy; do
   until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
     n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
   done
+  # A displaced pair leaves lower-priority copies after safe repair. Losing
+  # either leading hook repeatedly must not duplicate the surviving hook.
+  for bridge in ditto-sandbox0 'dtj+' ditto-sandbox0 'dtj+'; do
+    docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -t nat -D PREROUTING -i "$1" -j DITTO-OPENROUTER-SHIM' _ "$bridge"
+    docker exec "$name" sh -c 'rm /run/test-reconcile-paused; touch /run/test-resume-reconcile'
+    n=0
+    until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
+      n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+    done
+    docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; [ "$(iptables -w 5 -t nat -S PREROUTING | grep -c -- "-i dtj+ -j DITTO-OPENROUTER-SHIM")" -eq 2 ] && [ "$(iptables -w 5 -t nat -S PREROUTING | grep -c -- "-i ditto-sandbox0 -j DITTO-OPENROUTER-SHIM")" -eq 2 ]' || {
+      echo "$backend: displaced NAT hook repair duplicated the surviving hook" >&2
+      exit 1
+    }
+  done
   docker rm -f "$name" >/dev/null
 done
 

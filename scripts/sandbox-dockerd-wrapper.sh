@@ -144,11 +144,18 @@ EOF
     done
   fi
   if ! nat_hooks_first; then
-    # Hooks exist but have lost priority. Prepend a working pair before
-    # touching any active jumps so traffic stays protected during repair.
-    for bridge in ditto-sandbox0 'dtj+'; do
-      iptables -w 5 -t nat -I PREROUTING 1 -i "$bridge" -j DITTO-OPENROUTER-SHIM || return 1
-    done
+    # Hooks exist but have lost priority. Insert only the misplaced hooks;
+    # do not delete any active jumps or duplicate a surviving leading hook.
+    rules="$(iptables -w 5 -t nat -S PREROUTING)" || return 1
+    first="$(printf '%s\n' "$rules" | sed -n '2p')"
+    if [ "$first" != '-A PREROUTING -i dtj+ -j DITTO-OPENROUTER-SHIM' ]; then
+      iptables -w 5 -t nat -I PREROUTING 1 -i 'dtj+' -j DITTO-OPENROUTER-SHIM || return 1
+    fi
+    rules="$(iptables -w 5 -t nat -S PREROUTING)" || return 1
+    second="$(printf '%s\n' "$rules" | sed -n '3p')"
+    if [ "$second" != '-A PREROUTING -i ditto-sandbox0 -j DITTO-OPENROUTER-SHIM' ]; then
+      iptables -w 5 -t nat -I PREROUTING 2 -i ditto-sandbox0 -j DITTO-OPENROUTER-SHIM || return 1
+    fi
   fi
   check_hooks || return 1
 }
