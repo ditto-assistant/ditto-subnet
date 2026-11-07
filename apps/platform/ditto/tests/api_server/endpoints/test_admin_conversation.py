@@ -609,3 +609,29 @@ async def test_writes_that_can_create_work_end_the_idle_cooldown(
     # Turning admission on is seen at once, not after the cooldown.
     claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
     assert claim is not None
+
+
+async def test_a_write_during_an_idle_attempt_does_not_arm_the_cooldown(
+    app, monkeypatch
+):
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    request = Request({"type": "http", "app": app})
+    gate = module._admission_gate(request)
+
+    async def raced(*_args):
+        # Saw no work, then an operator write enabled admission mid-attempt.
+        gate.clear_idle_cooldown()
+        return None
+
+    monkeypatch.setattr(module, "_claim_assessment", raced)
+    assert await module.claim_assessment(request, None) is None
+    assert gate.idle_until == 0.0
+
+    next_attempt = AsyncMock(return_value=None)
+    monkeypatch.setattr(module, "_claim_assessment", next_attempt)
+    assert await module.claim_assessment(request, None) is None
+    next_attempt.assert_awaited_once()
+    assert gate.diagnostics.idle_skips == 0
+    # That undisturbed idle answer does start the wait.
+    assert gate.idle_until > 0.0

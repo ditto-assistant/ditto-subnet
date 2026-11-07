@@ -67,8 +67,12 @@ class _AdmissionGate:
     )
     idle_until: float = 0.0
     """``monotonic()`` time before which an attempt returns no work at once."""
+    work_writes: int = 0
+    """Count of writes that may have created work; an attempt that overlapped
+    one does not arm the cooldown from its now-stale no-work answer."""
 
     def clear_idle_cooldown(self) -> None:
+        self.work_writes += 1
         self.idle_until = 0.0
 
 
@@ -325,11 +329,17 @@ async def claim_assessment(
     async with gate.lock:
         gate.diagnostics.attempts += 1
         started = monotonic()
+        writes_before = gate.work_writes
         try:
             result = await _claim_assessment(request, session, worker_hotkey)
             gate.diagnostics.last_outcome = "claimed" if result is not None else "idle"
+            # A write that cleared the cooldown while this attempt ran may have
+            # created the work it did not see, so only an undisturbed idle
+            # answer starts the wait.
             gate.idle_until = (
-                monotonic() + ADMISSION_IDLE_COOLDOWN_SECONDS if result is None else 0.0
+                monotonic() + ADMISSION_IDLE_COOLDOWN_SECONDS
+                if result is None and gate.work_writes == writes_before
+                else 0.0
             )
             return result
         except asyncio.CancelledError:
