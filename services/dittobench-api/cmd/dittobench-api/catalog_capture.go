@@ -48,8 +48,11 @@ const (
 	// case is marked incomplete and counts keep increasing.
 	catalogCaptureMaxCompletions = 256
 	// catalogCaptureMaxTools bounds the distinct (name, schema digest) pairs kept
-	// per completion and per case. The published catalog has 31 tools.
-	catalogCaptureMaxTools = 512
+	// per completion and per case. The published catalog has 31 tools; the
+	// v18 seeded surface carries 1,517 (catalog.V18BulkToolkits), so the bound
+	// sits above it and a harness that forwards the whole v18 menu is still
+	// captured completely.
+	catalogCaptureMaxTools = 2048
 	// catalogCaptureMaxSpans bounds the distinct system-span digests kept per case.
 	catalogCaptureMaxSpans = 64
 	// catalogCaptureMaxEmissions bounds the model-emitted tool names kept per case.

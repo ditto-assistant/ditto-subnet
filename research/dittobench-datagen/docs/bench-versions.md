@@ -29,7 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
-| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; no token levers. Known vector `9029ef85b86ac44832ae5f3d7dadd0475cd14fb4271c00db2a6f78c8c5dc46d3` (`TestV18KnownVector`). |
+| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; the one token lever is a production-sized connector menu (1,517 tools). Known vector `4bdf63cff28126664d129ee20469117e0ca94bdee404c7ea28016571d90b46e4` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1487,8 +1487,9 @@ Contract tests: `gen/v16_contract_test.go`, `catalog/v16_test.go`,
 
 On live v17 the cost factor did all the ranking: every agent scored 0.93-0.99
 on the datagen half. V18 changes only which first-party cases a run asks.
-Scoring is priced-cost-v2 unchanged, and no lever adds tokens: no larger
-catalog, no extra decoy tools, the same 50 + 125 case half. Every lever is
+Scoring is priced-cost-v2 unchanged. The only lever that adds tokens is the
+production-sized connector menu below; there are no extra decoy tools and the
+case half is still 50 + 125. Every lever is
 gated on `bench_version >= 18`, so v2..v17 regenerate byte-identically
 (`TestV17KnownVector`). V18 was staged in `protocol/staged.go` and promoted
 into the supported list by the cross-layer PR with the same epoch and seed
@@ -1540,6 +1541,30 @@ money 0.062, money of computed answers 0.181, business 0.412, abstention
 0.096, twin 0.448, cascade 0.016). A third stale-removed pair would put the
 contacts sub-domain over its 20% cap on 4 of 40 seeds.
 
+**Production-sized connector catalog (catalog/v18.go).** Owner scope
+change, 2026-11-07: v18 also carries a production-sized tool menu, the one
+token-adding lever this contract takes (the cost rule itself is unchanged).
+Production, read-only on 2026-11-07 for one owner account: 128 first-party
+tools plus 1,282 enabled toolkit tools in 15 toolkits (328, 314, 127, 92, 70,
+61, 57, 50, 47, 46, 26, 25, 16, 16, 7). V18 splices `catalog.V18BulkToolkits`
+into every seed's v16 surface at exactly those toolkit sizes, so a seed offers
+1,517 tools (v17: 235). The toolkits reuse the production sizes on apps no
+v16 seed links and whose capability no product tool owns; every bulk tool
+answers "not connected", performs nothing and is never expected by a case.
+Descriptions run 140-280 characters, the production range.
+
+| Surface | Tools | Catalog tokens (o200k, OpenAI tools JSON) | Mean tokens per tool |
+| --- | ---: | ---: | ---: |
+| v17, seed 123456789 | 235 | 16,210 | 69 |
+| v18, seed 123456789 | 1,517 | 153,154 | 101 |
+
+The v18 menu is larger than the locked model's 131,072-token context, so a
+harness that forwards the whole catalog to the model cannot complete a tool
+case. On v17 every agent but one already forwards a filtered set: across all
+28 v17 rows, the median tools offered per completion was 31-34 (maximum 41)
+for nine agents and 234 for the tenth. The scorer's catalog capture keeps up
+to 2,048 tools per completion so such a harness is still captured completely.
+
 **`conversational-chitchat` is a grading ceiling, not difficulty.** Its
 0.500 on all 84 v17 cases is the fixed chitchat credit (`gradingPolicy.chitchatCredit`,
 0.5 since v8). It lowers every agent's memory mean by the same 1.2 points and
@@ -1559,7 +1584,7 @@ the v14 families stay `pending-panel` in `universe.V14FamilyMix`.
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV18KnownVector` pins
-`9029ef85b86ac44832ae5f3d7dadd0475cd14fb4271c00db2a6f78c8c5dc46d3`, with
+`4bdf63cff28126664d129ee20469117e0ca94bdee404c7ea28016571d90b46e4`, with
 epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
 `datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
 

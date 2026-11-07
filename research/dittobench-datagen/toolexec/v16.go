@@ -41,7 +41,8 @@ func (f Fixture) isLinkedReadBearer(category, name string) bool {
 // connectorRefusedV16 is the v16 connector branch of unavailable: a linked
 // app's tool is served, every other connector is refused.
 func (f Fixture) connectorRefusedV16(name string) (string, bool) {
-	app, isConnector := catalog.IsConnectorTool(name)
+	// From v18 the bulk toolkits are connectors too (never linked).
+	app, isConnector := catalog.IsConnectorToolForVersion(name, f.benchVersion)
 	if !isConnector {
 		return "", false
 	}

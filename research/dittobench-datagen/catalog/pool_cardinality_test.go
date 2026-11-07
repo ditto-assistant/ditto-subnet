@@ -42,6 +42,12 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"v13RetiredTools":        poolcanary.Internal,
 			"v16DescriptionRewrites": poolcanary.Keyed,    // keyed by the v15 description it rewrites
 			"V16LinkStatePhrases":    poolcanary.Internal, // contract-test denylist, never served
+			// v18 bulk toolkits: a non-answer distractor menu. No scored case
+			// expects a bulk tool (every call is refused "not connected"), so no
+			// answer or question cue can be keyed on these banks.
+			"V18BulkToolkits":    "production-sized non-answer connector menu; no case expects a bulk tool",
+			"v18Verbs":           "action vocabulary of the non-answer bulk menu; no case expects a bulk tool",
+			"v18DetailTemplates": "description sentences of the non-answer bulk menu; no case expects a bulk tool",
 		},
 	})
 }
