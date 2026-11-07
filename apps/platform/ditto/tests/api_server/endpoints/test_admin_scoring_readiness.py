@@ -26,7 +26,7 @@ from ditto.db.models import (
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.screener_policy_state import LEASE_SCREENING_POLICY_FLOOR
+from ditto.screener_policy_state import lease_screening_policy_floor
 from ditto.tests.legacy_era import retired_era_writes_allowed
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 
@@ -201,7 +201,7 @@ async def test_policy_below_the_screened_image_floor_blocks(
     app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
 ) -> None:
     """Only the screened-image floor gates; a later review policy never does."""
-    agent_id = await _seed(sr_maker, policy_version=LEASE_SCREENING_POLICY_FLOOR - 1)
+    agent_id = await _seed(sr_maker, policy_version=lease_screening_policy_floor() - 1)
     _install(app, sr_maker)
     body = await _get(client, agent_id)
     assert body["leaseable"] is False
