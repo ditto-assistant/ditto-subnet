@@ -251,6 +251,7 @@ import {
   retryFailedScreeningNowInputSchema,
   expireRunningScreeningInputSchema,
   rejectScreeningSubmissionInputSchema,
+  amendQuarantineRejectReasonInputSchema,
   releaseVerifiedV13CourtClearInputSchema,
   summarizeScreeningFailuresInputSchema,
   confirmationBundleStateSchema,
@@ -328,6 +329,7 @@ import {
   retryFailedScreeningNow,
   expireRunningScreening,
   rejectScreeningSubmission,
+  amendQuarantineRejectReason,
   fetchValidationRetry,
   fetchStuckSubmissions,
   fetchLeaseRevocations,
@@ -906,6 +908,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Exact V13 artifact review window; null/not_configured means none. Attempt leases are not finalizer dates.',
   reject_screening_submission:
     'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
+  amend_screening_reject_reason:
+    'Amend reject reason; decision unchanged. Confirm AMEND PUBLIC REJECT REASON. backroom:write.',
   release_verified_v13_court_clear:
     'Release a held V13 court clear after Platform re-verifies its signed receipt. Confirmation: RELEASE VERIFIED V13 COURT CLEAR. Requires backroom:write.',
   get_queue_policy_settings:
@@ -1406,7 +1410,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview ATH rulings batch',
       description:
-        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]; a clear on a held agent is ["clear"], and a clear on an unheld scored or live agent with no ATH review is ["attest"]: it records the terminal clear without holding the row, so the agent never leaves the board and would_change_crown is always false; a reject is also accepted on an agent still evaluating below quorum, as ["open","reject"], and ends its live validator tickets so the remaining runs are not paid for, while a bare open still needs scored or live; a WITHDRAWN REJECT is reversible: a clear on a banned agent whose ATH review resolved reject is ["open","clear"] -- it reopens that same review with the ruling\'s reason (a `reopen` action keeping the reject on the record), then clears it back to the status recorded before the reject (scored, live, or evaluating if it was rejected below quorum), and would_change_crown reports whether the restored score retakes the crown; an open on such an agent is ["open"] and holds it for further review; a ban by any other path, with no rejected review, stays a conflict, and the hotkey upload gate (list_hotkey_bans) is never touched), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear a held agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
+        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]; a clear on a held agent is ["clear"], and a clear on an unheld scored or live agent with no ATH review is ["attest"]: it records the terminal clear without holding the row, so the agent never leaves the board and would_change_crown is always false; a reject is also accepted on an agent still evaluating below quorum, as ["open","reject"], and ends its live validator tickets so the remaining runs are not paid for, while a bare open still needs scored or live; a WITHDRAWN REJECT is reversible: a clear on a banned agent whose ATH review resolved reject is ["open","clear"] -- it reopens that same review with the ruling\'s reason (a `reopen` action keeping the reject on the record), then clears it back to the status recorded before the reject (scored, live, or evaluating if it was rejected below quorum), and would_change_crown reports whether the restored score retakes the crown; an open on such an agent is ["open"] and holds it for further review; a ban by any other path, with no rejected review, stays a conflict, and the hotkey upload gate (list_hotkey_bans) is never touched; a STRANDED pending review behind an agent already rejected or banned closes with a reject as ["close_terminal"]: no evidence_references needed, the review resolves reject, the agent, its scores and the board are untouched, and the close is never a reject a later open can withdraw), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear a held agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
       inputSchema: previewAthRulingsBatchInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -4582,6 +4586,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => rejectScreeningSubmission(input, props.session.email)),
+  )
+
+  registerTool(
+    'amend_screening_reject_reason',
+    {
+      title: 'Amend public reject reason',
+      description:
+        'Correct the miner-visible reason on one resolved screening reject (operator or automated, e.g. platform:v13-confirmed-violation) without changing the decision. Guards: quarantineId plus expectedAgentId, expectedArtifactSha256 and expectedAttemptId from get_screening_quarantine_context, and expectedReason, the exact public reason being replaced. The quarantine resolution reason, the attempt public reason and the agent screening_reason take the corrected text where they still carry the replaced one; status, resolved_by, the moderation record and evidence are untouched. The replaced text stays in the append-only resolution history, seeded with the original decision when none was recorded. Replaying the same reason is idempotent. Confirmation: "AMEND PUBLIC REJECT REASON". Requires backroom:write.',
+      inputSchema: amendQuarantineRejectReasonInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => amendQuarantineRejectReason(input, props.session.email)),
   )
 
   registerTool(
