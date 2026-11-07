@@ -13586,11 +13586,13 @@ class TestQuarantineReviewContext:
         )
         assert blocked.status_code == 409
 
+    @pytest.mark.parametrize("has_resolution_time", [True, False])
     async def test_amend_reason_with_no_recorded_reason_after_a_rescreen(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        has_resolution_time: bool,
     ) -> None:
         # A reject that recorded no reason is amendable with an empty guard,
         # history gains the decision being amended even though an earlier
@@ -13622,7 +13624,7 @@ class TestQuarantineReviewContext:
             quarantine.status, quarantine.resolution = "resolved", "reject"
             quarantine.resolution_reason = None
             quarantine.resolved_by = "platform:v13-confirmed-violation"
-            quarantine.resolved_at = resolved_at
+            quarantine.resolved_at = resolved_at if has_resolution_time else None
             attempt.status, attempt.public_reason = "rejected", None
             agent.status, agent.screening_reason = AgentStatus.REJECTED, None
             quarantine_id = quarantine.quarantine_id
