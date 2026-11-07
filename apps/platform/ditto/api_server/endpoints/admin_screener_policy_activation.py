@@ -27,7 +27,7 @@ the model cannot see:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, cast
+from typing import Annotated, Any, NoReturn, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -98,6 +98,11 @@ SOURCE_REVIEW_RETIRED_DETAIL = (
 )
 
 
+_RETIRED_RESPONSES: dict[int | str, dict[str, Any]] = {
+    410: {"description": SOURCE_REVIEW_RETIRED_DETAIL}
+}
+
+
 def _source_review_retired() -> HTTPException:
     return HTTPException(status_code=410, detail=SOURCE_REVIEW_RETIRED_DETAIL)
 
@@ -144,10 +149,10 @@ async def get_v13_review_clock(
     return await _review_clock_schedule(session)
 
 
-@router.post("/review-clock", response_model=V13ReviewClockSchedule)
+@router.post("/review-clock", status_code=410, responses=_RETIRED_RESPONSES)
 async def schedule_v13_review_clock(
     _admin: AdminDep,
-) -> V13ReviewClockSchedule:
+) -> NoReturn:
     """Retired: source review no longer runs, so no review clock is scheduled."""
     raise _source_review_retired()
 
@@ -377,18 +382,18 @@ async def get_scored_rescreen(
     )
 
 
-@router.post("/advance-scored-rescreen", response_model=ScoredPolicyRescreenView)
+@router.post("/advance-scored-rescreen", status_code=410, responses=_RETIRED_RESPONSES)
 async def advance_scored_rescreen(
     _admin: AdminDep,
-) -> ScoredPolicyRescreenView:
+) -> NoReturn:
     """Retired: scored agents are never rescreened for a review policy."""
     raise _source_review_retired()
 
 
-@router.post("", response_model=ScreenerPolicyActivationView)
+@router.post("", status_code=410, responses=_RETIRED_RESPONSES)
 async def schedule_activation(
     _admin: AdminDep,
-) -> ScreenerPolicyActivationView:
+) -> NoReturn:
     """Retired: the required screening policy is frozen at its last activation.
 
     Validators lease on the benchmark contract floor alone, so nothing waits on
