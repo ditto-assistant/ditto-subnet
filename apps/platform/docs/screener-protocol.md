@@ -1,5 +1,57 @@
 # Screening protocol dependency
 
+## Source review retired (2026-11-07)
+
+Owner decision (Peyton, Discord #118・ditto, 2026-11-07): screening is build
+and safety checks only. Bench difficulty, with fresh private per-seed data and
+frequent harder versions, replaces the source-review layer, and operators read
+the top agents' code after scoring.
+
+What runs on every submission:
+
+| Stage | Where | Outcome on failure |
+|---|---|---|
+| Payment, banned-hotkey and same-owner duplicate checks | `/upload/check`, `/upload/agent` | refused at upload |
+| Archive, size and per-file source limits | upload, then the worker's download and container-contract check | `artifact-invalid`, `container-harness-contract` reject |
+| Static malicious-source preflight (deterministic, no model) | worker, before any submission-controlled build | `static-malicious-source` reject with file:line locations |
+| Isolated image build, health and seeding contract, screened-image export | worker on isolated screener infra | `docker-build*`, `health-contract`, `seed-*` reject, or an infra park |
+| Exact cross-miner duplicate | claim | `exact-cross-miner-duplicate` reject |
+| Copy signals and unreleased-copy protection | score finalization, copy court, sentinel | copy hold (`review_kind: copy`) |
+
+What no longer runs:
+
+- L1/L2/L3 model source review, L4 adjudication, policy modules, behavioral
+  challenges and lineage-scoped review. Every claim is an ordinary build-only
+  attempt (no `deferred-mechanical-admission` marker, since nothing is
+  deferred), which the protocol already forbids from quarantining; a pass
+  goes straight to `evaluating`. The queue-policy field
+  `deferred_source_review` is no longer read by the claim or by score
+  finalization.
+- Screening quarantines and inconclusive holds from a review, and policy
+  rejects. The repeated-expiry park now moves the agent to `screening_failed`
+  for an exact operator retry instead of opening a quarantine.
+- Automatic holds at score finalization: deferred source review, the top-five
+  integrity double-check, outlier escalation and transform-audit enforcement.
+  The transform audit is still recorded, observationally.
+- Policy-only rescreens, scored-policy rescreens, review clocks and new
+  review-policy activations (`POST /admin/screener-policy-activation`,
+  `/advance-scored-rescreen` and `/review-clock` answer 410). The last
+  activation (v14) stays the version new attempts stamp.
+- Leasing on the activated review policy. `queue_candidate_predicate`, the
+  provisional-contender lane, `rollout_member_policy_predicate` and
+  `POST /validator/score` gate only on the benchmark contract's
+  `minimum_screening_policy_version`, which pins the screened-image handoff.
+
+Unchanged: validators load only a Platform-verified screened image
+(`requires_screened_image`, [the untrusted-execution
+runbook](../../../docs/UNTRUSTED-EXECUTION-RUNBOOK.md)), copy protection,
+banned hotkeys, generator pack validation, and every operator post-hoc tool
+(void or replace scores, reject, ban, resolve the quarantines and ATH holds
+opened before the retirement). The sections below describe the historical
+review contract that those older rows were written under.
+
+## Package dependency
+
 The API owns queue state, leases, verdict acceptance, screening history, and
 public status projection. The public `ditto-screener` repository owns the
 build/run worker. They share only `ditto-screening-protocol`, pinned in
