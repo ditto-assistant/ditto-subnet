@@ -96,6 +96,9 @@ func memoryEnvelopeForVersion(mem, benchVersion int) (V13MemoryEnvelope, bool) {
 		// never inherits the newest one through the floor below.
 		return V13MemoryEnvelope{}, false
 	}
+	if benchVersion >= protocol.BenchVersionV18 {
+		return v18EnvelopeFor(mem)
+	}
 	if benchVersion >= protocol.BenchVersionV16 {
 		return v16EnvelopeFor(mem)
 	}
@@ -115,6 +118,9 @@ func MemoryEnvelopeForRunSize(runSize string, benchVersion int) (V13MemoryEnvelo
 // profilesForEnvelope returns the run-size profiles whose slot tables a
 // contract publishes (v13 tables for v13..v15, dueling tables from v16).
 func profilesForEnvelope(benchVersion int) map[string]Profile {
+	if benchVersion >= protocol.BenchVersionV18 {
+		return profilesV18
+	}
 	if benchVersion >= protocol.BenchVersionV16 {
 		return profilesV16
 	}

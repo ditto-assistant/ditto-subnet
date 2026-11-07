@@ -562,6 +562,9 @@ func GenerateV13PersonalProgramsForVersion(seed int64, count, benchVersion int) 
 	out := make([]V10GeneratedCase, 0, count)
 	for group := 0; group < count/4; group++ {
 		domain := V13PersonalDomains[domainPerm[group%len(domainPerm)]]
+		if benchVersion >= protocol.BenchVersionV18 {
+			domain = v18PersonalDomain(seed, group)
+		}
 		g := d.drawPersonalGroup(group, domain)
 		base := renderV13PersonalMember(d, group, 0, g, false)
 		counter := renderV13PersonalMember(d, group, 3, g, true)

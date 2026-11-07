@@ -184,6 +184,10 @@ func ProfileForVersion(runSize string, benchVersion int) (Profile, bool) {
 		// v17 inherits v16's dataset profile unchanged; its own contract
 		// change is the priced-cost-v2 scoring curve in the scorer.
 		profiles = profilesV16
+	case protocol.BenchVersionV18:
+		// v18 keeps the dueling run size and moves memory slots between
+		// families (gen/v18_envelope.go); only the full isolation quota moves.
+		profiles = profilesV18
 	default:
 		return Profile{}, false
 	}
