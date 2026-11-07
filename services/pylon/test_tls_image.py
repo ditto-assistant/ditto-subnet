@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ssl
 import subprocess
 import tempfile
@@ -15,20 +16,33 @@ from anyio.streams.tls import TLSStream
 
 
 class TLSImageTests(unittest.IsolatedAsyncioTestCase):
-    def test_compromised_intermediate_root_is_not_trusted(self):
-        context = ssl.create_default_context(cafile=certifi.where())
-        names = {
-            value
-            for cert in context.get_ca_certs()
-            for rdn in cert["subject"]
-            for key, value in rdn
-            if key == "commonName"
+    def _check_ca_store(self, context: ssl.SSLContext):
+        fingerprints = {
+            hashlib.sha256(cert).hexdigest()
+            for cert in context.get_ca_certs(binary_form=True)
         }
-        self.assertFalse(
-            "emSign ECC Root CA - G3" in names,
-            "root of compromised intermediates is trusted",
+        # Debian DSA-6572-1 removed both cross-signing trust anchors.
+        affected = {
+            "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b",
+            "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4",
+        }
+        self.assertTrue(
+            affected.isdisjoint(fingerprints), "affected CA root is trusted"
         )
-        self.assertIn("emSign Root CA - G1", names)
+        # An unaffected emSign root is a positive control against an empty store.
+        self.assertIn(
+            "40f6af0346a99aa1cd1d555a4e9cce62c7f9634603ee406615833dc8c8d00367",
+            fingerprints,
+        )
+
+    def test_certifi_ca_store(self):
+        self._check_ca_store(ssl.create_default_context(cafile=certifi.where()))
+
+    def test_system_ca_store(self):
+        self._check_ca_store(ssl.create_default_context())
+        self._check_ca_store(
+            ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt")
+        )
 
     async def _connect_with_certificate(self, dns_name: str) -> bytes:
         with tempfile.TemporaryDirectory() as tmp:
