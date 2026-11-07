@@ -1805,24 +1805,6 @@ def _due_activation(*, rescreen_scored: bool):
 
 
 @contextmanager
-def _due_canary_activation(
-    *, target_policy_version: int, activation_revision: int | None = None
-):
-    """Publish an isolated scored-rescreen target without raising the queue."""
-    update_effective_screener_policy(
-        SCREENING_FLOOR_POLICY_VERSION,
-        rescreen_scored=True,
-        scored_rescreen_policy_version=target_policy_version,
-        scored_rescreen_activation_revision=activation_revision,
-    )
-    try:
-        yield
-    finally:
-        update_effective_screener_policy(
-            SCREENING_FLOOR_POLICY_VERSION, rescreen_scored=False
-        )
-
-
 def _scored_agent(*, hotkey: str, name: str, created_at: datetime | None = None):
     agent = Agent(
         agent_id=uuid4(),
@@ -2029,53 +2011,6 @@ async def test_legacy_canary_posture_uses_the_l3_model_default(
     claimed = await _claim(session, limit=1, review_settings_binding=_NORMAL_BINDING)
 
     assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
-
-
-async def _seed_scored_canary_release_and_fresh_upload(
-    session: AsyncSession,
-) -> tuple[Agent, ScoredPolicyRescreenRelease, ScreenerPolicyActivation, Agent]:
-    await _activate_current_era(session)
-    posture = await _seed_canary_posture(session, scope="another-worker")
-    target = SCREENING_FLOOR_POLICY_VERSION + 1
-    now = datetime.now(UTC)
-    held = _scored_agent(
-        hotkey="5HK-scored-scoped-canary",
-        name="scored-scoped-canary",
-        created_at=now - timedelta(minutes=30),
-    )
-    fresh = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-fresh-behind-rescreen",
-        name="fresh-behind-rescreen",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.UPLOADED,
-        created_at=now,
-    )
-    async with session.begin():
-        activation = ScreenerPolicyActivation(
-            parent_revision=0,
-            target_policy_version=target,
-            activate_at=now - timedelta(minutes=1),
-            rescreen_scored=True,
-            canary_only=True,
-            reason="one scored canary pinned to a different worker",
-            actor="test",
-        )
-        session.add_all((held, fresh, activation))
-        await session.flush()
-        release = ScoredPolicyRescreenRelease(
-            release_id=uuid4(),
-            activation_revision=activation.revision,
-            target_policy_version=target,
-            agent_id=held.agent_id,
-            position=1,
-            state="pending",
-            review_settings_revision=posture.revision,
-            actor="test",
-            reason="one scored canary pinned to a different worker",
-        )
-        session.add(release)
-    return held, release, activation, fresh
 
 
 async def _seed_double_check_posture(

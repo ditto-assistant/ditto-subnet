@@ -34,8 +34,6 @@ from ditto.tests.api_server.endpoints.test_screener import (
 
 _MAIN_V1 = "fn main() {\n    answer();\n}\n\nfn answer() {\n    model();\n}\n"
 _MAIN_V2 = "fn main() {\n    answer();\n}\n\nfn answer() {\n    model_with_note();\n}\n"
-_ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
-_DOCKERFILE = 'FROM rust:1\nCOPY . .\nCMD ["agent"]\n'
 
 
 def _tarball(files: dict[str, str | bytes]) -> bytes:

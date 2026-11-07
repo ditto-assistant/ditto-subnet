@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
@@ -87,10 +86,8 @@ MAX_SCREENING_EXPIRIES = 5
 # set: an owner still being screened is handled by deferring the claim
 # (earlier_pending), not by flagging, so the race resolves before either is
 # judged.
-logger = logging.getLogger(__name__)
 # Mirrors ``ditto.api_server.deferred_source_review.INTEGRITY_DOUBLE_CHECK_TRIGGER``
 # without importing the API layer into queries.
-_INTEGRITY_DOUBLE_CHECK_TRIGGER = "integrity_double_check"
 
 _USABLE_OWNER_STATUSES = (
     AgentStatus.EVALUATING,
