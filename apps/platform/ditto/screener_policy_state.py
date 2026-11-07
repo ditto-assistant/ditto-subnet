@@ -64,9 +64,9 @@ def lease_screening_policy_floor(bench_version: int | None = None) -> int:
     With a ``bench_version`` it is that benchmark contract's
     ``minimum_screening_policy_version``, the exact gate the lease allocator
     and ``POST /validator/score`` apply. Without one (a projection that is not
-    tied to an era) it is the lowest minimum across the screened-image
-    contracts. It is never a later review-policy activation: source review is
-    retired (2026-11-07).
+    tied to an era), or for an era with no shipped contract, it is the lowest
+    minimum across the screened-image contracts. It is never a later
+    review-policy activation: source review is retired (2026-11-07).
     """
     from ditto.api_models.benchmark_contract import (  # noqa: PLC0415
         benchmark_contract,
@@ -74,7 +74,12 @@ def lease_screening_policy_floor(bench_version: int | None = None) -> int:
     )
 
     if bench_version is not None:
-        return benchmark_contract(bench_version).minimum_screening_policy_version
+        try:
+            return benchmark_contract(bench_version).minimum_screening_policy_version
+        except ValueError:
+            # A historical era with no shipped contract: fall back to the
+            # era-free floor rather than failing the caller's request.
+            pass
     return min(
         contract.minimum_screening_policy_version
         for contract in benchmark_contracts()
