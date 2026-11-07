@@ -45,7 +45,11 @@ from ditto.api_server.endpoints.miner_auth import (
     resolve_miner_session,
 )
 from ditto.api_server.no_store import no_store
-from ditto.db.models import MinerDittoLink, MinerDittoLinkAttempt
+from ditto.db.models import (
+    MinerDittoLink,
+    MinerDittoLinkAttempt,
+    MinerGithubLinkAttempt,
+)
 from ditto.db.queries.attestation import get_bound_coldkey_for_hotkey
 from ditto.db.queries.miner_ditto_links import (
     create_attempt,
@@ -195,13 +199,19 @@ async def link_attempt(
             if attempt.status == "linked"
             else None
         )
-    return _attempt_view(attempt, link)
+        view = await _attempt_view(session, attempt, link)
+    return view
 
 
-def _attempt_view(
-    attempt: MinerDittoLinkAttempt, link: MinerDittoLink | None
+async def _attempt_view(
+    session: AsyncSession, attempt: MinerDittoLinkAttempt, link: MinerDittoLink | None
 ) -> MinerDittoLinkAttemptResponse:
     authenticated = attempt.status in ("authenticated", "linked")
+    github = (
+        await session.get(MinerGithubLinkAttempt, attempt.attempt_id)
+        if authenticated
+        else None
+    )
     return MinerDittoLinkAttemptResponse(
         attempt_id=attempt.attempt_id,
         status=attempt.status,  # type: ignore[arg-type]
@@ -210,6 +220,9 @@ def _attempt_view(
         ditto_email=attempt.ditto_email if authenticated else None,
         miner_hotkey=attempt.miner_hotkey,
         link=_link_view(link) if link else None,
+        github_proof_attempt_id=github.attempt_id
+        if github is not None and github.status in ("accepted", "linked")
+        else None,
     )
 
 
@@ -238,7 +251,7 @@ async def confirm_link(
         attempt = await expire_stale_attempt(session, attempt=attempt, now=now)
         if attempt.status == "linked":
             link = await get_active_link(session, hotkey=row.miner_hotkey)
-            return _attempt_view(attempt, link)
+            return await _attempt_view(session, attempt, link)
         if attempt.status != "authenticated" or not attempt.ditto_user_id:
             raise HTTPException(
                 status_code=409,
@@ -263,7 +276,7 @@ async def confirm_link(
         attempt.error = None
         attempt.completed_at = now
         await session.flush()
-        view = _attempt_view(attempt, link)
+        view = await _attempt_view(session, attempt, link)
     return view
 
 
@@ -378,6 +391,23 @@ async def oidc_callback(
         fresh.error = None
         fresh.ditto_user_id = identity.user_id
         fresh.ditto_email = identity.email if identity.email_verified else None
+        # Matching server-generated ids record the Ditto provenance without
+        # changing a single historical signed GitHub proof or its wire format.
+        if identity.github_user_id is not None and identity.github_login is not None:
+            session.add(
+                MinerGithubLinkAttempt(
+                    attempt_id=fresh.attempt_id,
+                    netuid=request.app.state.config.chain.netuid,
+                    hotkey=fresh.miner_hotkey,
+                    session_id=fresh.session_id,
+                    launch_hash=hash_state(secrets.token_urlsafe(32)),
+                    status="identity_verified",
+                    github_user_id=identity.github_user_id,
+                    github_login=identity.github_login,
+                    created_at=now,
+                    expires_at=fresh.expires_at,
+                )
+            )
         fresh.completed_at = None
         accept_token = secrets.token_urlsafe(32)
         fresh.accept_token_hash = _sha256(accept_token)
@@ -504,11 +534,21 @@ async def accept_link_decide(
         if decision == "accept":
             row.status = "authenticated"
             row.user_accepted_at = now
+            github_attempt = await session.get(
+                MinerGithubLinkAttempt, row.attempt_id, with_for_update=True
+            )
+            if github_attempt is not None:
+                github_attempt.status = "accepted"
             outcome = with_result(
                 return_to, outcome="confirm", attempt=str(row.attempt_id)
             )
         else:
             _fail(row, now, "declined by the Ditto account holder")
+            github_attempt = await session.get(
+                MinerGithubLinkAttempt, row.attempt_id, with_for_update=True
+            )
+            if github_attempt is not None:
+                github_attempt.status = "failed"
             outcome = with_result(return_to, outcome="error", reason=row.error)
         await session.flush()
     return RedirectResponse(outcome, status_code=303)

@@ -542,10 +542,17 @@ def test_ditto_link_config_is_off_by_default_and_fails_closed(
         "DITTO_LINK_CLIENT_ID",
         "DITTO_LINK_CLIENT_SECRET",
         "DITTO_LINK_REDIRECT_URL",
+        "DITTO_LINK_SCOPES",
     ):
         monkeypatch.delenv(name, raising=False)
     config = parse_api_server_config_from_env("c")
     assert config.ditto_link.enabled is False
+    assert "connection:github:read" in config.ditto_link.scopes.split()
+    monkeypatch.setenv("DITTO_LINK_SCOPES", "  ")
+    assert (
+        "connection:github:read"
+        in parse_api_server_config_from_env("c").ditto_link.scopes.split()
+    )
     check_config(config)
 
     monkeypatch.setenv("DITTO_LINK_ENABLED", "true")

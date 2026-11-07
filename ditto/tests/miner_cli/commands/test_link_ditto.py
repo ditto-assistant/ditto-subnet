@@ -28,6 +28,9 @@ def _args(**overrides: object) -> argparse.Namespace:
         "network": "local",
         "chain_endpoint": None,
         "verbose": False,
+        "coldkey_name": "miner",
+        "hotkey_name": "default",
+        "expect_github_id": None,
     }
     base.update(overrides)
     return argparse.Namespace(**base)
