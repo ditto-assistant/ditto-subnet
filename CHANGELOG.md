@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.461.0 (2026-11-07)
+
+### Documentation
+
+- Describe build-and-safety-only screening for miners and operators
+  ([#3429](https://github.com/ditto-assistant/ditto-subnet/pull/3429),
+  [`5a7c2bf`](https://github.com/ditto-assistant/ditto-subnet/commit/5a7c2bf4f632952723e2a2775e21cd5a9f0cbfe0))
+
+### Features
+
+- **platform**: Lease every screening attempt build-only
+  ([#3428](https://github.com/ditto-assistant/ditto-subnet/pull/3428),
+  [`bd57cf4`](https://github.com/ditto-assistant/ditto-subnet/commit/bd57cf49e039e058d49d3586d7d826b655e7123b))
+
+
 ## v0.460.1 (2026-11-07)
 
 ### Bug Fixes
