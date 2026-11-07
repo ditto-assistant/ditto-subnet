@@ -1817,6 +1817,32 @@ async def test_unavailable_scorer_poll_is_infrastructure_not_miner_fault(
 
 
 @pytest.mark.asyncio
+async def test_scorer_outage_that_outlasts_the_budget_is_infrastructure() -> None:
+    """An unreadable scorer at budget expiry is ours, not a miner timeout."""
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        if request.method == "DELETE":
+            return httpx.Response(202, json={"status": "failed"})
+        return httpx.Response(503, text="scorer restarting")
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_timeout_seconds=0.05,
+        dittobench_poll_seconds=0.2,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await client._poll("run-1", expected_bench_version=8)
+
+    assert caught.value.code == "scorer_poll_unavailable"
+    assert methods[-1] == "DELETE"
+    assert methods.count("GET") < 3
+
+
+@pytest.mark.asyncio
 async def test_scorer_poll_blip_recovers_without_failing_the_run() -> None:
     responses = iter(
         [

@@ -2113,10 +2113,13 @@ class DittobenchClient:
                     unavailable, detail = True, f"transport: {e}"
                 if unavailable:
                     unavailable_polls += 1
-                    if unavailable_polls < _SCORER_UNAVAILABLE_POLL_LIMIT:
-                        remaining = budget - (time.monotonic() - started)
-                        if remaining <= 0:
-                            break
+                    remaining = budget - (time.monotonic() - started)
+                    # Below the limit with budget left: ride out the blip. With
+                    # no budget left the run's fate is unknowable, and that is
+                    # still our outage, not a miner timeout.
+                    if unavailable_polls < _SCORER_UNAVAILABLE_POLL_LIMIT and (
+                        remaining > 0
+                    ):
                         await asyncio.sleep(
                             min(self._config.dittobench_poll_seconds, remaining)
                         )
@@ -2358,6 +2361,13 @@ class DittobenchClient:
             await self._cancel(run_id)
             raise
         await self._cancel(run_id)
+        if unavailable_polls:
+            # The budget ran out while the scorer was still unreadable.
+            raise ValidatorInfrastructureError(
+                f"scorer unavailable while polling run {run_id} when its budget "
+                f"ran out ({unavailable_polls} consecutive polls)",
+                code="scorer_poll_unavailable",
+            )
         elapsed = time.monotonic() - started
         if lease_bound and ticket_deadline is not None:
             # Name the binding constraint. An operator reading this must be able
