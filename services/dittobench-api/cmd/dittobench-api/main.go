@@ -2145,6 +2145,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				fixture.NeedleValue(), fixture.DecoyValue())
 		} else {
 			cs = scorer.FinishTool(cs)
+			// v18: an unlinked-connector probe must also tell the user the app
+			// is not connected (scorer.ApplyV18UnlinkedReply; review posture by
+			// default). No-op below v18 and for every other category.
+			cs = scorer.ApplyV18UnlinkedReply(req.BenchVersion, v18UnlinkedReplyPosture, c, cs, grade.ReplyAsRead(req.BenchVersion, resp).FinalText)
 		}
 		// Exact v7+ trajectories retain the fabricated-self-report penalty.
 		// Outcome-driven v8 fuzzy cases rely on the authoritative observed calls
