@@ -160,7 +160,9 @@ def static_malicious_source_detail(observation: SourceReviewObservation) -> str:
                 continue
             path = str(item.get("path", ""))[:160]
             line = item.get("line")
-            if path:
+            # The list is comma-separated inside brackets; a path carrying
+            # either delimiter cannot be rendered unambiguously, so omit it.
+            if path and not any(mark in path for mark in ",[]"):
                 locations.append(f"{path}:{line}" if line is not None else path)
             if len(locations) >= _STATIC_REJECT_MAX_LOCATIONS:
                 break

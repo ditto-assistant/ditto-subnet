@@ -4206,3 +4206,25 @@ def test_static_reject_detail_keeps_its_brackets_when_bounded() -> None:
     )
     assert "]; remove or make the flagged code unreachable and resubmit" in detail
     assert "file_0.py:1" in detail
+
+
+def test_static_reject_detail_omits_paths_with_list_delimiters() -> None:
+    from ditto_screener.gate import static_malicious_source_detail
+    from ditto_screener.policy import SourceReviewObservation
+
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="high",
+        finding_digest="ab" * 32,
+        categories=("docker_socket",),
+        finding={
+            "evidence": [
+                {"path": "a,b.py", "line": 1, "category": "c"},
+                {"path": "x]y.py", "line": 2, "category": "c"},
+                {"path": "ok.py", "line": 3, "category": "c"},
+            ]
+        },
+    )
+    detail = static_malicious_source_detail(observation)
+    assert "locations=[ok.py:3]" in detail
+    assert "a,b.py" not in detail
