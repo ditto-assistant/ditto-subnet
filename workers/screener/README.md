@@ -232,6 +232,16 @@ Required values are supplied through the production host's protected
 - `SCREENER_L3_REVIEW_MODEL`: defaults to `openai/gpt-6-sol` (or
   `openai/gpt-6.1-terra` / `openai/gpt-6.1-sol`); both layers use
   OpenRouter ZDR routing and deny data collection.
+- `SCREENER_L3_FALLBACK_MODELS`: ordered L3 failover chain for every L3
+  trajectory, at most two distinct review models
+  (`openai/gpt-6.1-terra,z-ai/glm-5.2` by default; a copy of the L3 model is
+  skipped). Platform `l3_fallback_models` selects it per revision. It is used
+  only after the L3 model cannot return a response.
+- `SCREENER_L3_MAX_RAW_INPUT_TOKENS`: raw (uncached plus cached) input all L3
+  trajectories of one review may send, 100000-50000000 (`12000000` by
+  default; Platform `l3_max_raw_input_tokens`). Crossing it stops L3 as a
+  `model-total-budget` stop with `raw_input` tripped, on top of the 50M
+  aggregate raw ceiling and the effective-input and cost budgets.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built
   `ditto-screener-l2-analyzer:active` image.
 - The signed screener worker runs each bounded reviewer `bash`, `rg`, or

@@ -94,10 +94,19 @@ L2_MODEL = "openai/gpt-5.6-terra"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
-# Ordered L3 fallbacks for a reviewer route that keeps failing. The first is the
-# previous production L3 reviewer; the second is another vendor, so one
-# provider's outage cannot park every L3 trajectory on a manual retry.
-L3_FALLBACK_MODELS = ("openai/gpt-5.6-sol", "moonshotai/kimi-k3")
+# Default ordered L3 fallbacks for a reviewer route that keeps failing; Platform
+# review settings (``l3_fallback_models``) select the live chain. The first is
+# a cheaper current OpenAI reviewer; the second is another vendor, so one
+# provider's outage cannot park every L3 trajectory on a manual retry. The
+# previous $4/$20 GPT-5.6 SOL fallback is deliberately not a default.
+L3_FALLBACK_MODELS = ("openai/gpt-6.1-terra", "z-ai/glm-5.2")
+# Default raw (uncached plus cached) input the L3 trajectories of one review may
+# send in total (Platform ``l3_max_raw_input_tokens``). Runaway L3 critics have
+# replayed 15-40M input tokens; this stops them as a model-total-budget stop.
+L3_MAX_RAW_INPUT_TOKENS = 12_000_000
+_L3_ROLES = frozenset(
+    {"critic", "adjudicator", "violation_adjudicator", "violation_tiebreaker"}
+)
 # A model that exhausted its in-turn fault retries is skipped by later turns for
 # this long, so a multi-turn trajectory does not re-pay the backoff every turn.
 _FAILED_MODEL_COOLDOWN_SECONDS = 600.0
@@ -2975,6 +2984,7 @@ class TerraSolSourceReviewAgent:
         critic_model: str = L3_MODEL,
         critic_provider: str | None = L3_PROVIDER,
         critic_fallback_models: tuple[str, ...] = L3_FALLBACK_MODELS,
+        l3_max_raw_input_tokens: int = L3_MAX_RAW_INPUT_TOKENS,
         transport: httpx.AsyncBaseTransport | None = None,
         local_address: str | None = None,
         workspace_root: str | None = None,
@@ -3047,6 +3057,7 @@ class TerraSolSourceReviewAgent:
             if critic_provider == "openrouter"
             else ()
         )
+        self._l3_max_raw_input_tokens = l3_max_raw_input_tokens
         self._failed_models: dict[str, float] = {}
         self._transport = transport
         self._local_address = local_address
@@ -3975,6 +3986,7 @@ class TerraSolSourceReviewAgent:
                                 deadline=deadline,
                                 policy_version=policy_version,
                                 dossier_complete=adjudicator.dossier_complete,
+                                l3_raw_input_before=adjudicator.usage.input_tokens,
                                 max_steps=self._max_steps,
                             )
                         except L2TrajectoryError as error:
@@ -4374,6 +4386,7 @@ class TerraSolSourceReviewAgent:
                     deadline=deadline,
                     policy_version=policy_version,
                     dossier_complete=critic.dossier_complete,
+                    l3_raw_input_before=critic.usage.input_tokens,
                     max_steps=self._max_steps,
                 )
         except L2TrajectoryError as error:
@@ -4706,6 +4719,7 @@ class TerraSolSourceReviewAgent:
         dossier_complete: bool,
         max_steps: int | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        l3_raw_input_before: int = 0,
     ) -> L2RunResult:
         if role == "analyst":
             task = (
@@ -4962,6 +4976,11 @@ class TerraSolSourceReviewAgent:
                             usage=_add_usage(usage_before, usage),
                             steps_used=steps_used,
                             max_steps=max_steps or self._max_steps,
+                            l3_raw_input_tokens=(
+                                l3_raw_input_before + usage.input_tokens
+                                if role in _L3_ROLES
+                                else None
+                            ),
                         )
                     )
             return L2TrajectoryError(
@@ -5131,6 +5150,19 @@ class TerraSolSourceReviewAgent:
                 self._require_budget(combined)
             except ValueError as error:
                 raise failure("model-total-budget") from error
+            if (
+                role in _L3_ROLES
+                and l3_raw_input_before + usage.input_tokens
+                > self._l3_max_raw_input_tokens
+            ):
+                logger.warning(
+                    "L3 raw input budget exhausted: role=%s l3_raw_input=%d "
+                    "l3_raw_limit=%d",
+                    role,
+                    l3_raw_input_before + usage.input_tokens,
+                    self._l3_max_raw_input_tokens,
+                )
+                raise failure("model-total-budget")
             if response_model:
                 response_models.append(response_model)
             if response_provider:
@@ -5429,22 +5461,36 @@ class TerraSolSourceReviewAgent:
         usage: L2Usage,
         steps_used: int,
         max_steps: int,
+        l3_raw_input_tokens: int | None = None,
     ) -> ReviewBudgetStop:
         tripped = (
             self._exceeded_budget(usage)
             if code == "model-total-budget"
             else [_BUDGET_STOP_LIMITS[code]]
         )
+        max_raw_input_tokens = _MAX_AGGREGATE_RAW_INPUT_TOKENS
+        raw_input_tokens = usage.input_tokens
+        if (
+            code == "model-total-budget"
+            and l3_raw_input_tokens is not None
+            and l3_raw_input_tokens > self._l3_max_raw_input_tokens
+            and "raw_input" not in tripped
+        ):
+            # The L3-only raw cap stopped the review: report the L3 raw count
+            # against that cap, while the other fields stay the L2 aggregate.
+            tripped = ["raw_input", *tripped]
+            max_raw_input_tokens = self._l3_max_raw_input_tokens
+            raw_input_tokens = l3_raw_input_tokens
         return ReviewBudgetStop(
             stage=l2_stage_for_role(role),  # type: ignore[arg-type]
             code=code,  # type: ignore[arg-type]
             tripped=tripped,
-            max_raw_input_tokens=_MAX_AGGREGATE_RAW_INPUT_TOKENS,
+            max_raw_input_tokens=max_raw_input_tokens,
             max_input_tokens=self._max_input_tokens,
             max_output_tokens=self._max_output_tokens,
             max_cost_usd=self._max_cost_usd,
             max_steps=max_steps,
-            raw_input_tokens=usage.input_tokens,
+            raw_input_tokens=raw_input_tokens,
             effective_input_tokens=_effective_input_tokens(usage),
             output_tokens=usage.output_tokens,
             cost_usd=round(_billable_cost_usd(usage), 6),
@@ -6168,6 +6214,7 @@ class TerraSolSourceReviewAgent:
                     "max_output_tokens": self._max_output_tokens,
                     "max_completion_tokens": self._max_completion_tokens,
                     "max_cost_usd": self._max_cost_usd,
+                    "l3_max_raw_input_tokens": self._l3_max_raw_input_tokens,
                     "analyst_reasoning_effort": self._analyst_reasoning_effort,
                     "critic_reasoning_effort": self._critic_reasoning_effort,
                     "cause_adjudicator_reasoning_effort": (L2_CAUSE_REASONING_EFFORT),

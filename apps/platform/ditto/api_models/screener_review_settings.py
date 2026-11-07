@@ -57,6 +57,16 @@ PROBE_REVIEW_SETTINGS_FIELDS = (
     "probe_review_timeout_seconds",
     "probe_review_max_cost_usd",
 )
+# The L3 critic/adjudicator failover chain and its raw-input cap. Platform
+# omits each from the checksum while it holds its default, so every revision
+# minted before they existed keeps verifying, and workers that predate them
+# keep verifying any revision that leaves them at the default.
+DEFAULT_L3_FALLBACK_MODELS: tuple[ReviewModel, ...] = (
+    "openai/gpt-6.1-terra",
+    "z-ai/glm-5.2",
+)
+DEFAULT_L3_MAX_RAW_INPUT_TOKENS = 12_000_000
+L3_BUDGET_SETTINGS_FIELDS = ("l3_fallback_models", "l3_max_raw_input_tokens")
 PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
 # The reviewer posture (stronger L2/L3 models and budgets) a top-five integrity
 # double-check deep pass is pinned to. No worker heartbeats under this scope, so
@@ -119,6 +129,18 @@ class ScreenerReviewSettings(BaseModel):
     )
     l3_enabled: bool = True
     l3_model: L3ReviewModel = "openai/gpt-5.6-sol"
+    # Ordered OpenRouter failover for every L3 trajectory (critic, adjudicator,
+    # violation adjudicator and tiebreaker), used only after the L3 model
+    # cannot return a response. A copy of ``l3_model`` here is skipped.
+    l3_fallback_models: Annotated[tuple[ReviewModel, ...], Field(max_length=2)] = (
+        DEFAULT_L3_FALLBACK_MODELS
+    )
+    # Raw (uncached plus cached) input tokens the L3 trajectories of one review
+    # may send in total. Crossing it stops L3 as a model-total-budget stop
+    # instead of letting a runaway critic replay a huge context for 40M tokens.
+    l3_max_raw_input_tokens: Annotated[int, Field(ge=100_000, le=50_000_000)] = (
+        DEFAULT_L3_MAX_RAW_INPUT_TOKENS
+    )
     # Deep (L2 analyst + L3) review wall clock for one attempt. The renewable
     # attempt lease's hard lifetime is derived from this budget (see
     # ``_screening_attempt_lifetime_cap``), so raising it grows the attempt
@@ -232,7 +254,7 @@ class ScreenerReviewSettings(BaseModel):
             )
         return value
 
-    @field_validator("l2_fallback_models", mode="before")
+    @field_validator("l2_fallback_models", "l3_fallback_models", mode="before")
     @classmethod
     def accept_json_model_chain(cls, value: object) -> object:
         """Preserve an immutable chain after FastAPI decodes its JSON array."""
@@ -245,6 +267,8 @@ class ScreenerReviewSettings(BaseModel):
         chain = (self.l2_model, *self.l2_fallback_models)
         if len(chain) != len(set(chain)):
             raise ValueError("L2 model chain must not contain duplicates")
+        if len(self.l3_fallback_models) != len(set(self.l3_fallback_models)):
+            raise ValueError("L3 fallback chain must not contain duplicates")
         if self.max_completion_tokens > self.max_output_tokens:
             raise ValueError("completion budget must not exceed output budget")
         if (
@@ -284,6 +308,13 @@ def review_settings_checksum(settings: ScreenerReviewSettings) -> str:
     if settings.probe_review_mode == "off":
         # Workers that predate the reviewer drop its keys before hashing.
         for field in PROBE_REVIEW_SETTINGS_FIELDS:
+            value.pop(field)
+    for field in L3_BUDGET_SETTINGS_FIELDS:
+        if (
+            getattr(settings, field)
+            == ScreenerReviewSettings.model_fields[field].default
+        ):
+            # Workers that predate the L3 controls drop both keys before hashing.
             value.pop(field)
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

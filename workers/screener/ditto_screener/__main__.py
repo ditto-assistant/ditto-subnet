@@ -84,7 +84,7 @@ async def _amain() -> int:
         )
         logger.info(
             "source review L2 mode=%s model=%s fallbacks=%s L3_enabled=%s L3_model=%s "
-            "L3_provider=%s prompt=%s harness=%s "
+            "L3_fallbacks=%s L3_max_raw_input=%d L3_provider=%s prompt=%s harness=%s "
             "steps=%d input_tokens=%d output_tokens=%d cost_usd=%.2f timeout_s=%.0f "
             "analyst_reasoning=%s critic_reasoning=%s",
             config.l2_review_mode,
@@ -92,6 +92,8 @@ async def _amain() -> int:
             ",".join(config.l2_fallback_models),
             config.l3_review_enabled,
             config.l3_review_model,
+            ",".join(config.l3_fallback_models),
+            config.l3_max_raw_input_tokens,
             config.l3_review_provider,
             l2_prompt_revision(SCREENING_POLICY_VERSION),
             L2_HARNESS_REVISION,

@@ -315,6 +315,13 @@ export const screenerReviewSettingsSchema = z
       'openai/gpt-6.1-terra',
       'openai/gpt-6.1-sol',
     ]),
+    // Ordered L3 failover; Platform skips a copy of l3_model at runtime.
+    l3_fallback_models: z
+      .array(screenerReviewModelSchema)
+      .max(2)
+      .default(['openai/gpt-6.1-terra', 'z-ai/glm-5.2']),
+    // Raw (uncached + cached) input across one review's L3 trajectories.
+    l3_max_raw_input_tokens: z.number().int().min(100_000).max(50_000_000).default(12_000_000),
     timeout_seconds: z.number().int().min(30).max(3_600),
     max_steps: z.number().int().min(1).max(256),
     source_review_max_steps: z.number().int().min(1).max(240).default(200),
@@ -363,6 +370,13 @@ export const screenerReviewSettingsSchema = z
     const chain = [value.l2_model, ...value.l2_fallback_models]
     if (new Set(chain).size !== chain.length) {
       context.addIssue({ code: 'custom', message: 'Model chain cannot contain duplicates' })
+    }
+    if (new Set(value.l3_fallback_models).size !== value.l3_fallback_models.length) {
+      context.addIssue({
+        code: 'custom',
+        message: 'L3 fallback chain cannot contain duplicates',
+        path: ['l3_fallback_models'],
+      })
     }
     if (value.max_completion_tokens > value.max_output_tokens) {
       context.addIssue({
@@ -6309,6 +6323,9 @@ export const screeningReviewBudgetSchema: z.ZodType<GeneratedScreeningReviewBudg
         l2_timeout_seconds: tokenCount,
         adjudicator_max_steps: tokenCount,
         adjudicator_timeout_seconds: tokenCount,
+        l3_model: z.string().nullish(),
+        l3_fallback_models: z.array(z.string()).default([]),
+        l3_max_raw_input_tokens: tokenCount.nullish(),
       })
       .nullable(),
     exceeded_limits: z.array(z.string()),

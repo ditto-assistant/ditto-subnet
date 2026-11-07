@@ -218,6 +218,10 @@ class ScreenerConfig:
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
     l2_always_escalate: bool = False
+    l3_fallback_models: tuple[str, ...] = ("openai/gpt-6.1-terra", "z-ai/glm-5.2")
+    """Ordered L3 failover chain, used only after the L3 model cannot respond."""
+    l3_max_raw_input_tokens: int = 12_000_000
+    """Raw (uncached plus cached) input across one review's L3 trajectories."""
     scorer_capabilities_url: str | None = None
     expected_scorer_revision: str | None = None
     require_signed_runtime_lease: bool = False
@@ -312,6 +316,21 @@ def _parse_env_pairs(name: str, default: str) -> tuple[tuple[str, str], ...]:
             )
         pairs.append((key.strip(), value))
     return tuple(pairs)
+
+
+# Models a node env may place in the L3 failover chain (the Platform review
+# settings ``ReviewModel`` set).
+_L3_FALLBACK_MODEL_CHOICES = frozenset(
+    {
+        "openai/gpt-5.6-terra",
+        "openai/gpt-6-sol",
+        "openai/gpt-6.1-terra",
+        "openai/gpt-6.1-sol",
+        "moonshotai/kimi-k3",
+        "z-ai/glm-5.2",
+        "openai/gpt-5.6-sol",
+    }
+)
 
 
 def _parse_csv(name: str, default: str) -> tuple[str, ...]:
@@ -450,6 +469,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         l2_fallback_models=_parse_csv("SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2"),
         l3_review_enabled=_parse_bool("SCREENER_L3_REVIEW_ENABLED", True),
         l3_review_model=os.environ.get("SCREENER_L3_REVIEW_MODEL", "openai/gpt-6-sol"),
+        l3_fallback_models=_parse_csv(
+            "SCREENER_L3_FALLBACK_MODELS", "openai/gpt-6.1-terra,z-ai/glm-5.2"
+        ),
+        l3_max_raw_input_tokens=_parse_int(
+            "SCREENER_L3_MAX_RAW_INPUT_TOKENS", "12000000"
+        ),
         l3_review_provider=os.environ.get(
             "SCREENER_L3_REVIEW_PROVIDER", review_inference_provider
         ),
@@ -643,6 +668,19 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol, "
             "openai/gpt-6-sol, openai/gpt-6.1-terra, or openai/gpt-6.1-sol"
+        )
+    if (
+        len(config.l3_fallback_models) > 2
+        or len(set(config.l3_fallback_models)) != len(config.l3_fallback_models)
+        or not set(config.l3_fallback_models) <= _L3_FALLBACK_MODEL_CHOICES
+    ):
+        raise ScreenerConfigError(
+            "SCREENER_L3_FALLBACK_MODELS must list at most two distinct models from "
+            + ", ".join(sorted(_L3_FALLBACK_MODEL_CHOICES))
+        )
+    if not 100_000 <= config.l3_max_raw_input_tokens <= 50_000_000:
+        raise ScreenerConfigError(
+            "SCREENER_L3_MAX_RAW_INPUT_TOKENS must be between 100000 and 50000000"
         )
     if config.l3_review_provider != config.review_inference_provider:
         raise ScreenerConfigError(

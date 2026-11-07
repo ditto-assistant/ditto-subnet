@@ -82,7 +82,11 @@ reasons and diff size. Use it for an `l3-adjudicator-model-total-budget` or any
 other `*budget*` stop; `list_screening_adjudication_attempts` covers only L4
 `adjudicated-source-review-*` outcomes, so it is empty for those. A gateway
 `reported_cost_usd` of 0.0 is what the gateway said, not proof of no spend:
-compare `estimated_cost_usd`. Requires `backroom:read`.
+compare `estimated_cost_usd`. `limits` also names the pinned revision's
+`l3_model`, `l3_fallback_models` and `l3_max_raw_input_tokens`. When that
+L3-only raw cap stops a review, `budget_stop.tripped` holds `raw_input` and its
+`raw_input_tokens`/`max_raw_input_tokens` are the L3 count and cap, while the
+other `budget_stop` usage stays the L2 aggregate. Requires `backroom:read`.
 
 `get_outlier_escalation` reads the anomalous-score escalation that can open ATH
 holds (`review_kind` `anomalous_score`) through

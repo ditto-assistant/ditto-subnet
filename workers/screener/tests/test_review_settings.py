@@ -67,6 +67,56 @@ def test_gpt61_sol_deep_review_is_valid(make_config) -> None:
         ReviewSettings.model_validate(settings)
 
 
+def test_l3_controls_round_trip_and_reject_duplicate_chains(make_config) -> None:
+    effective = bootstrap_review_settings(make_config())
+    assert effective.settings.l3_fallback_models == (
+        "openai/gpt-6.1-terra",
+        "z-ai/glm-5.2",
+    )
+    assert effective.settings.l3_max_raw_input_tokens == 12_000_000
+    # The bootstrap checksum is minted in Platform's shape: no default L3 keys.
+    hashed = effective.settings.model_dump(mode="json")
+    hashed.pop("l3_fallback_models")
+    hashed.pop("l3_max_raw_input_tokens")
+    for name in ("probe_battery_mode", "probe_battery_timeout_seconds"):
+        hashed.pop(name)
+    for name in (
+        "probe_review_mode",
+        "probe_review_timeout_seconds",
+        "probe_review_max_cost_usd",
+    ):
+        hashed.pop(name)
+    hashed.pop("adjudicator_max_completion_tokens")
+    assert (
+        hashlib.sha256(
+            json.dumps(hashed, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        == effective.checksum
+    )
+    settings = effective.settings.model_dump(mode="json")
+    settings["l3_fallback_models"] = ["z-ai/glm-5.2", "z-ai/glm-5.2"]
+    with pytest.raises(ValidationError, match="L3 fallback chain"):
+        ReviewSettings.model_validate(settings)
+    settings["l3_fallback_models"] = ["openai/gpt-6.1-luna"]
+    with pytest.raises(ValidationError):
+        ReviewSettings.model_validate(settings)
+
+
+def test_non_default_l3_controls_are_bound_by_the_checksum(make_config) -> None:
+    config = make_config(source_review_timeout_seconds=1_800)
+    payload = _platform_shaped_payload(
+        config, l3_fallback_models=["z-ai/glm-5.2"], l3_max_raw_input_tokens=8_000_000
+    )
+    verified = EffectiveReviewSettings.model_validate(payload)
+    runtime = verified.apply_to(config)
+    assert runtime.l3_fallback_models == ("z-ai/glm-5.2",)
+    assert runtime.l3_max_raw_input_tokens == 8_000_000
+    # Stripping the chain back to the default must not verify.
+    payload["settings"]["l3_fallback_models"] = ["openai/gpt-6.1-terra", "z-ai/glm-5.2"]
+    with pytest.raises(ValidationError, match="checksum"):
+        EffectiveReviewSettings.model_validate(payload)
+
+
 def _shadow_observation(*, stages: int) -> ShadowReviewObservationRequest:
     return ShadowReviewObservationRequest(
         attempt_id=UUID("96af45fd-65da-4f59-87f8-8ddf5d57f88c"),
@@ -316,6 +366,10 @@ def _platform_shaped_payload(config, **updates: object) -> dict:
             "probe_review_max_cost_usd",
         ):
             hashed.pop(name)
+    if hashed["l3_fallback_models"] == ["openai/gpt-6.1-terra", "z-ai/glm-5.2"]:
+        hashed.pop("l3_fallback_models")
+    if hashed["l3_max_raw_input_tokens"] == 12_000_000:
+        hashed.pop("l3_max_raw_input_tokens")
     payload["checksum"] = hashlib.sha256(
         json.dumps(hashed, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

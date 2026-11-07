@@ -42,6 +42,7 @@ from ditto.api_models.screener import (
 from ditto.api_models.screener_review_settings import (
     FANOUT_SHADOW_SETTINGS_FIELDS,
     INTEGRITY_DOUBLE_CHECK_SCOPE,
+    L3_BUDGET_SETTINGS_FIELDS,
     PROBE_BATTERY_SETTINGS_FIELDS,
     PROBE_REVIEW_SETTINGS_FIELDS,
     ScreenerReviewSettings,
@@ -193,6 +194,8 @@ def test_inactive_fanout_checksum_keeps_the_pre_fanout_wire_shape() -> None:
         *FANOUT_SHADOW_SETTINGS_FIELDS,
         *PROBE_BATTERY_SETTINGS_FIELDS,
         *PROBE_REVIEW_SETTINGS_FIELDS,
+        # Default L3 controls are hashed in the shape that predates them.
+        *L3_BUDGET_SETTINGS_FIELDS,
     ):
         legacy.pop(field)
     legacy.pop("l2_always_escalate")
@@ -213,6 +216,8 @@ def test_always_escalate_is_bound_into_the_checksum_only_when_enabled() -> None:
         *FANOUT_SHADOW_SETTINGS_FIELDS,
         *PROBE_BATTERY_SETTINGS_FIELDS,
         *PROBE_REVIEW_SETTINGS_FIELDS,
+        # Default L3 controls are hashed in the shape that predates them.
+        *L3_BUDGET_SETTINGS_FIELDS,
     ):
         shape.pop(field)
     shape.pop("adjudicator_max_completion_tokens")
@@ -15609,6 +15614,13 @@ class TestReviewUsage:
         # L1 is outside the L2 aggregate budget: 0.5M uncached + 10% of 1M.
         assert body["l2_aggregate"]["effective_input_tokens"] == 600_000
         assert body["limits"]["max_input_tokens"] == 500_000
+        # The pinned L3 chain and its L3-only raw cap are visible per attempt.
+        assert body["limits"]["l3_model"] == "openai/gpt-5.6-sol"
+        assert body["limits"]["l3_fallback_models"] == [
+            "openai/gpt-6.1-terra",
+            "z-ai/glm-5.2",
+        ]
+        assert body["limits"]["l3_max_raw_input_tokens"] == 12_000_000
         assert body["exceeded_limits"] == ["input"]
         assert body["budget_stop"]["tripped"] == ["input"]
         lineage = body["lineage"]

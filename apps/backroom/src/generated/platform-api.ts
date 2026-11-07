@@ -40541,6 +40541,19 @@ export interface components {
              */
             l3_enabled: boolean;
             /**
+             * L3 Fallback Models
+             * @default [
+             *       "openai/gpt-6.1-terra",
+             *       "z-ai/glm-5.2"
+             *     ]
+             */
+            l3_fallback_models: ("openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "openai/gpt-6.1-sol" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
+            /**
+             * L3 Max Raw Input Tokens
+             * @default 12000000
+             */
+            l3_max_raw_input_tokens: number;
+            /**
              * L3 Model
              * @default openai/gpt-5.6-sol
              * @enum {string}
@@ -40766,6 +40779,15 @@ export interface components {
             l2_max_steps: number;
             /** L2 Timeout Seconds */
             l2_timeout_seconds: number;
+            /**
+             * L3 Fallback Models
+             * @default []
+             */
+            l3_fallback_models: string[];
+            /** L3 Max Raw Input Tokens */
+            l3_max_raw_input_tokens?: number | null;
+            /** L3 Model */
+            l3_model?: string | null;
             /** Max Cost Usd */
             max_cost_usd: number;
             /** Max Input Tokens */
