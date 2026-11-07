@@ -25,12 +25,6 @@ from ditto_screening_protocol.review_ledger import concern_threshold_reached
 DEFERRED_REVIEW_KIND = "deferred_source_review"
 DEFERRED_REVIEW_REASON = "Score qualified this submission for deferred source review"
 DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
-# Public text on a fresh admission. Source review is retired (owner decision,
-# 2026-11-07): build and safety checks are the whole screen, so nothing is
-# deferred and no later review can hold the submission.
-MECHANICAL_ADMISSION_PUBLIC_REASON = (
-    "Build and safety checks passed; admitted for scoring"
-)
 INCONCLUSIVE_REASON_CODE = SOURCE_REVIEW_INCONCLUSIVE
 # Public text written with INCONCLUSIVE_REASON_CODE. Clients classify a hold by
 # ``review_conclusion`` (see ``public_review_conclusion``), never by this text.
