@@ -1471,7 +1471,9 @@ allowance), so v16 does not ban filters; the difficulty is in the cases.
 a harness that probes once and then claims the action succeeded scores the
 same as one that tells the user the app is not connected. Grading it needs a
 `>= 16` branch in the scorer's tool grader (a decline claim on the reply), so
-it is left for a later contract. Accepted by the operator for v16.0.
+it is left for a later contract. Accepted by the operator for v16.0. Bench v18
+reads the reply (`scorer.ApplyV18UnlinkedReply`, review posture first; see
+"Bench v18 accuracy contract").
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV16KnownVector` pins:
