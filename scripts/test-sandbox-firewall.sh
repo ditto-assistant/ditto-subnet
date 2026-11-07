@@ -22,7 +22,7 @@ for backend in nft legacy; do
   [ "$(docker exec "$name" cat /run/ditto-sandbox-firewall-backend)" = "$backend" ]
   # Initial install and the worker's first reconcile have both completed.
   # Chain declarations in iptables-restore must replace, not append, rules.
-  docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; [ "$(iptables -w 5 -S DITTO-SANDBOX-EGRESS | grep -c "^-A ")" -eq 6 ] && [ "$(iptables -w 5 -t nat -S DITTO-OPENROUTER-SHIM | grep -c "^-A ")" -eq 1 ]'
+  docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; [ "$(iptables -w 5 -S DITTO-SANDBOX-EGRESS | grep -c "^-A ")" -eq 6 ] && [ "$(iptables -w 5 -t nat -S DITTO-OPENROUTER-SHIM | grep -c "^-A ")" -eq 1 ]'
   docker save "$busybox" | docker exec -i "$name" docker load >/dev/null
   docker exec "$name" docker image inspect "$busybox" >/dev/null
   docker exec "$name" docker run --rm --pull=never --network ditto-sandbox "$busybox" true
@@ -34,14 +34,29 @@ for backend in nft legacy; do
   if docker exec "$name" docker run --rm --pull=never --network ditto-sandbox "$busybox" nc -z -w 2 "$gateway" 19999; then
     printf '%s: non-allowlisted port was reachable\n' "$backend" >&2; exit 1
   fi
+  # A second nested bridge supplies a synthetic routed peer. Docker normally
+  # drops direct cross-bridge packets in raw PREROUTING before DOCKER-USER;
+  # remove only that test peer's rule so the control exercises our chain.
+  docker exec "$name" docker network create test-peer >/dev/null
+  docker exec "$name" docker run -d --name test-peer --pull=never --network test-peer "$busybox" nc -lk -s 0.0.0.0 -p 19999 -e /bin/cat >/dev/null
+  docker exec "$name" docker run -d --name test-source --pull=never --network ditto-sandbox "$busybox" sleep 300 >/dev/null
+  peer=$(docker exec "$name" docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' test-peer)
+  peer_network=$(docker exec "$name" docker network inspect -f '{{.Id}}' test-peer | cut -c1-12)
+  docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -t raw -D PREROUTING -d "$1/32" ! -i "br-$2" -j DROP; iptables -w 5 -I FORWARD 2 -j ACCEPT' _ "$peer" "$peer_network"
+  if docker exec "$name" docker exec test-source nc -z -w 2 "$peer" 19999; then
+    printf '%s: forwarded peer was reachable with hooks installed\n' "$backend" >&2; exit 1
+  fi
+  docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -D DOCKER-USER -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS; iptables -w 5 -D DOCKER-USER -i dtj+ -j DITTO-SANDBOX-EGRESS'
+  docker exec "$name" docker exec test-source nc -z -w 2 "$peer" 19999
+  docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -I DOCKER-USER 1 -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS; iptables -w 5 -I DOCKER-USER 1 -i dtj+ -j DITTO-SANDBOX-EGRESS; iptables -w 5 -D FORWARD 2'
   docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck
-  docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -I FORWARD 1 -j ACCEPT'
+  docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -I FORWARD 1 -j ACCEPT'
   if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then
     printf '%s: health missed displaced forward hook\n' "$backend" >&2; exit 1
   fi
-  docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -D FORWARD 1'
+  docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -D FORWARD 1'
   docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck
-  docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -I INPUT 1 -j ACCEPT'
+  docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -I INPUT 1 -j ACCEPT'
   if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then
     printf '%s: health missed displaced hook\n' "$backend" >&2; exit 1
   fi
