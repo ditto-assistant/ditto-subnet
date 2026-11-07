@@ -1507,7 +1507,7 @@ class TestUploadAgentSn455PylonMiss:
     """
 
     _FEE_RAO = 100_000_000
-    _COLDKEY = "5FezHVXfg3nUYSQCVEDg2SCDwNJqnqLfaZ2f5aXBMNtmpkgg"
+    _OWNER_SS58 = "5FezHVXfg3nUYSQCVEDg2SCDwNJqnqLfaZ2f5aXBMNtmpkgg"
     _SEND = "5Ecr5EGwvg2Xue2MdeJeCVSMLYWYuGcFb7y41eo7rQy3mGDN"
 
     def _wire(
@@ -1539,12 +1539,12 @@ class TestUploadAgentSn455PylonMiss:
                     call_module="Balances",
                     call_function="transfer_keep_alive",
                     call_args={"dest": self._SEND, "value": self._FEE_RAO},
-                    signer_address=self._COLDKEY,
+                    signer_address=self._OWNER_SS58,
                 )
             )
         chain.check_extrinsic_success = AsyncMock(return_value=True)
         chain.get_block_timestamp = AsyncMock(return_value=int(time.time()))
-        chain.get_coldkey_for_hotkey = AsyncMock(return_value=self._COLDKEY)
+        chain.get_coldkey_for_hotkey = AsyncMock(return_value=self._OWNER_SS58)
         oracle = MagicMock()
         oracle.get_tao_usd = AsyncMock(return_value=Decimal("400"))
         verifier = PaymentVerifier(chain=chain, oracle=oracle, send_address=self._SEND)
