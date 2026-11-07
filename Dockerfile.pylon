@@ -115,6 +115,15 @@ RUN /app/pylon_service/.venv/bin/python /tmp/pylon-epoch/patch_epoch_schedule.py
       /tmp/ditto-screening-protocol \
       /tmp/turbobt
 
+# The service starts from its installed Python environment and does not use
+# SSH. Debian 13's openssh-client remains vulnerable to CVE-2026-60002; remove
+# the optional Git-recommended client only after all build-time installs.
+# This intentionally removes SSH-based Git and debugging from this image.
+RUN dpkg --purge openssh-client \
+    && test -z "$(dpkg --audit)" \
+    && ! command -v ssh \
+    && git --version
+
 LABEL io.heyditto.validator.pylon-base-version="2.3.2" \
       io.heyditto.validator.epoch-schedule="subtensor-stateful-epochs-v1" \
       io.heyditto.validator.weight-receipts="1"
