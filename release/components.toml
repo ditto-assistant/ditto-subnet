@@ -14,6 +14,7 @@ ignored_paths = [
   "scripts/test-collector-custody.sh", # Credentials-free custody CI driver
   "scripts/check-treasury-manual-mode.sh", # Operator-staged custody lifecycle guard; never installed by service releases
   "scripts/test-treasury-manual-systemd.sh", # Credentials-free hosted systemd CI probe
+  "scripts/test-pylon-ca-downgrade.sh", # Manual-only image build regression; not shipped
   "scripts/check-collector-custody-plan.py", # Protected infrastructure scope fence, not service runtime
   "scripts/collector-custody-phase-input.py", # Typed public input for protected infrastructure only
   "scripts/manual-mailbox-input.py", # Typed mailbox input for protected infrastructure only
@@ -321,7 +322,6 @@ paths = [
   "Dockerfile.pylon",
   "services/pylon/**",
   "scripts/test-pylon-epoch-schedule.sh",
-  "scripts/test-pylon-ca-downgrade.sh",
   ".github/workflows/pylon-epoch-schedule.yml",
   "Dockerfile.stack-release",
   "docker-compose.yml",
