@@ -4233,6 +4233,8 @@ async def amend_quarantine_reject_reason(
                 event.reason or ""
                 for event in history.get(quarantine.quarantine_id, [])
                 if event.resolution == "reject"
+                and quarantine.resolved_at is not None
+                and event.created_at >= quarantine.resolved_at
             ]
             # The same reason may have been amended more than once. Confirm
             # this request's transition was recorded rather than attributing

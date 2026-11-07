@@ -13568,6 +13568,14 @@ class TestQuarantineReviewContext:
                 ("backroom:test-user", corrected),
             ]
 
+        # The same public reason on a later decision cannot replay an old amendment.
+        async with session_maker() as session, session.begin():
+            quarantine = await session.get(ScreeningQuarantine, quarantine_id)
+            assert quarantine is not None
+            quarantine.resolved_at = datetime.now(UTC)
+        stale_replay = await client.post(url, headers=_ADMIN_HEADERS, json=body)
+        assert stale_replay.status_code == 409
+
         # Only a resolved reject is amendable.
         async with session_maker() as session, session.begin():
             agent = await session.get(Agent, agent_id)
