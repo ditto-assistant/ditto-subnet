@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Managed by infra/ansible/roles/postgres. Compress finished PostgreSQL
+# collector logs and delete the ones past retention. Today's file is never
+# touched because PostgreSQL still has it open.
+set -euo pipefail
+LOG_DIR="{{ postgres_tuning.log_directory | replace(\"'\", '') }}"
+RETENTION_DAYS="{{ postgres_log_retention_days | int }}"
+COMPRESS_AFTER_DAYS="{{ postgres_log_compress_after_days | int }}"
+today="postgresql-$(date +%Y-%m-%d).log"
+find "$LOG_DIR" -maxdepth 1 -type f \( -name 'postgresql-*.log' -o -name 'postgresql-*.log.gz' \) -mtime +"$RETENTION_DAYS" -print -delete
+find "$LOG_DIR" -maxdepth 1 -type f -name 'postgresql-*.log' ! -name "$today" -mtime +"$((COMPRESS_AFTER_DAYS - 1))" -print -exec gzip -9 {} \;
+df -h "$LOG_DIR" | tail -1
