@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -216,7 +217,7 @@ func TestV18PricesLikeV17(t *testing.T) {
 		if v17 == nil || v18 == nil {
 			t.Fatal("priced cost missing")
 		}
-		if *v17 != *v18 || v18.ContractID != PricedCostV2ContractID {
+		if !reflect.DeepEqual(*v17, *v18) || v18.ContractID != PricedCostV2ContractID {
 			t.Fatalf("v18 priced cost %+v differs from v17 %+v", *v18, *v17)
 		}
 	}

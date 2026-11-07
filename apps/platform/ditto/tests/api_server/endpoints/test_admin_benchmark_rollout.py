@@ -475,7 +475,19 @@ async def test_control_discovery_is_authenticated_read_only_and_dynamic(
     # Nothing is offered. A target must be both above the active version and at
     # or above the floor. V8 through v11 are discoverable but remain inert until
     # an authenticated operator starts one.
-    assert body["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+    assert body["available_target_versions"] == [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+    ]
     # Still derived from the shipped registry, which is what "dynamic" means
     # here: the floor filters what may be STARTED, not what exists.
     assert [contract["version"] for contract in body["contracts"]] == [
@@ -644,7 +656,7 @@ async def test_v15_start_blocker_clears_once_the_decision_lane_pins_a_model(
     response = await client.get("/api/v1/admin/benchmark-rollout", headers=_HEADERS)
 
     assert response.status_code == 200, response.text
-    contract = response.json()["contracts"][-3]
+    contract = next(c for c in response.json()["contracts"] if c["version"] == 15)
     assert contract["version"] == 15
     assert contract["start_blockers"] == [
         "benchmark v15 rollout requires at least 1 fresh, identity-matched "
@@ -695,7 +707,7 @@ async def test_v16_start_blocker_clears_once_dueling_is_enabled(
     async def _v16_blockers() -> list[str]:
         response = await client.get("/api/v1/admin/benchmark-rollout", headers=_HEADERS)
         assert response.status_code == 200, response.text
-        contract = response.json()["contracts"][-2]
+        contract = next(c for c in response.json()["contracts"] if c["version"] == 16)
         assert contract["version"] == 16
         return contract["start_blockers"]
 
@@ -907,12 +919,12 @@ async def test_start_requires_full_guard_payload_and_exact_confirmation(
     assert "START BENCHMARK V4" in wrong.json()["message"]
 
     unsupported = await client.post(
-        "/api/v1/admin/benchmark-rollout/18",
+        "/api/v1/admin/benchmark-rollout/19",
         headers=_HEADERS,
         json={
             "reason": "attempt an unshipped contract",
             "actor": "backroom:test",
-            "confirmation": "START BENCHMARK V18",
+            "confirmation": "START BENCHMARK V19",
             "expected_active_version": 2,
         },
     )

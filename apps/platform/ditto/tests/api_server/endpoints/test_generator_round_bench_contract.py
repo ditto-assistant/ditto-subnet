@@ -908,7 +908,14 @@ def test_request_refusals_from_the_window_are_scorer_faults(
 
 @pytest.mark.parametrize(
     ("round_version", "accepted"),
-    [(13, (13,)), (14, (13, 14)), (15, (14, 15)), (16, (15, 16)), (17, (16, 17)), (18, (17, 18))],
+    [
+        (13, (13,)),
+        (14, (13, 14)),
+        (15, (14, 15)),
+        (16, (15, 16)),
+        (17, (16, 17)),
+        (18, (17, 18)),
+    ],
 )
 def test_a_round_accepts_its_version_and_the_one_before(
     round_version: int, accepted: tuple[int, ...]
