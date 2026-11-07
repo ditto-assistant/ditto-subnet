@@ -641,6 +641,7 @@ describe('Backroom MCP tools', () => {
         'get_validator_fleet',
         'get_validator_slot_settings',
         'get_scoring_lease_settings',
+        'get_miner_screening_retry_settings',
         'list_validator_assignments',
         'get_validator_capacity',
         'get_validator_request_outcomes',
@@ -654,6 +655,7 @@ describe('Backroom MCP tools', () => {
         'set_validator_slot_settings',
         'set_validator_issuance_pause',
         'set_scoring_lease_settings',
+        'set_miner_screening_retry_settings',
         'set_confirmation_bundle_settings',
         'authorize_confirmation_bundle_retest',
         'read_copy_review_source_diff_file',
@@ -1002,7 +1004,10 @@ describe('Backroom MCP tools', () => {
     // The guarded dueling season commitment republish (uuid, reason,
     // confirmation; one-line summary, detail in tool help) measures 234,365
     // bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(234_900)
+    // The miner self-serve screening retry settings pair (SN-456; history
+    // paging read, guarded bool + bounded int write; one-line summaries,
+    // detail in tool help) measures 236,106 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(236_600)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1061,7 +1066,9 @@ describe('Backroom MCP tools', () => {
       // it to 29,006; keep about 200 chars.
       // The three one-line dueling-season summaries measure 29,233; keep
       // about 200 chars.
-      29_450,
+      // The two one-line miner screening retry settings summaries (SN-456)
+      // measure 29,587; keep about 200 chars.
+      29_780,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2191,6 +2198,7 @@ describe('Backroom MCP tools', () => {
       'get_validator_slot_settings',
       'get_inference_concurrency_settings',
       'get_scoring_lease_settings',
+      'get_miner_screening_retry_settings',
     ]
 
     for (const name of settingsReads) {
@@ -7330,6 +7338,141 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  describe('miner screening retry settings (SN-456)', () => {
+    const control = (enabled: boolean, revision: number) => ({
+      current: {
+        revision,
+        parent_revision: revision - 1,
+        enabled,
+        max_retries_per_agent: 1,
+        reason: 'Let owners retry one interrupted screening per agent',
+        actor: 'migration',
+        created_at: '2026-11-06T00:00:00Z',
+      },
+      history: [],
+      recent_self_serve_retries_24h: 2,
+    })
+
+    it('reads the switch, budget, and 24h use without writing', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(control(true, 1)))
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+      const tools = await client.listTools()
+      expect(
+        tools.tools.find((tool) => tool.name === 'get_miner_screening_retry_settings')
+          ?.annotations?.readOnlyHint,
+      ).toBe(true)
+      const response = await client.callTool({
+        name: 'get_miner_screening_retry_settings',
+        arguments: {},
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        current: { enabled: true, max_retries_per_agent: 1 },
+        recent_self_serve_retries_24h: 2,
+      })
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'https://platform-api.heyditto.ai/api/v1/admin/miner-screening-retry-settings',
+        expect.objectContaining({ method: 'GET' }),
+      )
+      await client.close()
+      await server.close()
+    })
+
+    it('pauses with the exact phrase as the signed-in operator', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ revision: 2 }))
+        .mockResolvedValueOnce(Response.json(control(false, 2)))
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+      const response = await client.callTool({
+        name: 'set_miner_screening_retry_settings',
+        arguments: {
+          expectedRevision: 1,
+          enabled: false,
+          maxRetriesPerAgent: 1,
+          reason: 'Pause while the reviewer fails every attempt',
+          confirmation: 'DISABLE MINER SCREENING RETRY',
+        },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({ current: { enabled: false } })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/miner-screening-retry-settings',
+      )
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        expected_revision: 1,
+        enabled: false,
+        max_retries_per_agent: 1,
+        confirmation: 'DISABLE MINER SCREENING RETRY',
+      })
+      await client.close()
+      await server.close()
+    })
+
+    it('refuses a mismatched phrase before calling the platform', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+      const response = await client.callTool({
+        name: 'set_miner_screening_retry_settings',
+        arguments: {
+          expectedRevision: 1,
+          enabled: true,
+          maxRetriesPerAgent: 2,
+          reason: 'Allow a second retry per agent',
+          confirmation: 'ENABLE MINER SCREENING RETRY MAX 1',
+        },
+      })
+      expect(response.isError).toBe(true)
+      expect(JSON.stringify(response.content)).toContain('ENABLE MINER SCREENING RETRY MAX 2')
+      expect(fetchMock).not.toHaveBeenCalled()
+      await client.close()
+      await server.close()
+    })
+
+    it('keeps the platform stale-revision refusal and names the re-read', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        Response.json(
+          {
+            error_code: 1000,
+            message:
+              'miner screening retry settings changed; refresh before applying (expected 1, current 2)',
+          },
+          { status: 409 },
+        ),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+      const response = await client.callTool({
+        name: 'set_miner_screening_retry_settings',
+        arguments: {
+          expectedRevision: 1,
+          enabled: false,
+          maxRetriesPerAgent: 1,
+          reason: 'Pause while the reviewer fails every attempt',
+          confirmation: 'DISABLE MINER SCREENING RETRY',
+        },
+      })
+      expect(response.isError).toBe(true)
+      const message = JSON.stringify(response.content)
+      expect(message).toContain('current 2')
+      expect(message).toContain('re-read get_miner_screening_retry_settings')
+      await client.close()
+      await server.close()
+    })
   })
 
   describe('scoring lease settings (#1156)', () => {

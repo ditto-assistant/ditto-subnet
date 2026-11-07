@@ -23,6 +23,11 @@ from ditto.api_models.gate_evidence import MinerGateNotesResponse
 from ditto.api_models.miner_avatar import MinerAvatarResponse
 from ditto.api_models.miner_logs import MinerHarnessLogsResponse
 from ditto.api_models.miner_screening_feedback import MinerScreeningFeedbackResponse
+from ditto.api_models.miner_screening_retry import (
+    MinerScreeningRetryRequest,
+    MinerScreeningRetryResponse,
+    MinerScreeningRetryStatus,
+)
 from ditto.api_models.miner_session import (
     MinerArtifactDownload,
     MinerCommand,
@@ -44,6 +49,10 @@ from ditto.api_server.endpoints.miner_gate_notes import load_owned_gate_notes
 from ditto.api_server.endpoints.miner_logs import load_owned_agent_logs
 from ditto.api_server.endpoints.miner_screening_feedback import (
     load_owned_screening_feedback,
+)
+from ditto.api_server.endpoints.miner_screening_retry import (
+    authorize_owned_retry,
+    load_owned_retry_status,
 )
 from ditto.api_server.hippius import HippiusClient
 from ditto.api_server.miner_artifact import prepare_owned_artifact_download
@@ -427,6 +436,55 @@ async def my_screening_feedback(
     if payload is None:
         raise HTTPException(status_code=404, detail="no such agent for this hotkey")
     return payload
+
+
+@router.get(
+    "/agents/{agent_id}/screening-retry",
+    response_model=MinerScreeningRetryStatus,
+)
+async def my_screening_retry_status(
+    agent_id: UUID,
+    request: Request,
+    session: SessionDep,
+) -> MinerScreeningRetryStatus:
+    """Whether this miner may retry one of their interrupted screenings now.
+
+    Read-only; needs only the ``read`` scope. The response carries the exact
+    attempt and artifact guards a retry must echo back.
+    """
+    async with session.begin():
+        row, _token = await resolve_miner_session(request, session)
+        require_scope(row, "read")
+        payload = await load_owned_retry_status(
+            session, hotkey=row.miner_hotkey, agent_id=agent_id
+        )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="no such agent for this hotkey")
+    return payload
+
+
+@router.post(
+    "/agents/{agent_id}/screening-retry",
+    response_model=MinerScreeningRetryResponse,
+)
+async def retry_my_screening(
+    agent_id: UUID,
+    body: MinerScreeningRetryRequest,
+    request: Request,
+    session: SessionDep,
+) -> MinerScreeningRetryResponse:
+    """Authorize one retry of this miner's exact latest interrupted attempt.
+
+    Requires the ``upload`` scope: a read-only session (the dashboard and
+    OAuth defaults) cannot spend screening capacity. Re-sending the same
+    request is idempotent.
+    """
+    async with session.begin():
+        row, _token = await resolve_miner_session(request, session)
+        require_scope(row, "upload")
+        return await authorize_owned_retry(
+            session, hotkey=row.miner_hotkey, agent_id=agent_id, payload=body
+        )
 
 
 @router.get(

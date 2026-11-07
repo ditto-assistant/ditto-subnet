@@ -493,6 +493,8 @@ import {
   setInferenceConcurrencySettingsInputSchema,
   scoringLeaseSettingsControlSchema,
   setScoringLeaseSettingsInputSchema,
+  minerScreeningRetrySettingsControlSchema,
+  setMinerScreeningRetrySettingsInputSchema,
   runtimeProfileArtifactSchema,
   runtimeProfileCaptureInputSchema,
   runtimeProfileDownloadSchema,
@@ -2586,6 +2588,41 @@ export async function setScoringLeaseSettings(rawInput: unknown, actor: string) 
     throw scoringLeaseRefusal(cause) ?? cause
   }
   return fetchScoringLeaseSettings()
+}
+
+const MINER_SCREENING_RETRY_SETTINGS_PATH = '/api/v1/admin/miner-screening-retry-settings'
+
+/** Read the miner self-serve screening retry switch, budget, and 24h use. */
+export async function fetchMinerScreeningRetrySettings() {
+  const payload = await platformAdminRequest(MINER_SCREENING_RETRY_SETTINGS_PATH)
+  return minerScreeningRetrySettingsControlSchema.parse(payload)
+}
+
+/** Append one audited revision; existing grants are never revoked. */
+export async function setMinerScreeningRetrySettings(rawInput: unknown, actor: string) {
+  const input = setMinerScreeningRetrySettingsInputSchema.parse(rawInput)
+  try {
+    await platformAdminRequest(MINER_SCREENING_RETRY_SETTINGS_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        expected_revision: input.expectedRevision,
+        enabled: input.enabled,
+        max_retries_per_agent: input.maxRetriesPerAgent,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+  } catch (cause) {
+    if (cause instanceof PlatformAdminError && cause.status === 409) {
+      throw new Error(
+        `${cause.message}. Nothing was applied: re-read get_miner_screening_retry_settings and resubmit with the revision it reports.`,
+      )
+    }
+    throw cause
+  }
+  return fetchMinerScreeningRetrySettings()
 }
 
 // The platform's existing public heartbeat view. It is the only place the two

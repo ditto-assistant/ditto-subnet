@@ -88,6 +88,7 @@ from ditto.api_server.endpoints import (
     admin_leaderboard_router,
     admin_lease_revocations_router,
     admin_miner_fees_router,
+    admin_miner_screening_retry_settings_router,
     admin_outlier_escalation_router,
     admin_owner_router,
     admin_provider_outages_router,
@@ -811,6 +812,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(public_router, prefix="/api/v1")
     app.include_router(admin_artifact_release_settings_router, prefix="/api/v1")
     app.include_router(admin_transcript_mirror_settings_router, prefix="/api/v1")
+    app.include_router(admin_miner_screening_retry_settings_router, prefix="/api/v1")
     app.include_router(admin_attestation_router, prefix="/api/v1")
     app.include_router(admin_benchmark_rollout_router, prefix="/api/v1")
     app.include_router(admin_benchmark_canary_router, prefix="/api/v1")

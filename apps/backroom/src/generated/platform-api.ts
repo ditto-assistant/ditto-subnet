@@ -2813,6 +2813,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/miner-screening-retry-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_admin_miner_screening_retry_settings_get"];
+        put?: never;
+        /**
+         * Create Settings Revision
+         * @description Append one audited revision guarded by the revision the operator read.
+         */
+        post: operations["create_settings_revision_api_v1_admin_miner_screening_retry_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/operator-diagnostic/{agent_id}": {
         parameters: {
             query?: never;
@@ -6614,6 +6635,37 @@ export interface paths {
         get: operations["my_screening_feedback_api_v1_me_agents__agent_id__screening_feedback_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/agents/{agent_id}/screening-retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Screening Retry Status
+         * @description Whether this miner may retry one of their interrupted screenings now.
+         *
+         *     Read-only; needs only the ``read`` scope. The response carries the exact
+         *     attempt and artifact guards a retry must echo back.
+         */
+        get: operations["my_screening_retry_status_api_v1_me_agents__agent_id__screening_retry_get"];
+        put?: never;
+        /**
+         * Retry My Screening
+         * @description Authorize one retry of this miner's exact latest interrupted attempt.
+         *
+         *     Requires the ``upload`` scope: a read-only session (the dashboard and
+         *     OAuth defaults) cannot spend screening capacity. Re-sending the same
+         *     request is idempotent.
+         */
+        post: operations["retry_my_screening_api_v1_me_agents__agent_id__screening_retry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -13364,6 +13416,32 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "resolved";
+        };
+        /** AdminMinerScreeningRetrySettingsRequest */
+        AdminMinerScreeningRetrySettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Max Retries Per Agent */
+            max_retries_per_agent: number;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminMinerScreeningRetrySettingsResponse */
+        AdminMinerScreeningRetrySettingsResponse: {
+            current: components["schemas"]["MinerScreeningRetrySettingsRevision"];
+            /** History */
+            history: components["schemas"]["MinerScreeningRetrySettingsRevision"][];
+            /** Recent Self Serve Retries 24H */
+            recent_self_serve_retries_24h: number;
         };
         /**
          * AdminOpaqueBlobEntry
@@ -29621,6 +29699,113 @@ export interface components {
             attempts: components["schemas"]["MinerScreeningFailure"][];
             /** Miner Hotkey */
             miner_hotkey: string;
+        };
+        /**
+         * MinerScreeningRetryRequest
+         * @description Authorize one retry of the exact attempt the miner was shown.
+         */
+        MinerScreeningRetryRequest: {
+            /** Acknowledge Cost */
+            acknowledge_cost: boolean;
+            /**
+             * Expected Attempt Id
+             * Format: uuid
+             */
+            expected_attempt_id: string;
+            /** Expected Sha256 */
+            expected_sha256: string;
+        };
+        /** MinerScreeningRetryResponse */
+        MinerScreeningRetryResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Authorized By Operator */
+            authorized_by_operator: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Idempotent */
+            idempotent: boolean;
+            /**
+             * Override Id
+             * Format: uuid
+             */
+            override_id: string;
+            /** Retries Allowed */
+            retries_allowed: number;
+            /** Retries Used */
+            retries_used: number;
+        };
+        /** MinerScreeningRetrySettingsRevision */
+        MinerScreeningRetrySettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Created At */
+            created_at: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Max Retries Per Agent */
+            max_retries_per_agent: number;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+        };
+        /**
+         * MinerScreeningRetryStatus
+         * @description Whether the signed-in owner may retry this agent's screening now.
+         *
+         *     The ``latest_attempt_id`` and ``artifact_sha256`` are the guards a client
+         *     echoes back in :class:`MinerScreeningRetryRequest`, so a retry can only
+         *     authorize the attempt the miner was shown.
+         */
+        MinerScreeningRetryStatus: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Already Authorized */
+            already_authorized: boolean;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Blocker */
+            blocker: ("not_screening_failed" | "no_attempt" | "attempt_active" | "attempt_not_retryable" | "reason_not_retryable" | "disabled" | "budget_exhausted") | null;
+            /**
+             * Cost Notice
+             * @default A retry starts a new full screening of this exact artifact: image build, runtime smoke, and source review. It costs no TAO, but it uses one of this agent's limited self-serve retries and paid screening capacity. If the retry fails again for the same reason, wait for an operator instead of re-uploading.
+             */
+            cost_notice: string;
+            /** Eligible */
+            eligible: boolean;
+            /** Latest Attempt Id */
+            latest_attempt_id: string | null;
+            /** Latest Attempt Status */
+            latest_attempt_status: string | null;
+            /** Public Reason */
+            public_reason: string | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Retries Allowed */
+            retries_allowed: number;
+            /** Retries Used */
+            retries_used: number;
         };
         /**
          * MinerScreeningReviewOutcome
@@ -52553,6 +52738,72 @@ export interface operations {
             };
         };
     };
+    get_settings_api_v1_admin_miner_screening_retry_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMinerScreeningRetrySettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_miner_screening_retry_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminMinerScreeningRetrySettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerScreeningRetrySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_operator_diagnostic_api_v1_admin_operator_diagnostic__agent_id__get: {
         parameters: {
             query?: never;
@@ -59901,6 +60152,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerScreeningFeedbackResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_screening_retry_status_api_v1_me_agents__agent_id__screening_retry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerScreeningRetryStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_my_screening_api_v1_me_agents__agent_id__screening_retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MinerScreeningRetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerScreeningRetryResponse"];
                 };
             };
             /** @description Validation Error */

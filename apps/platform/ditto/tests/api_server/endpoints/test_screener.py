@@ -9616,6 +9616,63 @@ class TestQuarantineAdmin:
         assert claimed.status_code == 200, claimed.text
         assert claimed.json()["items"][0]["agent_id"] == str(agent_id)
 
+    async def test_miner_self_serve_retry_is_claimable_like_operator_retry(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SN-456: the owner's grant waives the same exact-attempt hold."""
+        from ditto.tests.api_server.endpoints.test_miner_logs import _login
+        from ditto.tests.api_server.endpoints.test_validator import _install_chain
+
+        miner = bittensor.Keypair.create_from_uri("//Alice")
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING_FAILED,
+            miner_hotkey=miner.ss58_address,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="failed",
+                    started_at=now - timedelta(minutes=2),
+                    deadline=now + timedelta(minutes=50),
+                    finished_at=now,
+                    public_reason="Screening was interrupted; manual retry required.",
+                    reason_code="source-review-model-tool-call-invalid",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        held = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        assert held.status_code == 200
+        assert held.json()["items"] == []
+
+        token = await _login(client, keypair=miner, scopes=["read", "upload"])
+        granted = await client.post(
+            f"/api/v1/me/agents/{agent_id}/screening-retry",
+            headers={"authorization": f"Bearer {token}"},
+            json={
+                "expected_attempt_id": str(attempt_id),
+                "expected_sha256": _SHA256,
+                "acknowledge_cost": True,
+            },
+        )
+        assert granted.status_code == 200, granted.text
+
+        claimed = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        assert claimed.status_code == 200, claimed.text
+        assert claimed.json()["items"][0]["agent_id"] == str(agent_id)
+
     async def test_operator_retry_canary_binds_immutable_adjudicator_posture(
         self,
         app: FastAPI,

@@ -468,3 +468,18 @@ class RegistrationCancelledError(MinerCliError):
     """
 
     pass
+
+
+class ScreeningRetryCancelledError(MinerCliError):
+    """Raised when the miner declines the screening-retry confirmation prompt."""
+
+
+class ScreeningRetryRejectedError(ApiResponseError):
+    """Raised when Platform refuses a self-serve screening retry.
+
+    This can happen when:
+    - The session lacks the ``upload`` scope (HTTP 403).
+    - The attempt or artifact changed since the status read (HTTP 409).
+    - The agent is not eligible: a ruling, an agent-fault failure, an
+      exhausted per-agent budget, or retries paused by operators (HTTP 409).
+    """

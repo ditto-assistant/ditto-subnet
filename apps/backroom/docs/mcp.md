@@ -352,6 +352,16 @@ tickets (default 180 minutes, bounded 60-240 so it stays inside the validator
 245-minute restart drain). A revision needs `expectedRevision`, a reason, and
 `APPLY SCORING TICKET TTL <n> MINUTES`; live tickets keep their minted deadline.
 
+`get_miner_screening_retry_settings` / `set_miner_screening_retry_settings`
+(SN-456) read and revise the operator control for miner self-serve screening
+retries. An owning miner with an upload-scoped session may authorize one
+exact-attempt retry of their own interrupted `screening_failed` agent from
+`ditto retry-screening` or the dashboard; the grant is an ordinary
+`screening_retry_overrides` row with a `miner-self-serve:` actor. A revision
+needs `expectedRevision`, a reason, and `DISABLE MINER SCREENING RETRY` or
+`ENABLE MINER SCREENING RETRY MAX <n>` (0-3 per agent). Pausing never revokes
+grants already created.
+
 It was ported from the private `ditto-assistant/backroom` repository, which
 keeps only `backroom.heyditto.ai` and the Ditto app surface. Feature flags and
 app reviews are deliberately **not** served here: they reach the private product

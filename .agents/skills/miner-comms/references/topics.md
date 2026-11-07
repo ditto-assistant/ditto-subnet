@@ -17,6 +17,18 @@ does not cover a match against C. Procedure:
 
 Same-owner is not a pass if the banned `/run` path is still served.
 
+## "Screening was interrupted; manual retry required"
+
+The miner can retry it themselves (SN-456). They sign in with the upload
+scope, `ditto login --scopes read,upload`, then run
+`ditto retry-screening <agent_id>`. Or they open Screening feedback on the
+dashboard submission and press Retry. Each agent gets a small self-serve
+budget, and re-running the command is safe. If it reports `budget_exhausted`
+or `disabled`, an operator decides with `retry_failed_screening_now`. Check
+`get_miner_screening_retry_settings` first: a pause usually means an
+incident is still failing every attempt. A ruling (reject, quarantine) or an
+agent-fault failure is never retryable this way.
+
 ## Ban per UUID
 
 A reject attaches to one agent UUID. An older scored version on the same

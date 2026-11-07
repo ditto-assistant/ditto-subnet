@@ -170,6 +170,54 @@ interface MinerScreeningFeedback {
   attempts: MinerScreeningFailure[];
 }
 
+/** Owner-only self-serve retry status (SN-456). */
+interface MinerScreeningRetryStatus {
+  agent_id: string;
+  agent_status: string;
+  artifact_sha256: string;
+  latest_attempt_id: string | null;
+  latest_attempt_status: string | null;
+  eligible: boolean;
+  blocker: string | null;
+  already_authorized: boolean;
+  retries_used: number;
+  retries_allowed: number;
+  cost_notice: string;
+}
+
+interface MinerScreeningRetryResult {
+  idempotent: boolean;
+  authorized_by_operator: boolean;
+  retries_used: number;
+  retries_allowed: number;
+}
+
+const RETRY_BLOCKER_COPY: Record<string, string> = {
+  attempt_active: "A screening attempt is still running.",
+  attempt_not_retryable:
+    "The latest screening ended in a review ruling; appeal from the submission page instead.",
+  reason_not_retryable:
+    "The latest failure is owned by the submission or is an operator hold; fix and upload a new version.",
+  disabled: "Operators have paused self-serve retries for now. Your submission is not lost.",
+  budget_exhausted:
+    "This agent has used its self-serve retries. Ask an operator, quoting the agent id.",
+};
+
+/** Only a parked failure gets retry copy; other statuses need none. */
+function retryBlockerCopy(status: MinerScreeningRetryStatus): string {
+  if (status.agent_status !== "screening_failed" || !status.blocker) return "";
+  return RETRY_BLOCKER_COPY[status.blocker] ?? "";
+}
+
+function isRetryStatus(value: unknown): value is MinerScreeningRetryStatus {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { eligible?: unknown }).eligible === "boolean" &&
+    typeof (value as { cost_notice?: unknown }).cost_notice === "string"
+  );
+}
+
 interface MinerGateNote {
   note_id: string;
   gate: string;
@@ -570,6 +618,9 @@ function AccountPanel(): JSX.Element {
   const [screeningAgent, setScreeningAgent] = createSignal<string | null>(null);
   const [screening, setScreening] = createSignal<MinerScreeningFeedback | null>(null);
   const [screeningError, setScreeningError] = createSignal("");
+  const [retryStatus, setRetryStatus] = createSignal<MinerScreeningRetryStatus | null>(null);
+  const [retryNotice, setRetryNotice] = createSignal("");
+  const [retryBusy, setRetryBusy] = createSignal(false);
   const [gateAgent, setGateAgent] = createSignal<string | null>(null);
   const [gateNotes, setGateNotes] = createSignal<MinerGateNotes | null>(null);
   const [gateError, setGateError] = createSignal("");
@@ -744,6 +795,7 @@ function AccountPanel(): JSX.Element {
 
   async function loadScreening(agentId: string): Promise<void> {
     setScreeningAgent(agentId);
+    setRetryNotice("");
     setScreening(null);
     setScreeningError("");
     try {
@@ -755,6 +807,51 @@ function AccountPanel(): JSX.Element {
     } catch (err) {
       setScreeningError(err instanceof Error ? err.message : "Could not load screening feedback.");
     }
+    await loadRetryStatus(agentId);
+  }
+
+  async function loadRetryStatus(agentId: string): Promise<void> {
+    setRetryStatus(null);
+    try {
+      const body = await authJSON<unknown>(`/me/agents/${agentId}/screening-retry`, {
+        headers: sessionAuthHeader(),
+      });
+      // Retry is an extra; an older Platform without the route shows nothing.
+      if (isRetryStatus(body)) setRetryStatus(body);
+    } catch {
+      setRetryStatus(null);
+    }
+  }
+
+  async function retryScreening(status: MinerScreeningRetryStatus): Promise<void> {
+    if (!status.latest_attempt_id) return;
+    const budget = `${status.retries_used} of ${status.retries_allowed} self-serve retries used; this uses one more.`;
+    if (!window.confirm(`${status.cost_notice}\n\n${budget}\n\nRetry this screening?`)) return;
+    setRetryBusy(true);
+    setRetryNotice("");
+    try {
+      const result = await authJSON<MinerScreeningRetryResult>(
+        `/me/agents/${status.agent_id}/screening-retry`,
+        {
+          method: "POST",
+          headers: { ...sessionAuthHeader(), "content-type": "application/json" },
+          body: JSON.stringify({
+            expected_attempt_id: status.latest_attempt_id,
+            expected_sha256: status.artifact_sha256,
+            acknowledge_cost: true,
+          }),
+        },
+      );
+      setRetryNotice(
+        result.idempotent
+          ? `A retry was already queued${result.authorized_by_operator ? " by an operator" : ""}.`
+          : `Retry queued (${result.retries_used} of ${result.retries_allowed} used). A screener will pick it up.`,
+      );
+    } catch (err) {
+      setRetryNotice(err instanceof Error ? err.message : "Could not retry screening.");
+    }
+    setRetryBusy(false);
+    await loadRetryStatus(status.agent_id);
   }
 
   async function loadGateNotes(agentId: string): Promise<void> {
@@ -1197,6 +1294,48 @@ function AccountPanel(): JSX.Element {
                             )}
                           </For>
                         </ul>
+                      </Show>
+                      <Show when={retryStatus()?.agent_id === item.agent_id ? retryStatus() : null}>
+                        {(status) => (
+                          <div class="account-screening-retry">
+                            <Show when={status().already_authorized}>
+                              <p class="muted">
+                                A retry of this screening is queued. A screener will pick it up.
+                              </p>
+                            </Show>
+                            <Show when={status().eligible}>
+                              <p>
+                                Screening was interrupted. You can retry it yourself (
+                                {status().retries_used} of {status().retries_allowed} self-serve
+                                retries used).
+                              </p>
+                              <p class="muted">{status().cost_notice}</p>
+                              <Show
+                                when={me()?.session.scopes.includes("upload")}
+                                fallback={
+                                  <p class="muted">
+                                    Sign in with the <code>upload</code> scope to retry, or run{" "}
+                                    <code>ditto retry-screening {status().agent_id}</code>.
+                                  </p>
+                                }
+                              >
+                                <button
+                                  class="btn"
+                                  disabled={retryBusy()}
+                                  onClick={() => void retryScreening(status())}
+                                >
+                                  Retry screening
+                                </button>
+                              </Show>
+                            </Show>
+                            <Show when={retryBlockerCopy(status())}>
+                              {(copy) => <p class="muted">{copy()}</p>}
+                            </Show>
+                          </div>
+                        )}
+                      </Show>
+                      <Show when={retryNotice()}>
+                        <p class="account-review-outcome">{retryNotice()}</p>
                       </Show>
                     </Show>
                   </li>

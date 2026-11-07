@@ -27,7 +27,7 @@ classification remains evidence; it is not retry authority.
 
 | Process | Automatic behavior after failure | Manual Backroom control |
 | --- | --- | --- |
-| Screening attempt, including image build, runtime smoke, source review, L2/critic/adjudication, verdict delivery, and deferred ATH deep review | The exact attempt becomes terminal and is not claimable again | `retry_failed_screening_now` authorizes the exact latest terminal attempt; its confirmed `forceFullReview` option forces only that retry through the full review lane without changing global admission policy; `expire_running_screening` first parks a stuck live attempt |
+| Screening attempt, including image build, runtime smoke, source review, L2/critic/adjudication, verdict delivery, and deferred ATH deep review | The exact attempt becomes terminal and is not claimable again | `retry_failed_screening_now` authorizes the exact latest terminal attempt; its confirmed `forceFullReview` option forces only that retry through the full review lane without changing global admission policy; `expire_running_screening` first parks a stuck live attempt. The owning miner may also authorize the same exact-attempt grant (see below) |
 | Rejected or quarantined screening | Remains terminal | `rescreen_rejected_submission`, `resolve_screening_quarantine`, and the guarded batch quarantine tools authorize a new attempt |
 | Trusted screener image build | `failed`, `fallback_required`, and `canceled` rows remain parked | `get_screener_capacity` supplies the build/status/attempt guards; `retry_trusted_image_build` requeues that exact build and appends an audit event |
 | Screening compute provider | Only the first configured provider is authoritative; no Targon/GCP or model failover occurs | `get_screener_capacity` and the screener-provider settings controls select the one provider before a manual retry |
@@ -43,6 +43,34 @@ ticket snapshot, build status and attempt count, or confirmation evidence) so a
 stale operator request cannot authorize newly changed work. Attempt history is
 append-only. Trusted-build attempt counts have no manual ceiling; the database
 keeps only the nonnegative invariant.
+
+## Miner self-serve screening retry (SN-456)
+
+The owning miner may authorize one exact-attempt screening retry themselves
+through `POST /api/v1/me/agents/{agent_id}/screening-retry` (`ditto
+retry-screening` or the signed-in dashboard). It is manual authority, not an
+automatic retry: nothing is retried until the miner asks, and it writes the
+same append-only `screening_retry_overrides` row as `retry_failed_screening_now`
+(actor `miner-self-serve:<hotkey>`, never `forceFullReview`). It is narrower than
+the operator control:
+
+- a miner session for the owning hotkey with the `upload` scope, and an
+  explicit cost acknowledgement;
+- only a `screening_failed` agent whose latest attempt is `failed` or
+  `expired`; rejections, quarantines, ATH holds, `agent_fault` codes and
+  `policy` codes stay with operators and the appeal path;
+- the `expected_attempt_id` and `expected_sha256` guards, so a stale client
+  cannot authorize newer work;
+- at most `max_retries_per_agent` miner grants per agent (default 1, the
+  same one-extra-screen bound accepted for `l2-late-result`); operator grants
+  never count against it;
+- operators pause the route or change the budget with
+  `set_miner_screening_retry_settings`, read back with
+  `get_miner_screening_retry_settings` (which also reports the fleet-wide 24h
+  count). Pausing never revokes grants already created.
+
+Replaying the request for an attempt that already has a grant returns that
+grant (`idempotent: true`) and spends nothing.
 
 ## Historical screening retry grants
 
