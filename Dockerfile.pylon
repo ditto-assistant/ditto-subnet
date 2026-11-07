@@ -11,7 +11,11 @@ FROM ${PYLON_BASE_IMAGE}
 ADD --checksum=sha256:c10585ac22c7f617a73d394eea29ba71d0356f350ae973b19043d1b017f80f54 \
   https://snapshot.debian.org/file/5f7c51c2ab8fb7a6d49f2cd774e6ac19a692414d \
   /tmp/ca-certificates_20250419+deb13u1_all.deb
-RUN DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/ca-certificates_20250419+deb13u1_all.deb \
+RUN installed="$(dpkg-query -W -f='${Version}' ca-certificates)" \
+    && if dpkg --compare-versions "$installed" gt '20250419+deb13u1'; then \
+         echo "refusing to downgrade ca-certificates from $installed to 20250419+deb13u1" >&2; exit 1; \
+       fi \
+    && DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/ca-certificates_20250419+deb13u1_all.deb \
     && test -z "$(dpkg --audit)" \
     && rm /tmp/ca-certificates_20250419+deb13u1_all.deb
 
