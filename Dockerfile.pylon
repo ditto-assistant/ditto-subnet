@@ -6,11 +6,14 @@ FROM ${PYLON_BASE_IMAGE}
 # The base image's system and Certifi stores trust a root with compromised
 # intermediate CA keys, and its AnyIO uses IDNA 2003 for TLS hostname checks.
 # Pin the Debian security update and wheels rather than resolving mutable
-# versions during the validator-stack build. Bump the Debian pin when the
-# security suite supersedes it; an unavailable pin must fail the build closed.
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates=20250419+deb13u1 \
-    && rm -rf /var/lib/apt/lists/*
+# versions during the validator-stack build. The content-addressed Debian
+# snapshot retains this package when the security suite publishes a newer one.
+ADD --checksum=sha256:c10585ac22c7f617a73d394eea29ba71d0356f350ae973b19043d1b017f80f54 \
+  https://snapshot.debian.org/file/5f7c51c2ab8fb7a6d49f2cd774e6ac19a692414d \
+  /tmp/ca-certificates_20250419+deb13u1_all.deb
+RUN DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/ca-certificates_20250419+deb13u1_all.deb \
+    && test -z "$(dpkg --audit)" \
+    && rm /tmp/ca-certificates_20250419+deb13u1_all.deb
 
 ADD --checksum=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1 \
   https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl \
