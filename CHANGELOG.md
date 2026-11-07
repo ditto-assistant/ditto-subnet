@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.458.3 (2026-11-07)
+
+### Performance Improvements
+
+- **platform**: Stop decoding unused score telemetry on public reads
+  ([#3409](https://github.com/ditto-assistant/ditto-subnet/pull/3409),
+  [`d0d06e6`](https://github.com/ditto-assistant/ditto-subnet/commit/d0d06e6dcdcfd569c112fef9245e9c0659e2f300))
+
+
 ## v0.458.2 (2026-11-07)
 
 ### Bug Fixes
