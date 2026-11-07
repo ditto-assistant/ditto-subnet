@@ -5873,13 +5873,18 @@ async def public_screener_review_settings(
     """
     response.headers["Cache-Control"] = "public, max-age=60"
     rows = await session.scalars(
-        select(ScreenerReviewSettingsRevision).order_by(
-            ScreenerReviewSettingsRevision.revision.desc()
+        select(ScreenerReviewSettingsRevision)
+        .distinct(ScreenerReviewSettingsRevision.scope)
+        .order_by(
+            ScreenerReviewSettingsRevision.scope,
+            ScreenerReviewSettingsRevision.revision.desc(),
         )
     )
-    latest: dict[str, ScreenerReviewSettingsRevision] = {}
-    for row in rows:
-        latest.setdefault(row.scope, row)
+    latest = {row.scope: row for row in rows}
+    # A global ``inherit`` revision has nothing to fall through to: workers then
+    # run the built-in defaults, so publish those as the global posture.
+    if latest.get("*") is not None and latest["*"].settings.get("mode") == "inherit":
+        del latest["*"]
     postures = [
         PublicScreenerReviewPosture.from_settings(
             revision=row.revision,

@@ -193,3 +193,31 @@ def test_production_posture_overrides_local_review_limits(
 def test_inheriting_scope_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="inherits"):
         _load_posture(str(_public_settings(tmp_path)), "subnet-screener-1")
+
+
+def test_invalid_saved_posture_effort_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _public_settings(tmp_path)
+    body = json.loads(path.read_text())
+    body["postures"][0]["source_review_reasoning_effort"] = "maximum"
+    path.write_text(json.dumps(body))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_l2_calibration.py",
+            "--manifest",
+            "m",
+            "--artifact-root",
+            "r",
+            "--api-key-file",
+            "k",
+            "--analyzer-image",
+            "i",
+            "--results-file",
+            "o",
+        ],
+    )
+    args = _arguments()
+    with pytest.raises(SystemExit, match="l1_reasoning_effort"):
+        _apply_posture(args, _load_posture(str(path), None))

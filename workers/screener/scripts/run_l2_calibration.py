@@ -99,6 +99,11 @@ def _apply_posture(args: argparse.Namespace, posture: dict[str, object]) -> None
     for field, attribute in _POSTURE_ARGS.items():
         if field in posture and posture[field] is not None:
             setattr(args, attribute, posture[field])
+    # A saved posture bypasses argparse choices; reject it at startup instead
+    # of at the first provider request.
+    for attribute in ("critic_reasoning_effort", "l1_reasoning_effort"):
+        if getattr(args, attribute) not in ("low", "medium", "high"):
+            raise SystemExit(f"posture {attribute} must be low, medium, or high")
     fallbacks = posture.get("l2_fallback_models")
     if isinstance(fallbacks, list):
         args.l2_fallback_models = tuple(str(model) for model in fallbacks)
@@ -355,6 +360,12 @@ async def _main() -> None:
     analyst_model = "openai/gpt-6-sol" if args.single_layer_sol else args.l2_model
     analyst_fallbacks = () if args.single_layer_sol else args.l2_fallback_models
     l3_enabled = args.l3_enabled and not args.single_layer_sol
+    # The production worker always retries one relayed provider fault in the
+    # same turn (gate.py); mirror it when replaying the live posture, and record
+    # the effective value in the run metadata.
+    retry_provider_body_fault_once = (
+        args.retry_provider_body_once or args.production_posture is not None
+    )
     agent = TerraSolSourceReviewAgent(
         api_key_file=str(args.api_key_file),
         base_url="https://openrouter.ai/api/v1",
@@ -378,9 +389,7 @@ async def _main() -> None:
         terminal_verdict_required=args.single_layer_sol,
         # The production worker always retries one relayed provider fault in
         # the same turn (gate.py); mirror it when replaying the live posture.
-        retry_provider_body_fault_once=(
-            args.retry_provider_body_once or args.production_posture is not None
-        ),
+        retry_provider_body_fault_once=retry_provider_body_fault_once,
         analyst_provider=args.sol_provider,
         compact_review_packet=args.compact_review_packet,
         model=analyst_model,
@@ -427,7 +436,7 @@ async def _main() -> None:
             else "production_multilayer"
         ),
         "terminal_verdict_required": args.single_layer_sol,
-        "retry_provider_body_fault_once": args.retry_provider_body_once,
+        "retry_provider_body_fault_once": retry_provider_body_fault_once,
         "sol_provider": args.sol_provider,
         "compact_review_packet": args.compact_review_packet,
         "revisions": {

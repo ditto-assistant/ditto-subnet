@@ -139,3 +139,28 @@ async def test_latest_revision_per_scope_is_public_allowlist_only(
         "probe_review",
     ):
         assert private not in raw
+
+
+async def test_global_inherit_publishes_builtin_default(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    first = await _add(
+        session_maker,
+        scope="*",
+        parent=0,
+        settings=ScreenerReviewSettings(source_review_max_steps=240),
+    )
+    await _add(
+        session_maker,
+        scope="*",
+        parent=first,
+        settings=ScreenerReviewSettings(mode="inherit"),
+    )
+
+    response = await client.get(_URL)
+    assert response.status_code == 200
+    postures = response.json()["postures"]
+    globals_ = [row for row in postures if row["role"] == "global"]
+    assert [row["scope"] for row in globals_] == ["builtin-default"]
+    assert globals_[0]["source_review_max_steps"] == 200
