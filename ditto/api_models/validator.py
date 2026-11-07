@@ -1237,16 +1237,17 @@ class CaseScore(BaseModel):
         ),
     ] = False
     budget_exhausted: Annotated[
-        bool,
+        bool | None,
         Field(
-            default=False,
+            default=None,
             description=(
                 "True when the run's priced-cost budget was spent before this "
                 "case started (bench v18+): the case never ran and scores 0. "
-                "The harness's own spend, never an infrastructure failure."
+                "The harness's own spend, never an infrastructure failure. "
+                "Absent when the case ran, so pre-v18 rows keep their shape."
             ),
         ),
-    ] = False
+    ] = None
     allow_extra_tools: Annotated[
         bool,
         Field(

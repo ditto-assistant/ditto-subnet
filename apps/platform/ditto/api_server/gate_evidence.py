@@ -80,6 +80,8 @@ _V13_ERA_CASE_KEYS = frozenset(
         "catalog",
         "claim_provenance",
         "inference_cost",
+        # Bench v18 run budget: absent (None) whenever a case ran.
+        "budget_exhausted",
     }
 )
 
