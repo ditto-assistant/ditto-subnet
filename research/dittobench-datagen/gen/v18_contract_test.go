@@ -13,7 +13,7 @@ import (
 // synthetic stand-in test binaries load. It is NOT the contract vector: that
 // is pinned with catalog.V18CatalogSnapshotSHA256 once the production
 // snapshot is. docs/bench-versions.md and the README publish the same string.
-const v18KnownVectorWant = "4f49235ed7ad2835e974f2abc8a9d53ab91ab3fd063bad7f94d9465e8656a8c7"
+const v18KnownVectorWant = "9a570c4e4c325a458df996c561ddf972424c568485a6af2b42c4979543f7eb91"
 
 // V18 is supported (promoted from staging by the cross-layer PR, with the epoch
 // and seed domain it was staged with, so this vector did not move). Every lever is gated on bench_version >= 18; the v2..v17 vectors

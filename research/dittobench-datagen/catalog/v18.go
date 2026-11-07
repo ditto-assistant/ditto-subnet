@@ -24,7 +24,7 @@ import (
 // toolkit the user enables. V18 builds each seed's menu from a PINNED snapshot
 // of real toolkits (the production Composio mirror) and of Ditto's
 // first-party tool catalog. The seed picks whole toolkits at random until the
-// seed's menu holds between V18MinTools and V18MaxTools tools, so the skew
+// seed's menu lands inside CatalogSizeForVersion, so the skew
 // stays realistic: a few huge toolkits, many small ones. A harness that hands
 // the whole menu to the model on every turn cannot keep that up; one that
 // defers or searches tools can, which is what Ditto's own harness does.
@@ -50,11 +50,43 @@ import (
 // mirror stores none), so each renders one optional free-form argument.
 // First-party tools keep their own schemas.
 
-// V18MinTools and V18MaxTools bound one seed's whole menu.
-const (
-	V18MinTools = 1400
-	V18MaxTools = 5000
-)
+// CatalogSize bounds one seed's whole menu (inclusive).
+type CatalogSize struct{ Min, Max int }
+
+// catalogSizes is the per-contract menu size, keyed by the bench version that
+// introduced it; a later version inherits the newest entry at or below it.
+// The production range is 1,400 to 5,000 tools; the bench grows toward it one
+// version at a time, so a later contract changes ONE number here plus the
+// pinned snapshot. V18 starts at the low end: weak, expensive harnesses that
+// forward the whole menu are already culled there.
+var catalogSizes = []struct {
+	BenchVersion int
+	Size         CatalogSize
+}{
+	{protocol.BenchVersionV18, CatalogSize{Min: 1400, Max: 2000}},
+}
+
+// CatalogSizeForVersion returns the menu size a contract samples, or false
+// below v18 (no snapshot menu).
+func CatalogSizeForVersion(benchVersion int) (CatalogSize, bool) {
+	var out CatalogSize
+	ok := false
+	for _, entry := range catalogSizes {
+		if benchVersion >= entry.BenchVersion {
+			out, ok = entry.Size, true
+		}
+	}
+	return out, ok
+}
+
+// MaxCatalogTools is the largest menu any supported contract samples.
+func MaxCatalogTools() int {
+	out := 0
+	for _, entry := range catalogSizes {
+		out = max(out, entry.Size.Max)
+	}
+	return out
+}
 
 // V18CatalogSnapshotSHA256 pins the snapshot every v18 dataset is built
 // from. Empty until the production snapshot is pinned: v18 generation fails
@@ -211,7 +243,8 @@ func v18ToolkitEligible(kit V18SnapshotToolkit) bool {
 // v18SampledToolkits returns the toolkits one seed offers, in sampled order,
 // and the target menu size the seed drew. base is the size of the rest of the
 // menu (the v16 surface plus first-party tools).
-func v18SampledToolkits(seed int64, snap *V18Snapshot, base int) ([]V18SnapshotToolkit, int) {
+func v18SampledToolkits(seed int64, benchVersion int, snap *V18Snapshot, base int) ([]V18SnapshotToolkit, int) {
+	size, _ := CatalogSizeForVersion(benchVersion)
 	linked := map[string]bool{}
 	for _, app := range V16ConnectorPlanForSeed(seed).Linked {
 		linked[strings.ToLower(app.Slug)] = true
@@ -222,7 +255,7 @@ func v18SampledToolkits(seed int64, snap *V18Snapshot, base int) ([]V18SnapshotT
 			eligible = append(eligible, kit)
 		}
 	}
-	target := V18MinTools + v13Pick(seed, "v18-catalog-target", V18MaxTools-V18MinTools+1)
+	target := size.Min + v13Pick(seed, "v18-catalog-target", size.Max-size.Min+1)
 	total := base
 	var out []V18SnapshotToolkit
 	for _, index := range v13Perm(seed, "v18-toolkit-order", len(eligible)) {
@@ -230,7 +263,7 @@ func v18SampledToolkits(seed int64, snap *V18Snapshot, base int) ([]V18SnapshotT
 			break
 		}
 		kit := eligible[index]
-		if total+len(kit.Tools) > V18MaxTools {
+		if total+len(kit.Tools) > size.Max {
 			continue
 		}
 		out = append(out, kit)
@@ -302,7 +335,7 @@ var v18ToolkitSchema = schema(nil, prop{name: "input", typ: "string", desc: "opt
 // V18ProductionToolsForSeed returns the snapshot tools one seed offers:
 // first-party tools that the v16 surface does not already carry, then the
 // sampled toolkits' tools, each with its seeded description.
-func V18ProductionToolsForSeed(seed int64) []protocol.ToolDefinition {
+func V18ProductionToolsForSeed(seed int64, benchVersion int) []protocol.ToolDefinition {
 	snap := v18Snapshot()
 	surface := map[string]bool{}
 	for _, def := range v16SeededCatalog(seed) {
@@ -320,7 +353,7 @@ func V18ProductionToolsForSeed(seed int64) []protocol.ToolDefinition {
 			Parameters:  append(json.RawMessage(nil), tool.Parameters...),
 		})
 	}
-	kits, _ := v18SampledToolkits(seed, snap, len(surface))
+	kits, _ := v18SampledToolkits(seed, benchVersion, snap, len(surface))
 	for _, kit := range kits {
 		tools := append([]V18SnapshotTool(nil), kit.Tools...)
 		sort.Slice(tools, func(a, b int) bool { return tools[a].Slug < tools[b].Slug })
@@ -377,9 +410,9 @@ func IsConnectorToolForVersion(name string, benchVersion int) (appName string, o
 
 // v18SeededCatalog is the v16 surface with the seed's snapshot tools spliced
 // in at seeded positions (their own slot keys, so the v16 order is kept).
-func v18SeededCatalog(seed int64) []protocol.ToolDefinition {
+func v18SeededCatalog(seed int64, benchVersion int) []protocol.ToolDefinition {
 	base := v16SeededCatalog(seed)
-	extra := V18ProductionToolsForSeed(seed)
+	extra := V18ProductionToolsForSeed(seed, benchVersion)
 	byPos := make([][]protocol.ToolDefinition, len(base)+1)
 	for i, def := range extra {
 		pos := v13Pick(seed, fmt.Sprintf("v18-slot:%d", i), len(base)+1)
