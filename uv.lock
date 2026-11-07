@@ -482,7 +482,7 @@ wheels = [
 
 [[package]]
 name = "ditto"
-version = "0.458.1"
+version = "0.458.2"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },

@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.458.2 (2026-11-07)
+
+### Bug Fixes
+
+- **platform**: A quarantine release restores a scored rescreen instead of stranding it
+  ([#3407](https://github.com/ditto-assistant/ditto-subnet/pull/3407),
+  [`3575817`](https://github.com/ditto-assistant/ditto-subnet/commit/35758176b320f067b06248c73f8b2cf2fc8fe411))
+
+
 ## v0.458.1 (2026-11-07)
 
 ### Bug Fixes
