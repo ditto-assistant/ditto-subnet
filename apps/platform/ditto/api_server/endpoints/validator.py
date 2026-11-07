@@ -89,7 +89,6 @@ from ditto.api_models.confirmation_progress import (
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.inference import InferenceGrantOffer
 from ditto.api_models.queue_policy_settings import (
-    DeferredSourceReviewSettings,
     PrevGenCarryoverSettings,
     QueuePolicySettings,
 )
@@ -167,20 +166,6 @@ from ditto.api_server.crn import (
     fold_seed_bound,
 )
 from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
-from ditto.api_server.deferred_source_review import (
-    DEFERRED_MECHANICAL_REASON,
-    DEFERRED_REVIEW_KIND,
-    DEFERRED_REVIEW_REASON,
-    INTEGRITY_DOUBLE_CHECK_ACTOR,
-    INTEGRITY_DOUBLE_CHECK_ALGORITHM,
-    INTEGRITY_DOUBLE_CHECK_AUDIT_KIND,
-    INTEGRITY_DOUBLE_CHECK_REASON,
-    INTEGRITY_DOUBLE_CHECK_TRIGGER,
-    TOP_FIVE_SIZE,
-    DeferredReviewDecision,
-    evaluate_deferred_review,
-    evaluate_integrity_double_check,
-)
 from ditto.api_server.dependencies import (
     get_chain_client,
     get_dataset_generator,
@@ -226,15 +211,8 @@ from ditto.api_server.operator_diagnostic import (
     operator_diagnostic_hotkeys,
 )
 from ditto.api_server.outlier_escalation import (
-    OUTLIER_ALGORITHM_VERSION,
-    OUTLIER_AXIS_EVIDENCE_KIND,
-    OUTLIER_REVIEW_KIND,
-    AxisObservation,
-    OutlierEscalationSettings,
     OutlierEscalationSettingsLoad,
-    evaluate_score_outlier,
     load_outlier_escalation_settings,
-    public_audit_evidence,
 )
 from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.queue_policy_settings import (
@@ -297,7 +275,6 @@ from ditto.chain import ChainError
 from ditto.db.models import (
     Agent,
     AthReview,
-    AthReviewAction,
     BenchmarkDataset,
     BenchmarkRollout,
     ConfirmationBundleSubject,
@@ -306,9 +283,6 @@ from ditto.db.models import (
     InferenceGrant,
     PrivateBenchmarkDataset,
     Score,
-    ScoreAuditEntry,
-    ScreeningAttempt,
-    ScreeningQuarantine,
     ValidatorHeartbeat,
     ValidatorReceiptDiagnostic,
     ValidatorTicket,
@@ -450,7 +424,6 @@ from ditto.metrics import (
     DispatchDeclineReason,
 )
 from ditto.score_order import rank_submissions
-from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol.dueling import (
     DUELING_SLICE_MODE,
     is_dueling_bench_version,
@@ -569,26 +542,11 @@ AUDIT_ALPHA = 0.01
 AUDIT_MIN_DISCORDANT = 6
 TRANSFORM_AUDIT_REVIEW_REASON = "transform_audit_brittleness"
 
-# Enforcement stays OFF by default. The metric now discriminates in principle
-# (see the calibration in dittobench-api docs/BASELINES.md Run 3), but the floor
-# has not been re-validated end to end against the population it judges --
-# champion/tail agents, which are more accurate than the stock reference harness
-# every number above came from. Turn this on only with that evidence.
-TRANSFORM_AUDIT_ENFORCE = os.environ.get(
-    "DITTO_TRANSFORM_AUDIT_ENFORCE", "false"
-).strip().lower() in {"1", "true", "yes", "on"}
-
-
-# Out-of-band composite escalation to ATH review (issue #476). Env-driven like
-# the transform-audit toggle above so the safety net can be rolled out
-# observe-first and enabled without a code change. Ships in ``off`` mode: the
-# gate is a no-op until an operator sets ``DITTO_OUTLIER_ESCALATION_MODE`` to
-# ``observe`` (record would-be holds) or ``enforce`` (open them). The bench-
-# version floor keeps v8-v11 behaviour byte-identical.
-# Loaded once per process at import, like the transform-audit toggle. The load
-# record keeps each field's source (env / default / default_invalid_env) so the
-# admin posture read can show a silently-rejected variable; scoring only ever
-# consumes ``OUTLIER_ESCALATION_SETTINGS``.
+# Out-of-band composite escalation settings (issue #476). Score finalization no
+# longer opens an automatic hold from them (automatic score holds retired
+# 2026-11-07); the operator dry-run read in ``admin_outlier_escalation`` still
+# uses them to show which composites stand out. The load record keeps each
+# field's source (env / default / default_invalid_env) for that posture read.
 OUTLIER_ESCALATION_SETTINGS_LOAD: OutlierEscalationSettingsLoad = (
     load_outlier_escalation_settings(os.environ)
 )
@@ -669,713 +627,6 @@ async def _resolve_queue_policy(request: Request) -> QueuePolicySettings:
     if resolver is None:
         return QUEUE_POLICY_DEFAULTS
     return await resolver.resolve(getattr(request.app.state, "session_maker", None))
-
-
-async def _deferred_screening_attempts(
-    session: AsyncSession, *, agent_ids: Sequence[UUID]
-) -> dict[UUID, ScreeningAttempt]:
-    """Batch-resolve outstanding mechanical admissions without ledger N+1s.
-
-    A prior deferred ATH lifecycle (pending or resolved) is terminal for
-    qualification; an operator clear must not be reopened by a later score
-    mutation. A terminal non-build attempt is also a stop even if historical
-    data somehow lost its review row.
-    """
-    ids = tuple(dict.fromkeys(agent_ids))
-    if not ids:
-        return {}
-    reviewed_ids = set(
-        await session.scalars(
-            select(AthReview.agent_id).where(
-                AthReview.agent_id.in_(ids),
-                AthReview.algorithm_provenance["review_kind"].as_string()
-                == DEFERRED_REVIEW_KIND,
-            )
-        )
-    )
-    terminal_ids = set(
-        await session.scalars(
-            select(ScreeningAttempt.agent_id)
-            .where(
-                ScreeningAttempt.agent_id.in_(ids),
-                ScreeningAttempt.policy_version == effective_screening_policy_version(),
-                ScreeningAttempt.build_only.is_(False),
-                ScreeningAttempt.status.in_(("passed", "quarantined")),
-            )
-            .distinct()
-        )
-    )
-    rows = (
-        await session.scalars(
-            select(ScreeningAttempt)
-            .where(
-                ScreeningAttempt.agent_id.in_(ids),
-                ScreeningAttempt.policy_version == effective_screening_policy_version(),
-                ScreeningAttempt.build_only.is_(True),
-                ScreeningAttempt.status == "passed",
-                ScreeningAttempt.reason_code == DEFERRED_MECHANICAL_REASON,
-            )
-            .order_by(
-                ScreeningAttempt.agent_id,
-                ScreeningAttempt.finished_at.desc(),
-                ScreeningAttempt.attempt_id,
-            )
-        )
-    ).all()
-    outstanding: dict[UUID, ScreeningAttempt] = {}
-    for attempt in rows:
-        if (
-            attempt.agent_id in reviewed_ids
-            or attempt.agent_id in terminal_ids
-            or attempt.agent_id in outstanding
-        ):
-            continue
-        outstanding[attempt.agent_id] = attempt
-    return outstanding
-
-
-async def _deferred_screening_attempt(
-    session: AsyncSession, *, agent_id: UUID
-) -> ScreeningAttempt | None:
-    """Return one admission attempt proving deep review is still outstanding."""
-    return (await _deferred_screening_attempts(session, agent_ids=(agent_id,))).get(
-        agent_id
-    )
-
-
-async def _record_deferred_review_decision(
-    session: AsyncSession,
-    *,
-    agent: Agent,
-    decision: DeferredReviewDecision,
-    mode: Literal["observe", "enforce"],
-    screening_attempt: ScreeningAttempt | None,
-    score_count: int,
-    now: datetime,
-    bench_version: int | None = None,
-    double_check: bool = False,
-) -> None:
-    """Persist an observe record or enforce an idempotent reward hold.
-
-    ``double_check`` records the hold as a top-five integrity double-check: the
-    same ``deferred_source_review`` lifecycle, with its own reason, actor and
-    ``trigger`` provenance so the screener claim pins the stronger posture, and
-    an ``enforced`` score-audit marker that survives later reopens of the
-    agent's single review row and suppresses a second double-check.
-    """
-    if not decision.triggered:
-        return
-    audit_kind = (
-        INTEGRITY_DOUBLE_CHECK_AUDIT_KIND if double_check else DEFERRED_REVIEW_KIND
-    )
-    reason = INTEGRITY_DOUBLE_CHECK_REASON if double_check else DEFERRED_REVIEW_REASON
-    actor = (
-        INTEGRITY_DOUBLE_CHECK_ACTOR
-        if double_check
-        else "platform:deferred-source-review"
-    )
-    trigger_provenance: dict[str, object] = (
-        {"trigger": INTEGRITY_DOUBLE_CHECK_TRIGGER} if double_check else {}
-    )
-    algorithm_version = (
-        INTEGRITY_DOUBLE_CHECK_ALGORITHM
-        if double_check
-        else "deferred-source-review-v1"
-    )
-    retained_review: ScreeningQuarantine | None = None
-    if screening_attempt is not None:
-        retained_review = await session.scalar(
-            select(ScreeningQuarantine).where(
-                ScreeningQuarantine.attempt_id == screening_attempt.attempt_id
-            )
-        )
-    evidence = {
-        "sha256": agent.sha256,
-        "score_count": score_count,
-        "previous_status": agent.status.value,
-        "deferred_review": {
-            **decision.evidence,
-            "mode": mode,
-            "bench_version": bench_version,
-            "screening_attempt_id": (
-                str(screening_attempt.attempt_id)
-                if screening_attempt is not None
-                else None
-            ),
-            "screening_reason_code": (
-                screening_attempt.reason_code if screening_attempt is not None else None
-            ),
-            "review_audit_digest": (
-                retained_review.review_audit_digest
-                if retained_review is not None
-                else None
-            ),
-            "review_audit": (
-                retained_review.review_audit if retained_review is not None else None
-            ),
-        },
-    }
-    existing = await session.scalar(
-        select(AthReview).where(AthReview.agent_id == agent.agent_id).with_for_update()
-    )
-    if mode == "observe":
-        # AthReview is unique per agent and may already hold unrelated resolved
-        # history. The append-only score audit is therefore the authoritative
-        # observe-mode record: every qualification is durable without
-        # overwriting, reopening, or being suppressed by that unique row.
-        await append_audit_entry(
-            session,
-            agent_id=agent.agent_id,
-            validator_hotkey=None,
-            event=EVENT_AUDIT,
-            payload={
-                "audit_kind": audit_kind,
-                "enforced": False,
-                "qualified": True,
-                "trigger_kinds": list(decision.triggers),
-            },
-            recorded_at=now,
-        )
-        return
-
-    if existing is not None and existing.status == "pending":
-        return
-    if double_check:
-        await append_audit_entry(
-            session,
-            agent_id=agent.agent_id,
-            validator_hotkey=None,
-            event=EVENT_AUDIT,
-            payload={
-                "audit_kind": audit_kind,
-                "enforced": True,
-                "qualified": True,
-                "trigger_kinds": list(decision.triggers),
-            },
-            recorded_at=now,
-        )
-
-    previous_status = agent.status.value
-    if existing is None:
-        session.add(
-            AthReview(
-                review_id=uuid4(),
-                agent_id=agent.agent_id,
-                status="pending",
-                opened_at=now,
-                original_reason=reason,
-                original_policy_version=agent.screening_policy_version,
-                original_evidence=evidence,
-                algorithm_provenance={
-                    "snapshot": "score-finalization",
-                    "review_kind": DEFERRED_REVIEW_KIND,
-                    "algorithm_version": algorithm_version,
-                    "opened_by": "platform",
-                    "backfilled": False,
-                    "opened_at_source": (
-                        "integrity-double-check-enforce"
-                        if double_check
-                        else "deferred-review-enforce"
-                    ),
-                    **trigger_provenance,
-                },
-            )
-        )
-    else:
-        prior_provenance = existing.algorithm_provenance
-        prior_review = {
-            "original_reason": existing.original_reason,
-            "original_duplicate_of": (
-                str(existing.original_duplicate_of)
-                if existing.original_duplicate_of is not None
-                else None
-            ),
-            "original_policy_version": existing.original_policy_version,
-            "original_evidence": existing.original_evidence,
-            "algorithm_provenance": prior_provenance,
-            "resolution": existing.resolution,
-            "resolution_reason": existing.resolution_reason,
-            "resolved_by": existing.resolved_by,
-            "resolved_at": (
-                existing.resolved_at.isoformat()
-                if existing.resolved_at is not None
-                else None
-            ),
-        }
-        existing.status = "pending"
-        existing.reopened_at = now
-        existing.resolved_at = None
-        existing.resolved_by = None
-        existing.resolution = None
-        existing.resolution_reason = None
-        existing.original_reason = reason
-        # The reopened lifecycle is a deferred source review, which has no
-        # matched agent. ``agent.duplicate_of`` is cleared below, and
-        # ``resolve_copy_review`` refuses to resolve while the two disagree, so
-        # a retained copy-hold pointer strands the agent in ATH forever -- the
-        # same failure the provenance reset below already guards against.
-        existing.original_duplicate_of = None
-        existing.original_policy_version = agent.screening_policy_version
-        existing.original_evidence = {
-            **evidence,
-            "prior_review": prior_review,
-        }
-        # The current pending lifecycle is a deferred review. Claiming the one
-        # allowed deep attempt keys off this provenance; retaining a resolved
-        # copy/transform kind here would strand the agent in ATH forever.
-        existing.algorithm_provenance = {
-            "snapshot": "score-finalization",
-            "review_kind": DEFERRED_REVIEW_KIND,
-            "algorithm_version": algorithm_version,
-            "opened_by": "platform",
-            "backfilled": False,
-            "opened_at_source": (
-                "integrity-double-check-reopen"
-                if double_check
-                else "deferred-review-reopen"
-            ),
-            "prior_review_kind": prior_provenance.get("review_kind"),
-            **trigger_provenance,
-        }
-        session.add(
-            AthReviewAction(
-                action_id=uuid4(),
-                review_id=existing.review_id,
-                action="reopen",
-                reason=reason,
-                actor=actor,
-                evidence={
-                    "sha256": agent.sha256,
-                    "score_count": score_count,
-                    "previous_status": previous_status,
-                },
-                created_at=now,
-            )
-        )
-    await preserve_desired_authority(session, now=now)
-    agent.status = AgentStatus.ATH_PENDING_REVIEW
-    agent.duplicate_of = None
-    agent.review_reason = reason
-
-
-async def _evaluate_and_record_deferred_review(
-    session: AsyncSession,
-    *,
-    agent: Agent,
-    bench_version: int,
-    score_count: int,
-    settings: DeferredSourceReviewSettings,
-    now: datetime,
-) -> None:
-    """Re-evaluate deferred admissions after a canonical ledger mutation.
-
-    This helper is used both at first quorum and on operator-authorized score
-    replacement. The explicit flush is load-bearing: ``list_eligible_ledger``
-    filters on the agent's finalized status and must see the just-written score
-    and status before deciding rank/anomaly eligibility. In enforce mode a
-    mutation can promote a *different* row into the top five, so the whole
-    canonical same-version ledger is reconsidered. Only rows carrying the
-    immutable mechanical-admission marker can acquire a delayed hold, and the
-    marker resolver suppresses pending or terminal deep-review lifecycles.
-    """
-    # ``off`` and ``bypass`` differ only in pre-score depth (see
-    # ``claim_screening_attempts``); neither computes anything after scoring, so
-    # the canonical ledger is never even read for them.
-    if (
-        settings.mode == "off"
-        or settings.mode == "bypass"
-        or agent.status
-        not in {
-            AgentStatus.SCORED,
-            AgentStatus.LIVE,
-        }
-    ):
-        return
-    mode: Literal["observe", "enforce"] = settings.mode
-    await session.flush()
-    ledger = await list_eligible_ledger(
-        session,
-        bench_version=bench_version,
-        include_fingerprints=False,
-        include_details=False,
-    )
-    if mode == "observe":
-        decision = evaluate_deferred_review(
-            agent_id=agent.agent_id,
-            ledger=ledger,
-            settings=settings,
-        )
-        await _record_deferred_review_decision(
-            session,
-            agent=agent,
-            decision=decision,
-            mode=mode,
-            screening_attempt=None,
-            score_count=score_count,
-            now=now,
-            bench_version=bench_version,
-        )
-        return
-
-    ledger_ids = [row.agent_id for row in ledger if row.eligible]
-    if not ledger_ids:
-        return
-    candidates = {
-        candidate.agent_id: candidate
-        for candidate in await session.scalars(
-            select(Agent).where(
-                Agent.agent_id.in_(ledger_ids),
-                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
-            )
-        )
-    }
-    score_counts = {
-        candidate_id: int(count)
-        for candidate_id, count in (
-            await session.execute(
-                select(Score.agent_id, func.count())
-                .where(
-                    Score.agent_id.in_(ledger_ids),
-                    Score.bench_version == bench_version,
-                )
-                .group_by(Score.agent_id)
-            )
-        ).all()
-    }
-    admissions = await _deferred_screening_attempts(
-        session, agent_ids=tuple(candidates)
-    )
-    for row in ledger:
-        candidate = candidates.get(row.agent_id)
-        if candidate is None or not row.eligible:
-            continue
-        admission_attempt = admissions.get(row.agent_id)
-        if admission_attempt is None:
-            # Legacy/full-reviewed rows never acquire a new hold merely because
-            # the control is enabled later. Resolved terminal deep reviews are
-            # likewise suppressed by the marker resolver.
-            continue
-        decision = evaluate_deferred_review(
-            agent_id=row.agent_id,
-            ledger=ledger,
-            settings=settings,
-        )
-        await _record_deferred_review_decision(
-            session,
-            agent=candidate,
-            decision=decision,
-            mode="enforce",
-            screening_attempt=admission_attempt,
-            score_count=score_counts.get(row.agent_id, 0),
-            now=now,
-            bench_version=bench_version,
-        )
-
-
-async def _held_post_score_review_composites(
-    session: AsyncSession, *, bench_version: int
-) -> list[float]:
-    """Composites of rows the canonical ledger dropped for a deep-review hold.
-
-    Read from each pending hold's own qualification snapshot, which is the
-    ledger composite it held at. A snapshot from before the benchmark version
-    was recorded is counted: it still occupies a slot on the only board it
-    could have come from, and over-counting only delays a hold.
-    """
-    composites: list[float] = []
-    for evidence in await session.scalars(
-        select(AthReview.original_evidence)
-        .join(Agent, Agent.agent_id == AthReview.agent_id)
-        .where(
-            AthReview.status == "pending",
-            Agent.status == AgentStatus.ATH_PENDING_REVIEW,
-            AthReview.algorithm_provenance["review_kind"].as_string()
-            == DEFERRED_REVIEW_KIND,
-        )
-    ):
-        snapshot = (
-            evidence.get("deferred_review") if isinstance(evidence, dict) else None
-        )
-        if not isinstance(snapshot, dict):
-            continue
-        held_version = snapshot.get("bench_version")
-        if held_version is not None and held_version != bench_version:
-            continue
-        candidate = snapshot.get("candidate")
-        composite = candidate.get("composite") if isinstance(candidate, dict) else None
-        if isinstance(composite, int | float) and not isinstance(composite, bool):
-            composites.append(float(composite))
-    return composites
-
-
-async def _evaluate_and_record_integrity_double_check(
-    session: AsyncSession,
-    *,
-    bench_version: int,
-    settings: DeferredSourceReviewSettings,
-    now: datetime,
-) -> None:
-    """Hold each new top-five row once for a stronger integrity double-check.
-
-    Runs after ``_evaluate_and_record_deferred_review`` on every canonical
-    ledger mutation, independent of its ``mode``: that path only reaches
-    mechanically admitted rows, while this one also covers rows that already
-    passed the full pre-score screen. A row is skipped when its agent has any
-    deferred review lifecycle (pending, or resolved by an operator or a deep
-    pass -- never reopened) or an enforced double-check audit marker (which
-    survives a later copy reopen of the agent's single review row).
-    """
-    mode = settings.integrity_double_check_mode
-    if mode == "off":
-        return
-    await session.flush()
-    ledger = await list_eligible_ledger(
-        session,
-        bench_version=bench_version,
-        include_fingerprints=False,
-        include_details=False,
-    )
-    top_ids = [row.agent_id for row in ledger[:TOP_FIVE_SIZE] if row.eligible]
-    if not top_ids:
-        return
-    candidates = {
-        candidate.agent_id: candidate
-        for candidate in await session.scalars(
-            select(Agent).where(
-                Agent.agent_id.in_(top_ids),
-                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
-            )
-        )
-    }
-    if not candidates:
-        return
-    reviewed_ids = set(
-        await session.scalars(
-            select(AthReview.agent_id).where(
-                AthReview.agent_id.in_(tuple(candidates)),
-                AthReview.algorithm_provenance["review_kind"].as_string()
-                == DEFERRED_REVIEW_KIND,
-            )
-        )
-    )
-    # An enforced marker suppresses in every mode. In observe, any earlier
-    # record does too: the ledger mutates on every finalization, and one
-    # would-be hold per agent is the evidence, not one per mutation.
-    audited = (
-        await session.execute(
-            select(ScoreAuditEntry.agent_id, ScoreAuditEntry.payload).where(
-                ScoreAuditEntry.agent_id.in_(tuple(candidates)),
-                ScoreAuditEntry.event == EVENT_AUDIT,
-                ScoreAuditEntry.payload["audit_kind"].as_string()
-                == INTEGRITY_DOUBLE_CHECK_AUDIT_KIND,
-            )
-        )
-    ).all()
-    checked_ids = {
-        audited_id
-        for audited_id, payload in audited
-        if mode == "observe"
-        or (isinstance(payload, dict) and payload.get("enforced") is True)
-    }
-    score_counts = {
-        candidate_id: int(count)
-        for candidate_id, count in (
-            await session.execute(
-                select(Score.agent_id, func.count())
-                .where(
-                    Score.agent_id.in_(tuple(candidates)),
-                    Score.bench_version == bench_version,
-                )
-                .group_by(Score.agent_id)
-            )
-        ).all()
-    }
-    # Snapshot once: the ledger above still ranks rows this loop holds, so
-    # adding them to ``held`` as well would count each one twice.
-    held = await _held_post_score_review_composites(
-        session, bench_version=bench_version
-    )
-    for agent_id in top_ids:
-        candidate = candidates.get(agent_id)
-        if candidate is None or agent_id in reviewed_ids or agent_id in checked_ids:
-            continue
-        decision = evaluate_integrity_double_check(
-            agent_id=agent_id, ledger=ledger, held_composites=held
-        )
-        await _record_deferred_review_decision(
-            session,
-            agent=candidate,
-            decision=decision,
-            mode=mode,
-            screening_attempt=None,
-            score_count=score_counts.get(agent_id, 0),
-            now=now,
-            bench_version=bench_version,
-            double_check=True,
-        )
-
-
-async def _evaluate_and_record_outlier_escalation(
-    session: AsyncSession,
-    *,
-    agent: Agent,
-    bench_version: int,
-    composite: float,
-    cohort: Sequence[float],
-    settings: OutlierEscalationSettings,
-    now: datetime,
-    axes: Mapping[str, AxisObservation] | None = None,
-) -> None:
-    """Escalate an out-of-band composite to ATH review (issue #476).
-
-    The safety net for a gamed fresh contract: on the score-finalization
-    transition, a composite that is a robust upward outlier of its comparable
-    same-benchmark cohort is routed to ``ATH_PENDING_REVIEW`` for operator
-    adjudication instead of being ranked. This reuses the exact hold mechanism
-    the copy and transform-audit holds use -- ``agents.status`` +
-    ``agents.review_reason`` + a pending ``ath_reviews`` row carrying the
-    immutable evidence snapshot -- so the operator queue, resolution flow and
-    ledger exclusion all work unchanged.
-
-    Auto-HOLD, never auto-reject. ``mode="observe"`` records a would-be hold on
-    the append-only audit chain without touching status; ``mode="enforce"``
-    opens the hold. Bench-version scoped so v8-v11 are untouched, and gated on
-    ``SCORED`` so a copy / transform-audit hold that already fired this
-    transition wins outright (this path never re-holds an already-held agent).
-
-    ``axes`` adds per-axis robust-z evidence to every recorded entry. A
-    per-axis outlier that does not hold under the policy (per-axis
-    enforcement off, or the composite below the floor) is appended as
-    ``OUTLIER_AXIS_EVIDENCE_KIND`` evidence only -- never a hold, never a
-    would-be hold -- in both ``observe`` and ``enforce`` mode.
-
-    The audit chain is public, so its entries carry only the neutral per-axis
-    projection (:func:`public_audit_evidence`: axis name + outlier flag). The
-    full per-axis statistics (value, cohort median/MAD, modified z) are kept
-    only on the private ``ath_reviews`` snapshot, which exists only when an
-    ``enforce`` hold opens. An ``observe`` would-be hold and every
-    ``OUTLIER_AXIS_EVIDENCE_KIND`` entry persist ``{axis, outlier}`` and
-    nothing more, so observe mode records which axes were out of band, not
-    their per-axis z distribution. To see the statistics before enforcing,
-    replay the ledger with the dry-run endpoint (``per_axis_enforce=true``).
-    """
-    if settings.mode == "off":
-        return
-    if bench_version < settings.min_bench_version:
-        return
-    # A copy or transform-audit hold that already fired moved the agent out of
-    # SCORED; the deferred path acts only on SCORED/LIVE for the same reason.
-    if agent.status != AgentStatus.SCORED:
-        return
-
-    decision = evaluate_score_outlier(
-        composite=composite, cohort=cohort, settings=settings, axes=axes
-    )
-    if not decision.held:
-        if decision.axis_outliers:
-            # A single axis far out of band while the policy holds nothing:
-            # observe-only evidence on its own audit kind, so the would-be-hold
-            # and hold counts stay exactly the composite policy's.
-            await append_audit_entry(
-                session,
-                agent_id=agent.agent_id,
-                validator_hotkey=None,
-                event=EVENT_AUDIT,
-                payload={
-                    "audit_kind": OUTLIER_AXIS_EVIDENCE_KIND,
-                    "enforced": False,
-                    "qualified": False,
-                    "bench_version": bench_version,
-                    "evidence": public_audit_evidence(decision.evidence),
-                },
-                recorded_at=now,
-            )
-            logger.info(
-                "agent %s: per-axis out-of-band score recorded as evidence: %s",
-                agent.agent_id,
-                ",".join(decision.axis_outliers),
-            )
-        # In-band, below the floor, or an insufficient cohort. Rank normally and
-        # leave no hold; the "why not" lives in the decision evidence, which is
-        # only persisted when a would-be hold fires (below), matching the other
-        # holds' record-on-trigger discipline.
-        return
-
-    if settings.mode == "observe":
-        # Record the would-be hold on the durable audit chain without holding,
-        # so a later switch to enforce leaves no gap in the evidence. AthReview
-        # is unique-per-agent and may carry unrelated resolved history, so the
-        # append-only chain -- not that row -- is the authoritative observe log.
-        await append_audit_entry(
-            session,
-            agent_id=agent.agent_id,
-            validator_hotkey=None,
-            event=EVENT_AUDIT,
-            payload={
-                "audit_kind": OUTLIER_REVIEW_KIND,
-                "enforced": False,
-                "qualified": True,
-                "bench_version": bench_version,
-                "evidence": public_audit_evidence(decision.evidence),
-            },
-            recorded_at=now,
-        )
-        logger.info(
-            "agent %s: out-of-band composite would hold (observe mode): %s",
-            agent.agent_id,
-            decision.reason,
-        )
-        return
-
-    # enforce -- open the hold. Idempotency: the unique (agent_id) row means a
-    # pending review already covering this agent must not be duplicated. A fresh
-    # first-quorum finalization has none; the guard protects any re-entry.
-    existing = await session.scalar(
-        select(AthReview).where(AthReview.agent_id == agent.agent_id).with_for_update()
-    )
-    if existing is not None:
-        return
-
-    agent.status = AgentStatus.ATH_PENDING_REVIEW
-    agent.review_reason = decision.reason
-    session.add(
-        AthReview(
-            review_id=uuid4(),
-            agent_id=agent.agent_id,
-            status="pending",
-            opened_at=now,
-            original_reason=decision.reason,
-            original_policy_version=agent.screening_policy_version,
-            original_evidence=decision.evidence,
-            algorithm_provenance={
-                "snapshot": "score-finalization",
-                "review_kind": OUTLIER_REVIEW_KIND,
-                "algorithm_version": OUTLIER_ALGORITHM_VERSION,
-                "opened_by": "platform",
-                "backfilled": False,
-                "opened_at_source": "outlier_escalation",
-            },
-        )
-    )
-    await append_audit_entry(
-        session,
-        agent_id=agent.agent_id,
-        validator_hotkey=None,
-        event=EVENT_AUDIT,
-        payload={
-            "audit_kind": OUTLIER_REVIEW_KIND,
-            "enforced": True,
-            "qualified": True,
-            "bench_version": bench_version,
-            "evidence": public_audit_evidence(decision.evidence),
-        },
-        recorded_at=now,
-    )
-    logger.warning(
-        "agent %s held for out-of-band score review: %s",
-        agent.agent_id,
-        decision.reason,
-    )
 
 
 async def _fresh_submission_lane_due(
@@ -8080,7 +7331,6 @@ async def submit_score(
             f"v{MIN_SCOREABLE_BENCH_VERSION} and later only"
         )
 
-    queue_policy = await _resolve_queue_policy(request)
     backfilled_structural = (
         await _backfill_structural_fingerprint(session, storage, agent_id=agent_id)
         if report.structural_fingerprint is None
@@ -8181,11 +7431,6 @@ async def submit_score(
             raise AgentNotEvaluatableError(
                 f"agent {agent_id} is {agent.status}, not in {_SCOREABLE_STATUSES}"
             )
-        if agent.screening_policy_version < effective_screening_policy_version():
-            raise AgentNotEvaluatableError(
-                f"agent {agent_id} has not passed screening policy "
-                f"{effective_screening_policy_version()}"
-            )
         # k=3 gate: a score is only accepted against a live ticket this validator
         # holds for the agent. No ticket (never issued, expired, or already
         # spent) means the score is unsolicited or late, so it is rejected and
@@ -8246,6 +7491,16 @@ async def submit_score(
             raise HTTPException(
                 status_code=409,
                 detail="score benchmark version does not match its ticket lease",
+            )
+        # The ticket's contract floor is the only screening-policy gate, the
+        # same one the lease allocator applies. A score is never refused for a
+        # later review-policy activation (source review retired 2026-11-07).
+        minimum_policy = benchmark_contract(
+            ticket.bench_version
+        ).minimum_screening_policy_version
+        if agent.screening_policy_version < minimum_policy:
+            raise AgentNotEvaluatableError(
+                f"agent {agent_id} has not passed screening policy {minimum_policy}"
             )
         if ticket.seed is not None and report.seed != ticket.seed:
             raise HTTPException(
@@ -8479,20 +7734,6 @@ async def submit_score(
             )
             replacement_median = statistics.median(
                 score.composite for score in replacement_scores
-            )
-            await _evaluate_and_record_deferred_review(
-                session,
-                agent=agent,
-                bench_version=ticket.bench_version,
-                score_count=len(replacement_scores),
-                settings=queue_policy.deferred_source_review,
-                now=audit_now,
-            )
-            await _evaluate_and_record_integrity_double_check(
-                session,
-                bench_version=ticket.bench_version,
-                settings=queue_policy.deferred_source_review,
-                now=audit_now,
             )
             await append_audit_entry(
                 session,
@@ -8796,51 +8037,15 @@ async def submit_score(
                 audit_pvalue, audit_pairs, audit_failed = _transform_audit_verdict(
                     agent_scores
                 )
-                if audit_failed and not TRANSFORM_AUDIT_ENFORCE:
-                    # Observational mode: record what the verdict WOULD have been
-                    # (the EVENT_AUDIT entry below carries `failed`) without
-                    # touching the agent's status. This is what accumulates the
-                    # real-world distribution a future threshold can be set from.
+                if audit_failed:
+                    # Observational only: the EVENT_AUDIT entry below carries
+                    # `failed` without touching the agent's status. Automatic
+                    # score holds are retired (2026-11-07); an operator reads
+                    # the feed and opens a review by hand if it warrants one.
                     logger.info(
                         "agent %s: transform-audit brittleness signature "
                         "(%d base-only vs %d transform-only, p=%.4f <= %.3f) "
                         "— NOT enforced pending champion-population validation",
-                        agent_id,
-                        audit_pairs["base_only"],
-                        audit_pairs["transform_only"],
-                        audit_pvalue if audit_pvalue is not None else 1.0,
-                        AUDIT_ALPHA,
-                    )
-                if (
-                    audit_failed
-                    and TRANSFORM_AUDIT_ENFORCE
-                    and agent.status == AgentStatus.SCORED
-                ):
-                    await preserve_desired_authority(session, now=audit_now)
-                    agent.status = AgentStatus.ATH_PENDING_REVIEW
-                    agent.review_reason = TRANSFORM_AUDIT_REVIEW_REASON
-                    session.add(
-                        AthReview(
-                            review_id=uuid4(),
-                            agent_id=agent.agent_id,
-                            status="pending",
-                            opened_at=audit_now,
-                            original_reason=TRANSFORM_AUDIT_REVIEW_REASON,
-                            original_policy_version=agent.screening_policy_version,
-                            original_evidence={
-                                "audit_pairs": audit_pairs,
-                                "transform_audit_pvalue": audit_pvalue,
-                                "audit_alpha": AUDIT_ALPHA,
-                            },
-                            algorithm_provenance={
-                                "snapshot": "score-finalization",
-                                "opened_at_source": "transform_audit",
-                            },
-                        )
-                    )
-                    logger.warning(
-                        "agent %s held for transform-audit review: %d base-only "
-                        "vs %d transform-only discordant pairs, p=%.4f <= %.3f",
                         agent_id,
                         audit_pairs["base_only"],
                         audit_pairs["transform_only"],
@@ -8870,7 +8075,7 @@ async def submit_score(
                             # Whether the verdict was allowed to affect status.
                             # Published so the feed is unambiguous about which
                             # entries were observational.
-                            "enforced": TRANSFORM_AUDIT_ENFORCE,
+                            "enforced": False,
                             "dataset_seed": (
                                 finalized_dataset.seed
                                 if finalized_dataset is not None
@@ -8895,54 +8100,6 @@ async def submit_score(
                         },
                         recorded_at=audit_now,
                     )
-                # Out-of-band composite escalation (issue #476). After the
-                # anti-copy and transform-audit gates have had their say, a
-                # composite that is a robust upward outlier of its comparable
-                # same-benchmark cohort is routed to ATH review instead of
-                # ranked -- the safety net for a gamed fresh contract whose
-                # spike outruns the other gates. Bench-version scoped (v12+),
-                # so v8-v11 are untouched, and a no-op unless an operator turns
-                # it on. The cohort is the eligible ledger read above, which is
-                # one row per owner and excludes this still-evaluating
-                # candidate, held agents, and banned agents.
-                # Per-axis evidence: each axis is the median of this agent's
-                # quorum on that axis, against the same eligible ledger's axis.
-                await _evaluate_and_record_outlier_escalation(
-                    session,
-                    agent=agent,
-                    bench_version=ticket.bench_version,
-                    composite=median_composite,
-                    cohort=[row.composite for row in eligible],
-                    settings=OUTLIER_ESCALATION_SETTINGS,
-                    now=audit_now,
-                    axes={
-                        "tool_mean": AxisObservation(
-                            value=statistics.median(s.tool_mean for s in agent_scores),
-                            cohort=[row.tool_mean for row in eligible],
-                        ),
-                        "memory_mean": AxisObservation(
-                            value=statistics.median(
-                                s.memory_mean for s in agent_scores
-                            ),
-                            cohort=[row.memory_mean for row in eligible],
-                        ),
-                    },
-                )
-                deferred_settings = queue_policy.deferred_source_review
-                await _evaluate_and_record_deferred_review(
-                    session,
-                    agent=agent,
-                    bench_version=ticket.bench_version,
-                    score_count=len(agent_scores),
-                    settings=deferred_settings,
-                    now=audit_now,
-                )
-                await _evaluate_and_record_integrity_double_check(
-                    session,
-                    bench_version=ticket.bench_version,
-                    settings=deferred_settings,
-                    now=audit_now,
-                )
                 # Append the finalize audit entry: quorum reached, the median the
                 # platform finalized on, and which validators scored it. The
                 # moderation detail (why held / duplicate_of) is deliberately kept
