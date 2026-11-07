@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.459.0 (2026-11-07)
+
+### Features
+
+- **platform**: Retire automatic score-finalization holds
+  ([#3425](https://github.com/ditto-assistant/ditto-subnet/pull/3425),
+  [`1dee6a1`](https://github.com/ditto-assistant/ditto-subnet/commit/1dee6a13d1317eee915e35c4c713b05bcc511682))
+
+
 ## v0.458.6 (2026-11-07)
 
 ### Bug Fixes
