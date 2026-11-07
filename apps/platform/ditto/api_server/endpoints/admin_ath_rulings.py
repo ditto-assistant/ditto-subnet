@@ -1037,7 +1037,7 @@ async def close_terminal_review(
     expected_score_count: int,
     reason: str,
     actor: str,
-) -> None:
+) -> bool:
     """Close a pending ATH review stranded behind a terminal agent (SN-434).
 
     ``resolve_copy_review`` answers 409 once ``agents.status`` has left
@@ -1062,7 +1062,7 @@ async def close_terminal_review(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if review is None or review.status != "pending":
+    if review is None:
         raise HTTPException(status_code=409, detail="review is not pending")
     if agent.status not in TERMINAL_QUARANTINE_AGENT_STATUSES:
         raise HTTPException(
@@ -1079,6 +1079,14 @@ async def close_terminal_review(
     )
     if score_count != expected_score_count:
         raise HTTPException(status_code=409, detail="score count changed")
+    if review.status != "pending":
+        if (
+            review.status == "resolved"
+            and review.resolution == "reject"
+            and "terminal_close" in (review.algorithm_provenance or {})
+        ):
+            return False
+        raise HTTPException(status_code=409, detail="review is not pending")
     now = datetime.now(UTC)
     # A JSON null decodes to None; the column itself is NOT NULL.
     provenance = review.algorithm_provenance or {}
@@ -1112,6 +1120,7 @@ async def close_terminal_review(
     # The execute loop has already ended the preview's autobegin, but commit
     # rather than begin() so this writer does not depend on that.
     await session.commit()
+    return True
 
 
 async def _apply_step(
@@ -1120,10 +1129,11 @@ async def _apply_step(
     ruling: AdminAthRuling,
     step: AthRulingStep,
     actor: str,
-) -> None:
+) -> bool:
     """Apply one step through the review writers, then end their autobegin."""
+    already_applied = False
     if step == "close_terminal":
-        await close_terminal_review(
+        already_applied = not await close_terminal_review(
             session,
             agent_id=ruling.agent_id,
             expected_sha256=ruling.expected_sha256,
@@ -1166,6 +1176,7 @@ async def _apply_step(
     # Every writer reads coldkeys after its own transaction commits, which
     # autobegins another; end it before the next begin().
     await session.rollback()
+    return already_applied
 
 
 async def _annotate_applied(
@@ -1433,10 +1444,13 @@ async def execute_ath_rulings_batch(
             continue
 
         steps_applied: list[AthRulingStep] = []
+        concurrently_applied = False
         try:
             for step in preview.steps:
                 write_attempted = True
-                await _apply_step(session, ruling=ruling, step=step, actor=actor)
+                if await _apply_step(session, ruling=ruling, step=step, actor=actor):
+                    concurrently_applied = True
+                    break
                 steps_applied.append(step)
         except HTTPException as exc:
             await session.rollback()
@@ -1474,6 +1488,16 @@ async def execute_ath_rulings_batch(
                         "error while applying ruling; write outcome unknown, "
                         "inspect current state before retry"
                     ),
+                )
+            )
+            continue
+
+        if concurrently_applied:
+            results.append(
+                AdminAthRulingExecuteItem(
+                    **base,
+                    status="already_applied",
+                    message="stranded review was already closed",
                 )
             )
             continue

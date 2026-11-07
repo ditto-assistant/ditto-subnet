@@ -13487,6 +13487,12 @@ class TestQuarantineReviewContext:
         assert replay.status_code == 200
         assert replay.json()["idempotent"] is True
         assert replay.json()["previous_reason"] == original
+        wrong_replay = await client.post(
+            url,
+            headers=_ADMIN_HEADERS,
+            json={**body, "expected_reason": "unrelated reason"},
+        )
+        assert wrong_replay.status_code == 409
 
         async with session_maker() as session:
             agent = await session.get(Agent, agent_id)
@@ -13514,6 +13520,62 @@ class TestQuarantineReviewContext:
                 ("backroom:test-user", corrected),
             ]
 
+        # A later non-reject event must not cause the existing amendment to be
+        # seeded again as though it had been made by the original decision maker.
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningQuarantineResolution(
+                    resolution_id=uuid4(),
+                    quarantine_id=quarantine_id,
+                    resolution="release",
+                    reason="An unrelated later history event",
+                    actor="backroom:other-user",
+                    created_at=datetime.now(UTC),
+                )
+            )
+        third = "I4: a different corrected public reason"
+        to_third = await client.post(
+            url,
+            headers=_ADMIN_HEADERS,
+            json={**body, "expected_reason": corrected, "reason": third},
+        )
+        assert to_third.status_code == 200, to_third.text
+        back_to_corrected = await client.post(
+            url,
+            headers=_ADMIN_HEADERS,
+            json={**body, "expected_reason": third},
+        )
+        assert back_to_corrected.status_code == 200, back_to_corrected.text
+        replay_original = await client.post(url, headers=_ADMIN_HEADERS, json=body)
+        assert replay_original.status_code == 200, replay_original.text
+        assert replay_original.json()["previous_reason"] == original
+        assert replay_original.json()["idempotent"] is True
+        async with session_maker() as session:
+            history = (
+                await session.scalars(
+                    select(ScreeningQuarantineResolution)
+                    .where(
+                        ScreeningQuarantineResolution.quarantine_id == quarantine_id,
+                        ScreeningQuarantineResolution.resolution == "reject",
+                    )
+                    .order_by(ScreeningQuarantineResolution.created_at)
+                )
+            ).all()
+            assert [(row.actor, row.reason) for row in history] == [
+                ("platform:v13-confirmed-violation", original),
+                ("backroom:test-user", corrected),
+                ("backroom:test-user", third),
+                ("backroom:test-user", corrected),
+            ]
+
+        # The same public reason on a later decision cannot replay an old amendment.
+        async with session_maker() as session, session.begin():
+            quarantine = await session.get(ScreeningQuarantine, quarantine_id)
+            assert quarantine is not None
+            quarantine.resolved_at = datetime.now(UTC)
+        stale_replay = await client.post(url, headers=_ADMIN_HEADERS, json=body)
+        assert stale_replay.status_code == 409
+
         # Only a resolved reject is amendable.
         async with session_maker() as session, session.begin():
             agent = await session.get(Agent, agent_id)
@@ -13524,11 +13586,13 @@ class TestQuarantineReviewContext:
         )
         assert blocked.status_code == 409
 
+    @pytest.mark.parametrize("has_resolution_time", [True, False])
     async def test_amend_reason_with_no_recorded_reason_after_a_rescreen(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        has_resolution_time: bool,
     ) -> None:
         # A reject that recorded no reason is amendable with an empty guard,
         # history gains the decision being amended even though an earlier
@@ -13560,7 +13624,7 @@ class TestQuarantineReviewContext:
             quarantine.status, quarantine.resolution = "resolved", "reject"
             quarantine.resolution_reason = None
             quarantine.resolved_by = "platform:v13-confirmed-violation"
-            quarantine.resolved_at = resolved_at
+            quarantine.resolved_at = resolved_at if has_resolution_time else None
             attempt.status, attempt.public_reason = "rejected", None
             agent.status, agent.screening_reason = AgentStatus.REJECTED, None
             quarantine_id = quarantine.quarantine_id

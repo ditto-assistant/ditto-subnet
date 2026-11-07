@@ -9618,71 +9618,76 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('amends a resolved reject reason with exact guards and confirmation (SN-439)', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const quarantineId = 'ee198c72-0000-4000-8000-000000000001'
-    const agentId = '92b9aec4-3642-4b0d-872f-9ce516cb7b7e'
-    const attemptId = '5f192704-e4ff-40a4-9edc-24aac520bee2'
-    const expectedArtifactSha256 = '70'.repeat(32)
-    const expectedReason = 'I4: app/agent.py:142 and :172 route benchmark answers'
-    const reason = 'I4: app/short.py:83-90 and :251 route benchmark answers'
-    const fetchMock = vi.fn().mockResolvedValue(
-      Response.json({
-        quarantine_id: quarantineId,
-        agent_id: agentId,
-        attempt_id: attemptId,
+  it.each([
+    ['RFC', '5f192704-e4ff-40a4-9edc-24aac520bee2'],
+    ['legacy database', '5f192704-e4ff-00a4-0edc-24aac520bee2'],
+  ])(
+    'amends a resolved reject reason with a %s attempt ID (SN-439)',
+    async (_kind, attemptId) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const quarantineId = 'ee198c72-0000-4000-8000-000000000001'
+      const agentId = '92b9aec4-3642-4b0d-872f-9ce516cb7b7e'
+      const expectedArtifactSha256 = '70'.repeat(32)
+      const expectedReason = 'I4: app/agent.py:142 and :172 route benchmark answers'
+      const reason = 'I4: app/short.py:83-90 and :251 route benchmark answers'
+      const fetchMock = vi.fn().mockResolvedValue(
+        Response.json({
+          quarantine_id: quarantineId,
+          agent_id: agentId,
+          attempt_id: attemptId,
+          previous_reason: expectedReason,
+          reason,
+          resolved_by: 'platform:v13-confirmed-violation',
+          idempotent: false,
+        }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([
+        BACKROOM_READ_SCOPE,
+        BACKROOM_WRITE_SCOPE,
+      ])
+      const response = await client.callTool({
+        name: 'amend_screening_reject_reason',
+        arguments: {
+          quarantineId,
+          expectedAgentId: agentId,
+          expectedArtifactSha256,
+          expectedAttemptId: attemptId,
+          expectedReason,
+          reason,
+          confirmation: 'AMEND PUBLIC REJECT REASON',
+        },
+      })
+
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
         previous_reason: expectedReason,
         reason,
         resolved_by: 'platform:v13-confirmed-violation',
         idempotent: false,
-      }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([
-      BACKROOM_READ_SCOPE,
-      BACKROOM_WRITE_SCOPE,
-    ])
-    const response = await client.callTool({
-      name: 'amend_screening_reject_reason',
-      arguments: {
-        quarantineId,
-        expectedAgentId: agentId,
-        expectedArtifactSha256,
-        expectedAttemptId: attemptId,
-        expectedReason,
-        reason,
-        confirmation: 'AMEND PUBLIC REJECT REASON',
-      },
-    })
-
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({
-      previous_reason: expectedReason,
-      reason,
-      resolved_by: 'platform:v13-confirmed-violation',
-      idempotent: false,
-    })
-    expect(fetchMock).toHaveBeenCalledWith(
-      `https://platform-api.heyditto.ai/api/v1/admin/screening-quarantines/${quarantineId}/amend-reason`,
-      expect.objectContaining({
-        method: 'POST',
-        headers: expect.objectContaining({
-          'X-Admin-Actor': 'peyton@omniaura.ai',
+      })
+      expect(fetchMock).toHaveBeenCalledWith(
+        `https://platform-api.heyditto.ai/api/v1/admin/screening-quarantines/${quarantineId}/amend-reason`,
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'X-Admin-Actor': 'peyton@omniaura.ai',
+          }),
+          body: JSON.stringify({
+            expected_agent_id: agentId,
+            expected_artifact_sha256: expectedArtifactSha256,
+            expected_attempt_id: attemptId,
+            expected_reason: expectedReason,
+            reason,
+            confirmation: 'AMEND PUBLIC REJECT REASON',
+          }),
         }),
-        body: JSON.stringify({
-          expected_agent_id: agentId,
-          expected_artifact_sha256: expectedArtifactSha256,
-          expected_attempt_id: attemptId,
-          expected_reason: expectedReason,
-          reason,
-          confirmation: 'AMEND PUBLIC REJECT REASON',
-        }),
-      }),
-    )
+      )
 
-    await client.close()
-    await server.close()
-  })
+      await client.close()
+      await server.close()
+    },
+  )
 
   it('releases a verified v13 court clear only with write scope and confirmation', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
