@@ -7,6 +7,37 @@ starter kit **byte-for-byte**.
 
 All payloads are JSON over HTTP.
 
+## Bench v18 per-run cost budget
+
+From bench_version 18 a canonical scoring run has a **cost budget**
+(`scoregates/run_budget.go`, contract `run-budget-v1`). Before each case
+starts, the scorer prices the run's broker session so far with the same locked
+priced-cost-v2 rates and arithmetic as `details.priced_cost`
+(`scoregates.MeteredCostNanoUSD` calls `BuildPricedCost`), so the budget and the
+factor never disagree about what a run cost. Once the metered cost reaches the
+budget, no further case is admitted.
+
+- **Budget:** the cost at which the factor reaches its floor, derived from the
+  curve: the last breakpoint ratio (2.0x) times the reference ($0.50), so $1.00
+  per 350-case run, scaled to the run's case count. Spending past it cannot
+  lower the factor further, so v18 converts it into lost accuracy instead.
+- **Window:** the whole run, the datagen half and the generator slice, the
+  priced-cost window. Cases are admitted in the run's deterministic dispatch
+  order (tool cases, then memory waves, then slice columns, each in index
+  order), so the cutoff lands on comparable cases on every validator. Cases
+  already running finish, so the final priced cost can exceed the budget.
+- **Unrun cases** score 0 and carry `budget_exhausted: true` with the note
+  `run_budget_exhausted`. They count in the tool and memory means and, for
+  slice cases, inside their column (`details.dueling.columns[].budget_exhausted`
+  counts them). They are not `undelivered` or `validator_fault`: the run
+  completes normally, nothing retries or voids it, and only the multiplicative
+  gates (which judge how the harness answered) skip them.
+- **Report:** `details.run_budget` records the budget, whether it was reached,
+  the admitted and unrun counts by phase, and the metered cost at the cutoff.
+- Practice runs without a broker session are not metered; the starter kit's
+  rehearsal (`scripts/rehearsal_cost.py`) prints the budget and where a scored
+  run would stop.
+
 ## Bench v16 priced inference cost factor
 
 From bench_version 16 the composite is multiplied by a **priced cost factor**.

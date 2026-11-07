@@ -1236,6 +1236,18 @@ class CaseScore(BaseModel):
             description="True when an undelivered case was the validator's fault.",
         ),
     ] = False
+    budget_exhausted: Annotated[
+        bool | None,
+        Field(
+            default=None,
+            description=(
+                "True when the run's priced-cost budget was spent before this "
+                "case started (bench v18+): the case never ran and scores 0. "
+                "The harness's own spend, never an infrastructure failure. "
+                "Absent when the case ran, so pre-v18 rows keep their shape."
+            ),
+        ),
+    ] = None
     allow_extra_tools: Annotated[
         bool,
         Field(

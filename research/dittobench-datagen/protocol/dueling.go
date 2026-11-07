@@ -70,4 +70,8 @@ type DuelingColumnDetails struct {
 	Sum                 float64 `json:"sum"`
 	SumSq               float64 `json:"sum_sq"`
 	Substituted         bool    `json:"substituted"`
+	// BudgetExhausted counts this column's cases the run did not reach
+	// because its priced-cost budget was spent (scored 0, inside N). Monitoring
+	// only: column statistics never feed generator pay.
+	BudgetExhausted int `json:"budget_exhausted,omitempty"`
 }

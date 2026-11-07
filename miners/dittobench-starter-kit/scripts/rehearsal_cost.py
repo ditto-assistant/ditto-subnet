@@ -53,6 +53,19 @@ CURVE_V2: tuple[tuple[int, int], ...] = (
 _UINT64_MAX = (1 << 64) - 1
 _MAX_TOKENS = 9_007_199_254_740_991
 
+# Bench 18+ per-run cost budget: a scored run stops admitting cases once its
+# priced cost reaches the cost at which the factor hits its floor (2.0 x the
+# $0.50 reference = $1.00 per 350 cases), and every unrun case scores 0.
+RUN_BUDGET_MIN_BENCH_VERSION = 18
+
+
+def run_budget_nano_usd(bench_version: int, cases: int) -> int | None:
+    """The scorer's budget for a run of ``cases`` cases, or None below v18."""
+    if bench_version < RUN_BUDGET_MIN_BENCH_VERSION or cases <= 0:
+        return None
+    per_run = REFERENCE_NANO_USD_V2 * CURVE_V2[-1][0] // 10_000
+    return per_run * cases // NORMALIZATION_CASES
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 _BODY_LIMIT = 32 << 20
@@ -359,7 +372,10 @@ def estimate(
     details = report.get("details") or {}
     scored = details.get("priced_cost")
     if isinstance(scored, dict) and scored.get("result") == "priced":
-        return {"source": "scorer", **scored}
+        out = {"source": "scorer", **scored}
+        if isinstance(details.get("run_budget"), dict):
+            out["run_budget"] = details["run_budget"]
+        return _with_budget(out, bench_version)
     if meter is None:
         return None
     cases = int(report.get("n") or 0)
@@ -386,7 +402,27 @@ def estimate(
             completion_tokens=totals.completion_tokens,
         )
     )
-    return out
+    return _with_budget(out, bench_version)
+
+
+def _with_budget(estimate_: dict[str, Any], bench_version: int) -> dict[str, Any]:
+    """Add the bench 18+ budget and, when the run spent past it, where a scored
+    run would have stopped (spend assumed even across cases; the scorer's own
+    ``details.run_budget`` wins when the report carries one)."""
+    cases = int(estimate_.get("cases") or 0)
+    budget = run_budget_nano_usd(bench_version, cases)
+    if budget is None:
+        return estimate_
+    estimate_["budget_nano_usd"] = budget
+    scored = estimate_.get("run_budget")
+    if isinstance(scored, dict):
+        estimate_["budget_exhausted"] = bool(scored.get("exhausted"))
+        estimate_["budget_stop_case"] = int(scored.get("admitted_cases") or 0) if scored.get("exhausted") else None
+        return estimate_
+    cost = int(estimate_.get("cost_nano_usd") or 0)
+    estimate_["budget_exhausted"] = cost >= budget
+    estimate_["budget_stop_case"] = (budget * cases) // cost if cost >= budget and cost > 0 else None
+    return estimate_
 
 
 def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str:
@@ -425,6 +461,16 @@ def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str
             else f" (informational: bench {bench_version} does not apply it)"
         ),
     ]
+    if "budget_nano_usd" in estimate_:
+        budget_usd = estimate_["budget_nano_usd"] / 1e9
+        if estimate_.get("budget_exhausted"):
+            stop = estimate_.get("budget_stop_case")
+            lines.append(
+                f"run budget:          ${budget_usd:.4f} (bench 18+): EXCEEDED. A scored run "
+                f"stops about case {stop} of {estimate_.get('cases', 0)} and scores the rest 0"
+            )
+        else:
+            lines.append(f"run budget:          ${budget_usd:.4f} (bench 18+): not reached")
     if estimate_.get("usage_missing"):
         lines.append(
             f"warning: {estimate_['usage_missing']} completion(s) returned no usage; "

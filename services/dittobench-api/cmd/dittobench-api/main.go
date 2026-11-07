@@ -2092,6 +2092,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	//    execution regardless of completion order.
 	observedTool, cappedTool := 0, 0
 	s.store.SetStage(runID, store.StatusRunning, 0, total)
+	// Bench v18: the run stops admitting cases once its priced cost reaches
+	// the budget (run_budget.go); nil below v18 and without a broker session.
+	budget := s.newRunBudget(req.BenchVersion, inferenceSessionID, total)
 	toolResults := make([]protocol.CaseScore, len(toolCases))
 	toolWasObserved := make([]bool, len(toolCases))
 	toolWasCapped := make([]bool, len(toolCases))
@@ -2121,6 +2124,22 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			return
 		}
 		c := toolCases[i]
+		if !budget.admit() {
+			budget.refuse(protocol.KindTool)
+			transcriptID := c.ID
+			if harnessProjection != nil {
+				internalID, reverseErr := harnessProjection.InternalCaseID(c.ID)
+				if reverseErr != nil {
+					recordProjectionFailure(reverseErr)
+					return
+				}
+				transcriptID = internalID
+			}
+			toolResults[i] = budgetExhaustedCase(transcriptID, c.Category, protocol.KindTool)
+			toolTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindTool}
+			s.store.AppendPartial(runID, toolResults[i])
+			return
+		}
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
 		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, c.ID, caseToolEndpoint, toolRunUserID))
 		observed := toolSrv.Observed(c.ID)
@@ -2300,6 +2319,22 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			if uid == "" {
 				uid = wave.UserID
 			}
+			if !budget.admit() {
+				budget.refuse(protocol.KindMemory)
+				transcriptID := mc.ID
+				if harnessProjection != nil {
+					internalID, reverseErr := harnessProjection.InternalCaseID(mc.ID)
+					if reverseErr != nil {
+						recordProjectionFailure(reverseErr)
+						return
+					}
+					transcriptID = internalID
+				}
+				waveResults[i] = budgetExhaustedCase(transcriptID, mc.QuestionType, protocol.KindMemory)
+				waveTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindMemory}
+				s.store.AppendPartial(runID, waveResults[i])
+				return
+			}
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
 			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, mc.ID, caseToolEndpoint, uid))
 			observedCalls := toolSrv.Observed(mc.ID)
@@ -2422,6 +2457,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			tools: tools, toolSrv: toolSrv, toolEndpoint: toolEndpoint,
 			gateway: harnessInferenceGateway, concurrency: effectiveCaseConcurrency,
 			progress: func(done int) { s.store.SetStage(runID, store.StatusRunning, datagenCases+done, total) },
+			budget:   budget,
 		})
 		if sliceErr != nil {
 			switch {
@@ -2619,6 +2655,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	report.Details.TwinPostPass = twinSummary
 	report.Details.InferenceCost = summarizeV13InferenceCostFrom(req.BenchVersion, perCase, sessionTotals.unattributedCost)
 	report.Details.PricedCost = pricedCost
+	report.Details.RunBudget = budget.summary()
 	report = applyTokenContract(report, req.BenchVersion, req.RunSize, tokenUsage)
 	if injections > 0 {
 		log.Printf("run %s: %d injection-compliance case(s) flagged", runID, injections)
