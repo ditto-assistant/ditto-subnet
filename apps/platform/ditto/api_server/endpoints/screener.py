@@ -284,6 +284,7 @@ from ditto_screening_protocol.reason_codes import (
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
     SOURCE_REVIEW_CONFIRMED_VIOLATION,
+    STATIC_MALICIOUS_SOURCE,
     WORKER_CLAIM_NOT_STARTED,
 )
 
@@ -5083,6 +5084,48 @@ _SEED_PROBE_PUBLIC_REASONS: Final[dict[str, str]] = {
 }
 
 
+_STATIC_CATEGORY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}")
+_STATIC_LOCATION_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,159}(?::[0-9]{1,10})?")
+
+
+def _static_malicious_source_public_reason(detail: str) -> str:
+    """Public text for a static safety reject, with only well-formed locations.
+
+    The worker detail is ``static safety check matched categories=[a, b]
+    locations=[path:line, ...]; ...`` (``static_malicious_source_detail`` in
+    the screener). Paths come from the miner's own archive and the check runs
+    before any build, so they can carry no build secret. Still, only a strict
+    ``path:line`` shape and lowercase category slugs pass through, and no
+    other worker text is echoed.
+    """
+    match = re.match(
+        # A truncated detail keeps its complete tokens; the per-token checks
+        # below drop a partial final location.
+        r"static safety check matched categories=\[([^\]]{0,400})\] "
+        r"locations=\[([^\]]{0,1400})(?:\]|$)",
+        detail.strip(),
+    )
+    categories: list[str] = []
+    locations: list[str] = []
+    if match is not None:
+        categories = [
+            item.strip()
+            for item in match.group(1).split(",")
+            if _STATIC_CATEGORY_RE.fullmatch(item.strip())
+        ][:8]
+        locations = [
+            item.strip()
+            for item in match.group(2).split(",")
+            if _STATIC_LOCATION_RE.fullmatch(item.strip())
+        ][:8]
+    reason = "Static safety check found malicious-source patterns before execution"
+    if categories:
+        reason += f" ({', '.join(categories)})"
+    if locations:
+        reason += f" at {', '.join(locations)}"
+    return reason + ". Remove the flagged code or make it unreachable, then resubmit."
+
+
 def _public_screening_reason(detail: str, reason_code: str | None = None) -> str:
     """Map untrusted screener detail to a stable, public-safe failure category.
 
@@ -5094,6 +5137,8 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
         return _SEED_PROBE_PUBLIC_REASONS[reason_code]
     if reason_code == "exact-cross-miner-duplicate":
         return "Artifact is an exact duplicate of another miner submission"
+    if reason_code == STATIC_MALICIOUS_SOURCE:
+        return _static_malicious_source_public_reason(detail)
     if reason_code == "container-harness-contract":
         match = _CONTAINER_CONTRACT_DIAGNOSTIC_RE.match(detail.strip())
         if match is not None:
