@@ -29,7 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
-| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; the one token lever is a per-seed production catalog of 1,400-5,000 real tools (pinned snapshot). Known vector `4f49235ed7ad2835e974f2abc8a9d53ab91ab3fd063bad7f94d9465e8656a8c7` (`TestV18KnownVector`). |
+| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; the one token lever is a per-seed production catalog of 1,400-5,000 real tools (pinned snapshot). Known vector `9a570c4e4c325a458df996c561ddf972424c568485a6af2b42c4979543f7eb91` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1555,9 +1555,12 @@ v18 that adds tokens; the cost rule is unchanged.
   not advertise v18, so Platform never leases it v18 work. Test binaries load
   the deterministic `catalog.V18FixtureSnapshot`.
 - *Sampled per seed, whole toolkits.* The seed draws a target menu size in
-  [1,400, 5,000] and adds whole toolkits in a seeded order, skipping any that
-  would pass 5,000, so the production skew (a few huge toolkits, many small
-  ones) carries through. First-party tools are always included.
+  the contract's range (`catalog.CatalogSizeForVersion`; v18: 1,400 to 2,000
+  tools) and adds whole toolkits in a seeded order, skipping any that would
+  pass the maximum, so the production skew (a few huge toolkits, many small
+  ones) carries through. First-party tools are always included. The bench
+  grows toward the production range (up to 5,000) one version at a time: a
+  later contract changes that one entry plus the pinned snapshot.
 - *Graded cases do not move.* Every graded case stays on the v16 surface the
   datagen simulates. Snapshot tools are refused "not connected" by the mock,
   perform nothing, and no case expects one. Toolkits whose capability a
@@ -1574,10 +1577,10 @@ v18 that adds tokens; the cost rule is unchanged.
 
 Token scale (o200k, OpenAI tools JSON): the v17 menu is 235 tools and 16,210
 tokens. A synthetic production-skew menu of 1,517 tools measured 153,154
-tokens (101 per tool). At 1,400 to 5,000 tools a whole menu is roughly
-140k to 500k tokens, above the locked model's 131,072-token context, and even
-tool names alone are about 11k to 40k tokens per call. Only harnesses that
-retrieve or defer tools can run v18 tool cases.
+tokens (101 per tool). At v18's 1,400 to 2,000 tools a whole menu is roughly
+100k to 200k tokens, at or above the locked model's 131,072-token context,
+and tool names alone are about 11k to 16k tokens per call. Harnesses that
+forward the whole menu are culled; ones that retrieve or defer tools are not.
 
 On v17 every agent but one already forwards a filtered set: across all 28
 v17 rows the median tools offered per completion was 31-34 (maximum 41) for
@@ -1609,7 +1612,7 @@ the v14 families stay `pending-panel` in `universe.V14FamilyMix`.
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV18KnownVector` pins
-`4f49235ed7ad2835e974f2abc8a9d53ab91ab3fd063bad7f94d9465e8656a8c7`, with
+`9a570c4e4c325a458df996c561ddf972424c568485a6af2b42c4979543f7eb91`, with
 epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
 `datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
 

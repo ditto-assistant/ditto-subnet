@@ -48,7 +48,7 @@ func TestV18SnapshotIsHashPinned(t *testing.T) {
 	}
 }
 
-// Every seed's whole menu lands in [V18MinTools, V18MaxTools], keeps the v16
+// Every seed's whole menu stays within CatalogSizeForVersion, keeps the v16
 // surface in order, carries the first-party tools, takes toolkits whole,
 // never samples a capability-owned toolkit or a toolkit the seed links, and
 // paraphrases per seed.
@@ -69,12 +69,9 @@ func TestV18CatalogPerSeed(t *testing.T) {
 	for seed := int64(1); seed <= 40; seed++ {
 		v16 := v16SeededCatalog(seed)
 		v18 := CatalogForSeed(protocol.BenchVersionV18, seed)
-		if n := len(v18); n < V18MinTools || n > V18MaxTools {
-			// A seed may fall short of its target only when no remaining
-			// toolkit fits under the cap.
-			if n > V18MaxTools {
-				t.Fatalf("seed %d: %d tools, over the cap", seed, n)
-			}
+		size, _ := CatalogSizeForVersion(protocol.BenchVersionV18)
+		if n := len(v18); n < size.Min || n > size.Max {
+			t.Fatalf("seed %d: %d tools, want %d..%d", seed, n, size.Min, size.Max)
 		}
 		sizes[len(v18)] = true
 		var kept []protocol.ToolDefinition
@@ -116,6 +113,18 @@ func TestV18CatalogPerSeed(t *testing.T) {
 	a, b := CatalogForSeed(protocol.BenchVersionV18, 1), CatalogForSeed(protocol.BenchVersionV18, 2)
 	if reflect.DeepEqual(a, b) {
 		t.Fatal("v18 surface is not seeded")
+	}
+}
+
+func TestCatalogSizeIsOneVersionedNumber(t *testing.T) {
+	if _, ok := CatalogSizeForVersion(protocol.BenchVersionV17); ok {
+		t.Fatal("v17 samples no snapshot menu")
+	}
+	if size, ok := CatalogSizeForVersion(protocol.BenchVersionV18); !ok || size != (CatalogSize{Min: 1400, Max: 2000}) {
+		t.Fatalf("v18 size %+v", size)
+	}
+	if MaxCatalogTools() != 2000 {
+		t.Fatalf("max %d", MaxCatalogTools())
 	}
 }
 

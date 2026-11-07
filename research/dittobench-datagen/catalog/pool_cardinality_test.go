@@ -45,7 +45,8 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			// v18 production catalog: the bulk menu comes from the pinned
 			// snapshot; these are its sampling filter and paraphrase banks. No
 			// scored case expects a snapshot tool.
-			"v18Synonyms": "meaning-preserving paraphrase swaps for the non-answer snapshot menu",
+			"catalogSizes": poolcanary.Internal, // per-contract menu size, never rendered
+			"v18Synonyms":  "meaning-preserving paraphrase swaps for the non-answer snapshot menu",
 		},
 	})
 }
