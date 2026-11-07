@@ -29,7 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
-| 18 (staged) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; no token levers. Known vector `9029ef85b86ac44832ae5f3d7dadd0475cd14fb4271c00db2a6f78c8c5dc46d3` (`TestV18KnownVector`). |
+| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; no token levers. Known vector `9029ef85b86ac44832ae5f3d7dadd0475cd14fb4271c00db2a6f78c8c5dc46d3` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1490,8 +1490,9 @@ on the datagen half. V18 changes only which first-party cases a run asks.
 Scoring is priced-cost-v2 unchanged, and no lever adds tokens: no larger
 catalog, no extra decoy tools, the same 50 + 125 case half. Every lever is
 gated on `bench_version >= 18`, so v2..v17 regenerate byte-identically
-(`TestV17KnownVector`). V18 is staged in `protocol/staged.go` until the
-cross-layer PR supports it.
+(`TestV17KnownVector`). V18 was staged in `protocol/staged.go` and promoted
+into the supported list by the cross-layer PR with the same epoch and seed
+domain, so its vector did not move. Supporting v18 does not activate it.
 
 **Evidence.** Per-category means over all 27 v17 production score rows
 (Platform `scores.details.per_case`, read 2026-11-07), all agents / top three
@@ -1551,7 +1552,7 @@ unlinked probe's reply for a not-connected claim
 a reply without the claim and `enforce` zeroes it. The operator moves it after
 reading the review notes against cleared top agents.
 
-**Not yet measured.** No agent has run a v18 dataset. The per-family
+**Not yet measured on v18.** No agent has run a v18 dataset. The per-family
 discrimination table (top-agent means on v18) and the `familygate` admission
 of the newly reachable business families need executed panel runs; until then
 the v14 families stay `pending-panel` in `universe.V14FamilyMix`.

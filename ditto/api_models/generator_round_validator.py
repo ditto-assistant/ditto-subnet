@@ -66,7 +66,7 @@ GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX = "generator-round-max-cases-"
 # listed version and advertises each as ``generator-round-bench-<n>``.
 # ``ditto/tests/test_bench_version_pins.py`` diffs this tuple against the Go
 # pack contract.
-GENERATOR_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13, 14, 15, 16, 17)
+GENERATOR_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13, 14, 15, 16, 17, 18)
 # The scorer feature naming one round bench version, and the versions a scorer
 # that advertises none runs (the original v13-only round mode).
 GENERATOR_ROUND_BENCH_FEATURE_PREFIX = "generator-round-bench-"

@@ -25,23 +25,12 @@ import (
 // RotateSeedForVersion and DatasetEpochForVersion already serve staged
 // versions with the same epoch and the same mixing function.
 
-// BenchVersionV18 is the ACCURACY contract: the v17 dueling datagen half with a
-// hardened first-party mix (docs/bench-versions.md, "Bench v18"). The full
-// 50-case tool half carries the full-run restraint and discovery quotas, and
-// the 125-case memory table moves slots from saturated families into the
-// v14 temporal, state-fold and role families and the measured weak spots.
-// Scoring is unchanged: v18 is priced with priced-cost-v2, as v17. Every lever
-// is gated on bench_version >= 18, so v2..v17 regenerate byte-identically.
-// Staged until the cross-layer PR supports it.
-const BenchVersionV18 = 18
-
-var datasetEpochV18 = time.Date(2027, 10, 1, 0, 0, 0, 0, time.UTC)
-
 // stagedBenchVersions are the generatable-but-unsupported contracts, in order.
 // Each is exactly one past the previous entry (or past the supported ceiling).
-// v16 (the dueling contract) was staged here and promoted into epoch.go by the
-// cross-layer PR that raised the shared ceiling to 16.
-var stagedBenchVersions = []int{BenchVersionV18}
+// Empty while every generatable contract is supported: v16 (the dueling
+// contract) and v18 (the accuracy contract) were staged here and promoted into
+// epoch.go by the cross-layer PRs that raised the shared ceiling.
+var stagedBenchVersions []int
 
 // StagedBenchVersions returns a copy of the staged versions.
 func StagedBenchVersions() []int {
@@ -80,8 +69,6 @@ func NewestGeneratableBenchVersion() int {
 // version; promotion moves the case into DatasetEpochForVersion.
 func stagedDatasetEpoch(version int) (time.Time, bool) {
 	switch version {
-	case BenchVersionV18:
-		return datasetEpochV18, true
 	default:
 		return time.Time{}, false
 	}
