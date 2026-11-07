@@ -50,6 +50,7 @@ from ditto.db.queries.benchmark_carryover import (
 )
 from ditto.db.queries.benchmark_rollout import DatasetPin, arrival_bench_version
 from ditto.db.queries.tickets import MAX_ATTEMPTS_PER_VERSION, issue_ticket
+from ditto.screener_policy_state import LEASE_SCREENING_POLICY_FLOOR
 from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
@@ -495,7 +496,7 @@ class TestStrandedSelection:
                 == []
             )
 
-    async def test_below_current_screening_policy_is_not_selected(
+    async def test_below_the_screened_image_floor_is_not_selected(
         self, session: AsyncSession
     ) -> None:
         """Not a new gate: ``issue_ticket`` already refuses to lease these.
@@ -509,7 +510,7 @@ class TestStrandedSelection:
             stale = await _seed_stranded(
                 session,
                 name="stale-policy",
-                screening_policy_version=SCREENING_POLICY_VERSION - 1,
+                screening_policy_version=LEASE_SCREENING_POLICY_FLOOR - 1,
             )
 
         async with session.begin():

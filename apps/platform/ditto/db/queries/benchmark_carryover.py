@@ -71,7 +71,9 @@ from ditto.db.queries.benchmark_rollout import DatasetPin, append_rollout_audit
 from ditto.db.queries.retirement import retirement_admission_predicate
 from ditto.db.queries.retry_state import classify_agent_retry_states
 from ditto.db.queries.scores import SCORING_QUORUM, emission_owner_key
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    lease_screening_policy_floor,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -218,7 +220,7 @@ async def stranded_prev_gen_candidates(
         .where(
             Agent.status == AgentStatus.EVALUATING,
             Agent.created_at < rollout.created_at,
-            Agent.screening_policy_version >= effective_screening_policy_version(),
+            Agent.screening_policy_version >= lease_screening_policy_floor(),
             prev_score_count >= settings.min_score_count,
             prev_score_count < SCORING_QUORUM,
             ~already_member,

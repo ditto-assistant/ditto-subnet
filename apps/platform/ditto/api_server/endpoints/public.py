@@ -501,7 +501,9 @@ from ditto.db.queries.tickets import (
 )
 from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enabled
 from ditto.score_order import score_order_key
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    lease_screening_policy_floor,
+)
 from ditto_screening_protocol import reason_codes
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 from ditto_screening_protocol.dueling import is_dueling_bench_version
@@ -6228,7 +6230,7 @@ def _public_activity_status(
     """Collapse internal moderation detail into stable public lifecycle labels."""
     needs_rescreen = (
         status == AgentStatus.EVALUATING
-        and screening_policy_version < effective_screening_policy_version()
+        and screening_policy_version < lease_screening_policy_floor()
         # Mirrors the claim path: only unfinished evaluations re-queue on a
         # policy bump. A terminal rejection stays visible unless an operator
         # explicitly authorizes its exact rescreen.
@@ -6763,7 +6765,7 @@ def _public_activity_response(
                     else None
                 ),
                 screening_policy_version=row.agent.screening_policy_version,
-                required_screening_policy_version=effective_screening_policy_version(),
+                required_screening_policy_version=lease_screening_policy_floor(),
                 screening_attempt_id=(
                     row.screening_attempt.attempt_id
                     if row.screening_attempt is not None
