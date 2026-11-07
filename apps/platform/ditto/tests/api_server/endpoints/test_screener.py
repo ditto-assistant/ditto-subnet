@@ -2041,12 +2041,8 @@ class TestFederatedScreenerNodes:
         assert worker_claim.status_code == 200, worker_claim.text
         assert worker_claim.json()["items"][0]["agent_id"] == str(canary_agent_id)
         # Retry canary postures are retired with source review: the attempt
-        # binds the claimant's own applied settings, never the node canary.
-        assert worker_claim.json()["items"][0]["review_settings_override"] == {
-            "revision": global_off_revision.revision,
-            "scope": "*",
-            "checksum": global_off_checksum,
-        }
+        # binds the claimant's own applied settings, so no override is sent.
+        assert worker_claim.json()["items"][0]["review_settings_override"] is None
 
         # The revision that Platform bound at claim time must also be accepted
         # when this exact local worker terminalizes the lease.
