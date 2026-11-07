@@ -433,8 +433,15 @@
         "type": "string"
       },
       "budget_exhausted": {
-        "default": false,
-        "type": "boolean"
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "called": {
         "items": {
@@ -6542,8 +6549,15 @@
             "type": "string"
           },
           "budget_exhausted": {
-            "default": false,
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "called": {
             "items": {
@@ -7237,8 +7251,15 @@
             "type": "string"
           },
           "budget_exhausted": {
-            "default": false,
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "called": {
             "items": {
