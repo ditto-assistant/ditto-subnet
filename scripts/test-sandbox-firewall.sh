@@ -56,6 +56,12 @@ for backend in nft legacy; do
   fi
   docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -D FORWARD 1'
   docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck
+  docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -t nat -I PREROUTING 1 -j ACCEPT'
+  if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then
+    printf '%s: health missed displaced NAT hooks\n' "$backend" >&2; exit 1
+  fi
+  docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -t nat -D PREROUTING 1'
+  docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck
   docker exec "$name" sh -c 'set -e; case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -I INPUT 1 -j ACCEPT'
   if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then
     printf '%s: health missed displaced hook\n' "$backend" >&2; exit 1
@@ -102,6 +108,7 @@ until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null
   n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
 done
 docker exec "$name" iptables -w 5 -D INPUT -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS
+docker exec "$name" iptables -w 5 -t nat -I PREROUTING 1 -j ACCEPT
 if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then echo 'health missed missing hook' >&2; exit 1; fi
 docker exec "$name" sh -c 'rm /run/test-reconcile-paused; touch /run/test-resume-reconcile'
 n=0

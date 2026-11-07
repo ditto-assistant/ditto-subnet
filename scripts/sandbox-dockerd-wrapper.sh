@@ -30,6 +30,15 @@ check_hooks() {
   for bridge in ditto-sandbox0 'dtj+'; do
     iptables -w 5 -t nat -C PREROUTING -i "$bridge" -j DITTO-OPENROUTER-SHIM >/dev/null 2>&1 || return 1
   done
+  nat_hooks_first
+}
+
+nat_hooks_first() {
+  rules="$(iptables -w 5 -t nat -S PREROUTING)" || return 1
+  first="$(printf '%s\n' "$rules" | sed -n '2p')"
+  second="$(printf '%s\n' "$rules" | sed -n '3p')"
+  [ "$first" = '-A PREROUTING -i dtj+ -j DITTO-OPENROUTER-SHIM' ] || return 1
+  [ "$second" = '-A PREROUTING -i ditto-sandbox0 -j DITTO-OPENROUTER-SHIM' ]
 }
 
 check_forward_hook() {
@@ -120,11 +129,11 @@ EOF
       fi
     done
   done
-  for bridge in ditto-sandbox0 'dtj+'; do
-    if [ "${1-}" = initial ] || ! iptables -w 5 -t nat -C PREROUTING -i "$bridge" -j DITTO-OPENROUTER-SHIM >/dev/null 2>&1; then
+  if ! nat_hooks_first; then
+    for bridge in ditto-sandbox0 'dtj+'; do
       iptables -w 5 -t nat -I PREROUTING 1 -i "$bridge" -j DITTO-OPENROUTER-SHIM || return 1
-    fi
-  done
+    done
+  fi
   check_hooks || return 1
 }
 
