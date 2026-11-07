@@ -172,6 +172,13 @@ def test_static_safety_reject_public_reason_passes_only_strict_locations() -> No
     assert "fine.py:9" in reason
     assert "../../etc/passwd:1" not in reason
 
+    spaced = (
+        "static safety check matched categories=[docker_socket] "
+        "locations=[src/my file.py:4, .hidden/x.py:2]; remove"
+    )
+    reason = screener._public_screening_reason(spaced, "static-malicious-source")
+    assert "src/my file.py:4, .hidden/x.py:2" in reason
+
     bare = screener._public_screening_reason("garbage", "static-malicious-source")
     assert bare.startswith("Static safety check found malicious-source patterns")
 

@@ -5085,7 +5085,9 @@ _SEED_PROBE_PUBLIC_REASONS: Final[dict[str, str]] = {
 
 
 _STATIC_CATEGORY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}")
-_STATIC_LOCATION_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,159}(?::[0-9]{1,10})?")
+_STATIC_LOCATION_RE = re.compile(
+    r"[A-Za-z0-9_.][A-Za-z0-9_./ -]{0,159}(?::[0-9]{1,10})?"
+)
 
 
 def _static_malicious_source_public_reason(detail: str) -> str:
@@ -5116,7 +5118,7 @@ def _static_malicious_source_public_reason(detail: str) -> str:
         locations = [
             item.strip()
             for item in match.group(2).split(",")
-            if _STATIC_LOCATION_RE.fullmatch(item.strip())
+            if _STATIC_LOCATION_RE.fullmatch(item.strip()) and ".." not in item
         ][:8]
     reason = "Static safety check found malicious-source patterns before execution"
     if categories:
