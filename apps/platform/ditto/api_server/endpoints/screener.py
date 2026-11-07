@@ -294,6 +294,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Public text for a legacy mechanical-admission pass. Source review is retired
+# (owner decision, 2026-11-07): build and safety checks are the whole screen,
+# so nothing is deferred and no later review can hold the submission.
+MECHANICAL_ADMISSION_PUBLIC_REASON = (
+    "Build and safety checks passed; admitted for scoring"
+)
+
 router = APIRouter(prefix="/screener", tags=["screener"])
 
 
@@ -3986,7 +3993,9 @@ async def claim(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
     policy_version: Annotated[int, Query(ge=1)],
-    canary_policy_version: Annotated[
+    # Accepted for wire compatibility with workers that still send it. Policy
+    # canaries and scored-policy rescreens are retired, so it selects nothing.
+    canary_policy_version: Annotated[  # noqa: ARG001
         int | None, Query(ge=1, le=SCREENING_POLICY_VERSION)
     ] = None,
     limit: Annotated[int, Query(ge=1, le=20)] = 1,
@@ -4095,7 +4104,6 @@ async def claim(
                     return _empty_claim(
                         response, reason=empty_reason, required_policy=required_policy
                     )
-                queue_settings = await resolve_queue_policy_settings(session)
                 binding = await resolve_claim_binding()
                 claimed = await claim_screening_attempts(
                     session,
@@ -4104,15 +4112,8 @@ async def claim(
                     ttl=lease_ttl,
                     limit=limit,
                     netuid=expected_netuid(),
-                    deferred_review_mode=queue_settings.deferred_source_review.mode,
-                    integrity_double_check_mode=(
-                        queue_settings.deferred_source_review.integrity_double_check_mode
-                    ),
                     review_settings_binding=binding,
-                    review_settings_enrolled_node_id=node_id,
-                    canary_policy_version=canary_policy_version,
                     claim_lock_held=True,
-                    lineage_reference_mode=queue_settings.lineage_reference_mode,
                 )
                 bound = await _bind_claim_runtime_leases(session, claimed)
         else:
@@ -4132,7 +4133,6 @@ async def claim(
                     return _empty_claim(
                         response, reason=empty_reason, required_policy=required_policy
                     )
-                queue_settings = await resolve_queue_policy_settings(session)
                 binding = await resolve_claim_binding()
                 claimed = await claim_screening_attempts(
                     session,
@@ -4141,14 +4141,7 @@ async def claim(
                     ttl=lease_ttl,
                     limit=limit,
                     netuid=expected_netuid(),
-                    deferred_review_mode=queue_settings.deferred_source_review.mode,
-                    integrity_double_check_mode=(
-                        queue_settings.deferred_source_review.integrity_double_check_mode
-                    ),
                     review_settings_binding=binding,
-                    review_settings_enrolled_node_id=node_id,
-                    canary_policy_version=canary_policy_version,
-                    lineage_reference_mode=queue_settings.lineage_reference_mode,
                 )
                 bound = await _bind_claim_runtime_leases(session, claimed)
     except _ScorerCohortUnavailableError:
@@ -5895,6 +5888,11 @@ async def submit_result(
         ):
             raise ScreenerAuthError("completion receipt signature did not verify")
 
+    # Every attempt is build-only once source review is retired; the legacy
+    # deferred marker only distinguishes the signed execution mode below.
+    mechanical_attempt = bool(
+        reported_attempt is not None and reported_attempt.build_only
+    )
     deferred_mechanical_admission = bool(
         reported_attempt is not None
         and reported_attempt.build_only
@@ -5979,9 +5977,8 @@ async def submit_result(
     elif outcome_value == "pass_inconclusive":
         target = AgentStatus.EVALUATING
         public_reason = (
-            "Mechanical admission passed; deep source review deferred until score "
-            "qualification"
-            if deferred_mechanical_admission
+            MECHANICAL_ADMISSION_PUBLIC_REASON
+            if mechanical_attempt
             else "Bounded source review exhausted; admitted for scoring"
         )
     elif (
@@ -6650,8 +6647,8 @@ async def submit_result(
                             if late_deferred_result
                             else "Evidence retained on the score-qualified ATH review"
                             if deferred_attempt_lifecycle
-                            else "Deep source review deferred until score qualification"
-                            if deferred_mechanical_admission
+                            else MECHANICAL_ADMISSION_PUBLIC_REASON
+                            if mechanical_attempt
                             else (
                                 "Source-review evidence retained on an admitted "
                                 "submission"
