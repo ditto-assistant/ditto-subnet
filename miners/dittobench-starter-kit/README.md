@@ -273,7 +273,7 @@ The command requires Rust and Go, plus the same local provider setup as
 `serve`: Ollama `embeddinggemma` is required for memory, and chat uses the
 provider selected in `.env`. It builds both binaries, uses an isolated temporary
 database, selects free loopback ports, submits a run on the live scoring bench
-(read from the public rollout endpoint at start; currently 15, with the
+(read from the public rollout endpoint at start; currently 17, with the
 script's `LIVE_SCORING_BENCH_VERSION` as the offline fallback),
 displays progress and the final score/provenance counts, and cleans up on exit.
 `--run-size small` is a smoke profile. `--run-size full` is the on-chain-shaped
@@ -1024,10 +1024,11 @@ Everything below is `bench_version >= 13`; v12 and earlier are unchanged.
 The wire stays at version 9 — no `protocol.rs` change is required to *parse*
 v13 traffic, only `MAX_SUPPORTED_BENCH_VERSION` moves to 13 with the v13
 wiring sweep (#1519) so `/run` accepts the new number when a validator
-rehearses it. Bench 15, which keeps this v13 surface and these gates and adds
-the production-scale catalog and decision lane, is now the live scoring
-contract; `local-rehearsal.py` defaults to the live version and falls back to
-`LIVE_SCORING_BENCH_VERSION` 15 offline.
+rehearses it. Bench 15 kept this v13 surface and these gates and added the
+production-scale catalog and decision lane. Bench 17, the dueling bench with
+the priced-cost-v2 factor, is now the live scoring contract;
+`local-rehearsal.py` defaults to the live version and falls back to
+`LIVE_SCORING_BENCH_VERSION` 17 offline.
 
 - **Tool catalog is per seed** (#1843, #1842, #1580, #1840): paraphrased
   descriptions, `enum` on `set_theme`/`set_reasoning_effort`,

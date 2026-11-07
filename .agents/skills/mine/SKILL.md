@@ -21,7 +21,8 @@ The numbers below drift. For the live scoring bench, emission split, payout
 curve, champion, next epoch, and your own agents' status, run `$subnet-status`
 (`python3 .agents/skills/subnet-status/scripts/subnet_status.py --hotkey <ss58>`).
 
-Live scoring is **bench 15**, `run_size=full`, observed tools, locked
+Live scoring is **bench 17** (dueling, priced-cost-v2: $0.50 reference per
+350 cases, 0.3 floor), `run_size=full`, observed tools, locked
 `openai/gpt-oss-20b`. Without `--bench-version`, `uv run ditto practice` reads
 the live scoring version (`active_version`) from the public rollout endpoint
 (`https://dittobench.ai/api/v1/public/bench/rollout`) at run time, so the

@@ -397,6 +397,11 @@ def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str
     cost = estimate_["cost_nano_usd"] / 1e9
     normalized = estimate_["normalized_cost_nano_usd"] / 1e9
     factor = estimate_["factor_bps"] / 10_000
+    reference_usd = (
+        REFERENCE_NANO_USD_V2
+        if bench_version >= PRICED_COST_V2_MIN_BENCH_VERSION
+        else REFERENCE_NANO_USD
+    ) / 1e9
     applies = bench_version >= PRICED_COST_MIN_BENCH_VERSION
     lines = [
         "",
@@ -406,7 +411,7 @@ def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str
         f"prompt_tokens:       {estimate_.get('prompt_tokens', 0)}",
         f"completion_tokens:   {estimate_.get('completion_tokens', 0)}",
         f"estimated cost:      ${cost:.4f} this run",
-        f"per 350 cases:       ${normalized:.4f} (reference $1.00)",
+        f"per 350 cases:       ${normalized:.4f} (reference ${reference_usd:.2f})",
         f"cost factor:         {factor:.4f}"
         + (
             ""
