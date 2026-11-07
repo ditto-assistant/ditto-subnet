@@ -101,21 +101,36 @@ EOF
 chmod 755 "$tmp/iptables-restore" "$tmp/sleep"
 # Remove one hook while the worker is paused and verify the actual reconcile
 # repairs it without reversing the required hook priority.
-docker run -d --name "$name" --privileged --network none -e DOCKER_TLS_CERTDIR= \
-  -e DOCKER_IPTABLES_LEGACY= -v "$tmp/sleep:/usr/local/bin/sleep:ro" "$image" >/dev/null
-n=0
-until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
-  n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+for backend in nft legacy; do
+  if [ "$backend" = legacy ]; then legacy=1; else legacy=; fi
+  docker run -d --name "$name" --privileged --network none -e DOCKER_TLS_CERTDIR= \
+    -e DOCKER_IPTABLES_LEGACY="$legacy" -v "$tmp/sleep:/usr/local/bin/sleep:ro" "$image" >/dev/null
+  n=0
+  until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
+    n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+  done
+  # Losing either NAT hook must not duplicate the surviving hook.
+  for bridge in ditto-sandbox0 'dtj+'; do
+    docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -t nat -D PREROUTING -i "$1" -j DITTO-OPENROUTER-SHIM' _ "$bridge"
+    docker exec "$name" sh -c 'rm /run/test-reconcile-paused; touch /run/test-resume-reconcile'
+    n=0
+    until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
+      n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+    done
+    docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; [ "$(iptables -w 5 -t nat -S PREROUTING | grep -c -- "-i dtj+ -j DITTO-OPENROUTER-SHIM")" -eq 1 ] && [ "$(iptables -w 5 -t nat -S PREROUTING | grep -c -- "-i ditto-sandbox0 -j DITTO-OPENROUTER-SHIM")" -eq 1 ]' || {
+      echo "$backend: partial NAT hook repair duplicated a live hook" >&2
+      exit 1
+    }
+  done
+  docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -D INPUT -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS; iptables -w 5 -t nat -I PREROUTING 1 -j ACCEPT'
+  if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then echo 'health missed missing hook' >&2; exit 1; fi
+  docker exec "$name" sh -c 'rm /run/test-reconcile-paused; touch /run/test-resume-reconcile'
+  n=0
+  until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
+    n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+  done
+  docker rm -f "$name" >/dev/null
 done
-docker exec "$name" iptables -w 5 -D INPUT -i ditto-sandbox0 -j DITTO-SANDBOX-EGRESS
-docker exec "$name" iptables -w 5 -t nat -I PREROUTING 1 -j ACCEPT
-if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then echo 'health missed missing hook' >&2; exit 1; fi
-docker exec "$name" sh -c 'rm /run/test-reconcile-paused; touch /run/test-resume-reconcile'
-n=0
-until docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1 && docker exec "$name" test -f /run/test-reconcile-paused; do
-  n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
-done
-docker rm -f "$name" >/dev/null
 
 # Pause a snapshot writer after it emits partial output. Health must continue
 # reading the previous complete snapshot until the new file is renamed.

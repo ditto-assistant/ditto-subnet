@@ -130,6 +130,22 @@ EOF
     done
   done
   if ! nat_hooks_first; then
+    # First restore only missing hooks, keeping a surviving first-position
+    # dtj+ jump in place. Repeated partial losses must not accumulate copies.
+    for bridge in ditto-sandbox0 'dtj+'; do
+      if ! iptables -w 5 -t nat -C PREROUTING -i "$bridge" -j DITTO-OPENROUTER-SHIM >/dev/null 2>&1; then
+        position=1
+        if [ "$bridge" = ditto-sandbox0 ] && \
+          iptables -w 5 -t nat -C PREROUTING -i 'dtj+' -j DITTO-OPENROUTER-SHIM >/dev/null 2>&1; then
+          position=2
+        fi
+        iptables -w 5 -t nat -I PREROUTING "$position" -i "$bridge" -j DITTO-OPENROUTER-SHIM || return 1
+      fi
+    done
+  fi
+  if ! nat_hooks_first; then
+    # Hooks exist but have lost priority. Prepend a working pair before
+    # touching any active jumps so traffic stays protected during repair.
     for bridge in ditto-sandbox0 'dtj+'; do
       iptables -w 5 -t nat -I PREROUTING 1 -i "$bridge" -j DITTO-OPENROUTER-SHIM || return 1
     done
