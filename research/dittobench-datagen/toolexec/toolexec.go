@@ -157,6 +157,9 @@ type Fixture struct {
 	// connectors is the seed's v16 connector plan (linked and named apps);
 	// nil below bench_version 16.
 	connectors *catalog.V16ConnectorPlan
+	// encounter is the case's v18 multi-call mock world (v18_encounter.go);
+	// nil for every other case and below bench_version 18.
+	encounter *protocol.Encounter
 }
 
 // v13 reports whether the fixture serves under the public-corpora contract.
@@ -937,6 +940,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func fixtureToolResult(fixture Fixture, req protocol.ToolExecRequest, priorSameTool int) protocol.ToolExecResponse {
+	if fixture.encounter != nil {
+		return encounterToolResult(fixture, req, priorSameTool)
+	}
 	// The first content-tool call flakes before the fixture produces an effect.
 	if fixture.recovery && contentTools[req.Name] && priorSameTool == 0 {
 		return protocol.ToolExecResponse{Error: "transient upstream error (503); retry"}

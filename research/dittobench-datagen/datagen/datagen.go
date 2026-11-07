@@ -2386,6 +2386,11 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 	if benchVersion >= protocol.BenchVersionV13 && !v13SkipToolSemantics {
 		applyV13ToolSemantics(seed, benchVersion, cases)
 	}
+	if benchVersion >= protocol.BenchVersionV18 {
+		// v18 multi-call encounters (datagen/v18_encounter.go), after every
+		// v13 and connector pass so none of their cases moves.
+		applyV18EncounterBench(seed, benchVersion, cases)
+	}
 	if benchVersion >= protocol.BenchVersionV16 && benchVersion < protocol.BenchVersionV18 {
 		// v16: linked-connector, unlinked-probe and named-product cases
 		// (datagen/v16.go), after every v13 pass so none of their slots move.

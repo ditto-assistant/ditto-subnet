@@ -183,12 +183,11 @@ func v13RestraintCaseCount(n int) int {
 }
 
 // v13RestraintCaseCountForVersion is v13RestraintCaseCount under an explicit
-// contract: from v18 the 50-case full dueling half carries the full-run
-// restraint quota (four triplets and two pairs) instead of the medium one.
+// contract. The 50-case v18 half keeps the medium restraint quota its case
+// count selects: every v17 restraint family was saturated, and v18 tests
+// restraint inside the multi-call encounters instead (a reconcile request
+// that must change nothing, a triage that must not file a duplicate).
 func v13RestraintCaseCountForVersion(n, benchVersion int) int {
-	if benchVersion >= protocol.BenchVersionV18 && n >= V18FullToolHalf && n < 80 {
-		return V13FullRestraintCaseCount
-	}
 	return v13RestraintCaseCount(n)
 }
 
