@@ -442,7 +442,7 @@ def test_hardcoded_openrouter_https_is_shimmed_into_the_bound_broker() -> None:
     # Docker's per-run /etc/hosts entry makes openrouter.ai the one local name.
     assert "-m addrtype --dst-type LOCAL -p tcp --dport 443" in firewall
     assert "-j REDIRECT --to-ports $openrouter_shim_port" in firewall
-    assert 'iptables -w 5 -t nat -I PREROUTING 1 -i "$bridge"' in firewall
+    assert 'iptables -w 5 -t nat -I PREROUTING "$position" -i "$bridge"' in firewall
 
 
 def test_screened_image_capability_is_enabled_without_a_global_requirement() -> None:
