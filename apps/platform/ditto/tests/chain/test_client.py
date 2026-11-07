@@ -466,6 +466,25 @@ class TestGetExtrinsicAtBlockHash:
 
         assert ext.call_function == "transfer_keep_alive"
 
+    async def test_empty_block_body_falls_through_to_next_archive(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.get_block = AsyncMock(
+            side_effect=[
+                {"extrinsics": []},
+                {"extrinsics": [MagicMock(value=_SN455_EXTRINSIC)]},
+            ]
+        )
+        config = make_chain_config(
+            public_archive_rpc_urls=("wss://a.example", "wss://b.example")
+        )
+        async with ChainClient(config) as client:
+            ext = await client.get_extrinsic_at_block_hash(
+                9446185, _SN455_BLOCK_HASH, 0
+            )
+
+        assert ext.call_function == "transfer_keep_alive"
+
     async def test_every_archive_failing_is_a_connection_error(
         self, install_substrate_module: AsyncMock
     ):

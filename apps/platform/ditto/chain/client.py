@@ -446,7 +446,9 @@ class ChainClient:
                 )
                 continue
             extrinsics = (block or {}).get("extrinsics")
-            if extrinsics is None:
+            # Every canonical block carries at least the timestamp inherent, so
+            # an empty body is a bad provider answer, not proof of absence.
+            if not extrinsics:
                 failures.append((provider, RuntimeError("block body unavailable")))
                 continue
             if not 0 <= extrinsic_index < len(extrinsics):
