@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.458.4 (2026-11-07)
+
+### Bug Fixes
+
+- **starter-kit**: Rehearse and describe Bench v17 as the live bench
+  ([#3410](https://github.com/ditto-assistant/ditto-subnet/pull/3410),
+  [`b6b0169`](https://github.com/ditto-assistant/ditto-subnet/commit/b6b0169c2fe0623adf583d9ed32ba4e79f7bfd02))
+
+
 ## v0.458.3 (2026-11-07)
 
 ### Performance Improvements
