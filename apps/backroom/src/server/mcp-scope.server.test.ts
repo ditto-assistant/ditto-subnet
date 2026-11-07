@@ -392,7 +392,7 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(read)).toEqual([])
   })
 
-  it('recognizes a screener policy activation schedule as write-scoped and its read as not', async () => {
+  it('recognizes a scored snapshot restore as write-scoped and the activation read as not', async () => {
     const write = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',
       body: JSON.stringify({
@@ -400,14 +400,16 @@ describe('MCP scope challenges', () => {
         id: 1,
         method: 'tools/call',
         params: {
-          name: 'schedule_screener_policy_activation',
+          name: 'restore_scored_screening_snapshot',
           arguments: {
-            expectedRevision: 3,
-            targetPolicyVersion: 11,
-            activateAt: '2026-08-29T09:00:00-04:00',
-            rescreenScored: true,
-            reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-            confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+            expectedCurrentActivationRevision: 2,
+            sourceActivationRevision: 1,
+            sourcePolicyVersion: 11,
+            targetPolicyVersion: 10,
+            benchVersion: 12,
+            expectedCount: 1,
+            reason: 'restore the pre-v11 scored screening snapshot',
+            confirmation: 'RESTORE SCORED SCREENING SNAPSHOT',
           },
         },
       }),

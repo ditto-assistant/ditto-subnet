@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime, timedelta
@@ -30,11 +29,9 @@ from ditto.api_models.benchmark_contract import benchmark_contracts
 from ditto.api_models.screener_review_settings import (
     INTEGRITY_DOUBLE_CHECK_SCOPE,
     ScreenerReviewSettings,
-    integrity_double_check_posture_error,
 )
 from ditto.db.models import (
     Agent,
-    AthReview,
     BenchmarkDataset,
     BenchmarkRollout,
     BenchmarkRolloutMember,
@@ -55,7 +52,6 @@ from ditto.db.queries.benchmark_admission import (
     validator_queue_admission_predicate,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
-from ditto.db.queries.review_lineage import select_lineage_parent
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.screening_infra_retry import (
     InfraRetryDecision,
@@ -68,9 +64,7 @@ from ditto.db.queries.screening_retry import (
     latest_screening_attempt_id,
 )
 from ditto.db.queries.screening_review_deadlines import record_first_v13_claim_window
-from ditto.db.queries.screening_review_events import append_platform_hold_event
 from ditto.screener_policy_state import (
-    effective_rescreen_scored,
     effective_scored_rescreen_activation_revision,
     effective_scored_rescreen_policy_version,
     effective_screening_policy_version,
@@ -123,10 +117,7 @@ EXHAUSTED_REASON_CODE = reason_codes.REPEATEDLY_INCONCLUSIVE
 (:mod:`ditto.api_server.emission_eligibility`) classifies this code as
 inconclusive, and must not carry its own copy of the string."""
 _EXHAUSTED_REASON_CODE = EXHAUSTED_REASON_CODE
-_EXHAUSTED_PUBLIC_REASON = (
-    "Screening was inconclusive repeatedly; held for operator review"
-)
-_DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
+_EXHAUSTED_PUBLIC_REASON = "Screening expired repeatedly; manual retry required"
 POLICY_ONLY_RESCREEN_REASON = "policy-only-rescreen"
 _ORPHANED_ATTEMPT_REASON_CODE = reason_codes.WORKER_LEASE_ORPHANED
 _ORPHANED_ATTEMPT_REASON = (
@@ -159,9 +150,6 @@ FAILED_ATTEMPT_RETRY_BACKOFF = timedelta(minutes=10)
 # observations fresh enough to classify that worker as online publicly.
 _ORPHANED_ATTEMPT_GRACE = timedelta(minutes=5)
 _SCREENER_HEARTBEAT_FRESHNESS = timedelta(minutes=5)
-_EXHAUSTED_MANIFEST_DIGEST = hashlib.sha256(
-    b"ditto:repeatedly-inconclusive:v1"
-).hexdigest()
 _SCREENING_CLAIM_LOCK_KEY = 0x445554544F534352
 
 
@@ -1140,58 +1128,32 @@ async def _park_repeatedly_inconclusive(
     screener_hotkey: str,
     now: datetime,
 ) -> None:
-    """Quarantine an agent that keeps expiring its lease, for operator review.
+    """Park an agent that keeps expiring its lease until an operator retries it.
 
-    Records a terminal ``quarantined`` attempt plus an active quarantine row
-    (the operator console is driven entirely by ``ScreeningQuarantine``) so the
-    agent leaves the retry pool and a human decides its fate instead of the
-    screener re-attempting it every lease forever.
+    Records a terminal ``failed`` attempt and moves the agent to
+    ``SCREENING_FAILED``, so it leaves the retry pool instead of burning a
+    lease every cycle. It is an infrastructure park, not a hold: no quarantine
+    row is opened (source review and its holds are retired, 2026-11-07) and an
+    exact Backroom retry authorization makes it claimable again.
     """
     # This is an operator park, not an artifact-bound execution lease.
-    attempt = ScreeningAttempt(
-        attempt_id=uuid4(),
-        agent_id=agent.agent_id,
-        screener_hotkey=screener_hotkey,
-        policy_version=effective_screening_policy_version(),
-        status="quarantined",
-        started_at=now,
-        deadline=now,
-        finished_at=now,
-        public_reason=_EXHAUSTED_PUBLIC_REASON,
-        reason_code=_EXHAUSTED_REASON_CODE,
+    session.add(
+        ScreeningAttempt(
+            attempt_id=uuid4(),
+            agent_id=agent.agent_id,
+            screener_hotkey=screener_hotkey,
+            policy_version=effective_screening_policy_version(),
+            status="failed",
+            started_at=now,
+            deadline=now,
+            finished_at=now,
+            public_reason=_EXHAUSTED_PUBLIC_REASON,
+            reason_code=_EXHAUSTED_REASON_CODE,
+        )
     )
-    session.add(attempt)
-    # Flush so the attempt row exists before the quarantine's FK references it
-    # (no ORM relationship links them to order the inserts automatically).
-    await session.flush()
-    quarantine = ScreeningQuarantine(
-        quarantine_id=uuid4(),
-        agent_id=agent.agent_id,
-        attempt_id=attempt.attempt_id,
-        screener_hotkey=screener_hotkey,
-        policy_version=effective_screening_policy_version(),
-        manifest_digest=_EXHAUSTED_MANIFEST_DIGEST,
-        finding_digest=None,
-        reason_code=_EXHAUSTED_REASON_CODE,
-        evidence=None,
-        finding=None,
-        status="active",
-    )
-    session.add(quarantine)
-    prior_status = agent.status
-    agent.status = AgentStatus.QUARANTINED
+    agent.status = AgentStatus.SCREENING_FAILED
     agent.screening_reason = _EXHAUSTED_PUBLIC_REASON
     agent.screening_reason_code = _EXHAUSTED_REASON_CODE
-    await append_platform_hold_event(
-        session,
-        agent=agent,
-        attempt=attempt,
-        quarantine=quarantine,
-        prior_agent_status=prior_status,
-        reason_code=_EXHAUSTED_REASON_CODE,
-        reason=_EXHAUSTED_PUBLIC_REASON,
-        created_at=now,
-    )
 
 
 async def latest_integrity_double_check_posture(
@@ -1214,32 +1176,24 @@ async def claim_screening_attempts(
     ttl: timedelta,
     limit: int,
     netuid: int = 118,
-    deferred_review_mode: str = "off",
-    integrity_double_check_mode: str = "off",
     review_settings_binding: tuple[int, str, str, str] | None = None,
-    review_settings_enrolled_node_id: str | None = None,
-    canary_policy_version: int | None = None,
     claim_lock_held: bool = False,
-    lineage_reference_mode: str = "same_owner_version",
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
     """Claim completion-lane contenders, then least-scored eligible work.
 
-    ``deferred_review_mode`` is the operator's
-    ``queue_policy_settings.deferred_source_review.mode``. It decides only how
-    deep a *fresh* admission is screened: ``enforce`` and ``bypass`` admit on a
-    cheap build-only pass, ``off`` and ``observe`` run the full deep screen
-    before the submission is scoreable. It never decides whether an agent
-    already holding a pending deferred review can be re-claimed for that
-    review -- that stays eligible in every mode, or a mode change would strand
-    the holds open when it was made.
+    Every attempt is the mechanical lane (``build_only``): archive and
+    container-contract validation, the static malicious-source preflight, the
+    isolated image build, the runtime health contract, and the screened-image
+    export. There is no model source review, no policy-only rescreen, no
+    scored-policy rescreen and no deferred deep review (owner decision,
+    2026-11-07), so no attempt carries the old ``deferred-mechanical-admission``
+    marker. A fresh upload or an authorized retry passes straight to validator
+    scoring once its screened image is verified; an EVALUATING or
+    rollout-member row is re-claimed only to rebuild a missing dataset or
+    screened image.
 
-    ``integrity_double_check_mode`` is
-    ``queue_policy_settings.deferred_source_review.integrity_double_check_mode``.
-    A deep pass for a hold opened by the double-check is always pinned to the
-    ``integrity-double-check`` reviewer posture, in every mode, and is skipped
-    (left pending) while that posture is missing or unusable. In ``enforce`` a
-    mechanically admitted top-five row's deferred pass takes the same posture
-    when it is usable, and otherwise keeps the worker's normal posture.
+    ``review_settings_binding`` is recorded on the attempt as the claimant's
+    applied worker settings. It selects no review posture.
 
     When at least one instance is heartbeating this shared hotkey, concurrent
     running leases cannot exceed that live instance count. That keeps
@@ -1298,8 +1252,7 @@ async def claim_screening_attempts(
         )
     )
     missing_v3_screen = (
-        (Agent.screening_policy_version < effective_screening_policy_version())
-        | Agent.screened_image_sha256.is_(None)
+        Agent.screened_image_sha256.is_(None)
         | Agent.screened_image_size_bytes.is_(None)
         | Agent.screened_image_id.is_(None)
         | Agent.screened_image_ref.is_(None)
@@ -1312,181 +1265,35 @@ async def claim_screening_attempts(
     # Per-agent score aggregates are computed once per claim rather
     # than re-evaluated per candidate row per ORDER BY term.
     score_aggregates = screening_score_aggregates()
-    pending_deferred_review = exists(
-        select(AthReview.review_id).where(
-            AthReview.agent_id == Agent.agent_id,
-            AthReview.status == "pending",
-            AthReview.algorithm_provenance["review_kind"].as_string()
-            == "deferred_source_review",
-            ~exists(
-                select(ScreeningAttempt.attempt_id).where(
-                    ScreeningAttempt.agent_id == Agent.agent_id,
-                    ScreeningAttempt.build_only.is_(False),
-                    ScreeningAttempt.status.in_(("passed", "quarantined")),
-                    ScreeningAttempt.started_at
-                    >= func.coalesce(AthReview.reopened_at, AthReview.opened_at),
-                )
-            ),
-        )
-    )
-    (
-        scored_rescreen_policy_version,
-        scored_release_criteria,
-        can_claim_scored_rescreen,
-    ) = scored_policy_release_filter(canary_policy_version)
-    released_scored_policy_rescreen = (
-        exists(
-            select(ScoredPolicyRescreenRelease.release_id).where(
-                ScoredPolicyRescreenRelease.agent_id == Agent.agent_id,
-                *scored_release_criteria,
-            )
-        )
-        if can_claim_scored_rescreen
-        else false()
-    )
-    # Deliberately NOT gated on ``deferred_review_mode``. An open deferred hold
-    # is an obligation the queue already took on, and the only way it clears is
-    # a screener re-claiming the agent for its deep pass. Gating this on
-    # ``enforce`` (as it once was) meant every flip to another mode froze the
-    # holds open at that instant: those agents stay out of the emission-eligible
-    # ledger with nothing willing to pick them up again, releasable only one at
-    # a time by hand. Draining an already-open queue is bounded work that ends;
-    # stranding a miner is not. The mode decides whether NEW holds open, never
-    # whether existing ones can be settled.
-    latest_attempt_id = latest_screening_attempt_id()
     manual_failed_retry = failed_screening_retry_authorized()
-    latest_attempt_build_only = (
-        select(ScreeningAttempt.build_only)
-        .where(ScreeningAttempt.attempt_id == latest_attempt_id)
-        .correlate(Agent)
-        .scalar_subquery()
-    )
-    canary_scopes = claim_canary_scopes(
-        review_settings_binding, enrolled_node_id=review_settings_enrolled_node_id
-    )
-    allowed_canary_scopes = canary_scopes or frozenset()
-    # Match the binding chosen below: an exact latest-attempt override wins,
-    # otherwise the pending release supplies the canary revision. Filter before
-    # LIMIT so a retry unusable by this claimant cannot hide the next upload.
-    canary_revision_usable = screening_canary_revision_usable(
-        allowed_scopes=canary_scopes,
-        release_criteria=scored_release_criteria if can_claim_scored_rescreen else None,
-    )
-    # Resolved before selection: a double-check hold without a usable posture
-    # (or claimed by a worker that cannot bind one) must not be selected at
-    # all, or it would sit at the head of every claim and starve the queue.
-    double_check_posture: tuple[int, str, str] | None = None
-    posture_row = await latest_integrity_double_check_posture(session)
-    if (
-        posture_row is not None
-        and integrity_double_check_posture_error(
-            ScreenerReviewSettings.model_validate(posture_row.settings)
-        )
-        is None
-    ):
-        double_check_posture = (
-            posture_row.revision,
-            posture_row.scope,
-            posture_row.checksum,
-        )
-    double_check_claimable = (
-        double_check_posture is not None and review_settings_binding is not None
-    )
-    # A double-check hold lands on an agent whose latest attempt is its full
-    # pre-score deep screen, not a build-only admission. What makes any
-    # deferred hold claimable is that no attempt has started since it opened;
-    # after one has, only an exact operator retry re-leases it.
-    no_attempt_since_hold = exists(
-        select(AthReview.review_id).where(
-            AthReview.agent_id == Agent.agent_id,
-            AthReview.status == "pending",
-            AthReview.algorithm_provenance["review_kind"].as_string()
-            == "deferred_source_review",
-            ~exists(
-                select(ScreeningAttempt.attempt_id).where(
-                    ScreeningAttempt.agent_id == Agent.agent_id,
-                    ScreeningAttempt.started_at
-                    >= func.coalesce(AthReview.reopened_at, AthReview.opened_at),
-                )
-            ),
-        )
-    )
-    deferred_ath_eligible = (
-        (Agent.status == AgentStatus.ATH_PENDING_REVIEW)
-        & pending_deferred_review
-        & (
-            latest_attempt_id.is_(None)
-            | latest_attempt_build_only.is_(True)
-            | no_attempt_since_hold
-            | manual_failed_retry
-        )
-        & (
-            true()
-            if double_check_claimable
-            else ~exists(
-                select(AthReview.review_id).where(
-                    AthReview.agent_id == Agent.agent_id,
-                    AthReview.status == "pending",
-                    AthReview.algorithm_provenance["trigger"].as_string()
-                    == _INTEGRITY_DOUBLE_CHECK_TRIGGER,
-                )
-            )
-        )
-    )
     eligible = or_(
         Agent.status == AgentStatus.UPLOADED,
         # A failed attempt is parked forever. Only the append-only Backroom
         # authorization for that exact latest attempt makes it claimable.
         (Agent.status == AgentStatus.SCREENING_FAILED) & manual_failed_retry,
-        # Same benchmark-era guard as the stale-EVALUATING lane: a submission
-        # withdrawn from the active era must not spend screener capacity.
+        # A submission withdrawn from the active benchmark era must not spend
+        # screener capacity on an automatic infrastructure retry.
         infra_auto_retry & prerequisite_admitted,
-        # A policy bump only returns agents admitted to the active benchmark
-        # era. Historical submissions the validator allocator already skips
-        # must not consume screener capacity on a rescreen they can never use.
-        (
-            (Agent.status == AgentStatus.EVALUATING)
-            & (Agent.screening_policy_version < effective_screening_policy_version())
-            & prerequisite_admitted
-        ),
+        # A rollout member that is scored but lacks a verified screened image
+        # is rebuilt so validators can lease it on the new contract.
         (
             Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
             & rolling_qualified
             & missing_v3_screen
-        ),
-        # A due scheduled activation that opted scored/live rows in re-queues
-        # them alongside everything else screened under the stale policy, on
-        # the same criteria. The flag lives on the governing activation row so
-        # a routine version bump cannot silently pull champions off the ledger
-        # without an operator decision recorded on the schedule.
-        #
-        # Gated on ``prerequisite_admitted`` for the same reason the stale
-        # EVALUATING lane above is: a scored row from a superseded benchmark
-        # era can never be leased again, so rescreening it burns screener
-        # capacity that the current-era backlog needs. At activation the whole
-        # scored field goes stale at once, so an ungated lane would enqueue
-        # every historical row on the board behind one flag flip.
-        (
-            Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
-            & effective_rescreen_scored()
-            & (Agent.screening_policy_version < (scored_rescreen_policy_version or 0))
-            & prerequisite_admitted
-            & released_scored_policy_rescreen
         ),
         (
             (Agent.status == AgentStatus.EVALUATING)
             & prerequisite_admitted
             & missing_dataset
         ),
-        # A submission released from an anti-cheat quarantine back to EVALUATING
-        # but without a complete screened image the active version needs is
-        # otherwise stuck forever — validators skip it and nothing re-screens it.
+        # An EVALUATING submission without a complete screened image the active
+        # version needs is otherwise stuck forever: validators skip it and
+        # nothing re-screens it.
         (
             (Agent.status == AgentStatus.EVALUATING)
             & prerequisite_admitted
             & missing_active_screened_image()
         ),
-        deferred_ath_eligible,
     )
     candidate_payment = aliased(EvaluationPayment)
     earlier_pending = screening_deferred_behind_earlier_owner(
@@ -1506,7 +1313,6 @@ async def claim_screening_attempts(
                 eligible,
                 ~has_running_or_backoff,
                 ~earlier_pending,
-                canary_revision_usable,
             )
             .order_by(*screening_priority_order(score_aggregates))
             # Surplus probe candidates only exist to be skipped below; widen the
@@ -1658,240 +1464,42 @@ async def claim_screening_attempts(
                         public_reason=agent.screening_reason,
                     )
                 )
-        # An EVALUATING agent on the current policy already cleared the anti-cheat
-        # review (it passed, or an operator released its quarantine). Re-claiming
-        # it — to rebuild a missing screened image or dataset — must NOT re-run
-        # that review, or we would re-judge an approved artifact (and risk a
-        # release/re-quarantine loop). It is a build-only pass. A fresh
-        # (UPLOADED), failed, or stale-policy submission still gets the full
-        # review.
-        deferred_deep_review = agent.status == AgentStatus.ATH_PENDING_REVIEW
-        latest_agent_attempt_id = await session.scalar(
-            select(ScreeningAttempt.attempt_id)
-            .where(ScreeningAttempt.agent_id == agent.agent_id)
-            .order_by(
-                ScreeningAttempt.started_at.desc(),
-                ScreeningAttempt.attempt_id.desc(),
-            )
-            .limit(1)
-        )
-        retry_override = await session.scalar(
-            select(ScreeningRetryOverride).where(
-                ScreeningRetryOverride.attempt_id == latest_agent_attempt_id
-            )
-        )
-        force_full_review = bool(
-            retry_override is not None and retry_override.force_full_review
-        )
-        policy_rescreen_release = (
-            await session.scalar(
-                select(ScoredPolicyRescreenRelease)
-                .where(
-                    ScoredPolicyRescreenRelease.agent_id == agent.agent_id,
-                    *scored_release_criteria,
-                )
-                .with_for_update()
-            )
-            if can_claim_scored_rescreen
-            else None
-        )
-        attempt_policy_version = (
-            policy_rescreen_release.target_policy_version
-            if policy_rescreen_release is not None
-            else effective_screening_policy_version()
-        )
-        attempt_review_settings_binding = review_settings_binding
-        canary_review_settings_revision = (
-            retry_override.review_settings_revision
-            if retry_override is not None
-            and retry_override.review_settings_revision is not None
-            else (
-                policy_rescreen_release.review_settings_revision
-                if policy_rescreen_release is not None
-                else None
-            )
-        )
-        if canary_review_settings_revision is not None:
-            # A canary may reuse an immutable, previously-audited enforce
-            # revision for exactly this retry. Never infer the posture from
-            # the live global revision: that would turn a one-attempt canary
-            # into a fleet-wide toggle between the claim and the verdict.
-            if review_settings_binding is None:
-                logger.warning(
-                    "screening canary skipped agent_id=%s revision=%s scope=%s "
-                    "instance_id=%s reason=no_binding",
-                    agent.agent_id,
-                    canary_review_settings_revision,
-                    None,
-                    None,
-                )
-                continue
-            canary_settings = await session.get(
-                ScreenerReviewSettingsRevision,
-                canary_review_settings_revision,
-            )
-            if canary_settings is None:
-                logger.warning(
-                    "screening canary skipped agent_id=%s revision=%s scope=%s "
-                    "instance_id=%s reason=missing_revision",
-                    agent.agent_id,
-                    canary_review_settings_revision,
-                    None,
-                    review_settings_binding[1],
-                )
-                continue
-            parsed_canary_settings = ScreenerReviewSettings.model_validate(
-                canary_settings.settings
-            )
-            instance_id = review_settings_binding[1]
-            if canary_settings.scope not in allowed_canary_scopes:
-                logger.warning(
-                    "screening canary skipped agent_id=%s revision=%s scope=%s "
-                    "instance_id=%s reason=scope_mismatch",
-                    agent.agent_id,
-                    canary_review_settings_revision,
-                    canary_settings.scope,
-                    instance_id,
-                )
-                continue
-            if (
-                parsed_canary_settings.mode != "enforce"
-                or not parsed_canary_settings.l3_enabled
-                or parsed_canary_settings.adjudicator_mode != "enforce"
-            ):
-                logger.warning(
-                    "screening canary skipped agent_id=%s revision=%s scope=%s "
-                    "instance_id=%s reason=posture_mismatch",
-                    agent.agent_id,
-                    canary_review_settings_revision,
-                    canary_settings.scope,
-                    instance_id,
-                )
-                continue
-            attempt_review_settings_binding = (
-                canary_settings.revision,
-                instance_id,
-                canary_settings.scope,
-                canary_settings.checksum,
-            )
-        if deferred_deep_review and canary_review_settings_revision is None:
-            pending_hold = await session.scalar(
-                select(AthReview).where(
-                    AthReview.agent_id == agent.agent_id,
-                    AthReview.status == "pending",
-                )
-            )
-            double_check_hold = bool(
-                pending_hold is not None
-                and pending_hold.algorithm_provenance.get("trigger")
-                == _INTEGRITY_DOUBLE_CHECK_TRIGGER
-            )
-            if double_check_hold or integrity_double_check_mode == "enforce":
-                if double_check_posture is not None and review_settings_binding:
-                    attempt_review_settings_binding = (
-                        double_check_posture[0],
-                        review_settings_binding[1],
-                        double_check_posture[1],
-                        double_check_posture[2],
-                    )
-                elif double_check_hold:
-                    # Unreachable while selection excludes these holds; kept so
-                    # a race with a posture write can never run the double-check
-                    # on the normal posture it already passed.
-                    logger.warning(
-                        "integrity double-check for agent_id=%s is waiting on a "
-                        "usable %s reviewer posture",
-                        agent.agent_id,
-                        INTEGRITY_DOUBLE_CHECK_SCOPE,
-                    )
-                    continue
-        # ``enforce`` defers the deep review to the submissions that qualify;
-        # ``bypass`` never runs it at all. Both admit on the same cheap
-        # build-only pass, so the pre-score depth is one predicate over the two.
-        mechanical_first = (
-            not force_full_review
-            and deferred_review_mode in {"enforce", "bypass"}
-            and agent.status
-            in {
-                AgentStatus.UPLOADED,
-                AgentStatus.SCREENING_FAILED,
-            }
-        )
-        build_only = not deferred_deep_review and (
-            mechanical_first
-            or (
-                agent.status == AgentStatus.EVALUATING
-                and agent.screening_policy_version >= attempt_policy_version
-            )
-        )
-        policy_only = (
-            not build_only
-            and agent.screening_policy_version < attempt_policy_version
-            and all(
-                value is not None
-                for value in (
-                    agent.screened_image_sha256,
-                    agent.screened_image_size_bytes,
-                    agent.screened_image_id,
-                    agent.screened_image_ref,
-                    agent.screened_image_upload_id,
-                    agent.screened_image_verified_at,
-                )
-            )
-        )
-        # A same-hotkey prior version scopes the model review to its diff and
-        # review history. Duplicates, mechanical rebuilds, canaries and forced
-        # full reviews keep the ordinary full review.
-        lineage_parent = (
-            await select_lineage_parent(session, agent, mode=lineage_reference_mode)
-            if not build_only
-            and duplicate_of is None
-            # A canary or integrity double-check pins its own posture.
-            and attempt_review_settings_binding == review_settings_binding
-            and not force_full_review
-            else None
-        )
+        attempt_policy_version = effective_screening_policy_version()
         attempt = ScreeningAttempt(
             attempt_id=uuid4(),
             agent_id=agent.agent_id,
             artifact_sha256=agent.sha256,
-            lineage_parent_agent_id=(
-                lineage_parent.agent_id if lineage_parent is not None else None
-            ),
             screener_hotkey=screener_hotkey,
             policy_version=attempt_policy_version,
             status="running",
             started_at=now,
             deadline=now + ttl,
+            # No deferred-review marker: nothing is deferred. A build-only
+            # attempt cannot quarantine, so a fresh upload either passes to
+            # EVALUATING or fails a build or safety check.
             reason_code=(
-                "exact-cross-miner-duplicate"
-                if duplicate_of is not None
-                else _DEFERRED_MECHANICAL_REASON
-                if mechanical_first
-                else POLICY_ONLY_RESCREEN_REASON
-                if policy_only
-                else None
+                "exact-cross-miner-duplicate" if duplicate_of is not None else None
             ),
             duplicate_of=duplicate_of,
-            build_only=build_only,
+            build_only=True,
             review_settings_revision=(
-                attempt_review_settings_binding[0]
-                if attempt_review_settings_binding is not None
+                review_settings_binding[0]
+                if review_settings_binding is not None
                 else None
             ),
             review_settings_instance_id=(
-                attempt_review_settings_binding[1]
-                if attempt_review_settings_binding is not None
+                review_settings_binding[1]
+                if review_settings_binding is not None
                 else None
             ),
             review_settings_scope=(
-                attempt_review_settings_binding[2]
-                if attempt_review_settings_binding is not None
+                review_settings_binding[2]
+                if review_settings_binding is not None
                 else None
             ),
             review_settings_checksum=(
-                attempt_review_settings_binding[3]
-                if attempt_review_settings_binding is not None
+                review_settings_binding[3]
+                if review_settings_binding is not None
                 else None
             ),
         )
@@ -1899,14 +1507,6 @@ async def claim_screening_attempts(
         await record_first_v13_claim_window(
             session, agent=agent, attempt=attempt, lease_ttl=ttl
         )
-        if policy_rescreen_release is not None:
-            # The release FK is intentionally one-way (an attempt has no ORM
-            # collection of rollout releases), so flush the new attempt before
-            # attaching it. Otherwise SQLAlchemy may update the release ahead
-            # of inserting its referenced attempt.
-            await session.flush()
-            policy_rescreen_release.state = "running"
-            policy_rescreen_release.attempt_id = attempt.attempt_id
         if agent.status not in (
             AgentStatus.SCORED,
             AgentStatus.LIVE,

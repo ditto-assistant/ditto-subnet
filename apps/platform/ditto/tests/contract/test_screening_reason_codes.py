@@ -147,3 +147,30 @@ def test_model_timeout_parked_codes_are_registered_source_review_codes() -> None
     for code in public._SOURCE_REVIEW_MODEL_TIMEOUT_REASON_CODES:
         assert ADMISSION_LANE_BY_REASON_CODE[code] == "source_review"
         assert code not in INFRA_AUTO_RETRY_REASON_CODES
+
+
+def test_static_safety_reject_public_reason_passes_only_strict_locations() -> None:
+    """The mechanical lane's static reject names what matched, safely."""
+    detail = (
+        "static safety check matched categories=[credential_exfiltration, "
+        "docker_socket] locations=[src/main.rs:12, app/run.py:3]; remove or "
+        "make the flagged code unreachable and resubmit"
+    )
+    reason = screener._public_screening_reason(detail, "static-malicious-source")
+    assert "credential_exfiltration, docker_socket" in reason
+    assert "src/main.rs:12, app/run.py:3" in reason
+
+    hostile = (
+        "static safety check matched categories=[Bad Category, ok_cat] "
+        "locations=[../../etc/passwd:1, $(curl x):2, fine.py:9]; token=SECRET"
+    )
+    reason = screener._public_screening_reason(hostile, "static-malicious-source")
+    assert "SECRET" not in reason
+    assert "$(curl" not in reason
+    assert "Bad Category" not in reason
+    assert "ok_cat" in reason
+    assert "fine.py:9" in reason
+    assert "../../etc/passwd:1" not in reason
+
+    bare = screener._public_screening_reason("garbage", "static-malicious-source")
+    assert bare.startswith("Static safety check found malicious-source patterns")

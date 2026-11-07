@@ -146,6 +146,7 @@ from ditto.api_server.deferred_source_review import (
     DEFERRED_MECHANICAL_REASON,
     DEFERRED_REVIEW_KIND,
     INCONCLUSIVE_REASON_CODE,
+    MECHANICAL_ADMISSION_PUBLIC_REASON,
 )
 from ditto.api_server.dependencies import (
     get_dataset_generator,
@@ -284,6 +285,7 @@ from ditto_screening_protocol.reason_codes import (
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
     SOURCE_REVIEW_CONFIRMED_VIOLATION,
+    STATIC_MALICIOUS_SOURCE,
     WORKER_CLAIM_NOT_STARTED,
 )
 
@@ -3985,7 +3987,9 @@ async def claim(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
     policy_version: Annotated[int, Query(ge=1)],
-    canary_policy_version: Annotated[
+    # Accepted for wire compatibility with workers that still send it. Policy
+    # canaries and scored-policy rescreens are retired, so it selects nothing.
+    canary_policy_version: Annotated[  # noqa: ARG001
         int | None, Query(ge=1, le=SCREENING_POLICY_VERSION)
     ] = None,
     limit: Annotated[int, Query(ge=1, le=20)] = 1,
@@ -4094,7 +4098,6 @@ async def claim(
                     return _empty_claim(
                         response, reason=empty_reason, required_policy=required_policy
                     )
-                queue_settings = await resolve_queue_policy_settings(session)
                 binding = await resolve_claim_binding()
                 claimed = await claim_screening_attempts(
                     session,
@@ -4103,15 +4106,8 @@ async def claim(
                     ttl=lease_ttl,
                     limit=limit,
                     netuid=expected_netuid(),
-                    deferred_review_mode=queue_settings.deferred_source_review.mode,
-                    integrity_double_check_mode=(
-                        queue_settings.deferred_source_review.integrity_double_check_mode
-                    ),
                     review_settings_binding=binding,
-                    review_settings_enrolled_node_id=node_id,
-                    canary_policy_version=canary_policy_version,
                     claim_lock_held=True,
-                    lineage_reference_mode=queue_settings.lineage_reference_mode,
                 )
                 bound = await _bind_claim_runtime_leases(session, claimed)
         else:
@@ -4131,7 +4127,6 @@ async def claim(
                     return _empty_claim(
                         response, reason=empty_reason, required_policy=required_policy
                     )
-                queue_settings = await resolve_queue_policy_settings(session)
                 binding = await resolve_claim_binding()
                 claimed = await claim_screening_attempts(
                     session,
@@ -4140,14 +4135,7 @@ async def claim(
                     ttl=lease_ttl,
                     limit=limit,
                     netuid=expected_netuid(),
-                    deferred_review_mode=queue_settings.deferred_source_review.mode,
-                    integrity_double_check_mode=(
-                        queue_settings.deferred_source_review.integrity_double_check_mode
-                    ),
                     review_settings_binding=binding,
-                    review_settings_enrolled_node_id=node_id,
-                    canary_policy_version=canary_policy_version,
-                    lineage_reference_mode=queue_settings.lineage_reference_mode,
                 )
                 bound = await _bind_claim_runtime_leases(session, claimed)
     except _ScorerCohortUnavailableError:
@@ -5083,6 +5071,46 @@ _SEED_PROBE_PUBLIC_REASONS: Final[dict[str, str]] = {
 }
 
 
+_STATIC_CATEGORY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}")
+_STATIC_LOCATION_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,159}:[0-9]{1,7}")
+
+
+def _static_malicious_source_public_reason(detail: str) -> str:
+    """Public text for a static safety reject, with only well-formed locations.
+
+    The worker detail is ``static safety check matched categories=[a, b]
+    locations=[path:line, ...]; ...`` (``static_malicious_source_detail`` in
+    the screener). Paths come from the miner's own archive and the check runs
+    before any build, so they can carry no build secret. Still, only a strict
+    ``path:line`` shape and lowercase category slugs pass through, and no
+    other worker text is echoed.
+    """
+    match = re.match(
+        r"static safety check matched categories=\[([^\]]{0,400})\] "
+        r"locations=\[([^\]]{0,1400})\]",
+        detail.strip(),
+    )
+    categories: list[str] = []
+    locations: list[str] = []
+    if match is not None:
+        categories = [
+            item.strip()
+            for item in match.group(1).split(",")
+            if _STATIC_CATEGORY_RE.fullmatch(item.strip())
+        ][:8]
+        locations = [
+            item.strip()
+            for item in match.group(2).split(",")
+            if _STATIC_LOCATION_RE.fullmatch(item.strip())
+        ][:8]
+    reason = "Static safety check found malicious-source patterns before execution"
+    if categories:
+        reason += f" ({', '.join(categories)})"
+    if locations:
+        reason += f" at {', '.join(locations)}"
+    return reason + ". Remove the flagged code or make it unreachable, then resubmit."
+
+
 def _public_screening_reason(detail: str, reason_code: str | None = None) -> str:
     """Map untrusted screener detail to a stable, public-safe failure category.
 
@@ -5094,6 +5122,8 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
         return _SEED_PROBE_PUBLIC_REASONS[reason_code]
     if reason_code == "exact-cross-miner-duplicate":
         return "Artifact is an exact duplicate of another miner submission"
+    if reason_code == STATIC_MALICIOUS_SOURCE:
+        return _static_malicious_source_public_reason(detail)
     if reason_code == "container-harness-contract":
         match = _CONTAINER_CONTRACT_DIAGNOSTIC_RE.match(detail.strip())
         if match is not None:
@@ -5932,8 +5962,7 @@ async def submit_result(
     elif outcome_value == "pass_inconclusive":
         target = AgentStatus.EVALUATING
         public_reason = (
-            "Mechanical admission passed; deep source review deferred until score "
-            "qualification"
+            MECHANICAL_ADMISSION_PUBLIC_REASON
             if deferred_mechanical_admission
             else "Bounded source review exhausted; admitted for scoring"
         )
@@ -6603,7 +6632,7 @@ async def submit_result(
                             if late_deferred_result
                             else "Evidence retained on the score-qualified ATH review"
                             if deferred_attempt_lifecycle
-                            else "Deep source review deferred until score qualification"
+                            else MECHANICAL_ADMISSION_PUBLIC_REASON
                             if deferred_mechanical_admission
                             else (
                                 "Source-review evidence retained on an admitted "

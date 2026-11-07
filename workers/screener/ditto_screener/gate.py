@@ -130,6 +130,9 @@ from ditto_screening_protocol.reason_codes import (
     DOCKER_BUILD_INFRASTRUCTURE,
     IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
 )
+from ditto_screening_protocol.reason_codes import (
+    STATIC_MALICIOUS_SOURCE as STATIC_MALICIOUS_SOURCE_REASON_CODE,
+)
 from ditto_screening_protocol.runtime_envelope import runtime_envelope
 
 if TYPE_CHECKING:
@@ -137,6 +140,40 @@ if TYPE_CHECKING:
     from ditto_screener.review_settings import EffectiveReviewSettings
 
 logger = logging.getLogger(__name__)
+
+
+_STATIC_REJECT_MAX_LOCATIONS = 8
+
+
+def static_malicious_source_detail(observation: SourceReviewObservation) -> str:
+    """Location-only miner-facing detail for a static safety reject.
+
+    Names the matched categories and up to eight ``path:line`` locations. It
+    never quotes source, so the public reason cannot leak the matched text.
+    """
+    finding = observation.finding or {}
+    raw_evidence = finding.get("evidence") if isinstance(finding, Mapping) else None
+    locations: list[str] = []
+    if isinstance(raw_evidence, Sequence):
+        for item in raw_evidence:
+            if not isinstance(item, Mapping):
+                continue
+            path = str(item.get("path", ""))[:160]
+            line = item.get("line")
+            if path:
+                locations.append(f"{path}:{line}" if line is not None else path)
+            if len(locations) >= _STATIC_REJECT_MAX_LOCATIONS:
+                break
+    categories = ", ".join(observation.categories)
+    where = ", ".join(locations)
+    # Platform parses this bracketed shape into the public reason
+    # (``_static_malicious_source_public_reason``); keep the two in step.
+    return (
+        f"static safety check matched categories=[{categories}] "
+        f"locations=[{where}]; remove or make the flagged code unreachable "
+        "and resubmit"
+    )[:1000]
+
 
 # Bytes of a failing build log to attach to the verdict detail.
 _LOG_TAIL_BYTES = 2000
@@ -1463,6 +1500,58 @@ class BuildGate:
                 # contract have both been verified. Record before a later L4
                 # hold can skip the build/runtime path.
                 await record_archive_verification()
+
+            if build_only:
+                # The mechanical lane is the whole screen now that model source
+                # review is retired (owner decision 2026-11-07). The static
+                # malicious-source preflight is a safety check, not a review: it
+                # still runs before any submission-controlled Dockerfile or
+                # image, deterministically and without a model. A decisive,
+                # reachable match is a deterministic reject with its file and
+                # line locations; nothing is held.
+                try:
+                    static_lead = TarSourceRepository(tmp_path).malicious_preflight(
+                        artifact_sha256=sha256.lower(),
+                        mode=self._config.static_preflight_v2_mode,
+                        policy_version=policy_version,
+                        audit_recorder=lambda payload: (
+                            self._static_preflight_audit.record(
+                                agent_id=agent_id,
+                                attempt_id=attempt_id,
+                                artifact_sha256=sha256.lower(),
+                                payload=payload,
+                            )
+                        ),
+                    )
+                except StaticPreflightAuditError as error:
+                    logger.exception(
+                        "static preflight audit failed agent_id=%s attempt_id=%s",
+                        agent_id,
+                        attempt_id,
+                    )
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="static-preflight-audit-failed",
+                        summary="static preflight audit journal write failed",
+                        detail=f"screener error: {error}",
+                    )
+                if static_lead is not None:
+                    logger.warning(
+                        "static-source safety reject agent_id=%s attempt_id=%s "
+                        "categories=%s execution_started=false",
+                        agent_id,
+                        attempt_id,
+                        ",".join(static_lead.categories),
+                    )
+                    return core_decision(
+                        ScreeningOutcome.DETERMINISTIC_REJECT,
+                        code=STATIC_MALICIOUS_SOURCE_REASON_CODE,
+                        summary=(
+                            "static safety check found malicious-source patterns; "
+                            "execution was not started"
+                        ),
+                        detail=static_malicious_source_detail(static_lead),
+                    )
 
             # General source review is deliberately deferred until the image
             # has built and passed its runtime contract. Broken Dockerfiles and

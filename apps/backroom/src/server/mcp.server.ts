@@ -17,7 +17,6 @@ import {
 } from './admin.service'
 import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.schemas'
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
-import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
   officialControlsInputSchema, officialControlLookupSchema,
 } from '../lib/v13-official-control.schemas'
@@ -240,8 +239,6 @@ import {
   outlierEscalationDryRunInputSchema,
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
-  scheduleScreenerPolicyActivationInputSchema,
-  advanceScoredPolicyRescreenInputSchema,
   restoreScoredScreeningSnapshotInputSchema,
   setValidatorSlotSettingsInputSchema,
   setValidatorIssuancePauseInputSchema,
@@ -389,9 +386,6 @@ import {
   fetchScreenerPolicyActivation,
   fetchV13ReviewClock,
   fetchScoredPolicyRescreen,
-  scheduleScreenerPolicyActivation,
-  scheduleV13ReviewClock,
-  advanceScoredPolicyRescreen,
   restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
@@ -915,13 +909,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_queue_policy_settings:
     'Read queue policy, rollout locks, defaults and optional history (default 0). Settings do not resize open rollout snapshots.',
   get_screener_policy_activation:
-    'Scheduled screening-policy activation and history; latest=null if never scheduled.',
+    'Screening-policy activation and history; latest=null if never scheduled. Scheduling retired 2026-11-07.',
   get_v13_review_clock:
-    'Scheduled V13 first-claim clock; absent means no authoritative deadline. No finalizer activation.',
-  schedule_v13_review_clock:
-    'Schedule a future V13 first-claim clock for new submissions only. Requires exact document/manifest digests, 65-minute notice, revision guard, and confirmation. Does not finalize holds.',
-  schedule_screener_policy_activation:
-    'Schedule future screening policy with CAS and exact confirmation. canaryOnly preserves ordinary policy. See tool help.',
+    'V13 first-claim clock; absent means no authoritative deadline. Scheduling retired 2026-11-07.',
   restore_scored_screening_snapshot:
     'Restore one displaced scored cohort using exact activation, policy, benchmark and count guards. See tool help.',
   get_continual_retest_settings:
@@ -3150,7 +3140,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screener policy activation',
       description:
-        'Read effective screening policy, version bounds, latest scheduled activation, and revision history. Read before scheduling to get expectedRevision. Requires backroom:read.',
+        'Read effective screening policy, version bounds, latest scheduled activation, and revision history. Scheduling is retired (source review retired 2026-11-07); this is read-only audit. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerPolicyActivation()),
@@ -3161,35 +3151,10 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get V13 review clock schedule',
       description:
-        'Read V13 first-claim clock revisions. No row means no configured deadline. Requires backroom:read.',
+        'Read V13 first-claim clock revisions. No row means no configured deadline. Scheduling is retired (source review retired 2026-11-07). Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchV13ReviewClock()),
-  )
-
-  registerTool(
-    'schedule_v13_review_clock',
-    {
-      title: 'Schedule V13 review clock',
-      description:
-        'Future V13 first-claim clock for new UUIDs only: exact document/manifest SHA, revision, 65-minute notice, confirmation SCHEDULE V13 REVIEW CLOCK. No backfill or finalizer. Requires backroom:write.',
-      inputSchema: scheduleV13ReviewClockInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => scheduleV13ReviewClock(input, props.session.email)),
-  )
-
-  registerTool(
-    'schedule_screener_policy_activation',
-    {
-      title: 'Schedule screener policy activation',
-      description:
-        'Schedule a future policy activation with expectedRevision, bounded targetPolicyVersion, timezone-aware activateAt, and reason. canaryOnly limits rollout to explicit scored releases and requires rescreenScored. Confirmation SCHEDULE SCREENER POLICY ACTIVATION. Requires backroom:write.',
-      inputSchema: scheduleScreenerPolicyActivationInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => scheduleScreenerPolicyActivation(input, props.session.email)),
   )
 
   registerTool(
@@ -3197,23 +3162,10 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get scored policy rescreen checkpoint',
       description:
-        'Read the bounded score-preserving policy rollout: every active release and the next top-down candidate. Existing scores remain visible; a pause blocks the window from widening. Requires backroom:read.',
+        'Read the bounded score-preserving policy rollout: every active release and the next top-down candidate. Existing scores remain visible. Advancing is retired (source review retired 2026-11-07). Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScoredPolicyRescreen()),
-  )
-
-  registerTool(
-    'advance_scored_policy_rescreen',
-    {
-      title: 'Advance scored policy rescreen',
-      description:
-        'Fill 1–4 stale-score rescreen slots or retry one paused row; existing scores remain visible. canaryOnly requires reviewSettingsRevision. Confirmation ADVANCE SCORED POLICY RESCREEN. Requires backroom:write.',
-      inputSchema: advanceScoredPolicyRescreenInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => advanceScoredPolicyRescreen(input, props.session.email)),
   )
 
   registerTool(

@@ -40,7 +40,9 @@ from ditto.db.queries.provider_outages import provider_outage_active
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.tickets import scoring_retry_ticket, ticket_retry_budget_spent
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    lease_screening_policy_floor,
+)
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
 _UNRESOLVED_ROLLOUT = object()
@@ -384,7 +386,7 @@ def recovery_gate(
     )
     if not waiting_for_scores:
         return False, False, "submission is not waiting for validator scores", []
-    if agent.screening_policy_version < effective_screening_policy_version():
+    if agent.screening_policy_version < lease_screening_policy_floor():
         return False, False, "submission is not on the current screening policy", []
     if score_count >= SCORING_QUORUM:
         return False, False, "submission already reached scoring quorum", []
@@ -477,7 +479,7 @@ def withdrawal_gate(
 
     if agent.status != AgentStatus.EVALUATING:
         return False, "submission is not waiting for validator scores"
-    if agent.screening_policy_version < effective_screening_policy_version():
+    if agent.screening_policy_version < lease_screening_policy_floor():
         return False, "submission is not on the current screening policy"
     if len(scores) >= SCORING_QUORUM:
         return False, "submission already reached scoring quorum"
@@ -622,7 +624,7 @@ def reinstatement_gate(
         )
     if agent.status != AgentStatus.EVALUATING:
         return False, "submission is not waiting for validator scores"
-    if agent.screening_policy_version < effective_screening_policy_version():
+    if agent.screening_policy_version < lease_screening_policy_floor():
         return False, "submission is not on the current screening policy"
     if len(scores) >= SCORING_QUORUM:
         return False, "submission already reached scoring quorum"

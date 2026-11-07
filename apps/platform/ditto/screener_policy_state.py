@@ -49,8 +49,25 @@ def update_effective_screener_policy(
 
 
 def effective_screening_policy_version() -> int:
-    """The screening-policy version the platform currently REQUIRES."""
+    """The policy version new screening attempts stamp and workers declare.
+
+    It no longer gates leasing or scoring: source review is retired
+    (2026-11-07) and no new activation is scheduled, so it stays at the last
+    activated version. Use :func:`lease_screening_policy_floor` for gates.
+    """
     return _required_policy_version
+
+
+LEASE_SCREENING_POLICY_FLOOR = 9
+"""Policy 9 introduced the verified screened-image handoff, and every
+screened-image benchmark contract names it as
+``minimum_screening_policy_version``. It is the only screening-policy gate on
+leasing, scoring, retries and public projections."""
+
+
+def lease_screening_policy_floor() -> int:
+    """The lowest screening policy whose pass makes an agent leasable."""
+    return LEASE_SCREENING_POLICY_FLOOR
 
 
 def effective_rescreen_scored() -> bool:

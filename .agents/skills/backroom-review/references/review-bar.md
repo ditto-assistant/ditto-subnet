@@ -213,15 +213,13 @@ canonical false-positive trap (aceron-style worksheets disabled in release).
 
 **Versioning and fairness.** The planner-forced ruling is **policy v11**,
 edited forward from v10 (v10 is preserved byte-for-byte as a legacy variant).
-The required version is DB-scheduled: the queue requires the floor (v10) until
-a scheduled activation fires (`schedule_screener_policy_activation`, MCP write
-tool, confirmation `SCHEDULE SCREENER POLICY ACTIVATION`, timezone-aware
-`activate_at`). Dual-text workers screen under and stamp the REQUIRED version.
-When an activation is due, agents screened under a stale version rescreen on
-identical criteria — scored/live rows only when the activation sets
-`rescreen_scored`. Agents are held to the policy that screened them: never
-apply the v11 I7 letter retroactively to a v10-screened row; the scheduled
-rescreen is the enforcement mechanism. Live precedent for the whole arc:
+Historical: the required version used to be DB-scheduled through
+`schedule_screener_policy_activation`, with stale agents rescreened when an
+activation fired. Since 2026-11-07 no review-policy activation or rescreen is
+scheduled (source review retired; that tool is removed and Platform answers
+410), and the last activation (v14) is frozen as the version new attempts
+stamp. Agents are still held to the policy that screened them: never apply the
+v11 I7 letter retroactively to a v10-screened row. Live precedent for the whole arc:
 `lets_v609` (`de936681`) was rejected under v10-in-place, then **reinstated**
 (clear on review `c8bf0641`) after community fairness feedback, and will be
 re-adjudicated by the scheduled v11 rescreen with every other cohort member.

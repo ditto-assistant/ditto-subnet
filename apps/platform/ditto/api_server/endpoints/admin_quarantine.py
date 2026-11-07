@@ -232,7 +232,10 @@ from ditto.db.queries.terminal_quarantine_reconciliation import (
     terminal_reconciliation_record,
 )
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    effective_screening_policy_version,
+    lease_screening_policy_floor,
+)
 from ditto_screening_protocol import (
     AdjudicationCompletionReceipt,
     AdjudicationRunDiagnostic,
@@ -4574,7 +4577,7 @@ async def _screened_image_rebuild_detail(
         blocking_reason = "submission already has an accepted active-version score"
     elif screening_attempt_active:
         blocking_reason = "screening attempt is active"
-    elif agent.screening_policy_version < effective_screening_policy_version():
+    elif agent.screening_policy_version < lease_screening_policy_floor():
         blocking_reason = "submission is not on the current screening policy"
     elif agent.screened_image_sha256 is None or agent.screened_image_upload_id is None:
         blocking_reason = "submission has no complete screened image to replace"

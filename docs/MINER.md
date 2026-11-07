@@ -237,9 +237,9 @@ implementation, not a submission requirement.
 
 Each source file (`.py`, `.rs`, `.go`, `.c`/`.cpp`/`.h`, `.ts`/`.js` and
 similar) must stay within **10,000 lines**, **1 MiB**, and **4,000 characters
-on any one line**. A reviewer reads source 400 lines at a time, so larger files
-cannot be reviewed and leave screening unable to clear the submission. Split
-large files. The one exception is an **unmodified** upstream release file whose
+on any one line**. Platform enforces these limits at upload so every source
+file stays readable when an operator reads a top agent's code. Split large
+files. The one exception is an **unmodified** upstream release file whose
 SHA-256 is on the vendored allowlist
 (`packages/ditto-screening-protocol/ditto_screening_protocol/data/vendored_upstream_allowlist.json`,
 currently QuickJS-ng 0.16.2 `quickjs.c`, SQLite 3.46.1 amalgamation files and
@@ -365,10 +365,27 @@ uv run ditto --network finney status <agent-id>
 You can also follow the public submission pipeline and leaderboard at
 [`platform-api.heyditto.ai`](https://platform-api.heyditto.ai/).
 
-The normal pipeline is upload, automated build and health screening, evaluation
+The normal pipeline is upload, automated build and safety screening, evaluation
 by up to three independent validators, and median-score finalization. Failed or
 expired validator leases are retried, so one validator does not control the
 result.
+
+Screening is build and safety checks only. There is no source review, no
+review-policy version to wait for and no hold before scoring (retired
+2026-11-07). Every submission still gets:
+
+- archive, size and container-contract validation;
+- a deterministic static malicious-source check before anything executes. A
+  decisive, reachable match is rejected as `static-malicious-source` with the
+  file and line it matched;
+- the isolated image build, health check and screened-image export that
+  validators load (they never build your Dockerfile);
+- exact-copy and copy-signal protection against other miners' work;
+- banned-hotkey enforcement.
+
+Operators read the top agents' code after scoring and can void scores, reject
+or ban after the fact. Bench difficulty, with fresh private per-seed data and
+frequent harder versions, is the main defence against overfitting.
 
 ## Scoring and emissions
 
@@ -509,11 +526,14 @@ model/provider path, and instructions intended to manipulate screening.
 Forking, replacing, or heavily optimizing the public starter harness is
 allowed; copying another miner's work is not. Lexical and structural
 fingerprints detect renamed, reformatted, or padded near-duplicates across
-miners, and suspicious or matching submissions are quarantined for human review
-rather than automatically banned. Confirmed plagiarism can result in a
-hotkey-level ban. Coding agents using `/mine` apply the operator review bar
-to the local served path before packaging. A local pass is not a production
-clearance.
+miners, and matching submissions are held for copy review rather than
+automatically banned. Confirmed plagiarism can result in a hotkey-level ban.
+
+There is no automated source review before scoring. Operators read the top
+agents' code after scoring, and a submission that breaks these rules can have
+its scores voided, be rejected, or have its hotkey banned after the fact. Coding
+agents using `/mine` check the local served path against that bar before
+packaging; a local pass is not a clearance.
 
 ## Link a rotated hotkey
 
@@ -916,8 +936,8 @@ it in Backroom, so treat that as an example. The CLI fetches and shows
 the authoritative TAO amount before confirmation. TAO/USD pricing is used only
 for internal revenue reporting and cannot change whether a payment is accepted.
 
-**How long does scoring take?** Screening and a full benchmark both involve
-container work. Expect minutes to hours depending on queue and build time.
+**How long does scoring take?** Screening (the image build and safety checks)
+and a full benchmark both involve container work. Expect minutes to hours depending on queue and build time.
 
 **When will I see incentive on chain?** Budget **two to three tempos — roughly
 2.5 to 4.5 hours** — from your first score. It is not one tempo, and the delay
