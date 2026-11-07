@@ -146,7 +146,6 @@ from ditto.api_server.deferred_source_review import (
     DEFERRED_MECHANICAL_REASON,
     DEFERRED_REVIEW_KIND,
     INCONCLUSIVE_REASON_CODE,
-    MECHANICAL_ADMISSION_PUBLIC_REASON,
 )
 from ditto.api_server.dependencies import (
     get_dataset_generator,
@@ -294,6 +293,13 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# Public text for a legacy mechanical-admission pass. Source review is retired
+# (owner decision, 2026-11-07): build and safety checks are the whole screen,
+# so nothing is deferred and no later review can hold the submission.
+MECHANICAL_ADMISSION_PUBLIC_REASON = (
+    "Build and safety checks passed; admitted for scoring"
+)
 
 router = APIRouter(prefix="/screener", tags=["screener"])
 
