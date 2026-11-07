@@ -538,7 +538,6 @@ describe('Backroom MCP tools', () => {
       [
         'activate_v13_scorer_cohort',
         'rotate_v13_scorer_cohort',
-        'advance_scored_policy_rescreen',
         'execute_screening_quarantine_batch',
         'expand_benchmark_rollout_cohort',
         'get_backroom_access',
@@ -635,8 +634,6 @@ describe('Backroom MCP tools', () => {
         'rotate_screener_policy_manifest',
         'get_screener_policy_activation',
         'get_v13_review_clock',
-        'schedule_screener_policy_activation',
-        'schedule_v13_review_clock',
         'restore_scored_screening_snapshot',
         'get_validator_fleet',
         'get_validator_slot_settings',
@@ -6468,96 +6465,7 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('retries only the exact paused scored-policy checkpoint', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const resumed = {
-      ...scoredPolicyRescreenView,
-      current: { ...scoredPolicyRescreenView.current, state: 'pending', attempt_id: null },
-      active: [{ ...scoredPolicyRescreenView.current, state: 'pending', attempt_id: null }],
-    }
-    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(resumed))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    const response = await client.callTool({
-      name: 'advance_scored_policy_rescreen',
-      arguments: {
-        expectedActivationRevision: 3,
-        expectedAgentId: '22222222-2222-4222-8222-222222222222',
-        retryPaused: true,
-        reason: 'retry the reviewed V11 canary after its infrastructure pause',
-        confirmation: 'ADVANCE SCORED POLICY RESCREEN',
-      },
-    })
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toEqual(resumed)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe(
-      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/advance-scored-rescreen',
-    )
-    expect(init.method).toBe('POST')
-    expect(JSON.parse(String(init.body))).toEqual({
-      expected_activation_revision: 3,
-      expected_agent_id: '22222222-2222-4222-8222-222222222222',
-      retry_paused: true,
-      max_active_releases: 1,
-      reason: 'retry the reviewed V11 canary after its infrastructure pause',
-      actor: 'peyton@omniaura.ai',
-      confirmation: 'ADVANCE SCORED POLICY RESCREEN',
-    })
-
-    await client.close()
-    await server.close()
-  })
-
-  it('schedules one screener policy activation with the exact platform contract', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ revision: 4 }))
-      .mockResolvedValueOnce(Response.json(screenerPolicyActivationView))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    const response = await client.callTool({
-      name: 'schedule_screener_policy_activation',
-      arguments: {
-        expectedRevision: 3,
-        targetPolicyVersion: 11,
-        activateAt: '2026-08-29T09:00:00-04:00',
-        rescreenScored: true,
-        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-        confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-      },
-    })
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({
-      latest: { revision: 3, state: 'pending' },
-    })
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation')
-    expect(init.method).toBe('POST')
-    expect(init.headers).toMatchObject({
-      Authorization: 'Bearer platform-admin-token',
-      'X-Admin-Actor': 'peyton@omniaura.ai',
-    })
-    // The audited actor is always the signed-in operator, never a tool argument.
-    expect(JSON.parse(String(init.body))).toEqual({
-      expected_revision: 3,
-      target_policy_version: 11,
-      activate_at: '2026-08-29T09:00:00-04:00',
-      rescreen_scored: true,
-      reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-      actor: 'peyton@omniaura.ai',
-      confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-    })
-
-    await client.close()
-    await server.close()
-  })
-
-  it('reads the default-off V13 review clock and guards its exact schedule write', async () => {
+  it('reads the default-off V13 review clock', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const empty = {
       current_policy_document_digest: 'a'.repeat(64),
@@ -6567,53 +6475,15 @@ describe('Backroom MCP tools', () => {
     }
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(Response.json(empty)))
     vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
 
     const read = await client.callTool({ name: 'get_v13_review_clock', arguments: {} })
     expect(read.isError).not.toBe(true)
     expect(readJsonResult(read)).toEqual(empty)
-    const invalid = await client.callTool({
-      name: 'schedule_v13_review_clock',
-      arguments: {
-        expectedRevision: 0,
-        policyDocumentDigest: 'a'.repeat(64),
-        policyManifestDigest: 'b'.repeat(64),
-        activateAt: '2026-10-01T12:00:00Z',
-        windowSeconds: 86400,
-        reason: 'publish a future first-claim window',
-        confirmation: 'WRONG PHRASE',
-      },
-    })
-    expect(invalid.isError).toBe(true)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-
-    const scheduled = await client.callTool({
-      name: 'schedule_v13_review_clock',
-      arguments: {
-        expectedRevision: 0,
-        policyDocumentDigest: 'a'.repeat(64),
-        policyManifestDigest: 'b'.repeat(64),
-        activateAt: '2026-10-01T12:00:00Z',
-        windowSeconds: 86400,
-        reason: 'publish a future first-claim window',
-        confirmation: 'SCHEDULE V13 REVIEW CLOCK',
-      },
-    })
-    expect(scheduled.isError).not.toBe(true)
-    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
-    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/review-clock')
-    expect(init.method).toBe('POST')
-    expect(JSON.parse(String(init.body))).toEqual({
-      expected_revision: 0,
-      policy_version: 13,
-      policy_document_digest: 'a'.repeat(64),
-      policy_manifest_digest: 'b'.repeat(64),
-      activate_at: '2026-10-01T12:00:00Z',
-      window_seconds: 86400,
-      reason: 'publish a future first-claim window',
-      actor: 'peyton@omniaura.ai',
-      confirmation: 'SCHEDULE V13 REVIEW CLOCK',
-    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/review-clock',
+      expect.objectContaining({ method: 'GET' }),
+    )
 
     await client.close()
     await server.close()
@@ -6700,53 +6570,6 @@ describe('Backroom MCP tools', () => {
         expectedCount: 35,
         reason: 'restore the pre-v11 scored screening snapshot',
         confirmation: 'RESTORE SCREENING SNAPSHOT',
-      },
-    })
-
-    expect(response.isError).toBe(true)
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    await client.close()
-    await server.close()
-  })
-
-  it('rejects a screener policy activation with the wrong confirmation before any admin call', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    const response = await client.callTool({
-      name: 'schedule_screener_policy_activation',
-      arguments: {
-        expectedRevision: 3,
-        targetPolicyVersion: 11,
-        activateAt: '2026-08-29T09:00:00-04:00',
-        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-        confirmation: 'SCHEDULE SCREENER POLICY',
-      },
-    })
-
-    expect(response.isError).toBe(true)
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    await client.close()
-    await server.close()
-  })
-
-  it('does not schedule a screener policy activation without the write scope', async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-
-    const response = await client.callTool({
-      name: 'schedule_screener_policy_activation',
-      arguments: {
-        expectedRevision: 3,
-        targetPolicyVersion: 11,
-        activateAt: '2026-08-29T09:00:00-04:00',
-        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-        confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
       },
     })
 

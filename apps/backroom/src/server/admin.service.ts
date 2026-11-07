@@ -231,10 +231,7 @@ import {
   v13ReplayPrivateReceiptSchema,
 } from '../lib/v13-private.schemas'
 
-import {
-  scheduleV13ReviewClockInputSchema,
-  v13ReviewClockScheduleSchema,
-} from '../lib/review-clock.schemas'
+import { v13ReviewClockScheduleSchema } from '../lib/review-clock.schemas'
 
 import {
   conversationAssessmentInputSchema,
@@ -502,10 +499,8 @@ import {
   setQueuePolicySettingsInputSchema,
   screenerPolicyActivationViewSchema,
   scoredPolicyRescreenViewSchema,
-  advanceScoredPolicyRescreenInputSchema,
   restoreScoredScreeningSnapshotInputSchema,
   restoreScoredScreeningSnapshotResponseSchema,
-  scheduleScreenerPolicyActivationInputSchema,
   VALIDATOR_SLOT_SETTINGS_SCOPE,
   validatorSlotSettingsControlSchema,
   validatorIssuanceConfirmation,
@@ -2015,76 +2010,13 @@ export async function fetchV13ReviewClock() {
   return v13ReviewClockScheduleSchema.parse(await platformAdminRequest(V13_REVIEW_CLOCK_PATH))
 }
 
-export async function scheduleV13ReviewClock(rawInput: unknown, actor: string) {
-  const input = scheduleV13ReviewClockInputSchema.parse(rawInput)
-  await platformAdminRequest(V13_REVIEW_CLOCK_PATH, {
-    method: 'POST',
-    actor,
-    body: {
-      expected_revision: input.expectedRevision,
-      policy_version: 13,
-      policy_document_digest: input.policyDocumentDigest,
-      policy_manifest_digest: input.policyManifestDigest,
-      activate_at: input.activateAt,
-      window_seconds: input.windowSeconds,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return fetchV13ReviewClock()
-}
-
 export async function fetchScreenerPolicyActivation() {
   const payload = await platformAdminRequest(SCREENER_POLICY_ACTIVATION_PATH)
   return screenerPolicyActivationViewSchema.parse(payload)
 }
 
-export async function scheduleScreenerPolicyActivation(rawInput: unknown, actor: string) {
-  const input = scheduleScreenerPolicyActivationInputSchema.parse(rawInput)
-  await platformAdminRequest(SCREENER_POLICY_ACTIVATION_PATH, {
-    method: 'POST',
-    actor,
-    body: {
-      expected_revision: input.expectedRevision,
-      target_policy_version: input.targetPolicyVersion,
-      activate_at: input.activateAt,
-      rescreen_scored: input.rescreenScored,
-      ...(input.canaryOnly ? { canary_only: true } : {}),
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return fetchScreenerPolicyActivation()
-}
-
 export async function fetchScoredPolicyRescreen() {
   const payload = await platformAdminRequest(`${SCREENER_POLICY_ACTIVATION_PATH}/scored-rescreen`)
-  return scoredPolicyRescreenViewSchema.parse(payload)
-}
-
-export async function advanceScoredPolicyRescreen(rawInput: unknown, actor: string) {
-  const input = advanceScoredPolicyRescreenInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `${SCREENER_POLICY_ACTIVATION_PATH}/advance-scored-rescreen`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        expected_activation_revision: input.expectedActivationRevision,
-        expected_agent_id: input.expectedAgentId,
-        retry_paused: input.retryPaused,
-        max_active_releases: input.maxActiveReleases,
-        ...(input.reviewSettingsRevision === null
-          ? {}
-          : { review_settings_revision: input.reviewSettingsRevision }),
-        reason: input.reason,
-        actor,
-        confirmation: input.confirmation,
-      },
-    },
-  )
   return scoredPolicyRescreenViewSchema.parse(payload)
 }
 

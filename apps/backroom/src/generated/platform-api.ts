@@ -3548,12 +3548,10 @@ export interface paths {
         put?: never;
         /**
          * Schedule Activation
-         * @description Append one optimistic, confirmation-gated schedule revision.
+         * @description Retired: the required screening policy is frozen at its last activation.
          *
-         *     The required version rises to ``target_policy_version`` when
-         *     ``activate_at`` passes, not when this row is written — miners get the full
-         *     notice window. Superseding an earlier schedule is a normal append: the
-         *     newest due revision governs.
+         *     Validators lease on the benchmark contract floor alone, so nothing waits on
+         *     a new review-policy version. Reads of the activation history still work.
          */
         post: operations["schedule_activation_api_v1_admin_screener_policy_activation_post"];
         delete?: never;
@@ -3573,13 +3571,7 @@ export interface paths {
         put?: never;
         /**
          * Advance Scored Rescreen
-         * @description Fill a bounded current-board window after an explicit checkpoint.
-         *
-         *     The policy schedule establishes the rule.  It does *not* bulk-requeue
-         *     every existing score: a false V11 clear remains observable before more than
-         *     the configured window of V10 scores is touched.  A non-verdict leaves its
-         *     row paused, prevents the window from widening, and requires an explicit
-         *     retry rather than silently advancing.
+         * @description Retired: scored agents are never rescreened for a review policy.
          */
         post: operations["advance_scored_rescreen_api_v1_admin_screener_policy_activation_advance_scored_rescreen_post"];
         delete?: never;
@@ -3626,7 +3618,7 @@ export interface paths {
         put?: never;
         /**
          * Schedule V13 Review Clock
-         * @description Schedule a future first-claim clock; never backfill existing attempts.
+         * @description Retired: source review no longer runs, so no review clock is scheduled.
          */
         post: operations["schedule_v13_review_clock_api_v1_admin_screener_policy_activation_review_clock_post"];
         delete?: never;
@@ -17183,37 +17175,6 @@ export interface components {
              */
             idempotent: boolean;
             quarantine: components["schemas"]["AdminQuarantineItem"];
-        };
-        /**
-         * AdvanceScoredPolicyRescreenRequest
-         * @description Fill a bounded top-down scored-rescreen window, or retry one pause.
-         */
-        AdvanceScoredPolicyRescreenRequest: {
-            /** Actor */
-            actor?: string | null;
-            /** Confirmation */
-            confirmation: string;
-            /** Expected Activation Revision */
-            expected_activation_revision: number;
-            /**
-             * Expected Agent Id
-             * Format: uuid
-             */
-            expected_agent_id: string;
-            /**
-             * Max Active Releases
-             * @default 1
-             */
-            max_active_releases: number;
-            /** Reason */
-            reason: string;
-            /**
-             * Retry Paused
-             * @default false
-             */
-            retry_paused: boolean;
-            /** Review Settings Revision */
-            review_settings_revision?: number | null;
         };
         /**
          * AgentEmissionEligibility
@@ -38549,74 +38510,6 @@ export interface components {
             surface: "source_emission" | "treasury_receipt";
         };
         /**
-         * ScheduleScreenerPolicyActivationRequest
-         * @description Append one optimistic, confirmation-gated schedule revision.
-         *
-         *     ``activate_at`` MUST carry a UTC offset (or be an explicit ``Z`` instant):
-         *     a timezone-naive datetime is rejected so an operator who means 9 a.m.
-         *     Eastern cannot silently schedule 9 a.m. server time. The row stores UTC.
-         */
-        ScheduleScreenerPolicyActivationRequest: {
-            /**
-             * Activate At
-             * Format: date-time
-             */
-            activate_at: string;
-            /** Actor */
-            actor?: string | null;
-            /**
-             * Canary Only
-             * @default false
-             */
-            canary_only: boolean;
-            /** Confirmation */
-            confirmation: string;
-            /** Expected Revision */
-            expected_revision: number;
-            /** Reason */
-            reason: string;
-            /**
-             * Rescreen Scored
-             * @default true
-             */
-            rescreen_scored: boolean;
-            /** Target Policy Version */
-            target_policy_version: number;
-        };
-        /**
-         * ScheduleV13ReviewClockRequest
-         * @description A future, manifest-bound deadline schedule; never a retroactive clock.
-         */
-        ScheduleV13ReviewClockRequest: {
-            /**
-             * Activate At
-             * Format: date-time
-             */
-            activate_at: string;
-            /** Actor */
-            actor: string;
-            /**
-             * Confirmation
-             * @constant
-             */
-            confirmation: "SCHEDULE V13 REVIEW CLOCK";
-            /** Expected Revision */
-            expected_revision: number;
-            /** Policy Document Digest */
-            policy_document_digest: string;
-            /** Policy Manifest Digest */
-            policy_manifest_digest: string;
-            /**
-             * Policy Version
-             * @constant
-             */
-            policy_version: 13;
-            /** Reason */
-            reason: string;
-            /** Window Seconds */
-            window_seconds: number;
-        };
-        /**
          * ScoreReport
          * @description A completed DittoBench evaluation result for one agent.
          *
@@ -53905,19 +53798,15 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleScreenerPolicyActivationRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScreenerPolicyActivationView"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -53940,19 +53829,15 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AdvanceScoredPolicyRescreenRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScoredPolicyRescreenView"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -54041,19 +53926,15 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleV13ReviewClockRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["V13ReviewClockSchedule"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
