@@ -29,6 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
+| 18 (staged) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17; no token levers. Known vector `46b82f49f6dd56defdcf887d4d242a6dac242168bdace83b6801899e28e2e414` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1479,6 +1480,85 @@ epoch `2027-08-01T00:00:00Z`. Every v2 to v15 vector is unchanged (v15 stays
 `33232bf35e829cbd08efc56777988d1e8784760487837aaa2f185c6f2077783d`).
 Contract tests: `gen/v16_contract_test.go`, `catalog/v16_test.go`,
 `datagen/v16_test.go`, `toolexec/v16_test.go`, `protocol/epoch_test.go`.
+
+## Bench v18 accuracy contract, datagen half
+
+On live v17 the cost factor did all the ranking: every agent scored 0.93-0.99
+on the datagen half. V18 changes only which first-party cases a run asks.
+Scoring is priced-cost-v2 unchanged, and no lever adds tokens: no larger
+catalog, no extra decoy tools, the same 50 + 125 case half. Every lever is
+gated on `bench_version >= 18`, so v2..v17 regenerate byte-identically
+(`TestV17KnownVector`). V18 is staged in `protocol/staged.go` until the
+cross-layer PR supports it.
+
+**Evidence.** Per-category means over all 27 v17 production score rows
+(Platform `scores.details.per_case`, read 2026-11-07), all agents / top three
+agents (dan0l v43, Tessellate v6, DrPresident v35). 70 of 113 categories
+averaged at least 0.99. The levers below cite the categories they move.
+
+**Tool half (50 cases).**
+
+| Lever | v17 | v18 | Evidence |
+| --- | ---: | ---: | --- |
+| Restraint groups (`v13RestraintCaseCountForVersion`) | 8 | 16 quota; 10-16, mean 15.08, full on 48 of 100 seeds | the structural floor (world carrier, state routes, mutation follow-ups) trims it on some seeds |
+| Discovery / unexpected (`v13QuotaForVersion`) | 3 / 2 | 6 / 4 | full-run quotas |
+| Decoy-correct | 5 | 2 (`V18DecoyCases`) | every `decoy_*_result_usage` family 1.000 |
+| Connector families | 11 (after the v13 passes) | 11 (installed first, never converted) | `connector_linked_result_usage` 0.909 |
+| World floor | 3 per family, 17 world-derived | 1 per family, 8 world-derived (`V18WorldMinimum`) | every world family 1.000 except contact research 0.981 |
+| Restraint may take ordinary result-usage singletons | no | yes (`v18RestraintMayTakeResultUsage`) | link_chain, multi_web, web_recovery, web_result 0.988-1.000 |
+| Residual weights (`toolCategoryWeightV18`) | v7 | entity_lookup_chain 2 -> 8; link_chain, web_recovery, stale_context_web -> 2 | entity_lookup_chain 0.889 / 0.667 |
+
+**Memory half (125 cases, `gen/v18_envelope.go`).**
+
+| Slot | v17 | v18 | Evidence |
+| --- | ---: | ---: | --- |
+| Story | 36 (6 arcs x 6) | 35 (7 arcs x 5; lesson-claims, status-current, order, x-owner-email dropped first while an arc is over its slot) | lesson-claims 1.000, status-current 0.985; status-disagree 0.879 |
+| Ordinary world | 20 | 19 | 12 answerable twins and 6 staged corrections kept |
+| Business programs | 16 (1 family group, always owner-after-correction, + 12 enterprise) | 16 (3 family groups drawn per seed from `universe.V18BusinessFamilies`, + 4 enterprise) | open program 0.973 / 1.000, enterprise 0.979 / 0.991 |
+| Personal programs | 4 | 8 | 0.946 / 0.917 |
+| Abstention | 12 (2/2/1/1/3/3) | 12 (pure 2, near miss 1, stale-removed 2, cross-user 2, false premise 3, insufficient 2) | probes 0.821-0.946, every answerable twin >= 0.95 |
+| Point-in-time | 6 (3 of 6 pairs) | 8 (4 of 6) | contact 0.946, trip leg 0.964 |
+| Isolation | 9 | 5 | 1.000 over 252 cases |
+| Record quantity, divergence, integrity | 4, 4, 14 | 4, 4, 14 | divergence and the canary are anti-gaming probes; integrity holds injection-envelope-free (0.821) |
+
+The v18 business families are the v14 ports of the generator-competition
+shapes that separated agents ([v14-generator-credits.md](v14-generator-credits.md)):
+unnamed reverts (supersession chains), 5-8 event relative sequences,
+dated status inside a non-final interval, step-state processes, holder versus
+actor custody (at most two hops), identity joins, and records that disagree.
+They shipped in v14, but the v16/v17 table rendered only group 0, so none of
+them reached a scored v16 or v17 run on the business side. Client-vs-vendor,
+whose records name the role label, is not drawn. Each group keeps its
+metamorphic variants (renderer, distractor and counterfactual) and its
+near-miss distractors.
+
+`go run ./cmd/mixaudit -bench-version 18 -seeds 40 -gate` passes 0/40 (means:
+money 0.062, money of computed answers 0.181, business 0.412, abstention
+0.096, twin 0.448, cascade 0.016). A third stale-removed pair would put the
+contacts sub-domain over its 20% cap on 4 of 40 seeds.
+
+**`conversational-chitchat` is a grading ceiling, not difficulty.** Its
+0.500 on all 84 v17 cases is the fixed chitchat credit (`gradingPolicy.chitchatCredit`,
+0.5 since v8). It lowers every agent's memory mean by the same 1.2 points and
+ranks nobody. V18 does not change grading.
+
+**Unlinked-connector reply (the v16.0 gap).** From v18 the scorer reads an
+unlinked probe's reply for a not-connected claim
+(`services/dittobench-api/internal/scorer/v18_unlinked_reply.go`). It ships in
+`review` (notes only); `DITTOBENCH_V18_UNLINKED_REPLY_POSTURE=penalize` halves
+a reply without the claim and `enforce` zeroes it. The operator moves it after
+reading the review notes against cleared top agents.
+
+**Not yet measured.** No agent has run a v18 dataset. The per-family
+discrimination table (top-agent means on v18) and the `familygate` admission
+of the newly reachable business families need executed panel runs; until then
+the v14 families stay `pending-panel` in `universe.V14FamilyMix`.
+
+For seed `123456789`, full profile, public surface salt 0,
+`TestV18KnownVector` pins
+`46b82f49f6dd56defdcf887d4d242a6dac242168bdace83b6801899e28e2e414`, with
+epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
+`datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
 
 ## Bench v15 grading policy (shipped ahead of the generation contract)
 

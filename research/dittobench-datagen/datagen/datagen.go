@@ -2120,6 +2120,9 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		optional := make([]bool, len(cats))
 		for i, c := range cats {
 			weights[i] = toolCategoryWeightV13(c.name)
+			if benchVersion >= protocol.BenchVersionV18 {
+				weights[i] = toolCategoryWeightV18(c.name)
+			}
 			optional[i] = v13OptionalFamilies[c.name]
 		}
 		order = sampledCategoryOrderV13(toolCategoryMixRNG(seed, benchVersion, n), n, weights, optional)
@@ -2369,16 +2372,24 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 	if benchVersion >= protocol.BenchVersionV10 {
 		applyV10StateDependentActions(seed, benchVersion, cases)
 	}
+	if benchVersion >= protocol.BenchVersionV18 {
+		// v18 installs the connector families before the v13 passes, so the
+		// full-run restraint and discovery quotas of the 50-case half cannot
+		// squeeze them (on v17 connector_linked_result_usage, 0.909, was one
+		// of the few tool families below 0.95). The v13 passes never convert
+		// a connector case (IsV16ConnectorCase).
+		applyV16ConnectorBenchForVersion(seed, benchVersion, cases)
+	}
 	if benchVersion >= protocol.BenchVersionV13 {
 		applyV13ToolBenchForVersion(seed, benchVersion, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV13 && !v13SkipToolSemantics {
 		applyV13ToolSemantics(seed, benchVersion, cases)
 	}
-	if benchVersion >= protocol.BenchVersionV16 {
+	if benchVersion >= protocol.BenchVersionV16 && benchVersion < protocol.BenchVersionV18 {
 		// v16: linked-connector, unlinked-probe and named-product cases
 		// (datagen/v16.go), after every v13 pass so none of their slots move.
-		applyV16ConnectorBench(seed, cases)
+		applyV16ConnectorBenchForVersion(seed, benchVersion, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV8 && benchVersion < protocol.BenchVersionV13 {
 		// v13 moves writing noise to the artifact surface pass (gen/v13_surface.go),

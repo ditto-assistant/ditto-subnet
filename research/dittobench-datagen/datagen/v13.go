@@ -79,6 +79,33 @@ type v13Quota struct {
 	Unexpected int
 }
 
+// V18DecoyCases is the decoy-correct quota of the v18 50-case full half.
+const V18DecoyCases = 2
+
+// V18FullToolHalf is the dueling full-profile tool case count from which
+// bench v18 installs the full-run v13 family quotas.
+const V18FullToolHalf = 50
+
+// v13QuotaForVersion is v13QuotaFor under an explicit contract. From v18 the
+// 50-case full dueling half carries the full-run discovery and unexpected
+// quotas (6 and 4) instead of the medium ones its case count selects (3 and
+// 2): on v17 the tool half averaged 0.98-1.00 for every agent, so it is
+// spent on the harder families rather than on more tokens. The decoy-correct
+// share drops from 10% (5) to V18DecoyCases: every decoy_*_result_usage
+// family averaged 1.000 across the 27 v17 production rows, and the 50-case
+// half cannot hold the full restraint quota and all 11 connector cases
+// otherwise.
+func v13QuotaForVersion(n, benchVersion int) v13Quota {
+	q := v13QuotaFor(n)
+	if benchVersion >= protocol.BenchVersionV18 && n >= V18FullToolHalf && n < 80 {
+		q.Discovery, q.Unexpected, q.Decoy = 6, 4, V18DecoyCases
+		if total := q.Discovery + q.Decoy + q.Unexpected; total > n {
+			return v13QuotaFor(n)
+		}
+	}
+	return q
+}
+
 func v13QuotaFor(n int) v13Quota {
 	q := v13Quota{Decoy: (n*v13DecoyCorrectShareBps + 9_999) / 10_000}
 	switch {
@@ -146,6 +173,28 @@ func toolCategoryWeightV13(name string) int {
 		return 2
 	}
 	return toolCategoryWeightV7(name)
+}
+
+// toolCategoryWeightV18 re-fits the residual draw of the base family mix to
+// the 27 v17 production rows (2026-11-07; mean over all rows / top three
+// agents). The one-per-family floor is unchanged, so this moves only the
+// residual slots of the 50-case half:
+//
+//   - entity_lookup_chain 0.889 / 0.667 (9 cases) was the weakest base tool
+//     family: 2 -> 8.
+//   - link_chain_result_usage 1.000 (22), web_recovery_result_usage 1.000
+//     (22) and stale_context_web 0.981 (44) no longer separate anyone: 6, 5
+//     and 8 -> 2.
+//
+// Families with no v17 evidence keep their v7 weight.
+func toolCategoryWeightV18(name string) int {
+	switch name {
+	case "entity_lookup_chain":
+		return 8
+	case "link_chain_result_usage", "web_recovery_result_usage", "stale_context_web":
+		return 2
+	}
+	return toolCategoryWeightV13(name)
 }
 
 // sampledCategoryOrderV13 is sampledCategoryOrderV9 without a mandatory family
@@ -284,7 +333,7 @@ func applyV13ToolBenchForVersion(seed int64, benchVersion int, cases []protocol.
 	if len(cases) == 0 {
 		return
 	}
-	quota := v13QuotaFor(len(cases))
+	quota := v13QuotaForVersion(len(cases), benchVersion)
 	inventory := catalog.InventoryForSeed(seed)
 	decoys := catalog.DecoysForSeed(seed)
 	coined := toolexec.CoinedForSeed(seed)
@@ -448,6 +497,10 @@ func v13ConversionOrderForVersion(seed int64, benchVersion int, cases []protocol
 		if IsDecoyCorrect(tc.Category) || v13DiscoveryFamily(tc.Category) || tc.Category == "recipe_apply" || tc.Category == "world_theme_discover_set" {
 			return false
 		}
+		if IsV16ConnectorCase(tc.Category) {
+			// Only reachable from v18, whose connector pass runs first.
+			return false
+		}
 		for _, pair := range tc.PrerequisitePairs {
 			if worldPairs[pair.PairID] {
 				return false
@@ -471,6 +524,13 @@ func v13ConversionOrderForVersion(seed int64, benchVersion int, cases []protocol
 	}
 	if len(cases) < 80 {
 		allowSingletons = true
+	}
+	if benchVersion >= protocol.BenchVersionV18 {
+		// v18 spends world duplicates on the full-run restraint, discovery and
+		// connector quotas: every world tool family averaged 1.000 across the
+		// 27 v17 production rows (world_contact_research_email 0.981), so one
+		// case per world family keeps coverage without holding slots.
+		worldFloor = 1
 	}
 	var ordinary, singletons, world, routed []int
 	remaining := map[string]int{}

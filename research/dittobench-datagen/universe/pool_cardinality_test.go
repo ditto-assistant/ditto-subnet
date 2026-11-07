@@ -213,6 +213,7 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"V13Families":          poolcanary.Schema,
 			"V14Families":          poolcanary.Schema,
 			"v14RoleFamilies":      poolcanary.Schema,
+			"v18BusinessFamilies":  poolcanary.Schema,
 			"v14RoleSlots":         poolcanary.Internal,
 			"V13PersonalDomains":   poolcanary.Schema,
 			"V13AbsenceFamilies":   poolcanary.Schema,
@@ -239,6 +240,7 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"v14ChainPersonalDomains":  poolcanary.Internal,
 			"V14FamilyMix":             poolcanary.Internal, // SN-351 admission ledger; never rendered
 			"storyDropRotation":        poolcanary.Internal,
+			"v18SaturatedStoryOracles": poolcanary.Internal, // oracle kinds dropped first; never rendered
 			"tripAliasForbidden":       poolcanary.Internal, // words a trip alias must avoid
 
 			// v8..v12 world lists that v13 draws only to hold the rng phase

@@ -149,6 +149,12 @@ func v16Email(seed int64, index int) string {
 // then singletons), minus every case a later or earlier pass depends on and
 // every case that carries prerequisite pairs (a replacement would drop them).
 func v16ConnectorSlots(seed int64, cases []protocol.ToolCase) []int {
+	return v16ConnectorSlotsForVersion(seed, protocol.BenchVersionV16, cases)
+}
+
+// v16ConnectorSlotsForVersion is v16ConnectorSlots under an explicit contract:
+// from v18 the conversion order reads the v18 world floor.
+func v16ConnectorSlotsForVersion(seed int64, benchVersion int, cases []protocol.ToolCase) []int {
 	referenced := map[string]bool{}
 	for _, tc := range cases {
 		if tc.RunAfterCaseID != "" {
@@ -162,7 +168,11 @@ func v16ConnectorSlots(seed int64, cases []protocol.ToolCase) []int {
 	}
 	var out []int
 	used := map[int]bool{}
-	for _, i := range v13ConversionOrderForVersion(seed, protocol.BenchVersionV16, cases) {
+	orderVersion := protocol.BenchVersionV16
+	if benchVersion >= protocol.BenchVersionV18 {
+		orderVersion = benchVersion
+	}
+	for _, i := range v13ConversionOrderForVersion(seed, orderVersion, cases) {
 		if free(cases[i]) {
 			out = append(out, i)
 			used[i] = true
@@ -196,12 +206,18 @@ func v16ConnectorSlots(seed int64, cases []protocol.ToolCase) []int {
 // applyV16ConnectorBench installs the v16 connector families. It runs after
 // every v13 pass, so it never replaces a case those passes built or depend on.
 func applyV16ConnectorBench(seed int64, cases []protocol.ToolCase) {
+	applyV16ConnectorBenchForVersion(seed, protocol.BenchVersionV16, cases)
+}
+
+// applyV16ConnectorBenchForVersion is applyV16ConnectorBench under an explicit
+// contract; only the slot order depends on the version.
+func applyV16ConnectorBenchForVersion(seed int64, benchVersion int, cases []protocol.ToolCase) {
 	quota := V16ConnectorQuotaFor(len(cases))
 	if quota.Total() == 0 {
 		return
 	}
 	plan := catalog.V16ConnectorPlanForSeed(seed)
-	slots := v16ConnectorSlots(seed, cases)
+	slots := v16ConnectorSlotsForVersion(seed, benchVersion, cases)
 	// The published quota fits every full and medium seed swept by
 	// TestV16ConnectorQuotaHoldsAcrossSeeds (at least 13 and 8 free slots for
 	// 11 and 5). Generation never fails on a short seed: the quota is trimmed

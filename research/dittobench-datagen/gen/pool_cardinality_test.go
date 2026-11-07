@@ -32,7 +32,13 @@ import (
 // to profilesV16 (same run-size envelope, same generator path). The v17 contract
 // change is entirely in the scorer's priced-cost-v2 gate; no data-generation
 // pool is touched.
-const poolLedgerAuditedThrough = protocol.BenchVersionV17
+//
+// v18 audit: gen/ adds the v18 envelope (profilesV18, configuration, and
+// v18AbstentionQuotas, keyed by slot size); universe/ adds the business family
+// bank v18BusinessFamilies (a published case-structure enum, a subset of
+// V14Families) and v18SaturatedStoryOracles (oracle kinds dropped first, never
+// rendered). Every v18 case still draws its values from the v14 pools.
+const poolLedgerAuditedThrough = protocol.BenchVersionV18
 
 // TestPoolCardinalityCanary is the generator's pool-cardinality canary (#492,
 // item 4). A closed pool small enough to copy into a dispatch table is a
@@ -135,6 +141,8 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"profilesV13":              poolcanary.Internal,
 			"profilesV16":              poolcanary.Internal,
 			"v16AbstentionQuotas":      poolcanary.Keyed,
+			"profilesV18":              poolcanary.Internal,
+			"v18AbstentionQuotas":      poolcanary.Keyed,
 			"V13SlotOrder":             poolcanary.Internal,
 			"v13InterimSlots":          poolcanary.Internal,
 			"v13InterimGenerators":     poolcanary.Internal,
