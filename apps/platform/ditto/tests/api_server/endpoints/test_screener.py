@@ -13487,6 +13487,12 @@ class TestQuarantineReviewContext:
         assert replay.status_code == 200
         assert replay.json()["idempotent"] is True
         assert replay.json()["previous_reason"] == original
+        wrong_replay = await client.post(
+            url,
+            headers=_ADMIN_HEADERS,
+            json={**body, "expected_reason": "unrelated reason"},
+        )
+        assert wrong_replay.status_code == 409
 
         async with session_maker() as session:
             agent = await session.get(Agent, agent_id)
@@ -13511,6 +13517,54 @@ class TestQuarantineReviewContext:
             ).all()
             assert [(row.actor, row.reason) for row in history] == [
                 ("platform:v13-confirmed-violation", original),
+                ("backroom:test-user", corrected),
+            ]
+
+        # A later non-reject event must not cause the existing amendment to be
+        # seeded again as though it had been made by the original decision maker.
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningQuarantineResolution(
+                    resolution_id=uuid4(),
+                    quarantine_id=quarantine_id,
+                    resolution="release",
+                    reason="An unrelated later history event",
+                    actor="backroom:other-user",
+                    created_at=datetime.now(UTC),
+                )
+            )
+        third = "I4: a different corrected public reason"
+        to_third = await client.post(
+            url,
+            headers=_ADMIN_HEADERS,
+            json={**body, "expected_reason": corrected, "reason": third},
+        )
+        assert to_third.status_code == 200, to_third.text
+        back_to_corrected = await client.post(
+            url,
+            headers=_ADMIN_HEADERS,
+            json={**body, "expected_reason": third},
+        )
+        assert back_to_corrected.status_code == 200, back_to_corrected.text
+        replay_original = await client.post(url, headers=_ADMIN_HEADERS, json=body)
+        assert replay_original.status_code == 200, replay_original.text
+        assert replay_original.json()["previous_reason"] == original
+        assert replay_original.json()["idempotent"] is True
+        async with session_maker() as session:
+            history = (
+                await session.scalars(
+                    select(ScreeningQuarantineResolution)
+                    .where(
+                        ScreeningQuarantineResolution.quarantine_id == quarantine_id,
+                        ScreeningQuarantineResolution.resolution == "reject",
+                    )
+                    .order_by(ScreeningQuarantineResolution.created_at)
+                )
+            ).all()
+            assert [(row.actor, row.reason) for row in history] == [
+                ("platform:v13-confirmed-violation", original),
+                ("backroom:test-user", corrected),
+                ("backroom:test-user", third),
                 ("backroom:test-user", corrected),
             ]
 

@@ -4229,12 +4229,20 @@ async def amend_quarantine_reject_reason(
 
         if current == payload.reason:
             history = await _resolution_history(session, [quarantine.quarantine_id])
-            replaced = [
-                event.reason
+            reasons = [
+                event.reason or ""
                 for event in history.get(quarantine.quarantine_id, [])
-                if event.resolution == "reject" and event.reason != payload.reason
+                if event.resolution == "reject"
             ]
-            return _amended(replaced[-1] if replaced else current, idempotent=True)
+            # The same reason may have been amended more than once. Confirm
+            # this request's transition was recorded rather than attributing
+            # an unrelated later transition to the replay.
+            if payload.expected_reason != current and not any(
+                previous == payload.expected_reason and amended == current
+                for previous, amended in zip(reasons, reasons[1:], strict=False)
+            ):
+                raise HTTPException(status_code=409, detail="public reason changed")
+            return _amended(payload.expected_reason, idempotent=True)
         if current != payload.expected_reason:
             raise HTTPException(status_code=409, detail="public reason changed")
         attempt = await session.scalar(
@@ -4247,15 +4255,20 @@ async def amend_quarantine_reject_reason(
         )
         if attempt is None:
             raise HTTPException(status_code=409, detail="screening attempt changed")
-        latest = await session.scalar(
-            select(ScreeningQuarantineResolution)
-            .where(ScreeningQuarantineResolution.quarantine_id == quarantine_id)
-            .order_by(ScreeningQuarantineResolution.created_at.desc())
-            .limit(1)
+        recorded_query = select(ScreeningQuarantineResolution).where(
+            ScreeningQuarantineResolution.quarantine_id == quarantine_id,
+            ScreeningQuarantineResolution.resolution == "reject",
+            ScreeningQuarantineResolution.reason == current,
         )
-        # Seed the decision being amended unless history already ends with it:
-        # an automated reject writes no row, including one after a rescreen.
-        if latest is None or latest.resolution != "reject" or latest.reason != current:
+        # A prior screening decision with the same text is not evidence for
+        # this decision. A later non-reject event does not erase evidence that
+        # the current decision or an amendment was already recorded.
+        if quarantine.resolved_at is not None:
+            recorded_query = recorded_query.where(
+                ScreeningQuarantineResolution.created_at >= quarantine.resolved_at
+            )
+        recorded = await session.scalar(recorded_query.limit(1))
+        if recorded is None:
             session.add(
                 ScreeningQuarantineResolution(
                     resolution_id=uuid4(),
