@@ -194,15 +194,17 @@ from ditto.db.queries.benchmark_admission import (
     benchmark_admission_predicate,
 )
 from ditto.db.queries.benchmark_rollout import (
-    DatasetPin as RolloutDatasetPin,
-)
-from ditto.db.queries.benchmark_rollout import (
+    SCORING_QUORUM,
     active_bench_version,
     append_rollout_member,
     historical_rescore_cohort,
     maybe_activate_rollout,
     open_rollout,
 )
+from ditto.db.queries.benchmark_rollout import (
+    DatasetPin as RolloutDatasetPin,
+)
+from ditto.db.queries.dueling_season_window import season_scope_predicate
 from ditto.db.queries.moderation_audit import (
     ACTION_PROVENANCE_REVOCATION,
     ACTION_REJECT,
@@ -2059,6 +2061,63 @@ async def get_quarantine_context(
     return await _build_quarantine_context(quarantine_id, session)
 
 
+async def _released_agent_status(
+    session: AsyncSession, *, quarantine: ScreeningQuarantine, agent: Agent
+) -> AgentStatus:
+    """The status a ``release`` returns this submission to.
+
+    A release normally sends the submission to ``evaluating`` so validators can
+    score it. That is wrong for a scored or live agent whose *policy rescreen*
+    was quarantined: it already holds a complete active-era quorum, so no lane
+    will lease it again (the canonical lane sees a full quorum, the rollout
+    cohort lane leases only scored/live members) and it is stranded in
+    ``evaluating`` forever. Bench v17's priority member crown-v210 sat there
+    after its v14 rescreen quarantine was released on 2026-11-06.
+
+    The quarantine's opening review event recorded the status it displaced. When
+    that was ``scored`` or ``live`` and the active-era quorum is still complete,
+    restore it, exactly as the copy court restores ``previous_status`` on a
+    clear. Anything else (a first-time screen, an ATH hold, a quorum that no
+    longer counts) keeps the conservative ``evaluating`` default.
+    """
+    displaced = await session.scalar(
+        select(ScreeningReviewEvent.prior_agent_status)
+        .where(
+            ScreeningReviewEvent.quarantine_id == quarantine.quarantine_id,
+            ScreeningReviewEvent.resolution_id.is_(None),
+        )
+        .order_by(
+            ScreeningReviewEvent.created_at.asc(),
+            ScreeningReviewEvent.event_id.asc(),
+        )
+        .limit(1)
+    )
+    if displaced not in (AgentStatus.SCORED.value, AgentStatus.LIVE.value):
+        return AgentStatus.EVALUATING
+    bench_version = await active_bench_version(session)
+    # Count the quorum the ranked ledger counts: distinct validators, and on a
+    # dueling version (v16+) only rows inside the current season window, so
+    # an expired season's scores cannot restore a ledger position.
+    active_scores = int(
+        await session.scalar(
+            select(func.count(func.distinct(Score.validator_hotkey))).where(
+                Score.agent_id == agent.agent_id,
+                Score.bench_version == bench_version,
+                await season_scope_predicate(
+                    session,
+                    version_column=Score.bench_version,
+                    season_column=Score.dueling_season_id,
+                    bench_versions=(bench_version,),
+                ),
+            )
+        )
+        or 0
+    )
+    if active_scores < SCORING_QUORUM:
+        return AgentStatus.EVALUATING
+    return AgentStatus(displaced)
+
+
 @router.post(
     "/screening-quarantines/{quarantine_id}/resolve",
     response_model=AdminQuarantineResolveResponse,
@@ -2103,7 +2162,26 @@ async def resolve_quarantine(
             and agent.status == AgentStatus.REJECTED
             and payload.resolution == "release"
         )
-        if not is_initial_resolution and not is_rejection_correction:
+        # A release that stranded a scored rescreen in ``evaluating`` (before
+        # ``_released_agent_status`` existed) can be re-applied once to restore
+        # the displaced status. Fenced to exactly that state: the release is
+        # already the ruling, the agent is still waiting in ``evaluating``, and
+        # the restored status differs, so a second call is refused.
+        is_release_correction = (
+            quarantine.status == "resolved"
+            and quarantine.resolution == "release"
+            and agent.status == AgentStatus.EVALUATING
+            and payload.resolution == "release"
+            and await _released_agent_status(
+                session, quarantine=quarantine, agent=agent
+            )
+            != AgentStatus.EVALUATING
+        )
+        if (
+            not is_initial_resolution
+            and not is_rejection_correction
+            and not is_release_correction
+        ):
             if is_terminal_quarantine_ghost(quarantine, agent):
                 # This route has no exact identity fence, so it never closes
                 # an orphan behind a terminal ruling (ditto-subnet#2038).
@@ -2120,11 +2198,14 @@ async def resolve_quarantine(
             )
 
         prior_agent_status = agent.status
-        target = {
-            "release": AgentStatus.EVALUATING,
-            "rescreen": AgentStatus.SCREENING_FAILED,
-            "reject": AgentStatus.REJECTED,
-        }[payload.resolution]
+        target = (
+            await _released_agent_status(session, quarantine=quarantine, agent=agent)
+            if payload.resolution == "release"
+            else {
+                "rescreen": AgentStatus.SCREENING_FAILED,
+                "reject": AgentStatus.REJECTED,
+            }[payload.resolution]
+        )
         agent.status = target
         agent.screening_reason = payload.reason
         # The miner-facing pair must agree: ``screening_reason`` is the
@@ -2433,7 +2514,9 @@ async def release_verified_v13_court_clear(
         if not already_released:
             prior_agent_status = agent.status
             now = datetime.now(UTC)
-            agent.status = AgentStatus.EVALUATING
+            agent.status = await _released_agent_status(
+                session, quarantine=quarantine, agent=agent
+            )
             agent.screening_reason = payload.reason
             agent.screening_reason_code = resolution_reason_code("release")
             await _apply_dataset(session, agent, new_dataset)
@@ -2658,7 +2741,9 @@ async def resolve_screening_dispute(
         ):
             assert quarantine is not None
             prior_agent_status = agent.status
-            agent.status = AgentStatus.EVALUATING
+            agent.status = await _released_agent_status(
+                session, quarantine=quarantine, agent=agent
+            )
             agent.screening_reason = payload.reason
             agent.screening_reason_code = resolution_reason_code("release")
             await _apply_dataset(session, agent, new_dataset)
