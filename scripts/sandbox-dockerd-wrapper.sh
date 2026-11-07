@@ -31,11 +31,18 @@ check_hooks() {
   done
 }
 
+check_forward_hook() {
+  rules="$(iptables -w 5 -S FORWARD)" || return 1
+  first="$(printf '%s\n' "$rules" | sed -n '2p')"
+  [ "$first" = '-A FORWARD -j DOCKER-USER' ]
+}
+
 healthcheck() {
   test -f "$ready" || return 1
   select_saved_backend || return 1
   docker info >/dev/null 2>&1 || return 1
   check_hooks || return 1
+  check_forward_hook || return 1
   actual_filter="$(iptables -w 5 -S DITTO-SANDBOX-EGRESS)" || return 1
   expected_filter="$(cat "$filter_snapshot")" || return 1
   [ -n "$actual_filter" ] && [ "$actual_filter" = "$expected_filter" ] || return 1
@@ -117,14 +124,14 @@ ensure_sandbox_network() {
     bridge_name="$(docker network inspect --format '{{index .Options "com.docker.network.bridge.name"}}' ditto-sandbox)" || return 1
     if [ "$network_driver" != bridge ] || [ "$bridge_name" != ditto-sandbox0 ]; then
       printf 'unsafe ditto-sandbox network: driver=%s bridge=%s\n' "$network_driver" "$bridge_name" >&2
-      return 1
+      return 2
     fi
   else
     docker network create --driver bridge --opt com.docker.network.bridge.name=ditto-sandbox0 \
       --opt com.docker.network.bridge.enable_icc=false ditto-sandbox >/dev/null || return 1
   fi
   gateway="$(docker network inspect --format '{{(index .IPAM.Config 0).Gateway}}' ditto-sandbox)" || return 1
-  case "$gateway" in '' | *[!0-9a-fA-F:.]*) return 1 ;; esac
+  case "$gateway" in '' | *[!0-9a-fA-F:.]*) return 2 ;; esac
 }
 
 fail_closed() {
@@ -138,7 +145,18 @@ maintain_sandbox() {
   until docker info >/dev/null 2>&1; do sleep 1; done
   while :; do
     install_firewall || fail_closed
-    ensure_sandbox_network || fail_closed
+    attempts=0
+    while :; do
+      if ensure_sandbox_network; then break; else network_status=$?; fi
+      # An unsafe network is fatal immediately. API errors get a short,
+      # bounded retry while readiness is withheld.
+      rm -f "$ready"
+      [ "$network_status" -ne 2 ] || fail_closed
+      attempts=$((attempts + 1))
+      [ "$attempts" -lt 3 ] || fail_closed
+      sleep 2
+    done
+    check_forward_hook || fail_closed
     iptables -w 5 -S DITTO-SANDBOX-EGRESS > "$filter_snapshot" || fail_closed
     iptables -w 5 -t nat -S DITTO-OPENROUTER-SHIM > "$nat_snapshot" || fail_closed
     touch "$ready" || fail_closed

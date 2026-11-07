@@ -20,6 +20,9 @@ for backend in nft legacy; do
     sleep 1
   done
   [ "$(docker exec "$name" cat /run/ditto-sandbox-firewall-backend)" = "$backend" ]
+  # Initial install and the worker's first reconcile have both completed.
+  # Chain declarations in iptables-restore must replace, not append, rules.
+  docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; [ "$(iptables -w 5 -S DITTO-SANDBOX-EGRESS | grep -c "^-A ")" -eq 6 ] && [ "$(iptables -w 5 -t nat -S DITTO-OPENROUTER-SHIM | grep -c "^-A ")" -eq 1 ]'
   docker save "$busybox" | docker exec -i "$name" docker load >/dev/null
   docker exec "$name" docker image inspect "$busybox" >/dev/null
   docker exec "$name" docker run --rm --pull=never --network ditto-sandbox "$busybox" true
@@ -31,6 +34,12 @@ for backend in nft legacy; do
   if docker exec "$name" docker run --rm --pull=never --network ditto-sandbox "$busybox" nc -z -w 2 "$gateway" 19999; then
     printf '%s: non-allowlisted port was reachable\n' "$backend" >&2; exit 1
   fi
+  docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck
+  docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -I FORWARD 1 -j ACCEPT'
+  if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then
+    printf '%s: health missed displaced forward hook\n' "$backend" >&2; exit 1
+  fi
+  docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -D FORWARD 1'
   docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck
   docker exec "$name" sh -c 'case "$(cat /run/ditto-sandbox-firewall-backend)" in legacy) export PATH="/usr/local/sbin/.iptables-legacy:$PATH";; esac; iptables -w 5 -I INPUT 1 -j ACCEPT'
   if docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck; then
@@ -82,3 +91,43 @@ while [ "$(docker inspect -f '{{.State.Running}}' "$name")" = true ]; do
 done
 docker logs "$name" 2>&1 | grep -q 'sandbox firewall initialization or reconciliation failed; stopping daemon'
 printf 'startup barrier and reconciliation failure checked\n'
+docker rm -f "$name" >/dev/null
+
+# Intercept only network-list calls: one transient error must recover, while
+# persistent errors must stop dockerd after the bounded retry budget.
+cat > "$tmp/docker" <<'EOF'
+#!/bin/sh
+if [ "${1-}" = network ] && [ "${2-}" = ls ]; then
+  count=0
+  [ ! -f /run/test-network-attempts ] || count=$(cat /run/test-network-attempts)
+  count=$((count + 1))
+  printf '%s\n' "$count" > /run/test-network-attempts
+  if [ "$TEST_DOCKER_FAILURE" = always ] || [ "$count" -eq 1 ]; then
+    printf 'injected network-list failure %s\n' "$count" >&2
+    exit 42
+  fi
+fi
+exec /usr/local/bin/docker "$@"
+EOF
+chmod 755 "$tmp/docker"
+for mode in once always; do
+  docker run -d --name "$name" --privileged --network none -e DOCKER_TLS_CERTDIR= \
+    -e DOCKER_IPTABLES_LEGACY= -e TEST_DOCKER_FAILURE="$mode" \
+    -v "$tmp/docker:/usr/local/sbin/docker:ro" "$image" >/dev/null
+  n=0
+  while :; do
+    if [ "$mode" = once ] && docker exec "$name" /usr/local/sbin/dockerd --ditto-healthcheck >/dev/null 2>&1; then
+      [ "$(docker exec "$name" cat /run/test-network-attempts)" -eq 2 ]
+      break
+    fi
+    if [ "$(docker inspect -f '{{.State.Running}}' "$name")" = false ]; then
+      [ "$mode" = always ] || { docker logs "$name"; exit 1; }
+      docker logs "$name" 2>&1 | grep -q 'injected network-list failure 3'
+      docker logs "$name" 2>&1 | grep -q 'sandbox firewall initialization or reconciliation failed; stopping daemon'
+      break
+    fi
+    n=$((n + 1)); if [ "$n" -ge 90 ]; then docker logs "$name"; exit 1; fi; sleep 1
+  done
+  docker rm -f "$name" >/dev/null
+done
+printf 'transient and persistent Docker API failures checked\n'
