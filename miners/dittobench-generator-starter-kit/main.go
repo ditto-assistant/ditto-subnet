@@ -11,6 +11,7 @@
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -sandbox docker
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 16
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 17
+//	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 18
 //
 // and submit the source with `uv run ditto generator upload --dir .`.
 //
@@ -31,10 +32,12 @@ import (
 
 // Name and Version identify this generator in the pack's provenance.
 // Version 4 declares the newest grading policy the request accepts; version 5
-// adds policy 16; version 6 adds policy 17.
+// adds policy 16; version 6 adds policy 17; version 7 adds policy 18 and, in a
+// round that accepts it, the hardened families (families.Hardened). Below
+// policy 18 the pack is the version 6 pack apart from the version string.
 const (
 	Name    = "starter-kit"
-	Version = "6"
+	Version = "7"
 )
 
 // GradingBenchVersions are the pack grading policies the default families are
@@ -48,7 +51,11 @@ const (
 // dueling slice. Policy 15 is deliberately absent: a v15 round (window
 // {14, 15}) keeps getting the v14 pack this kit has always emitted there, so
 // the public default generator's live v15 columns do not move.
-var GradingBenchVersions = []int{challenge.GradingBenchVersion, challenge.GradingBenchVersionV14, challenge.GradingBenchVersionV16, challenge.GradingBenchVersionV17}
+//
+// Policy 18 also switches the case mix: the four default families were
+// trivial in every generator round, so a column the public default fills
+// scored nobody apart. A round that accepts 18 gets families.Hardened.
+var GradingBenchVersions = []int{challenge.GradingBenchVersion, challenge.GradingBenchVersionV14, challenge.GradingBenchVersionV16, challenge.GradingBenchVersionV17, challenge.GradingBenchVersionV18}
 
 // MaxCases is the most cases the starter pools can fill without reusing a
 // value (twenty rounds of the four default families). It matches the pack
@@ -67,17 +74,22 @@ func Generate(req challenge.GenerateRequest) (challenge.Pack, error) {
 	if req.Cases > MaxCases {
 		return challenge.Pack{}, fmt.Errorf("starter kit fills at most %d cases, request asks for %d", MaxCases, req.Cases)
 	}
+	policy := req.NewestAccepted(GradingBenchVersions)
+	mix := families.Default
+	if policy >= challenge.GradingBenchVersionV18 {
+		mix = families.Hardened
+	}
 	b := families.NewBuilder(req)
 	for i := 0; b.Len() < req.Cases; i++ {
-		round, family := i/len(families.Default), families.Default[i%len(families.Default)]
+		round, family := i/len(mix), mix[i%len(mix)]
 		b.Add(family(b, round))
 		// The filler pair closes a round only when both of its cases fit.
-		if i%len(families.Default) == len(families.Default)-1 && b.Len()+2 <= req.Cases {
+		if i%len(mix) == len(mix)-1 && b.Len()+2 <= req.Cases {
 			families.Filler(b)
 		}
 	}
 	pack := b.Pack(req, Name, Version)
-	pack.GradingBenchVersion = req.NewestAccepted(GradingBenchVersions)
+	pack.GradingBenchVersion = policy
 	return pack, nil
 }
 

@@ -151,7 +151,7 @@ func TestV13OutputIsUnchanged(t *testing.T) {
 		if err := run(bytes.NewReader(request(c.seed, c.cases).Bytes()), &out); err != nil {
 			t.Fatal(err)
 		}
-		v3 := bytes.Replace(out.Bytes(), []byte(`"version":"5"`), []byte(`"version":"3"`), 1)
+		v3 := bytes.Replace(out.Bytes(), []byte(`"version":"`+Version+`"`), []byte(`"version":"3"`), 1)
 		if got := challenge.Digest(v3); got != c.digest {
 			t.Fatalf("seed %d cases %d: v13 pack digest %s, want the version 3 pack %s", c.seed, c.cases, got, c.digest)
 		}
@@ -208,7 +208,7 @@ func TestV15OutputIsUnchanged(t *testing.T) {
 		if err := run(bytes.NewReader(req.Bytes()), &out); err != nil {
 			t.Fatal(err)
 		}
-		v4 := bytes.Replace(out.Bytes(), []byte(`"version":"5"`), []byte(`"version":"4"`), 1)
+		v4 := bytes.Replace(out.Bytes(), []byte(`"version":"`+Version+`"`), []byte(`"version":"4"`), 1)
 		if got := challenge.Digest(v4); got != c.digest {
 			t.Fatalf("seed %d cases %d: v15-round pack digest %s, want the version 4 pack %s", c.seed, c.cases, got, c.digest)
 		}
@@ -241,6 +241,81 @@ func TestV16RequestDeclaresV16(t *testing.T) {
 			again, _ := json.Marshal(legacy)
 			if !bytes.Equal(raw, again) {
 				t.Fatalf("seed %d cases %d: v16 pack differs from the v13 pack beyond its policy", seed, cases)
+			}
+		}
+	}
+}
+
+// A v17 round (window {16, 17}) keeps the default families: the pack equals
+// the v13 pack apart from its declared policy, exactly as in version 6.
+func TestV17RequestKeepsTheDefaultFamilies(t *testing.T) {
+	for _, seed := range []int64{1, 2, 3} {
+		req := challenge.NewGenerateRequestFor(challenge.SeedFromInt64(seed), testHotkey, 35, challenge.GradingBenchVersionV17)
+		pack, err := Generate(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pack.GradingBenchVersion != challenge.GradingBenchVersionV17 {
+			t.Fatalf("seed %d: declared v%d", seed, pack.GradingBenchVersion)
+		}
+		legacy, err := Generate(request(seed, 35))
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy.GradingBenchVersion = pack.GradingBenchVersion
+		a, _ := json.Marshal(pack)
+		b, _ := json.Marshal(legacy)
+		if !bytes.Equal(a, b) {
+			t.Fatalf("seed %d: v17 pack differs from the v13 pack beyond its policy", seed)
+		}
+	}
+}
+
+// A v18 round (window {17, 18}) gets the hardened families, declares policy
+// 18, and passes every rule at every size.
+func TestV18RequestUsesTheHardenedFamilies(t *testing.T) {
+	for _, seed := range []int64{1, 2, 3} {
+		for _, cases := range []int{challenge.MinCases, 35, MaxCases} {
+			req := challenge.NewGenerateRequestFor(challenge.SeedFromInt64(seed), testHotkey, cases, challenge.GradingBenchVersionV18)
+			pack, err := Generate(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pack.GradingBenchVersion != challenge.GradingBenchVersionV18 {
+				t.Fatalf("seed %d: declared v%d", seed, pack.GradingBenchVersion)
+			}
+			raw, _ := json.Marshal(pack)
+			if r := challenge.ValidateGenerated(raw, req); !r.Valid {
+				b, _ := json.MarshalIndent(r.Issues, "", "  ")
+				t.Fatalf("seed %d cases %d invalid at v18:\n%s", seed, cases, b)
+			}
+			prefixes := map[string]int{}
+			for _, c := range pack.Cases {
+				for _, p := range []string{"revert-", "custody-", "dated-status-", "membership-", "update-chain-", "two-hop-", "retracted-pref-", "scattered-list-"} {
+					if len(c.ID) >= len(p) && c.ID[:len(p)] == p {
+						prefixes[p]++
+					}
+				}
+			}
+			for _, old := range []string{"update-chain-", "two-hop-", "retracted-pref-", "scattered-list-"} {
+				if prefixes[old] != 0 {
+					t.Fatalf("seed %d cases %d: v18 pack carries default family %s", seed, cases, old)
+				}
+			}
+			if cases >= 35 && (prefixes["revert-"] == 0 || prefixes["custody-"] == 0 || prefixes["dated-status-"] == 0 || prefixes["membership-"] == 0) {
+				t.Fatalf("seed %d cases %d: hardened mix %v", seed, cases, prefixes)
+			}
+		}
+	}
+}
+
+// Every size fills at v18 without exhausting a pool.
+func TestV18EverySizeFills(t *testing.T) {
+	for seed := int64(1); seed <= 8; seed++ {
+		for cases := challenge.MinCases; cases <= MaxCases; cases++ {
+			req := challenge.NewGenerateRequestFor(challenge.SeedFromInt64(seed), testHotkey, cases, challenge.GradingBenchVersionV18)
+			if _, err := Generate(req); err != nil {
+				t.Fatal(err)
 			}
 		}
 	}
