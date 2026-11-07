@@ -12,8 +12,10 @@ requires-python = ">=3.11,<3.14"
 authors = [{ name = "heyDitto" }]
 dependencies = [
     # Patched floors apply to pip consumers as well as the uv lock.
+    "aiohttp>=3.14.4",
     "anyio>=4.14.2",
     "msgpack>=1.2.3",
+    "urllib3>=2.8.0",
     "bittensor>=10.2.1",
     "bittensor-pylon-client",
     "async-substrate-interface",
@@ -43,8 +45,10 @@ dependencies = [
 [tool.uv]
 # Security floors also cover dependencies pulled in through Bittensor and tooling.
 constraint-dependencies = [
+    "aiohttp>=3.14.4",
     "anyio>=4.14.2",
     "msgpack>=1.2.3",
+    "urllib3>=2.8.0",
 ]
 
 [tool.uv.sources]
