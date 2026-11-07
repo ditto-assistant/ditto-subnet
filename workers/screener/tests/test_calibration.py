@@ -221,3 +221,46 @@ def test_invalid_saved_posture_effort_is_rejected(
     args = _arguments()
     with pytest.raises(SystemExit, match="l1_reasoning_effort"):
         _apply_posture(args, _load_posture(str(path), None))
+
+
+def _parsed_args(monkeypatch: pytest.MonkeyPatch) -> object:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_l2_calibration.py",
+            "--manifest",
+            "m",
+            "--artifact-root",
+            "r",
+            "--api-key-file",
+            "k",
+            "--analyzer-image",
+            "i",
+            "--results-file",
+            "o",
+        ],
+    )
+    return _arguments()
+
+
+def test_mistyped_saved_posture_field_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _public_settings(tmp_path)
+    body = json.loads(path.read_text())
+    body["postures"][0]["max_cost_usd"] = "5"
+    path.write_text(json.dumps(body))
+    args = _parsed_args(monkeypatch)
+    with pytest.raises(SystemExit, match="max_cost_usd has an unexpected type"):
+        _apply_posture(args, _load_posture(str(path), None))  # type: ignore[arg-type]
+
+
+def test_report_only_canary_scope_is_refused(tmp_path: Path) -> None:
+    path = _public_settings(tmp_path)
+    body = json.loads(path.read_text())
+    body["postures"].append(
+        {"scope": "l2-report-canary", "role": "l2_report_canary", "mode": "enforce"}
+    )
+    path.write_text(json.dumps(body))
+    with pytest.raises(SystemExit, match="report-only canary"):
+        _load_posture(str(path), "l2-report-canary")

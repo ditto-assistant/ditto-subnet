@@ -91,14 +91,36 @@ def _load_posture(source: str, scope: str | None) -> dict[str, object]:
                 raise SystemExit(
                     f"scope {posture.get('scope')} inherits; pick the global posture"
                 )
+            # A report-only canary posture never decides a production screen,
+            # so replaying it cannot claim production parity.
+            if posture.get("role") == "l2_report_canary":
+                raise SystemExit(
+                    f"scope {posture.get('scope')} is a report-only canary, "
+                    "not a production posture"
+                )
             return posture
     raise SystemExit(f"no posture for scope {scope or 'global'}")
 
 
 def _apply_posture(args: argparse.Namespace, posture: dict[str, object]) -> None:
     for field, attribute in _POSTURE_ARGS.items():
-        if field in posture and posture[field] is not None:
-            setattr(args, attribute, posture[field])
+        if field not in posture or posture[field] is None:
+            continue
+        value = posture[field]
+        # Match the type of the argparse default so a malformed saved posture
+        # fails here with a clear message, not as a TypeError in a bound check.
+        current = getattr(args, attribute)
+        if isinstance(current, bool):
+            valid = isinstance(value, bool)
+        elif isinstance(current, int):
+            valid = isinstance(value, int) and not isinstance(value, bool)
+        elif isinstance(current, float):
+            valid = isinstance(value, int | float) and not isinstance(value, bool)
+        else:
+            valid = isinstance(value, str)
+        if not valid:
+            raise SystemExit(f"posture {field} has an unexpected type")
+        setattr(args, attribute, value)
     # A saved posture bypasses argparse choices; reject it at startup instead
     # of at the first provider request.
     for attribute in ("critic_reasoning_effort", "l1_reasoning_effort"):
