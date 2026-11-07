@@ -8,10 +8,12 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
-// v18KnownVectorWant is the v18 accuracy contract's datagen-half vector (seed
-// 123456789, full profile, public surface salt 0). docs/bench-versions.md and
-// the README publish the same string.
-const v18KnownVectorWant = "9029ef85b86ac44832ae5f3d7dadd0475cd14fb4271c00db2a6f78c8c5dc46d3"
+// v18KnownVectorWant is the v18 datagen-half vector (seed 123456789, full
+// profile, public surface salt 0) built from catalog.V18FixtureSnapshot, the
+// synthetic stand-in test binaries load. It is NOT the contract vector: that
+// is pinned with catalog.V18CatalogSnapshotSHA256 once the production
+// snapshot is. docs/bench-versions.md and the README publish the same string.
+const v18KnownVectorWant = "9a570c4e4c325a458df996c561ddf972424c568485a6af2b42c4979543f7eb91"
 
 // V18 is supported (promoted from staging by the cross-layer PR, with the epoch
 // and seed domain it was staged with, so this vector did not move). Every lever is gated on bench_version >= 18; the v2..v17 vectors

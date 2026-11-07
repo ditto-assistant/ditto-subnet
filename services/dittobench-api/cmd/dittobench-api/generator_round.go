@@ -200,7 +200,11 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 	// observed tool_endpoint. A harness built for the scored path rejects a
 	// /run without them. Each case's fixture is registered just before its
 	// /run, under the opaque ID the harness sees.
-	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
+	tools, err := catalog.CatalogForSeedChecked(req.BenchVersion, seed)
+	if err != nil {
+		s.store.Fail(runID, "tool catalog unavailable: "+err.Error())
+		return
+	}
 	toolSrv := toolexec.NewServer()
 	toolEndpoint, stopToolSrv, err := s.startToolServerForSession(
 		toolSrv, handle.SourceIP, req.BenchVersion, sessionID, concurrency,

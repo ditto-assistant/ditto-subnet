@@ -506,6 +506,13 @@ func supportedBenchVersions() []int {
 		if version < advertisedMinBenchVersion || version > advertisedMaxBenchVersion {
 			continue
 		}
+		if version >= protocol.BenchVersionV18 && catalog.V18SnapshotReady() != nil {
+			// v18 builds its tool menu from the pinned catalog snapshot
+			// (DITTOBENCH_V18_CATALOG_SNAPSHOT). A scorer without it cannot
+			// generate a v18 dataset, so it does not advertise v18 and
+			// Platform never leases it v18 work.
+			continue
+		}
 		if efficiency.ProductionReadyForVersion(version) {
 			versions = append(versions, version)
 		}
@@ -642,7 +649,12 @@ func (s *server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "seed must be an integer")
 			return
 		}
-		writeJSON(w, http.StatusOK, catalog.CatalogForSeed(benchVersion, seed))
+		tools, err := catalog.CatalogForSeedChecked(benchVersion, seed)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "this scorer has no catalog snapshot for bench_version "+strconv.Itoa(benchVersion))
+			return
+		}
+		writeJSON(w, http.StatusOK, tools)
 		return
 	}
 	writeJSON(w, http.StatusOK, catalog.CatalogForVersion(benchVersion))
