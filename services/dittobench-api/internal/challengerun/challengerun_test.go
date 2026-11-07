@@ -366,3 +366,35 @@ func TestExecuteIncludeRunsOnlySelectedCases(t *testing.T) {
 		t.Fatalf("harness saw %d runs and %d seeds, want 3 and %d", len(h.runs), len(h.seeded), len(p.MemoryWaves))
 	}
 }
+
+// A case Admit refuses never reaches the harness and comes back
+// BudgetExhausted with score 0, never as a fault.
+func TestExecuteSkipsCasesTheBudgetRefuses(t *testing.T) {
+	p := challenge.ReferencePack(4, testHotkey)
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	admitted := 0
+	out, err := Execute(context.Background(), srv.URL, p, Options{Nonce: []byte("pinned"), Concurrency: 1, Admit: func() bool {
+		admitted++
+		return admitted <= 2
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran, refused := 0, 0
+	for _, o := range out {
+		switch {
+		case o.BudgetExhausted:
+			refused++
+			if o.Score != 0 || o.Fault {
+				t.Fatalf("refused case %+v", o)
+			}
+		default:
+			ran++
+		}
+	}
+	if ran != 2 || refused != len(p.Cases)-2 {
+		t.Fatalf("ran %d refused %d of %d", ran, refused, len(p.Cases))
+	}
+}

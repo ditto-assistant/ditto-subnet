@@ -432,6 +432,10 @@
         "default": "",
         "type": "string"
       },
+      "budget_exhausted": {
+        "default": false,
+        "type": "boolean"
+      },
       "called": {
         "items": {
           "type": "string"
@@ -6537,6 +6541,10 @@
             "default": "",
             "type": "string"
           },
+          "budget_exhausted": {
+            "default": false,
+            "type": "boolean"
+          },
           "called": {
             "items": {
               "type": "string"
@@ -7227,6 +7235,10 @@
           "audit_half": {
             "default": "",
             "type": "string"
+          },
+          "budget_exhausted": {
+            "default": false,
+            "type": "boolean"
           },
           "called": {
             "items": {

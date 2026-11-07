@@ -19703,6 +19703,12 @@ export interface components {
              */
             audit_half: string;
             /**
+             * Budget Exhausted
+             * @description True when the run's priced-cost budget was spent before this case started (bench v18+): the case never ran and scores 0. The harness's own spend, never an infrastructure failure.
+             * @default false
+             */
+            budget_exhausted: boolean;
+            /**
              * Called
              * @description Tool names the agent called.
              */
