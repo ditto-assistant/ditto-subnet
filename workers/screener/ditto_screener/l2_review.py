@@ -7992,6 +7992,23 @@ def _cost(
     cached_input_tokens: int = 0,
     model: str | None = None,
 ) -> float:
+    if model == "openai/gpt-6.1-sol" or (model or "").startswith("openai/gpt-6.1-sol-"):
+        # OpenRouter 2026-11-03: standard Sol 6.1 is $2/$10 per million with
+        # $0.10 cached input, and $4/$15 ($0.20 cached) once one request
+        # reaches 272k prompt tokens. Use the OpenAI Fast (priority) ceiling of
+        # each tier, $4/$20 and $8/$30, when exact reported cost is absent.
+        uncached = max(0, input_tokens - cached_input_tokens)
+        if input_tokens >= 272_000:
+            return (
+                uncached * 8.0 / 1_000_000
+                + cached_input_tokens * 0.4 / 1_000_000
+                + output_tokens * 30.0 / 1_000_000
+            )
+        return (
+            uncached * 4.0 / 1_000_000
+            + cached_input_tokens * 0.2 / 1_000_000
+            + output_tokens * 20.0 / 1_000_000
+        )
     if model == "openai/gpt-6.1-terra" or (model or "").startswith(
         "openai/gpt-6.1-terra-"
     ):
