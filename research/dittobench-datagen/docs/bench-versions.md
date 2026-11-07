@@ -29,7 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
-| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17, plus a per-run cost budget ($1.00 per 350 cases; unrun cases score 0); the one token lever is a per-seed production catalog of 1,400-2,000 real tools (pinned snapshot). Known vector `461b731be85e2e1cd01379dcf47eb3ddfbddd7ae5cb25c7707dc42ce1b58a0be` (`TestV18KnownVector`). |
+| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17, plus a per-run cost budget ($1.00 per 350 cases; unrun cases score 0); the one token lever is a per-seed production catalog of 1,400-2,000 real tools (pinned snapshot). Known vector `892f5ede283c6f41593dbc7b4b8794fa66de17a5c8118a731cdce5f0aa3412a8` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1583,7 +1583,18 @@ contact changed. Each case is graded on the outcome (`grade.Encounter`):
 | `status_triage` | search_web, read_links, linked-app read and write | read the status page and the tracker; file the incident only if it is untracked | a duplicate when it is tracked; filing the resolved incident | incident id (and the existing ref when tracked) |
 
 Every value is coined per seed and case, so the shapes are public but no
-answer is. Encounters use only product tools and the seed's linked apps; an
+answer is. Each archetype also branches into variants that need one judgment
+the plain path skips: a notice for another plan, a correction that is itself
+superseded, a later edit still awaiting approval, an automatic job retry, a
+credit note, another region's incident that is already tracked. Prompts and
+results are composed from interchangeable phrasings and shuffled lines.
+`TestV18EncountersDefeatAPlainPathScript` is the negative control. A
+template script is told the archetype, the tools and the search terms, but
+has no judgment step. Run against the real mock endpoint and grader over 40
+seeds, it scores 1.000 on the plain variants (207 cases) and 0.049 on the
+trap variants (189 cases), 0.546 overall. A harness that reads the results,
+or asks the decision lane (Jev) to choose among the candidates it extracted,
+passes both. Encounters use only product tools and the seed's linked apps; an
 unlinked app, a snapshot toolkit or a wording decoy is still refused inside an
 encounter. The slots come from families every v17 agent saturated: v18 keeps
 the medium restraint, discovery and unexpected quotas its 50-case half selects
@@ -1698,7 +1709,7 @@ the v14 families stay `pending-panel` in `universe.V14FamilyMix`.
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV18KnownVector` pins
-`461b731be85e2e1cd01379dcf47eb3ddfbddd7ae5cb25c7707dc42ce1b58a0be`, with
+`892f5ede283c6f41593dbc7b4b8794fa66de17a5c8118a731cdce5f0aa3412a8`, with
 epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
 `datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
 

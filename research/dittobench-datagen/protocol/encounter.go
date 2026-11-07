@@ -31,6 +31,10 @@ type Encounter struct {
 	// Archetype names the scenario shape (the case category is
 	// "encounter_" + Archetype).
 	Archetype string
+	// Variant names the branch of the shape this case takes (a correction
+	// that is itself superseded, a later record still awaiting approval).
+	// Variants exist so a script written for the plain path fails.
+	Variant string
 	// Rules are the mock world. For each call the first rule whose Tool,
 	// Contains and MinPrior match answers it.
 	Rules []EncounterRule
@@ -59,6 +63,10 @@ type EncounterRule struct {
 	Result   string
 	// Error, when set, is served as a tool error instead of Result.
 	Error string
+	// Page marks a rule as one page of a multi-target read: a call that
+	// matches several Page rules of its tool gets all of their results,
+	// joined, so reading two links in one call reads both.
+	Page bool
 }
 
 // EncounterCall is a tool call identified by name and argument values.
@@ -197,7 +205,19 @@ func EncounterArgsMatch(raw json.RawMessage, values []string) bool {
 // this tool was already called in the case. matched=false means no rule
 // applied and the caller serves Fallback.
 func (e *Encounter) Respond(name string, args json.RawMessage, prior int) (result, errText string, matched bool) {
+	var pages []string
 	for _, rule := range e.Rules {
+		if rule.Page && rule.Tool == name && prior >= rule.MinPrior && EncounterArgsMatch(args, rule.Contains) {
+			pages = append(pages, rule.Result)
+		}
+	}
+	if len(pages) > 0 {
+		return strings.Join(pages, "\n\n---\n\n"), "", true
+	}
+	for _, rule := range e.Rules {
+		if rule.Page {
+			continue
+		}
 		if rule.Tool != name || prior < rule.MinPrior || !EncounterArgsMatch(args, rule.Contains) {
 			continue
 		}
