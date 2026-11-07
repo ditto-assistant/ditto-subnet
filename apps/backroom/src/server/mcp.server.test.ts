@@ -1061,7 +1061,8 @@ describe('Backroom MCP tools', () => {
       // it to 29,006; keep about 200 chars.
       // The three one-line dueling-season summaries measure 29,233; keep
       // about 200 chars.
-      29_450,
+      // The combined catalog's descriptions measure 29,531 characters.
+      29_600,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
