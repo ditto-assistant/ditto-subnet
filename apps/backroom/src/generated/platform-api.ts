@@ -53800,13 +53800,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScreenerPolicyActivationView"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -53831,13 +53831,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScoredPolicyRescreenView"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -53928,13 +53928,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["V13ReviewClockSchedule"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
