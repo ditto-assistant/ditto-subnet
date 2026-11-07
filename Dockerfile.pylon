@@ -6,7 +6,8 @@ FROM ${PYLON_BASE_IMAGE}
 # The base image's system and Certifi stores trust a root with compromised
 # intermediate CA keys, and its AnyIO uses IDNA 2003 for TLS hostname checks.
 # Pin the Debian security update and wheels rather than resolving mutable
-# versions during the validator-stack build.
+# versions during the validator-stack build. Bump the Debian pin when the
+# security suite supersedes it; an unavailable pin must fail the build closed.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates=20250419+deb13u1 \
     && rm -rf /var/lib/apt/lists/*

@@ -16,14 +16,12 @@ from anyio.streams.tls import TLSStream
 
 
 class TLSImageTests(unittest.IsolatedAsyncioTestCase):
-    def _check_ca_store(self, context: ssl.SSLContext):
-        fingerprints = {
-            hashlib.sha256(cert).hexdigest()
-            for cert in context.get_ca_certs(binary_form=True)
-        }
+    def _check_ca_fingerprints(self, fingerprints: set[str]):
         # Debian DSA-6572-1 removed both cross-signing trust anchors.
         affected = {
+            # emSign ECC Root CA - G3
             "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b",
+            # AAA Certificate Services
             "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4",
         }
         self.assertTrue(
@@ -35,6 +33,14 @@ class TLSImageTests(unittest.IsolatedAsyncioTestCase):
             fingerprints,
         )
 
+    def _check_ca_store(self, context: ssl.SSLContext):
+        self._check_ca_fingerprints(
+            {
+                hashlib.sha256(cert).hexdigest()
+                for cert in context.get_ca_certs(binary_form=True)
+            }
+        )
+
     def test_certifi_ca_store(self):
         self._check_ca_store(ssl.create_default_context(cafile=certifi.where()))
 
@@ -42,6 +48,14 @@ class TLSImageTests(unittest.IsolatedAsyncioTestCase):
         self._check_ca_store(ssl.create_default_context())
         self._check_ca_store(
             ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt")
+        )
+        # OpenSSL can also lazily load hashed symlinks from this directory.
+        self._check_ca_fingerprints(
+            {
+                hashlib.sha256(ssl.PEM_cert_to_DER_cert(path.read_text())).hexdigest()
+                for path in Path("/etc/ssl/certs").iterdir()
+                if path.is_symlink() and path.is_file()
+            }
         )
 
     async def _connect_with_certificate(self, dns_name: str) -> bytes:
