@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.467.1 (2026-11-08)
+
+### Bug Fixes
+
+- **validator**: Stop charging miners when our own scorer is down
+  ([#3401](https://github.com/ditto-assistant/ditto-subnet/pull/3401),
+  [`85dcab9`](https://github.com/ditto-assistant/ditto-subnet/commit/85dcab92ec7e2ac807a6eeaa3ae5eddc42736281))
+
+
 ## v0.467.0 (2026-11-08)
 
 ### Features
