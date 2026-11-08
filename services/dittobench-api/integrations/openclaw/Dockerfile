@@ -11,7 +11,8 @@ WORKDIR /opt/adapter
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY scripts ./scripts
-RUN node ./scripts/force-patched-transitives.mjs
+RUN node ./scripts/force-patched-transitives.mjs \
+    && npm cache clean --force
 
 COPY src ./src
 COPY plugin ./plugin
