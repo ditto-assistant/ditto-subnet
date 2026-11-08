@@ -112,6 +112,34 @@ outside the cohort.
 (`benchmark_rollout.py:1029`) abandons a rollout that has not yet taken
 authority.
 
+**The score window (this changes the window sizes in options B-D).** At bench
+v16 and later a score only counts if it belongs to the version's current or
+previous dueling season; older seasons' scores have expired from the ledger,
+the queue floors and rollout completion
+(`apps/platform/ditto/db/queries/dueling_season_window.py:65-90`, which takes
+the two newest opened seasons, shadow and authoritative as one sequence).
+Rollout completion reads exactly this window (`_desired_season_scope`,
+`benchmark_rollout.py:1786`, used by `rollout_cohort_score_complete` and the
+activation count). Authoritative seasons open about every 4.8 hours (notes), so
+a quorum row is good for about two seasons, roughly 5-10 hours. Two consequences
+follow from the code; neither has been measured:
+
+- The flip needs 5 owner families with 3/3 inside one two-season window. With
+  today's frozen cohort that is system-driven. In a no-carry-over design, an
+  early resubmitter's rows can expire before a late resubmitter reaches 3/3, so
+  a claim window of 24 hours (my first proposal) can fail to flip even when five
+  families all resubmit.
+- A shadow season's rotation cohort is the rollout's frozen members
+  (`_rotation_cohort`, `dueling_seasons.py:596`). With cohort 0 nothing is
+  rotated, so nothing renews an expiring row. I did not trace whether an empty
+  shadow cohort is accepted by `queue_dueling_rotation_retests`.
+
+The window can be widened by running longer seasons during a rollout
+(`rounds_per_season`, a generator-competition setting that the notes show as 1;
+I did not read its bounds) or by adding credited agents to the shadow rotation
+cohort. Option E below is the other way: line the credit window up with the
+season so the question does not arise.
+
 ## Fee credits today (verified)
 
 `evaluation_payments.credit_for_agent_id` is not a free-resubmission hook.
@@ -397,6 +425,187 @@ the flip rule in `_live_desired_authority_ready` and `maybe_activate_rollout`.
 flip rule, burn marker. Burn is fleet-gated and reversible by a settings
 revision.
 
+### E. Round-batched admission
+
+*What it is (Peyton's rule).* An upload made during round n is not leased until
+round n+1 opens. Every agent in a batch then enters the same season together.
+"Round" here is a dueling season (about 4.8 hours, `rounds_per_season` 1 per the
+notes). At a bump, the first season of the new version admits only agents
+uploaded or credited during the round before it. That is a no-carry-over rule
+with no cohort at all: a previous-version agent is in the new era only if its
+owner acted in that round.
+
+*Seeds and secrecy (verified).* There are two seed families and only one is a
+concern.
+
+- The season's **generator set** is drawn from a committed secret and the round's
+  open block and stays secret until the privacy window after the season closes
+  (`dueling_seasons.py` module docstring, steps 1, 3 and 5). It is not exposed to
+  entrants either way.
+- The season's **duel seeds** are the champion-anchored family. The anchor block
+  is `B_ready + 10` blocks, where `B_ready` is the latest block when the season
+  first asks for a seed, and the hash is read only once that block is finalized
+  (`CRN_ANCHOR_BLOCK_DELTA = 10`,
+  `apps/platform/ditto/api_server/confirmation_seed_anchor.py:1-30`,
+  `packages/ditto-screening-protocol/ditto_screening_protocol/crn_block_binding.py:21`).
+  They are public once pinned (`docs/title-duels.md` section 1), so an agent
+  uploaded after that could hard-code the season's cases. That is why
+  `docs/title-duels.md` section 4 leaves entrants on canonical seeds, and why
+  `season_duel_excluded_entrants` sits out agents created after an idle
+  extension (`apps/platform/ditto/api_server/season_duel.py:87-111`).
+
+*The freeze deadline.* The anchor is scoped to the most recently opened season
+(`anchor_season_key`, `confirmation_seed_anchor.py:134-145`), so a claim made
+before season n+1 opens creates its anchor row under season n. The anchor for
+n+1 therefore cannot exist before n+1's `opened_at`. An artifact whose upload
+row (`agent.created_at`) precedes `opened_at` of n+1 was fixed before the block
+that seeds n+1 existed, and cannot have been tuned to it. The artifact bytes are
+final earlier still: the upload stores to object storage before the database
+row is written (`apps/platform/CLAUDE.md`, upload ordering). The conservative
+rule is `created_at < opened_at(n+1)`. The true slack is the first claim's
+latency plus 10 blocks (about two minutes at 12-second blocks, a chain
+assumption I did not measure). Do not use the pin time as the deadline: a
+participant can read an unfinalized block hash from a node before Platform pins
+it.
+
+*The 20-minute fallback (verified).* Season-seeded rotation re-scores wait for
+the pin and, if the anchor is still unpinned 20 minutes after the season opened,
+take their canonical seed instead (`ROTATION_ANCHOR_GRACE`,
+`rotation_duel_seeds.py:71`, `:116-145`). A batch on shared seeds needs the same
+fallback. Entrants would then run private canonical seeds for that round: the
+quorum is never stranded, the saving is lost for the round, and nothing leaks.
+Two further limits from the same file: the lease path is protocol 35 and later
+(`CROWN_DUEL_PROTOCOL`), and shadow seasons of a desired version only ever use
+canonical seeds (`assign_rotation_seed`, `rotation_duel_seeds.py:148-160`).
+
+*A non-empty batch must rotate.* The idle extension keeps a season and its
+public seeds, so a batch admitted into an extended season would run on seeds that
+are already public. Criterion (c) already rotates whenever an agent was created
+since the season opened (`dueling_seasons.py:765-772`, `:714`), and the dry run
+found that criterion fires at all 12 boundaries it replayed. Batching keeps that
+rule and makes it an invariant.
+
+*Cost.* Batching by itself removes no run; every admitted agent still needs its
+quorum. The only saving is the one Peyton described: an entrant's quorum runs
+become the season's shared-seed duel runs, one run counting as level and duel
+evidence, as Phase B2 does for rotation (`docs/title-duels.md` section 4,
+`rotation_duel_seeds.py`). That removes the separate duel runs an entrant owes
+once it reaches the top five, not its quorum runs. Sizing with the observed
+numbers:
+
+| Quantity | Value | Basis |
+|---|---|---|
+| v17 canonical rows / confirmation rows | 153 / 126 | replay report |
+| v17 canonical rows of agents created after v16 started | 121 of 153 | replay report |
+| Duel runs an entrant owes on reaching the top five | 3 per season | `docs/title-duels.md` section 5 |
+| Strong entrants (reach the cohort) | about 2 a day | notes, UPDATE 3 |
+| Saving in steady state | about 6 runs a day, $6-8 | estimate: 2 × 3 × $1.0-1.4 |
+| Saving at a no-carry-over bump | $15-30 | estimate: 5-7 contenders, all entrants, × 3 × $1.0-1.4 |
+
+So the estimated saving is $15-30 per bump and $6-8 a day, small next to the
+$300-350 bump scale. The 121 canonical rows are still run. Shared seeds also buy
+less fairness than they sound like: seed difficulty explains at most about 3% of
+per-seed variance (`docs/title-duels.md`, Data), so the gain is the exposure rule
+and the clean pairing with the champion, not lower noise.
+
+*Rotations.* Batching does not reduce them. The idle-extension dry run found the
+rotation cohort changes at 9 of 12 boundaries and generator pins at 5 of 12, and
+no boundary passed both even with criterion (c) removed. Batching changes who
+enters a season, not whether one opens.
+
+*Miner experience.* Upload-to-first-score latency becomes the wait for the next
+boundary (mean about 2.4 hours, worst case 4.8 hours) plus up to 20 minutes for
+the anchor plus scoring. Today an upload can be leased at once (it is placed on
+the active era on arrival, `arrival_bench_version`, `benchmark_rollout.py:911`).
+Miners who iterate several times a day lose most. The counter-case is that every
+miner in a batch is scored on the same seeds in the same season.
+
+*Boundary gaming.* Uploading just before the freeze gives no seed advantage,
+since the seeds do not exist yet. The effect is a race to the boundary: an agent
+whose screening finishes after the boundary misses the batch and waits a whole
+round. With build-only admission (every admission since 2026-11-07, per
+`benchmark_admission.py:101`) screening should be short, but I have no measured
+duration. Publish the cutoff (boundary minus a screening margin) in
+`/upload/check` and the CLI instead of letting miners guess. A second exploit is
+a flood of low-quality uploads in one round to crowd the batch; the existing
+per-owner concurrency limit of 3 (`queue_policy_settings.py:124`) and the fee
+bound it.
+
+*Load.* The batch, the rotation re-tests and the anchor wait all start at the
+same boundary, so validator demand arrives in bursts. Rotation already does this;
+the batch adds to it. The notes show the single highest scoring hour of the
+window ($24, 19Z on 11-07) coincided with a boundary-like burst, but I did not
+attribute it.
+
+*What stays at upload time.* Everything done in `/upload/agent` before the
+database row: archive validation, payment or credit check, content, normalized
+source, prompt, structural fingerprints, the code embedding and the
+distinctive-item index (`upload.py:~810-900`), plus the screening build. The
+anti-copy gate and unreleased-copy sentinel read those. The additional check
+batching needs is that screening has passed by the boundary. Whether the
+similarity rail compares members of the same batch with each other I did not
+verify.
+
+*What miners see.* Today there is no state for "accepted, waiting for the next
+round". The agent would sit in `evaluating` with no ticket. Backroom and the
+dashboard need an explicit queued state with the boundary time, and the rollout
+telemetry (`rollout_state`, `benchmark_rollout.py:2707`) should list the batch
+count and who is still outstanding. Not designed in code; this is a gap to close
+before enabling.
+
+*Code.* A conjunct in queue admission (agent created before the current
+season's `opened_at`, for dueling versions;
+`validator_queue_admission_predicate`, `benchmark_admission.py:312`), the same
+rule in the lease path, entrant tickets taking the season seed (extend
+`assign_rotation_seed`, `rotation_duel_seeds.py:148`, from rotation tickets to
+fresh-submission tickets) and the mirrored confirmation record. I traced the
+rotation half only; where the fresh-submission lane promotes tickets was not
+traced. No protocol change beyond 35, which already carries `seed_scope: "season"`.
+
+*Rollout and rollback.* A Platform setting (`round_batched_admission`, proposed
+name), default off, applied at a season boundary. Turning it off returns to
+immediate leasing. Shared-seed entrants are a second switch, gated on
+`season_duel_rotation_seeds` being on.
+
+### E combined with C and D
+
+E makes the credit window a round, and that fixes the weakness the score-window
+constraint puts in C and D.
+
+- **Credit window.** A credit claimed in round n is scored in n+1. With
+  `rounds_per_season` 1, the honest window is two rounds: claims in the first two
+  rounds after rollout start are scored in seasons 2 and 3, and the flip must land
+  before season 4 opens, or the first batch's rows expire. A free-running 24-hour
+  claim window does not fit a 4.8-hour season; claims in hour 1 can expire before
+  claims in hour 20 finish.
+- **Flip rule.** Express the deadline in rounds, not hours: flip as soon as 5
+  families hold 3/3, or at the end of the second batch's season with at least
+  `min_agents_at_deadline`, otherwise hold the old board and escalate to the
+  operator. A third batch needs the first batch's rows renewed (rotation cohort
+  extended to credited agents) or a longer season.
+- **Hoarding.** Batching helps: the first batch is all agents that acted in the
+  first round, so a lone early resubmitter is no longer ahead of a contender who
+  needs a few hours to port. The grace period becomes the round itself, not a
+  separate timer. It does not stop a weak agent from being the only one in a batch
+  whose contenders were late; the minimum-agents rule and the burn still cover
+  that.
+- **Shared-seed saving.** At a bump the new version's first seasons are shadow
+  seasons, which only restore canonical seeds
+  (`rotation_duel_seeds.py:158`). The $15-30 saving therefore applies after
+  activation, not to the scoring that earns the flip, unless shadow seasons are
+  changed to allow it. Count the bump saving as lower than the table shows.
+- **Cost of the combination.** Same as C and D plus E's own: the saving is small
+  and the latency is real. The case for adding E to D is the window alignment and
+  the deterministic flip, not money.
+
+Combination summary:
+
+| | Credit window | Flip deadline | Entrant seeds | Added latency | Estimated extra saving |
+|---|---|---|---|---|---|
+| D alone | 24 h proposed, but must fit the 2-season score window | hours, free-running | canonical | none | none |
+| E alone | 1 round | none (no flip rule) | canonical or shared | up to 4.8 h per upload | $0 (shared-seed entrants $15-30 per bump, after activation) |
+| D + E | 1-2 rounds | end of round 2 or 3 | canonical during rollout, shared after | up to 4.8 h per upload | $15-30 per bump, $6-8 a day |
+
 ## Hoarding when the board is thin after a reset
 
 - **The first resubmitter profits only if the flip happens early.** The ledger
@@ -437,11 +646,16 @@ revision.
 | Rollback | settings | settings, supersede | settings, supersede | settings, supersede |
 
 The dollar rows are not independent: they share the unknown split of the $310.
-Treat "saving vs A" as an upper bound until Phase 0 reports.
+Treat "saving vs A" as an upper bound until Phase 0 reports. Option E and the
+combinations are in their own table above, because E changes timing and seed
+exposure rather than who is scored. In the columns here, C and D claim windows
+longer than two seasons are only safe if rotation also renews the early rows
+(see "The score window").
 
 ## Recommendation
 
-Build D in phases, and let Phase 0 decide whether to go past it. A is already
+Build D in phases, with E's round alignment for the credit window, and let
+Phase 0 decide whether to go past the flip rule. A is already
 applied and is the right default until the v18 numbers exist. B is not worth its
 churn: it moves cost to miners at several bumps a week, and the contenders who
 make up most of the cost will pay it and stay. C alone leaves the stall and the
@@ -453,6 +667,14 @@ If Phase 0 shows that the readmission part of the tax is under about $60 a bump,
 skip the credit machinery (Phase 2) and ship only the flip rule and the burn.
 They address emission integrity, which does not depend on the cost split.
 
+On E: use it for bumps, not as a standing rule, at least first. Its saving is
+about $15–30 per bump and $6–8 a day (estimate), it adds up to 4.8 hours of
+upload latency for every miner, and shared-seed entrant runs do not apply during
+the rollout because shadow seasons use canonical seeds. What it buys is the
+alignment of the credit window with the season, so the flip is deterministic,
+plus a clean exposure rule. If Peyton wants batching as a permanent rule, ship it
+after the flip rule and measure upload-to-first-score latency before and after.
+
 ## Phases
 
 0. **Measure, read-only, no code.** After the v18 rollout, split the pre-bump
@@ -460,15 +682,24 @@ They address emission integrity, which does not depend on the cost split.
    rotation re-scores, and everything else (queued submissions that first reached
    a queue in the era). Report the readmission part of the tax and the
    time from rollout start to flip. Report contender time to 3/3 for the
-   window sizing. This is the number the whole project hangs on.
-1. **Flip rule, Platform only.** Add `min_agents_at_deadline`, `flip_deadline_hours`
-   and a grace period to the queue policy as next-rollout fields. Extend
+   window sizing, and how many quorum rows of the v17 rollout had expired from
+   the two-season window by the flip. This is the number the whole project
+   hangs on.
+1. **Flip rule, Platform only.** Add `min_agents_at_deadline`, `flip_deadline_rounds`
+   and a grace period (in rounds) to the queue policy as next-rollout fields. Extend
    `_live_desired_authority_ready` and rollout state telemetry. Cohort
    stays at 8, so behaviour only differs when a flip stalls. Backroom shows the
    remaining condition (`bench_promotion_requirement`, `benchmark_rollout.py:2672`).
 2. **Opt-in credit, Platform and miner CLI.** Credit table and upload path,
    cohort mode `opt_in`, migration relaxing the three CHECK constraints so
    cohort 0 is storable. Default `cohort`. Preview-tested with minted accounts.
+   The credit window is counted in rounds and ends with the second batch (option
+   E), so it fits the two-season score window.
+2b. **Round-batched admission (E), Platform only.** The admission and lease
+   conjunct on `created_at < opened_at`, a visible queued state, the cutoff in
+   `/upload/check`, and non-empty batches always rotating. Entrant shared seeds
+   (the `assign_rotation_seed` extension) are a second, later switch after
+   activation. Default off.
 3. **Burn unfilled shares, protocol 36.** Both folds, parity fixtures, served
    marker, fleet gate, Backroom visibility. Default `disabled`.
 4. **Enable, in order, one at a time:** flip rule on a real bump, then `opt_in`
@@ -482,13 +713,19 @@ these fields changed, as `docs/title-duels.md` does.
 Phase 1, after it ships:
 
 ```json
-{"flip_deadline_hours": 36, "min_agents_at_deadline": 3}
+{"flip_deadline_rounds": 2, "min_agents_at_deadline": 3}
 ```
 
 Phase 2, for the bump that tests the credit:
 
 ```json
-{"readmission_mode": "opt_in", "resubmit_credit_window_hours": 24, "resubmit_credit_top_m": 10}
+{"readmission_mode": "opt_in", "resubmit_credit_window_rounds": 2, "resubmit_credit_top_m": 10}
+```
+
+Phase 2b, batching for that bump:
+
+```json
+{"round_batched_admission": true}
 ```
 
 Phase 3, after the fleet reports protocol 36:
@@ -503,13 +740,19 @@ effect at the next rollout start because they are frozen onto the rollout row.
 
 ## Decisions for Peyton
 
-1. **Credit window.** Proposal: 24 hours to claim. It must exceed contender time
-   to 3/3 (unmeasured) and cover a full waking day in the main miner time zones.
-   Bumps every 2–3 days leave room for one window and one settle period only.
-2. **Minimum agents to flip, and the deadline.** Proposal: flip at 5 families, or
-   at 36 hours with at least 3, with one 12-hour extension; below that,
-   hold the old board and page the operator. A minimum of 1 is only safe with the
-   burn on.
+1. **Credit window.** Revised proposal: two rounds (about 9.6 hours), not 24
+   hours. A quorum row is good for about two seasons, so a longer claim window can
+   expire early rows before the late ones finish, unless the season is lengthened
+   during the rollout or the shadow rotation cohort renews them. The cost is
+   miners in the wrong time zone. The window must also exceed contender time to
+   3/3, which is unmeasured. Bumps every 2–3 days leave room for one window and
+   one settle period only.
+2. **Minimum agents to flip, and the deadline.** Revised proposal: flip at 5
+   families, or at the end of the second batch's season with at least 3; below
+   that, hold the old board and page the operator. A minimum of 1 is only safe
+   with the burn on.
+2b. **Round-batched admission.** For bumps only, or for every upload. Bumps only
+   costs miners latency only during a rollout.
 3. **Whether the burn applies, and from when.** It also applies outside bumps
    whenever fewer than 5 miners are eligible. That is intended here, and it
    reduces miner income in any thin period. The 56% memory share (task
@@ -550,6 +793,15 @@ effect at the next rollout start because they are frozen onto the rollout row.
   same cross-layer audit.
 - **Longer stalls hurt harder miners.** Miners in other time zones lose the most to
   a short window.
+- **Score window expiry.** A flip that needs 5 families inside two seasons may
+  never complete if early rows expire. This applies to B, C and D as first
+  written and is the largest correction in this revision. It is inferred from
+  the window code and not measured on a real rollout.
+- **Batching latency and boundary races.** Up to 4.8 hours added per upload, and
+  an upload whose screening finishes after the boundary misses the batch.
+- **Shared-seed entrants.** Only safe if the freeze is `created_at < opened_at`
+  and every non-empty batch rotates. A bug that admits an agent into an extended
+  season puts it on public seeds.
 - **Revenue.** C and D forgo about $22 per resubmitter; B keeps it.
 
 ## Limits of this doc
@@ -563,6 +815,15 @@ Inferred, not run: the cost split between frozen-cohort members and other
 pre-bump agents, the savings estimates, previous-champion incumbency across a
 bump, the dethrone time, and that a byte-identical own resubmission passes the
 similarity rail.
+
+Option E adds: the freeze deadline and the 20-minute fallback are read from
+`confirmation_seed_anchor.py`, `rotation_duel_seeds.py` and `dueling_seasons.py`;
+the two-minute slack assumes 12-second blocks; I did not trace where the
+fresh-submission lane promotes tickets, whether an empty shadow rotation cohort
+is accepted, the `rounds_per_season` bounds, screening duration, or whether the
+similarity rail compares agents inside one batch. The $15-30 and $6-8 savings
+use the notes' "about 2 strong entrants a day" and the $1.0-1.4 run cost, and
+are estimates.
 
 Could not verify: any production state. The production read tool was denied in
 this session by the permission classifier, so no query was run. No setting was
