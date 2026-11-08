@@ -1,5 +1,6 @@
 """Enrolled-worker access to the isolated shadow conversation lane."""
 
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Body, HTTPException, Request
@@ -27,7 +28,7 @@ async def claim(
     request: Request,
     worker: ScreenerDep,
     session: SessionDep,
-    capability: ConversationClaimRequest | None = Body(None),
+    capability: Annotated[ConversationClaimRequest | None, Body()] = None,
 ) -> ConversationLaunch | None:
     if request.state.screener_node_status != "active":
         return None

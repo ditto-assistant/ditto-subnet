@@ -194,8 +194,8 @@ async def test_worker_claim_is_image_bound_and_result_requires_its_owner(
     claim = response.json()
     assert claim["instrument"] == INSTRUMENT_V2
     expires = datetime.fromisoformat(claim["expires_at"])
-    assert timedelta(minutes=124) < expires - datetime.now(UTC) <= timedelta(
-        minutes=125
+    assert (
+        timedelta(minutes=124) < expires - datetime.now(UTC) <= timedelta(minutes=125)
     )
     assert claim["screened_image_url"] == "https://artifacts.example/image.tar"
     report = report_for(claim)
@@ -692,8 +692,11 @@ async def test_stored_v1_report_still_lists_with_its_evidence(
             "spent_microusd": 54767,
             "unmetered": True,
             "failed": True,
-            "failure": {"code": "provider_http_error", "stage": "provider",
-                        "http_status": 429},
+            "failure": {
+                "code": "provider_http_error",
+                "stage": "provider",
+                "http_status": 429,
+            },
         },
     )
     for exchange in report["exchanges"][24:]:
@@ -707,7 +710,9 @@ async def test_stored_v1_report_still_lists_with_its_evidence(
         row.instrument = INSTRUMENT_V1
         row.report = report
     listing = (await client.get(BASE, headers=HEADERS)).json()
-    item = next(i for i in listing["items"] if i["assessment_id"] == claim["assessment_id"])
+    item = next(
+        i for i in listing["items"] if i["assessment_id"] == claim["assessment_id"]
+    )
     assert item["instrument"] == INSTRUMENT_V1 and item["judge_model"] == JUDGE_MODEL_V1
     assert item["spent_microusd"] == 6000 + 54767 and item["spent_is_upper_bound"]
     assert item["empty_answers"] == 6 and item["exchange_count"] == 30

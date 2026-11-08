@@ -225,7 +225,9 @@ def test_private_provider_failure_retains_reservation_and_first_status(
 
 
 @pytest.mark.parametrize("status", [429, 502, 503])
-def test_transient_provider_error_is_retried_then_metered(tmp_path, monkeypatch, status):
+def test_transient_provider_error_is_retried_then_metered(
+    tmp_path, monkeypatch, status
+):
     calls = []
 
     class Response:
@@ -295,7 +297,10 @@ def test_dispatches_overlap_up_to_the_slot_limit(tmp_path, monkeypatch):
 
         def read(self, _limit):
             return json.dumps(
-                {"choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0}}
+                {
+                    "choices": [],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0},
+                }
             ).encode()
 
     class Opener:

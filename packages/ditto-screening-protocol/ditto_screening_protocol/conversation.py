@@ -307,11 +307,7 @@ class ConversationReport(WireModel):
                 if self.instrument == INSTRUMENT_V1
                 else 1 <= self.judge_requests <= V2_MAX_JUDGE_REQUESTS
             )
-            if (
-                not requests_ok
-                or self.input_tokens == 0
-                or self.output_tokens == 0
-            ):
+            if not requests_ok or self.input_tokens == 0 or self.output_tokens == 0:
                 raise ValueError(
                     "completed assessment requires metered judge execution"
                 )

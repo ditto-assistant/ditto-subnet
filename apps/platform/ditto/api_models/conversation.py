@@ -20,7 +20,9 @@ class ConversationClaimRequest(WireModel):
     """What an enrolled worker can run. A worker that sends no body predates
     v2 and is offered nothing while Platform admits v2."""
 
-    instruments: Annotated[list[Annotated[str, Field(max_length=80)]], Field(max_length=8)]
+    instruments: Annotated[
+        list[Annotated[str, Field(max_length=80)]], Field(max_length=8)
+    ]
 
 
 class ConversationResultRequest(WireModel):

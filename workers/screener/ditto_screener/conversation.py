@@ -172,17 +172,18 @@ class JudgeMeter:
         usage = response.get("usage")
         if not isinstance(usage, dict):
             raise AssessmentFailure("judge_usage_unverifiable")
-        counts = {
-            key: usage.get(key) if usage.get(key) is not None else 0
-            for key in (
-                "input_tokens",
-                "output_tokens",
-                "cache_creation_input_tokens",
-                "cache_read_input_tokens",
-            )
-        }
-        if any(type(value) is not int or value < 0 for value in counts.values()):
-            raise AssessmentFailure("judge_usage_unverifiable")
+        counts: dict[str, int] = {}
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ):
+            value = usage.get(key)
+            value = 0 if value is None else value
+            if type(value) is not int or value < 0:
+                raise AssessmentFailure("judge_usage_unverifiable")
+            counts[key] = value
         prompt = (
             counts["input_tokens"]
             + counts["cache_creation_input_tokens"]
@@ -197,6 +198,7 @@ class JudgeMeter:
             + counts["output_tokens"] * self.limits.output_decimicros
         )
         billed = usage.get("cost")
+        basis: Literal["billed", "tariff"]
         if billed is None:
             actual, basis = tariff, "tariff"
         else:
@@ -394,7 +396,9 @@ class MemoryHarness:
         return exchange
 
 
-def judge_client(provider_key: str, *, timeout: float = 600) -> anthropic.AsyncAnthropic:
+def judge_client(
+    provider_key: str, *, timeout: float = 600
+) -> anthropic.AsyncAnthropic:
     """OpenRouter's Messages endpoint with the fleet's existing provider key.
 
     SDK retries are off: the examiner retries itself so every attempt is
@@ -454,7 +458,9 @@ def verify_grades(text: str, exchanges: Sequence[Exchange]) -> GradeSheet:
         if answer and (not probe.quote.strip() or probe.quote not in answer):
             problems.append(f"turn {probe.turn_id}: quote is not an exact substring")
         if not answer and (probe.score != 0 or probe.quote):
-            problems.append(f"turn {probe.turn_id}: empty reply needs score 0, no quote")
+            problems.append(
+                f"turn {probe.turn_id}: empty reply needs score 0, no quote"
+            )
     if problems:
         raise ValueError("; ".join(problems))
     return sheet

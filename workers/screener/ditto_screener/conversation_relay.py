@@ -415,7 +415,10 @@ class Relay:
                 with opener.open(request, timeout=PROVIDER_TIMEOUT_SECONDS) as response:
                     data = response.read(MAX_RESPONSE + 1)
             except HTTPError as exc:
-                if exc.code not in RETRYABLE_STATUSES or attempt + 1 == PROVIDER_ATTEMPTS:
+                if (
+                    exc.code not in RETRYABLE_STATUSES
+                    or attempt + 1 == PROVIDER_ATTEMPTS
+                ):
                     raise
                 delay = 2.0 ** (attempt + 1)
                 with contextlib.suppress(TypeError, ValueError):
