@@ -44,13 +44,23 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import MappingProxyType
-from typing import Annotated, Literal, NamedTuple
+from typing import Any, Annotated, Literal, NamedTuple
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 # Floor, not an enumeration: every later bench version carries the evidence.
 GATE_EVIDENCE_MIN_BENCH_VERSION = 13
+
+# Bench version from which a run carries the per-run cost budget
+# (``details.run_budget`` and the per-case ``budget_exhausted`` flag).
+RUN_BUDGET_MIN_BENCH_VERSION = 18
 
 # Version of the *stored* projection shape (``scores.gate_evidence``), so a
 # later reshaping can tell old rows apart without a data migration.
@@ -275,7 +285,10 @@ class RunBudgetSummary(BaseModel):
     The scorer stops admitting cases, in dispatch order, once the run's
     metered priced cost reaches ``budget_nano_usd``; every unrun case scores
     0 with ``budget_exhausted``. A spent budget is the harness's own cost,
-    never an infrastructure failure.
+    never an infrastructure failure. ``reason`` is ``run_budget_exhausted``,
+    or ``run_budget_meter_lost`` when the run's metering session disappeared
+    and the scorer stopped admitting cases (``spent_nano_usd_at_cutoff`` is
+    then the last successful reading).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -339,6 +352,17 @@ class StoredGateEvidence(BaseModel):
     flagged_case_count: _Count = 0
     flagged_case_share: _UnitFloat | None = None
     cases: list[StoredGateCase] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_run_budget(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        # A projection without a budget keeps the pre-v18 shape on every dump,
+        # including a round trip of a stored row, not just at build time.
+        dumped = handler(self)
+        if isinstance(dumped, dict) and dumped.get("run_budget") is None:
+            dumped.pop("run_budget", None)
+        return dumped
 
 
 _POSTURE_DESCRIPTION = (
@@ -452,6 +476,8 @@ class MinerGateNotesRun(BaseModel):
     twin_post_pass: TwinPostPassSummary | None = None
     inference_cost: InferenceCostSummary | None = None
     priced_cost: PricedCostSummary | None = None
+    run_budget: RunBudgetSummary | None = None
+    """Bench v18+: why unrun cases scored 0 (they carry no gate notes)."""
     catalog_suppression_rate: _UnitFloat | None = None
     flagged_case_count: _Count = 0
     flagged_case_share: _UnitFloat | None = None
