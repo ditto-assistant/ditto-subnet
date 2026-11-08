@@ -156,6 +156,7 @@ when you build.
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `src/baseline.rs`             | The agent you optimize. Wires DB + embedder + model + MLP predictor + reranker + harness.               |
 | `src/reranker.rs`             | ONNX cross-encoder reranker, the production rerank stage, 1:1.                                             |
+| `src/hybrid.rs`, `src/jev.rs` | Opt-in reference path (`DITTOBENCH_JEV_HYBRID=1`): the decision lane picks, the chat model writes.        |
 | `src/seed.rs`                 | Loads the bundled LongMemEval seed user into the vector DB.                                                 |
 | `src/protocol.rs`             | The validator HTTP wire contract (see `PROTOCOL.md`).                                                       |
 | `src/catalog.rs`              | The Ditto tool catalog presented per case.                                                                  |
@@ -663,6 +664,66 @@ drop it in. To run the exact production stack, use Vertex `text-embedding-005`
 
 - the production `model.bin`.
 
+## Reference: Jev decides, the chat model writes (opt-in)
+
+`src/hybrid.rs` is a second served path that uses the scored decision lane
+(`DITTOBENCH_DECISIONS_URL`, TypeSafe Jev System One) for every *decision* and
+the locked chat model only for *strings*. It is off by default: without
+`DITTOBENCH_JEV_HYBRID=1` the default path above is unchanged. It is a worked
+example, not a required library; the competition stays language- and
+architecture-agnostic.
+
+Why it pays at v18. A v18 seed offers about 1,450 tools, which is about 156k
+tokens of tool JSON. That is more than gpt-oss-20b's 131k context, so a harness that
+forwards the menu cannot complete a tool case. Validators price a chat prompt
+token at $0.07/M, decision-lane input at $0.042/M and decision output at
+zero. Picking from a long list is what the decision lane answers well, and
+it is the part that makes chat prompts large.
+
+| Step | Who | What |
+| --- | --- | --- |
+| Tool selection | Jev `choice` | The whole menu as `choice` questions of at most 255 options (name plus an 80-character description), packed under the 32k-per-question and 64k-per-request limits. The v18 menu fits one request. Each chunk carries a `none_of_these` option so chunks can be ranked against each other. |
+| Act or not | Jev `choice` + `noul` | A route (recall / act / remember / chat), "did the user ask for no change?" and "do the records show it is already done?". |
+| Notes | Jev `choice` | Which of 12 retrieved memories matter. 2 to 5 reach the prompt, not 24. |
+| Argument values | code + Jev `choice` | Code extracts URLs, emails, ids, amounts, dates and quoted or capitalised spans from the request and the notes. Jev picks one for each required string argument of the top tool. |
+| Next tool (multi-call) | Jev `choice` + `noul` | After each tool hop, the next tool from the first pass's top 24 and "is the request done?". |
+| Every string | gpt-oss-20b | Message bodies, titles, every tool call and the final reply, from a prompt holding the request, the chosen notes, the confirmed values and three to six tool schemas. There is no tool menu and no memory dump. |
+
+It stays inside the gates by construction:
+
+- The chat model emits every tool call. `tool_endpoint` only executes a call
+  that matches an unconsumed model emission, so Jev never places one.
+- Every chat call also offers the published semantic top-3 (the catalog-present
+  safe harbor). Restraint stays the model's choice even when Jev says "no
+  action".
+- Every emitted call is executed, and the served text is the model's own.
+- Suggested values come from the request, `/seed` records and served tool
+  results, which are the sources `answer_in_prompt` exempts.
+
+Knobs (environment):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DITTOBENCH_JEV_HYBRID` | unset | `1` turns the path on. |
+| `DITTOBENCH_JEV_MENU` | `full` | `grouped` asks about toolkits (name prefixes) first, then only the tools of the top 5 toolkits. It reads about a fifth of the decision tokens, at some recall risk. |
+| `DITTOBENCH_JEV_OFFER_K` | `3` | Tools Jev hands the chat model, before the safe-harbor top-3. |
+| `DITTOBENCH_JEV_NOTES` | `5` | Most memory notes in a prompt. |
+| `DITTOBENCH_JEV_DESC_CHARS` | `80` | Description characters Jev reads per tool. |
+| `DITTOBENCH_DECISIONS_URL` | validator-set | Set by the sandbox on bench 15+. Without it the path falls back to code-only (semantic top-k) selection. |
+| `DITTOBENCH_DECISIONS_API_KEY`, `DITTOBENCH_DECISIONS_MODEL` | unset, `typesafe/jev-1.14` | Only for pointing the client at a provider directly. The canonical broker signs the call and forces its own pinned model. |
+| `DITTOBENCH_JEV_USAGE_LOG` | unset | JSONL with per-case chat and decision tokens, largest prompt and tools offered. |
+
+Rehearse it like the default path. With `DITTOBENCH_PROVIDER=openrouter` and
+`OPENROUTER_API_KEY`, the rehearsal's cost meter also fronts OpenRouter's
+System One route as a keyless `DITTOBENCH_DECISIONS_URL` and prices decision
+input tokens. The estimate it prints is then the whole priced cost:
+
+```bash
+DITTOBENCH_JEV_HYBRID=1 uv run ditto practice --bench-version 18 --run-size medium
+```
+
+The measured comparison against the default path is in [BASELINES.md](BASELINES.md).
+
 ## Changing the retrieval algorithm
 
 Retrieval is the main lever on your score, so this is worth being clear about:
@@ -771,7 +832,8 @@ produces a container serving that protocol on :8080.
 > POST a System One body (`{"state": ..., "questions": {...}}`) there to ask the
 > locked decision model (TypeSafe Jev) choice or score questions, for example
 > which tools to offer the chat model. Use it however you like; it is metered
-> like chat. This kit accepts `bench_version` 15 on `/run`.
+> like chat. *Reference: Jev decides, the chat model writes* below is one
+> worked example (opt-in). This kit accepts `bench_version` 15 on `/run`.
 >
 > **Bench v16 (shipped, shadow only, not live)** is the dueling bench: a
 > canonical run becomes a 175-case datagen half (the v15 surface at a smaller

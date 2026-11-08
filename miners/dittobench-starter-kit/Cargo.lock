@@ -927,6 +927,7 @@ dependencies = [
  "clap",
  "ditto-harness",
  "dotenvy",
+ "futures",
  "ndarray 0.16.1",
  "ort",
  "rand 0.8.6",

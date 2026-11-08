@@ -1,0 +1,489 @@
+//! Client and question builders for the scored decision lane
+//! (`DITTOBENCH_DECISIONS_URL`, TypeSafe Jev System One).
+//!
+//! A System One request is `{model, state, questions: {<id>: {type,
+//! instructions, criteria}}}`; the answer is `{model, answers: {<id>: ...},
+//! usage: {input_tokens, output_tokens}}`. Three primitives matter here
+//! (<https://docs.typesafe.ai/primitives>):
+//!
+//! * `choice`: pick one of up to 255 named options. The answer carries the
+//!   full `probabilities` map, so one question also ranks every option.
+//! * `noul`: probability that a statement is true.
+//! * `score`: an ordinal scale (unused by the reference path).
+//!
+//! Limits: 32k tokens per question (state plus that question) and 64k per
+//! request (state plus every question). Validators price decision input at
+//! 42 nano-USD per token and decision output at 0, against 70 for a chat
+//! prompt token, so Jev reads are cheaper than chat reads but not free: send
+//! it short option text and a short state.
+//!
+//! The canonical broker signs the request with the run's grant and forces the
+//! pinned model, so a scored run needs no key. Local practice can point the
+//! URL at OpenRouter's System One route and set `DITTOBENCH_DECISIONS_API_KEY`
+//! (or let the rehearsal's cost meter front it keylessly).
+
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
+
+use serde_json::{json, Map, Value};
+
+/// Endpoint the sandbox receives on bench 15+.
+pub const DECISIONS_URL_ENV: &str = "DITTOBENCH_DECISIONS_URL";
+/// Optional bearer for local practice against a provider directly.
+pub const DECISIONS_API_KEY_ENV: &str = "DITTOBENCH_DECISIONS_API_KEY";
+/// Model id sent in the body. The canonical relay forces its own pin.
+pub const DECISIONS_MODEL_ENV: &str = "DITTOBENCH_DECISIONS_MODEL";
+pub const DEFAULT_DECISIONS_MODEL: &str = "typesafe/jev-1.14";
+
+/// System One `choice` accepts at most this many options.
+pub const MAX_CHOICE_OPTIONS: usize = 255;
+/// Per-question context limit (state plus one question), in tokens.
+pub const MAX_QUESTION_TOKENS: usize = 32_000;
+/// Per-request context limit (state plus all questions), in tokens.
+pub const MAX_REQUEST_TOKENS: usize = 64_000;
+/// Headroom kept under each limit, because [`estimate_tokens`] is an estimate.
+const LIMIT_HEADROOM: f64 = 0.85;
+
+/// Conservative token estimate for JSON text: about 3 characters per token,
+/// rounded up. Real tokenizers average closer to 4 on English, so this
+/// over-counts and keeps packed requests under the provider limit.
+pub fn estimate_tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(3)
+}
+
+fn estimate_value_tokens(value: &Value) -> usize {
+    estimate_tokens(&value.to_string())
+}
+
+/// One question in a System One request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Question {
+    pub id: String,
+    pub body: Value,
+}
+
+impl Question {
+    pub fn noul(id: impl Into<String>, instructions: impl Into<Value>) -> Question {
+        Question {
+            id: id.into(),
+            body: json!({"type": "noul", "instructions": instructions.into()}),
+        }
+    }
+
+    /// A `choice` over `options` (`name -> description`, in order). Panics in
+    /// debug builds when given more than [`MAX_CHOICE_OPTIONS`]; use
+    /// [`choice_chunks`] for longer lists.
+    pub fn choice(
+        id: impl Into<String>,
+        instructions: impl Into<Value>,
+        options: &[(String, String)],
+    ) -> Question {
+        debug_assert!(options.len() <= MAX_CHOICE_OPTIONS);
+        let mut criteria = Map::new();
+        for (name, description) in options {
+            let description = if description.is_empty() {
+                Value::Null
+            } else {
+                Value::String(description.clone())
+            };
+            criteria.insert(name.clone(), description);
+        }
+        Question {
+            id: id.into(),
+            body: json!({
+                "type": "choice",
+                "instructions": instructions.into(),
+                "criteria": criteria,
+            }),
+        }
+    }
+
+    pub fn estimated_tokens(&self) -> usize {
+        estimate_value_tokens(&self.body) + estimate_tokens(&self.id)
+    }
+}
+
+/// Splits `options` into `choice` questions `<prefix>0`, `<prefix>1`, ...
+/// Each holds at most `max_per_question` options (capped at 255) plus the
+/// `extra` options (a "none of these" reference, for example) and stays under
+/// the per-question token limit given `state_tokens`.
+pub fn choice_chunks(
+    prefix: &str,
+    instructions: &str,
+    options: &[(String, String)],
+    extra: &[(String, String)],
+    max_per_question: usize,
+    state_tokens: usize,
+) -> Vec<Question> {
+    let cap = max_per_question
+        .min(MAX_CHOICE_OPTIONS.saturating_sub(extra.len()))
+        .max(1);
+    let budget = ((MAX_QUESTION_TOKENS as f64) * LIMIT_HEADROOM) as usize;
+    let base = estimate_tokens(instructions) + 40 + state_tokens;
+    let extra_tokens: usize = extra
+        .iter()
+        .map(|(n, d)| estimate_tokens(n) + estimate_tokens(d) + 6)
+        .sum();
+    let mut out = Vec::new();
+    let mut current: Vec<(String, String)> = Vec::new();
+    let mut current_tokens = base + extra_tokens;
+    let flush = |current: &mut Vec<(String, String)>, out: &mut Vec<Question>| {
+        if current.is_empty() {
+            return;
+        }
+        let mut opts = std::mem::take(current);
+        opts.extend(extra.iter().cloned());
+        out.push(Question::choice(
+            format!("{prefix}{}", out.len()),
+            instructions,
+            &opts,
+        ));
+    };
+    for option in options {
+        let cost = estimate_tokens(&option.0) + estimate_tokens(&option.1) + 6;
+        if !current.is_empty() && (current.len() >= cap || current_tokens + cost > budget) {
+            flush(&mut current, &mut out);
+            current_tokens = base + extra_tokens;
+        }
+        current.push(option.clone());
+        current_tokens += cost;
+    }
+    flush(&mut current, &mut out);
+    out
+}
+
+/// Packs questions into as few requests as the per-request limit allows,
+/// keeping their order. With the v18 menu (about 1,450 tools) and 80-character
+/// descriptions every question fits one request.
+pub fn pack_requests(questions: Vec<Question>, state: &Value) -> Vec<Vec<Question>> {
+    let budget = ((MAX_REQUEST_TOKENS as f64) * LIMIT_HEADROOM) as usize;
+    let state_tokens = estimate_value_tokens(state);
+    let mut out: Vec<Vec<Question>> = Vec::new();
+    let mut current: Vec<Question> = Vec::new();
+    let mut used = state_tokens;
+    for question in questions {
+        let cost = question.estimated_tokens();
+        if !current.is_empty() && used + cost > budget {
+            out.push(std::mem::take(&mut current));
+            used = state_tokens;
+        }
+        used += cost;
+        current.push(question);
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// The answers of one or more System One requests, keyed by question id.
+#[derive(Debug, Clone, Default)]
+pub struct Answers {
+    pub answers: BTreeMap<String, Value>,
+}
+
+impl Answers {
+    pub fn merge(&mut self, raw: &Value) {
+        if let Some(map) = raw.as_object() {
+            for (id, answer) in map {
+                self.answers.insert(id.clone(), answer.clone());
+            }
+        }
+    }
+
+    /// `noul` probability for `id`, if answered.
+    pub fn noul(&self, id: &str) -> Option<f64> {
+        self.answers.get(id)?.get("noul")?.as_f64()
+    }
+
+    /// The chosen option of a `choice` question.
+    pub fn choice(&self, id: &str) -> Option<String> {
+        Some(self.answers.get(id)?.get("choice")?.as_str()?.to_string())
+    }
+
+    /// Every option of a `choice` question with its probability, best first.
+    pub fn ranked(&self, id: &str) -> Vec<(String, f64)> {
+        let Some(probs) = self
+            .answers
+            .get(id)
+            .and_then(|a| a.get("probabilities"))
+            .and_then(Value::as_object)
+        else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, f64)> = probs
+            .iter()
+            .filter_map(|(k, v)| v.as_f64().map(|p| (k.clone(), p)))
+            .collect();
+        out.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out
+    }
+
+    /// Ranks options across every chunk `<prefix>0..` of a chunked choice.
+    ///
+    /// Probabilities from different chunks are normalised within their own
+    /// chunk, so each chunk carries the same `reference` option ("none of
+    /// these"). An option's cross-chunk score is its probability divided by
+    /// its chunk's reference probability (floored), which puts a strong match
+    /// in a weak chunk above a near-tie in a strong one. The reference itself
+    /// is dropped.
+    pub fn ranked_chunks(&self, prefix: &str, reference: &str) -> Vec<(String, f64)> {
+        let mut out = Vec::new();
+        for (id, _) in self.answers.iter() {
+            let Some(suffix) = id.strip_prefix(prefix) else {
+                continue;
+            };
+            if suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let ranked = self.ranked(id);
+            let none = ranked
+                .iter()
+                .find(|(name, _)| name == reference)
+                .map(|(_, p)| *p)
+                .unwrap_or(0.0)
+                .max(1e-3);
+            for (name, p) in ranked {
+                if name != reference {
+                    out.push((name, p / none));
+                }
+            }
+        }
+        out.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out
+    }
+}
+
+/// Token and call counters for one case (or one run).
+#[derive(Debug, Default)]
+pub struct DecisionUsage {
+    pub calls: AtomicI64,
+    pub input_tokens: AtomicI64,
+    pub output_tokens: AtomicI64,
+    pub failures: AtomicI64,
+}
+
+impl DecisionUsage {
+    pub fn snapshot(&self) -> (i64, i64, i64, i64) {
+        (
+            self.calls.load(Ordering::Relaxed),
+            self.input_tokens.load(Ordering::Relaxed),
+            self.output_tokens.load(Ordering::Relaxed),
+            self.failures.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// HTTP client for the decision lane.
+#[derive(Clone)]
+pub struct DecisionClient {
+    http: reqwest::Client,
+    url: String,
+    model: String,
+    api_key: Option<String>,
+}
+
+impl DecisionClient {
+    pub fn new(
+        http: reqwest::Client,
+        url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: Option<String>,
+    ) -> DecisionClient {
+        DecisionClient {
+            http,
+            url: url.into(),
+            model: model.into(),
+            api_key: api_key.filter(|k| !k.trim().is_empty()),
+        }
+    }
+
+    /// The client the sandbox environment describes, or `None` when
+    /// `DITTOBENCH_DECISIONS_URL` is unset (bench < 15, confirmation runs, or
+    /// local practice without a decision endpoint).
+    pub fn from_env(http: reqwest::Client) -> Option<DecisionClient> {
+        let url = std::env::var(DECISIONS_URL_ENV).ok()?;
+        if url.trim().is_empty() {
+            return None;
+        }
+        let model = std::env::var(DECISIONS_MODEL_ENV)
+            .ok()
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_DECISIONS_MODEL.to_string());
+        Some(DecisionClient::new(
+            http,
+            url.trim(),
+            model,
+            std::env::var(DECISIONS_API_KEY_ENV).ok(),
+        ))
+    }
+
+    pub fn request_body(&self, state: &Value, questions: &[Question]) -> Value {
+        let mut map = Map::new();
+        for q in questions {
+            map.insert(q.id.clone(), q.body.clone());
+        }
+        json!({"model": self.model, "state": state, "questions": map})
+    }
+
+    /// Sends one request. Retries 429/5xx twice with a short backoff
+    /// (honouring `Retry-After`), then gives up and returns an error; callers
+    /// fall back to code-only decisions rather than failing the case.
+    pub async fn ask_one(
+        &self,
+        case_id: &str,
+        state: &Value,
+        questions: &[Question],
+        usage: &DecisionUsage,
+    ) -> anyhow::Result<Value> {
+        let body = self.request_body(state, questions);
+        let mut last_err = None;
+        for attempt in 0..3u64 {
+            let mut req = self
+                .http
+                .post(&self.url)
+                .timeout(Duration::from_secs(60))
+                .header("X-Ditto-Case-Id", case_id)
+                .json(&body);
+            if let Some(key) = &self.api_key {
+                req = req.bearer_auth(key);
+            }
+            match req.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let retry_after = resp
+                        .headers()
+                        .get("retry-after")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.trim().parse::<u64>().ok());
+                    let text = resp.text().await.unwrap_or_default();
+                    let parsed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                    // A metered call is priced from its usage even when it
+                    // answers an error, so count usage whenever it is present.
+                    if let Some(u) = parsed.get("usage") {
+                        usage.input_tokens.fetch_add(
+                            u.get("input_tokens").and_then(Value::as_i64).unwrap_or(0),
+                            Ordering::Relaxed,
+                        );
+                        usage.output_tokens.fetch_add(
+                            u.get("output_tokens").and_then(Value::as_i64).unwrap_or(0),
+                            Ordering::Relaxed,
+                        );
+                    }
+                    usage.calls.fetch_add(1, Ordering::Relaxed);
+                    if status.is_success() {
+                        return Ok(parsed.get("answers").cloned().unwrap_or(Value::Null));
+                    }
+                    last_err = Some(anyhow::anyhow!(
+                        "decision lane returned {status}: {}",
+                        text.chars().take(300).collect::<String>()
+                    ));
+                    if !(status.as_u16() == 429 || status.is_server_error()) {
+                        break;
+                    }
+                    let wait = retry_after.unwrap_or(1 + attempt).min(5);
+                    tokio::time::sleep(Duration::from_secs(wait)).await;
+                }
+                Err(err) => {
+                    last_err = Some(anyhow::anyhow!("decision lane unreachable: {err}"));
+                    tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
+                }
+            }
+        }
+        usage.failures.fetch_add(1, Ordering::Relaxed);
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("decision lane failed")))
+    }
+
+    /// Packs `questions` into as few requests as the limits allow, sends them
+    /// concurrently and merges the answers. Requests that fail are skipped:
+    /// their questions are simply unanswered.
+    pub async fn ask(
+        &self,
+        case_id: &str,
+        state: &Value,
+        questions: Vec<Question>,
+        usage: &DecisionUsage,
+    ) -> Answers {
+        let batches = pack_requests(questions, state);
+        let futures = batches
+            .iter()
+            .map(|batch| self.ask_one(case_id, state, batch, usage));
+        let mut answers = Answers::default();
+        for result in futures::future::join_all(futures).await {
+            match result {
+                Ok(raw) => answers.merge(&raw),
+                Err(err) => eprintln!("jev: {case_id}: {err}"),
+            }
+        }
+        answers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(n: usize, desc: &str) -> Vec<(String, String)> {
+        (0..n)
+            .map(|i| (format!("tool_{i}"), desc.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn chunks_respect_the_option_cap_and_carry_the_reference() {
+        let none = vec![("none_of_these".to_string(), "No listed tool fits.".to_string())];
+        let qs = choice_chunks("t", "Which tool?", &opts(1454, "short"), &none, 255, 20);
+        assert_eq!(qs.len(), 6, "1454 tools at 254 per chunk");
+        let mut seen = 0;
+        for (i, q) in qs.iter().enumerate() {
+            assert_eq!(q.id, format!("t{i}"));
+            let criteria = q.body["criteria"].as_object().unwrap();
+            assert!(criteria.len() <= MAX_CHOICE_OPTIONS);
+            assert!(criteria.contains_key("none_of_these"));
+            seen += criteria.len() - 1;
+            assert!(q.estimated_tokens() < MAX_QUESTION_TOKENS);
+        }
+        assert_eq!(seen, 1454, "every tool is asked about exactly once");
+    }
+
+    #[test]
+    fn chunks_split_on_tokens_before_the_option_cap() {
+        let long = "x".repeat(1200);
+        let qs = choice_chunks("t", "Which?", &opts(255, &long), &[], 255, 0);
+        assert!(qs.len() > 1);
+        for q in &qs {
+            assert!(q.estimated_tokens() <= MAX_QUESTION_TOKENS);
+        }
+    }
+
+    #[test]
+    fn the_v18_menu_packs_into_one_request() {
+        let none = vec![("none_of_these".to_string(), String::new())];
+        let desc = "d".repeat(80);
+        let state = json!({"request": "Kick off the weekly digest workflow."});
+        let qs = choice_chunks("t", "Which tool?", &opts(1454, &desc), &none, 255, 20);
+        let batches = pack_requests(qs, &state);
+        assert_eq!(batches.len(), 1, "names plus 80-char descriptions fit 64k");
+        let qs = choice_chunks("t", "Which tool?", &opts(4000, &desc), &none, 255, 20);
+        assert!(pack_requests(qs, &state).len() > 1, "a 4,000-tool menu splits");
+    }
+
+    #[test]
+    fn ranked_chunks_normalise_by_each_chunks_reference() {
+        let mut a = Answers::default();
+        a.merge(&json!({
+            "t0": {"type": "choice", "choice": "none_of_these",
+                   "probabilities": {"a": 0.2, "b": 0.05, "none_of_these": 0.75}},
+            "t1": {"type": "choice", "choice": "c",
+                   "probabilities": {"c": 0.5, "d": 0.45, "none_of_these": 0.05}},
+            "tx": {"type": "choice", "probabilities": {"zzz": 1.0}},
+        }));
+        let ranked: Vec<String> = a
+            .ranked_chunks("t", "none_of_these")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(ranked, vec!["c", "d", "a", "b"]);
+    }
+}

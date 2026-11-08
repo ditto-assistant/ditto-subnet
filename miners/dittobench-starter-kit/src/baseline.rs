@@ -1094,6 +1094,13 @@ impl Baseline {
             })
         });
 
+        // Opt-in reference path (`DITTOBENCH_JEV_HYBRID=1`, see `hybrid.rs`):
+        // the decision lane picks tools, notes and argument values and the
+        // chat model only writes. Unset, nothing below changes.
+        if crate::hybrid::enabled() {
+            return self.run_hybrid(req, user_id, exec_ctx, started).await;
+        }
+
         // Expose this case's tool catalog to the model so it can SELECT the
         // right tool (what the validator scores). Built per-run because the
         // catalog arrives on the wire. Memory tools are dropped here when the
@@ -1262,6 +1269,159 @@ impl Baseline {
             output_tokens,
             latency_ms,
         })
+    }
+
+    /// The `DITTOBENCH_JEV_HYBRID` path: same wire contract, same observed
+    /// tool execution, a different division of labour (see `hybrid.rs`).
+    async fn run_hybrid(
+        &self,
+        req: protocol::RunRequest,
+        user_id: String,
+        exec_ctx: Option<Arc<ToolExecCtx>>,
+        started: Instant,
+    ) -> anyhow::Result<protocol::RunResponse> {
+        let cfg = crate::hybrid::HybridConfig::from_env();
+        let decisions = crate::jev::DecisionClient::from_env(self.http.clone());
+        if decisions.is_none() {
+            eprintln!(
+                "{}: {} is unset; the hybrid path falls back to code-only tool selection",
+                req.case_id,
+                crate::jev::DECISIONS_URL_ENV
+            );
+        }
+
+        // Executable tools: catalog tools through the validator endpoint,
+        // memory tools against the local store.
+        let mut executable: HashMap<String, Arc<dyn Tool>> = HashMap::new();
+        for d in &req.tools {
+            if !MEMORY_TOOL_NAMES.contains(&d.name.as_str()) {
+                executable.insert(
+                    d.name.clone(),
+                    Arc::new(WireTool::from_wire(d, exec_ctx.clone())) as Arc<dyn Tool>,
+                );
+            }
+        }
+        let mut memory_tools = Vec::new();
+        for tool in ditto_harness::memory::memory_tools(Arc::clone(&self.store), &user_id, "") {
+            let tool: Arc<dyn Tool> = Arc::from(tool);
+            let name = tool.definition().name;
+            memory_tools.push(name.clone());
+            executable.insert(name, tool);
+        }
+
+        // A small candidate pool; Jev decides which few reach the prompt.
+        let (memories, _meta) = self
+            .store
+            .search_composite_memories(CompositeSearchRequest {
+                user_id: user_id.clone(),
+                query: req.user_input.clone(),
+                limit: 12,
+                candidate_pool_size: 100,
+                variant: Variant::V2,
+                ..CompositeSearchRequest::default()
+            })
+            .await
+            .map_err(|err| anyhow::anyhow!("hybrid retrieval: {err}"))?;
+        let notes = memories
+            .into_iter()
+            .filter_map(|m| {
+                let text = match (m.prompt.trim().is_empty(), m.response.trim().is_empty()) {
+                    (false, false) => format!("{} / {}", m.prompt.trim(), m.response.trim()),
+                    (false, true) => m.prompt.trim().to_string(),
+                    (true, false) => m.response.trim().to_string(),
+                    (true, true) => return None,
+                };
+                let date = m.timestamp.format("%Y-%m-%d");
+                Some(crate::hybrid::Note {
+                    text: format!("[{date}] {text}"),
+                })
+            })
+            .collect();
+
+        // One model per case so platform calls carry `X-Ditto-Case-Id`.
+        let case_model = match req
+            .inference_base_url
+            .as_ref()
+            .filter(|url| !url.trim().is_empty())
+        {
+            Some(base_url) => Self::build_case_model(base_url, &self.model_name, &req.case_id)?,
+            None => Arc::clone(&self.model),
+        };
+
+        let outcome = crate::hybrid::run_case(
+            case_model.as_ref(),
+            decisions.as_ref(),
+            &cfg,
+            crate::hybrid::HybridCase {
+                case_id: &req.case_id,
+                user_input: &req.user_input,
+                system_prompt: &req.system_prompt,
+                catalog: &req.tools,
+                executable,
+                memory_tools,
+                notes,
+            },
+        )
+        .await?;
+        crate::hybrid::log_usage(&req.case_id, &outcome);
+
+        if let Ok(path) = std::env::var(v13::COMPLETION_LOG_ENV) {
+            if !path.trim().is_empty() {
+                let entry = v13::completion_log_entry(
+                    &req,
+                    &user_id,
+                    outcome.tools_offered.clone(),
+                    &outcome.messages,
+                );
+                if let Err(err) = v13::append_completion_log(std::path::Path::new(&path), &entry) {
+                    eprintln!("completion log append failed for {}: {err}", req.case_id);
+                }
+            }
+        }
+
+        let answer_slot = v13::answer_slot_enabled();
+        let final_text = outcome.final_text;
+        Ok(protocol::RunResponse {
+            abstain: None,
+            answer: v13::answer_slot(&final_text, answer_slot),
+            final_text,
+            tool_calls: outcome.tool_calls,
+            blocked_tool_calls: exec_ctx
+                .as_ref()
+                .map(|ctx| {
+                    ctx.blocked_tool_calls
+                        .lock()
+                        .expect("blocked tool calls lock")
+                        .clone()
+                })
+                .unwrap_or_default(),
+            prompt_tokens: outcome.prompt_tokens,
+            output_tokens: outcome.output_tokens,
+            latency_ms: started.elapsed().as_millis() as i64,
+        })
+    }
+
+    /// The platform-broker model for one case, stamped with `X-Ditto-Case-Id`
+    /// so the relay attributes every completion to it under concurrency.
+    fn build_case_model(
+        base_url: &str,
+        model: &str,
+        case_id: &str,
+    ) -> anyhow::Result<Arc<dyn Model>> {
+        ChatModelConfig::OpenAiCompat {
+            base_url: base_url.to_string(),
+            api_key: "ticket".to_string(),
+            model: model.to_string(),
+        }
+        .build_with_params_and_headers(
+            ModelParams {
+                temperature: Some(0.0),
+                max_tokens: None,
+                seed: Some(42),
+            },
+            &[("X-Ditto-Case-Id", case_id)],
+        )
+        .map_err(|err| anyhow::anyhow!("build case model: {err}"))
     }
 }
 
