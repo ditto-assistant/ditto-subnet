@@ -801,3 +801,55 @@ async def test_an_unscored_canonical_is_never_repeated(
     await install(app, session_maker, monkeypatch, count=1)
     await failed_attempt(client)
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+
+
+async def test_failed_or_expired_repeats_do_not_use_up_samples(
+    app, client, session_maker, monkeypatch
+):
+    """Only completed repeats count toward the two samples; the attempt cap
+    still stops an agent whose repeats keep failing after four tries."""
+    await install(app, session_maker, monkeypatch, count=1)
+    canonical = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    result = await client.post(
+        BASE + f"/{canonical['assessment_id']}/result",
+        headers=HEADERS,
+        json={"lease_token": canonical["lease_token"], "report": report_for(canonical)},
+    )
+    assert result.status_code == 200, result.text
+    # First repeat expires unreported; second ends incomplete.
+    expired = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    async with session_maker() as db, db.begin():
+        row = await db.get(ConversationAssessment, UUID(expired["assessment_id"]))
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    _pass_idle_cooldown(monkeypatch)
+    failed = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    report = report_for(failed)
+    report.update(
+        status="incomplete",
+        error_code="harness_unresponsive",
+        grades=None,
+        exchanges=[],
+    )
+    assert (
+        await client.post(
+            BASE + f"/{failed['assessment_id']}/result",
+            headers=HEADERS,
+            json={"lease_token": failed["lease_token"], "report": report},
+        )
+    ).status_code == 200
+    # Neither counted: two more repeats are offered, then the attempt cap stops.
+    offered = []
+    for _ in range(3):
+        _pass_idle_cooldown(monkeypatch)
+        claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+        if claim is None:
+            break
+        offered.append(claim)
+        await client.post(
+            BASE + f"/{claim['assessment_id']}/result",
+            headers=HEADERS,
+            json={"lease_token": claim["lease_token"], "report": report_for(claim)},
+        )
+    assert len(offered) == 2  # Attempts 3 and 4 complete the two samples.
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    assert sorted(i["repeat_index"] for i in listing["items"]) == [0, 1, 2, 3, 4]

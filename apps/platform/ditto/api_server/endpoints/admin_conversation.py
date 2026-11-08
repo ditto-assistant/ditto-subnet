@@ -59,8 +59,12 @@ ADMISSION_RANK_LIMIT = 15
 the top five so a rank-change estimate covers more than the podium)."""
 REPEAT_RANK_LIMIT = 5
 REPEAT_SAMPLES = 2
-"""Fresh-seed repeats per leading artifact, after every eligible artifact has
-its canonical assessment: three judged samples measure judge noise."""
+"""Completed fresh-seed repeats per leading artifact, after every eligible
+artifact has its canonical assessment: three judged samples measure judge
+noise."""
+REPEAT_ATTEMPT_LIMIT = 4
+"""Repeat attempts per artifact, completed or not. Bounds what an agent whose
+repeats keep failing can cost (and stays inside the repeat_index 0-8 check)."""
 LEASE_MINUTES = 125
 """The worker derives its own deadlines from this lease: the conversation gets
 the lease minus a 15-minute judge window and 3 minutes for settlement and
@@ -553,14 +557,26 @@ async def _claim_assessment(
             or canonical.report.get("status") != "completed"
         ):
             continue  # Repeat only an artifact the judge has actually scored.
-        repeats = list(
-            await session.scalars(
-                select(ConversationAssessment.repeat_index).where(
+        repeat_rows = (
+            await session.execute(
+                select(
+                    ConversationAssessment.repeat_index,
+                    ConversationAssessment.report,
+                ).where(
                     *identity(agent, entry), ConversationAssessment.repeat_index > 0
                 )
             )
+        ).all()
+        repeats = [index for index, _ in repeat_rows]
+        completed = sum(
+            1
+            for _, report in repeat_rows
+            if report is not None and report.get("status") == "completed"
         )
-        if len(repeats) >= REPEAT_SAMPLES:
+        # A repeat that expired or ended incomplete is no noise sample, so it
+        # does not use up one of the two; the attempt cap still bounds spend on
+        # an agent whose repeats keep failing.
+        if completed >= REPEAT_SAMPLES or len(repeats) >= REPEAT_ATTEMPT_LIMIT:
             continue
         return await _admit(
             session,
