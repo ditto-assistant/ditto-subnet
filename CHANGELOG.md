@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.462.1 (2026-11-08)
+
+### Bug Fixes
+
+- **screener**: Route conversation gpt-oss-20b like the bench so a rate-limited provider falls back
+  ([#3434](https://github.com/ditto-assistant/ditto-subnet/pull/3434),
+  [`7545e87`](https://github.com/ditto-assistant/ditto-subnet/commit/7545e8741ce988d0d0ed23a2a81c1a49fb7769f7))
+
+
 ## v0.462.0 (2026-11-08)
 
 ### Features
