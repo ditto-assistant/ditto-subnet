@@ -478,6 +478,11 @@ func metamorphicGroupCounts(perCase []protocol.CaseScore) (consistent, total int
 // pair, or "" for everything else. Derived from the validator-internal question
 // id, so no new wire field is needed on the case itself and the harness sees
 // nothing new.
+// AuditHalfFor is a memory case's audit half (base or transform), empty when
+// the case is not in an audit pair: the family identity a budget-refused
+// case must keep.
+func AuditHalfFor(mc protocol.MemoryCase) string { return auditHalf(mc) }
+
 func auditHalf(mc protocol.MemoryCase) string {
 	if !isAuditGroup(mc.TwinGroup) {
 		return ""
