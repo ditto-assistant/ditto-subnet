@@ -2350,6 +2350,16 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertEqual(estimate["source"], "scorer")
         self.assertIn("cost factor:         0.6733", COST.format_estimate(estimate, 16))
         self.assertIsNone(COST.estimate(None, {"n": 350}))
+        # An unpriced scorer report still carries the scorer's budget verdict
+        # through the local-meter path.
+        meter = COST.CostMeter("http://127.0.0.1:9/v1", "sk-local")
+        report = {"n": 350, "details": {"priced_cost": {"result": "insufficient_evidence"},
+                  "run_budget": {"exhausted": True, "admitted_cases": 280}}}
+        fallback = COST.estimate(meter, report, 18)
+        assert fallback is not None
+        self.assertEqual(fallback["source"], "local_meter")
+        self.assertTrue(fallback["budget_exhausted"])
+        self.assertEqual(fallback["budget_stop_case"], 280)
         self.assertIn("not metered", COST.format_estimate(None, 16))
         self.assertIsNone(COST.meter_for_environment({"DITTOBENCH_PROVIDER": "openrouter"}))
         self.assertIsNone(COST.meter_for_environment({"DITTOBENCH_PROVIDER": "unknown"}))
