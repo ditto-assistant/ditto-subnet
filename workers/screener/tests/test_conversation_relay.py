@@ -558,3 +558,5 @@ def test_slot_wait_spends_the_caller_deadline_and_refunds(tmp_path, monkeypatch)
     usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
     assert not calls and usage.spent_microusd == 0 and not usage.unmetered
     assert usage.failure.code == "relay_busy"
+    raw = json.loads(relay.state_file.read_text())
+    assert raw["requests"] == 0 and raw["chat_dispatches"] == 0

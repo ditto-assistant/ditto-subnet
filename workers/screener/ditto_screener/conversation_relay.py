@@ -392,6 +392,11 @@ class Relay:
                     # Nothing billable was answered: no slot, or only error
                     # responses before the deadline. Return the hold.
                     self.spent -= reservation
+                    if str(exc) == "relay_busy":
+                        # Never reached the provider: it was not a dispatch.
+                        self.requests -= 1
+                        if not embed:
+                            self.chat_dispatches -= 1
                 else:
                     self.uncertain = True  # The reservation stays charged.
                 self.unmetered = self.uncertain or self.in_flight > 0
