@@ -149,8 +149,11 @@ func v13WorldMinimumForRun(n int) int {
 // ones it can reach (link_chain, multi_web, web_recovery, web_result) all
 // averaged 0.988-1.000 across the 27 v17 production rows. World, decoy,
 // unexpected and connector result-usage cases are never taken.
-func v18RestraintMayTakeResultUsage(benchVersion int, category string) bool {
-	return benchVersion >= protocol.BenchVersionV18 && !v9WorldFamily(category) && !IsDecoyCorrect(category) &&
+// n is the run's tool-case count: like every v18 tool override, it applies
+// only in the 50-79-case full dueling half.
+func v18RestraintMayTakeResultUsage(benchVersion, n int, category string) bool {
+	return benchVersion >= protocol.BenchVersionV18 && n >= V18FullToolHalf && n < 80 &&
+		!v9WorldFamily(category) && !IsDecoyCorrect(category) &&
 		!v13IsUnexpectedFamily(category) && !IsV16ConnectorCase(category)
 }
 
@@ -350,7 +353,10 @@ func applyV13RestraintGroupsForVersion(seed int64, benchVersion int, world unive
 	// planted-context families (stale_context_web, memory_fetch) whose compact
 	// local record is replaced by the restraint record.
 	for _, withPrerequisites := range []bool{false, true} {
-		if withPrerequisites && len(cases) < V9FullToolCaseCount && benchVersion < protocol.BenchVersionV18 {
+		// v18 opens this pass only for the 50-79-case full dueling half, the
+		// window every other v18 tool override is scoped to.
+		v18FullHalf := benchVersion >= protocol.BenchVersionV18 && len(cases) >= V18FullToolHalf && len(cases) < 80
+		if withPrerequisites && len(cases) < V9FullToolCaseCount && !v18FullHalf {
 			continue
 		}
 		for i, tc := range cases {
@@ -378,7 +384,7 @@ func applyV13RestraintGroupsForVersion(seed int64, benchVersion int, world unive
 				break
 			}
 			if seen[i] || i == worldCarrier || len(tc.PrerequisitePairs) != 0 ||
-				v13WorldDerived(tc.Category) || IsResultUsage(tc.Category) && !v18RestraintMayTakeResultUsage(benchVersion, tc.Category) ||
+				v13WorldDerived(tc.Category) || IsResultUsage(tc.Category) && !v18RestraintMayTakeResultUsage(benchVersion, len(cases), tc.Category) ||
 				v13MemoryRoutingCase(tc) || v9RetiredSourceFamily(tc.Category) || IsV13Restraint(tc.Category) || v13DiscoveryFamily(tc.Category) ||
 				IsV16ConnectorCase(tc.Category) {
 				continue

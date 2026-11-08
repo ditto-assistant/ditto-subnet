@@ -512,3 +512,34 @@ func TestTwinRelationConstantsMatchGenerator(t *testing.T) {
 		}
 	}
 }
+
+// Bench v18 run budget: a twin or counterfactual pair that lost a member to the
+// budget never answered as a group, so the post-pass must not rewrite the
+// survivors' scores from it (as for an undelivered member).
+func TestTwinPostPassSkipsGroupsWithABudgetRefusedMember(t *testing.T) {
+	perCase, evidence := runBank(alwaysAnswer)
+	refusedGroup := map[string]bool{}
+	for i := range perCase {
+		ev := evidence[perCase[i].CaseID]
+		refuse := perCase[i].CaseID == "m-base"
+		if ev.TwinGroup != "" && !refusedGroup[ev.TwinGroup] {
+			refusedGroup[ev.TwinGroup], refuse = true, true
+		}
+		if refuse {
+			perCase[i].BudgetExhausted, perCase[i].Score, perCase[i].Correct = true, 0, false
+		}
+	}
+	if len(refusedGroup) == 0 {
+		t.Fatal("the bank has no twin group to refuse a member of")
+	}
+	before := append([]protocol.CaseScore(nil), perCase...)
+	out, summary := ApplyV13TwinPostPass(perCase, evidence, enforceConfig(TwinRuleConcordantZero), protocol.RunBudgetMinBenchVersion)
+	for i := range out {
+		if out[i].Score != before[i].Score {
+			t.Fatalf("case %s rewritten %v -> %v from a group with a refused member (%+v)", out[i].CaseID, before[i].Score, out[i].Score, summary)
+		}
+	}
+	if summary.TwinGroupsConcordant != 0 || summary.CounterfactualPairs != 0 {
+		t.Fatalf("refused groups were measured: %+v", summary)
+	}
+}

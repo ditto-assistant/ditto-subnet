@@ -94,10 +94,23 @@ func v18AbstentionSubset(pairs [][2]StagedCase, want int) [][2]StagedCase {
 	}
 	taken := map[string]int{}
 	out := make([][2]StagedCase, 0, want)
-	for _, pair := range pairs {
+	used := make([]bool, len(pairs))
+	for i, pair := range pairs {
 		family := strings.TrimPrefix(pair[0].Case.QuestionType, QTAbsence)
 		if taken[family] < quota[family] {
 			taken[family]++
+			used[i] = true
+			out = append(out, pair)
+		}
+	}
+	// A family the pool under-supplies leaves its quota unfilled: top the slot
+	// up to want from the remaining pairs in pool order, so the published
+	// 12-pair slot is always full.
+	for i, pair := range pairs {
+		if len(out) >= want {
+			break
+		}
+		if !used[i] {
 			out = append(out, pair)
 		}
 	}

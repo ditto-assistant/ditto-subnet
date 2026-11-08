@@ -13,14 +13,22 @@ import httpx
 
 from ditto_screener.conversation import (
     AssessmentFailure,
-    AstraExaminer,
     Limits,
     MemoryHarness,
+    OpusExaminer,
     evaluate,
+    judge_client,
 )
-from ditto_screener.conversation_runtime import ConversationRuntime
+from ditto_screener.conversation_runtime import (
+    RELAY_SETTLE_SECONDS,
+    ConversationRuntime,
+)
 from ditto_screening_protocol.conversation import (
-    JUDGE_MODEL,
+    INSTRUMENT_V1,
+    INSTRUMENT_V2,
+    JUDGE_MODELS,
+    RUBRIC_DIGESTS,
+    RUN_RESERVATION_MICROUSD,
     ConversationLaunch,
     ConversationReport,
 )
@@ -29,8 +37,16 @@ from ditto_screening_protocol.conversation_story import story_digest
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
     from ditto_screener.platform import PlatformClient
+    from ditto_screening_protocol.conversation import HarnessUsage
 
 logger = logging.getLogger(__name__)
+SETTLE_MARGIN_SECONDS = RELAY_SETTLE_SECONDS + 30
+"""Lease time kept back for relay settlement, cleanup and result delivery."""
+HARNESS_BUDGET_CODES = frozenset(
+    # The first recorded failure is kept, so "unavailable" here means a budget
+    # wait ran out of time with holds still in flight, not a prior failure.
+    {"inference_budget_exhausted", "inference_budget_unavailable"}
+)
 
 
 def private_write(path: Path, text: str) -> None:
@@ -58,7 +74,15 @@ async def consume(config: ScreenerConfig, platform: PlatformClient) -> bool:
             raise ValueError("empty credential")
         spool = Path(spool_dir)
         spool.mkdir(mode=0o700, parents=True, exist_ok=True)
-        offer = await platform.conversation_request("/claim")
+        # A Platform that admits v2 only issues claims to workers that say so;
+        # an older worker sends no body and is offered nothing.
+        offer = await platform.conversation_request(
+            "/claim",
+            {
+                "instruments": [INSTRUMENT_V2],
+                "reservation_microusd": RUN_RESERVATION_MICROUSD,
+            },
+        )
         if offer is None:
             return False
         claim = ConversationLaunch.model_validate(offer)
@@ -78,28 +102,37 @@ async def consume(config: ScreenerConfig, platform: PlatformClient) -> bool:
     runtime = ConversationRuntime(config, claim, provider_key)
     report = None
     reason = "sandbox_unavailable"
+    if claim.instrument != INSTRUMENT_V2:
+        # An older Platform issued a v1 (Astra) claim. Nothing was spent; free
+        # the slot with an honest terminal report instead of running it.
+        return await _deliver(
+            platform, spool, claim, _empty_report(claim, "instrument_unsupported"), None
+        )
     try:
         # Leave five minutes of the immutable lease for setup failure reporting,
         # provider settlement and cleanup. No judge request after its deadline.
         async with asyncio.timeout(600):
             url = await runtime.start()
-        remaining = (claim.expires_at - datetime.now(UTC)).total_seconds() - 180
+        judge_seconds = Limits.judge_seconds
+        remaining = (
+            (claim.expires_at - datetime.now(UTC)).total_seconds()
+            - SETTLE_MARGIN_SECONDS
+            - judge_seconds
+        )
         if remaining <= 0:
             raise AssessmentFailure("conversation_lease_expired")
-        limits = Limits(total_seconds=min(3600, remaining))
+        limits = Limits(
+            judge_microusd=claim.judge_budget_microusd,
+            total_seconds=min(7_200, remaining),
+        )
         async with (
             httpx.AsyncClient(
-                timeout=120,
+                timeout=300,
                 trust_env=False,
                 follow_redirects=False,
-                transport=runtime.transport(),
+                transport=runtime.transport(timeout=300),
             ) as harness_client,
-            httpx.AsyncClient(
-                timeout=120,
-                trust_env=False,
-                follow_redirects=False,
-                headers={"Authorization": "Bearer " + provider_key},
-            ) as judge_client,
+            judge_client(provider_key) as judge,
         ):
             report = await evaluate(
                 assessment_id=claim.assessment_id,
@@ -109,7 +142,7 @@ async def consume(config: ScreenerConfig, platform: PlatformClient) -> bool:
                 bench_version=claim.bench_version,
                 seed=claim.seed,
                 harness=MemoryHarness(harness_client, url, limits),
-                examiner=AstraExaminer(judge_client, limits, provider="openrouter"),
+                examiner=OpusExaminer(judge, limits),
             )
     except AssessmentFailure as exc:
         reason = str(exc)
@@ -122,36 +155,76 @@ async def consume(config: ScreenerConfig, platform: PlatformClient) -> bool:
     finally:
         usage = await runtime.stop()
     if report is None:
-        report = ConversationReport(
-            **{
-                k: getattr(claim, k)
-                for k in (
-                    "assessment_id",
-                    "agent_id",
-                    "artifact_sha256",
-                    "screened_image_sha256",
-                    "bench_version",
-                )
-            },
-            story_sha256=story_digest(claim.seed),
-            provider_model=JUDGE_MODEL,
-            status="incomplete",
-            error_code=reason,
-            exchanges=[],
-            judge_requests=0,
-            input_tokens=0,
-            output_tokens=0,
-            reserved_microusd=25_000_000,
-            spent_microusd=0,
-        )
+        report = _empty_report(claim, reason)
+    return await _deliver(platform, spool, claim, report, usage)
+
+
+def _empty_report(claim: ConversationLaunch, reason: str) -> ConversationReport:
+    return ConversationReport(
+        **{
+            k: getattr(claim, k)
+            for k in (
+                "assessment_id",
+                "agent_id",
+                "artifact_sha256",
+                "screened_image_sha256",
+                "bench_version",
+                "instrument",
+            )
+        },
+        model=JUDGE_MODELS[claim.instrument],
+        rubric_sha256=RUBRIC_DIGESTS[claim.instrument],
+        story_sha256=story_digest(claim.seed),
+        provider_model=JUDGE_MODELS[claim.instrument],
+        status="incomplete",
+        error_code=reason,
+        exchanges=[],
+        judge_requests=0,
+        input_tokens=0,
+        output_tokens=0,
+        # A v1 claim from an older Platform carries no budget fields and was
+        # held at the legacy $30, whose report reserves the $25 judge budget.
+        reserved_microusd=(
+            25_000_000
+            if claim.instrument == INSTRUMENT_V1
+            else claim.judge_budget_microusd
+        ),
+        spent_microusd=0,
+        judge_cost_is_upper_bound=claim.instrument == INSTRUMENT_V1,
+    )
+
+
+async def _deliver(
+    platform: PlatformClient,
+    spool: Path,
+    claim: ConversationLaunch,
+    report: ConversationReport,
+    usage: HarnessUsage | None,
+) -> bool:
     document = report.model_dump(mode="json")
     document["harness_usage"] = usage.model_dump(mode="json") if usage else None
     if (
         report.status == "completed"
         and (usage is None or usage.unmetered or usage.failed)
     ) or (usage is not None and usage.failed):
+        # Running out of the claim's harness hold is a budget outcome, not a
+        # harness defect: the relay refused further paid inference by design.
+        exhausted = (
+            usage is not None
+            and usage.failure is not None
+            and usage.failure.code in HARNESS_BUDGET_CODES
+        )
+        # A finished conversation whose relay was still settling a dispatch
+        # at stop is a cost-accounting gap, not a broken harness: say so.
+        unsettled = usage is not None and usage.unmetered and not usage.failed
         document.update(
-            status="incomplete", grades=None, error_code="harness_inference_incomplete"
+            status="incomplete",
+            grades=None,
+            error_code="harness_budget_exhausted"
+            if exhausted
+            else "harness_usage_unsettled"
+            if unsettled
+            else "harness_inference_incomplete",
         )
     report = ConversationReport.model_validate(document)
     private_write(

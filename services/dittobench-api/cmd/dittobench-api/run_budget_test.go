@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,7 +47,7 @@ func TestRunBudgetAdmitsUntilThePricedCostReachesTheBudget(t *testing.T) {
 }
 
 func TestBudgetExhaustedCaseIsNeverAnInfrastructureFailure(t *testing.T) {
-	cs := budgetExhaustedCase("c1", "world-trip-current", protocol.KindMemory)
+	cs := budgetExhaustedCase("c1", "world-trip-current", protocol.KindMemory, (*runBudget)(nil).refusalNote())
 	if !cs.BudgetExhausted || cs.Undelivered || cs.ValidatorFault || cs.Score != 0 {
 		t.Fatalf("%+v", cs)
 	}
@@ -175,15 +176,40 @@ func TestRunBudgetFailsClosedWhenTheSessionVanishes(t *testing.T) {
 	if b.admit() || b.admit() {
 		t.Fatal("admitted after the session vanished")
 	}
-	if got := b.summary(); !got.Exhausted || got.AdmittedCases != 1 {
+	got := b.summary()
+	if !got.Exhausted || got.AdmittedCases != 1 || got.Reason != protocol.RunBudgetMeterLostReason {
 		t.Fatalf("summary %+v", got)
+	}
+	if note := b.refusalNote(); !strings.HasPrefix(note, protocol.RunBudgetMeterLostReason) {
+		t.Fatalf("refused case note %q", note)
+	}
+}
+
+// When the session vanishes after a successful under-budget reading, the
+// summary keeps that last reading as the cutoff spend instead of zero.
+func TestRunBudgetMeterLossKeepsTheLastReading(t *testing.T) {
+	gone := false
+	var prompt uint64 = 10_000 // 700k nano-USD, under the 4-case budget
+	b := &runBudget{benchVersion: protocol.BenchVersionV18, cases: 4,
+		meter: func() (scoregates.PricedCostUsage, bool) {
+			return scoregates.PricedCostUsage{ChatComplete: true, PromptTokens: prompt}, !gone
+		}}
+	b.budget, _ = scoregates.RunBudgetNanoUSD(protocol.BenchVersionV18, 4)
+	if !b.admit() {
+		t.Fatal("first case refused")
+	}
+	want := scoregates.MeteredCostNanoUSD(protocol.BenchVersionV18, scoregates.PricedCostUsage{ChatComplete: true, PromptTokens: prompt})
+	gone = true
+	b.admit()
+	if got := b.summary(); want == 0 || got.SpentNanoUSDAtCutoff != want {
+		t.Fatalf("cutoff spend %d, want the last reading %d", got.SpentNanoUSDAtCutoff, want)
 	}
 }
 
 // Budget-refused cases leave the signed gate inputs (and their transcripts)
 // but nothing else; below v18 the inputs are untouched.
 func TestV18GatedEvidenceDropsOnlyRefusedCases(t *testing.T) {
-	perCase := []protocol.CaseScore{{CaseID: "a", Score: 1}, budgetExhaustedCase("b", "x", protocol.KindMemory), {CaseID: "c"}}
+	perCase := []protocol.CaseScore{{CaseID: "a", Score: 1}, budgetExhaustedCase("b", "x", protocol.KindMemory, "n"), {CaseID: "c"}}
 	transcripts := []transcriptCase{{CaseID: "a"}, {CaseID: "b"}, {CaseID: "c"}}
 	gotCases, gotTranscripts := v18GatedEvidence(protocol.BenchVersionV18, perCase, transcripts)
 	if len(gotCases) != 2 || len(gotTranscripts) != 2 || gotCases[1].CaseID != "c" || gotTranscripts[1].CaseID != "c" {

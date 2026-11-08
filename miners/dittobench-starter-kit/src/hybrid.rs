@@ -466,6 +466,16 @@ pub fn compact_prompt(
 }
 
 fn tool_message(id: &str, name: &str, output: Value, max_chars: usize) -> ChatMessage {
+    // A failed call carries `{"error": ...}` and no result; surface it in the
+    // protocol error field too, not only inside the output.
+    let error = match &output {
+        Value::Object(map) if !map.contains_key("result") => map
+            .get("error")
+            .and_then(Value::as_str)
+            .map(|e| truncate(e, max_chars))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     let rendered = match &output {
         Value::Object(map) if map.contains_key("result") => map["result"]
             .as_str()
@@ -483,7 +493,7 @@ fn tool_message(id: &str, name: &str, output: Value, max_chars: usize) -> ChatMe
                 id: id.to_string(),
                 name: name.to_string(),
                 output,
-                error: String::new(),
+                error,
             }),
             ..Content::default()
         }],
@@ -792,6 +802,54 @@ async fn replan(
 
 // ------------------------------------------------------------------ the case
 
+/// Every call a model turn emitted: `tool_calls`, or the legacy singular
+/// `tool_call` when the list is empty.
+fn emitted_calls(chunk: &ditto_harness::types::ChatChunk) -> Vec<ditto_harness::types::ToolCall> {
+    if !chunk.tool_calls.is_empty() {
+        return chunk.tool_calls.clone();
+    }
+    chunk.tool_call.clone().into_iter().collect()
+}
+
+/// Executes and records every model-emitted call, offered or not.
+#[allow(clippy::too_many_arguments)]
+async fn execute_calls(
+    case: &HybridCase<'_>,
+    tool_calls: &[ditto_harness::types::ToolCall],
+    cfg: &HybridConfig,
+    hop: &mut i32,
+    outcome: &mut HybridOutcome,
+    calls: &mut Vec<(String, Value, String)>,
+    messages: &mut Vec<ChatMessage>,
+    offered: &mut Vec<String>,
+) {
+    for tc in tool_calls {
+        let output = match case.executable.get(&tc.name) {
+            Some(tool) => match tool.execute(tc.args.clone()).await {
+                Ok(v) => v,
+                Err(err) => json!({"error": err.to_string()}),
+            },
+            None => json!({"error": format!("unknown tool {}", tc.name)}),
+        };
+        outcome.tool_calls.push(ObservedToolCall {
+            name: tc.name.clone(),
+            args: tc.args.clone(),
+            hop: *hop,
+        });
+        *hop += 1;
+        let rendered = output
+            .get("result")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| output.to_string());
+        calls.push((tc.name.clone(), tc.args.clone(), rendered));
+        messages.push(tool_message(&tc.id, &tc.name, output, cfg.result_chars));
+        if !offered.contains(&tc.name) && case.executable.contains_key(&tc.name) {
+            offered.push(tc.name.clone());
+        }
+    }
+}
+
 /// Runs one case on the hybrid path.
 pub async fn run_case(
     model: &dyn Model,
@@ -836,10 +894,13 @@ pub async fn run_case(
                 offer(name, &mut offered);
             }
         }
-        hint = Some(
+        hint = Some(if plan.route == "remember" {
+            "This is a fact the user wants kept: save it with save_memory unless the notes already hold it, then confirm briefly."
+                .to_string()
+        } else {
             "No action seems to be needed: answer from the notes unless the request clearly asks for one."
-                .to_string(),
-        );
+                .to_string()
+        });
     } else {
         for name in &jev_top {
             offer(name, &mut offered);
@@ -902,6 +963,7 @@ pub async fn run_case(
     let mut calls: Vec<(String, Value, String)> = Vec::new();
     let mut all_offered: BTreeSet<String> = offered.iter().cloned().collect();
     let mut hop = 0i32;
+    let mut done_prompted = false;
 
     for turn in 0..cfg.max_hops {
         let defs: Vec<_> = offered
@@ -919,12 +981,7 @@ pub async fn run_case(
             outcome.output_tokens += cost.usage.output_tokens;
             outcome.max_prompt_tokens = outcome.max_prompt_tokens.max(cost.usage.input_tokens);
         }
-        let mut tool_calls = chunk.tool_calls.clone();
-        if tool_calls.is_empty() {
-            if let Some(tc) = chunk.tool_call.clone() {
-                tool_calls.push(tc);
-            }
-        }
+        let tool_calls = emitted_calls(&chunk);
         if tool_calls.is_empty() {
             outcome.final_text = chunk.text.clone();
             messages.push(text_message("assistant", chunk.text));
@@ -940,32 +997,17 @@ pub async fn run_case(
             tool_calls: tool_calls.clone(),
             ..ChatMessage::default()
         });
-        for tc in &tool_calls {
-            // Every model-emitted call is executed, offered or not.
-            let output = match case.executable.get(&tc.name) {
-                Some(tool) => match tool.execute(tc.args.clone()).await {
-                    Ok(v) => v,
-                    Err(err) => json!({"error": err.to_string()}),
-                },
-                None => json!({"error": format!("unknown tool {}", tc.name)}),
-            };
-            outcome.tool_calls.push(ObservedToolCall {
-                name: tc.name.clone(),
-                args: tc.args.clone(),
-                hop,
-            });
-            hop += 1;
-            let rendered = output
-                .get("result")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| output.to_string());
-            calls.push((tc.name.clone(), tc.args.clone(), rendered));
-            messages.push(tool_message(&tc.id, &tc.name, output, cfg.result_chars));
-            if !offered.contains(&tc.name) && case.executable.contains_key(&tc.name) {
-                offered.push(tc.name.clone());
-            }
-        }
+        execute_calls(
+            &case,
+            &tool_calls,
+            cfg,
+            &mut hop,
+            &mut outcome,
+            &mut calls,
+            &mut messages,
+            &mut offered,
+        )
+        .await;
         if turn + 1 == cfg.max_hops {
             break;
         }
@@ -976,7 +1018,8 @@ pub async fn run_case(
                     offered.push(name);
                 }
             }
-            if done >= 0.7 {
+            if done >= 0.7 && !done_prompted {
+                done_prompted = true;
                 messages.push(text_message(
                     "user",
                     "The request looks complete. Reply to the user with the result.".to_string(),
@@ -1002,8 +1045,38 @@ pub async fn run_case(
             outcome.output_tokens += cost.usage.output_tokens;
             outcome.max_prompt_tokens = outcome.max_prompt_tokens.max(cost.usage.input_tokens);
         }
-        outcome.final_text = chunk.text.clone();
-        messages.push(text_message("assistant", chunk.text));
+        let tool_calls = emitted_calls(&chunk);
+        if tool_calls.is_empty() {
+            outcome.final_text = chunk.text.clone();
+            messages.push(text_message("assistant", chunk.text));
+        } else {
+            // No tools were offered, but a provider may still return a call.
+            // Every model-emitted call is executed and recorded; the budget
+            // is spent, so no further model call follows and the reply is
+            // whatever text came with the calls.
+            outcome.final_text = chunk.text.clone();
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: if chunk.text.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Content::text(chunk.text.clone())]
+                },
+                tool_calls: tool_calls.clone(),
+                ..ChatMessage::default()
+            });
+            execute_calls(
+                &case,
+                &tool_calls,
+                cfg,
+                &mut hop,
+                &mut outcome,
+                &mut calls,
+                &mut messages,
+                &mut offered,
+            )
+            .await;
+        }
     }
     all_offered.extend(offered.iter().cloned());
     outcome.tools_offered = all_offered.into_iter().collect();

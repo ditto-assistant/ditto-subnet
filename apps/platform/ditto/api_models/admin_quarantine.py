@@ -783,6 +783,38 @@ class AdminRejectScreeningResponse(BaseModel):
     idempotent: bool = False
 
 
+class AdminQuarantineReasonAmendRequest(BaseModel):
+    """Guarded correction of the public reason on a resolved reject (SN-439).
+
+    The rejection itself stands; only the miner-visible reason changes, and
+    the text it replaces is kept in the quarantine's resolution history.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    expected_agent_id: UUID
+    expected_artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    expected_attempt_id: UUID
+    expected_reason: str
+    """The public reason being replaced, exactly as currently recorded; empty
+    when the reject recorded none."""
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
+    confirmation: Literal["AMEND PUBLIC REJECT REASON"]
+
+
+class AdminQuarantineReasonAmendResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    quarantine_id: UUID
+    agent_id: UUID
+    attempt_id: UUID
+    previous_reason: str
+    reason: str
+    resolved_by: str | None = None
+    """Who made the original reject decision; amending does not change it."""
+    idempotent: bool = False
+
+
 class AdminBenchmarkContractRefreshRequest(BaseModel):
     """Compare-and-swap guard for rebuilding one stale benchmark contract."""
 

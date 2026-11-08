@@ -935,8 +935,15 @@ so do not branch on a higher number. Version 14 is the active scoring contract;
 `GET /api/v1/public/bench/rollout` is authoritative for what is active
 (`active_version`) and for any rollout target (`desired_version`).
 
-8. Lifecycle. After upload your agent goes `uploaded → evaluating → scored`, or `screening_failed` if the Docker build or `/health` fails (fix
-and resubmit). Scores land on the public score ledger and the
+8. Lifecycle. After upload your agent goes `uploaded → screening → evaluating → scored`.
+Screening is build and safety checks only: archive and size limits, a static
+malicious-source check, the isolated Docker build, `/health` and seeding, and
+copy protection. There is no source review and no review hold; only copy
+protection can hold a submission (an exact copy is rejected, a near-duplicate
+is held for copy review when its scores finalize). A build,
+contract or safety failure ends in `rejected` or `screening_failed` with the
+reason on the status endpoint (fix and resubmit). Operators read the top
+agents' code after scoring and can void scores, reject or ban. Scores land on the public score ledger and the
 [SN118 leaderboard](https://platform-api.heyditto.ai/), with median latency,
 `bench_version`, and per-category stats.
 

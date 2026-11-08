@@ -82,14 +82,17 @@ func DatedStatus(b *Builder, i int) challenge.Case {
 	q := m2 + 1 + b.Rng.Intn(2)
 	m3 := q + 1 + b.Rng.Intn(2)
 	day := func() int { return 3 + b.Rng.Intn(20) }
-	b.Say(0, fmt.Sprintf("Since %s %d, %s has had %s every morning.", monthNames[m1], day(), who, drinks[0]), fmt.Sprintf("%s every morning, got it.", drinks[0]))
-	ev := b.Say(1, fmt.Sprintf("On %s %d %s switched to %s in the mornings.", monthNames[m2], day(), who, drinks[1]), "Noted the switch.")
-	b.Say(2, fmt.Sprintf("As of %s %d, %s is on %s every morning instead.", monthNames[m3], day(), who, drinks[2]), "Updated.")
+	// Every date names 2025: the waves are timestamped March 2026
+	// (builder.go), so a month-only date from April on would be recorded
+	// before it happened.
+	b.Say(0, fmt.Sprintf("Since %s %d, 2025, %s has had %s every morning.", monthNames[m1], day(), who, drinks[0]), fmt.Sprintf("%s every morning, got it.", drinks[0]))
+	ev := b.Say(1, fmt.Sprintf("On %s %d, 2025, %s switched to %s in the mornings.", monthNames[m2], day(), who, drinks[1]), "Noted the switch.")
+	b.Say(2, fmt.Sprintf("As of %s %d, 2025, %s is on %s every morning instead.", monthNames[m3], day(), who, drinks[2]), "Updated.")
 	return challenge.Case{
 		MemoryCase: protocol.MemoryCase{
 			ID:                fmt.Sprintf("dated-status-%d", i),
 			QuestionType:      "temporal-reasoning",
-			Question:          fmt.Sprintf("What was %s drinking in the mornings in the middle of %s?", who, monthNames[q]),
+			Question:          fmt.Sprintf("What was %s drinking in the mornings in the middle of %s 2025?", who, monthNames[q]),
 			ExpectedAnswer:    drinks[1],
 			DistractorAnswers: []string{drinks[0], drinks[2]},
 		},

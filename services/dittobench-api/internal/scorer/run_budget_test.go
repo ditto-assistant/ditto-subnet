@@ -57,3 +57,30 @@ func TestBudgetRefusedCasesLeaveThePublishedFactors(t *testing.T) {
 		t.Fatalf("a refused twin was compared (%d groups)", total)
 	}
 }
+
+// A twin family that lost a member to the budget is dissolved in the gated
+// population: the survivor stays (every other gate still reads it) but no
+// family gate counts it as a one-member consistent group. Refused cases never
+// enter the median latency.
+func TestBudgetRefusedTwinDissolvesItsFamily(t *testing.T) {
+	v18 := protocol.RunBudgetMinBenchVersion
+	run := []protocol.CaseScore{
+		{CaseID: "x", Kind: protocol.KindMemory, TwinGroup: "twin-1", Correct: true, Score: 1, LatencyMs: 900},
+		{CaseID: "y", Kind: protocol.KindMemory, TwinGroup: "twin-1", BudgetExhausted: true},
+		{CaseID: "z", Kind: protocol.KindMemory, TwinGroup: "twin-2", Correct: true, Score: 1, LatencyMs: 700},
+		{CaseID: "w", Kind: protocol.KindMemory, TwinGroup: "twin-2", Correct: true, Score: 1, LatencyMs: 800},
+	}
+	gated := gatedPopulation(run, v18)
+	if len(gated) != 3 || gated[0].CaseID != "x" || gated[0].TwinGroup != "" || gated[1].TwinGroup != "twin-2" {
+		t.Fatalf("gated population %+v", gated)
+	}
+	if _, total := metamorphicGroupCounts(gated); total != 1 {
+		t.Fatalf("%d twin groups measured, want only the intact one", total)
+	}
+	if run[0].TwinGroup != "twin-1" {
+		t.Fatal("gatedPopulation mutated the report's cases")
+	}
+	if report := AggregateForVersion("r", run, v18); report.MedianMs != 800 {
+		t.Fatalf("median latency %d read the refused case", report.MedianMs)
+	}
+}

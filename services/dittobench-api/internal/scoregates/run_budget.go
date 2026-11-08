@@ -25,7 +25,15 @@ func RunBudgetNanoUSD(benchVersion, cases int) (uint64, bool) {
 	floorRatio := uint64(curve[len(curve)-1].RatioBPS)
 	reference := pricedCostReferenceForVersion(benchVersion)
 	perNormalizedRun := satMul(reference, floorRatio) / BasisPointScale
-	return satMul(perNormalizedRun, uint64(cases)) / PricedCostNormalizationCases, true
+	// Rounded up: the budget is the first whole cost whose 350-case
+	// normalization reaches the floor threshold, so admission never stops a
+	// tick before the factor floors.
+	scaled := satMul(perNormalizedRun, uint64(cases))
+	budget := scaled / PricedCostNormalizationCases
+	if scaled%PricedCostNormalizationCases != 0 {
+		budget++
+	}
+	return budget, true
 }
 
 // MeteredCostNanoUSD prices usage at the contract's locked rates exactly as

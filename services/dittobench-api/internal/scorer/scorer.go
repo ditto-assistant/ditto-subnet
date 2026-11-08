@@ -478,6 +478,11 @@ func metamorphicGroupCounts(perCase []protocol.CaseScore) (consistent, total int
 // pair, or "" for everything else. Derived from the validator-internal question
 // id, so no new wire field is needed on the case itself and the harness sees
 // nothing new.
+// AuditHalfFor is a memory case's audit half (base or transform), empty when
+// the case is not in an audit pair: the family identity a budget-refused
+// case must keep.
+func AuditHalfFor(mc protocol.MemoryCase) string { return auditHalf(mc) }
+
 func auditHalf(mc protocol.MemoryCase) string {
 	if !isAuditGroup(mc.TwinGroup) {
 		return ""
@@ -1119,11 +1124,26 @@ func gatedPopulation(perCase []protocol.CaseScore, benchVersion int) []protocol.
 	if !protocol.RunBudgetBenchVersion(benchVersion) {
 		return perCase
 	}
+	// A twin or audit family that lost a member to the budget cannot establish
+	// agreement any more, exactly like a family with an undelivered member.
+	// Its surviving members stay in the population for every other gate but
+	// are detached from the family, so no family gate reads a lone survivor
+	// as a consistent group.
+	broken := map[string]bool{}
+	for _, cs := range perCase {
+		if cs.BudgetExhausted && cs.TwinGroup != "" {
+			broken[cs.TwinGroup] = true
+		}
+	}
 	out := make([]protocol.CaseScore, 0, len(perCase))
 	for _, cs := range perCase {
-		if !cs.BudgetExhausted {
-			out = append(out, cs)
+		if cs.BudgetExhausted {
+			continue
 		}
+		if broken[cs.TwinGroup] {
+			cs.TwinGroup = ""
+		}
+		out = append(out, cs)
 	}
 	return out
 }
@@ -1149,7 +1169,10 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 	catOrder := make([]string, 0)
 
 	for _, cs := range perCase {
-		latencies = append(latencies, cs.LatencyMs)
+		// A budget-refused case (bench v18) never ran: it has no latency.
+		if !cs.BudgetExhausted || !protocol.RunBudgetBenchVersion(benchVersion) {
+			latencies = append(latencies, cs.LatencyMs)
+		}
 		if _, seen := catCount[cs.Category]; !seen {
 			catOrder = append(catOrder, cs.Category)
 		}

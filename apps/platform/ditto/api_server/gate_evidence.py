@@ -37,6 +37,7 @@ from ditto.api_models.gate_evidence import (
     GATE_EVIDENCE_MIN_BENCH_VERSION,
     GATE_FINDINGS,
     GATE_NOTE_VOCABULARY,
+    RUN_BUDGET_MIN_BENCH_VERSION,
     TWIN_NOTE_MARKERS,
     CatalogGateSummary,
     ClaimProvenanceSummary,
@@ -117,7 +118,12 @@ def persisted_case_dump(
     ``None`` values the Go engine omits (``omitempty`` / nil pointers).
     """
     if carries_gate_evidence(bench_version):
-        return case.model_dump(mode="json", exclude_none=True)
+        dumped = case.model_dump(mode="json", exclude_none=True)
+        # The budget flag is a bench 18+ term; an earlier report never
+        # persists it.
+        if bench_version is None or bench_version < RUN_BUDGET_MIN_BENCH_VERSION:
+            dumped.pop("budget_exhausted", None)
+        return dumped
     dumped = case.model_dump(mode="json")
     for key in _V13_ERA_CASE_KEYS:
         dumped.pop(key, None)
@@ -203,6 +209,10 @@ def _run_summaries(
         )
     else:
         out["priced_cost"] = None
+    # ``run_budget`` is a bench 18+ term: an earlier report's block never
+    # reaches a projection either.
+    if bench_version is None or bench_version < RUN_BUDGET_MIN_BENCH_VERSION:
+        out["run_budget"] = None
     return out
 
 
@@ -327,11 +337,9 @@ def build_gate_evidence(
         flagged_case_share=(round(len(cases) / total, 6) if total else None),
         cases=cases,
     )
-    stored = evidence.model_dump(mode="json")
-    # Pre-v18 projections keep their exact shape: no run_budget key at all.
-    if stored.get("run_budget") is None:
-        stored.pop("run_budget", None)
-    return stored
+    # StoredGateEvidence omits an absent run_budget itself, so pre-v18
+    # projections keep their exact shape on this dump and every later one.
+    return evidence.model_dump(mode="json")
 
 
 def stored_gate_evidence(raw: object) -> StoredGateEvidence | None:
@@ -441,6 +449,7 @@ def _run_notes(score: Any, *, agent_id: UUID) -> MinerGateNotesRun | None:
         twin_post_pass=stored.twin_post_pass,
         inference_cost=stored.inference_cost,
         priced_cost=stored.priced_cost,
+        run_budget=stored.run_budget,
         catalog_suppression_rate=stored.catalog_suppression_rate,
         flagged_case_count=stored.flagged_case_count,
         flagged_case_share=stored.flagged_case_share,

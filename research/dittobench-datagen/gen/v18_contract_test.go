@@ -12,7 +12,7 @@ import (
 // profile, public surface salt 0), built from the embedded production catalog
 // snapshot pinned by catalog.V18CatalogSnapshotSHA256. docs/bench-versions.md
 // and the README publish the same string.
-const v18KnownVectorWant = "892f5ede283c6f41593dbc7b4b8794fa66de17a5c8118a731cdce5f0aa3412a8"
+const v18KnownVectorWant = "f216f9473780a7af5105567180e23c3e2d2418c574bfed4c700296f69cd2459d"
 
 // V18 is supported (promoted from staging by the cross-layer PR, with the epoch
 // and seed domain it was staged with, so this vector did not move). Every lever is gated on bench_version >= 18; the v2..v17 vectors
@@ -156,5 +156,28 @@ func TestV18MixGate(t *testing.T) {
 		if v := audit.Summarize(gate).Violations; len(v) != 0 {
 			t.Fatalf("seed %d violates the v18 mix gate: %v", seed, v)
 		}
+	}
+}
+
+// A pool that under-supplies one absence family still fills the 12-pair slot:
+// the quota pass runs first, then the remaining pairs top it up in pool order.
+func TestV18AbstentionSubsetFillsTheSlot(t *testing.T) {
+	pair := func(family string, n int) [][2]StagedCase {
+		var out [][2]StagedCase
+		for i := 0; i < n; i++ {
+			c := StagedCase{Case: protocol.MemoryCase{QuestionType: QTAbsence + family}}
+			out = append(out, [2]StagedCase{c, c})
+		}
+		return out
+	}
+	var pool [][2]StagedCase
+	pool = append(pool, pair(universe.V13FamilyPureAbsence, 4)...)
+	pool = append(pool, pair(universe.V13FamilyNearMiss, 3)...)
+	pool = append(pool, pair(universe.V13FamilyStaleRemoved, 3)...)
+	pool = append(pool, pair(universe.V13FamilyCrossUser, 1)...) // quota 2
+	pool = append(pool, pair(universe.V13FamilyFalsePremise, 3)...)
+	pool = append(pool, pair(universe.V13FamilyInsufficient, 2)...)
+	if got := len(v18AbstentionSubset(pool, 12)); got != 12 {
+		t.Fatalf("slot holds %d pairs, want 12", got)
 	}
 }

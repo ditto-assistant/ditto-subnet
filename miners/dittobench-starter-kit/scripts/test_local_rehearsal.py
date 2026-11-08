@@ -2190,6 +2190,8 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertIsNone(COST.run_budget_nano_usd(17, 350))
         self.assertEqual(COST.run_budget_nano_usd(18, 350), 1_000_000_000)
         self.assertEqual(COST.run_budget_nano_usd(18, 175), 500_000_000)
+        # Rounded up exactly as the scorer rounds (11,428,571.4 -> 11,428,572).
+        self.assertEqual(COST.run_budget_nano_usd(18, 4), 11_428_572)
         under = COST._with_budget({"cases": 350, "cost_nano_usd": 600_000_000}, 18)
         self.assertFalse(under["budget_exhausted"])
         self.assertIsNone(under["budget_stop_case"])
@@ -2221,6 +2223,11 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertEqual(block["budget_nano_usd"], 7)
         self.assertTrue(block["budget_exhausted"])
         self.assertIsNone(block["budget_stop_case"])
+        unknown = COST.format_estimate(
+            {"source": "scorer", "cost_nano_usd": 1, "normalized_cost_nano_usd": 1,
+             "factor_bps": 10000, **block}, 18)
+        self.assertIn("stopped admitting cases", unknown)
+        self.assertNotIn("case None", unknown)
         self.assertNotIn("budget_nano_usd", COST._with_budget({"cases": 350, "cost_nano_usd": 1}, 17))
 
     def test_rule_matches_the_shared_go_vectors(self) -> None:
@@ -2444,6 +2451,17 @@ class PricedCostEstimateTest(unittest.TestCase):
         ollama = COST.meter_for_environment({"DITTOBENCH_PROVIDER": "ollama"})
         assert ollama is not None
         self.assertIsNone(ollama.decisions_path)
+        # Only the platform broker serves decisions beside chat; Chutes does not.
+        chutes = COST.meter_for_environment(
+            {"DITTOBENCH_PROVIDER": "chutes", "CHUTES_BASE_URL": "http://127.0.0.1:9/v1"}
+        )
+        assert chutes is not None
+        self.assertIsNone(chutes.decisions_path)
+        platform = COST.meter_for_environment(
+            {"DITTOBENCH_PROVIDER": "platform", "DITTOBENCH_INFERENCE_BASE_URL": "http://127.0.0.1:9/v1"}
+        )
+        assert platform is not None
+        self.assertEqual(platform.decisions_path, COST.PLATFORM_DECISIONS_PATH)
 
     def test_scorer_block_wins_and_unmeterable_providers_say_so(self) -> None:
         scored = {"result": "priced", "cases": 350, "cost_nano_usd": 1_816_989_710,

@@ -76,6 +76,9 @@ type Options struct {
 	// sent to the harness and comes back BudgetExhausted (bench v18 per-run
 	// cost budget). Rounds and qualification leave it nil.
 	Admit func() bool
+	// RefusalNote, when set, is the note a refused case carries (the
+	// specific reason: a spent budget or a lost cost meter).
+	RefusalNote func() string
 }
 
 // CaseOutcome is one graded case: the panel result the scorer submits plus the
@@ -141,9 +144,13 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 			runBoundedAdmitted(len(run), concurrency, opts.Admit, func(j int, admitted bool) {
 				i := run[j]
 				if !admitted {
+					note := protocol.RunBudgetExhaustedReason
+					if opts.RefusalNote != nil {
+						note = opts.RefusalNote()
+					}
 					outcomes[i] = CaseOutcome{
 						PanelCaseResult: challenge.PanelCaseResult{CaseID: p.Cases[i].ID},
-						Notes:           []string{protocol.RunBudgetExhaustedReason},
+						Notes:           []string{note},
 						BudgetExhausted: true,
 					}
 					return

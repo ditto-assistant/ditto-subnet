@@ -662,10 +662,16 @@ func (s *server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 		tools, err := catalog.CatalogForSeedChecked(benchVersion, seed)
 		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, "this scorer has no catalog snapshot for bench_version "+strconv.Itoa(benchVersion))
+			writeError(w, http.StatusServiceUnavailable, "tool catalog unavailable for bench_version "+strconv.Itoa(benchVersion))
 			return
 		}
 		writeJSON(w, http.StatusOK, tools)
+		return
+	}
+	if benchVersion >= protocol.BenchVersionV18 {
+		// The v18 menu is a per-seed sample of the pinned snapshot; there is no
+		// seed-free v18 surface, and the v13 production list would mislead.
+		writeError(w, http.StatusBadRequest, "bench_version "+strconv.Itoa(benchVersion)+" requires a seed for its catalog; request one with seed")
 		return
 	}
 	writeJSON(w, http.StatusOK, catalog.CatalogForVersion(benchVersion))
@@ -1847,9 +1853,15 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// v13+ advertises the per-seed surface (paraphrased descriptions, enum
 	// schemas, coined decoys); the same seed drives the fixtures above, so the
 	// decoys a harness sees are exactly the ones the mock endpoint knows.
-	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
-	if privateArtifact != nil {
-		tools = artifact.Catalog
+	tools := artifact.Catalog
+	if privateArtifact == nil {
+		var toolsErr error
+		tools, toolsErr = catalog.CatalogForSeedChecked(req.BenchVersion, seed)
+		if toolsErr != nil {
+			// The catalog is scorer-owned: never the miner's failure.
+			s.store.FailWith(runID, "tool catalog unavailable: "+toolsErr.Error(), toolEndpointInfrastructureFailure())
+			return
+		}
 	}
 
 	// V8 harnesses may embed before any model turn, including the route probe
@@ -2146,7 +2158,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				}
 				transcriptID = internalID
 			}
-			toolResults[i] = budgetExhaustedCase(transcriptID, c.Category, protocol.KindTool)
+			toolResults[i] = budgetExhaustedCase(transcriptID, c.Category, protocol.KindTool, budget.refusalNote())
+			// Keep the family identity: the gates and the twin post-pass must see
+			// that this family lost a member, not a smaller intact family.
+			toolResults[i].TwinGroup, toolResults[i].Relation = c.TwinGroup, c.TwinRelation
+			toolTwins[i] = toolTwinEvidence(req.BenchVersion, c, protocol.RunResponse{}, nil)
 			toolTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindTool}
 			s.store.AppendPartial(runID, toolResults[i])
 			return
@@ -2303,6 +2319,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	}
 	errMemoryProjection := errors.New("v9 memory capability reverse mapping failed")
 	waveErr := runner.RunStagedWaves(ctx, memSuite.Waves, casesByWave, func(ctx context.Context, w int, wave protocol.SeedRequest) error {
+		if budget.isExhausted() {
+			// Every later case is refused at dispatch, so seeding this wave
+			// would only spend embeddings past the budget.
+			return nil
+		}
 		s.store.SetStage(runID, store.StatusSeeding, len(perCase), total)
 		_, err := runner.SeedForVersion(ctx, harnessURL, wave, req.BenchVersion)
 		return err
@@ -2350,7 +2371,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				if category == "" {
 					category = "memory"
 				}
-				waveResults[i] = budgetExhaustedCase(transcriptID, category, protocol.KindMemory)
+				waveResults[i] = budgetExhaustedCase(transcriptID, category, protocol.KindMemory, budget.refusalNote())
+				// Keep the family identity (twin group, audit half, twin evidence)
+				// so the family is dissolved rather than read as intact.
+				waveResults[i].TwinGroup, waveResults[i].AuditHalf = mc.TwinGroup, scorer.AuditHalfFor(mc)
+				waveResults[i] = carryV13ProvenanceRelation(req.BenchVersion, sc, waveResults[i])
+				waveTwins[i] = memoryTwinEvidence(req.BenchVersion, sc, protocol.RunResponse{}, nil)
 				waveTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindMemory, UserID: transcriptUser}
 				s.store.AppendPartial(runID, waveResults[i])
 				return
