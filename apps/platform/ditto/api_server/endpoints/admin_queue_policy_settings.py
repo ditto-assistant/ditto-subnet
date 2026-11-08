@@ -37,6 +37,7 @@ from ditto.api_models.queue_policy_settings import (
     AdminQueuePolicySettingsRequest,
     AdminQueuePolicySettingsResponse,
     EffectiveQueuePolicySettings,
+    FlipRuleSettings,
     QueuePolicySettings,
     QueuePolicySettingsRevision,
     rollout_locked_change,
@@ -112,10 +113,23 @@ async def _effective(
     rollout = await open_rollout(session)
     rescore_frozen = rollout.rescore_cohort_target if rollout is not None else None
     priority_frozen = rollout.priority_cohort_target if rollout is not None else None
+    flip_frozen = (
+        FlipRuleSettings(
+            enabled=rollout.flip_rule_enabled,
+            min_agents_to_flip=rollout.flip_min_agents,
+            flip_deadline_hours=rollout.flip_deadline_hours,
+            min_agents_at_deadline=rollout.flip_min_agents_at_deadline,
+        )
+        if rollout is not None
+        else None
+    )
     overrides = (
-        rescore_frozen is not None and rescore_frozen != settings.rescore_cohort_size
-    ) or (
-        priority_frozen is not None and priority_frozen != settings.priority_cohort_size
+        (rescore_frozen is not None and rescore_frozen != settings.rescore_cohort_size)
+        or (
+            priority_frozen is not None
+            and priority_frozen != settings.priority_cohort_size
+        )
+        or (flip_frozen is not None and flip_frozen != settings.flip_rule)
     )
     return EffectiveQueuePolicySettings(
         revision=latest.revision if latest is not None else 0,
@@ -129,6 +143,7 @@ async def _effective(
         ),
         open_rollout_rescore_cohort_target=rescore_frozen,
         open_rollout_priority_cohort_target=priority_frozen,
+        open_rollout_flip_rule=flip_frozen,
         open_rollout_overrides_setting=overrides,
     )
 

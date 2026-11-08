@@ -86,6 +86,12 @@ def _settings(**overrides: object) -> dict[str, object]:
             "min_axis_delta": 0.15,
         },
         "lineage_reference_mode": "same_owner_version",
+        "flip_rule": {
+            "enabled": False,
+            "min_agents_to_flip": 5,
+            "flip_deadline_hours": 36,
+            "min_agents_at_deadline": 3,
+        },
     }
     settings.update(overrides)
     return settings
@@ -241,6 +247,130 @@ class TestOpenRolloutIsReportedAsFrozen:
         assert effective["open_rollout_priority_cohort_target"] == 5
         assert effective["open_rollout_overrides_setting"] is True
         assert effective["rollout_is_open"] is True
+
+
+class TestFlipRule:
+    """The flip rule ships off, is stored whole, and is frozen per rollout."""
+
+    _ON = {
+        "enabled": True,
+        "min_agents_to_flip": 5,
+        "flip_deadline_hours": 36,
+        "min_agents_at_deadline": 3,
+    }
+
+    async def test_ships_disabled_at_revision_zero(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        body = (await client.get(_URL, headers=_HEADERS)).json()
+        assert body["default"]["flip_rule"]["enabled"] is False
+        assert body["effective"]["settings"]["flip_rule"]["enabled"] is False
+        assert body["effective"]["open_rollout_flip_rule"] is None
+
+    async def test_round_trips_and_is_audited_in_the_revision(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        response = await client.post(
+            _URL, headers=_HEADERS, json=_payload(flip_rule=self._ON)
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["settings"]["flip_rule"] == self._ON
+        assert response.json()["reason"]
+        got = (await client.get(_URL, headers=_HEADERS)).json()
+        assert got["current"][0]["settings"]["flip_rule"] == self._ON
+        assert got["history"][0]["actor"] == "backroom:test"
+
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            {**_ON, "min_agents_to_flip": 6},
+            {**_ON, "min_agents_to_flip": 2},
+            {**_ON, "min_agents_at_deadline": 2},
+            {**_ON, "flip_deadline_hours": 0},
+            {**_ON, "flip_deadline_hours": 169},
+            # Deadline floor above the immediate threshold: stricter fallback.
+            {**_ON, "min_agents_to_flip": 3, "min_agents_at_deadline": 4},
+        ],
+    )
+    async def test_out_of_range_or_incoherent_rules_are_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+        rule: dict[str, object],
+    ) -> None:
+        _install(app, settings_maker)
+        response = await client.post(
+            _URL, headers=_HEADERS, json=_payload(flip_rule=rule)
+        )
+        assert response.status_code == 422
+        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []
+
+    async def test_a_partial_rule_is_refused_and_names_the_missing_fields(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        response = await client.post(
+            _URL, headers=_HEADERS, json=_payload(flip_rule={"enabled": True})
+        )
+        # The envelope logs the field names; the wire reply is the generic 422.
+        assert response.status_code == 422
+        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []
+
+    async def test_a_policy_sent_without_flip_rule_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """An operator cannot silently reset the rule by omitting the block."""
+        _install(app, settings_maker)
+        settings = _settings()
+        del settings["flip_rule"]
+        response = await client.post(
+            _URL, headers=_HEADERS, json=_payload(settings=settings)
+        )
+        assert response.status_code == 422
+        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []
+
+    async def test_open_rollout_keeps_the_rule_it_froze(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        async with settings_maker() as session, session.begin():
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=uuid4(),
+                    from_version=6,
+                    desired_version=7,
+                    status="collecting",
+                    cohort_size=10,
+                    rescore_cohort_target=25,
+                    priority_cohort_target=5,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        await client.post(_URL, headers=_HEADERS, json=_payload(flip_rule=self._ON))
+        effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
+        assert effective["settings"]["flip_rule"]["enabled"] is True
+        # The open rollout froze the disabled default, so enabling the rule
+        # applies to the NEXT rollout only, and the board says so.
+        assert effective["open_rollout_flip_rule"]["enabled"] is False
+        assert effective["open_rollout_overrides_setting"] is True
 
 
 class TestConfirmationAndConcurrency:
