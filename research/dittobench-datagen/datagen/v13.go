@@ -525,11 +525,12 @@ func v13ConversionOrderForVersion(seed int64, benchVersion int, cases []protocol
 	if len(cases) < 80 {
 		allowSingletons = true
 	}
-	if benchVersion >= protocol.BenchVersionV18 {
+	if benchVersion >= protocol.BenchVersionV18 && len(cases) >= V18FullToolHalf && len(cases) < 80 {
 		// v18 spends world duplicates on the full-run restraint, discovery and
 		// connector quotas: every world tool family averaged 1.000 across the
 		// 27 v17 production rows (world_contact_research_email 0.981), so one
-		// case per world family keeps coverage without holding slots.
+		// case per world family keeps coverage without holding slots. Like the
+		// other v18 tool overrides it applies only to the 50-case half.
 		worldFloor = 1
 	}
 	var ordinary, singletons, world, routed []int
