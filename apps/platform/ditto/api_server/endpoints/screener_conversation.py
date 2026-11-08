@@ -18,7 +18,11 @@ from ditto.api_server.endpoints.admin_conversation import (
 )
 from ditto.api_server.endpoints.screener import ScreenerDep, _screened_image_key
 from ditto.db.models import Agent, ConversationAssessment
-from ditto_screening_protocol.conversation import INSTRUMENT, ConversationLaunch
+from ditto_screening_protocol.conversation import (
+    INSTRUMENT,
+    RUN_RESERVATION_MICROUSD,
+    ConversationLaunch,
+)
 
 router = APIRouter(prefix="/screener/conversation-assessments", tags=["screener"])
 
@@ -32,8 +36,13 @@ async def claim(
 ) -> ConversationLaunch | None:
     if request.state.screener_node_status != "active":
         return None
-    if capability is None or INSTRUMENT not in capability.instruments:
-        return None  # An older worker would run a retired judge; offer nothing.
+    if (
+        capability is None
+        or INSTRUMENT not in capability.instruments
+        or capability.reservation_microusd != RUN_RESERVATION_MICROUSD
+    ):
+        # An older worker would run a retired judge or enforce another hold.
+        return None
     claim = await claim_assessment(request, session, worker)
     if claim is None:
         return None

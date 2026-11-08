@@ -25,6 +25,7 @@ from ditto_screening_protocol.conversation import (
     INSTRUMENT_V2,
     JUDGE_MODELS,
     RUBRIC_DIGESTS,
+    RUN_RESERVATION_MICROUSD,
     ConversationLaunch,
     ConversationReport,
 )
@@ -36,6 +37,11 @@ if TYPE_CHECKING:
     from ditto_screening_protocol.conversation import HarnessUsage
 
 logger = logging.getLogger(__name__)
+HARNESS_BUDGET_CODES = frozenset(
+    # The first recorded failure is kept, so "unavailable" here means a budget
+    # wait ran out of time with holds still in flight, not a prior failure.
+    {"inference_budget_exhausted", "inference_budget_unavailable"}
+)
 
 
 def private_write(path: Path, text: str) -> None:
@@ -66,7 +72,11 @@ async def consume(config: ScreenerConfig, platform: PlatformClient) -> bool:
         # A Platform that admits v2 only issues claims to workers that say so;
         # an older worker sends no body and is offered nothing.
         offer = await platform.conversation_request(
-            "/claim", {"instruments": [INSTRUMENT_V2]}
+            "/claim",
+            {
+                "instruments": [INSTRUMENT_V2],
+                "reservation_microusd": RUN_RESERVATION_MICROUSD,
+            },
         )
         if offer is None:
             return False
@@ -104,7 +114,10 @@ async def consume(config: ScreenerConfig, platform: PlatformClient) -> bool:
         )
         if remaining <= 0:
             raise AssessmentFailure("conversation_lease_expired")
-        limits = Limits(total_seconds=min(7_200, remaining))
+        limits = Limits(
+            judge_microusd=claim.judge_budget_microusd,
+            total_seconds=min(7_200, remaining),
+        )
         async with (
             httpx.AsyncClient(
                 timeout=300,
@@ -162,7 +175,13 @@ def _empty_report(claim: ConversationLaunch, reason: str) -> ConversationReport:
         judge_requests=0,
         input_tokens=0,
         output_tokens=0,
-        reserved_microusd=25_000_000,
+        # A v1 claim from an older Platform carries no budget fields and was
+        # held at the legacy $30, whose report reserves the $25 judge budget.
+        reserved_microusd=(
+            25_000_000
+            if claim.instrument == INSTRUMENT_V1
+            else claim.judge_budget_microusd
+        ),
         spent_microusd=0,
         judge_cost_is_upper_bound=claim.instrument == INSTRUMENT_V1,
     )
@@ -181,8 +200,19 @@ async def _deliver(
         report.status == "completed"
         and (usage is None or usage.unmetered or usage.failed)
     ) or (usage is not None and usage.failed):
+        # Running out of the claim's harness hold is a budget outcome, not a
+        # harness defect: the relay refused further paid inference by design.
+        exhausted = (
+            usage is not None
+            and usage.failure is not None
+            and usage.failure.code in HARNESS_BUDGET_CODES
+        )
         document.update(
-            status="incomplete", grades=None, error_code="harness_inference_incomplete"
+            status="incomplete",
+            grades=None,
+            error_code="harness_budget_exhausted"
+            if exhausted
+            else "harness_inference_incomplete",
         )
     report = ConversationReport.model_validate(document)
     private_write(

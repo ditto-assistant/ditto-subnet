@@ -23,6 +23,10 @@ class ConversationClaimRequest(WireModel):
     instruments: Annotated[
         list[Annotated[str, Field(max_length=80)]], Field(max_length=8)
     ]
+    reservation_microusd: Annotated[int, Field(strict=True, ge=0)] | None = None
+    """The per-assessment hold the worker enforces. Platform offers a claim only
+    when it equals the hold it reserves, so a worker sized for the old $30 hold
+    is never handed a $1 claim it would overspend."""
 
 
 class ConversationResultRequest(WireModel):

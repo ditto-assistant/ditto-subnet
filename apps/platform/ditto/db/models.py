@@ -12318,7 +12318,9 @@ class ConversationAssessment(Base):
             name="conversation_base_quality",
         ),
         CheckConstraint(
-            "reserved_microusd = 30000000", name="conversation_reserved_cost"
+            # Legacy $30 v1 hold, or the $1 hold from 2026-11-08.
+            "reserved_microusd IN (30000000, 1000000)",
+            name="conversation_reserved_cost",
         ),
         CheckConstraint("bench_version >= 9", name="conversation_bench_version"),
     )
