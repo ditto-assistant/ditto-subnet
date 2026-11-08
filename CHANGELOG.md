@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.462.0 (2026-11-08)
+
+### Features
+
+- **screener**: Judge conversation assessments with Claude Opus 5.5 (v2) and fix harness failure
+  classes ([#3433](https://github.com/ditto-assistant/ditto-subnet/pull/3433),
+  [`3370604`](https://github.com/ditto-assistant/ditto-subnet/commit/33706049d2ea3f0e3c7952ca266af73254dd1b40))
+
+
 ## v0.461.0 (2026-11-07)
 
 ### Documentation
