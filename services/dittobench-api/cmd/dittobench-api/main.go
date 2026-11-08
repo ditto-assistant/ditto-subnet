@@ -657,6 +657,12 @@ func (s *server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, tools)
 		return
 	}
+	if benchVersion >= protocol.BenchVersionV18 {
+		// The v18 menu is a per-seed sample of the pinned snapshot; there is no
+		// seed-free v18 surface, and the v13 production list would mislead.
+		writeError(w, http.StatusBadRequest, "bench_version "+strconv.Itoa(benchVersion)+" requires a seed for its catalog; request one with seed")
+		return
+	}
 	writeJSON(w, http.StatusOK, catalog.CatalogForVersion(benchVersion))
 }
 
@@ -1836,9 +1842,15 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// v13+ advertises the per-seed surface (paraphrased descriptions, enum
 	// schemas, coined decoys); the same seed drives the fixtures above, so the
 	// decoys a harness sees are exactly the ones the mock endpoint knows.
-	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
-	if privateArtifact != nil {
-		tools = artifact.Catalog
+	tools := artifact.Catalog
+	if privateArtifact == nil {
+		var toolsErr error
+		tools, toolsErr = catalog.CatalogForSeedChecked(req.BenchVersion, seed)
+		if toolsErr != nil {
+			// The catalog is scorer-owned: never the miner's failure.
+			s.store.FailWith(runID, "tool catalog unavailable: "+toolsErr.Error(), toolEndpointInfrastructureFailure())
+			return
+		}
 	}
 
 	// V8 harnesses may embed before any model turn, including the route probe
