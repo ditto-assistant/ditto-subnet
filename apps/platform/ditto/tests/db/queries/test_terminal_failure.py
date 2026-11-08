@@ -159,3 +159,56 @@ async def test_sweep_leaves_rows_that_can_still_finish_or_are_not_the_agents(
     assert await sweep_terminal_artifact_failures(session_maker) == 0
     for agent_id in (reachable, mixed, disagreeing, running):
         assert await _withdrawals(session_maker, agent_id) == []
+
+
+async def test_candidates_skip_rows_that_can_never_qualify(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Non-qualifying rows must not fill the batch ahead of qualifying ones."""
+    unclassified = await _seed(
+        session_maker,
+        name="unclassified",
+        details=["inference_request_rejected:stale_session"] * 3,
+    )
+    reachable = await _seed(
+        session_maker, name="reachable", details=["inference_allowance_exhausted"] * 2
+    )
+    qualifying = await _seed(
+        session_maker, name="qualifying", details=["inference_allowance_exhausted"] * 3
+    )
+    async with session_maker() as session:
+        assert await terminal_close_out_candidates(session, limit=1) == [qualifying]
+        candidates = await terminal_close_out_candidates(session, limit=100)
+    assert unclassified not in candidates
+    assert reachable not in candidates
+
+
+async def test_a_prior_era_withdrawal_does_not_hide_the_current_era(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed(
+        session_maker, name="two-eras", details=["inference_allowance_exhausted"] * 3
+    )
+    async with session_maker() as session, session.begin():
+        session.add(
+            ValidatorQueueWithdrawal(
+                withdrawal_id=uuid4(),
+                agent_id=agent_id,
+                bench_version=_VERSION - 1,
+                actor="peyton",
+                reason="earlier era withdrawal",
+                expected_snapshot="ab" * 32,
+                score_count=0,
+                ticket_snapshot=[],
+                created_at=_NOW - timedelta(days=2),
+            )
+        )
+    assert await sweep_terminal_artifact_failures(session_maker) == 1
+    current = [
+        row
+        for row in await _withdrawals(session_maker, agent_id)
+        if row.bench_version == _VERSION
+    ]
+    assert [row.terminal_failure_code for row in current] == [
+        "inference_allowance_exhausted"
+    ]

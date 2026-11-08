@@ -76,6 +76,14 @@ _AGENT_ADMISSION_DETAIL_CODES = frozenset(
 )
 
 
+# Every exact ``failure_detail`` string :func:`is_agent_attributable_failure_detail`
+# accepts, for SQL filters that cannot call it.
+AGENT_ATTRIBUTABLE_FAILURE_DETAIL_VALUES = frozenset(
+    AGENT_ATTRIBUTABLE_FAILURE_DETAILS
+    | {_ADMISSION_DETAIL_PREFIX + code for code in _AGENT_ADMISSION_DETAIL_CODES}
+)
+
+
 def is_agent_attributable_failure_detail(detail: str | None) -> bool:
     """True for a spent allowance or a classified pre-reservation refusal."""
     if detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS:

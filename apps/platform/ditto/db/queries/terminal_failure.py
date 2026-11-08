@@ -28,7 +28,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -43,12 +43,13 @@ from ditto.db.models import (
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.queue_removal import load_queue_removal, removal_in_force
 from ditto.db.queries.retry_state import (
-    AGENT_ATTRIBUTABLE_FAILURE_DETAILS,
+    AGENT_ATTRIBUTABLE_FAILURE_DETAIL_VALUES,
     dominant_agent_failure_detail,
     is_agent_attributable_exhaustion,
     resolve_bench_version,
     withdrawal_gate,
 )
+from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.tickets import scoring_retry_ticket
 
 logger = logging.getLogger(__name__)
@@ -253,10 +254,13 @@ async def terminal_close_out_candidates(
 ) -> list[UUID]:
     """Evaluating agents that may be owed a close-out, oldest first.
 
-    A cheap superset: an expired scoring ticket whose detail is a named agent
-    code, no live ticket, and no in-force withdrawal yet. Each candidate is
-    then decided by :func:`withdraw_terminal_artifact_failure`, which applies
-    the full fail-closed predicates under row locks.
+    Narrow enough that rows which cannot qualify do not pile up at the head of
+    every sweep and starve the ones that can: per (agent, benchmark version),
+    at least as many expired scoring tickets whose *current* detail is an
+    allowlisted agent code as scores are still owed, no live ticket, and no
+    in-force withdrawal for that same version. Each candidate is then decided
+    by :func:`withdraw_terminal_artifact_failure`, which applies the full
+    fail-closed predicates under row locks.
     """
     live = (
         select(ValidatorTicket.agent_id)
@@ -271,34 +275,48 @@ async def terminal_close_out_candidates(
         select(ValidatorQueueWithdrawal.agent_id)
         .where(
             ValidatorQueueWithdrawal.agent_id == Agent.agent_id,
+            ValidatorQueueWithdrawal.bench_version == ValidatorTicket.bench_version,
             removal_in_force(),
         )
-        .correlate(Agent)
+        .correlate(Agent, ValidatorTicket)
         .exists()
     )
+    scored = (
+        select(func.count(Score.validator_hotkey))
+        .where(
+            Score.agent_id == Agent.agent_id,
+            Score.bench_version == ValidatorTicket.bench_version,
+        )
+        .correlate(Agent, ValidatorTicket)
+        .scalar_subquery()
+    )
     statement = (
-        select(Agent.agent_id)
+        select(Agent.agent_id, Agent.created_at)
         .join(ValidatorTicket, ValidatorTicket.agent_id == Agent.agent_id)
         .where(
             Agent.status == AgentStatus.EVALUATING,
             ValidatorTicket.status == TicketStatus.EXPIRED,
-            or_(
-                ValidatorTicket.failure_detail.in_(
-                    sorted(AGENT_ATTRIBUTABLE_FAILURE_DETAILS)
-                ),
-                # Classified pre-reservation refusals carry a suffix
-                # (``inference_request_rejected:request_too_large``).
-                ValidatorTicket.failure_detail.like("inference_request_rejected:%"),
+            ValidatorTicket.failure_detail.in_(
+                sorted(AGENT_ATTRIBUTABLE_FAILURE_DETAIL_VALUES)
             ),
+            # A detail older than the lease belongs to a superseded attempt.
+            ValidatorTicket.failed_at >= ValidatorTicket.issued_at,
             scoring_retry_ticket(),
             ~live,
             ~withdrawn,
         )
-        .group_by(Agent.agent_id, Agent.created_at)
+        .group_by(Agent.agent_id, Agent.created_at, ValidatorTicket.bench_version)
+        .having(
+            func.count(func.distinct(ValidatorTicket.validator_hotkey))
+            >= SCORING_QUORUM - scored
+        )
         .order_by(Agent.created_at.asc(), Agent.agent_id.asc())
         .limit(limit)
     )
-    return list((await session.scalars(statement)).all())
+    seen: dict[UUID, None] = {}
+    for agent_id, _created_at in (await session.execute(statement)).all():
+        seen.setdefault(agent_id, None)
+    return list(seen)
 
 
 async def sweep_terminal_artifact_failures(
