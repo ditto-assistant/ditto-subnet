@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.464.1 (2026-11-08)
+
+### Bug Fixes
+
+- **screener**: Let the conversation relay settle in-flight calls before stopping
+  ([#3441](https://github.com/ditto-assistant/ditto-subnet/pull/3441),
+  [`1713509`](https://github.com/ditto-assistant/ditto-subnet/commit/17135098dd186fe26442ed942c3157f96011536f))
+
+
 ## v0.464.0 (2026-11-08)
 
 ### Features
