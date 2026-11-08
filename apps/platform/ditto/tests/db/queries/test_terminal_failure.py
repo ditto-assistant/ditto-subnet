@@ -212,3 +212,39 @@ async def test_a_prior_era_withdrawal_does_not_hide_the_current_era(
     assert [row.terminal_failure_code for row in current] == [
         "inference_allowance_exhausted"
     ]
+
+
+async def test_an_agent_failing_in_two_versions_takes_one_candidate_slot(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    older = await _seed(
+        session_maker, name="older", details=["inference_allowance_exhausted"] * 3
+    )
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, older)
+        assert agent is not None
+        agent.created_at = _NOW - timedelta(days=2)
+        for index in range(3):
+            failed = _NOW - timedelta(hours=2, minutes=index)
+            session.add(
+                ValidatorTicket(
+                    agent_id=older,
+                    validator_hotkey=f"5Validator-{index}",
+                    status=TicketStatus.EXPIRED,
+                    issued_at=failed - timedelta(minutes=30),
+                    deadline=failed,
+                    bench_version=_VERSION + 1,
+                    attempt_count=1,
+                    manual_retry_grants=0,
+                    infra_retry_grants=0,
+                    failure_reason="scoring_error",
+                    failure_detail="inference_allowance_exhausted",
+                    failed_at=failed,
+                    retry_after=failed,
+                )
+            )
+    newer = await _seed(
+        session_maker, name="newer", details=["inference_allowance_exhausted"] * 3
+    )
+    async with session_maker() as session:
+        assert await terminal_close_out_candidates(session, limit=2) == [older, newer]

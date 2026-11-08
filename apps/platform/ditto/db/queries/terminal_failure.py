@@ -291,7 +291,10 @@ async def terminal_close_out_candidates(
         .scalar_subquery()
     )
     statement = (
+        # DISTINCT runs after the per-version GROUP BY and before LIMIT, so an
+        # agent qualifying in two versions takes one slot, not two.
         select(Agent.agent_id, Agent.created_at)
+        .distinct()
         .join(ValidatorTicket, ValidatorTicket.agent_id == Agent.agent_id)
         .where(
             Agent.status == AgentStatus.EVALUATING,
@@ -313,10 +316,7 @@ async def terminal_close_out_candidates(
         .order_by(Agent.created_at.asc(), Agent.agent_id.asc())
         .limit(limit)
     )
-    seen: dict[UUID, None] = {}
-    for agent_id, _created_at in (await session.execute(statement)).all():
-        seen.setdefault(agent_id, None)
-    return list(seen)
+    return [agent_id for agent_id, _created_at in (await session.execute(statement))]
 
 
 async def sweep_terminal_artifact_failures(
