@@ -1,9 +1,13 @@
-//! Opt-in reference path: Jev decides, the chat model only writes.
+//! Reference path: Jev decides, the chat model only writes.
 //!
-//! Enable with `DITTOBENCH_JEV_HYBRID=1`. With it unset the kit's default
-//! served path (`Baseline::run`) is byte-for-byte unchanged. This is an
-//! example of one way to use the decision lane, not a required library: the
-//! competition stays language- and architecture-agnostic.
+//! The default from bench_version 18 (see [`DEFAULT_FROM_BENCH_VERSION`]):
+//! with `DITTOBENCH_JEV_HYBRID` unset, a v18+ request takes this path and an
+//! older one takes the classic `Baseline::run`, byte-for-byte unchanged.
+//! `DITTOBENCH_JEV_HYBRID=1` forces it on for every bench, `0` forces it off.
+//! The classic path cannot complete a v18 tool case: the full menu is larger
+//! than the locked chat model's context. This is an example of one way to use
+//! the decision lane, not a required library: the competition stays language-
+//! and architecture-agnostic.
 //!
 //! ## Why
 //!
@@ -61,8 +65,15 @@ use crate::jev::{self, Answers, DecisionClient, DecisionUsage, Question};
 use crate::protocol::{ObservedToolCall, ToolDefWire};
 use crate::v13;
 
-/// Opt-in switch. Unset (the default) keeps `Baseline::run` unchanged.
+/// Switch. Unset means "on from [`DEFAULT_FROM_BENCH_VERSION`]"; `1` forces
+/// it on and `0` forces the classic `Baseline::run` path for every bench.
 pub const HYBRID_ENV: &str = "DITTOBENCH_JEV_HYBRID";
+/// First bench_version that takes this path when [`HYBRID_ENV`] is unset. At
+/// v18 a seed's ~1,450-tool menu (about 152k tokens of tool JSON) exceeds
+/// gpt-oss-20b's 131,072-token context, so the classic path's every chat call
+/// is refused. Older benches keep the classic path, so live scoring of an
+/// unmodified kit below v18 does not change.
+pub const DEFAULT_FROM_BENCH_VERSION: u32 = 18;
 /// `full` (default) or `grouped`; see the module docs.
 pub const MENU_ENV: &str = "DITTOBENCH_JEV_MENU";
 /// Tools Jev hands the chat model (before the safe-harbor top-3 is added).
@@ -88,16 +99,40 @@ do not. Call any other tool only when the request needs an action or fresh \
 information. If nothing you found answers it, say so and name the closest \
 detail you did find. Keep the reply short.";
 
-pub fn enabled_from(value: Option<&str>) -> bool {
-    matches!(
-        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    )
+/// Whether a request at `bench_version` takes the hybrid path, given the raw
+/// [`HYBRID_ENV`] value. An explicit on/off wins; unset, empty or unrecognised
+/// means the bench default.
+pub fn enabled_from(value: Option<&str>, bench_version: u32) -> bool {
+    match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("1" | "true" | "yes" | "on") => true,
+        Some("0" | "false" | "no" | "off") => false,
+        _ => bench_version >= DEFAULT_FROM_BENCH_VERSION,
+    }
 }
 
-/// True when `DITTOBENCH_JEV_HYBRID` opts in.
-pub fn enabled() -> bool {
-    enabled_from(std::env::var(HYBRID_ENV).ok().as_deref())
+/// True when a request at `bench_version` takes the hybrid path.
+pub fn enabled(bench_version: u32) -> bool {
+    enabled_from(std::env::var(HYBRID_ENV).ok().as_deref(), bench_version)
+}
+
+/// One startup line naming the served path per bench, so a miner who
+/// rehearses v18 knows which path produced the score.
+pub fn served_path_note() -> String {
+    served_path_note_from(std::env::var(HYBRID_ENV).ok().as_deref())
+}
+
+pub fn served_path_note_from(value: Option<&str>) -> String {
+    match (enabled_from(value, 0), enabled_from(value, u32::MAX)) {
+        (true, _) => format!("served path: Jev hybrid on every bench ({HYBRID_ENV} set on)"),
+        (false, false) => format!(
+            "served path: classic Baseline::run on every bench ({HYBRID_ENV} set off; \
+             a v18+ full tool menu exceeds the chat model's context)"
+        ),
+        (false, true) => format!(
+            "served path: classic Baseline::run below bench {DEFAULT_FROM_BENCH_VERSION}, \
+             Jev hybrid from {DEFAULT_FROM_BENCH_VERSION} ({HYBRID_ENV}=1/0 forces one)"
+        ),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

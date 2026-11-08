@@ -58,6 +58,28 @@ class LocalRehearsalTest(unittest.TestCase):
         with self.assertRaisesRegex(LOCAL.RehearsalError, "harness_oom"):
             LOCAL.enforce_memory_envelope(cap << 20, cap)
 
+    def test_case_concurrency_needs_no_exported_override(self) -> None:
+        # Regression: run() read the concurrency from the harness environment,
+        # which only carries it when the caller exported it, so a plain
+        # `local-rehearsal.py --bench-version 18` raised KeyError before scoring.
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}):
+            os.environ.pop("DITTOBENCH_V8_CASE_CONCURRENCY", None)
+            tmp = Path(directory)
+            harness_env = LOCAL.harness_rehearsal_env(tmp, gates=False)
+            api_env = LOCAL.scorer_environment(tmp, 0)
+        self.assertNotIn("DITTOBENCH_V8_CASE_CONCURRENCY", harness_env)
+        self.assertEqual(
+            LOCAL.rehearsal_case_concurrency(api_env),
+            LOCAL.runtime_envelope()["case_concurrency"],
+        )
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"DITTOBENCH_V8_CASE_CONCURRENCY": "3"}
+        ):
+            api_env = LOCAL.scorer_environment(Path(directory), 0)
+        self.assertEqual(LOCAL.rehearsal_case_concurrency(api_env), 3)
+        source = SCRIPT_PATH.read_text()
+        self.assertNotIn('harness_env["DITTOBENCH_V8_CASE_CONCURRENCY"]', source)
+
     def test_submit_body_can_pin_an_older_contract(self) -> None:
         body = LOCAL.submit_body("small", "http://127.0.0.1:8080", None, 9)
         self.assertEqual(body["bench_version"], 9)

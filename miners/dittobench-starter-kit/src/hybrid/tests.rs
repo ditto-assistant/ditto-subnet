@@ -262,12 +262,31 @@ fn user_prompt(messages: &[ChatMessage]) -> String {
 // ----------------------------------------------------------------- tests
 
 #[test]
-fn hybrid_is_off_unless_opted_in() {
-    assert!(!enabled_from(None));
-    assert!(!enabled_from(Some("")));
-    assert!(!enabled_from(Some("0")));
-    assert!(enabled_from(Some("1")));
-    assert!(enabled_from(Some(" TRUE ")));
+fn hybrid_is_the_default_from_bench_18_only() {
+    // Unset: the classic path below v18 (live scoring of an unmodified kit
+    // does not change), the hybrid from v18 (the menu exceeds the context).
+    assert_eq!(DEFAULT_FROM_BENCH_VERSION, 18);
+    for unset in [None, Some(""), Some("  "), Some("maybe")] {
+        assert!(!enabled_from(unset, 17), "{unset:?} at 17");
+        assert!(enabled_from(unset, 18), "{unset:?} at 18");
+        assert!(enabled_from(unset, 19), "{unset:?} at 19");
+    }
+    // An explicit value wins on every bench.
+    for off in ["0", "false", " OFF ", "no"] {
+        assert!(!enabled_from(Some(off), 17), "{off} at 17");
+        assert!(!enabled_from(Some(off), 18), "{off} at 18");
+    }
+    for on in ["1", " TRUE ", "yes", "on"] {
+        assert!(enabled_from(Some(on), 9), "{on} at 9");
+        assert!(enabled_from(Some(on), 18), "{on} at 18");
+    }
+}
+
+#[test]
+fn startup_note_names_the_path_per_bench() {
+    assert!(served_path_note_from(None).contains("Jev hybrid from 18"));
+    assert!(served_path_note_from(Some("1")).contains("Jev hybrid on every bench"));
+    assert!(served_path_note_from(Some("0")).contains("classic Baseline::run on every bench"));
 }
 
 #[test]
