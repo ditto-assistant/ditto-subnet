@@ -46,6 +46,7 @@ type runBudget struct {
 	exhausted     bool
 	admitted      int
 	spentAtCutoff uint64
+	lastSpent     uint64 // the last successful meter reading
 	meterLost     bool
 	unrunTool     int
 	unrunMemory   int
@@ -99,10 +100,13 @@ func (b *runBudget) admit() bool {
 		if !b.meterLost {
 			log.Printf("run budget: broker session vanished after %d admitted cases; refusing the rest", b.admitted)
 		}
-		b.exhausted, b.meterLost = true, true
+		// The spend at the cutoff is the last reading that succeeded.
+		b.exhausted, b.meterLost, b.spentAtCutoff = true, true, b.lastSpent
 		return false
 	}
-	if spent := scoregates.MeteredCostNanoUSD(b.benchVersion, usage); spent >= b.budget {
+	spent := scoregates.MeteredCostNanoUSD(b.benchVersion, usage)
+	b.lastSpent = spent
+	if spent >= b.budget {
 		b.exhausted, b.spentAtCutoff = true, spent
 		return false
 	}
@@ -143,19 +147,40 @@ func (b *runBudget) summary() *protocol.RunBudgetSummary {
 	}
 	out.UnrunCases = out.UnrunToolCases + out.UnrunMemoryCases + out.UnrunSliceCases
 	if b.exhausted {
-		out.Reason = protocol.RunBudgetExhaustedReason
+		out.Reason = b.reasonLocked()
 	}
 	return out
 }
 
-// budgetExhaustedCase is the score of a case the budget refused.
-func budgetExhaustedCase(caseID, category, kind string) protocol.CaseScore {
+func (b *runBudget) reasonLocked() string {
+	if b.meterLost {
+		return protocol.RunBudgetMeterLostReason
+	}
+	return protocol.RunBudgetExhaustedReason
+}
+
+// refusalNote is the note a refused case carries: why it never ran.
+func (b *runBudget) refusalNote() string {
+	if b == nil {
+		return protocol.RunBudgetExhaustedReason
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.meterLost {
+		return protocol.RunBudgetMeterLostReason + ": the run's cost meter (its broker session) disappeared before this case started; the scorer stopped admitting cases and scored it 0"
+	}
+	return protocol.RunBudgetExhaustedReason + ": the run's priced cost reached its budget before this case started; scored 0"
+}
+
+// budgetExhaustedCase is the score of a case the budget refused; note says
+// why (runBudget.refusalNote).
+func budgetExhaustedCase(caseID, category, kind, note string) protocol.CaseScore {
 	return protocol.CaseScore{
 		CaseID: caseID, Category: category, Kind: kind, Score: 0,
 		BudgetExhausted: true,
 		Called:          []string{},
 		Expected:        []string{},
-		Notes:           []string{protocol.RunBudgetExhaustedReason + ": the run's priced cost reached its budget before this case started; scored 0"},
+		Notes:           []string{note},
 	}
 }
 

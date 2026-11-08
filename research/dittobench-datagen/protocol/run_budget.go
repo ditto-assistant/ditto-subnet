@@ -38,9 +38,17 @@ type RunBudgetSummary struct {
 	// (0 when the budget was never reached). Cases already running finish, so
 	// the run's final priced cost can exceed the budget.
 	SpentNanoUSDAtCutoff uint64 `json:"spent_nano_usd_at_cutoff"`
-	// Reason is "run_budget_exhausted" when Exhausted.
+	// Reason is "run_budget_exhausted" when the metered spend reached the
+	// budget, and "run_budget_meter_lost" when the scorer stopped admitting
+	// cases because the run's broker session disappeared (spend unknown past
+	// SpentNanoUSDAtCutoff, the last successful reading).
 	Reason string `json:"reason,omitempty"`
 }
 
 // RunBudgetExhaustedReason is the reason an unrun case and the summary carry.
 const RunBudgetExhaustedReason = "run_budget_exhausted"
+
+// RunBudgetMeterLostReason is the reason when the run's metering session
+// disappeared mid-run and the scorer failed closed. Unrun cases still carry
+// CaseScore.BudgetExhausted (they never ran), with this reason in their notes.
+const RunBudgetMeterLostReason = "run_budget_meter_lost"

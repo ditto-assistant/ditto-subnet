@@ -2146,7 +2146,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				}
 				transcriptID = internalID
 			}
-			toolResults[i] = budgetExhaustedCase(transcriptID, c.Category, protocol.KindTool)
+			toolResults[i] = budgetExhaustedCase(transcriptID, c.Category, protocol.KindTool, budget.refusalNote())
 			toolTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindTool}
 			s.store.AppendPartial(runID, toolResults[i])
 			return
@@ -2350,7 +2350,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				if category == "" {
 					category = "memory"
 				}
-				waveResults[i] = budgetExhaustedCase(transcriptID, category, protocol.KindMemory)
+				waveResults[i] = budgetExhaustedCase(transcriptID, category, protocol.KindMemory, budget.refusalNote())
 				waveTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindMemory, UserID: transcriptUser}
 				s.store.AppendPartial(runID, waveResults[i])
 				return

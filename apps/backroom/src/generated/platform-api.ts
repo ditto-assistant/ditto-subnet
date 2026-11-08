@@ -29449,6 +29449,7 @@ export interface components {
             /** Posture */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
             priced_cost?: components["schemas"]["PricedCostSummary"] | null;
+            run_budget?: components["schemas"]["RunBudgetSummary"] | null;
             /** Run Id */
             run_id: string;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
@@ -38362,6 +38363,71 @@ export interface components {
             min_tool_accuracy: number;
             /** Speed Weight */
             speed_weight: number;
+        };
+        /**
+         * RunBudgetSummary
+         * @description Run-level bench v18 per-run cost budget (``details.run_budget``).
+         *
+         *     The scorer stops admitting cases, in dispatch order, once the run's
+         *     metered priced cost reaches ``budget_nano_usd``; every unrun case scores
+         *     0 with ``budget_exhausted``. A spent budget is the harness's own cost,
+         *     never an infrastructure failure. ``reason`` is ``run_budget_exhausted``,
+         *     or ``run_budget_meter_lost`` when the run's metering session disappeared
+         *     and the scorer stopped admitting cases (``spent_nano_usd_at_cutoff`` is
+         *     then the last successful reading).
+         */
+        RunBudgetSummary: {
+            /**
+             * Admitted Cases
+             * @default 0
+             */
+            admitted_cases: number;
+            /**
+             * Budget Nano Usd
+             * @default 0
+             */
+            budget_nano_usd: number;
+            /** Budget Usd */
+            budget_usd?: number | null;
+            /**
+             * Cases
+             * @default 0
+             */
+            cases: number;
+            /** Contract Id */
+            contract_id?: string | null;
+            /**
+             * Exhausted
+             * @default false
+             */
+            exhausted: boolean;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Spent Nano Usd At Cutoff
+             * @default 0
+             */
+            spent_nano_usd_at_cutoff: number;
+            /**
+             * Unrun Cases
+             * @default 0
+             */
+            unrun_cases: number;
+            /**
+             * Unrun Memory Cases
+             * @default 0
+             */
+            unrun_memory_cases: number;
+            /**
+             * Unrun Slice Cases
+             * @default 0
+             */
+            unrun_slice_cases: number;
+            /**
+             * Unrun Tool Cases
+             * @default 0
+             */
+            unrun_tool_cases: number;
         };
         /** RuntimeInterfaceReport */
         RuntimeInterfaceReport: {
