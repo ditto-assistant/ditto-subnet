@@ -238,12 +238,16 @@ impl Answers {
                 continue;
             }
             let ranked = self.ranked(id);
-            let none = ranked
+            // A chunk whose answer lacks the reference cannot be normalised
+            // against the others; skip it rather than inflate it.
+            let Some(none) = ranked
                 .iter()
                 .find(|(name, _)| name == reference)
                 .map(|(_, p)| *p)
-                .unwrap_or(0.0)
-                .max(1e-3);
+            else {
+                continue;
+            };
+            let none = none.max(1e-3);
             for (name, p) in ranked {
                 if name != reference {
                     out.push((name, p / none));
@@ -358,7 +362,20 @@ impl DecisionClient {
                         .and_then(|v| v.to_str().ok())
                         .and_then(|v| v.trim().parse::<u64>().ok());
                     let text = resp.text().await.unwrap_or_default();
-                    let parsed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                    let parsed: Value = match serde_json::from_str(&text) {
+                        Ok(parsed) => parsed,
+                        Err(err) => {
+                            // Unreadable even on a 2xx: a failure to retry and
+                            // report, never a silent empty answer set.
+                            usage.calls.fetch_add(1, Ordering::Relaxed);
+                            last_err = Some(anyhow::anyhow!(
+                                "decision lane returned {status} with an unparseable body: {err}: {}",
+                                text.chars().take(300).collect::<String>()
+                            ));
+                            tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
+                            continue;
+                        }
+                    };
                     // A metered call is priced from its usage even when it
                     // answers an error, so count usage whenever it is present.
                     if let Some(u) = parsed.get("usage") {
@@ -373,7 +390,14 @@ impl DecisionClient {
                     }
                     usage.calls.fetch_add(1, Ordering::Relaxed);
                     if status.is_success() {
-                        return Ok(parsed.get("answers").cloned().unwrap_or(Value::Null));
+                        if let Some(answers) = parsed.get("answers").filter(|a| a.is_object()) {
+                            return Ok(answers.clone());
+                        }
+                        last_err = Some(anyhow::anyhow!(
+                            "decision lane returned {status} without an answers object"
+                        ));
+                        tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
+                        continue;
                     }
                     last_err = Some(anyhow::anyhow!(
                         "decision lane returned {status}: {}",

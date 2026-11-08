@@ -615,6 +615,9 @@ const RELATIVE_FLOOR: f64 = 0.05;
 /// the best: a clear winner travels alone, a close race keeps its runners-up.
 pub fn top_relative(ranked: Vec<(String, f64)>, k: usize) -> Vec<String> {
     let best = ranked.first().map(|(_, s)| *s).unwrap_or(0.0);
+    if best <= 0.0 {
+        return Vec::new();
+    }
     ranked
         .into_iter()
         .take(k)
@@ -946,6 +949,26 @@ pub async fn run_case(
             }
         }
         all_offered.extend(offered.iter().cloned());
+    }
+    if outcome.final_text.is_empty() && messages.last().is_some_and(|m| m.role == "tool") {
+        // The hop budget ran out right after tool results: one short call
+        // with no tools writes the reply from them.
+        messages.push(text_message(
+            "user",
+            "Reply to the user now with the result of the tool calls above.".to_string(),
+        ));
+        let chunk = model
+            .next(&messages, &[])
+            .await
+            .map_err(|err| anyhow::anyhow!("hybrid chat call: {err}"))?;
+        outcome.chat_calls += 1;
+        if let Some(cost) = &chunk.cost {
+            outcome.prompt_tokens += cost.usage.input_tokens;
+            outcome.output_tokens += cost.usage.output_tokens;
+            outcome.max_prompt_tokens = outcome.max_prompt_tokens.max(cost.usage.input_tokens);
+        }
+        outcome.final_text = chunk.text.clone();
+        messages.push(text_message("assistant", chunk.text));
     }
     all_offered.extend(offered.iter().cloned());
     outcome.tools_offered = all_offered.into_iter().collect();

@@ -1348,6 +1348,10 @@ impl Baseline {
             None => Arc::clone(&self.model),
         };
 
+        // Same prompt composition as the default path: the wire prompt, plus
+        // the answer-line instruction only when the slot rehearsal enables it.
+        let answer_slot = v13::answer_slot_enabled();
+        let system_prompt = v13::compose_system_prompt(&req.system_prompt, answer_slot);
         let outcome = crate::hybrid::run_case(
             case_model.as_ref(),
             decisions.as_ref(),
@@ -1355,7 +1359,7 @@ impl Baseline {
             crate::hybrid::HybridCase {
                 case_id: &req.case_id,
                 user_input: &req.user_input,
-                system_prompt: &req.system_prompt,
+                system_prompt: &system_prompt,
                 catalog: &req.tools,
                 executable,
                 memory_tools,
@@ -1379,7 +1383,6 @@ impl Baseline {
             }
         }
 
-        let answer_slot = v13::answer_slot_enabled();
         let final_text = outcome.final_text;
         Ok(protocol::RunResponse {
             abstain: None,

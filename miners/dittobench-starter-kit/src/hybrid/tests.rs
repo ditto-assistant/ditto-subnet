@@ -108,10 +108,7 @@ impl Model for ScriptedModel {
             .lock()
             .unwrap()
             .pop()
-            .unwrap_or_else(|| ChatChunk {
-                text: "done".into(),
-                ..ChatChunk::default()
-            });
+            .expect("chat model called more times than the test script provides");
         let prompt: usize = messages
             .iter()
             .flat_map(|m| m.content.iter())
@@ -633,4 +630,75 @@ async fn a_failing_decision_lane_degrades_instead_of_failing_the_case() {
     .unwrap();
     assert_eq!(out.final_text, "ok");
     assert!(out.decision_failures >= 1);
+}
+
+#[test]
+fn an_all_zero_ranking_selects_nothing() {
+    let zero = vec![("a".to_string(), 0.0), ("b".to_string(), 0.0)];
+    assert!(top_relative(zero, 3).is_empty());
+}
+
+#[test]
+fn chunks_without_their_reference_are_not_inflated() {
+    let mut a = Answers::default();
+    a.merge(&json!({
+        "tool0": {"type": "choice", "probabilities": {"a": 0.4, "none_of_these": 0.6}},
+        "tool1": {"type": "choice", "probabilities": {"b": 0.99}},
+    }));
+    let ranked: Vec<String> = a
+        .ranked_chunks("tool", NONE_OPTION)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(ranked, vec!["a"]);
+}
+
+#[tokio::test]
+async fn a_hop_budget_that_ends_on_tool_results_still_gets_a_reply() {
+    let catalog = catalog();
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let model = ScriptedModel::new(vec![
+        call("search_web", json!({"query": "a"})),
+        text("Here is what the search found."),
+    ]);
+    let cfg = HybridConfig {
+        max_hops: 1,
+        ..HybridConfig::default()
+    };
+    let out = run_case(&model, None, &cfg, case(&catalog, &executed))
+        .await
+        .unwrap();
+    assert_eq!(executed.lock().unwrap().len(), 1);
+    assert_eq!(out.final_text, "Here is what the search found.");
+    let calls = model.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[1].1.is_empty(), "the wrap-up call offers no tools");
+}
+
+async fn serve_raw(body: &'static str) -> String {
+    let app = Router::new().route("/decisions", post(move || async move { body }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/decisions")
+}
+
+#[tokio::test]
+async fn a_malformed_success_body_is_retried_and_reported() {
+    let url = serve_raw("<html>gateway hiccup</html>").await;
+    let client = DecisionClient::new(reqwest::Client::new(), url, "typesafe/jev-1.14", None);
+    let usage = DecisionUsage::default();
+    let err = client
+        .ask_one(
+            "case-1",
+            &json!({"request": "x"}),
+            &[Question::noul("q", "x")],
+            &usage,
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unparseable"), "{err}");
+    let (calls, _, _, failures) = usage.snapshot();
+    assert_eq!(calls, 3, "retried");
+    assert_eq!(failures, 1, "reported");
 }
