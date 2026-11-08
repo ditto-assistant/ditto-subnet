@@ -12,7 +12,8 @@ func TestV18UnlinkedReplyClaims(t *testing.T) {
 		"I tried, but Notion isn't connected to your workspace, so nothing was posted.",
 		"Your Asana account is not linked yet. Connect it in Settings and I can add the task.",
 		"I couldn’t reach Linear: it hasn’t been connected.",
-		"That app is unavailable right now, so I did not create the page.",
+		"That app is unavailable because it isn't set up, so I did not create the page.",
+		"I couldn't access Trello: you'll need to authorize the integration first.",
 	} {
 		if !UnlinkedReplyClaimsNotConnected(reply) {
 			t.Errorf("missed a not-connected claim: %q", reply)
@@ -23,6 +24,12 @@ func TestV18UnlinkedReplyClaims(t *testing.T) {
 		"Your Asana board shows 14 open tasks.",
 		"",
 		"Connected teams love this.", // "connected" alone is not a claim
+		// Generic failure words outside a connection sentence are not a claim
+		// (PR #3413 review): a fabricated success with an unrelated hiccup.
+		"Done! I posted the checklist to Notion. The cover image upload failed, though.",
+		"Created the Asana task; I couldn't attach the PDF.",
+		"Your Linear issue is filed. Unable to add a due date.",
+		"Posted to Slack. The emoji reaction was unavailable.",
 	} {
 		if UnlinkedReplyClaimsNotConnected(reply) {
 			t.Errorf("success or silent reply read as a not-connected claim: %q", reply)
