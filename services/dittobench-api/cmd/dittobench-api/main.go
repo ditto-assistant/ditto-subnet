@@ -2319,6 +2319,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	}
 	errMemoryProjection := errors.New("v9 memory capability reverse mapping failed")
 	waveErr := runner.RunStagedWaves(ctx, memSuite.Waves, casesByWave, func(ctx context.Context, w int, wave protocol.SeedRequest) error {
+		if budget.isExhausted() {
+			// Every later case is refused at dispatch, so seeding this wave
+			// would only spend embeddings past the budget.
+			return nil
+		}
 		s.store.SetStage(runID, store.StatusSeeding, len(perCase), total)
 		_, err := runner.SeedForVersion(ctx, harnessURL, wave, req.BenchVersion)
 		return err

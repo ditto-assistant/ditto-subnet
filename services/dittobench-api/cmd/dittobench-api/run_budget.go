@@ -159,6 +159,17 @@ func (b *runBudget) reasonLocked() string {
 	return protocol.RunBudgetExhaustedReason
 }
 
+// isExhausted reports whether the budget has stopped admitting cases (false
+// for a nil budget).
+func (b *runBudget) isExhausted() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.exhausted
+}
+
 // refusalNote is the note a refused case carries: why it never ran.
 func (b *runBudget) refusalNote() string {
 	if b == nil {

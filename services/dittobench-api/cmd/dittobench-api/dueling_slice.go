@@ -272,6 +272,7 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 					env.budget.refuse("slice")
 					return false
 				},
+				RefusalNote: env.budget.refusalNote,
 			})
 			if err != nil {
 				return duelingSliceResult{}, fmt.Errorf("column %s: %w", id, err)
@@ -292,13 +293,18 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 				agg.N++
 				agg.Sum += score
 				agg.SumSq += score * score
-				result.rows = append(result.rows, protocol.CaseScore{
+				row := protocol.CaseScore{
 					CaseID:          challenge.RoundCaseID(id, o.CaseID),
 					Category:        challenge.SliceCaseCategory,
 					Kind:            protocol.KindMemory,
 					Score:           score,
 					BudgetExhausted: o.BudgetExhausted,
-				})
+				}
+				if o.BudgetExhausted {
+					// The refusal's specific reason (spent budget or lost meter).
+					row.Notes = append([]string(nil), o.Notes...)
+				}
+				result.rows = append(result.rows, row)
 			}
 			if env.progress != nil {
 				env.progress(len(result.rows))
