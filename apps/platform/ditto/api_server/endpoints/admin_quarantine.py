@@ -56,6 +56,8 @@ from ditto.api_models.admin_quarantine import (
     AdminQuarantineContext,
     AdminQuarantineItem,
     AdminQuarantineList,
+    AdminQuarantineReasonAmendRequest,
+    AdminQuarantineReasonAmendResponse,
     AdminQuarantineResolutionEvent,
     AdminQuarantineResolveRequest,
     AdminQuarantineResolveResponse,
@@ -230,7 +232,10 @@ from ditto.db.queries.terminal_quarantine_reconciliation import (
     terminal_reconciliation_record,
 )
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    effective_screening_policy_version,
+    lease_screening_policy_floor,
+)
 from ditto_screening_protocol import (
     AdjudicationCompletionReceipt,
     AdjudicationRunDiagnostic,
@@ -4243,6 +4248,157 @@ async def expire_running_screening(
     )
 
 
+@router.post(
+    "/screening-quarantines/{quarantine_id}/amend-reason",
+    response_model=AdminQuarantineReasonAmendResponse,
+)
+async def amend_quarantine_reject_reason(
+    quarantine_id: UUID,
+    payload: AdminQuarantineReasonAmendRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminQuarantineReasonAmendResponse:
+    """Correct the miner-visible reason on a resolved reject (SN-439).
+
+    The reject stands: status, decision-maker, moderation record and evidence
+    are untouched. The quarantine's resolution reason, the attempt's public
+    reason and the agent's screening reason -- wherever they still carry the
+    replaced text -- take the corrected text. The replaced text stays in the
+    append-only resolution history, seeded with the original decision when
+    the reject (an automated confirmed violation, say) wrote no history row.
+    """
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    now = datetime.now(UTC)
+    async with session.begin():
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine)
+            .where(ScreeningQuarantine.quarantine_id == quarantine_id)
+            .with_for_update()
+        )
+        if quarantine is None:
+            raise HTTPException(status_code=404, detail="quarantine not found")
+        agent = await session.scalar(
+            select(Agent).where(Agent.agent_id == quarantine.agent_id).with_for_update()
+        )
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        if (
+            agent.agent_id != payload.expected_agent_id
+            or agent.sha256 != payload.expected_artifact_sha256
+        ):
+            raise HTTPException(status_code=409, detail="submission identity changed")
+        if quarantine.attempt_id != payload.expected_attempt_id:
+            raise HTTPException(status_code=409, detail="screening attempt changed")
+        if (
+            quarantine.status != "resolved"
+            or quarantine.resolution != "reject"
+            or agent.status != AgentStatus.REJECTED
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="only a resolved reject on a rejected submission is amendable",
+            )
+        current = quarantine.resolution_reason or ""
+
+        def _amended(
+            previous: str, *, idempotent: bool
+        ) -> AdminQuarantineReasonAmendResponse:
+            return AdminQuarantineReasonAmendResponse(
+                quarantine_id=quarantine.quarantine_id,
+                agent_id=agent.agent_id,
+                attempt_id=quarantine.attempt_id,
+                previous_reason=previous,
+                reason=payload.reason,
+                resolved_by=quarantine.resolved_by,
+                idempotent=idempotent,
+            )
+
+        if current == payload.reason:
+            history = await _resolution_history(session, [quarantine.quarantine_id])
+            reasons = [
+                event.reason or ""
+                for event in history.get(quarantine.quarantine_id, [])
+                if event.resolution == "reject"
+                and (
+                    quarantine.resolved_at is None
+                    or event.created_at >= quarantine.resolved_at
+                )
+            ]
+            # The same reason may have been amended more than once. Confirm
+            # this request's transition was recorded rather than attributing
+            # an unrelated later transition to the replay.
+            if payload.expected_reason != current and not any(
+                previous == payload.expected_reason and amended == current
+                for previous, amended in zip(reasons, reasons[1:], strict=False)
+            ):
+                raise HTTPException(status_code=409, detail="public reason changed")
+            return _amended(payload.expected_reason, idempotent=True)
+        if current != payload.expected_reason:
+            raise HTTPException(status_code=409, detail="public reason changed")
+        attempt = await session.scalar(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.attempt_id == quarantine.attempt_id,
+                ScreeningAttempt.agent_id == agent.agent_id,
+            )
+            .with_for_update()
+        )
+        if attempt is None:
+            raise HTTPException(status_code=409, detail="screening attempt changed")
+        recorded_query = select(ScreeningQuarantineResolution).where(
+            ScreeningQuarantineResolution.quarantine_id == quarantine_id,
+            ScreeningQuarantineResolution.resolution == "reject",
+            ScreeningQuarantineResolution.reason == current,
+        )
+        # A prior screening decision with the same text is not evidence for
+        # this decision. A later non-reject event does not erase evidence that
+        # the current decision or an amendment was already recorded.
+        if quarantine.resolved_at is not None:
+            recorded_query = recorded_query.where(
+                ScreeningQuarantineResolution.created_at >= quarantine.resolved_at
+            )
+        recorded = await session.scalar(recorded_query.limit(1))
+        if recorded is None:
+            session.add(
+                ScreeningQuarantineResolution(
+                    resolution_id=uuid4(),
+                    quarantine_id=quarantine_id,
+                    resolution="reject",
+                    reason=current,
+                    actor=quarantine.resolved_by or "unknown",
+                    # Strictly before the amendment row, so history order never
+                    # rests on random resolution ids.
+                    created_at=quarantine.resolved_at or (now - timedelta(seconds=1)),
+                )
+            )
+        session.add(
+            ScreeningQuarantineResolution(
+                resolution_id=uuid4(),
+                quarantine_id=quarantine_id,
+                resolution="reject",
+                reason=payload.reason,
+                actor=x_admin_actor,
+                created_at=now,
+            )
+        )
+        quarantine.resolution_reason = payload.reason
+        if (attempt.public_reason or "") == current:
+            attempt.public_reason = payload.reason
+        if (agent.screening_reason or "") == current:
+            agent.screening_reason = payload.reason
+    logger.info(
+        "admin_actor=%s amended reject reason quarantine_id=%s agent_id=%s "
+        "attempt_id=%s",
+        x_admin_actor,
+        quarantine_id,
+        agent.agent_id,
+        quarantine.attempt_id,
+    )
+    return _amended(current, idempotent=False)
+
+
 def _reject_screening_blocked_detail(status: AgentStatus) -> str:
     if status == AgentStatus.QUARANTINED:
         return "submission is quarantined; use resolve_screening_quarantine"
@@ -4421,7 +4577,7 @@ async def _screened_image_rebuild_detail(
         blocking_reason = "submission already has an accepted active-version score"
     elif screening_attempt_active:
         blocking_reason = "screening attempt is active"
-    elif agent.screening_policy_version < effective_screening_policy_version():
+    elif agent.screening_policy_version < lease_screening_policy_floor(bench_version):
         blocking_reason = "submission is not on the current screening policy"
     elif agent.screened_image_sha256 is None or agent.screened_image_upload_id is None:
         blocking_reason = "submission has no complete screened image to replace"

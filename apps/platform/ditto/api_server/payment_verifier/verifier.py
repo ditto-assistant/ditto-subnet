@@ -18,7 +18,7 @@ from ditto.api_server.payment_verifier.models import (
     PaymentProof,
     VerifiedPayment,
 )
-from ditto.chain.errors import ExtrinsicNotFoundError
+from ditto.chain.errors import ChainError, ExtrinsicNotFoundError
 
 if TYPE_CHECKING:
     from typing import Any
@@ -44,7 +44,8 @@ class PaymentVerifier:
     Verification flow (single async path):
 
     1. Resolve ``block_number`` and require its canonical hash to match the proof.
-    2. Fetch the extrinsic via Pylon by ``(block_number, extrinsic_index)``.
+    2. Fetch the extrinsic via Pylon by ``(block_number, extrinsic_index)``,
+       falling back to the archive providers by the bound block hash.
     3. Confirm the call is ``Balances.transfer_keep_alive``.
     4. Confirm the chain emitted ``ExtrinsicSuccess`` at the matching index.
     5. Confirm the destination equals the configured upload-payment address.
@@ -99,16 +100,33 @@ class PaymentVerifier:
                 f"{canonical_block_hash}, not {proof.block_hash}"
             )
 
-        # 2. Pylon: fetch the extrinsic.
+        # 2. Fetch the extrinsic: Pylon first, then the archive providers by
+        # the hash bound above. Pylon is one backend; when it lags the head or
+        # no longer serves the block body it answers not-found for a payment
+        # that executed (SN-455). Only an archive holding the block decides
+        # 3201; an archive outage stays a retryable ChainError (503).
         try:
             ext = await self._chain.get_extrinsic(
                 proof.block_number, proof.extrinsic_index
             )
-        except ExtrinsicNotFoundError as e:
-            raise PaymentNotFoundOnChain(
-                f"extrinsic at block_number={proof.block_number} "
-                f"index={proof.extrinsic_index} not found on chain"
-            ) from e
+        except ChainError as pylon_error:
+            logger.warning(
+                "pylon extrinsic read failed; reading archive block=%s idx=%s error=%s",
+                proof.block_number,
+                proof.extrinsic_index,
+                pylon_error,
+            )
+            try:
+                ext = await self._chain.get_extrinsic_at_block_hash(
+                    proof.block_number,
+                    canonical_block_hash,
+                    proof.extrinsic_index,
+                )
+            except ExtrinsicNotFoundError as e:
+                raise PaymentNotFoundOnChain(
+                    f"extrinsic at block_number={proof.block_number} "
+                    f"index={proof.extrinsic_index} not found on chain"
+                ) from e
 
         # 3. Call must be Balances.transfer_keep_alive.
         if (

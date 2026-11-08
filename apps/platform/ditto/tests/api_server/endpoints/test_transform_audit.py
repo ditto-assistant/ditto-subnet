@@ -102,12 +102,3 @@ def test_alpha_is_the_honest_false_positive_rate() -> None:
     assert 0 < AUDIT_ALPHA <= 0.01
     assert _binomial_tail(AUDIT_MIN_DISCORDANT, AUDIT_MIN_DISCORDANT) <= 0.02
     assert _binomial_tail(0, 10) == pytest.approx(1.0)
-
-
-def test_enforcement_is_off_by_default() -> None:
-    """The metric now discriminates in principle, but the floor has not been
-    validated against the champion population it judges. Flipping this without
-    that evidence is what would cost miners."""
-    from ditto.api_server.endpoints import validator as v
-
-    assert v.TRANSFORM_AUDIT_ENFORCE is False

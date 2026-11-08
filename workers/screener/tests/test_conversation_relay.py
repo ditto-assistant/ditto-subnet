@@ -37,8 +37,13 @@ def test_route_and_model_override_cannot_escape_budget_profile():
     )
     assert route == "chat/completions" and not embed
     assert payload["model"] == MODEL
-    assert payload["provider"]["max_price"] == {"prompt": 2, "completion": 2}
-    assert payload["provider"]["allow_fallbacks"] is False
+    assert payload["provider"]["max_price"] == {"prompt": 0.1, "completion": 0.4}
+    # The bench's aggregate route: fall back across providers on a rate limit,
+    # never onto the excluded 4-bit endpoint, always under the price ceiling.
+    assert payload["provider"]["allow_fallbacks"] is True
+    assert payload["provider"]["ignore"] == ["coreweave"]
+    assert payload["provider"]["zdr"] is True
+    assert "only" not in payload["provider"]
     assert "plugins" not in payload and "route" not in payload
     with pytest.raises(ValueError):
         Relay.payload("/proxy/https://evil.example", chat())
@@ -52,7 +57,7 @@ def provider(monkeypatch, body):
     class Opener:
         def open(self, request, *, timeout):
             calls.append(request)
-            assert timeout == 110
+            assert timeout == 240
             return io.BytesIO(json.dumps(body).encode())
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_args: Opener())
@@ -64,7 +69,7 @@ def test_private_slice_rejects_paid_dispatch_before_provider_call(
 ):
     calls = provider(monkeypatch, {"usage": {"cost": 0}})
     relay = Relay("secret", tmp_path / "usage.json", budget_microusd=1)
-    with pytest.raises(RelayError, match="inference_budget_unavailable"):
+    with pytest.raises(RelayError, match="inference_budget_exhausted"):
         relay.post("/v1/chat/completions", chat())
     assert calls == []
     assert relay.requests == 0 and relay.spent == 0
@@ -87,12 +92,12 @@ def test_larger_client_allowance_uses_unchanged_ceiling(
 ):
     calls = provider(
         monkeypatch,
-        {"usage": {"prompt_tokens": 20, "completion_tokens": 8192, "cost": 0.016424}},
+        {"usage": {"prompt_tokens": 20, "completion_tokens": 8192, "cost": 0.0025}},
     )
     relay = Relay("secret", tmp_path / "usage.json")
     relay.post(route, body)
     assert json.loads(calls[0].data)[field] == 8192
-    assert relay.tokens == 8212 and relay.spent == 16424 and not relay.failed
+    assert relay.tokens == 8212 and relay.spent == 2500 and not relay.failed
     assert relay.chat_dispatches == relay.successful_chat_responses == 1
 
 
@@ -129,7 +134,8 @@ def test_embedding_without_dollars_is_a_labelled_cost_bound(tmp_path, monkeypatc
     relay = Relay("secret", tmp_path / "usage.json")
     result = relay.post("/api/embed", {"input": ["notebook"]})
     assert len(result["embeddings"][0]) == 768
-    assert relay.spent == 20 and relay.cost_is_upper_bound
+    # 10 tokens at the $0.10/M ceiling, rounded up to a whole microUSD.
+    assert relay.spent == 1 and relay.cost_is_upper_bound
     assert not relay.unmetered and not relay.failed
 
 
@@ -198,6 +204,7 @@ def test_private_provider_failure_retains_reservation_and_first_status(
     tmp_path, monkeypatch
 ):
     calls = []
+    sleeps = []
 
     class Opener:
         def open(self, request, **_kwargs):
@@ -205,6 +212,7 @@ def test_private_provider_failure_retains_reservation_and_first_status(
             raise HTTPError("https://secret.example", 429, "secret body", {}, None)
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    monkeypatch.setattr("time.sleep", sleeps.append)
     relay = Relay("secret", tmp_path / "usage.json")
     with pytest.raises(HTTPError):
         relay.post("/v1/chat/completions", chat())
@@ -217,7 +225,108 @@ def test_private_provider_failure_retains_reservation_and_first_status(
         "http_status": 429,
     }
     assert usage.failed and usage.unmetered and usage.spent_microusd > 0
-    assert len(calls) == 1 and "secret" not in relay.state_file.read_text()
+    # Rate limits are retried (unbilled), then the first status is kept.
+    assert len(calls) == 4 and usage.provider_retries == 3
+    assert sleeps == [4.0, 8.0, 16.0]
+    assert "secret" not in relay.state_file.read_text()
+
+
+@pytest.mark.parametrize("status", [429, 502, 503])
+def test_transient_provider_error_is_retried_then_metered(
+    tmp_path, monkeypatch, status
+):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, _limit):
+            return json.dumps(
+                {
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 20,
+                        "completion_tokens": 10,
+                        "cost": 0.00004,
+                    },
+                }
+            ).encode()
+
+    class Opener:
+        def open(self, request, **_kwargs):
+            calls.append(request)
+            if len(calls) == 1:
+                raise HTTPError("https://x", status, "busy", {"Retry-After": "1"}, None)
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    relay = Relay("secret", tmp_path / "usage.json")
+    relay.post("/v1/chat/completions", chat())
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert len(calls) == 2 and usage.provider_retries == 1
+    assert not usage.failed and not usage.unmetered and usage.spent_microusd == 40
+
+
+def test_timeouts_are_never_retried(tmp_path, monkeypatch):
+    calls = []
+
+    class Opener:
+        def open(self, request, **_kwargs):
+            calls.append(request)
+            raise TimeoutError
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    relay = Relay("secret", tmp_path / "usage.json")
+    with pytest.raises(TimeoutError):
+        relay.post("/v1/chat/completions", chat())
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert len(calls) == 1 and usage.failed and usage.unmetered
+    assert usage.failure.code == "timeout"
+
+
+def test_dispatches_overlap_up_to_the_slot_limit(tmp_path, monkeypatch):
+    import threading
+
+    active, peak, lock = [0], [0], threading.Lock()
+    full = threading.Event()
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, _limit):
+            usage = {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0}
+            return json.dumps({"choices": [], "usage": usage}).encode()
+
+    class Opener:
+        def open(self, _request, **_kwargs):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+                if active[0] == 4:
+                    full.set()
+            # Hold the call until four dispatches are inside the provider at
+            # once; a serial relay would time out here with a peak of one.
+            assert full.wait(timeout=10), "dispatches never overlapped"
+            with lock:
+                active[0] -= 1
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    relay = Relay("secret", tmp_path / "usage.json")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: relay.post("/v1/chat/completions", chat()), range(8)))
+    assert peak[0] == 4  # Overlapping, and never past the slot limit.
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert usage.requests == 8 and not usage.unmetered and not usage.failed
 
 
 def test_concurrent_requests_reserve_before_dispatch(tmp_path, monkeypatch):
@@ -259,7 +368,7 @@ def test_byok_zero_router_fee_retains_provider_price_bound(tmp_path, monkeypatch
     )
     relay = Relay("secret", tmp_path / "usage.json")
     relay.post("/v1/chat/completions", chat())
-    assert relay.spent == 60 and relay.cost_is_upper_bound
+    assert relay.spent == 6 and relay.cost_is_upper_bound
     assert not relay.unmetered and not relay.failed
 
 
@@ -269,7 +378,7 @@ def test_harness_ingress_is_fixed_target_and_response_bounded(monkeypatch):
     class Opener:
         def open(self, request, *, timeout):
             requests.append(request)
-            assert timeout == 120
+            assert timeout == 300
             response = io.BytesIO(b'{"pairs":1}')
             response.status = 200
             return response
@@ -377,3 +486,209 @@ def test_real_socket_deadline_survives_stdio_without_paid_requests(monkeypatch, 
     assert json.loads(output.out) == {"error": "timeout"}
     assert output.err == "" and "private" not in output.out
     assert calls == ["/run"]
+
+
+def test_retries_stop_inside_one_harness_operation(tmp_path, monkeypatch):
+    """A slow 429 near the operation deadline is not retried past it."""
+    calls = []
+    clock = [1_000.0]
+
+    class Opener:
+        def open(self, _request, *, timeout):
+            calls.append(timeout)
+            clock[0] += 260  # The provider took most of the operation.
+            raise HTTPError("https://x", 429, "busy", {"Retry-After": "20"}, None)
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("time.sleep", lambda _s: pytest.fail("must not back off"))
+    relay = Relay("secret", tmp_path / "usage.json")
+    with pytest.raises(HTTPError):
+        relay.post("/v1/chat/completions", chat())
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert calls == [240] and usage.provider_retries == 0
+    assert usage.failure.http_status == 429
+
+
+def test_nan_retry_after_falls_back_to_bounded_backoff(tmp_path, monkeypatch):
+    sleeps = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, _limit):
+            return json.dumps(
+                {
+                    "choices": [],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0},
+                }
+            ).encode()
+
+    class Opener:
+        calls = 0
+
+        def open(self, _request, **_kwargs):
+            Opener.calls += 1
+            if Opener.calls == 1:
+                raise HTTPError("https://x", 503, "busy", {"Retry-After": "NaN"}, None)
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    relay = Relay("secret", tmp_path / "usage.json")
+    relay.post("/v1/chat/completions", chat())
+    assert sleeps == [4.0] and Opener.calls == 2 and not relay.failed
+
+
+def test_slot_wait_spends_the_caller_deadline_and_refunds(tmp_path, monkeypatch):
+    calls = provider(monkeypatch, {"choices": [], "usage": {"cost": 0}})
+    clock = [0.0]
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    relay = Relay("secret", tmp_path / "usage.json")
+
+    class Busy:
+        def acquire(self, timeout):
+            assert 0 < timeout <= 270
+            clock[0] += timeout  # Every slot stayed busy for the whole wait.
+            return False
+
+        def release(self):
+            pytest.fail("a slot that was never acquired is never released")
+
+    relay.slots = Busy()
+    with pytest.raises(RelayError, match="relay_busy"):
+        relay.post("/v1/chat/completions", chat())
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert not calls and usage.spent_microusd == 0 and not usage.unmetered
+    assert usage.failure.code == "relay_busy"
+    raw = json.loads(relay.state_file.read_text())
+    assert raw["requests"] == 0 and raw["chat_dispatches"] == 0
+
+
+def test_budget_waits_for_in_flight_holds_then_exhausts_distinctly(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    class Opener:
+        def open(self, request, **_kwargs):
+            calls.append(request)
+            if len(calls) == 1:
+                started.set()
+                assert release.wait(timeout=10)
+            usage = {"prompt_tokens": 10, "completion_tokens": 10, "cost": 0.00001}
+            return Response(json.dumps({"choices": [], "usage": usage}).encode())
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    # One dispatch reserves ~2.6k microUSD at the ceiling: two cannot be held
+    # at once inside 4k, but each settles at 10 microUSD.
+    relay = Relay("secret", tmp_path / "usage.json", budget_microusd=4_000)
+    first = threading.Thread(target=lambda: relay.post("/v1/chat/completions", chat()))
+    first.start()
+    assert started.wait(timeout=10)
+    second_done = threading.Event()
+
+    def second():
+        relay.post("/v1/chat/completions", chat())
+        second_done.set()
+
+    waiter = threading.Thread(target=second)
+    waiter.start()
+    assert not second_done.wait(timeout=0.3)  # Waiting, not failed.
+    release.set()
+    first.join(timeout=10)
+    waiter.join(timeout=10)
+    assert second_done.is_set() and len(calls) == 2 and relay.spent == 20
+    assert not relay.failed
+    relay.spent = 2_000  # Less than one hold left, with nothing in flight.
+    with pytest.raises(RelayError, match="inference_budget_exhausted"):
+        relay.post("/v1/chat/completions", chat())
+    assert len(calls) == 2
+
+
+def test_ceiling_prices_cover_every_listed_provider():
+    from ditto_screener.conversation_relay import CHAT_PROVIDER, ceiling_microusd
+
+    # Highest gpt-oss-20b list price on 2026-11-08: Groq $0.075 in / $0.30 out.
+    assert CHAT_PROVIDER["max_price"] == {"prompt": 0.1, "completion": 0.4}
+    assert ceiling_microusd(1_000_000, 0) == 100_000
+    assert ceiling_microusd(0, 1_000_000) == 400_000
+
+
+def test_waiter_out_of_time_with_holds_in_flight_is_not_exhaustion(
+    tmp_path, monkeypatch
+):
+    relay = Relay("secret", tmp_path / "usage.json", budget_microusd=4_000)
+    relay.in_flight, relay.spent = 1, 3_000  # Another dispatch holds the rest.
+    clock = [0.0]
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+
+    def wait(**_kwargs):
+        clock[0] += 400  # The holder never settles before our deadline.
+        return False
+
+    relay.settled_cv.wait = wait
+    with pytest.raises(RelayError, match="^inference_budget_unavailable$"):
+        relay.post("/v1/chat/completions", chat())
+
+
+def test_a_failure_wakes_budget_waiters(tmp_path, monkeypatch):
+    import threading
+
+    provider(monkeypatch, {"choices": [], "usage": {"cost": 0}})
+    relay = Relay("secret", tmp_path / "usage.json", budget_microusd=4_000)
+    relay.in_flight, relay.spent = 1, 3_000
+    outcome = []
+
+    def waiter():
+        try:
+            relay.post("/v1/chat/completions", chat())
+        except RelayError as exc:
+            outcome.append(str(exc))
+
+    thread = threading.Thread(target=waiter)
+    thread.start()
+    import time as clock
+
+    clock.sleep(0.2)
+    with relay.lock:
+        relay.fail(RelayError("unsupported_message_content"), "request")
+    thread.join(timeout=5)
+    assert not thread.is_alive() and outcome == ["inference_budget_unavailable"]
+
+
+def test_shutdown_drains_in_flight_dispatches(tmp_path):
+    import threading
+    import time as clock
+
+    from ditto_screener.conversation_relay import drain_in_flight
+
+    relay = Relay("secret", tmp_path / "usage.json")
+    relay.in_flight = 1
+
+    def settle():
+        clock.sleep(0.2)
+        with relay.lock:
+            relay.in_flight -= 1
+            relay.settled_cv.notify_all()
+
+    threading.Thread(target=settle).start()
+    started = clock.monotonic()
+    assert drain_in_flight(relay, 5) is True
+    assert 0.1 < clock.monotonic() - started < 4
+    relay.in_flight = 1  # A dispatch that never settles is bounded.
+    assert drain_in_flight(relay, 0.1) is False

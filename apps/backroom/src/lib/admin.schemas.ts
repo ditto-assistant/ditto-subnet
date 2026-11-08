@@ -6706,6 +6706,28 @@ export const rejectScreeningSubmissionResponseSchema = z.object({
   idempotent: z.boolean(),
 })
 
+export const AMEND_REJECT_REASON_CONFIRMATION = 'AMEND PUBLIC REJECT REASON'
+
+export const amendQuarantineRejectReasonInputSchema = z.object({
+  quarantineId: z.string().uuid(),
+  expectedAgentId: z.string().uuid(),
+  expectedArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedAttemptId: databaseUuidSchema,
+  expectedReason: z.string(),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(AMEND_REJECT_REASON_CONFIRMATION),
+})
+
+export const amendQuarantineRejectReasonResponseSchema = z.object({
+  quarantine_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  attempt_id: databaseUuidSchema,
+  previous_reason: z.string(),
+  reason: z.string(),
+  resolved_by: z.string().nullish(),
+  idempotent: z.boolean(),
+})
+
 export const quarantineAgentContextSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
@@ -8558,7 +8580,7 @@ export const athRulingActionSchema = z.enum(['open', 'clear', 'reject'])
 
 // What execute performs for one ruling. `attest` is a clear on an unheld
 // scored or live agent: the terminal clear is recorded without holding the row.
-export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject'])
+export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject', 'close_terminal'])
 
 export const athRulingDispositionSchema = z.enum([
   'ready',
@@ -10140,19 +10162,15 @@ export const tracePeekResponseSchema = z.object({
   scan_complete: z.boolean(),
 })
 
-// Future screening-policy activation.
+// Screening-policy activation (read-only; scheduling retired with source
+// review on 2026-11-07).
 //
-// The platform keeps the live policy in force and holds ONE pending activation
-// that flips the policy version at a scheduled instant. Revisions are
-// append-only: scheduling a new activation supersedes the pending one but the
-// old rows stay readable as audit. `state` is computed by the platform at read
-// time ("due" once now >= activate_at), so it is never stored and never
-// defaulted here.
-export const SCREENER_POLICY_ACTIVATION_CONFIRMATION = 'SCHEDULE SCREENER POLICY ACTIVATION'
+// The platform keeps the live policy in force. Revisions are append-only and
+// stay readable as audit. `state` is computed by the platform at read time
+// ("due" once now >= activate_at), so it is never stored and never defaulted
+// here.
 export const RESTORE_SCORED_SCREENING_SNAPSHOT_CONFIRMATION =
   'RESTORE SCORED SCREENING SNAPSHOT'
-export const ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION =
-  'ADVANCE SCORED POLICY RESCREEN'
 export const MAX_SCREENER_POLICY_ACTIVATION_REVISIONS = 200
 
 export const screenerPolicyActivationRevisionSchema = z.object({
@@ -10191,21 +10209,6 @@ export const screenerPolicyActivationViewSchema = z.object({
     .max(MAX_SCREENER_POLICY_ACTIVATION_REVISIONS),
   // Absent from platforms older than heartbeat protocol v7.
   fleet: screenerFleetPolicyReadinessSchema.nullish().transform((value) => value ?? null),
-})
-
-// The offset requirement is what makes the schedule unambiguous: a naive
-// "2026-08-29T09:00:00" would be the platform's UTC wall clock, not the
-// operator's, and the 422 that catches it should never have to.
-export const scheduleScreenerPolicyActivationInputSchema = z.object({
-  expectedRevision: z.number().int().nonnegative(),
-  // The platform bounds this to [floor..builtin] and answers 422 out of range;
-  // it stays the authority, so this only rejects nonsense a positive int catches.
-  targetPolicyVersion: z.number().int().positive(),
-  activateAt: z.string().datetime({ offset: true }),
-  rescreenScored: z.boolean().default(true),
-  canaryOnly: z.boolean().default(false),
-  reason: auditReasonSchema(8),
-  confirmation: z.literal(SCREENER_POLICY_ACTIVATION_CONFIRMATION),
 })
 
 export const restoreScoredScreeningSnapshotInputSchema = z.object({
@@ -10261,16 +10264,6 @@ export const scoredPolicyRescreenViewSchema = z.object({
 })
 
 void (scoredPolicyRescreenViewSchema satisfies z.ZodType<GeneratedScoredPolicyRescreenView>)
-
-export const advanceScoredPolicyRescreenInputSchema = z.object({
-  expectedActivationRevision: z.number().int().positive(),
-  expectedAgentId: z.string().uuid(),
-  retryPaused: z.boolean().default(false),
-  maxActiveReleases: z.number().int().min(1).max(4).default(1),
-  reviewSettingsRevision: z.number().int().positive().nullable().default(null),
-  reason: auditReasonSchema(8),
-  confirmation: z.literal(ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION),
-})
 
 export type ScreenerPolicyActivationView = z.infer<typeof screenerPolicyActivationViewSchema>
 

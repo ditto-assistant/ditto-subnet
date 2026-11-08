@@ -2,6 +2,16 @@
 
 Platform-operated screening worker for Ditto SN118 submissions.
 
+> **Source review is retired (2026-11-07).** Platform now leases every attempt
+> as `build_only`, so the worker runs the mechanical lane only: verified
+> download, archive and container-contract checks, the deterministic static
+> malicious-source preflight (a decisive, reachable match is a
+> `static-malicious-source` reject), the isolated build, the health and seeding
+> contract, and the screened-image export. The L1/L2/L3 review, L4
+> adjudication, policy modules and challenges described below no longer run on
+> submissions; the code remains until a follow-up removes it. See
+> `apps/platform/docs/screener-protocol.md`.
+
 The stable core leases one submission at a time from `ditto-platform`,
 downloads and verifies its tarball, enforces safe language-neutral Docker
 rules, builds the Docker image, starts it with resource caps and an internal fake
