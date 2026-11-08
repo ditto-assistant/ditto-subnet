@@ -9,10 +9,9 @@ WORKDIR /opt/adapter
 # node_modules/openclaw/node_modules (Omar #3455) without busting the ci layer
 # when only scripts/ change (Ditto Medium).
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY scripts ./scripts
-RUN node ./scripts/force-patched-transitives.mjs \
-    && npm cache clean --force
+RUN node ./scripts/force-patched-transitives.mjs
 
 COPY src ./src
 COPY plugin ./plugin
