@@ -627,3 +627,45 @@ def test_ceiling_prices_cover_every_listed_provider():
     assert CHAT_PROVIDER["max_price"] == {"prompt": 0.1, "completion": 0.4}
     assert ceiling_microusd(1_000_000, 0) == 100_000
     assert ceiling_microusd(0, 1_000_000) == 400_000
+
+
+def test_waiter_out_of_time_with_holds_in_flight_is_not_exhaustion(
+    tmp_path, monkeypatch
+):
+    relay = Relay("secret", tmp_path / "usage.json", budget_microusd=4_000)
+    relay.in_flight, relay.spent = 1, 3_000  # Another dispatch holds the rest.
+    clock = [0.0]
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+
+    def wait(**_kwargs):
+        clock[0] += 400  # The holder never settles before our deadline.
+        return False
+
+    relay.settled_cv.wait = wait
+    with pytest.raises(RelayError, match="^inference_budget_unavailable$"):
+        relay.post("/v1/chat/completions", chat())
+
+
+def test_a_failure_wakes_budget_waiters(tmp_path, monkeypatch):
+    import threading
+
+    provider(monkeypatch, {"choices": [], "usage": {"cost": 0}})
+    relay = Relay("secret", tmp_path / "usage.json", budget_microusd=4_000)
+    relay.in_flight, relay.spent = 1, 3_000
+    outcome = []
+
+    def waiter():
+        try:
+            relay.post("/v1/chat/completions", chat())
+        except RelayError as exc:
+            outcome.append(str(exc))
+
+    thread = threading.Thread(target=waiter)
+    thread.start()
+    import time as clock
+
+    clock.sleep(0.2)
+    with relay.lock:
+        relay.fail(RelayError("unsupported_message_content"), "request")
+    thread.join(timeout=5)
+    assert not thread.is_alive() and outcome == ["inference_budget_unavailable"]

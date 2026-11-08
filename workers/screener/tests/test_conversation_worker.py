@@ -164,6 +164,7 @@ async def test_v1_claim_from_older_platform_frees_the_slot_without_running(
     report = ConversationReport.model_validate(results[0]["report"])
     assert report.instrument == INSTRUMENT_V1 and report.status == "incomplete"
     assert report.error_code == "instrument_unsupported"
+    assert report.reserved_microusd == 25_000_000  # The legacy $30 v1 hold.
     assert report.spent_microusd == 0 and report.harness_usage is None
 
 

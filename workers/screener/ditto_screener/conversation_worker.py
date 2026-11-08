@@ -171,7 +171,13 @@ def _empty_report(claim: ConversationLaunch, reason: str) -> ConversationReport:
         judge_requests=0,
         input_tokens=0,
         output_tokens=0,
-        reserved_microusd=claim.judge_budget_microusd,
+        # A v1 claim from an older Platform carries no budget fields and was
+        # held at the legacy $30, whose report reserves the $25 judge budget.
+        reserved_microusd=(
+            25_000_000
+            if claim.instrument == INSTRUMENT_V1
+            else claim.judge_budget_microusd
+        ),
         spent_microusd=0,
         judge_cost_is_upper_bound=claim.instrument == INSTRUMENT_V1,
     )

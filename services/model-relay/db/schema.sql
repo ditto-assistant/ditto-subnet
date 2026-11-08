@@ -3697,7 +3697,7 @@ CREATE TABLE public.conversation_assessments (
     retry_authorization jsonb,
     CONSTRAINT ck_conversation_assessments_conversation_base_quality CHECK (((base_quality_micros >= 0) AND (base_quality_micros <= 1000000))),
     CONSTRAINT ck_conversation_assessments_conversation_bench_version CHECK ((bench_version >= 9)),
-    CONSTRAINT ck_conversation_assessments_conversation_reserved_cost CHECK ((reserved_microusd = 30000000)),
+    CONSTRAINT ck_conversation_assessments_conversation_reserved_cost CHECK ((reserved_microusd = ANY (ARRAY[(30000000)::bigint, (1000000)::bigint]))),
     CONSTRAINT ck_conversation_assessments_conversation_retry_lineage CHECK (((retry_of IS NULL) OR ((retry_of <> assessment_id) AND (retry_authorization IS NULL))))
 );
 

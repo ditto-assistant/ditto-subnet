@@ -102,6 +102,7 @@ class Relay:
         # Caller holds the dispatch lock. Preserve the original error when an
         # untrusted client retries; never store exception text, URLs or bodies.
         self.failed = True
+        self.settled_cv.notify_all()  # Budget waiters must see the failure.
         if self.failure is None:
             code = "unexpected_error"
             status = None
@@ -338,7 +339,13 @@ class Relay:
                     else "inference_budget_unavailable"
                 )
             if self.spent + reservation > self.budget_microusd:
-                raise RelayError("inference_budget_exhausted")
+                # Out of time with holds still in flight is not exhaustion:
+                # those holds might have settled. Only an idle relay is spent.
+                raise RelayError(
+                    "inference_budget_exhausted"
+                    if self.in_flight == 0
+                    else "inference_budget_unavailable"
+                )
             self.spent += reservation
             self.requests += 1
             if not embed:

@@ -509,3 +509,53 @@ async def test_typical_grading_completes_inside_the_judge_hold():
     report = await Rig().run(Limits(judge_microusd=850_000))
     assert report.status == "completed"
     assert report.spent_microusd == 300_000 and report.reserved_microusd == 850_000
+
+
+def test_worst_case_evidence_is_cut_to_fit_the_judge_hold():
+    from ditto_screener.conversation import (
+        JUDGE_EVIDENCE_BYTES,
+        grade_evidence,
+        judge_body,
+    )
+    from ditto_screening_protocol.conversation import Exchange
+
+    turns = story(SEED)
+    exchanges = [
+        Exchange(
+            turn_id=t.turn_id,
+            session=(t.turn_id - 1) // 3 + 1,
+            user=t.user,
+            assistant=("é" * 7_999) + "!",  # 2-byte characters, at the 8k cap.
+        )
+        for t in turns
+    ]
+    evidence = grade_evidence(exchanges, turns)
+    assert len(evidence.encode()) <= JUDGE_EVIDENCE_BYTES
+    shown = json.loads(evidence.split("instruction.\n", 1)[1])["exchanges"]
+    assert all(e["truncated"] for e in shown)
+    assert all(
+        e["assistant"] and e["assistant"] in x.assistant
+        for e, x in zip(shown, exchanges, strict=True)
+    )
+    meter = JudgeMeter(Limits(judge_microusd=850_000))
+    meter.preflight()
+    reservation, _ = meter.reserve(judge_body(evidence))
+    assert reservation <= 850_000  # The request preflight priced is affordable.
+
+
+def test_short_evidence_is_never_cut():
+    from ditto_screener.conversation import grade_evidence
+    from ditto_screening_protocol.conversation import Exchange
+
+    turns = story(SEED)
+    exchanges = [
+        Exchange(
+            turn_id=t.turn_id,
+            session=(t.turn_id - 1) // 3 + 1,
+            user=t.user,
+            assistant="ok",
+        )
+        for t in turns
+    ]
+    shown = json.loads(grade_evidence(exchanges, turns).split("instruction.\n", 1)[1])
+    assert not any(e["truncated"] for e in shown["exchanges"])
