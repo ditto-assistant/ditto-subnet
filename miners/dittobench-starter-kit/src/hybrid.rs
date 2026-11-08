@@ -239,12 +239,15 @@ pub fn menu_options(catalog: &[ToolDefWire], desc_chars: usize) -> Vec<(String, 
 
 /// One option per toolkit: up to six member names plus the first member's
 /// short description. Returns the options and the members of each toolkit.
+/// Catalog indices of each toolkit's tools.
+pub type ToolkitMembers = HashMap<String, Vec<usize>>;
+
 pub fn toolkit_options(
     catalog: &[ToolDefWire],
     desc_chars: usize,
-) -> (Vec<(String, String)>, HashMap<String, Vec<usize>>) {
+) -> (Vec<(String, String)>, ToolkitMembers) {
     let mut order: Vec<String> = Vec::new();
-    let mut members: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut members: ToolkitMembers = HashMap::new();
     for (i, t) in catalog.iter().enumerate() {
         let key = toolkit_of(&t.name);
         let entry = members.entry(key.clone()).or_default();
@@ -257,7 +260,11 @@ pub fn toolkit_options(
         .iter()
         .map(|key| {
             let idx = &members[key];
-            let names: Vec<&str> = idx.iter().take(6).map(|i| catalog[*i].name.as_str()).collect();
+            let names: Vec<&str> = idx
+                .iter()
+                .take(6)
+                .map(|i| catalog[*i].name.as_str())
+                .collect();
             let more = if idx.len() > 6 {
                 format!(" (+{} more)", idx.len() - 6)
             } else {
@@ -331,7 +338,9 @@ pub fn extract_candidates(texts: &[&str], limit: usize) -> Vec<String> {
         }
         let words: Vec<&str> = text.split_whitespace().collect();
         let mut caps: Vec<String> = Vec::new();
-        let flush_caps = |caps: &mut Vec<String>, out: &mut Vec<String>, push: &mut dyn FnMut(String, &mut Vec<String>)| {
+        let flush_caps = |caps: &mut Vec<String>,
+                          out: &mut Vec<String>,
+                          push: &mut dyn FnMut(String, &mut Vec<String>)| {
             if !caps.is_empty() {
                 push(caps.join(" "), out);
             }
@@ -423,9 +432,10 @@ pub fn compact_prompt(
 
 fn tool_message(id: &str, name: &str, output: Value, max_chars: usize) -> ChatMessage {
     let rendered = match &output {
-        Value::Object(map) if map.contains_key("result") => {
-            map["result"].as_str().map(str::to_string).unwrap_or_else(|| output.to_string())
-        }
+        Value::Object(map) if map.contains_key("result") => map["result"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| output.to_string()),
         _ => output.to_string(),
     };
     let output = json!(truncate(&rendered, max_chars));
@@ -505,7 +515,12 @@ async fn plan(
             "Which record is most relevant to the user's request?",
             &opts,
         ));
-        let records: Vec<String> = case.notes.iter().take(6).map(|n| truncate(&n.text, 200)).collect();
+        let records: Vec<String> = case
+            .notes
+            .iter()
+            .take(6)
+            .map(|n| truncate(&n.text, 200))
+            .collect();
         questions.push(Question::noul(
             "already_done",
             json!({
@@ -646,12 +661,22 @@ async fn suggest_arguments(
     let mut questions = Vec::new();
     let mut keys = Vec::new();
     for (ti, tool) in tools.iter().enumerate() {
-        for (pi, (param, desc)) in required_string_params(&tool.parameters).into_iter().enumerate() {
+        for (pi, (param, desc)) in required_string_params(&tool.parameters)
+            .into_iter()
+            .enumerate()
+        {
             let id = format!("arg{ti}_{pi}");
             let instructions = if desc.is_empty() {
-                format!("Which value fills the `{param}` argument of `{}`?", tool.name)
+                format!(
+                    "Which value fills the `{param}` argument of `{}`?",
+                    tool.name
+                )
             } else {
-                format!("Which value fills the `{param}` argument of `{}` ({})?", tool.name, truncate(&desc, 120))
+                format!(
+                    "Which value fills the `{param}` argument of `{}` ({})?",
+                    tool.name,
+                    truncate(&desc, 120)
+                )
             };
             questions.push(Question::choice(&id, instructions, &options));
             keys.push((id, tool.name.clone(), param));
@@ -670,7 +695,10 @@ async fn suggest_arguments(
         if p < 0.4 {
             continue;
         }
-        if let Some(i) = choice.strip_prefix('c').and_then(|s| s.parse::<usize>().ok()) {
+        if let Some(i) = choice
+            .strip_prefix('c')
+            .and_then(|s| s.parse::<usize>().ok())
+        {
             if let Some(value) = candidates.get(i) {
                 out.push((tool, param, value.clone()));
             }
@@ -694,7 +722,10 @@ async fn replan(
         .map(|(n, a, r)| json!({"tool": n, "args": a, "result": truncate(r, 300)}))
         .collect();
     let state = json!({"request": case.user_input, "done_so_far": done_so_far});
-    let mut options = menu_options(&pool.iter().map(|t| (*t).clone()).collect::<Vec<_>>(), cfg.desc_chars);
+    let mut options = menu_options(
+        &pool.iter().map(|t| (*t).clone()).collect::<Vec<_>>(),
+        cfg.desc_chars,
+    );
     options.push((
         NO_TOOL_OPTION.to_string(),
         "No further tool call is needed.".to_string(),
@@ -942,7 +973,11 @@ pub fn log_usage(case_id: &str, outcome: &HybridOutcome) {
         map.remove("final_text");
     }
     use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path.trim()) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.trim())
+    {
         let _ = writeln!(file, "{line}");
     }
 }

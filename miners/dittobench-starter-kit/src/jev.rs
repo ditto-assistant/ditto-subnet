@@ -230,7 +230,7 @@ impl Answers {
     /// is dropped.
     pub fn ranked_chunks(&self, prefix: &str, reference: &str) -> Vec<(String, f64)> {
         let mut out = Vec::new();
-        for (id, _) in self.answers.iter() {
+        for id in self.answers.keys() {
             let Some(suffix) = id.strip_prefix(prefix) else {
                 continue;
             };
@@ -432,7 +432,10 @@ mod tests {
 
     #[test]
     fn chunks_respect_the_option_cap_and_carry_the_reference() {
-        let none = vec![("none_of_these".to_string(), "No listed tool fits.".to_string())];
+        let none = vec![(
+            "none_of_these".to_string(),
+            "No listed tool fits.".to_string(),
+        )];
         let qs = choice_chunks("t", "Which tool?", &opts(1454, "short"), &none, 255, 20);
         assert_eq!(qs.len(), 6, "1454 tools at 254 per chunk");
         let mut seen = 0;
@@ -466,7 +469,10 @@ mod tests {
         let batches = pack_requests(qs, &state);
         assert_eq!(batches.len(), 1, "names plus 80-char descriptions fit 64k");
         let qs = choice_chunks("t", "Which tool?", &opts(4000, &desc), &none, 255, 20);
-        assert!(pack_requests(qs, &state).len() > 1, "a 4,000-tool menu splits");
+        assert!(
+            pack_requests(qs, &state).len() > 1,
+            "a 4,000-tool menu splits"
+        );
     }
 
     #[test]
