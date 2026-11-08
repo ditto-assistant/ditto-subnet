@@ -211,6 +211,7 @@ from ditto.api_server.screener_policy_activation import (
 )
 from ditto.api_server.source_emission_collector import SourceEmissionCollector
 from ditto.api_server.storage import create_storage_client
+from ditto.api_server.terminal_failure_sweep import TerminalFailureSweeper
 from ditto.api_server.track_share_settings import TrackShareSettingsResolver
 from ditto.api_server.unreleased_copy_sentinel import UnreleasedCopySentinel
 from ditto.api_server.validator_names import create_validator_names
@@ -511,6 +512,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if run_background_tasks:
                 await capacity_event_janitor.start()
             app.state.screener_capacity_event_janitor = capacity_event_janitor
+
+            # Catch-up for terminal artifact failure close-outs the
+            # /validator/job/fail hook dropped, and rows stranded before it.
+            terminal_failure_sweeper = TerminalFailureSweeper(
+                session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(terminal_failure_sweeper.aclose)
+            if run_background_tasks:
+                await terminal_failure_sweeper.start()
+            app.state.terminal_failure_sweeper = terminal_failure_sweeper
 
             # Copy-hold triage court. Settings-gated: with no revision (or
             # mode off) each tick is a cheap no-op, so the loop runs on the

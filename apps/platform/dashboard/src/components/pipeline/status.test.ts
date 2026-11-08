@@ -534,6 +534,22 @@ describe("a submission that cannot finish scoring", () => {
     expect(detail).not.toContain("Waiting for");
   });
 
+  it("wins over the low-priority lane copy for a below-floor row", () => {
+    const belowFloor = {
+      status: "below_score_floor",
+      score_count: 2,
+      quorum: 3,
+      score_floor: 0.5,
+      provisional_scores: [{ composite: 0.2 }, { composite: 0.3 }],
+      retry_disposition: "terminal_artifact_failure",
+      terminal_failure_code: "inference_allowance_exhausted",
+    } as unknown as Parameters<typeof validationDetail>[0];
+    expect(validationProgress(belowFloor)).toBe("2 of 3 · cannot finish");
+    const detail = validationDetail(belowFloor);
+    expect(detail).toContain("cannot finish scoring");
+    expect(detail).not.toContain("queued");
+  });
+
   it("keeps an operator hold on the waiting copy, never blaming the artifact", () => {
     const held = {
       status: "waiting_validator",

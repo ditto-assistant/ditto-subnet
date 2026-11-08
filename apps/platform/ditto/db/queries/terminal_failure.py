@@ -28,9 +28,11 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.ticket_status import TicketStatus
 from ditto.db.models import (
     Agent,
     Score,
@@ -41,6 +43,7 @@ from ditto.db.models import (
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.queue_removal import load_queue_removal, removal_in_force
 from ditto.db.queries.retry_state import (
+    AGENT_ATTRIBUTABLE_FAILURE_DETAILS,
     dominant_agent_failure_detail,
     is_agent_attributable_exhaustion,
     resolve_bench_version,
@@ -243,3 +246,87 @@ async def terminal_failure_codes(
         )
     ).all()
     return {agent_id: str(code) for agent_id, code in rows}
+
+
+async def terminal_close_out_candidates(
+    session: AsyncSession, *, limit: int
+) -> list[UUID]:
+    """Evaluating agents that may be owed a close-out, oldest first.
+
+    A cheap superset: an expired scoring ticket whose detail is a named agent
+    code, no live ticket, and no in-force withdrawal yet. Each candidate is
+    then decided by :func:`withdraw_terminal_artifact_failure`, which applies
+    the full fail-closed predicates under row locks.
+    """
+    live = (
+        select(ValidatorTicket.agent_id)
+        .where(
+            ValidatorTicket.agent_id == Agent.agent_id,
+            ValidatorTicket.status == TicketStatus.ISSUED,
+        )
+        .correlate(Agent)
+        .exists()
+    )
+    withdrawn = (
+        select(ValidatorQueueWithdrawal.agent_id)
+        .where(
+            ValidatorQueueWithdrawal.agent_id == Agent.agent_id,
+            removal_in_force(),
+        )
+        .correlate(Agent)
+        .exists()
+    )
+    statement = (
+        select(Agent.agent_id)
+        .join(ValidatorTicket, ValidatorTicket.agent_id == Agent.agent_id)
+        .where(
+            Agent.status == AgentStatus.EVALUATING,
+            ValidatorTicket.status == TicketStatus.EXPIRED,
+            or_(
+                ValidatorTicket.failure_detail.in_(
+                    sorted(AGENT_ATTRIBUTABLE_FAILURE_DETAILS)
+                ),
+                # Classified pre-reservation refusals carry a suffix
+                # (``inference_request_rejected:request_too_large``).
+                ValidatorTicket.failure_detail.like("inference_request_rejected:%"),
+            ),
+            scoring_retry_ticket(),
+            ~live,
+            ~withdrawn,
+        )
+        .group_by(Agent.agent_id, Agent.created_at)
+        .order_by(Agent.created_at.asc(), Agent.agent_id.asc())
+        .limit(limit)
+    )
+    return list((await session.scalars(statement)).all())
+
+
+async def sweep_terminal_artifact_failures(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime | None = None,
+    limit: int = 200,
+) -> int:
+    """Close out every candidate that qualifies; returns how many were written.
+
+    The safety net under the ``/validator/job/fail`` hook: that hook runs after
+    the report commits and only logs a failure, so a close-out it dropped, and
+    any row stranded before close-outs existed, is applied here. Each agent
+    gets its own transaction so one bad row cannot block the rest.
+    """
+    at = now or datetime.now(UTC)
+    async with session_maker() as session:
+        candidates = await terminal_close_out_candidates(session, limit=limit)
+    written = 0
+    for agent_id in candidates:
+        try:
+            async with session_maker() as session, session.begin():
+                if await withdraw_terminal_artifact_failure(
+                    session, agent_id=agent_id, now=at
+                ):
+                    written += 1
+        except Exception:
+            logger.exception(
+                "terminal artifact failure sweep failed agent=%s", agent_id
+            )
+    return written

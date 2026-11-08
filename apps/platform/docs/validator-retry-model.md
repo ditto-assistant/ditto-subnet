@@ -144,7 +144,7 @@ the per-agent detail:
 | `recommended_action` | Meaning | Operator move |
 | --- | --- | --- |
 | `retry` | Remaining slots died of infrastructure, timeout, silent expiry, or an unclassified failure. A fresh lease can still produce a score. | Grant a retry after verifying the infra fix. |
-| `withdraw` | Every remaining slot died of a **named agent-attributable** code (`inference_request_rejected`, `inference_allowance_exhausted`, `model_inference_required`). Re-leasing the same image cannot repair those. | Usually nothing: the platform closes these out itself (see below). For a row stranded before that existed, `POST .../withdraw`. It does **not** mint a score of 0; it removes the row from the validator queue (public `scoring_failed` when the slots agree on one code, else `not_queued`) while preserving scores, artifact, payment, and ticket history. |
+| `withdraw` | Every remaining slot died of a **named agent-attributable** code (`inference_request_rejected`, `inference_allowance_exhausted`, `model_inference_required`). Re-leasing the same image cannot repair those. | Usually nothing: the platform closes these out itself, and a periodic sweep catches any it missed (see below). `POST .../withdraw` still works for an operator who wants to act first. It does **not** mint a score of 0; it removes the row from the validator queue (public `scoring_failed` when the slots agree on one code, else `not_queued`) while preserving scores, artifact, payment, and ticket history. |
 
 The classifier is fail-closed: a mixed remaining set, a 6600s/lease-deadline
 timeout, a Kaniko identity error, a silent expiry, or a missing
@@ -166,6 +166,13 @@ with:
 - `terminal_failure_code` set to the agreed code (the operator withdraw route
   stamps the same column when the same evidence holds);
 - `expected_snapshot` a SHA-256 of the evidence, like every operator row.
+
+The hook only logs a failure, so `TerminalFailureSweeper`
+(`api_server/terminal_failure_sweep.py`, every 10 minutes) re-runs the same
+decision for every evaluating agent that has an agent-coded expired ticket and
+no in-force withdrawal. That retries a close-out the hook dropped and also
+closes out rows stranded before the hook existed. Each agent is decided in its
+own transaction under the same row locks, so replicas cannot double-write.
 
 Without it the row stayed `evaluating` indefinitely. Every fresh validator
 could still take a first assignment and burn a full run on an artifact that

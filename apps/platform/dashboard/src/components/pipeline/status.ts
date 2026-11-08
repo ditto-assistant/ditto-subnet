@@ -359,10 +359,12 @@ export type ActivityStatusEntry = ActivityEntry & ActivityStatusFields & Termina
 export function validationProgress(e: ActivityStatusEntry): string {
   const count = Math.max(0, Number(e.score_count) || 0);
   const quorum = Math.max(1, Number(e.quorum) || 3);
+  // Before the lane labels: a below-floor or waiting row carrying a terminal
+  // verdict is not queued for anything.
+  if (isTerminalScoringFailure(e.status, e)) return count + " of " + quorum + " · cannot finish";
   if (e.status === "below_score_floor") return count + " of " + quorum + " · queued last";
   if (e.status === "not_queued") return "Not in active benchmark queue";
   if (e.status === "retired") return count + " of " + quorum + " · benchmark closed";
-  if (isTerminalScoringFailure(e.status, e)) return count + " of " + quorum + " · cannot finish";
   const hasStarted =
     count > 0 ||
     ["waiting_validator", "evaluating", "scored", "live", "under_review"].indexOf(e.status || "") >=
@@ -433,6 +435,19 @@ export function validationDetail(e: ActivityStatusEntry): string {
       attempt.status === "issued" &&
       benchmarkVersionKey(attempt.bench_version) === benchmarkVersionKey(e.active_bench_version),
   ).length;
+  if (isTerminalScoringFailure(e.status, e)) {
+    const code = terminalFailureCode(e);
+    const cause = (code && TERMINAL_FAILURE_CAUSES[code]) || "";
+    return (
+      "This submission cannot finish scoring. " +
+      (cause ? cause + " " : "") +
+      "That happened on every remaining validator run, so " +
+      count +
+      " of " +
+      quorum +
+      " scores is final for this benchmark version: no validator will be assigned again and re-running the same artifact would repeat the failure. Fix the artifact and submit a new version. This is not a rejection; the submission, its screening record and its validator history stay on file."
+    );
+  }
   if (e.status === "below_score_floor") {
     const provisionalScores = e.provisional_scores || [];
     const scoreFloor = Number(e.score_floor);
@@ -454,19 +469,6 @@ export function validationDetail(e: ActivityStatusEntry): string {
       ". " +
       scoreFloorAttribution(e) +
       " The third score is still queued at low priority so this benchmark record reaches 3 of 3."
-    );
-  }
-  if (isTerminalScoringFailure(e.status, e)) {
-    const code = terminalFailureCode(e);
-    const cause = (code && TERMINAL_FAILURE_CAUSES[code]) || "";
-    return (
-      "This submission cannot finish scoring. " +
-      (cause ? cause + " " : "") +
-      "That happened on every remaining validator run, so " +
-      count +
-      " of " +
-      quorum +
-      " scores is final for this benchmark version: no validator will be assigned again and re-running the same artifact would repeat the failure. Fix the artifact and submit a new version. This is not a rejection; the submission, its screening record and its validator history stay on file."
     );
   }
   if (e.status === "not_queued") {
