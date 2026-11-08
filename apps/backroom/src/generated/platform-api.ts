@@ -23906,6 +23906,7 @@ export interface components {
             min_cohort_size: number;
             /** Open Rollout Desired Version */
             open_rollout_desired_version?: number | null;
+            open_rollout_flip_rule?: components["schemas"]["FlipRuleSettings"] | null;
             /**
              * Open Rollout Overrides Setting
              * @default false
@@ -24806,6 +24807,57 @@ export interface components {
             source_fixture_v1: boolean;
             /** Version */
             version?: string | null;
+        };
+        /**
+         * FlipRuleSettings
+         * @description When a benchmark rollout may take ledger authority with a thin board.
+         *
+         *     Without this rule the ledger flips to the new bench version only when the
+         *     frozen priority cohort holds a 3/3 quorum AND five ranked owner families do.
+         *     If fewer agents get there the old board is paid indefinitely; a champion who
+         *     stops resubmitting profits from delay. This rule bounds the wait.
+         *
+         *     Ships DISABLED, and a disabled rule is byte-identical to the original
+         *     switch. Like the cohort sizes it is NEXT-ROLLOUT policy: read once when a
+         *     rollout starts and frozen onto the rollout row, so a revision never moves
+         *     the finish line of a transition already in flight.
+         *
+         *     When enabled, the rollout flips on the first of:
+         *
+         *     * the original condition, with the family count lowered to
+         *       :attr:`min_agents_to_flip` (priority cohort at quorum AND at least that
+         *       many ranked owner families -- the default 5 is the original rule);
+         *     * **the deadline**: :attr:`flip_deadline_hours` after the rollout started, at
+         *       least :attr:`min_agents_at_deadline` ranked owner families hold a complete
+         *       quorum. The deadline branch does not wait for the priority cohort, because
+         *       a cohort member that can never score is the stall it exists to break.
+         *
+         *     A "ranked family" is exactly what
+         *     :func:`~ditto.db.queries.scores.count_ranked_quorum_agents` counts: an owner
+         *     root with a 3-score median row that ran the full benchmark with a positive
+         *     composite, inside the current-or-previous dueling season window.
+         */
+        FlipRuleSettings: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Flip Deadline Hours
+             * @default 36
+             */
+            flip_deadline_hours: number;
+            /**
+             * Min Agents At Deadline
+             * @default 3
+             */
+            min_agents_at_deadline: number;
+            /**
+             * Min Agents To Flip
+             * @default 5
+             */
+            min_agents_to_flip: number;
         };
         /** FundingBatch */
         FundingBatch: {
@@ -37095,6 +37147,15 @@ export interface components {
              *     }
              */
             deferred_source_review: components["schemas"]["DeferredSourceReviewSettings"];
+            /**
+             * @default {
+             *       "enabled": false,
+             *       "flip_deadline_hours": 36,
+             *       "min_agents_at_deadline": 3,
+             *       "min_agents_to_flip": 5
+             *     }
+             */
+            flip_rule: components["schemas"]["FlipRuleSettings"];
             /**
              * Fresh Submission Slots
              * @default [

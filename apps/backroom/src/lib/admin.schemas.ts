@@ -2992,6 +2992,63 @@ export const prevGenCarryoverWriteSchema = prevGenCarryoverSchema.extend({
   require_desired_era_drained: z.boolean(),
 })
 
+// Optional bound on how long a thin board can hold the old bench version's
+// emissions. Ships DISABLED and is next-rollout policy: the platform freezes it
+// onto the rollout row at start. The family counts mirror the platform's
+// MIN/MAX_FLIP_AGENTS (the scoring quorum up to the KOTH emission set) and the
+// deadline mirrors MIN/MAX_FLIP_DEADLINE_HOURS.
+export const FLIP_RULE_AGENTS_MIN = 3
+export const FLIP_RULE_AGENTS_MAX = 5
+export const FLIP_RULE_DEADLINE_HOURS_MIN = 1
+export const FLIP_RULE_DEADLINE_HOURS_MAX = 168
+
+export const FLIP_RULE_DEFAULT = {
+  enabled: false,
+  min_agents_to_flip: 5,
+  flip_deadline_hours: 36,
+  min_agents_at_deadline: 3,
+} as const
+
+export const flipRuleSchema = z.object({
+  enabled: z.boolean().default(FLIP_RULE_DEFAULT.enabled),
+  // Ranked owner families that flip the ledger immediately. The priority
+  // cohort must still be at quorum; 5 is the original rule.
+  min_agents_to_flip: z
+    .number()
+    .int()
+    .min(FLIP_RULE_AGENTS_MIN)
+    .max(FLIP_RULE_AGENTS_MAX)
+    .default(FLIP_RULE_DEFAULT.min_agents_to_flip),
+  // Hours after rollout start at which the deadline branch opens.
+  flip_deadline_hours: z
+    .number()
+    .int()
+    .min(FLIP_RULE_DEADLINE_HOURS_MIN)
+    .max(FLIP_RULE_DEADLINE_HOURS_MAX)
+    .default(FLIP_RULE_DEFAULT.flip_deadline_hours),
+  // Ranked owner families that flip once the deadline has passed, without
+  // waiting for the priority cohort. At most `min_agents_to_flip`.
+  min_agents_at_deadline: z
+    .number()
+    .int()
+    .min(FLIP_RULE_AGENTS_MIN)
+    .max(FLIP_RULE_AGENTS_MAX)
+    .default(FLIP_RULE_DEFAULT.min_agents_at_deadline),
+})
+
+// The write half: the platform stores the block whole and names every omitted
+// key back (`flip_rule is stored whole too; missing [...]`).
+export const flipRuleWriteSchema = flipRuleSchema.extend({
+  enabled: z.boolean(),
+  min_agents_to_flip: z.number().int().min(FLIP_RULE_AGENTS_MIN).max(FLIP_RULE_AGENTS_MAX),
+  flip_deadline_hours: z
+    .number()
+    .int()
+    .min(FLIP_RULE_DEADLINE_HOURS_MIN)
+    .max(FLIP_RULE_DEADLINE_HOURS_MAX),
+  min_agents_at_deadline: z.number().int().min(FLIP_RULE_AGENTS_MIN).max(FLIP_RULE_AGENTS_MAX),
+})
+
 export const QUEUE_POLICY_DEFAULT_FRESH_SUBMISSION_SLOTS = [0, 1, 3]
 
 // How many of one owner's submissions may hold live leases at once, on the
@@ -3158,6 +3215,9 @@ const queuePolicySettingsBaseSchema = z.object({
   // about who a miner is -- and this board must describe what the platform
   // actually accepts, nothing more.
   prev_gen_carryover: prevGenCarryoverSchema.default(PREV_GEN_CARRYOVER_DEFAULT),
+  // Next-rollout policy, frozen onto the rollout row at start. Ships disabled;
+  // read default keeps this page rendering against a platform that predates it.
+  flip_rule: flipRuleSchema.default(FLIP_RULE_DEFAULT),
   // Which already-screened artifact a screening attempt may be diffed
   // against: the same hotkey's prior version only (default), also a same-
   // coldkey earlier upload, or also a declared released public base.
@@ -3173,6 +3233,14 @@ const refineQueuePolicyCoherence = (
         code: 'custom',
         message: 'priority_cohort_size must be at most rescore_cohort_size',
         path: ['priority_cohort_size'],
+      })
+    }
+    if (value.flip_rule.min_agents_at_deadline > value.flip_rule.min_agents_to_flip) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'flip_rule.min_agents_at_deadline cannot exceed min_agents_to_flip: the deadline is a fallback and must never be stricter than the immediate condition',
+        path: ['flip_rule', 'min_agents_at_deadline'],
       })
     }
     const slots = value.fresh_submission_slots
@@ -3237,6 +3305,7 @@ export const queuePolicySettingsWriteSchema = queuePolicySettingsBaseSchema
     similarity_budget: similarityBudgetWriteSchema,
     deferred_source_review: deferredSourceReviewWriteSchema,
     prev_gen_carryover: prevGenCarryoverWriteSchema,
+    flip_rule: flipRuleWriteSchema,
     lineage_reference_mode: lineageReferenceModeSchema,
   })
   .superRefine(refineQueuePolicyCoherence)
@@ -3265,6 +3334,8 @@ export const effectiveQueuePolicySettingsSchema = z.object({
   open_rollout_desired_version: z.number().int().positive().nullable().default(null),
   open_rollout_rescore_cohort_target: z.number().int().nonnegative().nullable().default(null),
   open_rollout_priority_cohort_target: z.number().int().nonnegative().nullable().default(null),
+  // The flip rule that rollout froze at start (null when none is open).
+  open_rollout_flip_rule: flipRuleSchema.nullable().default(null),
   open_rollout_overrides_setting: z.boolean().default(false),
   // Fields the platform will refuse while that rollout stays open.
   rollout_locked_fields: z.array(z.string()).default([]),
@@ -8021,6 +8092,26 @@ export const benchmarkRolloutMemberSchema = z.object({
   currently_top_five: z.boolean(),
 })
 
+export const rolloutFlipRuleStateSchema = z.object({
+  enabled: z.boolean(),
+  min_agents_to_flip: z.number().int().positive(),
+  flip_deadline_hours: z.number().int().positive(),
+  min_agents_at_deadline: z.number().int().positive(),
+  deadline_at: z.string().nullable().default(null),
+  deadline_elapsed: z.boolean().default(false),
+  // Null while the rule is off (the read is skipped).
+  authority_earned: z.boolean().nullable().default(null),
+  priority_complete: z.boolean().default(false),
+  // Ranked owner families inside the current-or-previous dueling season window,
+  // i.e. what a flip would put on the board.
+  ranked_quorum_agents: z.number().int().nonnegative().default(0),
+  // Families that reached a ranked quorum on the desired version and have since
+  // aged out of that window. Null while the rule is off (the count is skipped).
+  expired_quorum_agents: z.number().int().nonnegative().nullable().default(null),
+  immediate_ready: z.boolean().default(false),
+  deadline_ready: z.boolean().default(false),
+})
+
 export const benchmarkRolloutStateSchema = z.object({
   active_version: z.number().int().positive(),
   desired_version: z.number().int().positive(),
@@ -8047,6 +8138,9 @@ export const benchmarkRolloutStateSchema = z.object({
   priority_complete: z.boolean().optional().default(false),
   promotion_pending: z.boolean().nullish().default(null),
   promotion_requirement: z.string().nullish().default(null),
+  // The flip rule this rollout froze at start and where it stands against it.
+  // Nullish so a Platform that predates the rule still parses.
+  flip_rule: rolloutFlipRuleStateSchema.nullish().default(null),
   members: z.array(benchmarkRolloutMemberSchema),
   qualification_blockers: z
     .array(z.record(z.string(), z.string()))

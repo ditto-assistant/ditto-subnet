@@ -25,6 +25,7 @@ needs no ``safe_add_column`` batching. Nothing reads the columns while
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "b7e1f4a9c203"

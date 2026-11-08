@@ -232,6 +232,7 @@ async def test_admin_status_read_does_not_start_rollout(
             "priority_complete": False,
             "promotion_pending": False,
             "promotion_requirement": None,
+            "flip_rule": None,
             "members": [],
         }
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))

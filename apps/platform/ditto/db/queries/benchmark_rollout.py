@@ -879,9 +879,7 @@ async def maybe_record_desired_authority(
                 "flip_path": flip_path,
                 "flip_min_agents": int(rollout.flip_min_agents),
                 "flip_deadline_hours": int(rollout.flip_deadline_hours),
-                "flip_min_agents_at_deadline": int(
-                    rollout.flip_min_agents_at_deadline
-                ),
+                "flip_min_agents_at_deadline": int(rollout.flip_min_agents_at_deadline),
                 "flip_deadline_at": deadline.isoformat() if deadline else None,
             }
         )
@@ -1349,9 +1347,7 @@ async def create_rollout_snapshot(
             f"rollout flip_min_agents must be between {MIN_FLIP_RULE_AGENTS} "
             f"and {MAX_FLIP_RULE_AGENTS}"
         )
-    if not (
-        MIN_FLIP_RULE_AGENTS <= flip_min_agents_at_deadline <= flip_min_agents
-    ):
+    if not (MIN_FLIP_RULE_AGENTS <= flip_min_agents_at_deadline <= flip_min_agents):
         raise ValueError(
             "rollout flip_min_agents_at_deadline must be between "
             f"{MIN_FLIP_RULE_AGENTS} and flip_min_agents ({flip_min_agents})"
@@ -2855,10 +2851,15 @@ async def flip_rule_telemetry(
     from ditto.db.queries.scores import count_ranked_quorum_agents
 
     deadline = flip_deadline_at(rollout)
-    earned = await desired_authority_earned(session, rollout)
-    # The all-season count scans every score row at the desired version, so it
-    # is taken only for a rollout that froze an enabled rule: the public rollout
-    # endpoint must cost nothing extra while the rule is off.
+    # Both extra reads below run only for a rollout that froze an enabled rule,
+    # so the public rollout endpoint issues the same statements as before while
+    # the rule is off (its statement budget is a tested ceiling).
+    earned = (
+        await desired_authority_earned(session, rollout)
+        if rollout.flip_rule_enabled
+        else None
+    )
+    # The all-season count scans every score row at the desired version.
     all_time = (
         await count_ranked_quorum_agents(
             session,

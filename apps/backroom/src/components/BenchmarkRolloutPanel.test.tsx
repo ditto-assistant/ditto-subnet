@@ -59,6 +59,7 @@ const ready: BenchmarkRolloutControl = {
   priority_complete: true,
   promotion_pending: false,
   promotion_requirement: null,
+  flip_rule: null,
   members: [],
   qualification_blockers: [],
   retry_diagnostics: [],

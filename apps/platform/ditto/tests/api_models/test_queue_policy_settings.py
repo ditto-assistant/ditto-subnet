@@ -13,21 +13,21 @@ from __future__ import annotations
 import pytest
 
 from ditto.api_models.queue_policy_settings import (
+    DEFAULT_FLIP_DEADLINE_HOURS,
+    DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE,
     DEFAULT_FRESH_SUBMISSION_SLOTS,
     DEFAULT_LANE_CYCLE_SIZE,
     DEFAULT_OWNER_CONCURRENT_SUBMISSIONS,
     DEFAULT_PREV_GEN_CARRYOVER_AGENTS,
     MAX_COHORT_SIZE,
+    MAX_FLIP_AGENTS,
+    MAX_FLIP_DEADLINE_HOURS,
     MAX_OWNER_CONCURRENT_SUBMISSIONS,
     MAX_PREV_GEN_CARRYOVER_AGENTS,
     MIN_COHORT_SIZE,
-    MIN_OWNER_CONCURRENT_SUBMISSIONS,
-    DEFAULT_FLIP_DEADLINE_HOURS,
-    DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE,
-    MAX_FLIP_AGENTS,
-    MAX_FLIP_DEADLINE_HOURS,
     MIN_FLIP_AGENTS,
     MIN_FLIP_DEADLINE_HOURS,
+    MIN_OWNER_CONCURRENT_SUBMISSIONS,
     FlipRuleSettings,
     PrevGenCarryoverSettings,
     QueuePolicySettings,
@@ -71,7 +71,9 @@ class TestQueuePolicyBoundsMatchQueueConstants:
         assert MAX_FLIP_AGENTS == rollout_queries.MIN_DESIRED_AUTHORITY_AGENTS
         assert MIN_FLIP_DEADLINE_HOURS == rollout_queries.MIN_FLIP_DEADLINE_HOURS
         assert MAX_FLIP_DEADLINE_HOURS == rollout_queries.MAX_FLIP_DEADLINE_HOURS
-        assert DEFAULT_FLIP_DEADLINE_HOURS == rollout_queries.DEFAULT_FLIP_DEADLINE_HOURS
+        assert (
+            DEFAULT_FLIP_DEADLINE_HOURS == rollout_queries.DEFAULT_FLIP_DEADLINE_HOURS
+        )
         assert (
             DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE
             == rollout_queries.DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE
@@ -287,7 +289,9 @@ class TestFlipRuleSettings:
         assert QueuePolicySettings.model_validate(stored).flip_rule.enabled is False
 
     @pytest.mark.parametrize("agents", [0, 1, 2, 6, 25])
-    def test_family_counts_outside_three_to_five_are_rejected(self, agents: int) -> None:
+    def test_family_counts_outside_three_to_five_are_rejected(
+        self, agents: int
+    ) -> None:
         with pytest.raises(ValueError):
             FlipRuleSettings(min_agents_to_flip=agents)
         with pytest.raises(ValueError):

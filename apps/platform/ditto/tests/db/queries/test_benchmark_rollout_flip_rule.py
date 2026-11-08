@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -104,7 +104,10 @@ async def test_deadline_flips_three_families_only_with_the_rule_on(
         # default): three ranked families and an incomplete priority cohort
         # never flip, however long we wait.
         assert rollout.flip_rule_enabled is False
-        assert await maybe_record_desired_authority(session, rollout, now=after_deadline) is False
+        assert (
+            await maybe_record_desired_authority(session, rollout, now=after_deadline)
+            is False
+        )
         assert await active_bench_version(session, open_transition=rollout) == source
         assert await _earned_events(session, rollout) == []
 
@@ -112,7 +115,10 @@ async def test_deadline_flips_three_families_only_with_the_rule_on(
         # seals the flip durably.
         _enable_rule(rollout)
         await session.flush()
-        assert await maybe_record_desired_authority(session, rollout, now=after_deadline) is True
+        assert (
+            await maybe_record_desired_authority(session, rollout, now=after_deadline)
+            is True
+        )
         assert await desired_authority_earned(session, rollout)
         assert await active_bench_version(session, open_transition=rollout) == desired
         [event] = await _earned_events(session, rollout)
@@ -196,9 +202,7 @@ async def test_flip_is_sealed_by_the_poll_path_and_closes_the_rollout(
 
         # Sticky: the quorum rows can lapse afterwards and nothing rolls back.
         await session.execute(
-            Score.__table__.delete().where(
-                Score.bench_version == rollout.desired_version
-            )
+            delete(Score).where(Score.bench_version == rollout.desired_version)
         )
         assert await desired_authority_earned(session, rollout)
 
@@ -285,9 +289,7 @@ async def test_enabled_rule_at_defaults_is_the_original_rule_before_the_deadline
         assert await active_bench_version(session, open_transition=rollout) == source
         # The fifth arrives: the original rule flips, on the original path.
         session.add_all(
-            _desired_quorum(
-                agent_ids[4], desired_version=desired, now=now, tag="4"
-            )
+            _desired_quorum(agent_ids[4], desired_version=desired, now=now, tag="4")
         )
         await session.flush()
         assert await maybe_record_desired_authority(session, rollout, now=now)
@@ -418,6 +420,7 @@ async def test_telemetry_and_public_requirement_describe_the_rule(
         assert off["flip_rule"]["enabled"] is False
         assert off["flip_rule"]["deadline_at"] is None
         assert off["flip_rule"]["expired_quorum_agents"] is None
+        assert off["flip_rule"]["authority_earned"] is None
         # Disabled wording is the original sentence, character for character.
         assert off["promotion_requirement"] == bench_promotion_requirement(
             emission_version=source,
