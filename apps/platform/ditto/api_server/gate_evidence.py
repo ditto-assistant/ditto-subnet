@@ -35,9 +35,9 @@ from ditto.api_models.claim_provenance_cases import (
 from ditto.api_models.gate_evidence import (
     GATE_EVIDENCE_CONTRACT_VERSION,
     GATE_EVIDENCE_MIN_BENCH_VERSION,
-    RUN_BUDGET_MIN_BENCH_VERSION,
     GATE_FINDINGS,
     GATE_NOTE_VOCABULARY,
+    RUN_BUDGET_MIN_BENCH_VERSION,
     TWIN_NOTE_MARKERS,
     CatalogGateSummary,
     ClaimProvenanceSummary,

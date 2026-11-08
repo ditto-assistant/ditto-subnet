@@ -2358,6 +2358,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				// Keep the family identity (twin group, audit half, twin evidence)
 				// so the family is dissolved rather than read as intact.
 				waveResults[i].TwinGroup, waveResults[i].AuditHalf = mc.TwinGroup, scorer.AuditHalfFor(mc)
+				waveResults[i] = carryV13ProvenanceRelation(req.BenchVersion, sc, waveResults[i])
 				waveTwins[i] = memoryTwinEvidence(req.BenchVersion, sc, protocol.RunResponse{}, nil)
 				waveTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindMemory, UserID: transcriptUser}
 				s.store.AppendPartial(runID, waveResults[i])
