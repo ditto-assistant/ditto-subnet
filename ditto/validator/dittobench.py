@@ -336,6 +336,9 @@ _FAILED = "failed"
 # by design: it is spent out of the lease's reporting margin.
 _CANCEL_TIMEOUT_SECONDS = 15.0
 _UNCHANGED_PROGRESS_TIMEOUT_SECONDS = 15 * 60.0
+# Consecutive unreadable polls (transport error, 5xx, or 404 for our own run)
+# tolerated before the run is handed back as validator infrastructure.
+_SCORER_UNAVAILABLE_POLL_LIMIT = 3
 _CONFIRMATION_FAILURE_CLASS_HEADER = "X-Ditto-Confirmation-Failure-Class"
 _CONFIRMATION_FAILURE_STATUS_HEADER = "X-Ditto-Confirmation-Failure-Status"
 _CONFIRMATION_ZERO_STATUS_FAILURES = frozenset(
@@ -2006,7 +2009,16 @@ class DittobenchClient:
                 url, json=body, headers=self._control_headers()
             )
         except httpx.HTTPError as e:
-            raise DittobenchError(f"submit failed: {e}") from e
+            # The local scorer is ours: unreachable means our infrastructure,
+            # not the miner's artifact (SN-445 / SN-426).
+            raise ValidatorInfrastructureError(
+                f"scorer unreachable at submit: {e}", code="scorer_unreachable"
+            ) from e
+        if resp.status_code >= 500 and resp.status_code != 503:
+            raise ValidatorInfrastructureError(
+                f"scorer failed at submit ({resp.status_code}): {resp.text[:200]}",
+                code="scorer_submit_unavailable",
+            )
         if resp.status_code in (429, 503):
             raise ValidatorInfrastructureError(
                 f"scorer admission unavailable ({resp.status_code}); "
@@ -2085,9 +2097,41 @@ class DittobenchClient:
         # lease from continued progress on the previous run and rebaseline the
         # monotonicity guard accordingly.
         run_token = hashlib.sha256(run_id.encode()).hexdigest()[:16]
+        unavailable_polls = 0
+        detail = ""
         try:
             while time.monotonic() - started <= budget:
-                resp = await self._client.get(url, headers=self._control_headers())
+                # The scorer is validator-owned. A transport error, 5xx, or a
+                # 404 for the run id we were just handed (the scorer restarted
+                # and lost it) says nothing about the miner's artifact: ride
+                # out a short blip, then hand back as infrastructure so the
+                # miner's attempt is not charged (SN-445 / SN-426).
+                try:
+                    resp = await self._client.get(url, headers=self._control_headers())
+                    unavailable = resp.status_code == 404 or resp.status_code >= 500
+                    detail = f"{resp.status_code}: {resp.text[:200]}"
+                except httpx.HTTPError as e:
+                    unavailable, detail = True, f"transport: {e}"
+                if unavailable:
+                    unavailable_polls += 1
+                    remaining = budget - (time.monotonic() - started)
+                    # Below the limit with budget left: ride out the blip. With
+                    # no budget left the run's fate is unknowable, and that is
+                    # still our outage, not a miner timeout.
+                    if unavailable_polls < _SCORER_UNAVAILABLE_POLL_LIMIT and (
+                        remaining > 0
+                    ):
+                        await asyncio.sleep(
+                            min(self._config.dittobench_poll_seconds, remaining)
+                        )
+                        continue
+                    await self._cancel(run_id)
+                    raise ValidatorInfrastructureError(
+                        f"scorer unavailable while polling run {run_id} "
+                        f"({unavailable_polls} consecutive polls; last {detail})",
+                        code="scorer_poll_unavailable",
+                    )
+                unavailable_polls = 0
                 # A poll that cannot be read says nothing about the run itself,
                 # which is still live in the sandbox. Cancel it like every other
                 # non-terminal exit so it cannot keep the sandbox after the
@@ -2311,11 +2355,20 @@ class DittobenchClient:
                 )
         except httpx.HTTPError as e:
             await self._cancel(run_id)
-            raise DittobenchError(f"poll failed: {e}") from e
+            raise ValidatorInfrastructureError(
+                f"poll failed: {e}", code="scorer_poll_unavailable"
+            ) from e
         except asyncio.CancelledError:
             await self._cancel(run_id)
             raise
         await self._cancel(run_id)
+        if unavailable_polls:
+            # The budget ran out while the scorer was still unreadable.
+            raise ValidatorInfrastructureError(
+                f"scorer unavailable while polling run {run_id} when its budget "
+                f"ran out ({unavailable_polls} consecutive polls; last {detail})",
+                code="scorer_poll_unavailable",
+            )
         elapsed = time.monotonic() - started
         if lease_bound and ticket_deadline is not None:
             # Name the binding constraint. An operator reading this must be able
