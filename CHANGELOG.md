@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.463.0 (2026-11-08)
+
+### Features
+
+- **screener**: Resize conversation assessments to a $1 hold and a $30 daily spend cap
+  ([#3436](https://github.com/ditto-assistant/ditto-subnet/pull/3436),
+  [`6fd21e4`](https://github.com/ditto-assistant/ditto-subnet/commit/6fd21e4e5473a05acf14cdfeff06bfd8a6a61c94))
+
+
 ## v0.462.2 (2026-11-08)
 
 ### Bug Fixes
