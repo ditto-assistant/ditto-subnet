@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.467.0 (2026-11-08)
+
+### Features
+
+- **bench**: Support and advertise bench v18 across every layer
+  ([#3414](https://github.com/ditto-assistant/ditto-subnet/pull/3414),
+  [`4781a53`](https://github.com/ditto-assistant/ditto-subnet/commit/4781a53318c141acab69c3bc9fc6c2fc48c2e9c9))
+
+
 ## v0.466.0 (2026-11-08)
 
 ### Features
