@@ -181,6 +181,18 @@ export function BurnControlPanel({
                     : 'Frozen 65/14/10/7/4'}
                 </dd>
               </div>
+              <div>
+                <dt className="text-[var(--muted)]">Unfilled rank slots</dt>
+                <dd className="mt-1 font-medium">
+                  {effective.settings.burn_unfilled_rank_shares
+                    ? effective.unfilled_burn_served === true
+                      ? 'Burn · served'
+                      : effective.unfilled_burn_served === false
+                        ? 'Burn · waiting for protocol 36'
+                        : 'Burn · readiness unknown'
+                    : 'Renormalised (off)'}
+                </dd>
+              </div>
             </dl>
           </div>
 

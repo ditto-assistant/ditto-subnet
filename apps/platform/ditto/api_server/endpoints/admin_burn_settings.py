@@ -240,21 +240,18 @@ async def create_settings_revision(
         settings = settings.model_copy(update={"rank_shares": carried})
     if "burn_unfilled_rank_shares" not in settings.model_fields_set:
         # Same rule as the curve: a write that does not mention the burn keeps
-        # the current value rather than silently switching it off.
+        # the current value rather than silently switching it off. A revision
+        # that no longer parses already reads as the default everywhere
+        # (settings_from_row), so the burn it carried reads as off; carrying
+        # that cannot clear anything a reader still sees.
         try:
             carried_burn = (
                 BurnSettings.model_validate(latest.settings).burn_unfilled_rank_shares
                 if latest is not None
                 else False
             )
-        except ValidationError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "current burn settings revision is unreadable; send "
-                    "burn_unfilled_rank_shares explicitly"
-                ),
-            ) from error
+        except ValidationError:
+            carried_burn = False
         settings = settings.model_copy(
             update={"burn_unfilled_rank_shares": carried_burn}
         )

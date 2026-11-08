@@ -981,3 +981,64 @@ class TestClassifyWithGeneratorShare:
         assert pin_expected_burn(0.2, None, generator_fraction=0.1) == pytest.approx(
             0.2
         )
+
+
+def test_served_unfilled_burn_accepts_only_the_exact_marker() -> None:
+    from ditto.api_server.ledger_pin import served_unfilled_burn
+
+    assert served_unfilled_burn({}) is False
+    assert served_unfilled_burn({"unfilled_share_mode": "burn"}) is True
+    for bad in (None, "", "off", True, 1, ["burn"]):
+        assert served_unfilled_burn({"unfilled_share_mode": bad}) is False
+
+
+class TestUnfilledBurnInPins:
+    """Protocol 36: the marker is frozen with the pin and keys the digest only when on."""
+
+    def _pin(self, draft: Any) -> LedgerPin:
+        return LedgerPin(
+            netuid=draft.netuid,
+            epoch_index=draft.epoch_index,
+            last_epoch_block=draft.last_epoch_block,
+            pinned_block=draft.pinned_block,
+            pinned_block_hash=draft.pinned_block_hash,
+            pinned_at=draft.pinned_at,
+            bench_version=draft.bench_version,
+            entries=(),
+            context=draft.context,
+            ledger_digest=draft.ledger_digest,
+        )
+
+    def _draft(self, **overrides: Any) -> Any:
+        return build_pin_draft(
+            _schedule(),
+            snapshot=_snapshot([], **overrides),
+            previous_pin=None,
+            previous_champion_owner_root=None,
+            now=_NOW,
+        )
+
+    def test_off_keeps_the_legacy_digest_and_replays_without_the_marker(self) -> None:
+        legacy = self._draft()
+        off = self._draft(unfilled_share_mode=None)
+        assert off.ledger_digest == legacy.ledger_digest
+        assert off.context == legacy.context
+        assert "unfilled_share_mode" not in off.context["served"]
+        replayed = response_from_pin(self._pin(off), stale=False, now=_NOW)
+        assert replayed.unfilled_share_mode is None
+        assert "unfilled_share_mode" not in replayed.model_dump(mode="json")
+
+    def test_on_is_frozen_keyed_into_the_digest_and_replayed(self) -> None:
+        legacy = self._draft()
+        burning = self._draft(unfilled_share_mode="burn")
+        assert burning.context["served"]["unfilled_share_mode"] == "burn"
+        assert burning.ledger_digest != legacy.ledger_digest
+        for stale in (False, True):
+            replayed = response_from_pin(self._pin(burning), stale=stale, now=_NOW)
+            assert replayed.unfilled_share_mode == "burn"
+
+    def test_a_malformed_frozen_marker_replays_as_the_renormalising_fold(self) -> None:
+        draft = self._draft(unfilled_share_mode="burn")
+        draft.context["served"]["unfilled_share_mode"] = "renormalise"
+        replayed = response_from_pin(self._pin(draft), stale=False, now=_NOW)
+        assert replayed.unfilled_share_mode is None
