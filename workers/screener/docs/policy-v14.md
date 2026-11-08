@@ -1,7 +1,9 @@
 # SN118 source-review policy v14: complete decision-path evidence
 
-Status: **DRAFT — NOT ACTIVE; runtime support and activation not implemented
-by this document.** This is screening/review policy 14, not benchmark 14.
+Status: **HISTORICAL.** Activated 2026-11-06 01:30Z (activation revision 7),
+then retired with the whole source-review layer on 2026-11-07: no submission is
+reviewed against it any more, and v14 is frozen as the version new build-only
+attempts stamp. This is screening/review policy 14, not benchmark 14.
 
 V14 makes completeness of a clearance auditable. It does not add a new
 prohibition on ordinary model critique, prompt augmentation, retrieval,

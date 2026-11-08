@@ -49,8 +49,42 @@ def update_effective_screener_policy(
 
 
 def effective_screening_policy_version() -> int:
-    """The screening-policy version the platform currently REQUIRES."""
+    """The policy version new screening attempts stamp and workers declare.
+
+    It no longer gates leasing or scoring: source review is retired
+    (2026-11-07) and no new activation is scheduled, so it stays at the last
+    activated version. Use :func:`lease_screening_policy_floor` for gates.
+    """
     return _required_policy_version
+
+
+def lease_screening_policy_floor(bench_version: int | None = None) -> int:
+    """The lowest screening policy whose pass makes an agent leasable.
+
+    With a ``bench_version`` it is that benchmark contract's
+    ``minimum_screening_policy_version``, the exact gate the lease allocator
+    and ``POST /validator/score`` apply. Without one (a projection that is not
+    tied to an era), or for an era with no shipped contract, it is the lowest
+    minimum across the screened-image contracts. It is never a later
+    review-policy activation: source review is retired (2026-11-07).
+    """
+    from ditto.api_models.benchmark_contract import (  # noqa: PLC0415
+        benchmark_contract,
+        benchmark_contracts,
+    )
+
+    if bench_version is not None:
+        try:
+            return benchmark_contract(bench_version).minimum_screening_policy_version
+        except ValueError:
+            # A historical era with no shipped contract: fall back to the
+            # era-free floor rather than failing the caller's request.
+            pass
+    return min(
+        contract.minimum_screening_policy_version
+        for contract in benchmark_contracts()
+        if contract.requires_screened_image
+    )
 
 
 def effective_rescreen_scored() -> bool:

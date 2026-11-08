@@ -85,7 +85,6 @@ from ditto.db.queries.screener_node_settings import (
     resolve_screener_node_channel_settings,
 )
 from ditto.db.queries.screening import (
-    claim_canary_scopes,
     has_claimable_screening_work,
 )
 from ditto_screening_protocol import ScreenerReviewSettingsOverride
@@ -472,7 +471,6 @@ async def _canary_yields_to_production(
     limits: ScreenerNodeChannelSettings,
     instance_id: str,
     active: int,
-    review_settings_scopes: frozenset[str] | None,
     now: datetime,
 ) -> bool:
     """Hold a leasable canary while this node's production admission is open.
@@ -495,7 +493,6 @@ async def _canary_yields_to_production(
     if await has_claimable_screening_work(
         session,
         now=now,
-        review_settings_scopes=review_settings_scopes,
         netuid=expected_netuid(),
     ):
         reason = "production-claimable"
@@ -1607,21 +1604,6 @@ async def claim_l2_report_canary(
             limits=limits,
             instance_id=payload.instance_id,
             active=len(active),
-            # The pinned retries a production claim from this worker could
-            # bind, as ``resolve_claim_binding`` derives them.
-            review_settings_scopes=claim_canary_scopes(
-                (
-                    (
-                        effective.revision,
-                        payload.instance_id,
-                        effective.scope,
-                        effective.checksum,
-                    )
-                    if effective.revision >= 1
-                    else None
-                ),
-                enrolled_node_id=node_id,
-            ),
             now=now,
         ):
             return None

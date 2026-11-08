@@ -2537,9 +2537,7 @@ async def _leased(
 
 async def _production_claimable(session: AsyncSession, *, now: datetime) -> bool:
     """The advisory read for a claimant on built-in review settings."""
-    return await has_claimable_screening_work(
-        session, now=now, review_settings_scopes=None, netuid=118
-    )
+    return await has_claimable_screening_work(session, now=now, netuid=118)
 
 
 def _holds(caplog: pytest.LogCaptureFixture, reason: str | None = None) -> list[str]:
@@ -2901,59 +2899,11 @@ async def test_canary_claim_not_held_by_work_production_would_skip(
         miner_hotkey="5HK-deferred-copy",
         created_at=now - timedelta(days=1),
     )
-    # A retry an operator pinned to another node's adjudicator posture: no
-    # production claim from this node can bind it.
-    pinned = await _seed_agent(
-        session_maker,
-        status=AgentStatus.SCREENING_FAILED,
-        sha256="8" * 64,
-        name="pinned-elsewhere",
-    )
-    posture = ScreenerReviewSettings(
-        mode="enforce", l3_enabled=True, adjudicator_mode="enforce"
-    )
-    pinned_attempt = uuid4()
-    async with session_maker() as session, session.begin():
-        revision = ScreenerReviewSettingsRevision(
-            parent_revision=0,
-            scope="subnet-screener-elsewhere",
-            settings=posture.model_dump(mode="json"),
-            checksum=review_settings_checksum(posture),
-            reason="Pin one adjudicator retry to another node",
-            actor="test",
-        )
-        session.add(revision)
-        session.add(
-            ScreeningAttempt(
-                attempt_id=pinned_attempt,
-                agent_id=pinned,
-                artifact_sha256="8" * 64,
-                screener_hotkey="hotkey-production",
-                policy_version=13,
-                status="failed",
-                started_at=now - timedelta(minutes=30),
-                deadline=now - timedelta(minutes=20),
-                finished_at=now - timedelta(minutes=20),
-            )
-        )
-        await session.flush()
-        session.add(
-            ScreeningRetryOverride(
-                override_id=uuid4(),
-                agent_id=pinned,
-                attempt_id=pinned_attempt,
-                artifact_sha256="8" * 64,
-                expected_score_count=0,
-                force_full_review=True,
-                review_settings_revision=revision.revision,
-                reason="Retry under the other node's adjudicator posture",
-                actor="operator@example.com",
-            )
-        )
     claim = _reservation_claimer(node_id, session_maker, monkeypatch)
 
-    # Neither is work this node's production claim would take, so neither
-    # may hold the canary lane.
+    # The deferred copy is not work this node's production claim would take,
+    # so it may not hold the canary lane. (Retry review postures are retired:
+    # a pinned retry is ordinary claimable work now.)
     assert await claim(1) is not None
     assert _holds(caplog) == []
 

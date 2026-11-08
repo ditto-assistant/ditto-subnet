@@ -167,12 +167,14 @@ async def stranded_previous_era_agents(
         .correlate(Agent, payment)
         .scalar_subquery()
     )
+    # The earliest pass of any kind: every admission has been build-only since
+    # source review was retired (2026-11-07), and a later rebuild never moves
+    # the minimum.
     first_pass = (
         select(func.min(ScreeningAttempt.finished_at))
         .where(
             ScreeningAttempt.agent_id == Agent.agent_id,
             ScreeningAttempt.status == "passed",
-            ScreeningAttempt.build_only.is_(False),
         )
         .correlate(Agent)
         .scalar_subquery()
