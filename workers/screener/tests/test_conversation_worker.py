@@ -309,10 +309,12 @@ async def test_unsettled_harness_usage_at_stop_has_its_own_outcome(tmp_path):
     )
 
 
-def test_relay_settle_window_outlasts_a_provider_call():
-    from ditto_screener.conversation_relay import PROVIDER_TIMEOUT_SECONDS
+def test_relay_settle_window_outlasts_a_dispatch():
+    from ditto_screener.conversation_relay import MAX_HARNESS_SECONDS
     from ditto_screener.conversation_runtime import RELAY_SETTLE_SECONDS
     from ditto_screener.conversation_worker import SETTLE_MARGIN_SECONDS
 
-    assert RELAY_SETTLE_SECONDS > PROVIDER_TIMEOUT_SECONDS
+    # A dispatch ends by its deadline, MAX_HARNESS_SECONDS - 30 after arrival;
+    # the relay drains for MAX_HARNESS_SECONDS and Docker waits longer still.
+    assert RELAY_SETTLE_SECONDS > MAX_HARNESS_SECONDS
     assert SETTLE_MARGIN_SECONDS > RELAY_SETTLE_SECONDS

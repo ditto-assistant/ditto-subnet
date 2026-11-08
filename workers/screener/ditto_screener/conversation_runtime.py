@@ -19,7 +19,7 @@ from uuid import UUID
 import httpx
 
 from ditto_screener.conversation import AssessmentFailure
-from ditto_screener.conversation_relay import PROVIDER_TIMEOUT_SECONDS
+from ditto_screener.conversation_relay import MAX_HARNESS_SECONDS
 from ditto_screener.gate import (
     _CANARY_IMAGE,
     BuildGate,
@@ -28,7 +28,10 @@ from ditto_screener.gate import (
 )
 from ditto_screening_protocol.conversation import HarnessUsage
 
-RELAY_SETTLE_SECONDS = PROVIDER_TIMEOUT_SECONDS + 15
+RELAY_SETTLE_SECONDS = MAX_HARNESS_SECONDS + 15
+"""A dispatch may run until its operation deadline (under MAX_HARNESS_SECONDS
+after arrival); the relay drains in-flight dispatches for that long on SIGTERM,
+and Docker allows a little more before it kills the relay."""
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -357,9 +360,9 @@ class ConversationRuntime:
         with contextlib.suppress(Exception):
             await self.docker("rm", "--force", self.container)
         with contextlib.suppress(Exception):
-            # Let an in-flight dispatch finish and settle: the relay's provider
-            # timeout is 240 s, and a stop shorter than that killed the relay
-            # mid-call and left the run's harness usage unsettled (cc5c4114).
+            # Let an in-flight dispatch finish and settle: a 120 s stop killed the
+            # relay mid-call and left the run's harness usage unsettled
+            # (cc5c4114). The relay drains for up to MAX_HARNESS_SECONDS.
             await self.docker(
                 "stop",
                 "--time",
