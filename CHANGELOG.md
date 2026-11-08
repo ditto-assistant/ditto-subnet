@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.464.0 (2026-11-08)
+
+### Features
+
+- **platform**: Widen conversation admission to ranks 1-15 and add fresh-seed repeats
+  ([#3439](https://github.com/ditto-assistant/ditto-subnet/pull/3439),
+  [`be40005`](https://github.com/ditto-assistant/ditto-subnet/commit/be4000560e1c1bc8a2ef19ffba152e43dd8cd71a))
+
+
 ## v0.463.0 (2026-11-08)
 
 ### Features
