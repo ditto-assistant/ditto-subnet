@@ -12,11 +12,14 @@ requires-python = ">=3.12,<3.14"
 authors = [{ name = "heyDitto" }]
 dependencies = [
     # Patched floors apply to pip consumers as well as the uv lock.
+    "aiohttp>=3.14.4",
     "anyio>=4.14.2",
+    "filelock>=4.2.1",
     "msgpack>=1.2.3",
+    "urllib3>=2.8.0",
     "bittensor>=10.2.1",
     "bittensor-wallet>=4.1.0",
-    "cryptography>=42",
+    "cryptography>=50.0.0",
     "anthropic>=2.6,<3",
     "httpx>=0.27",
     "pydantic>=2.12",
@@ -33,8 +36,12 @@ ditto-screener-replay = "ditto_screener.replay_main:main"
 [tool.uv]
 # Security floors also cover dependencies pulled in through Bittensor and tooling.
 constraint-dependencies = [
+    "aiohttp>=3.14.4",
     "anyio>=4.14.2",
+    "cryptography>=50.0.0",
+    "filelock>=4.2.1",
     "msgpack>=1.2.3",
+    "urllib3>=2.8.0",
 ]
 
 [tool.uv.sources]
