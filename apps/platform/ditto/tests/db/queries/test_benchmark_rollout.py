@@ -1285,16 +1285,16 @@ async def test_frozen_top_five_barrier_remains_raw_three_of_three(
         assert ticket.agent_id == sixth_id
 
 
-async def test_rollout_lease_waits_for_member_to_pass_the_required_policy(
+async def test_rollout_lease_never_waits_for_a_review_policy_activation(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    """A rollout lease is issued only when its score can be accepted.
+    """Source review is retired (2026-11-07): only the contract floor gates.
 
-    ``POST /validator/score`` rejects any agent below the effective required
-    screening policy ("agent is not evaluatable"). Before this guard the rollout
-    lane checked only the contract floor, so after a scheduled activation it
-    kept leasing members that were mid-rescreen; every score bounced and each
-    bounce spent one of the member's fail-once slots (bench v17, 2026-11-06).
+    On 2026-11-06 a v14 activation made every rollout member stale, the lane
+    held them for a rescreen, and validators burned retries on scores Platform
+    refused. A raised activation snapshot must now change nothing: a member on
+    the contract floor stays leasable, and ``POST /validator/score`` applies
+    the same floor.
     """
     from ditto.screener_policy_state import (
         effective_screening_policy_version,
@@ -1313,22 +1313,7 @@ async def test_rollout_lease_waits_for_member_to_pass_the_required_policy(
             assert agent is not None
             agent.screening_policy_version = floor
         await session.flush()
-        # A scheduled activation raises the requirement: every member is now
-        # stale and re-entering screening, so no lease can produce a score.
         update_effective_screener_policy(floor + 1, rescreen_scored=False)
-        stale = await issue_rollout_ticket(
-            session,
-            validator_hotkey="validator-a",
-            now=now,
-            ttl=timedelta(minutes=90),
-        )
-        assert stale is None
-
-        # The first member passes the new policy; only it is leasable.
-        rescreened = await session.get(Agent, priority_ids[0])
-        assert rescreened is not None
-        rescreened.screening_policy_version = floor + 1
-        await session.flush()
         ticket = await issue_rollout_ticket(
             session,
             validator_hotkey="validator-a",
@@ -1336,7 +1321,7 @@ async def test_rollout_lease_waits_for_member_to_pass_the_required_policy(
             ttl=timedelta(minutes=90),
         )
         assert ticket is not None
-        assert ticket.agent_id == priority_ids[0]
+        assert ticket.agent_id in priority_ids
 
 
 async def test_parallel_rollout_slots_stay_distinct_inside_frozen_priority_five(

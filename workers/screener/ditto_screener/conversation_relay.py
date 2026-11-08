@@ -8,6 +8,7 @@ model, provider credential, budget, or administrative route.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import math
 import os
@@ -15,6 +16,7 @@ import signal
 import ssl
 import sys
 import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,7 +29,44 @@ PROFILE = "conversation-openrouter-oss20b-pplx768-v1"
 MAX_BODY = 131_072
 MAX_RESPONSE = 8_388_608
 BUDGET = 5_000_000
+"""Largest harness budget any claim may carry (the retired $5 v1 hold)."""
+PRICE_IN_DECIMICROS = 1
+PRICE_OUT_DECIMICROS = 4
+"""The route's price ceiling in tenths of a microUSD per token: $0.10/M input,
+$0.40/M output. Every gpt-oss-20b provider on 2026-11-08 sat at or under
+$0.075/$0.30. Reservations are taken at this ceiling, so it is what lets a
+$0.15 harness budget hold several concurrent dispatches instead of one."""
 MAX_REQUESTS = 300
+MAX_HARNESS_SECONDS = 300
+"""Matches the bench's v7+ per-case ``/run`` deadline (DITTOBENCH_V7_CASE_TIMEOUT).
+Harnesses are tuned for that envelope; a tighter one here measured the timeout,
+not the conversation (51 of 100 v1 assessments ended in ``harness_run_timeout``)."""
+PROVIDER_TIMEOUT_SECONDS = 240
+MAX_CONCURRENT_DISPATCHES = 4
+"""Harnesses overlap embedding and chat calls on the bench relay. One serial
+lock made every turn wait for the sum of them. The budget is still reserved
+under the lock before any dispatch, so concurrency cannot overspend."""
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+UNDISPATCHED = frozenset({"relay_busy", "provider_deadline_exceeded"})
+PROVIDER_ATTEMPTS_BACKOFF = 4.0
+CHAT_PROVIDER: dict[str, Any] = {
+    # The bench's aggregate throughput route for gpt-oss-20b (Platform
+    # inference._provider_preferences): OpenRouter moves to the next eligible
+    # provider when one is rate limited, instead of handing the harness a 429.
+    # v2's first production run still ended on a 429 after two retries with
+    # allow_fallbacks false. CoreWeave stays excluded (its reviewed route is
+    # 4-bit), and max_price still caps every provider OpenRouter may pick.
+    "sort": "throughput",
+    "ignore": ["coreweave"],
+    "allow_fallbacks": True,
+    "data_collection": "deny",
+    "zdr": True,
+    "max_price": {"prompt": 0.1, "completion": 0.4},
+}
+PROVIDER_ATTEMPTS = 4
+"""An HTTP error response is not billed by the router, so a bounded retry of a
+rate limit or upstream outage costs nothing and keeps the assessment alive.
+Timeouts and transport errors are never retried: they may have been billed."""
 
 
 class RelayError(ValueError):
@@ -42,6 +81,11 @@ class Relay:
         self.state_file = state_file
         self.budget_microusd = budget_microusd
         self.lock = threading.Lock()
+        self.settled_cv = threading.Condition(self.lock)
+        self.slots = threading.BoundedSemaphore(MAX_CONCURRENT_DISPATCHES)
+        self.in_flight = 0
+        self.uncertain = False
+        self.provider_retries = 0
         self.spent = 0
         self.requests = 0
         self.chat_dispatches = 0
@@ -58,6 +102,7 @@ class Relay:
         # Caller holds the dispatch lock. Preserve the original error when an
         # untrusted client retries; never store exception text, URLs or bodies.
         self.failed = True
+        self.settled_cv.notify_all()  # Budget waiters must see the failure.
         if self.failure is None:
             code = "unexpected_error"
             status = None
@@ -93,6 +138,7 @@ class Relay:
                         "failed": self.failed,
                         "cost_is_upper_bound": self.cost_is_upper_bound,
                         "failure": self.failure,
+                        "provider_retries": self.provider_retries,
                     }
                 )
             )
@@ -151,11 +197,7 @@ class Relay:
                 store=False,
                 stream=False,
                 reasoning={"effort": "medium"},
-                provider={
-                    "allow_fallbacks": False,
-                    "data_collection": "deny",
-                    "max_price": {"prompt": 2, "completion": 2},
-                },
+                provider=dict(CHAT_PROVIDER),
             )
             return "responses", response_payload, False
         embed = path in {
@@ -185,7 +227,7 @@ class Relay:
                         "only": ["Perplexity"],
                         "allow_fallbacks": False,
                         "data_collection": "deny",
-                        "max_price": {"prompt": 2},
+                        "max_price": {"prompt": 0.1},
                     },
                 },
                 True,
@@ -253,11 +295,7 @@ class Relay:
                 "stream": False,
                 "max_tokens": output,
                 "reasoning": {"effort": effort},
-                "provider": {
-                    "allow_fallbacks": False,
-                    "data_collection": "deny",
-                    "max_price": {"prompt": 2, "completion": 2},
-                },
+                "provider": dict(CHAT_PROVIDER),
                 "usage": {"include": True},
             }
         )
@@ -266,6 +304,7 @@ class Relay:
         return "chat/completions", payload, False
 
     def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        deadline = time.monotonic() + MAX_HARNESS_SECONDS - 30
         try:
             route, payload, embed = self.payload(path, body)
         except Exception as exc:
@@ -280,108 +319,193 @@ class Relay:
             if embed
             else int(payload.get("max_tokens", payload.get("max_output_tokens", 0)))
         )
-        # OpenRouter max_price is dollars per million tokens; 2 microUSD/token
-        # is the corresponding route ceiling, applied before every dispatch.
-        reservation = 2 * (input_bound + output_bound)
-        reservation = (reservation * 105 + 99) // 100
+        reservation = ceiling_microusd(input_bound, output_bound)
+        reservation = (reservation * 105 + 99) // 100  # Possible BYOK fee.
         with self.lock:
-            if (
-                self.failed
-                or self.requests >= MAX_REQUESTS
-                or self.spent + reservation > self.budget_microusd
+            # Holds still in flight usually settle far below their ceiling, so
+            # wait for them before calling the budget spent. Only a budget that
+            # is still short with nothing in flight is exhausted.
+            while (
+                not self.failed
+                and self.in_flight > 0
+                and self.spent + reservation > self.budget_microusd
+                and time.monotonic() < deadline
             ):
-                raise RelayError("inference_budget_unavailable")
+                self.settled_cv.wait(timeout=max(0.0, deadline - time.monotonic()))
+            if self.failed or self.requests >= MAX_REQUESTS:
+                raise RelayError(
+                    "inference_request_limit"
+                    if self.requests >= MAX_REQUESTS
+                    else "inference_budget_unavailable"
+                )
+            if self.spent + reservation > self.budget_microusd:
+                # Out of time with holds still in flight is not exhaustion:
+                # those holds might have settled. Only an idle relay is spent.
+                raise RelayError(
+                    "inference_budget_exhausted"
+                    if self.in_flight == 0
+                    else "inference_budget_unavailable"
+                )
             self.spent += reservation
             self.requests += 1
             if not embed:
                 self.chat_dispatches += 1
+            self.in_flight += 1
             self.unmetered = True
             self.save()  # Persist before a possibly billed dispatch.
+        try:
+            # One deadline from the caller's arrival: waiting for a dispatch
+            # slot spends the same harness operation as the provider call.
+            if not self.slots.acquire(timeout=max(0.0, deadline - time.monotonic())):
+                raise RelayError("relay_busy")
             try:
-                request = urllib.request.Request(
-                    "https://openrouter.ai/api/v1/" + route,
-                    data=encoded,
-                    headers={
-                        "Authorization": "Bearer " + self.key,
-                        "Content-Type": "application/json",
-                    },
-                    method="POST",
-                )
-                opener = urllib.request.build_opener(
-                    urllib.request.ProxyHandler({}), NoRedirect()
-                )
-                with opener.open(request, timeout=110) as response:
-                    data = response.read(MAX_RESPONSE + 1)
-                if len(data) > MAX_RESPONSE:
-                    raise RelayError("oversized_provider_response")
-                result = json.loads(data)
-                usage = result["usage"]
-                prompt = usage.get(
-                    "prompt_tokens",
-                    usage.get("total_tokens") if embed else usage.get("input_tokens"),
-                )
-                completion = (
-                    0
-                    if embed
-                    else usage.get("completion_tokens", usage.get("output_tokens"))
-                )
-                cost = usage.get("cost")
-                if (
-                    usage.get("is_byok") is True
-                    and type(prompt) is int
-                    and type(completion) is int
-                ):
-                    # BYOK credits cover the Router fee, not the provider bill.
-                    # Keep the provider price ceiling as a labelled upper bound.
-                    tariff = 2 * (prompt + completion) / 1_000_000
-                    if cost is None:
-                        cost = tariff * 1.05
-                    elif (
-                        type(cost) in {int, float} and math.isfinite(cost) and cost >= 0
-                    ):
-                        cost += tariff
-                    else:
-                        raise RelayError("unverifiable_byok_fee")
-                    self.cost_is_upper_bound = True
-                if embed and cost is None and type(prompt) is int:
-                    # Embeddings can omit dollars. Preserve a clearly labelled
-                    # upper bound at the enforced provider price ceiling.
-                    cost = prompt * 2 / 1_000_000
-                    self.cost_is_upper_bound = True
-                if (
-                    type(prompt) is not int
-                    or not 0 <= prompt <= input_bound
-                    or type(completion) is not int
-                    or not 0 <= completion <= output_bound
-                    or type(cost) not in {int, float}
-                    or not math.isfinite(cost)
-                    or not 0 <= cost * 1_000_000 <= reservation
-                ):
-                    raise RelayError("unverifiable_provider_usage")
-                self.spent += math.ceil(cost * 1_000_000) - reservation
-                self.tokens += prompt + completion
-                self.unmetered = False
-                if not embed:
-                    self.successful_chat_responses += 1
-                if embed and path in {"/api/embed", "/api/embeddings"}:
-                    vectors = [
-                        item["embedding"]
-                        for item in sorted(result["data"], key=lambda i: i["index"])
-                    ]
-                    if any(len(v) != 768 for v in vectors):
-                        raise RelayError("embedding_dimension_mismatch")
-                    result = {
-                        "model": body.get("model", EMBED_MODEL),
-                        "embeddings": vectors,
-                        "embedding": vectors[0],
-                        "prompt_eval_count": prompt,
-                    }
-                return result
-            except Exception as exc:
-                self.fail(exc, "provider")  # Never issue a paid fallback or retry.
-                raise
+                result = self._dispatch(route, encoded, deadline)
             finally:
+                self.slots.release()
+            usage = result["usage"]
+            prompt = usage.get(
+                "prompt_tokens",
+                usage.get("total_tokens") if embed else usage.get("input_tokens"),
+            )
+            completion = (
+                0
+                if embed
+                else usage.get("completion_tokens", usage.get("output_tokens"))
+            )
+            cost = usage.get("cost")
+            upper_bound = False
+            if (
+                usage.get("is_byok") is True
+                and type(prompt) is int
+                and type(completion) is int
+            ):
+                # BYOK credits cover the Router fee, not the provider bill.
+                # Keep the provider price ceiling as a labelled upper bound.
+                tariff = ceiling_microusd(prompt, completion) / 1_000_000
+                if cost is None:
+                    cost = tariff * 1.05
+                elif type(cost) in {int, float} and math.isfinite(cost) and cost >= 0:
+                    cost += tariff
+                else:
+                    raise RelayError("unverifiable_byok_fee")
+                upper_bound = True
+            if embed and cost is None and type(prompt) is int:
+                # Embeddings can omit dollars. Preserve a clearly labelled
+                # upper bound at the enforced provider price ceiling.
+                cost = ceiling_microusd(prompt, 0) / 1_000_000
+                upper_bound = True
+            if (
+                type(prompt) is not int
+                or not 0 <= prompt <= input_bound
+                or type(completion) is not int
+                or not 0 <= completion <= output_bound
+                or type(cost) not in {int, float}
+                or not math.isfinite(cost)
+                or not 0 <= cost * 1_000_000 <= reservation
+            ):
+                raise RelayError("unverifiable_provider_usage")
+            if embed and path in {"/api/embed", "/api/embeddings"}:
+                vectors = [
+                    item["embedding"]
+                    for item in sorted(result["data"], key=lambda i: i["index"])
+                ]
+                if any(len(v) != 768 for v in vectors):
+                    raise RelayError("embedding_dimension_mismatch")
+                result = {
+                    "model": body.get("model", EMBED_MODEL),
+                    "embeddings": vectors,
+                    "embedding": vectors[0],
+                    "prompt_eval_count": prompt,
+                }
+        except Exception as exc:
+            with self.lock:
+                self.in_flight -= 1
+                self.settled_cv.notify_all()
+                if isinstance(exc, RelayError) and str(exc) in UNDISPATCHED:
+                    # Nothing billable was answered: no slot, or only error
+                    # responses before the deadline. Return the hold.
+                    self.spent -= reservation
+                    if str(exc) == "relay_busy":
+                        # Never reached the provider: it was not a dispatch.
+                        self.requests -= 1
+                        if not embed:
+                            self.chat_dispatches -= 1
+                else:
+                    self.uncertain = True  # The reservation stays charged.
+                self.unmetered = self.uncertain or self.in_flight > 0
+                self.fail(exc, "provider")  # Never issue a paid fallback.
                 self.save()
+            raise
+        with self.lock:
+            self.in_flight -= 1
+            self.settled_cv.notify_all()
+            self.spent += math.ceil(cost * 1_000_000) - reservation
+            self.tokens += prompt + completion
+            self.cost_is_upper_bound = self.cost_is_upper_bound or upper_bound
+            self.unmetered = self.uncertain or self.in_flight > 0
+            if not embed:
+                self.successful_chat_responses += 1
+            self.save()
+        return result
+
+    def _dispatch(self, route: str, encoded: bytes, deadline: float) -> dict[str, Any]:
+        """One billed completion; retries only unbilled HTTP error responses.
+
+        Every attempt and backoff fits inside one harness operation, so the
+        relay never keeps dispatching for a caller that has already timed out."""
+        for attempt in range(PROVIDER_ATTEMPTS):
+            remaining = deadline - time.monotonic()
+            if remaining <= 1:
+                raise RelayError("provider_deadline_exceeded")
+            request = urllib.request.Request(
+                "https://openrouter.ai/api/v1/" + route,
+                data=encoded,
+                headers={
+                    "Authorization": "Bearer " + self.key,
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}), NoRedirect()
+            )
+            try:
+                timeout = min(PROVIDER_TIMEOUT_SECONDS, remaining)
+                with opener.open(request, timeout=timeout) as response:
+                    data = response.read(MAX_RESPONSE + 1)
+            except HTTPError as exc:
+                if (
+                    exc.code not in RETRYABLE_STATUSES
+                    or attempt + 1 == PROVIDER_ATTEMPTS
+                ):
+                    raise
+                delay = PROVIDER_ATTEMPTS_BACKOFF * 2.0**attempt
+                with contextlib.suppress(TypeError, ValueError, AttributeError):
+                    delay = float(exc.headers.get("Retry-After", delay))
+                if not math.isfinite(delay):
+                    delay = PROVIDER_ATTEMPTS_BACKOFF * 2.0**attempt
+                delay = min(max(delay, 0.5), 20.0)
+                if time.monotonic() + delay + 1 >= deadline:
+                    raise  # No time left for another attempt: keep this status.
+                with self.lock:
+                    self.provider_retries += 1
+                    self.save()
+                time.sleep(delay)
+                continue
+            if len(data) > MAX_RESPONSE:
+                raise RelayError("oversized_provider_response")
+            result = json.loads(data)
+            if not isinstance(result, dict):
+                raise RelayError("invalid_provider_response")
+            return result
+        raise RelayError("provider_retries_exhausted")  # pragma: no cover
+
+
+def ceiling_microusd(input_tokens: int, output_tokens: int) -> int:
+    """Cost at the route's price ceiling, rounded up to a whole microUSD."""
+    return (
+        input_tokens * PRICE_IN_DECIMICROS + output_tokens * PRICE_OUT_DECIMICROS + 9
+    ) // 10
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -390,14 +514,14 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def harness_request(
-    path: str, body: bytes | None, *, timeout: int = 120
+    path: str, body: bytes | None, *, timeout: int = MAX_HARNESS_SECONDS
 ) -> tuple[int, bytes]:
     """Fixed-target host ingress; never forwards a caller's headers or origin."""
     if (body is None and path != "/health") or (
         body is not None and (path not in {"/run", "/seed"} or len(body) > MAX_BODY)
     ):
         raise RelayError("unsupported_harness_route")
-    if type(timeout) is not int or not 1 <= timeout <= 120:
+    if type(timeout) is not int or not 1 <= timeout <= MAX_HARNESS_SECONDS:
         raise RelayError("invalid_harness_timeout")
     request = urllib.request.Request(
         "http://agent:8080" + path,
@@ -469,7 +593,7 @@ def serve(relay: Relay) -> None:
             self.wfile.write(encoded)
 
         def do_POST(self) -> None:
-            self.connection.settimeout(120)
+            self.connection.settimeout(MAX_HARNESS_SECONDS)
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= MAX_BODY or self.headers.get("Transfer-Encoding"):
@@ -512,10 +636,24 @@ def serve(relay: Relay) -> None:
     finally:
         for listener in servers:
             listener.shutdown()
-        # Join in-flight handlers before the host reads settled usage. Docker's
-        # outer stop deadline still bounds hostile or stalled connections.
+        # ThreadingHTTPServer handlers are daemon threads, so closing the
+        # listeners does not wait for them: wait for in-flight dispatches to
+        # settle before the process exits and the host reads usage.json.
+        drain_in_flight(relay, MAX_HARNESS_SECONDS)
         for listener in servers:
             listener.server_close()
+
+
+def drain_in_flight(relay: Relay, timeout_seconds: float) -> bool:
+    """Block until no dispatch is in flight, or the timeout passes."""
+    deadline = time.monotonic() + timeout_seconds
+    with relay.lock:
+        while relay.in_flight > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            relay.settled_cv.wait(timeout=remaining)
+    return True
 
 
 if __name__ == "__main__":
@@ -526,6 +664,10 @@ if __name__ == "__main__":
             Relay(
                 os.environ["OPENROUTER_API_KEY"],
                 Path("/state/usage.json"),
+                # The claim's harness budget; the constructor bounds it.
+                budget_microusd=int(
+                    os.environ.get("CONVERSATION_RELAY_BUDGET_MICROUSD", BUDGET)
+                ),
             )
         )
     else:

@@ -34,7 +34,6 @@ from ditto.db.models import (
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningRetryOverride,
-    ScreeningReviewEvent,
     SubmissionImageBuild,
 )
 from ditto.db.queries.screening import (
@@ -43,7 +42,6 @@ from ditto.db.queries.screening import (
     MAX_SCREENING_EXPIRIES,
     POLICY_ONLY_RESCREEN_REASON,
     _inconclusive_attempt_count,
-    claim_canary_scopes,
     claim_screening_attempts,
     expire_screening_attempts,
     fail_orphaned_screening_attempts,
@@ -556,12 +554,8 @@ async def _claim(
     session: AsyncSession,
     *,
     limit: int = 10,
-    deferred_review_mode: str = "off",
-    integrity_double_check_mode: str = "off",
     review_settings_binding: tuple[int, str, str, str] | None = None,
-    review_settings_enrolled_node_id: str | None = None,
     now: datetime | None = None,
-    canary_policy_version: int | None = None,
 ) -> list:
     async with session.begin():
         return await claim_screening_attempts(
@@ -570,11 +564,7 @@ async def _claim(
             now=now or datetime.now(UTC),
             ttl=timedelta(minutes=45),
             limit=limit,
-            deferred_review_mode=deferred_review_mode,
-            integrity_double_check_mode=integrity_double_check_mode,
             review_settings_binding=review_settings_binding,
-            review_settings_enrolled_node_id=review_settings_enrolled_node_id,
-            canary_policy_version=canary_policy_version,
         )
 
 
@@ -844,7 +834,7 @@ async def test_polling_pet_does_not_orphan_in_flight_targon_kaniko(
             ]
         )
 
-    claimed = await _claim(session, limit=4, deferred_review_mode="bypass", now=now)
+    claimed = await _claim(session, limit=4, now=now)
 
     assert claimed == []
     assert attempt.status == "running"
@@ -893,7 +883,7 @@ async def test_two_fresh_heartbeats_may_hold_two_targon_first_leases(
             ]
         )
 
-    claimed = await _claim(session, limit=4, deferred_review_mode="bypass", now=now)
+    claimed = await _claim(session, limit=4, now=now)
 
     assert len(claimed) == 1
     assert claimed[0][0].agent_id == waiting.agent_id
@@ -944,7 +934,7 @@ async def test_orphan_refill_cannot_exceed_fresh_heartbeat_instances(
     async with session.begin():
         session.add_all(rows)
 
-    claimed = await _claim(session, limit=4, deferred_review_mode="bypass", now=now)
+    claimed = await _claim(session, limit=4, now=now)
 
     assert len(claimed) == 1
     claimed_ids = {agent.agent_id for agent, _, _ in claimed}
@@ -968,65 +958,55 @@ async def test_orphan_refill_cannot_exceed_fresh_heartbeat_instances(
     assert len(failed) == 4
 
 
-@pytest.mark.parametrize("mode", ["off", "observe"])
-async def test_full_review_modes_do_not_use_mechanical_first_claim(
-    session: AsyncSession, mode: str
+async def test_fresh_upload_is_always_mechanical_admission(
+    session: AsyncSession,
 ) -> None:
+    """Source review is retired: every fresh claim is the build-only lane."""
     agent = Agent(
         agent_id=uuid4(),
-        miner_hotkey=f"5HK-{mode}",
-        name=f"fresh-{mode}",
+        miner_hotkey="5HK-fresh",
+        name="fresh",
         sha256=uuid4().hex * 2,
         status=AgentStatus.UPLOADED,
     )
     async with session.begin():
         session.add(agent)
 
-    claimed = await _claim(session, deferred_review_mode=mode)
+    claimed = await _claim(session)
     attempt, _duplicate = _claimed_duplicate(claimed, agent)
 
-    assert attempt.build_only is False
+    assert attempt.build_only is True
+    assert attempt.reason_code is None
+    assert attempt.lineage_parent_agent_id is None
 
 
-@pytest.mark.parametrize(
-    ("force_full_review", "expected_build_only"),
-    [(False, True), (True, False)],
-)
-async def test_manual_retry_can_force_one_full_review_while_queue_bypasses(
+@pytest.mark.parametrize("force_full_review", [False, True])
+async def test_manual_retry_never_reintroduces_source_review(
     session: AsyncSession,
     force_full_review: bool,
-    expected_build_only: bool,
 ) -> None:
+    """A stored ``force_full_review`` override from before the retirement is
+    ignored: the retry is the same mechanical admission as a fresh upload."""
     agent = await _seed_failed_agent(session)
     await _add_expired_attempts(session, agent, 1)
     await _authorize_latest_retry(session, agent, force_full_review=force_full_review)
 
-    claimed = await _claim(session, deferred_review_mode="bypass")
+    claimed = await _claim(session)
     attempt, _duplicate = _claimed_duplicate(claimed, agent)
 
-    assert attempt.build_only is expected_build_only
-    assert attempt.reason_code == (
-        "deferred-mechanical-admission" if expected_build_only else None
-    )
+    assert attempt.build_only is True
+    assert attempt.reason_code is None
 
 
-@pytest.mark.parametrize(
-    "mode",
-    [
-        "off",
-    ],
-)
-async def test_open_deferred_hold_still_drains_after_leaving_enforce(
-    session: AsyncSession, mode: str
+async def test_open_deferred_hold_is_not_reclaimed_for_source_review(
+    session: AsyncSession,
 ) -> None:
-    """A mode change must not strand the holds that were open when it happened.
+    """A deferred hold opened before the retirement is an operator decision.
 
-    The re-claim of an ``ath_pending_review`` agent for its deferred deep pass
-    used to be gated on ``mode == "enforce"``, so any flip away from it froze
-    every open hold: no screener would pick those agents up again and they sat
-    outside the emission-eligible ledger indefinitely. The mode now decides only
-    whether NEW holds open; settling an existing one is always allowed.
+    No screener runs a deep source review any more, so the hold is never
+    re-leased; it drains only through ``resolve_ath_review``.
     """
+    mode = "retired"
     opened_at = datetime.now(UTC) - timedelta(minutes=5)
     agent = Agent(
         agent_id=uuid4(),
@@ -1053,112 +1033,11 @@ async def test_open_deferred_hold_still_drains_after_leaving_enforce(
             )
         )
 
-    claimed = await _claim(session, deferred_review_mode=mode)
-    deep, _duplicate = _claimed_duplicate(claimed, agent)
+    claimed = await _claim(session)
 
-    assert deep.build_only is False
-    assert deep.reason_code is None
-
-
-async def test_enforce_uses_mechanical_first_then_one_deep_claim(
-    session: AsyncSession,
-) -> None:
-    agent = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-enforce",
-        name="fresh-enforce",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.UPLOADED,
+    assert all(
+        claimed_agent.agent_id != agent.agent_id for claimed_agent, _, _ in claimed
     )
-    async with session.begin():
-        session.add(agent)
-
-    claimed = await _claim(session, deferred_review_mode="enforce")
-    mechanical, _duplicate = _claimed_duplicate(claimed, agent)
-    assert mechanical.build_only is True
-    assert mechanical.reason_code == "deferred-mechanical-admission"
-
-    opened_at = datetime.now(UTC)
-    async with session.begin():
-        mechanical.status = "passed"
-        mechanical.finished_at = opened_at
-        agent.status = AgentStatus.ATH_PENDING_REVIEW
-        session.add(
-            AthReview(
-                review_id=uuid4(),
-                agent_id=agent.agent_id,
-                status="pending",
-                opened_at=opened_at,
-                original_reason="deferred review",
-                original_policy_version=SCREENING_POLICY_VERSION,
-                original_evidence={"previous_status": AgentStatus.SCORED.value},
-                algorithm_provenance={
-                    "review_kind": "deferred_source_review",
-                },
-            )
-        )
-
-    claimed = await _claim(session, deferred_review_mode="enforce")
-    deep, _duplicate = _claimed_duplicate(claimed, agent)
-    assert deep.build_only is False
-    assert deep.reason_code is None
-
-    async with session.begin():
-        deep.status = "passed"
-        deep.finished_at = datetime.now(UTC)
-
-    # Any terminal deep result is the one allowed attempt. The pending ATH row
-    # now waits for operator adjudication instead of looping back to a screener.
-    assert await _claim(session, deferred_review_mode="enforce") == []
-
-
-async def test_deep_infrastructure_failure_requires_manual_retry(
-    session: AsyncSession,
-) -> None:
-    agent = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-deep-infra",
-        name="deep-infra",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.ATH_PENDING_REVIEW,
-    )
-    opened_at = datetime.now(UTC) - timedelta(minutes=2)
-    async with session.begin():
-        session.add(agent)
-        await session.flush()
-        session.add(
-            AthReview(
-                review_id=uuid4(),
-                agent_id=agent.agent_id,
-                status="pending",
-                opened_at=opened_at,
-                original_reason="deferred review",
-                original_policy_version=SCREENING_POLICY_VERSION,
-                original_evidence={"previous_status": AgentStatus.SCORED.value},
-                algorithm_provenance={
-                    "review_kind": "deferred_source_review",
-                },
-            )
-        )
-        session.add(
-            ScreeningAttempt(
-                attempt_id=uuid4(),
-                agent_id=agent.agent_id,
-                screener_hotkey=_SCREENER,
-                policy_version=SCREENING_POLICY_VERSION,
-                status="failed",
-                started_at=opened_at + timedelta(seconds=1),
-                deadline=opened_at + timedelta(minutes=1),
-                finished_at=opened_at + timedelta(minutes=1),
-                build_only=False,
-            )
-        )
-
-    assert await _claim(session, deferred_review_mode="enforce") == []
-    await _authorize_latest_retry(session, agent)
-    claimed = await _claim(session, deferred_review_mode="enforce")
-    retry, _duplicate = _claimed_duplicate(claimed, agent)
-    assert retry.build_only is False
 
 
 async def test_failed_infrastructure_attempt_stays_parked_after_deadline(
@@ -1849,29 +1728,26 @@ async def test_expiries_after_release_still_exhaust(session: AsyncSession) -> No
     assert agent.agent_id not in {a.agent_id for a, _, _ in claimed}
     refreshed = await session.get(Agent, agent.agent_id)
     assert refreshed is not None
-    assert refreshed.status == AgentStatus.QUARANTINED
+    # An infrastructure park, not a hold: no quarantine row, no review event.
+    assert refreshed.status == AgentStatus.SCREENING_FAILED
     assert refreshed.screening_reason_code == "repeatedly-inconclusive"
     parked = await session.scalar(
         select(ScreeningAttempt).where(
             ScreeningAttempt.agent_id == agent.agent_id,
             ScreeningAttempt.reason_code == "repeatedly-inconclusive",
-            ScreeningAttempt.status == "quarantined",
+            ScreeningAttempt.status == "failed",
         )
     )
     assert parked is not None and parked.artifact_sha256 is None
-    event = await session.scalar(
-        select(ScreeningReviewEvent).where(
-            ScreeningReviewEvent.attempt_id == parked.attempt_id
+    assert (
+        await session.scalar(
+            select(ScreeningQuarantine).where(
+                ScreeningQuarantine.agent_id == agent.agent_id,
+                ScreeningQuarantine.status == "active",
+            )
         )
+        is None
     )
-    assert event is not None
-    assert event.outcome == "synthetic_hold"
-    assert event.effective_decision == "hold"
-    assert event.actor == "platform:lease-expiry-park"
-    assert event.artifact_sha256 == agent.sha256
-    assert event.prior_agent_status == AgentStatus.EVALUATING
-    assert event.next_agent_status == AgentStatus.QUARANTINED
-    assert event.evidence["signed_artifact_bound_verdict"] is None
 
 
 async def test_evaluating_agent_with_complete_prereqs_is_not_reclaimed(
@@ -1928,25 +1804,6 @@ def _due_activation(*, rescreen_scored: bool):
         )
 
 
-@contextmanager
-def _due_canary_activation(
-    *, target_policy_version: int, activation_revision: int | None = None
-):
-    """Publish an isolated scored-rescreen target without raising the queue."""
-    update_effective_screener_policy(
-        SCREENING_FLOOR_POLICY_VERSION,
-        rescreen_scored=True,
-        scored_rescreen_policy_version=target_policy_version,
-        scored_rescreen_activation_revision=activation_revision,
-    )
-    try:
-        yield
-    finally:
-        update_effective_screener_policy(
-            SCREENING_FLOOR_POLICY_VERSION, rescreen_scored=False
-        )
-
-
 def _scored_agent(*, hotkey: str, name: str, created_at: datetime | None = None):
     agent = Agent(
         agent_id=uuid4(),
@@ -1959,114 +1816,6 @@ def _scored_agent(*, hotkey: str, name: str, created_at: datetime | None = None)
     agent.screening_policy_version = SCREENING_FLOOR_POLICY_VERSION
     _complete_screened_image(agent)
     return agent
-
-
-async def test_scheduled_rescreen_requires_one_operator_release_before_claiming(
-    session: AsyncSession,
-) -> None:
-    """A due policy change cannot bulk-requeue the current leaderboard."""
-    await _activate_current_era(session)
-    agent = _scored_agent(hotkey="5HK-scored-current", name="scored-current")
-    async with session.begin():
-        session.add(agent)
-
-    with _due_activation(rescreen_scored=True):
-        claimed = await _claim(session)
-
-    assert agent.agent_id not in {row.agent_id for row, _, _ in claimed}
-
-    # The activation itself changes the required attestation, but only the
-    # operator-issued release makes one existing score claimable.  This keeps
-    # every other V10 row on the board while the first V11 verdict is audited.
-    async with session.begin():
-        activation = ScreenerPolicyActivation(
-            parent_revision=0,
-            target_policy_version=SCREENING_FLOOR_POLICY_VERSION + 1,
-            activate_at=datetime.now(UTC) - timedelta(minutes=1),
-            rescreen_scored=True,
-            reason="release the first scored policy rescreen only",
-            actor="test",
-        )
-        session.add(activation)
-        await session.flush()
-        session.add(
-            ScoredPolicyRescreenRelease(
-                release_id=uuid4(),
-                activation_revision=activation.revision,
-                target_policy_version=SCREENING_FLOOR_POLICY_VERSION + 1,
-                agent_id=agent.agent_id,
-                position=1,
-                state="pending",
-                attempt_id=None,
-                actor="test",
-                reason="release the first scored policy rescreen only",
-            )
-        )
-
-    with _due_activation(rescreen_scored=True):
-        claimed = await _claim(session)
-
-    assert agent.agent_id in {a.agent_id for a, _, _ in claimed}
-    attempt = next(
-        attempt for row, attempt, _ in claimed if row.agent_id == agent.agent_id
-    )
-    assert attempt.reason_code == "policy-only-rescreen"
-    assert attempt.build_only is False
-    release = await session.scalar(
-        select(ScoredPolicyRescreenRelease).where(
-            ScoredPolicyRescreenRelease.agent_id == agent.agent_id
-        )
-    )
-    assert release is not None
-    assert release.state == "running"
-    assert release.attempt_id == attempt.attempt_id
-
-
-async def test_isolated_rescreen_requires_canary_capability_and_attests_target(
-    session: AsyncSession,
-) -> None:
-    """A V11 release cannot be claimed by a V10-only worker or new arrivals."""
-    await _activate_current_era(session)
-    target = SCREENING_FLOOR_POLICY_VERSION + 1
-    agent = _scored_agent(hotkey="5HK-isolated-canary", name="isolated-canary")
-    async with session.begin():
-        activation = ScreenerPolicyActivation(
-            parent_revision=0,
-            target_policy_version=target,
-            activate_at=datetime.now(UTC) - timedelta(minutes=1),
-            rescreen_scored=True,
-            canary_only=True,
-            reason="release one isolated scored policy canary only",
-            actor="test",
-        )
-        session.add_all((agent, activation))
-        await session.flush()
-        session.add(
-            ScoredPolicyRescreenRelease(
-                release_id=uuid4(),
-                activation_revision=activation.revision,
-                target_policy_version=target,
-                agent_id=agent.agent_id,
-                position=1,
-                state="pending",
-                attempt_id=None,
-                actor="test",
-                reason="release one isolated scored policy canary only",
-            )
-        )
-
-    with _due_canary_activation(
-        target_policy_version=target,
-        activation_revision=activation.revision,
-    ):
-        assert await _claim(session) == []
-        claimed = await _claim(session, canary_policy_version=target)
-
-    attempt = next(
-        attempt for row, attempt, _ in claimed if row.agent_id == agent.agent_id
-    )
-    assert attempt.policy_version == target
-    assert attempt.reason_code == POLICY_ONLY_RESCREEN_REASON
 
 
 async def test_expired_scored_policy_release_pauses_without_removing_the_score(
@@ -2252,105 +2001,6 @@ async def _seed_canary_retry_and_fresh_upload(
     return held, override, fresh
 
 
-async def test_unusable_canary_override_does_not_starve_queue(
-    session: AsyncSession,
-) -> None:
-    posture = await _seed_canary_posture(session, scope="subnet-screener-1")
-    held, override, fresh = await _seed_canary_retry_and_fresh_upload(
-        session, posture.revision
-    )
-
-    claimed = await _claim(session, limit=1, review_settings_binding=_NORMAL_BINDING)
-
-    assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
-    assert held.status == AgentStatus.SCREENING_FAILED
-    async with session.begin():
-        assert (
-            await session.scalar(
-                select(ScreeningRetryOverride.review_settings_revision).where(
-                    ScreeningRetryOverride.override_id == override.override_id
-                )
-            )
-            == posture.revision
-        )
-        attempts = list(
-            await session.scalars(
-                select(ScreeningAttempt).where(
-                    ScreeningAttempt.agent_id == held.agent_id
-                )
-            )
-        )
-        assert len(attempts) == 1
-        assert attempts[0].status == "expired"
-
-    claimed = await _claim(
-        session,
-        limit=1,
-        review_settings_binding=_NORMAL_BINDING,
-        review_settings_enrolled_node_id="subnet-screener-1",
-    )
-    assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
-    attempt = claimed[0][1]
-    assert (
-        attempt.review_settings_revision,
-        attempt.review_settings_instance_id,
-        attempt.review_settings_scope,
-        attempt.review_settings_checksum,
-    ) == (
-        posture.revision,
-        _NORMAL_BINDING[1],
-        posture.scope,
-        posture.checksum,
-    )
-
-
-@pytest.mark.parametrize(
-    "settings",
-    [
-        ScreenerReviewSettings(
-            mode="enforce", l3_enabled=False, adjudicator_mode="enforce"
-        ),
-    ],
-    ids=[
-        "l3",
-    ],
-)
-async def test_unusable_canary_posture_does_not_starve_queue(
-    session: AsyncSession, settings: ScreenerReviewSettings
-) -> None:
-    posture = await _seed_canary_posture(session, settings=settings)
-    held, _, fresh = await _seed_canary_retry_and_fresh_upload(
-        session, posture.revision
-    )
-
-    claimed = await _claim(session, limit=1, review_settings_binding=_NORMAL_BINDING)
-
-    assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
-    assert held.status == AgentStatus.SCREENING_FAILED
-
-
-@pytest.mark.parametrize(
-    "scope",
-    [
-        "worker-instance-1",
-    ],
-)
-async def test_global_or_claimant_scoped_canary_override_still_claimable(
-    session: AsyncSession, scope: str
-) -> None:
-    posture = await _seed_canary_posture(session, scope=scope)
-    held, _, _ = await _seed_canary_retry_and_fresh_upload(session, posture.revision)
-    binding = (_NORMAL_BINDING[0], _NORMAL_BINDING[1], "effective-posture", "a" * 64)
-
-    claimed = await _claim(session, limit=1, review_settings_binding=binding)
-
-    assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
-    attempt = claimed[0][1]
-    assert attempt.review_settings_revision == posture.revision
-    assert attempt.review_settings_scope == scope
-    assert attempt.review_settings_checksum == posture.checksum
-
-
 async def test_legacy_canary_posture_uses_the_l3_model_default(
     session: AsyncSession,
 ) -> None:
@@ -2360,150 +2010,6 @@ async def test_legacy_canary_posture_uses_the_l3_model_default(
     claimed = await _claim(session, limit=1, review_settings_binding=_NORMAL_BINDING)
 
     assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
-
-
-async def _seed_scored_canary_release_and_fresh_upload(
-    session: AsyncSession,
-) -> tuple[Agent, ScoredPolicyRescreenRelease, ScreenerPolicyActivation, Agent]:
-    await _activate_current_era(session)
-    posture = await _seed_canary_posture(session, scope="another-worker")
-    target = SCREENING_FLOOR_POLICY_VERSION + 1
-    now = datetime.now(UTC)
-    held = _scored_agent(
-        hotkey="5HK-scored-scoped-canary",
-        name="scored-scoped-canary",
-        created_at=now - timedelta(minutes=30),
-    )
-    fresh = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-fresh-behind-rescreen",
-        name="fresh-behind-rescreen",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.UPLOADED,
-        created_at=now,
-    )
-    async with session.begin():
-        activation = ScreenerPolicyActivation(
-            parent_revision=0,
-            target_policy_version=target,
-            activate_at=now - timedelta(minutes=1),
-            rescreen_scored=True,
-            canary_only=True,
-            reason="one scored canary pinned to a different worker",
-            actor="test",
-        )
-        session.add_all((held, fresh, activation))
-        await session.flush()
-        release = ScoredPolicyRescreenRelease(
-            release_id=uuid4(),
-            activation_revision=activation.revision,
-            target_policy_version=target,
-            agent_id=held.agent_id,
-            position=1,
-            state="pending",
-            review_settings_revision=posture.revision,
-            actor="test",
-            reason="one scored canary pinned to a different worker",
-        )
-        session.add(release)
-    return held, release, activation, fresh
-
-
-async def test_out_of_scope_policy_rescreen_canary_does_not_starve_queue(
-    session: AsyncSession,
-) -> None:
-    (
-        held,
-        release,
-        activation,
-        fresh,
-    ) = await _seed_scored_canary_release_and_fresh_upload(session)
-
-    with _due_canary_activation(
-        target_policy_version=activation.target_policy_version,
-        activation_revision=activation.revision,
-    ):
-        claimed = await _claim(
-            session,
-            limit=1,
-            canary_policy_version=activation.target_policy_version,
-            review_settings_binding=_NORMAL_BINDING,
-        )
-        assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
-        assert held.status == AgentStatus.SCORED
-        assert release.state == "pending"
-        assert release.attempt_id is None
-
-        claimed = await _claim(
-            session,
-            limit=1,
-            canary_policy_version=activation.target_policy_version,
-            review_settings_binding=(1, "another-worker", "*", "a" * 64),
-        )
-        assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
-        assert (
-            claimed[0][1].review_settings_revision == release.review_settings_revision
-        )
-        assert release.state == "running"
-        assert release.attempt_id == claimed[0][1].attempt_id
-
-
-@pytest.mark.parametrize("override_scope", ["*", "unrelated-worker"])
-async def test_retry_canary_override_takes_precedence_over_a_usable_release(
-    session: AsyncSession, override_scope: str
-) -> None:
-    (
-        held,
-        release,
-        activation,
-        fresh,
-    ) = await _seed_scored_canary_release_and_fresh_upload(session)
-    posture = await _seed_canary_posture(session, scope=override_scope)
-    now = datetime.now(UTC)
-    async with session.begin():
-        session.add(
-            ScreeningAttempt(
-                attempt_id=uuid4(),
-                agent_id=held.agent_id,
-                screener_hotkey=_SCREENER,
-                policy_version=SCREENING_POLICY_VERSION,
-                status="failed",
-                started_at=now - timedelta(minutes=15),
-                deadline=now + timedelta(minutes=30),
-                finished_at=now - timedelta(minutes=10),
-            )
-        )
-    await _authorize_latest_retry(
-        session,
-        held,
-        force_full_review=True,
-        review_settings_revision=posture.revision,
-    )
-
-    with _due_canary_activation(
-        target_policy_version=activation.target_policy_version,
-        activation_revision=activation.revision,
-    ):
-        claimed = await _claim(
-            session,
-            limit=1,
-            canary_policy_version=activation.target_policy_version,
-            review_settings_binding=_NORMAL_BINDING,
-            review_settings_enrolled_node_id="another-worker",
-        )
-
-    if override_scope == "*":
-        assert [agent.agent_id for agent, _, _ in claimed] == [held.agent_id]
-        attempt = claimed[0][1]
-        assert attempt.review_settings_revision == posture.revision
-        assert attempt.review_settings_scope == "*"
-        assert attempt.review_settings_checksum == posture.checksum
-        assert release.state == "running"
-    else:
-        # The allowed release cannot silently replace an unusable exact retry pin.
-        assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
-        assert release.state == "pending"
-        assert held.status == AgentStatus.SCORED
 
 
 async def _seed_double_check_posture(
@@ -2618,33 +2124,6 @@ async def test_double_check_hold_is_not_claimed_without_a_worker_binding(
     }
 
 
-@pytest.mark.parametrize(
-    ("integrity_mode", "expect_posture"), [("enforce", True), ("observe", False)]
-)
-async def test_mechanical_deferred_hold_takes_posture_only_when_enforced(
-    session: AsyncSession, integrity_mode: str, expect_posture: bool
-) -> None:
-    posture = await _seed_double_check_posture(session)
-    agent = await _seed_double_check_hold(
-        session, name=f"mechanical-{integrity_mode}", trigger=None
-    )
-
-    claimed = await _claim(
-        session,
-        integrity_double_check_mode=integrity_mode,
-        review_settings_binding=_NORMAL_BINDING,
-    )
-    deep, _duplicate = _claimed_duplicate(claimed, agent)
-
-    assert deep.build_only is False
-    if expect_posture:
-        assert deep.review_settings_scope == INTEGRITY_DOUBLE_CHECK_SCOPE
-        assert deep.review_settings_revision == posture.revision
-    else:
-        assert deep.review_settings_scope == "*"
-        assert deep.review_settings_revision == _NORMAL_BINDING[0]
-
-
 # has_claimable_screening_work is the advisory read report-only canaries yield
 # to. It must never report work a production claim from the same worker would
 # not select, or an open node holds its canaries indefinitely. Each case asks
@@ -2653,17 +2132,12 @@ async def _claimable_and_claimed(
     session_maker: async_sessionmaker[AsyncSession],
     *,
     review_settings_binding: tuple[int, str, str, str] | None = None,
-    review_settings_enrolled_node_id: str | None = None,
 ) -> tuple[bool, list[UUID]]:
     now = datetime.now(UTC)
     async with session_maker() as reader:
         claimable = await has_claimable_screening_work(
             reader,
             now=now,
-            review_settings_scopes=claim_canary_scopes(
-                review_settings_binding,
-                enrolled_node_id=review_settings_enrolled_node_id,
-            ),
             netuid=118,
         )
     async with session_maker() as claimer:
@@ -2676,7 +2150,6 @@ async def _claimable_and_claimed(
                 ttl=timedelta(minutes=45),
                 limit=10,
                 review_settings_binding=review_settings_binding,
-                review_settings_enrolled_node_id=review_settings_enrolled_node_id,
             )
             claimed_ids = [agent.agent_id for agent, _, _ in claimed]
         finally:
@@ -2702,33 +2175,3 @@ async def test_claimable_work_skips_a_copy_deferred_behind_its_earlier_owner(
     # Authorizing the owner's retry makes the owner itself claimable.
     await _authorize_latest_retry(session, owner)
     assert await _claimable_and_claimed(session_maker) == (True, [owner_id])
-
-
-async def test_claimable_work_skips_a_retry_pinned_outside_the_claimant_scopes(
-    session: AsyncSession,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    posture = await _seed_canary_posture(session, scope="subnet-screener-2")
-    held = await _seed_failed_agent_with_age(
-        session, name="pinned-elsewhere", age=timedelta(days=1)
-    )
-    held_id = held.agent_id
-    await _add_expired_attempts(session, held, 1)
-    await _authorize_latest_retry(
-        session, held, force_full_review=True, review_settings_revision=posture.revision
-    )
-
-    # A claimant on built-in defaults binds no pin, and neither does one
-    # bound on another node.
-    assert await _claimable_and_claimed(session_maker) == (False, [])
-    assert await _claimable_and_claimed(
-        session_maker,
-        review_settings_binding=_NORMAL_BINDING,
-        review_settings_enrolled_node_id="subnet-screener-1",
-    ) == (False, [])
-    # A worker on the node the pin names takes it.
-    assert await _claimable_and_claimed(
-        session_maker,
-        review_settings_binding=_NORMAL_BINDING,
-        review_settings_enrolled_node_id="subnet-screener-2",
-    ) == (True, [held_id])

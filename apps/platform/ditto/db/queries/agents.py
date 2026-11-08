@@ -37,7 +37,9 @@ from ditto.db.queries.owner_submission_cooldown import (
     owner_override_retry_at,
 )
 from ditto.db.queries.screening_retry import failed_screening_retry_authorized
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    lease_screening_policy_floor,
+)
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -537,7 +539,7 @@ async def query_public_activity_page(
     # submission on the public board.
     needs_rescreen = (
         (Agent.status == AgentStatus.EVALUATING)
-        & (Agent.screening_policy_version < effective_screening_policy_version())
+        & (Agent.screening_policy_version < lease_screening_policy_floor())
         & admitted
     )
     failed_retry_authorized = failed_screening_retry_authorized()
