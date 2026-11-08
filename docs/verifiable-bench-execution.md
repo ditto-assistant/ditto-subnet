@@ -395,15 +395,24 @@ but is no longer a seed input.
    - The leaf's `issued_block` must satisfy
      `0 ≤ anchor_block − issued_block ≤ W`, and its `expires_block` may not
      exceed `issued_block + W`.
-   - No earlier extrinsic from the same signer may carry the same `C` in the
-     fixed window `[anchor_block − W, anchor_block)`.
+   - Order extrinsics by position `(block, index)`. No extrinsic from the
+     same signer, other than the anchor itself, may carry the same `C` at a
+     position `p` with `(anchor_block − W, 0) ≤ p < (anchor_block, anchor_extrinsic_index)`.
+     The scan covers blocks `anchor_block − W` through `anchor_block`
+     **inclusive**. Within the anchor block it covers only indices below
+     `anchor_extrinsic_index`.
+   - Without that last rule, a miner could put the same `C` in two
+     extrinsics of one block. The seed includes `anchor_extrinsic_index`
+     (and check 5 only forbids reusing the *same* anchor), so the miner could
+     then choose between two seeds.
    - The window ends at the anchor and does **not** start at the reported
      `issued_block`, so post-dating the issuance record cannot hide an earlier
      commitment. A token is valid for at most `W` blocks, so any earlier
      commitment carrying `C` must fall inside that window.
 
-   This makes the *first* matching commitment the canonical one, so a miner
-   cannot post several commitments and keep the one with the luckiest round.
+   This makes the *first* matching commitment, by `(block, index)`, the
+   canonical one. A miner cannot post several commitments, in different blocks
+   or in the same block, and keep the one with the luckiest seed.
 5. No other published statement (across anchored statement roots) uses the
    same anchor.
 6. `R` follows the rule above under a pinned `Δ ≥ Δ_min`, and its BLS
@@ -641,7 +650,8 @@ For each new statement (cached by digest):
    admission token, and on the paid path the batched transfer must pay the
    quote. Its issuance leaf must be proven against an anchored root, with
    `0 ≤ anchor_block − issued_block ≤ W`. It must be the first matching
-   commitment in the fixed window `[anchor_block − W, anchor_block)`, and
+   commitment by `(block, index)` over blocks `anchor_block − W` through
+   `anchor_block`, including lower indices in the anchor block itself, and
    no other statement may use this anchor. Then check that
    `Δ ≥ Δ_min` in the pinned policy, verify the drand BLS signature for `R`
    and the rule `R = first ≥ ts(anchor) + Δ`, and re-derive `s_j`. Reject on
@@ -779,7 +789,7 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 17 | Crown-decision audits | Beacon-sampled audit selection; paired CRN comparison; Backroom surface | 14 | M |
 | 18 | Dispute workflow | Quarantine and re-prove tools; owner-gated witness access | 15 | M |
 | 19 | Article and X draft (after the Phase 1 numbers) | Per the feature-article convention; owner Peyton | 6 | S |
-| 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged with `expires_block ≤ issued_block + W`. A shared Go/Python anchor-check library covers all six §4.5 checks, including the anchored issuance inclusion proof and the fixed-window `[anchor − W, anchor)` first-match scan, with negative vectors: post-dated issuance, an unanchored leaf, an earlier commitment inside the window | 10, 11 | M |
+| 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged with `expires_block ≤ issued_block + W`. A shared Go/Python anchor-check library covers all six §4.5 checks, including the anchored issuance inclusion proof and the fixed-window first-match scan by `(block, index)` from `anchor − W` through the anchor block's lower indices, with negative vectors: post-dated issuance, an unanchored leaf, an earlier commitment in an earlier block, and an earlier commitment at a lower index in the anchor block | 10, 11 | M |
 
 ---
 
