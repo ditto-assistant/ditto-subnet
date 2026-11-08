@@ -73,9 +73,14 @@ without the rule writes the same payload it always did.
 answer. A wall-clock condition inside it would let two readers disagree for the
 second around the deadline. So the read path stays clock-free (immediate branch
 only), and the deadline branch is evaluated in `maybe_record_desired_authority`,
-which runs on every validator poll (`refresh_rolling_qualification`) and on score
-ingest, and seals the flip durably. After the sealing write every reader sees one
-answer. The practical latency is one validator poll after the deadline.
+which `refresh_rolling_qualification` reaches from two places: after every
+accepted score (`validator.py`, best-effort), and from authenticated idle
+validator polls, single-flight and throttled to once per 30 seconds per API
+process (`_refresh_qualification_if_due`). Either seals the flip durably. After the
+sealing write every reader sees one answer. The practical latency is up to about
+30 seconds after the deadline while a validator is polling; with no validator
+polling and no score arriving it does not run, but then nothing else in the
+rollout is moving either.
 
 ### The two-season expiry window
 
@@ -86,8 +91,9 @@ ways, and does not handle a fourth:
 
 - **Eager evaluation.** The immediate branch is evaluated in the same write that
   creates the quorum, so a quorum cannot lapse unobserved between two
-  evaluations. The deadline branch is evaluated on every poll after the deadline,
-  and the first poll that sees the floor met seals the flip.
+  evaluations. The deadline branch is evaluated on every refresh after the deadline
+  (at most about 30 seconds apart while validators poll), and the first one that
+  sees the floor met seals the flip.
 - **Only live quorums count.** The floor is measured against rows inside the
   window, which is exactly what the ledger will serve after the flip. A quorum
   that has already expired cannot be on the board the flip would produce, so

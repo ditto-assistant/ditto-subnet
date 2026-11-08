@@ -845,11 +845,11 @@ async def maybe_record_desired_authority(
     until the next write seals it.
 
     With an enabled flip rule the deadline branch is evaluated here too, after
-    the original predicate. It runs on every validator poll
-    (``refresh_rolling_qualification``) and every score ingest, so the flip is
-    sealed by the first write that sees the floor met -- a quorum cannot lapse
-    out of the two-season window unobserved between two evaluations a poll
-    apart.
+    the original predicate. It runs after every accepted score and from
+    authenticated idle validator polls (``refresh_rolling_qualification``,
+    throttled to once per 30 s per API process), so the flip is sealed by the
+    first write that sees the floor met -- a quorum cannot lapse out of the
+    two-season window unobserved for longer than one refresh interval.
     """
     if await desired_authority_earned(session, rollout):
         return True
