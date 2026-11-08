@@ -662,7 +662,7 @@ func (s *server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 		tools, err := catalog.CatalogForSeedChecked(benchVersion, seed)
 		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, "this scorer has no catalog snapshot for bench_version "+strconv.Itoa(benchVersion))
+			writeError(w, http.StatusServiceUnavailable, "tool catalog unavailable for bench_version "+strconv.Itoa(benchVersion))
 			return
 		}
 		writeJSON(w, http.StatusOK, tools)

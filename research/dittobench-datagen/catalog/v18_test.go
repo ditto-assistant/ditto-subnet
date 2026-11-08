@@ -142,6 +142,9 @@ func TestV18ParaphraseKeepsMeaningAndVariesBySeed(t *testing.T) {
 	if len(seen) < 4 {
 		t.Fatalf("only %d paraphrases over 20 seeds", len(seen))
 	}
+	if got := v18ReplaceWord("pre-Retrieves Retrieves-x Retrieves", "Retrieves", "Fetches"); got != "pre-Retrieves Retrieves-x Fetches" {
+		t.Fatalf("hyphenated compound rewritten: %q", got)
+	}
 	if got := v18ReplaceWord("Retrievesx Retrieves", "Retrieves", "Fetches"); got != "Retrievesx Fetches" {
 		t.Fatalf("whole-word replace: %q", got)
 	}

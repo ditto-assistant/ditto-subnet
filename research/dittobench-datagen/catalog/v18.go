@@ -368,8 +368,10 @@ func v18ReplaceWord(text, from, to string) string {
 	return b.String()
 }
 
+// isWordByte counts hyphens as word bytes, so a swap never rewrites part of a
+// hyphenated compound ("pre-existing" stays "pre-existing").
 func isWordByte(c byte) bool {
-	return c == '_' || c == '\'' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	return c == '_' || c == '\'' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // v18ToolkitSchema is the input schema every snapshot toolkit tool renders.
