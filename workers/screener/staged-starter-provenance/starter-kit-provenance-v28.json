@@ -32,15 +32,15 @@
     "scripts/test_local_rehearsal.py": "6de5fe1793757ef2c4df8b0b1a5ef9ceb0188c6aeae495642039a5881e6a3c7d",
     "scripts/test_submission_lab.py": "27459bbacf2f97b4f615c30e9ddd7e40b89a5d632a87a38db5e04ee9604cb1cf",
     "scripts/test_submission_workbench.py": "dfb39a8a2a45fecb8c7cd3eaf59db29ad830f907237a3f3e27008c0b1987bbc5",
-    "src/baseline.rs": "268f7a6d990676e66b14e91fcb96e16e61087e07cfd4950ca09ac4b1570d4033",
+    "src/baseline.rs": "006b1e5032a39c514f116c495d2487b6584c2930c04d10b56d334bea07bb907e",
     "src/bin/dittobench-miner.rs": "691dc6a272c23c0fd986eea66c205dcf4c42eb299fb938441c7e23f837c9d9cc",
     "src/catalog.rs": "4e6874efbbdafc10f07506cc30441f546d5512efa79b579b8b26cb186715a0ad",
     "src/datagen.rs": "ab3219a3ad03aed17c8d5ab47a4898f1f2824ef10ee821172badf3772b9891ec",
     "src/eval.rs": "bd0c7817b48e7f653e8aee2f725d19e5b64b2e21580311090dacfc042dd6e0ae",
     "src/grade.rs": "63bde59c67cd9fa5d7082e9fb771165b47cfb3758979d8fed9eb275d2bce625e",
-    "src/hybrid.rs": "c33a340b8047627a15590a71e9def4ae6c585d7db11df3ad87df89f99718e445",
-    "src/hybrid/tests.rs": "efb1373bdd79404d1e1720d863ee5390e854eba1878c84ad87d527d75efa02b4",
-    "src/jev.rs": "9b862f5892cf37ae95e6c8fb410a9bba7042e3d4c95a92719fb3e0fc0b8009c5",
+    "src/hybrid.rs": "54c19061a68d4639e8f9a00c2443f04a20ae8a8f06df2cfbd8c187e15adbc486",
+    "src/hybrid/tests.rs": "9d03a4aefaedb037b1996baa2c5d960ab039a21677c3bb1aed0933548d2168fd",
+    "src/jev.rs": "dd81b6bbf8393fafa6846b322ce8e2c84dbdeb39103874e8181a0dc102e00a38",
     "src/lib.rs": "d3c23921bed5cc59a7fb53b98cfcb10cf57ead4eb0cbd9f7ea169aab22bdfc95",
     "src/playground.html": "4cdf46936d5cf89f924168e49ff4b13f86acbb1ece4e8f7563714c3a21d49fa6",
     "src/playground/mod.rs": "7e6dc26c7910f7f22c856c0082f1ae38f64dd5f8b04857f68200e7e2eefb941c",
@@ -55,6 +55,6 @@
     "tests/store_concurrency.rs": "7cf956ffa08d2632ecb400f1f5aa7580df6e684fa831861beca8ba947c8578cd"
   },
   "origin": "ditto-assistant/ditto-subnet/miners/dittobench-starter-kit",
-  "revision": "168a3dc387d4700cf8d0066cd767fc9109710403",
+  "revision": "30c3923c20f113d42eebc780c3c04662c48d90d7",
   "version": 1
 }
