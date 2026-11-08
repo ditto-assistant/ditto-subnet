@@ -561,18 +561,15 @@ async def _claim_assessment(
             await session.execute(
                 select(
                     ConversationAssessment.repeat_index,
-                    ConversationAssessment.report,
+                    # Only the status: never deserialize transcripts here.
+                    ConversationAssessment.report["status"].as_string(),
                 ).where(
                     *identity(agent, entry), ConversationAssessment.repeat_index > 0
                 )
             )
         ).all()
         repeats = [index for index, _ in repeat_rows]
-        completed = sum(
-            1
-            for _, report in repeat_rows
-            if report is not None and report.get("status") == "completed"
-        )
+        completed = sum(1 for _, status in repeat_rows if status == "completed")
         # A repeat that expired or ended incomplete is no noise sample, so it
         # does not use up one of the two; the attempt cap still bounds spend on
         # an agent whose repeats keep failing.
