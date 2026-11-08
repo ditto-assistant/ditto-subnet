@@ -44,7 +44,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Annotated, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple
 from uuid import UUID
 
 from pydantic import (

@@ -47,10 +47,10 @@ from ditto.api_server.endpoints.public import screening_dispute_signing_message
 from ditto.api_server.endpoints.validator import _score_details
 from ditto.api_server.gate_evidence import (
     build_gate_evidence,
-    persisted_case_dump,
     gate_note_id,
     gate_note_ids_for,
     overall_posture,
+    persisted_case_dump,
     public_gate_evidence,
 )
 from ditto.db.models import (
@@ -1085,7 +1085,9 @@ class TestRunBudgetProjection:
         stored = build_gate_evidence(self._with_budget(18), bench_version=18)
         assert stored is not None
         assert stored["run_budget"]["admitted_cases"] == 270
-        assert StoredGateEvidence.model_validate(stored).model_dump(mode="json") == stored
+        assert (
+            StoredGateEvidence.model_validate(stored).model_dump(mode="json") == stored
+        )
 
     def test_a_pre_v18_block_never_reaches_the_projection(self) -> None:
         stored = build_gate_evidence(self._with_budget(17), bench_version=17)
