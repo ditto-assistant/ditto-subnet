@@ -66,7 +66,9 @@ def _entries(case: dict[str, Any]) -> list[LedgerEntry]:
     ]
 
 
-def _fold(case: dict[str, Any], *, burn_unfilled: bool, **extra: Any) -> dict[str, float]:
+def _fold(
+    case: dict[str, Any], *, burn_unfilled: bool, **extra: Any
+) -> dict[str, float]:
     return compute_weights(
         _entries(case),
         margin=KOTH_MARGIN,
@@ -95,7 +97,9 @@ def _pool_shares(weights: dict[str, float]) -> tuple[dict[str, float], float]:
 
 
 @pytest.mark.parametrize("case", _CASES, ids=[case["name"] for case in _CASES])
-def test_validator_fold_matches_shared_unfilled_burn_cases(case: dict[str, Any]) -> None:
+def test_validator_fold_matches_shared_unfilled_burn_cases(
+    case: dict[str, Any],
+) -> None:
     off, off_burned = _pool_shares(_fold(case, burn_unfilled=False))
     assert off == pytest.approx(case["off"], abs=1e-9)
     assert off_burned == 0.0

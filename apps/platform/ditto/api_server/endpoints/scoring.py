@@ -1584,7 +1584,9 @@ async def _require_statistical_cap_requester(
     if burned and protocol < _UNFILLED_BURN_PROTOCOL:
         raise HTTPException(
             status_code=428,
-            detail="validator protocol 36 is required for the pinned unfilled-slot burn",
+            detail=(
+                "validator protocol 36 is required for the pinned unfilled-slot burn"
+            ),
         )
     return ledger
 

@@ -33,7 +33,8 @@ from ditto.api_server.ledger_pin import (
 )
 
 _FIXTURE = (
-    Path(__file__).resolve().parents[5] / "ditto/tests/fixtures/unfilled_burn_cases.json"
+    Path(__file__).resolve().parents[5]
+    / "ditto/tests/fixtures/unfilled_burn_cases.json"
 )
 _CASES = json.loads(_FIXTURE.read_text())["cases"]
 _T0 = datetime(2026, 11, 8, tzinfo=UTC)
@@ -121,9 +122,7 @@ def _pin(case: dict[str, Any], *, unfilled_mode: str | None) -> SimpleNamespace:
     if case["tie_pooling"]:
         served["tie_weighting_mode"] = "pool"
     return SimpleNamespace(
-        entries=[
-            entry.model_dump(mode="json") for entry in _ledger_entries(case)
-        ],
+        entries=[entry.model_dump(mode="json") for entry in _ledger_entries(case)],
         context={"served": served},
         incumbent_agent_id=None,
     )
@@ -209,7 +208,13 @@ def test_mixed_fleet_is_visible_as_a_burn_mismatch() -> None:
 
 @pytest.mark.parametrize(
     ("served", "expected"),
-    [({"unfilled_share_mode": "burn"}, True), ({}, False), ({"unfilled_share_mode": 1}, False)],
+    [
+        ({"unfilled_share_mode": "burn"}, True),
+        ({}, False),
+        ({"unfilled_share_mode": 1}, False),
+    ],
 )
-def test_pin_only_honours_the_exact_marker(served: dict[str, Any], expected: bool) -> None:
+def test_pin_only_honours_the_exact_marker(
+    served: dict[str, Any], expected: bool
+) -> None:
     assert served_unfilled_burn(served) is expected

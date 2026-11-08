@@ -993,7 +993,7 @@ def test_served_unfilled_burn_accepts_only_the_exact_marker() -> None:
 
 
 class TestUnfilledBurnInPins:
-    """Protocol 36: the marker is frozen with the pin and keys the digest only when on."""
+    """Protocol 36: frozen with the pin; keys the digest only when on."""
 
     def _pin(self, draft: Any) -> LedgerPin:
         return LedgerPin(
