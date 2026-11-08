@@ -45,9 +45,15 @@ const result = spawnSync(
     "--no-audit",
     "--ignore-scripts",
   ],
-  { cwd: root, encoding: "utf8" },
+  { cwd: root, encoding: "utf8", shell: process.platform === "win32" },
 );
 
+if (result.error) {
+  process.stderr.write(
+    `force-patched-transitives: failed to run npm: ${result.error.message}\n`,
+  );
+  process.exit(1);
+}
 if (result.status !== 0) {
   process.stderr.write(result.stdout || "");
   process.stderr.write(result.stderr || "");
