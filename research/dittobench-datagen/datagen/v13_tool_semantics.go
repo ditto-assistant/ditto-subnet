@@ -351,7 +351,10 @@ func applyV13RestraintGroupsForVersion(seed int64, benchVersion int, world unive
 	// planted-context families (stale_context_web, memory_fetch) whose compact
 	// local record is replaced by the restraint record.
 	for _, withPrerequisites := range []bool{false, true} {
-		if withPrerequisites && len(cases) < V9FullToolCaseCount && benchVersion < protocol.BenchVersionV18 {
+		// v18 opens this pass only for the 50-79-case full dueling half, the
+		// window every other v18 tool override is scoped to.
+		v18FullHalf := benchVersion >= protocol.BenchVersionV18 && len(cases) >= V18FullToolHalf && len(cases) < 80
+		if withPrerequisites && len(cases) < V9FullToolCaseCount && !v18FullHalf {
 			continue
 		}
 		for i, tc := range cases {
