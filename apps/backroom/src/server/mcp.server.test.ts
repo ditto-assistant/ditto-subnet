@@ -3501,6 +3501,71 @@ describe('Backroom MCP tools', () => {
     }
   })
 
+  it('keeps v2 Opus rows and their transcript-free failure evidence in the read tool', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const item = {
+      assessment_id: '11111111-1111-4111-8111-111111111111',
+      agent_id: '22222222-2222-4222-8222-222222222222',
+      artifact_sha256: 'a'.repeat(64), bench_version: 17, status: 'completed',
+      created_at: '2026-11-08T01:00:00Z', expires_at: '2026-11-08T03:05:00Z',
+      base_quality_micros: 210000, conversation_micros: 750000, proposed_quality_micros: 390000,
+      reserved_microusd: 30000000, spent_microusd: 512345, error_code: null,
+      instrument: 'conversational-continuity-v2', judge_model: 'claude-opus-5-5',
+      spent_is_upper_bound: false, judge_spent_microusd: 480000, harness_spent_microusd: 32345,
+      judge_cost_basis: 'tariff', judge_requests: 1, judge_input_tokens: 41000, judge_output_tokens: 7000,
+      exchange_count: 30, empty_answers: 1, truncated_answers: 1, failed_turns: [13],
+      harness_requests: 140, harness_provider_retries: 2,
+      harness_failure_code: null, harness_failure_stage: null, harness_failure_http_status: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      mode: 'shadow', instrument: 'conversational-continuity-v2', judge_model: 'claude-opus-5-5',
+      daily_budget_microusd: 180000000, reserved_last_day_microusd: 30000000,
+      proposed_submission_fee_rao: 200000000, current_submission_fee_rao: 100000000,
+      fee_change_request: { expected_revision: 0, cooldown_seconds: 3600, fee_amount_rao: 200000000,
+        reason: 'Fund conversation assessment', actor: 'conversation-rollout', confirmation: 'example' },
+      items: [item],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_conversation_assessments', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({ judge_model: 'claude-opus-5-5', items: [item] })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads a v2 Opus report through the read-only tool', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const assessmentId = '11111111-1111-4111-8111-111111111111'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({
+      assessment_id: assessmentId,
+      agent_id: '22222222-2222-4222-8222-222222222222',
+      instrument: 'conversational-continuity-v2',
+      model: 'claude-opus-5-5',
+      status: 'incomplete',
+      error_code: 'harness_unresponsive',
+      exchanges: [],
+      grades: null,
+    })))
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_conversation_assessments',
+        arguments: { assessment_id: assessmentId },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        model: 'claude-opus-5-5', error_code: 'harness_unresponsive',
+      })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('reads private conversation evidence through a read-only tool', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const assessmentId = '11111111-1111-4111-8111-111111111111'

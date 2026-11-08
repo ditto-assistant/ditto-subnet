@@ -2819,7 +2819,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_conversation_assessments',
     {
       title: 'Get conversational continuity assessments',
-      description: 'Read top-five Astra conversation assessment state, cost reservations, proposed quality and process-local admission diagnostics (in-flight, attempts, overlapping polls skipped, last outcome and duration). Counters reset on Platform process restart and are not fleet totals. Pass assessment_id to inspect the private transcript and rubric evidence. Shadow results never change rewards or screening decisions. Requires backroom:read.',
+      description: 'Read top-five conversation assessment state (v2: Claude Opus 5.5 judge; v1 rows: GPT-6 Astra), cost reservations, judge and harness spend with an upper-bound flag, per-row failure evidence without the transcript (exchange_count, empty_answers, failed_turns, harness_failure_code/http_status, provider retries, judge requests and tokens), proposed quality and process-local admission diagnostics (in-flight, attempts, overlapping polls skipped, last outcome and duration). Counters reset on Platform process restart and are not fleet totals. Pass assessment_id to inspect the private transcript and rubric evidence. Shadow results never change rewards or screening decisions. Requires backroom:read.',
       inputSchema: conversationAssessmentInputSchema,
       annotations: toolAnnotations('read'),
     },

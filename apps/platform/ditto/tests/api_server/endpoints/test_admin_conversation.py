@@ -15,7 +15,14 @@ from sqlalchemy import func, select
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.screener import require_screener
 from ditto.db.models import Agent, AgentStatus, ConversationAssessment, Score
-from ditto_screening_protocol.conversation import DIMENSIONS, ConversationReport
+from ditto_screening_protocol.conversation import (
+    DIMENSIONS,
+    INSTRUMENT_V1,
+    INSTRUMENT_V2,
+    JUDGE_MODEL_V1,
+    RUBRIC_SHA256_V1,
+    ConversationReport,
+)
 from ditto_screening_protocol.conversation_story import story, story_digest
 
 TOKEN = uuid4().hex
@@ -87,7 +94,7 @@ def report_for(claim):
         screened_image_sha256=claim["screened_image_sha256"],
         bench_version=claim["bench_version"],
         story_sha256=story_digest(claim["seed"]),
-        provider_model="gpt-6-astra",
+        provider_model="anthropic/claude-opus-5.5",
         status="completed",
         exchanges=[
             {
@@ -110,11 +117,13 @@ def report_for(claim):
                 for i in range(11, 31)
             ]
         },
-        judge_requests=31,
+        judge_requests=1,
         input_tokens=100,
         output_tokens=100,
         reserved_microusd=25_000_000,
         spent_microusd=6000,
+        judge_cost_is_upper_bound=False,
+        judge_cost_basis="tariff",
     ).model_dump(mode="json")
 
 
@@ -171,9 +180,23 @@ async def test_worker_claim_is_image_bound_and_result_requires_its_owner(
         AsyncMock(return_value=storage),
     )
     worker_base = "/api/v1/screener/conversation-assessments"
-    response = await client.post(worker_base + "/claim")
+    # A worker that predates v2 sends no capability and is offered nothing.
+    legacy = await client.post(worker_base + "/claim")
+    assert legacy.status_code == 200 and legacy.json() is None
+    stale = await client.post(
+        worker_base + "/claim", json={"instruments": [INSTRUMENT_V1]}
+    )
+    assert stale.status_code == 200 and stale.json() is None
+    response = await client.post(
+        worker_base + "/claim", json={"instruments": [INSTRUMENT_V2]}
+    )
     assert response.status_code == 200, response.text
     claim = response.json()
+    assert claim["instrument"] == INSTRUMENT_V2
+    expires = datetime.fromisoformat(claim["expires_at"])
+    assert timedelta(minutes=124) < expires - datetime.now(UTC) <= timedelta(
+        minutes=125
+    )
     assert claim["screened_image_url"] == "https://artifacts.example/image.tar"
     report = report_for(claim)
     payload = {"lease_token": claim["lease_token"], "report": report}
@@ -193,7 +216,14 @@ async def test_worker_claim_is_image_bound_and_result_requires_its_owner(
     report["judge_cost_is_upper_bound"] = False
     accepted = await client.post(path, json=payload)
     assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["spent_microusd"] == 36000
+    observed = accepted.json()
+    assert observed["spent_microusd"] == 36000
+    assert observed["spent_is_upper_bound"] is False
+    assert observed["judge_spent_microusd"] == 6000
+    assert observed["harness_spent_microusd"] == 30000
+    assert observed["judge_model"] == "claude-opus-5-5"
+    assert observed["exchange_count"] == 30 and observed["failed_turns"] == []
+    assert observed["harness_requests"] == 60
     listing = (await client.get(BASE, headers=HEADERS)).json()
     assert "seed" not in str(listing) and "lease_token" not in str(listing)
     assert "screened_image_url" not in str(listing)
@@ -635,3 +665,52 @@ async def test_a_write_during_an_idle_attempt_does_not_arm_the_cooldown(
     assert gate.diagnostics.idle_skips == 0
     # That undisturbed idle answer does start the wait.
     assert gate.idle_until > 0.0
+
+
+async def test_stored_v1_report_still_lists_with_its_evidence(
+    app, client, session_maker, monkeypatch
+):
+    """Reports judged by Astra before v2 stay verifiable and visible."""
+    await install(app, session_maker, monkeypatch)
+    claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    report = report_for(claim)
+    report.update(
+        instrument=INSTRUMENT_V1,
+        model=JUDGE_MODEL_V1,
+        rubric_sha256=RUBRIC_SHA256_V1,
+        provider_model="openai/gpt-6-astra",
+        judge_requests=31,
+        judge_cost_is_upper_bound=True,
+        judge_cost_basis=None,
+        status="incomplete",
+        grades=None,
+        error_code="harness_inference_incomplete",
+        harness_usage={
+            "profile": "conversation-openrouter-oss20b-pplx768-v1",
+            "requests": 106,
+            "tokens": 404062,
+            "spent_microusd": 54767,
+            "unmetered": True,
+            "failed": True,
+            "failure": {"code": "provider_http_error", "stage": "provider",
+                        "http_status": 429},
+        },
+    )
+    for exchange in report["exchanges"][24:]:
+        exchange["assistant"] = ""
+    for exchange in report["exchanges"]:
+        exchange.pop("assistant_truncated")
+        exchange.pop("failure")
+    ConversationReport.model_validate(report)
+    async with session_maker() as db, db.begin():
+        row = await db.get(ConversationAssessment, UUID(claim["assessment_id"]))
+        row.instrument = INSTRUMENT_V1
+        row.report = report
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    item = next(i for i in listing["items"] if i["assessment_id"] == claim["assessment_id"])
+    assert item["instrument"] == INSTRUMENT_V1 and item["judge_model"] == JUDGE_MODEL_V1
+    assert item["spent_microusd"] == 6000 + 54767 and item["spent_is_upper_bound"]
+    assert item["empty_answers"] == 6 and item["exchange_count"] == 30
+    assert item["harness_failure_code"] == "provider_http_error"
+    assert item["harness_failure_http_status"] == 429
+    assert listing["instrument"] == INSTRUMENT_V2

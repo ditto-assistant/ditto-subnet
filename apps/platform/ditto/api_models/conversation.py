@@ -16,6 +16,13 @@ from ditto_screening_protocol.conversation import (
 __all__ = ["ConversationClaim", "ConversationReport"]
 
 
+class ConversationClaimRequest(WireModel):
+    """What an enrolled worker can run. A worker that sends no body predates
+    v2 and is offered nothing while Platform admits v2."""
+
+    instruments: Annotated[list[Annotated[str, Field(max_length=80)]], Field(max_length=8)]
+
+
 class ConversationResultRequest(WireModel):
     lease_token: UUID
     report: ConversationReport
@@ -52,7 +59,28 @@ class ConversationObservation(WireModel):
     proposed_quality_micros: int | None
     reserved_microusd: int
     spent_microusd: int | None
+    """Judge plus harness spend from the report. ``spent_is_upper_bound`` says
+    whether part of it is a retained hold or a price ceiling, not a bill."""
     error_code: str | None
+    instrument: str | None = None
+    judge_model: str | None = None
+    spent_is_upper_bound: bool | None = None
+    judge_spent_microusd: int | None = None
+    harness_spent_microusd: int | None = None
+    judge_cost_basis: str | None = None
+    judge_requests: int | None = None
+    judge_input_tokens: int | None = None
+    judge_output_tokens: int | None = None
+    exchange_count: int | None = None
+    empty_answers: int | None = None
+    truncated_answers: int | None = None
+    failed_turns: Annotated[list[int], Field(max_length=30)] | None = None
+    """v2 turns the harness did not complete (timeout or error on run/seed)."""
+    harness_requests: int | None = None
+    harness_provider_retries: int | None = None
+    harness_failure_code: str | None = None
+    harness_failure_stage: str | None = None
+    harness_failure_http_status: int | None = None
     report_sha256: str | None = None
     retry_of: UUID | None = None
     retry_authorization: ConversationRetryAuthorization | None = None
