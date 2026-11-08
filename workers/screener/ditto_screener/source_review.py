@@ -118,6 +118,10 @@ _COVERAGE_AREAS = frozenset(
 )
 # Ask for a note again when this many inspection calls pass without one.
 _NOTELESS_NUDGE_EVERY = 8
+# Badly typed inspection-tool arguments (SN-430) go back to the model as a
+# correctable tool result. Past this many in one review the reviewer is not
+# converging, and the review fails with source-review-model-tool-call-invalid.
+_MAX_INVALID_TOOL_ARGUMENT_CALLS = 3
 _NOTE_NUDGE = (
     "Reminder: record_note after each area you inspect — a concern the moment "
     "you see one, cleared when an area checks out. Only recorded notes "
@@ -4126,6 +4130,7 @@ class OpenRouterSourceReviewAgent:
         noteless_calls = 0
         coverage_nudged = False
         tool_correction_used = False
+        invalid_argument_calls = 0
         read_files: set[str] = set()
         runtime_source_read = False
         schema_repair_turn = False
@@ -4304,7 +4309,30 @@ class OpenRouterSourceReviewAgent:
                             }
                         )
                         continue
-                    output = _execute_tool(repository, name, arguments)
+                    try:
+                        output = _execute_tool(repository, name, arguments)
+                    except InvalidToolArguments as error:
+                        invalid_argument_calls += 1
+                        if invalid_argument_calls > _MAX_INVALID_TOOL_ARGUMENT_CALLS:
+                            raise
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "content": json.dumps(
+                                    {
+                                        "error": "tool-arguments-invalid",
+                                        "detail": str(error),
+                                        "correctable": True,
+                                        "remaining_corrections": (
+                                            _MAX_INVALID_TOOL_ARGUMENT_CALLS
+                                            - invalid_argument_calls
+                                        ),
+                                    }
+                                ),
+                            }
+                        )
+                        continue
                     inspection_calls += 1
                     noteless_calls += 1
                     if name == "read_file":
@@ -4675,13 +4703,23 @@ def _tool_call(call: object) -> tuple[str, str, dict[str, object]]:
     return call["id"], function["name"], arguments
 
 
+class InvalidToolArguments(ValueError):
+    """The reviewer called an inspection tool with badly typed arguments.
+
+    The message is one of the registered failure-code keys, so a review that
+    exhausts its correction budget still reports
+    ``source-review-model-tool-call-invalid``. Repository faults raised while
+    executing a well-typed call stay plain ``ValueError`` and are not fed back.
+    """
+
+
 def _execute_tool(
     repository: TarSourceRepository, name: str, arguments: dict[str, object]
 ) -> str:
     if name == "list_files":
         prefix = arguments.get("prefix", "")
         if not isinstance(prefix, str):
-            raise ValueError("list_files prefix is invalid")
+            raise InvalidToolArguments("list_files prefix is invalid")
         return repository.list_files(prefix)
     if name == "read_file":
         path = arguments.get("path")
@@ -4694,19 +4732,19 @@ def _execute_tool(
             or not isinstance(end, int)
             or isinstance(end, bool)
         ):
-            raise ValueError("read_file arguments are invalid")
+            raise InvalidToolArguments("read_file arguments are invalid")
         return repository.read_file(path, start, end)
     if name == "search":
         query = arguments.get("query")
         if not isinstance(query, str):
-            raise ValueError("search query is invalid")
+            raise InvalidToolArguments("search query is invalid")
         return repository.search(query)
     if name == "analyze_binary":
         path = arguments.get("path")
         if not isinstance(path, str):
-            raise ValueError("analyze_binary path is invalid")
+            raise InvalidToolArguments("analyze_binary path is invalid")
         return repository.analyze_binary(path)
-    raise ValueError("source reviewer requested an unsupported tool")
+    raise InvalidToolArguments("source reviewer requested an unsupported tool")
 
 
 def _validated_invariant_assessment(

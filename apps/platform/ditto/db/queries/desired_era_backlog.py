@@ -68,7 +68,9 @@ from ditto.db.queries.benchmark_admission import (
 )
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.tickets import retry_budget_spent
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    lease_screening_policy_floor,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -225,7 +227,7 @@ async def desired_era_work_outstanding(
 
     statement = select(Agent.agent_id).where(
         Agent.status == AgentStatus.EVALUATING,
-        Agent.screening_policy_version >= effective_screening_policy_version(),
+        Agent.screening_policy_version >= lease_screening_policy_floor(bench_version),
         validator_queue_admission_predicate(bench_version=bench_version),
         benchmark_admission_predicate(rollout=rollout, bench_version=bench_version),
         versioned_dataset,

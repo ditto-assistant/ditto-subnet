@@ -17,7 +17,6 @@ import {
 } from './admin.service'
 import { treasuryActivationPreflightInputSchema } from '../lib/treasury-ledger.schemas'
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
-import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import {
   officialControlsInputSchema, officialControlLookupSchema,
 } from '../lib/v13-official-control.schemas'
@@ -240,8 +239,6 @@ import {
   outlierEscalationDryRunInputSchema,
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
-  scheduleScreenerPolicyActivationInputSchema,
-  advanceScoredPolicyRescreenInputSchema,
   restoreScoredScreeningSnapshotInputSchema,
   setValidatorSlotSettingsInputSchema,
   setValidatorIssuancePauseInputSchema,
@@ -251,6 +248,7 @@ import {
   retryFailedScreeningNowInputSchema,
   expireRunningScreeningInputSchema,
   rejectScreeningSubmissionInputSchema,
+  amendQuarantineRejectReasonInputSchema,
   releaseVerifiedV13CourtClearInputSchema,
   summarizeScreeningFailuresInputSchema,
   confirmationBundleStateSchema,
@@ -328,6 +326,7 @@ import {
   retryFailedScreeningNow,
   expireRunningScreening,
   rejectScreeningSubmission,
+  amendQuarantineRejectReason,
   fetchValidationRetry,
   fetchStuckSubmissions,
   fetchLeaseRevocations,
@@ -387,9 +386,6 @@ import {
   fetchScreenerPolicyActivation,
   fetchV13ReviewClock,
   fetchScoredPolicyRescreen,
-  scheduleScreenerPolicyActivation,
-  scheduleV13ReviewClock,
-  advanceScoredPolicyRescreen,
   restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
@@ -906,18 +902,16 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Exact V13 artifact review window; null/not_configured means none. Attempt leases are not finalizer dates.',
   reject_screening_submission:
     'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
+  amend_screening_reject_reason:
+    'Amend reject reason; decision unchanged. Confirm AMEND PUBLIC REJECT REASON. backroom:write.',
   release_verified_v13_court_clear:
     'Release a held V13 court clear after Platform re-verifies its signed receipt. Confirmation: RELEASE VERIFIED V13 COURT CLEAR. Requires backroom:write.',
   get_queue_policy_settings:
     'Read queue policy, rollout locks, defaults and optional history (default 0). Settings do not resize open rollout snapshots.',
   get_screener_policy_activation:
-    'Scheduled screening-policy activation and history; latest=null if never scheduled.',
+    'Screening-policy activation and history; latest=null if never scheduled. Scheduling retired 2026-11-07.',
   get_v13_review_clock:
-    'Scheduled V13 first-claim clock; absent means no authoritative deadline. No finalizer activation.',
-  schedule_v13_review_clock:
-    'Schedule a future V13 first-claim clock for new submissions only. Requires exact document/manifest digests, 65-minute notice, revision guard, and confirmation. Does not finalize holds.',
-  schedule_screener_policy_activation:
-    'Schedule future screening policy with CAS and exact confirmation. canaryOnly preserves ordinary policy. See tool help.',
+    'V13 first-claim clock; absent means no authoritative deadline. Scheduling retired 2026-11-07.',
   restore_scored_screening_snapshot:
     'Restore one displaced scored cohort using exact activation, policy, benchmark and count guards. See tool help.',
   get_continual_retest_settings:
@@ -1406,7 +1400,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview ATH rulings batch',
       description:
-        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]; a clear on a held agent is ["clear"], and a clear on an unheld scored or live agent with no ATH review is ["attest"]: it records the terminal clear without holding the row, so the agent never leaves the board and would_change_crown is always false; a reject is also accepted on an agent still evaluating below quorum, as ["open","reject"], and ends its live validator tickets so the remaining runs are not paid for, while a bare open still needs scored or live; a WITHDRAWN REJECT is reversible: a clear on a banned agent whose ATH review resolved reject is ["open","clear"] -- it reopens that same review with the ruling\'s reason (a `reopen` action keeping the reject on the record), then clears it back to the status recorded before the reject (scored, live, or evaluating if it was rejected below quorum), and would_change_crown reports whether the restored score retakes the crown; an open on such an agent is ["open"] and holds it for further review; a ban by any other path, with no rejected review, stays a conflict, and the hotkey upload gate (list_hotkey_bans) is never touched), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear a held agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
+        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]; a clear on a held agent is ["clear"], and a clear on an unheld scored or live agent with no ATH review is ["attest"]: it records the terminal clear without holding the row, so the agent never leaves the board and would_change_crown is always false; a reject is also accepted on an agent still evaluating below quorum, as ["open","reject"], and ends its live validator tickets so the remaining runs are not paid for, while a bare open still needs scored or live; a WITHDRAWN REJECT is reversible: a clear on a banned agent whose ATH review resolved reject is ["open","clear"] -- it reopens that same review with the ruling\'s reason (a `reopen` action keeping the reject on the record), then clears it back to the status recorded before the reject (scored, live, or evaluating if it was rejected below quorum), and would_change_crown reports whether the restored score retakes the crown; an open on such an agent is ["open"] and holds it for further review; a ban by any other path, with no rejected review, stays a conflict, and the hotkey upload gate (list_hotkey_bans) is never touched; a STRANDED pending review behind an agent already rejected or banned closes with a reject as ["close_terminal"]: no evidence_references needed, the review resolves reject, the agent, its scores and the board are untouched, and the close is never a reject a later open can withdraw), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear a held agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
       inputSchema: previewAthRulingsBatchInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2825,7 +2819,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'get_conversation_assessments',
     {
       title: 'Get conversational continuity assessments',
-      description: 'Read top-five Astra conversation assessment state, cost reservations, proposed quality and process-local admission diagnostics (in-flight, attempts, overlapping polls skipped, last outcome and duration). Counters reset on Platform process restart and are not fleet totals. Pass assessment_id to inspect the private transcript and rubric evidence. Shadow results never change rewards or screening decisions. Requires backroom:read.',
+      description: 'Read top-five conversation assessment state (v2: Claude Opus 5.5 judge; v1 rows: GPT-6 Astra), cost reservations, judge and harness spend with an upper-bound flag, per-row failure evidence without the transcript (exchange_count, empty_answers, failed_turns, harness_failure_code/http_status, provider retries, judge requests and tokens), proposed quality and process-local admission diagnostics (in-flight, attempts, overlapping polls skipped, last outcome and duration). Counters reset on Platform process restart and are not fleet totals. Pass assessment_id to inspect the private transcript and rubric evidence. Shadow results never change rewards or screening decisions. Requires backroom:read.',
       inputSchema: conversationAssessmentInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -3146,7 +3140,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screener policy activation',
       description:
-        'Read effective screening policy, version bounds, latest scheduled activation, and revision history. Read before scheduling to get expectedRevision. Requires backroom:read.',
+        'Read effective screening policy, version bounds, latest scheduled activation, and revision history. Scheduling is retired (source review retired 2026-11-07); this is read-only audit. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerPolicyActivation()),
@@ -3157,35 +3151,10 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get V13 review clock schedule',
       description:
-        'Read V13 first-claim clock revisions. No row means no configured deadline. Requires backroom:read.',
+        'Read V13 first-claim clock revisions. No row means no configured deadline. Scheduling is retired (source review retired 2026-11-07). Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchV13ReviewClock()),
-  )
-
-  registerTool(
-    'schedule_v13_review_clock',
-    {
-      title: 'Schedule V13 review clock',
-      description:
-        'Future V13 first-claim clock for new UUIDs only: exact document/manifest SHA, revision, 65-minute notice, confirmation SCHEDULE V13 REVIEW CLOCK. No backfill or finalizer. Requires backroom:write.',
-      inputSchema: scheduleV13ReviewClockInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) => write(() => scheduleV13ReviewClock(input, props.session.email)),
-  )
-
-  registerTool(
-    'schedule_screener_policy_activation',
-    {
-      title: 'Schedule screener policy activation',
-      description:
-        'Schedule a future policy activation with expectedRevision, bounded targetPolicyVersion, timezone-aware activateAt, and reason. canaryOnly limits rollout to explicit scored releases and requires rescreenScored. Confirmation SCHEDULE SCREENER POLICY ACTIVATION. Requires backroom:write.',
-      inputSchema: scheduleScreenerPolicyActivationInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => scheduleScreenerPolicyActivation(input, props.session.email)),
   )
 
   registerTool(
@@ -3193,23 +3162,10 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get scored policy rescreen checkpoint',
       description:
-        'Read the bounded score-preserving policy rollout: every active release and the next top-down candidate. Existing scores remain visible; a pause blocks the window from widening. Requires backroom:read.',
+        'Read the bounded score-preserving policy rollout: every active release and the next top-down candidate. Existing scores remain visible. Advancing is retired (source review retired 2026-11-07). Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScoredPolicyRescreen()),
-  )
-
-  registerTool(
-    'advance_scored_policy_rescreen',
-    {
-      title: 'Advance scored policy rescreen',
-      description:
-        'Fill 1–4 stale-score rescreen slots or retry one paused row; existing scores remain visible. canaryOnly requires reviewSettingsRevision. Confirmation ADVANCE SCORED POLICY RESCREEN. Requires backroom:write.',
-      inputSchema: advanceScoredPolicyRescreenInputSchema,
-      annotations: toolAnnotations('write', true),
-    },
-    async (input) =>
-      write(() => advanceScoredPolicyRescreen(input, props.session.email)),
   )
 
   registerTool(
@@ -4582,6 +4538,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => rejectScreeningSubmission(input, props.session.email)),
+  )
+
+  registerTool(
+    'amend_screening_reject_reason',
+    {
+      title: 'Amend public reject reason',
+      description:
+        'Correct the miner-visible reason on one resolved screening reject (operator or automated, e.g. platform:v13-confirmed-violation) without changing the decision. Guards: quarantineId plus expectedAgentId, expectedArtifactSha256 and expectedAttemptId from get_screening_quarantine_context, and expectedReason, the exact public reason being replaced. The quarantine resolution reason, the attempt public reason and the agent screening_reason take the corrected text where they still carry the replaced one; status, resolved_by, the moderation record and evidence are untouched. The replaced text stays in the append-only resolution history, seeded with the original decision when none was recorded. Replaying the same reason is idempotent. Confirmation: "AMEND PUBLIC REJECT REASON". Requires backroom:write.',
+      inputSchema: amendQuarantineRejectReasonInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => amendQuarantineRejectReason(input, props.session.email)),
   )
 
   registerTool(

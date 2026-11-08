@@ -125,6 +125,11 @@ WORKER_LEASE_ORPHANED: Final = "worker-lease-orphaned"
 SCREENING_LEASE_EXPIRED: Final = "screening-lease-expired"
 SOURCE_REVIEW_INCONCLUSIVE: Final = "source-review-inconclusive"
 REPEATEDLY_INCONCLUSIVE: Final = "repeatedly-inconclusive"
+STATIC_MALICIOUS_SOURCE: Final = "static-malicious-source"
+"""The deterministic static malicious-source preflight found a decisive,
+reachable match before any submission-controlled build or runtime started. With
+model source review retired (2026-11-07) the mechanical lane rejects it outright
+with file and line locations; no reviewer resolves it and nothing is held."""
 SOURCE_REVIEW_CONFIRMED_VIOLATION: Final = "source-review-confirmed-violation"
 """A policy v13 invariant breach whose causal proof is complete and which the
 independent L3 violation adjudicator confirmed after it could have refuted it.
@@ -217,6 +222,8 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode("docker-build", _A, _WORKER),
     ScreeningReasonCode("docker-build-timeout", _A, _WORKER),
     ScreeningReasonCode("container-harness-contract", _A, _WORKER),
+    # The static malicious-source safety preflight (mechanical lane).
+    ScreeningReasonCode(STATIC_MALICIOUS_SOURCE, _A, _WORKER),
     # The Rust-only harness contract was replaced by the container contract.
     ScreeningReasonCode("rust-harness-contract", _A, _RETIRED),
     ScreeningReasonCode("exact-cross-miner-duplicate", _A, _WORKER),

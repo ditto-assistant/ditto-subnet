@@ -27,6 +27,7 @@ from sqlalchemy import (
     MetaData,
     Numeric,
     PrimaryKeyConstraint,
+    SmallInteger,
     Text,
     UniqueConstraint,
     false,
@@ -12285,6 +12286,10 @@ class ConversationAssessment(Base):
     report: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
     worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_of: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    repeat_index: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="0", default=0
+    )
+    """0 is the canonical assessment; 1..N are fresh-seed shadow repeats."""
     retry_authorization: Mapped[dict | None] = mapped_column(
         _NULLABLE_JSON_VARIANT, nullable=True
     )
@@ -12298,12 +12303,17 @@ class ConversationAssessment(Base):
         ),
         UniqueConstraint("retry_of", name="conversation_one_manual_retry"),
         Index("conversation_created_at", "created_at"),
+        CheckConstraint(
+            "repeat_index >= 0 AND repeat_index <= 8",
+            name="conversation_repeat_index_range",
+        ),
         Index(
             "conversation_assessment_identity",
             "agent_id",
             "artifact_sha256",
             "bench_version",
             "instrument",
+            "repeat_index",
             unique=True,
             postgresql_where=text("retry_of IS NULL"),
             sqlite_where=text("retry_of IS NULL"),
@@ -12318,7 +12328,9 @@ class ConversationAssessment(Base):
             name="conversation_base_quality",
         ),
         CheckConstraint(
-            "reserved_microusd = 30000000", name="conversation_reserved_cost"
+            # Legacy $30 v1 hold, or the $1 hold from 2026-11-08.
+            "reserved_microusd IN (30000000, 1000000)",
+            name="conversation_reserved_cost",
         ),
         CheckConstraint("bench_version >= 9", name="conversation_bench_version"),
     )

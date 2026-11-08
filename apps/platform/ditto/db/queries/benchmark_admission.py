@@ -116,8 +116,9 @@ def first_queued_in_era_predicate(
     The rule needs positive evidence of a first queue entry at or after the
     rollout opened, and no evidence of an earlier one:
 
-    * a non-build-only screening pass, or a quarantine released by an operator,
-      at or after ``rollout.created_at`` -- the two transitions that move a
+    * a screening pass (build-only included, since every admission has been
+      build-only from 2026-11-07), or a quarantine released by an operator, at
+      or after ``rollout.created_at`` -- the two transitions that move a
       submission into ``evaluating``;
     * no screening pass (build-only included) and no release before it;
     * no previous-era queue ticket or accepted score.
@@ -140,12 +141,14 @@ def first_queued_in_era_predicate(
     era_start = rollout.created_at
     passed = ScreeningAttempt.status == "passed"
     released = ScreeningQuarantine.resolution == "release"
+    # Any pass counts: since source review was retired (2026-11-07) every
+    # admission is build-only. A build-only rebuild of already-queued work is
+    # still excluded, because that work has an earlier pass or release.
     passed_in_era = (
         select(ScreeningAttempt.attempt_id)
         .where(
             ScreeningAttempt.agent_id == agent.agent_id,
             passed,
-            ScreeningAttempt.build_only.is_(False),
             ScreeningAttempt.finished_at >= era_start,
         )
         .correlate(agent)

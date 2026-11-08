@@ -482,7 +482,7 @@ wheels = [
 
 [[package]]
 name = "ditto"
-version = "0.458.4"
+version = "0.465.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
@@ -550,7 +550,7 @@ release = [
 
 [[package]]
 name = "ditto-screening-protocol"
-version = "0.30.1"
+version = "0.32.0"
 source = { directory = "packages/ditto-screening-protocol" }
 dependencies = [
     { name = "pydantic" },
