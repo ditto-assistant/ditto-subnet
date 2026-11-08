@@ -28,8 +28,8 @@ import (
 // stagedBenchVersions are the generatable-but-unsupported contracts, in order.
 // Each is exactly one past the previous entry (or past the supported ceiling).
 // Empty while every generatable contract is supported: v16 (the dueling
-// contract) was staged here and promoted into epoch.go by the cross-layer PR
-// that raised the shared ceiling to 16.
+// contract) and v18 (the accuracy contract) were staged here and promoted into
+// epoch.go by the cross-layer PRs that raised the shared ceiling.
 var stagedBenchVersions []int
 
 // StagedBenchVersions returns a copy of the staged versions.

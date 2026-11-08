@@ -222,6 +222,32 @@ generator's columns in canonical agent runs stay private until its source is
 released under the subnet's source-disclosure policy; until then only
 per-column aggregates are shown.
 
+### Bench v18: policy 18 and the hardened families
+
+Kit version 7 adds policy 18 to `GradingBenchVersions`. Policy 18 grades like
+17. In a round that accepts it (window `[17, 18]`), the kit also switches its
+case mix from the four default families to `families.Hardened`: a revert
+without restating the original value, a two-hop custody handoff, a status
+asked inside a middle date interval, and a list member removed and re-added.
+The defaults were trivial in every generator round, so the public default
+generator, which fills empty dueling columns, scored nobody apart. The
+hardened families are small re-implementations of the public first-party
+bench v14 families (`research/dittobench-datagen/universe/v14_*.go`).
+
+A round at v17 or earlier gets exactly the version 6 pack, byte for byte
+apart from the version string. Rehearse both windows:
+
+```bash
+go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 35 -round-bench 17
+go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 35 -round-bench 18
+```
+
+To migrate a fork, rebuild against the current `research/dittobench-datagen`
+(it knows `challenge.GradingBenchVersionV18`), add it to the policies you pass
+to `req.NewestAccepted`, and rehearse at `-round-bench 18`.
+
 ### How this kit improves
 
 Every starter kit is improved continuously. An improvement learned from a

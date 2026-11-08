@@ -86,11 +86,19 @@ const GradingBenchVersionV16 = protocol.BenchVersionV16
 // not in the memory grading.
 const GradingBenchVersionV17 = protocol.BenchVersionV17
 
+// GradingBenchVersionV18 is the v18 memory grading policy. grade/ adds no v18
+// branch, so a v18 pack grades exactly like a v17 pack. It exists because
+// every activatable bench version ships a pack policy of the same number
+// (tandem upgrade): v18 rounds accept packs declaring 17 or 18. The v18
+// contract change is in the first-party datagen half and the unlinked-probe
+// reply rule, not in pack grading.
+const GradingBenchVersionV18 = protocol.BenchVersionV18
+
 // supportedGradingBenchVersions is the ordered set of policies a pack may
 // declare. It is also the set of bench versions a generator round can run at
 // (Platform's GENERATOR_ROUND_BENCH_VERSIONS; the pin test diffs them): a
 // round at version N accepts packs graded at any supported version <= N.
-var supportedGradingBenchVersions = []int{GradingBenchVersion, GradingBenchVersionV14, GradingBenchVersionV15, GradingBenchVersionV16, GradingBenchVersionV17}
+var supportedGradingBenchVersions = []int{GradingBenchVersion, GradingBenchVersionV14, GradingBenchVersionV15, GradingBenchVersionV16, GradingBenchVersionV17, GradingBenchVersionV18}
 
 // SupportedGradingBenchVersions returns a copy of the ordered grading policies
 // a pack may declare.
