@@ -19,6 +19,7 @@ from uuid import UUID
 import httpx
 
 from ditto_screener.conversation import AssessmentFailure
+from ditto_screener.conversation_relay import PROVIDER_TIMEOUT_SECONDS
 from ditto_screener.gate import (
     _CANARY_IMAGE,
     BuildGate,
@@ -26,6 +27,8 @@ from ditto_screener.gate import (
     _write_openrouter_shim_certs,
 )
 from ditto_screening_protocol.conversation import HarnessUsage
+
+RELAY_SETTLE_SECONDS = PROVIDER_TIMEOUT_SECONDS + 15
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -354,7 +357,16 @@ class ConversationRuntime:
         with contextlib.suppress(Exception):
             await self.docker("rm", "--force", self.container)
         with contextlib.suppress(Exception):
-            await self.docker("stop", "--time", "120", self.relay, timeout=130)
+            # Let an in-flight dispatch finish and settle: the relay's provider
+            # timeout is 240 s, and a stop shorter than that killed the relay
+            # mid-call and left the run's harness usage unsettled (cc5c4114).
+            await self.docker(
+                "stop",
+                "--time",
+                str(RELAY_SETTLE_SECONDS),
+                self.relay,
+                timeout=RELAY_SETTLE_SECONDS + 15,
+            )
         with contextlib.suppress(Exception):
             await self.docker("rm", "--force", self.relay)
         usage = None

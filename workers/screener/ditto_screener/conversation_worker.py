@@ -19,7 +19,10 @@ from ditto_screener.conversation import (
     evaluate,
     judge_client,
 )
-from ditto_screener.conversation_runtime import ConversationRuntime
+from ditto_screener.conversation_runtime import (
+    RELAY_SETTLE_SECONDS,
+    ConversationRuntime,
+)
 from ditto_screening_protocol.conversation import (
     INSTRUMENT_V1,
     INSTRUMENT_V2,
@@ -37,6 +40,8 @@ if TYPE_CHECKING:
     from ditto_screening_protocol.conversation import HarnessUsage
 
 logger = logging.getLogger(__name__)
+SETTLE_MARGIN_SECONDS = RELAY_SETTLE_SECONDS + 30
+"""Lease time kept back for relay settlement, cleanup and result delivery."""
 HARNESS_BUDGET_CODES = frozenset(
     # The first recorded failure is kept, so "unavailable" here means a budget
     # wait ran out of time with holds still in flight, not a prior failure.
@@ -110,7 +115,9 @@ async def consume(config: ScreenerConfig, platform: PlatformClient) -> bool:
             url = await runtime.start()
         judge_seconds = Limits.judge_seconds
         remaining = (
-            (claim.expires_at - datetime.now(UTC)).total_seconds() - 180 - judge_seconds
+            (claim.expires_at - datetime.now(UTC)).total_seconds()
+            - SETTLE_MARGIN_SECONDS
+            - judge_seconds
         )
         if remaining <= 0:
             raise AssessmentFailure("conversation_lease_expired")
@@ -207,11 +214,16 @@ async def _deliver(
             and usage.failure is not None
             and usage.failure.code in HARNESS_BUDGET_CODES
         )
+        # A finished conversation whose relay was still settling a dispatch
+        # at stop is a cost-accounting gap, not a broken harness: say so.
+        unsettled = usage is not None and usage.unmetered and not usage.failed
         document.update(
             status="incomplete",
             grades=None,
             error_code="harness_budget_exhausted"
             if exhausted
+            else "harness_usage_unsettled"
+            if unsettled
             else "harness_inference_incomplete",
         )
     report = ConversationReport.model_validate(document)
