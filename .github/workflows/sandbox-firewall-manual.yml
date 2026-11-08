@@ -1,0 +1,29 @@
+name: Sandbox firewall validation
+
+# Deliberately operator-dispatched: changes to the firewall must not add
+# automatic CI cost. Select the branch to test when starting the workflow.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firewall:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prepare pinned test image
+        run: |
+          docker pull busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+          docker tag busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec busybox:1.37
+
+      - name: Build the sandbox Docker daemon image
+        run: docker build -f Dockerfile.sandbox-docker -t sandbox-firewall:manual .
+
+      - name: Exercise firewall and failure handling
+        run: sh scripts/test-sandbox-firewall.sh sandbox-firewall:manual busybox:1.37
