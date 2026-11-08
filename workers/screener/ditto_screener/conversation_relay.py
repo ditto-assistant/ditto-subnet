@@ -41,7 +41,22 @@ lock made every turn wait for the sum of them. The budget is still reserved
 under the lock before any dispatch, so concurrency cannot overspend."""
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 UNDISPATCHED = frozenset({"relay_busy", "provider_deadline_exceeded"})
-PROVIDER_ATTEMPTS = 3
+PROVIDER_ATTEMPTS_BACKOFF = 4.0
+CHAT_PROVIDER: dict[str, Any] = {
+    # The bench's aggregate throughput route for gpt-oss-20b (Platform
+    # inference._provider_preferences): OpenRouter moves to the next eligible
+    # provider when one is rate limited, instead of handing the harness a 429.
+    # v2's first production run still ended on a 429 after two retries with
+    # allow_fallbacks false. CoreWeave stays excluded (its reviewed route is
+    # 4-bit), and max_price still caps every provider OpenRouter may pick.
+    "sort": "throughput",
+    "ignore": ["coreweave"],
+    "allow_fallbacks": True,
+    "data_collection": "deny",
+    "zdr": True,
+    "max_price": {"prompt": 2, "completion": 2},
+}
+PROVIDER_ATTEMPTS = 4
 """An HTTP error response is not billed by the router, so a bounded retry of a
 rate limit or upstream outage costs nothing and keeps the assessment alive.
 Timeouts and transport errors are never retried: they may have been billed."""
@@ -173,11 +188,7 @@ class Relay:
                 store=False,
                 stream=False,
                 reasoning={"effort": "medium"},
-                provider={
-                    "allow_fallbacks": False,
-                    "data_collection": "deny",
-                    "max_price": {"prompt": 2, "completion": 2},
-                },
+                provider=dict(CHAT_PROVIDER),
             )
             return "responses", response_payload, False
         embed = path in {
@@ -275,11 +286,7 @@ class Relay:
                 "stream": False,
                 "max_tokens": output,
                 "reasoning": {"effort": effort},
-                "provider": {
-                    "allow_fallbacks": False,
-                    "data_collection": "deny",
-                    "max_price": {"prompt": 2, "completion": 2},
-                },
+                "provider": dict(CHAT_PROVIDER),
                 "usage": {"include": True},
             }
         )
@@ -445,11 +452,11 @@ class Relay:
                     or attempt + 1 == PROVIDER_ATTEMPTS
                 ):
                     raise
-                delay = 2.0 ** (attempt + 1)
+                delay = PROVIDER_ATTEMPTS_BACKOFF * 2.0**attempt
                 with contextlib.suppress(TypeError, ValueError, AttributeError):
                     delay = float(exc.headers.get("Retry-After", delay))
                 if not math.isfinite(delay):
-                    delay = 2.0 ** (attempt + 1)
+                    delay = PROVIDER_ATTEMPTS_BACKOFF * 2.0**attempt
                 delay = min(max(delay, 0.5), 20.0)
                 if time.monotonic() + delay + 1 >= deadline:
                     raise  # No time left for another attempt: keep this status.

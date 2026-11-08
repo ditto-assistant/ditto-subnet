@@ -38,7 +38,12 @@ def test_route_and_model_override_cannot_escape_budget_profile():
     assert route == "chat/completions" and not embed
     assert payload["model"] == MODEL
     assert payload["provider"]["max_price"] == {"prompt": 2, "completion": 2}
-    assert payload["provider"]["allow_fallbacks"] is False
+    # The bench's aggregate route: fall back across providers on a rate limit,
+    # never onto the excluded 4-bit endpoint, always under the price ceiling.
+    assert payload["provider"]["allow_fallbacks"] is True
+    assert payload["provider"]["ignore"] == ["coreweave"]
+    assert payload["provider"]["zdr"] is True
+    assert "only" not in payload["provider"]
     assert "plugins" not in payload and "route" not in payload
     with pytest.raises(ValueError):
         Relay.payload("/proxy/https://evil.example", chat())
@@ -220,7 +225,8 @@ def test_private_provider_failure_retains_reservation_and_first_status(
     }
     assert usage.failed and usage.unmetered and usage.spent_microusd > 0
     # Rate limits are retried (unbilled), then the first status is kept.
-    assert len(calls) == 3 and usage.provider_retries == 2 and sleeps == [2.0, 4.0]
+    assert len(calls) == 4 and usage.provider_retries == 3
+    assert sleeps == [4.0, 8.0, 16.0]
     assert "secret" not in relay.state_file.read_text()
 
 
@@ -534,7 +540,7 @@ def test_nan_retry_after_falls_back_to_bounded_backoff(tmp_path, monkeypatch):
     monkeypatch.setattr("time.sleep", sleeps.append)
     relay = Relay("secret", tmp_path / "usage.json")
     relay.post("/v1/chat/completions", chat())
-    assert sleeps == [2.0] and Opener.calls == 2 and not relay.failed
+    assert sleeps == [4.0] and Opener.calls == 2 and not relay.failed
 
 
 def test_slot_wait_spends_the_caller_deadline_and_refunds(tmp_path, monkeypatch):
