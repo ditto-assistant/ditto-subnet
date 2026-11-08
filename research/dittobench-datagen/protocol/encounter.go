@@ -75,6 +75,9 @@ type EncounterRule struct {
 type EncounterCall struct {
 	Tool     string
 	Contains []string
+	// AnyContains are alternatives at least one of which must appear (an id
+	// or a name for the same target). Empty means no such condition.
+	AnyContains []string
 	// Excludes are values whose presence means the call is not this one: a
 	// filing that names the right incident and only quotes a resolved one as
 	// context is not "filing the resolved incident".
@@ -98,6 +101,19 @@ type EncounterAnswer struct {
 func (c EncounterCall) Matches(name string, args json.RawMessage) bool {
 	if name != c.Tool || !EncounterArgsMatch(args, c.Contains) {
 		return false
+	}
+	if len(c.AnyContains) > 0 {
+		text := EncounterArgText(args)
+		found := false
+		for _, value := range c.AnyContains {
+			if EncounterContains(text, value) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
 	}
 	if len(c.Excludes) > 0 {
 		text := EncounterArgText(args)

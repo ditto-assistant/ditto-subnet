@@ -323,7 +323,7 @@ func (w *v18EncounterWorld) errataChain(plan catalog.V16ConnectorPlan) protocol.
 	otherFixed := otherListed - w.between(2, 6)
 	// The other plan's corrected total is a hedge, so it must never equal the
 	// right answer.
-	for otherFixed == listed {
+	for otherFixed == listed || otherListed == listed {
 		otherListed = w.between(8, 90)
 		otherFixed = otherListed - w.between(2, 6)
 	}
@@ -581,6 +581,7 @@ func (w *v18EncounterWorld) jobFollowthrough(plan catalog.V16ConnectorPlan, ordi
 		fmt.Sprintf("%s, old version (id %s, archived)", name, archived),
 		fmt.Sprintf("%s inbox triage (id %s, active, daily)", w.stem("otherflow"), other),
 	)
+	startedHint := w.say("It takes a minute or two; list_agent_jobs shows when it has finished.", "Check list_agent_jobs for progress.", "")
 	prompt := sentence(
 		w.say(
 			fmt.Sprintf("Run my %s workflow,", name),
@@ -605,20 +606,27 @@ func (w *v18EncounterWorld) jobFollowthrough(plan catalog.V16ConnectorPlan, ordi
 				{Tool: "run_workflow", Contains: []string{archived}, Error: fmt.Sprintf("Workflow %s is archived and cannot run.", archived)},
 				// The decoy's job comes from below every real job range.
 				{Tool: "run_workflow", Contains: []string{other}, Result: fmt.Sprintf("Started workflow %s as job job-%05d.", other, w.between(0, 9999))},
-				{Tool: "run_workflow", Result: fmt.Sprintf("Started %s as job %s. %s", name, job,
-					w.say("It takes a minute or two; list_agent_jobs shows when it has finished.", "Check list_agent_jobs for progress.", ""))},
+				// Only a run that names the active workflow (its id, or its name
+				// without the archived twin's suffix) starts the real job.
+				{Tool: "run_workflow", Contains: []string{name, "old version"}, Error: fmt.Sprintf("Workflow %s is archived and cannot run.", archived)},
+				{Tool: "run_workflow", Contains: []string{active}, Result: fmt.Sprintf("Started %s as job %s. %s", name, job, startedHint)},
+				{Tool: "run_workflow", Contains: []string{name}, Result: fmt.Sprintf("Started %s as job %s. %s", name, job, startedHint)},
+				{Tool: "run_workflow", Error: "No saved workflow matches that request. list_workflows shows the saved workflows and their ids."},
 				{Tool: "list_agent_jobs", MinPrior: 1, Result: done},
 				{Tool: "list_agent_jobs", Result: running},
 				{Tool: app.WriteTool, Result: fmt.Sprintf("%s accepted the request (reference %s-%d).", app.Name, strings.ToUpper(app.Slug[:2]), w.between(100, 999))},
 			},
 			Required: []protocol.EncounterCall{
-				{Tool: "run_workflow", Why: "run the workflow"},
+				{Tool: "run_workflow", AnyContains: []string{active, name}, Why: "run the active workflow"},
 				{Tool: "list_agent_jobs", Why: "follow the run until " + finalJob + " finishes"},
 				{Tool: app.WriteTool, Contains: []string{commaInt(value)}, Why: "post this run's figure"},
 			},
-			Expected:  []string{"list_workflows"},
-			Forbidden: []protocol.EncounterCall{{Tool: "run_workflow", Contains: []string{archived}, Why: "the archived version"}},
-			Answer:    []protocol.EncounterAnswer{{Value: commaInt(value), Hedges: []string{commaInt(previous)}}},
+			Expected: []string{"list_workflows"},
+			Forbidden: []protocol.EncounterCall{
+				{Tool: "run_workflow", Contains: []string{archived}, Why: "the archived version"},
+				{Tool: "run_workflow", Contains: []string{name, "old version"}, Why: "the archived version, by name"},
+			},
+			Answer: []protocol.EncounterAnswer{{Value: commaInt(value), Hedges: []string{commaInt(previous)}}},
 		},
 	}
 }
@@ -701,7 +709,9 @@ func (w *v18EncounterWorld) memoryHandoff(plan catalog.V16ConnectorPlan, ordinal
 			},
 			Expected: []string{"search_memories", "fetch_memories"},
 			Forbidden: append([]protocol.EncounterCall{
-				{Tool: "gmail_send", Contains: []string{oldEmail}, Why: "the former billing contact"},
+				// Emailing the former contact, not mentioning them in a message
+				// to the current one.
+				{Tool: "gmail_send", Contains: []string{oldEmail}, Excludes: []string{newEmail}, Why: "the former billing contact"},
 			}, otherLinkedWrites(plan, "nothing was to be changed in the app")...),
 			Answer: []protocol.EncounterAnswer{{Value: commaInt(due)}, {Value: newSurname}},
 		},
