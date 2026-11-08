@@ -1315,7 +1315,7 @@ impl Baseline {
             .search_composite_memories(CompositeSearchRequest {
                 user_id: user_id.clone(),
                 query: req.user_input.clone(),
-                limit: 12,
+                limit: 24,
                 candidate_pool_size: 100,
                 variant: Variant::V2,
                 ..CompositeSearchRequest::default()

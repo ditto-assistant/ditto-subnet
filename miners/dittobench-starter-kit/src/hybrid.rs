@@ -81,11 +81,12 @@ const NO_NOTE_OPTION: &str = "none_relevant";
 
 /// Short policy appended to the wire system prompt. Values-free.
 pub const HYBRID_POLICY: &str = "\
-Notes from the user's own records are listed below, most relevant first. \
-Answer from them when they hold the answer and cite the detail you used. \
-Call a tool only when the request needs an action or information the notes \
-do not hold. If neither the notes nor a tool can answer, say what is \
-missing. Keep the reply short.";
+Notes from the user's own records are listed below, most relevant first; \
+newer records replace older ones. Answer from them when they hold the \
+answer and state the value plainly. search_memories looks further when they \
+do not. Call any other tool only when the request needs an action or fresh \
+information. If nothing you found answers it, say so and name the closest \
+detail you did find. Keep the reply short.";
 
 pub fn enabled_from(value: Option<&str>) -> bool {
     matches!(
@@ -125,7 +126,7 @@ impl Default for HybridConfig {
         HybridConfig {
             menu: MenuMode::Full,
             offer_k: 3,
-            notes_k: 5,
+            notes_k: 8,
             desc_chars: 80,
             groups_k: 5,
             replan_pool: 24,
@@ -455,7 +456,6 @@ struct Plan {
     top_tools: Vec<String>,
     menu_asked: bool,
     notes: Vec<usize>,
-    no_note_prob: f64,
     act_unlikely: bool,
 }
 
@@ -521,12 +521,6 @@ async fn plan(
 
     plan.route = answers.choice("route").unwrap_or_default();
     plan.notes = pick_notes(&answers, case.notes.len(), cfg.notes_k);
-    plan.no_note_prob = answers
-        .ranked("note")
-        .iter()
-        .find(|(n, _)| n == NO_NOTE_OPTION)
-        .map(|(_, p)| *p)
-        .unwrap_or(0.0);
     let route_p = answers
         .ranked("route")
         .into_iter()
@@ -614,29 +608,21 @@ pub fn top_relative(ranked: Vec<(String, f64)>, k: usize) -> Vec<String> {
         .collect()
 }
 
-/// Notes in Jev's order until 90% of the probability mass (at least 2, at
-/// most `k`). Without an answer, the retrieval order.
+/// The `k` notes Jev ranks highest, in its order. A `choice` distribution
+/// piles onto one option, so its probability mass is a poor cut-off (a
+/// question needing three records would keep one); Jev orders, `k` cuts.
+/// Without an answer, the retrieval order.
 fn pick_notes(answers: &Answers, available: usize, k: usize) -> Vec<usize> {
     let ranked = answers.ranked("note");
     if ranked.is_empty() {
         return (0..available.min(k)).collect();
     }
-    let mut out = Vec::new();
-    let mut mass = 0.0;
-    for (name, p) in ranked {
-        let Some(idx) = name.strip_prefix('n').and_then(|s| s.parse::<usize>().ok()) else {
-            continue;
-        };
-        if idx >= available {
-            continue;
-        }
-        if out.len() >= k || (out.len() >= 2 && mass >= 0.9) {
-            break;
-        }
-        out.push(idx);
-        mass += p;
-    }
-    out
+    ranked
+        .into_iter()
+        .filter_map(|(name, _)| name.strip_prefix('n').and_then(|s| s.parse::<usize>().ok()))
+        .filter(|idx| *idx < available)
+        .take(k)
+        .collect()
 }
 
 /// Jev picks a value for each required string argument of `tools` from
@@ -793,10 +779,10 @@ pub async fn run_case(
     for name in &safe_harbor {
         offer(name, &mut offered);
     }
-    match plan.route.as_str() {
-        "recall" => offer("search_memories", &mut offered),
-        "remember" => offer("save_memory", &mut offered),
-        _ => {}
+    // Memory search is always one schema away; saving only when told a fact.
+    offer("search_memories", &mut offered);
+    if plan.route == "remember" {
+        offer("save_memory", &mut offered);
     }
 
     let notes: Vec<Note> = plan
@@ -808,9 +794,6 @@ pub async fn run_case(
         })
         .collect();
     outcome.notes_used = notes.len();
-    if !notes.is_empty() && plan.no_note_prob >= 0.6 && hint.is_none() {
-        hint = Some("These notes may not hold the answer.".to_string());
-    }
 
     let mut suggestions = Vec::new();
     if let (Some(client), false) = (decisions, plan.act_unlikely) {

@@ -324,7 +324,12 @@ async fn jev_selects_tools_and_values_and_the_model_sees_a_small_prompt() {
         text("Booked the Roadmap review for 12 November at 10:00."),
     ]);
 
-    let out = run_case(&model, Some(&client), &HybridConfig::default(), case(&catalog, &executed))
+    // Two notes: Jev's ranking decides which records reach the prompt.
+    let cfg = HybridConfig {
+        notes_k: 2,
+        ..HybridConfig::default()
+    };
+    let out = run_case(&model, Some(&client), &cfg, case(&catalog, &executed))
         .await
         .unwrap();
 

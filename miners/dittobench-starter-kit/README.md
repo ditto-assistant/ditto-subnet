@@ -684,7 +684,7 @@ it is the part that makes chat prompts large.
 | --- | --- | --- |
 | Tool selection | Jev `choice` | The whole menu as `choice` questions of at most 255 options (name plus an 80-character description), packed under the 32k-per-question and 64k-per-request limits. The v18 menu fits one request. Each chunk carries a `none_of_these` option so chunks can be ranked against each other. |
 | Act or not | Jev `choice` + `noul` | A route (recall / act / remember / chat), "did the user ask for no change?" and "do the records show it is already done?". |
-| Notes | Jev `choice` | Which of 12 retrieved memories matter. 2 to 5 reach the prompt, not 24. |
+| Notes | Jev `choice` | Ranks 24 retrieved memories; the top 8 reach the prompt (short ones, not a 24-record block). |
 | Argument values | code + Jev `choice` | Code extracts URLs, emails, ids, amounts, dates and quoted or capitalised spans from the request and the notes. Jev picks one for each required string argument of the top tool. |
 | Next tool (multi-call) | Jev `choice` + `noul` | After each tool hop, the next tool from the first pass's top 24 and "is the request done?". |
 | Every string | gpt-oss-20b | Message bodies, titles, every tool call and the final reply, from a prompt holding the request, the chosen notes, the confirmed values and three to six tool schemas. There is no tool menu and no memory dump. |
@@ -707,7 +707,7 @@ Knobs (environment):
 | `DITTOBENCH_JEV_HYBRID` | unset | `1` turns the path on. |
 | `DITTOBENCH_JEV_MENU` | `full` | `grouped` asks about toolkits (name prefixes) first, then only the tools of the top 5 toolkits. It reads about a fifth of the decision tokens, at some recall risk. |
 | `DITTOBENCH_JEV_OFFER_K` | `3` | Tools Jev hands the chat model, before the safe-harbor top-3. |
-| `DITTOBENCH_JEV_NOTES` | `5` | Most memory notes in a prompt. |
+| `DITTOBENCH_JEV_NOTES` | `8` | Most memory notes in a prompt. |
 | `DITTOBENCH_JEV_DESC_CHARS` | `80` | Description characters Jev reads per tool. |
 | `DITTOBENCH_DECISIONS_URL` | validator-set | Set by the sandbox on bench 15+. Without it the path falls back to code-only (semantic top-k) selection. |
 | `DITTOBENCH_DECISIONS_API_KEY`, `DITTOBENCH_DECISIONS_MODEL` | unset, `typesafe/jev-1.14` | Only for pointing the client at a provider directly. The canonical broker signs the call and forces its own pinned model. |
