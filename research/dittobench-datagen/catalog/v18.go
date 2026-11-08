@@ -269,7 +269,9 @@ func v18ToolkitEligible(kit V18SnapshotToolkit) bool {
 // v18SampledToolkits returns the toolkits one seed offers, in sampled order,
 // and the target menu size the seed drew. base is the size of the rest of the
 // menu (the v16 surface plus first-party tools).
-func v18SampledToolkits(seed int64, benchVersion int, snap *V18Snapshot, base int) ([]V18SnapshotToolkit, int) {
+// served names the tools already on the menu; only a toolkit's new names
+// count toward the target, exactly the tools V18ProductionToolsForSeed emits.
+func v18SampledToolkits(seed int64, benchVersion int, snap *V18Snapshot, served map[string]bool) ([]V18SnapshotToolkit, int) {
 	size, _ := CatalogSizeForVersion(benchVersion)
 	linked := map[string]bool{}
 	for _, app := range V16ConnectorPlanForSeed(seed).Linked {
@@ -284,18 +286,31 @@ func v18SampledToolkits(seed int64, benchVersion int, snap *V18Snapshot, base in
 		}
 	}
 	target := size.Min + v13Pick(seed, "v18-catalog-target", size.Max-size.Min+1)
-	total := base
+	seen := make(map[string]bool, len(served))
+	for name := range served {
+		seen[name] = true
+	}
+	total := len(seen)
 	var out []V18SnapshotToolkit
 	for _, index := range v13Perm(seed, "v18-toolkit-order", len(eligible)) {
 		if total >= target {
 			break
 		}
 		kit := eligible[index]
-		if total+len(kit.Tools) > size.Max {
+		fresh := 0
+		for _, tool := range kit.Tools {
+			if !seen[tool.Slug] {
+				fresh++
+			}
+		}
+		if fresh == 0 || total+fresh > size.Max {
 			continue
 		}
+		for _, tool := range kit.Tools {
+			seen[tool.Slug] = true
+		}
 		out = append(out, kit)
-		total += len(kit.Tools)
+		total += fresh
 	}
 	return out, target
 }
@@ -353,8 +368,10 @@ func v18ReplaceWord(text, from, to string) string {
 	return b.String()
 }
 
+// isWordByte counts hyphens as word bytes, so a swap never rewrites part of a
+// hyphenated compound ("pre-existing" stays "pre-existing").
 func isWordByte(c byte) bool {
-	return c == '_' || c == '\'' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	return c == '_' || c == '\'' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // v18ToolkitSchema is the input schema every snapshot toolkit tool renders.
@@ -381,7 +398,7 @@ func V18ProductionToolsForSeed(seed int64, benchVersion int) []protocol.ToolDefi
 			Parameters:  append(json.RawMessage(nil), tool.Parameters...),
 		})
 	}
-	kits, _ := v18SampledToolkits(seed, benchVersion, snap, len(surface))
+	kits, _ := v18SampledToolkits(seed, benchVersion, snap, surface)
 	for _, kit := range kits {
 		tools := append([]V18SnapshotTool(nil), kit.Tools...)
 		sort.Slice(tools, func(a, b int) bool { return tools[a].Slug < tools[b].Slug })
@@ -393,7 +410,9 @@ func V18ProductionToolsForSeed(seed int64, benchVersion int) []protocol.ToolDefi
 			out = append(out, protocol.ToolDefinition{
 				Name:        tool.Slug,
 				Description: v18Paraphrase(seed, tool.Slug, kit.Name, tool.Description),
-				Parameters:  v18ToolkitSchema,
+				// A copy per definition: a caller that edits one schema in
+				// place must not change every other toolkit tool's.
+				Parameters: append(json.RawMessage(nil), v18ToolkitSchema...),
 			})
 		}
 	}
@@ -402,13 +421,19 @@ func V18ProductionToolsForSeed(seed int64, benchVersion int) []protocol.ToolDefi
 
 // CatalogForSeedChecked is CatalogForSeed for callers that must fail cleanly
 // instead of panicking when a v18 snapshot is missing.
+// It also fails, rather than serving a menu outside the contract, when the
+// seed's menu misses CatalogSizeForVersion.
 func CatalogForSeedChecked(benchVersion int, seed int64) ([]protocol.ToolDefinition, error) {
 	if benchVersion >= protocol.BenchVersionV18 {
 		if err := V18SnapshotReady(); err != nil {
 			return nil, err
 		}
 	}
-	return CatalogForSeed(benchVersion, seed), nil
+	tools := CatalogForSeed(benchVersion, seed)
+	if size, ok := CatalogSizeForVersion(benchVersion); ok && (len(tools) < size.Min || len(tools) > size.Max) {
+		return nil, fmt.Errorf("bench_version %d seed %d: catalog of %d tools outside the contract's %d..%d", benchVersion, seed, len(tools), size.Min, size.Max)
+	}
+	return tools, nil
 }
 
 // IsV18ProductionTool reports whether name is a snapshot tool (first-party or
@@ -422,6 +447,23 @@ func IsV18ProductionTool(name string) (appName string, ok bool) {
 	defer v18SnapshotMu.RUnlock()
 	appName, ok = v18Index[name]
 	return appName, ok
+}
+
+// IsConnectorToolForVersionChecked is IsConnectorToolForVersion that reports
+// an unavailable v18 snapshot instead of answering "not a connector" for a
+// name it cannot look up. Callers that enforce the refusal use it.
+func IsConnectorToolForVersionChecked(name string, benchVersion int) (appName string, ok bool, err error) {
+	if appName, ok := IsConnectorTool(name); ok {
+		return appName, true, nil
+	}
+	if benchVersion >= protocol.BenchVersionV18 {
+		if err := V18SnapshotReady(); err != nil {
+			return "", false, err
+		}
+		appName, ok := IsV18ProductionTool(name)
+		return appName, ok, nil
+	}
+	return "", false, nil
 }
 
 // IsConnectorToolForVersion is IsConnectorTool under an explicit contract:

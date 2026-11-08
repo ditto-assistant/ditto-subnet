@@ -538,7 +538,6 @@ describe('Backroom MCP tools', () => {
       [
         'activate_v13_scorer_cohort',
         'rotate_v13_scorer_cohort',
-        'advance_scored_policy_rescreen',
         'execute_screening_quarantine_batch',
         'expand_benchmark_rollout_cohort',
         'get_backroom_access',
@@ -635,8 +634,6 @@ describe('Backroom MCP tools', () => {
         'rotate_screener_policy_manifest',
         'get_screener_policy_activation',
         'get_v13_review_clock',
-        'schedule_screener_policy_activation',
-        'schedule_v13_review_clock',
         'restore_scored_screening_snapshot',
         'get_validator_fleet',
         'get_validator_slot_settings',
@@ -802,6 +799,7 @@ describe('Backroom MCP tools', () => {
         'retry_trusted_image_build',
         'expire_running_screening',
         'reject_screening_submission',
+        'amend_screening_reject_reason',
         'retry_validator_evaluation',
         'replace_validator_score',
         'queue_validator_score_retests',
@@ -999,10 +997,9 @@ describe('Backroom MCP tools', () => {
     // summary, detail in tool help) measures 232,562 bytes; keep about 0.5 KB.
     // The generator source release read (status, uuid, limit, offset; one-line
     // summary, detail in tool help) measures 233,483 bytes; keep about 0.5 KB.
-    // The guarded dueling season commitment republish (uuid, reason,
-    // confirmation; one-line summary, detail in tool help) measures 234,365
-    // bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(234_900)
+    // Allow the guarded dueling season republish and reject-reason amendment
+    // controls, with about 0.5 KB of headroom for the combined catalog.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(236_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1061,7 +1058,8 @@ describe('Backroom MCP tools', () => {
       // it to 29,006; keep about 200 chars.
       // The three one-line dueling-season summaries measure 29,233; keep
       // about 200 chars.
-      29_450,
+      // The combined catalog's descriptions measure 29,531 characters.
+      29_600,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -3497,6 +3495,71 @@ describe('Backroom MCP tools', () => {
         'https://platform-api.heyditto.ai/api/v1/admin/conversation-assessments?limit=50',
         expect.any(Object),
       )
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('keeps v2 Opus rows and their transcript-free failure evidence in the read tool', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const item = {
+      assessment_id: '11111111-1111-4111-8111-111111111111',
+      agent_id: '22222222-2222-4222-8222-222222222222',
+      artifact_sha256: 'a'.repeat(64), bench_version: 17, status: 'completed',
+      created_at: '2026-11-08T01:00:00Z', expires_at: '2026-11-08T03:05:00Z',
+      base_quality_micros: 210000, conversation_micros: 750000, proposed_quality_micros: 390000,
+      reserved_microusd: 30000000, spent_microusd: 512345, error_code: null,
+      instrument: 'conversational-continuity-v2', judge_model: 'claude-opus-5-5',
+      spent_is_upper_bound: false, judge_spent_microusd: 480000, harness_spent_microusd: 32345,
+      judge_cost_basis: 'tariff', judge_requests: 1, judge_input_tokens: 41000, judge_output_tokens: 7000,
+      exchange_count: 30, empty_answers: 1, truncated_answers: 1, failed_turns: [13],
+      harness_requests: 140, harness_provider_retries: 2,
+      harness_failure_code: null, harness_failure_stage: null, harness_failure_http_status: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      mode: 'shadow', instrument: 'conversational-continuity-v2', judge_model: 'claude-opus-5-5',
+      daily_budget_microusd: 180000000, reserved_last_day_microusd: 30000000,
+      proposed_submission_fee_rao: 200000000, current_submission_fee_rao: 100000000,
+      fee_change_request: { expected_revision: 0, cooldown_seconds: 3600, fee_amount_rao: 200000000,
+        reason: 'Fund conversation assessment', actor: 'conversation-rollout', confirmation: 'example' },
+      items: [item],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_conversation_assessments', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({ judge_model: 'claude-opus-5-5', items: [item] })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads a v2 Opus report through the read-only tool', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const assessmentId = '11111111-1111-4111-8111-111111111111'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({
+      assessment_id: assessmentId,
+      agent_id: '22222222-2222-4222-8222-222222222222',
+      instrument: 'conversational-continuity-v2',
+      model: 'claude-opus-5-5',
+      status: 'incomplete',
+      error_code: 'harness_unresponsive',
+      exchanges: [],
+      grades: null,
+    })))
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_conversation_assessments',
+        arguments: { assessment_id: assessmentId },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        model: 'claude-opus-5-5', error_code: 'harness_unresponsive',
+      })
     } finally {
       await client.close()
       await server.close()
@@ -6467,96 +6530,7 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('retries only the exact paused scored-policy checkpoint', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const resumed = {
-      ...scoredPolicyRescreenView,
-      current: { ...scoredPolicyRescreenView.current, state: 'pending', attempt_id: null },
-      active: [{ ...scoredPolicyRescreenView.current, state: 'pending', attempt_id: null }],
-    }
-    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(resumed))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    const response = await client.callTool({
-      name: 'advance_scored_policy_rescreen',
-      arguments: {
-        expectedActivationRevision: 3,
-        expectedAgentId: '22222222-2222-4222-8222-222222222222',
-        retryPaused: true,
-        reason: 'retry the reviewed V11 canary after its infrastructure pause',
-        confirmation: 'ADVANCE SCORED POLICY RESCREEN',
-      },
-    })
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toEqual(resumed)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe(
-      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/advance-scored-rescreen',
-    )
-    expect(init.method).toBe('POST')
-    expect(JSON.parse(String(init.body))).toEqual({
-      expected_activation_revision: 3,
-      expected_agent_id: '22222222-2222-4222-8222-222222222222',
-      retry_paused: true,
-      max_active_releases: 1,
-      reason: 'retry the reviewed V11 canary after its infrastructure pause',
-      actor: 'peyton@omniaura.ai',
-      confirmation: 'ADVANCE SCORED POLICY RESCREEN',
-    })
-
-    await client.close()
-    await server.close()
-  })
-
-  it('schedules one screener policy activation with the exact platform contract', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ revision: 4 }))
-      .mockResolvedValueOnce(Response.json(screenerPolicyActivationView))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    const response = await client.callTool({
-      name: 'schedule_screener_policy_activation',
-      arguments: {
-        expectedRevision: 3,
-        targetPolicyVersion: 11,
-        activateAt: '2026-08-29T09:00:00-04:00',
-        rescreenScored: true,
-        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-        confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-      },
-    })
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({
-      latest: { revision: 3, state: 'pending' },
-    })
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation')
-    expect(init.method).toBe('POST')
-    expect(init.headers).toMatchObject({
-      Authorization: 'Bearer platform-admin-token',
-      'X-Admin-Actor': 'peyton@omniaura.ai',
-    })
-    // The audited actor is always the signed-in operator, never a tool argument.
-    expect(JSON.parse(String(init.body))).toEqual({
-      expected_revision: 3,
-      target_policy_version: 11,
-      activate_at: '2026-08-29T09:00:00-04:00',
-      rescreen_scored: true,
-      reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-      actor: 'peyton@omniaura.ai',
-      confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-    })
-
-    await client.close()
-    await server.close()
-  })
-
-  it('reads the default-off V13 review clock and guards its exact schedule write', async () => {
+  it('reads the default-off V13 review clock', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const empty = {
       current_policy_document_digest: 'a'.repeat(64),
@@ -6566,53 +6540,15 @@ describe('Backroom MCP tools', () => {
     }
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(Response.json(empty)))
     vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
 
     const read = await client.callTool({ name: 'get_v13_review_clock', arguments: {} })
     expect(read.isError).not.toBe(true)
     expect(readJsonResult(read)).toEqual(empty)
-    const invalid = await client.callTool({
-      name: 'schedule_v13_review_clock',
-      arguments: {
-        expectedRevision: 0,
-        policyDocumentDigest: 'a'.repeat(64),
-        policyManifestDigest: 'b'.repeat(64),
-        activateAt: '2026-10-01T12:00:00Z',
-        windowSeconds: 86400,
-        reason: 'publish a future first-claim window',
-        confirmation: 'WRONG PHRASE',
-      },
-    })
-    expect(invalid.isError).toBe(true)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-
-    const scheduled = await client.callTool({
-      name: 'schedule_v13_review_clock',
-      arguments: {
-        expectedRevision: 0,
-        policyDocumentDigest: 'a'.repeat(64),
-        policyManifestDigest: 'b'.repeat(64),
-        activateAt: '2026-10-01T12:00:00Z',
-        windowSeconds: 86400,
-        reason: 'publish a future first-claim window',
-        confirmation: 'SCHEDULE V13 REVIEW CLOCK',
-      },
-    })
-    expect(scheduled.isError).not.toBe(true)
-    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
-    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/review-clock')
-    expect(init.method).toBe('POST')
-    expect(JSON.parse(String(init.body))).toEqual({
-      expected_revision: 0,
-      policy_version: 13,
-      policy_document_digest: 'a'.repeat(64),
-      policy_manifest_digest: 'b'.repeat(64),
-      activate_at: '2026-10-01T12:00:00Z',
-      window_seconds: 86400,
-      reason: 'publish a future first-claim window',
-      actor: 'peyton@omniaura.ai',
-      confirmation: 'SCHEDULE V13 REVIEW CLOCK',
-    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/review-clock',
+      expect.objectContaining({ method: 'GET' }),
+    )
 
     await client.close()
     await server.close()
@@ -6699,53 +6635,6 @@ describe('Backroom MCP tools', () => {
         expectedCount: 35,
         reason: 'restore the pre-v11 scored screening snapshot',
         confirmation: 'RESTORE SCREENING SNAPSHOT',
-      },
-    })
-
-    expect(response.isError).toBe(true)
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    await client.close()
-    await server.close()
-  })
-
-  it('rejects a screener policy activation with the wrong confirmation before any admin call', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    const response = await client.callTool({
-      name: 'schedule_screener_policy_activation',
-      arguments: {
-        expectedRevision: 3,
-        targetPolicyVersion: 11,
-        activateAt: '2026-08-29T09:00:00-04:00',
-        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-        confirmation: 'SCHEDULE SCREENER POLICY',
-      },
-    })
-
-    expect(response.isError).toBe(true)
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    await client.close()
-    await server.close()
-  })
-
-  it('does not schedule a screener policy activation without the write scope', async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-
-    const response = await client.callTool({
-      name: 'schedule_screener_policy_activation',
-      arguments: {
-        expectedRevision: 3,
-        targetPolicyVersion: 11,
-        activateAt: '2026-08-29T09:00:00-04:00',
-        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-        confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
       },
     })
 
@@ -9617,6 +9506,77 @@ describe('Backroom MCP tools', () => {
     await client.close()
     await server.close()
   })
+
+  it.each([
+    ['RFC', '5f192704-e4ff-40a4-9edc-24aac520bee2'],
+    ['legacy database', '5f192704-e4ff-00a4-0edc-24aac520bee2'],
+  ])(
+    'amends a resolved reject reason with a %s attempt ID (SN-439)',
+    async (_kind, attemptId) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const quarantineId = 'ee198c72-0000-4000-8000-000000000001'
+      const agentId = '92b9aec4-3642-4b0d-872f-9ce516cb7b7e'
+      const expectedArtifactSha256 = '70'.repeat(32)
+      const expectedReason = 'I4: app/agent.py:142 and :172 route benchmark answers'
+      const reason = 'I4: app/short.py:83-90 and :251 route benchmark answers'
+      const fetchMock = vi.fn().mockResolvedValue(
+        Response.json({
+          quarantine_id: quarantineId,
+          agent_id: agentId,
+          attempt_id: attemptId,
+          previous_reason: expectedReason,
+          reason,
+          resolved_by: 'platform:v13-confirmed-violation',
+          idempotent: false,
+        }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([
+        BACKROOM_READ_SCOPE,
+        BACKROOM_WRITE_SCOPE,
+      ])
+      const response = await client.callTool({
+        name: 'amend_screening_reject_reason',
+        arguments: {
+          quarantineId,
+          expectedAgentId: agentId,
+          expectedArtifactSha256,
+          expectedAttemptId: attemptId,
+          expectedReason,
+          reason,
+          confirmation: 'AMEND PUBLIC REJECT REASON',
+        },
+      })
+
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        previous_reason: expectedReason,
+        reason,
+        resolved_by: 'platform:v13-confirmed-violation',
+        idempotent: false,
+      })
+      expect(fetchMock).toHaveBeenCalledWith(
+        `https://platform-api.heyditto.ai/api/v1/admin/screening-quarantines/${quarantineId}/amend-reason`,
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'X-Admin-Actor': 'peyton@omniaura.ai',
+          }),
+          body: JSON.stringify({
+            expected_agent_id: agentId,
+            expected_artifact_sha256: expectedArtifactSha256,
+            expected_attempt_id: attemptId,
+            expected_reason: expectedReason,
+            reason,
+            confirmation: 'AMEND PUBLIC REJECT REASON',
+          }),
+        }),
+      )
+
+      await client.close()
+      await server.close()
+    },
+  )
 
   it('releases a verified v13 court clear only with write scope and confirmation', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'

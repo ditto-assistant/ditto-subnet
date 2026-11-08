@@ -17,7 +17,10 @@ AthRulingAction = Literal["open", "clear", "reject"]
 # What execute performs for one ruling. ``attest`` is a ``clear`` on an unheld
 # scored or live agent: it records the terminal clear without holding the row,
 # so the agent never leaves the board and the crown cannot move.
-AthRulingStep = Literal["open", "clear", "attest", "reject"]
+# ``close_terminal`` is a ``reject`` on a pending review stranded behind an
+# agent that is already ``rejected`` or ``banned`` (SN-434): it resolves the
+# review as reject without touching the agent, its scores or the board.
+AthRulingStep = Literal["open", "clear", "attest", "reject", "close_terminal"]
 AthRulingDisposition = Literal[
     "ready", "already_applied", "stale_guard", "conflict", "not_found", "invalid"
 ]

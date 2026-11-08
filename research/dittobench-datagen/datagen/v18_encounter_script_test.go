@@ -123,12 +123,13 @@ func (s *encounterScript) job() {
 	run := s.call("run_workflow", map[string]any{"name": "workflow"})
 	job := scriptJob.FindString(run)
 	figure := ""
-	for poll := 0; poll < 4 && figure == ""; poll++ {
+	for poll := 0; poll < 4 && figure == "" && job != ""; poll++ {
 		jobs := s.call("list_agent_jobs", map[string]any{})
 		for _, seg := range strings.Split(strings.TrimPrefix(jobs, "Recent jobs: "), "; ") {
 			if strings.HasPrefix(seg, job) && strings.Contains(seg, "completed") {
 				if m := regexp.MustCompile(`completed, ([\d,]+)`).FindStringSubmatch(seg); m != nil {
 					figure = m[1]
+					break
 				}
 			}
 		}
@@ -150,8 +151,12 @@ func (s *encounterScript) handoff() {
 	emails := scriptEmail.FindAllString(memory, -1)
 	to := emails[len(emails)-1]
 	record := s.call(enc.Required[0].Tool, map[string]any{"query": "invoice"})
-	amount := scriptMoney.FindStringSubmatch(record)[1]
-	invoice := scriptInvoice.FindString(record)
+	money, invoice := scriptMoney.FindStringSubmatch(record), scriptInvoice.FindString(record)
+	if money == nil || invoice == "" {
+		s.reply = "I could not read the invoice."
+		return
+	}
+	amount := money[1]
 	s.call("gmail_send", map[string]any{"to": to, "subject": "Invoice " + invoice, "body": "Balance $" + amount + " for invoice " + invoice})
 	s.reply = fmt.Sprintf("Emailed %s: $%s due on %s.", to, amount, invoice)
 }
@@ -175,6 +180,10 @@ func (s *encounterScript) triage() {
 	}
 	page := s.call("read_links", map[string]any{"urls": []string{status}})
 	incident := regexp.MustCompile(`incident ([A-Z]{3}-\d{4})|Incident ([A-Z]{3}-\d{4})`).FindStringSubmatch(page)
+	if incident == nil {
+		s.reply = "No incident found on the status page."
+		return
+	}
 	id := incident[1] + incident[2]
 	items := s.call(tracker, map[string]any{"query": id})
 	if strings.Contains(items, id) && !strings.Contains(items, "no item") {

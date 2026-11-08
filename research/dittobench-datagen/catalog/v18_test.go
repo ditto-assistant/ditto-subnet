@@ -142,6 +142,9 @@ func TestV18ParaphraseKeepsMeaningAndVariesBySeed(t *testing.T) {
 	if len(seen) < 4 {
 		t.Fatalf("only %d paraphrases over 20 seeds", len(seen))
 	}
+	if got := v18ReplaceWord("pre-Retrieves Retrieves-x Retrieves", "Retrieves", "Fetches"); got != "pre-Retrieves Retrieves-x Fetches" {
+		t.Fatalf("hyphenated compound rewritten: %q", got)
+	}
 	if got := v18ReplaceWord("Retrievesx Retrieves", "Retrieves", "Fetches"); got != "Retrievesx Fetches" {
 		t.Fatalf("whole-word replace: %q", got)
 	}
@@ -172,6 +175,48 @@ func TestV18RefusalIndexNeverShadowsSimulatedTools(t *testing.T) {
 	for _, def := range v13ProductionCatalog() {
 		if _, refused := IsConnectorToolForVersion(def.Name, protocol.BenchVersionV18); refused {
 			t.Fatalf("product tool %s is refused at v18", def.Name)
+		}
+	}
+}
+
+// The checked lookup serves every seed's menu inside the contract (it errors
+// rather than serving one outside), toolkit schemas are independent copies,
+// and the checked connector classification agrees with the unchecked one.
+func TestV18CheckedCatalogHoldsTheContract(t *testing.T) {
+	size, _ := CatalogSizeForVersion(protocol.BenchVersionV18)
+	seeds := 200
+	if testing.Short() {
+		seeds = 20
+	}
+	for seed := int64(1); seed <= int64(seeds); seed++ {
+		tools, err := CatalogForSeedChecked(protocol.BenchVersionV18, seed)
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+		if n := len(tools); n < size.Min || n > size.Max {
+			t.Fatalf("seed %d: %d tools outside %d..%d", seed, n, size.Min, size.Max)
+		}
+	}
+	extra := V18ProductionToolsForSeed(3, protocol.BenchVersionV18)
+	var kitTools []int
+	for i, def := range extra {
+		if string(def.Parameters) == string(v18ToolkitSchema) {
+			kitTools = append(kitTools, i)
+		}
+	}
+	if len(kitTools) < 2 {
+		t.Fatal("seed 3 offers fewer than two toolkit tools")
+	}
+	extra[kitTools[0]].Parameters[0] = 'X'
+	if extra[kitTools[1]].Parameters[0] == 'X' || v18ToolkitSchema[0] == 'X' {
+		t.Fatal("toolkit definitions share one mutable schema")
+	}
+	name := v18Snapshot().Toolkits[0].Tools[0].Slug
+	for _, n := range []string{name, "search_web", "slack_post_message", "nonexistent_tool"} {
+		app, ok := IsConnectorToolForVersion(n, protocol.BenchVersionV18)
+		capp, cok, err := IsConnectorToolForVersionChecked(n, protocol.BenchVersionV18)
+		if err != nil || app != capp || ok != cok {
+			t.Fatalf("%s: checked (%q %v %v) disagrees with unchecked (%q %v)", n, capp, cok, err, app, ok)
 		}
 	}
 }

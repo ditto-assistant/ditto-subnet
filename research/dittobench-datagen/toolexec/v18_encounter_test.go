@@ -108,6 +108,16 @@ func TestEncounterMatchingIsBoundedAndSeparatorBlind(t *testing.T) {
 		{"see JOB-12345.", "job-12345", true},
 		{"vel‑4821", "VEL-4821", true},
 		{"dana.ruiz@velmora.com", "dana.ruiz@velmora.com", true},
+		// PR #3430 review cases.
+		{"VEL\u20154821", "VEL-4821", true},        // horizontal bar
+		{"VEL-48\u00ad21", "VEL-4821", true},       // soft hyphen
+		{"US$18,420", "18420", true},               // country-prefixed currency
+		{"18\u2009420", "18420", true},             // thin-space thousands
+		{"\u201cVEL-4821\u201d", "VEL-4821", true}, // curly quotes are boundaries
+		{"https://x.com/pricing/notice-7", "https://x.com/pricing", false},
+		{"see https://x.com/pricing/ now", "https://x.com/pricing", true},
+		{"https://x.com/pricing.", "https://x.com/pricing", true},
+		{"https://x.com/pricing?plan=pro", "https://x.com/pricing", false},
 	}
 	for _, c := range cases {
 		if got := protocol.EncounterContains(c.text, c.value); got != c.want {
@@ -119,5 +129,31 @@ func TestEncounterMatchingIsBoundedAndSeparatorBlind(t *testing.T) {
 	}
 	if !protocol.EncounterArgsMatch([]byte(`{"n":18420}`), []string{"18,420"}) {
 		t.Error("numeric argument not matched")
+	}
+}
+
+func TestEncounterArgTextKeepsFalseAndNull(t *testing.T) {
+	if !protocol.EncounterArgsMatch([]byte(`{"archived":false,"note":null}`), []string{"false", "null"}) {
+		t.Fatal("false/null arguments not matched")
+	}
+}
+
+// The first matching rule decides; a matching Page rule's Error fails the
+// call; several Page rules of one call are joined.
+func TestEncounterRespondOrdering(t *testing.T) {
+	e := &protocol.Encounter{Rules: []protocol.EncounterRule{
+		{Tool: "read_links", Contains: []string{"https://x.com/gone"}, Error: "page not found"},
+		{Tool: "read_links", Page: true, Contains: []string{"https://x.com/a"}, Result: "A"},
+		{Tool: "read_links", Page: true, Contains: []string{"https://x.com/b"}, Result: "B"},
+		{Tool: "read_links", Page: true, Contains: []string{"https://x.com/broken"}, Error: "broken page"},
+	}}
+	if _, errText, _ := e.Respond("read_links", []byte(`{"urls":["https://x.com/gone","https://x.com/a"]}`), 0); errText != "page not found" {
+		t.Fatalf("an earlier non-page rule was bypassed: %q", errText)
+	}
+	if got, _, _ := e.Respond("read_links", []byte(`{"urls":["https://x.com/a","https://x.com/b"]}`), 0); !strings.Contains(got, "A") || !strings.Contains(got, "B") {
+		t.Fatalf("two pages not joined: %q", got)
+	}
+	if _, errText, _ := e.Respond("read_links", []byte(`{"urls":["https://x.com/a","https://x.com/broken"]}`), 0); errText != "broken page" {
+		t.Fatalf("a page error was discarded: %q", errText)
 	}
 }

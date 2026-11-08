@@ -73,10 +73,18 @@ func Encounter(e *protocol.Encounter, calls []protocol.ObservedToolCall, resp pr
 		v.Coverage = 1
 	}
 
-	for _, forbidden := range e.Forbidden {
-		if encounterObserved(forbidden, calls) {
+	// Each distinct forbidden call is charged once, and one observed call is
+	// charged at most once even when it matches several forbidden entries.
+	hit := make([]bool, len(e.Forbidden))
+	for _, call := range calls {
+		for k, forbidden := range e.Forbidden {
+			if hit[k] || !forbidden.Matches(call.Name, call.Args) {
+				continue
+			}
+			hit[k] = true
 			v.ForbiddenHits++
 			v.Notes = append(v.Notes, "v18 encounter: forbidden call made: "+describeEncounterCall(forbidden))
+			break
 		}
 	}
 	v.Score = v.AnswerCredit * v.Coverage * math.Pow(EncounterForbiddenFactor, float64(v.ForbiddenHits))

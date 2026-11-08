@@ -3548,12 +3548,10 @@ export interface paths {
         put?: never;
         /**
          * Schedule Activation
-         * @description Append one optimistic, confirmation-gated schedule revision.
+         * @description Retired: the required screening policy is frozen at its last activation.
          *
-         *     The required version rises to ``target_policy_version`` when
-         *     ``activate_at`` passes, not when this row is written — miners get the full
-         *     notice window. Superseding an earlier schedule is a normal append: the
-         *     newest due revision governs.
+         *     Validators lease on the benchmark contract floor alone, so nothing waits on
+         *     a new review-policy version. Reads of the activation history still work.
          */
         post: operations["schedule_activation_api_v1_admin_screener_policy_activation_post"];
         delete?: never;
@@ -3573,13 +3571,7 @@ export interface paths {
         put?: never;
         /**
          * Advance Scored Rescreen
-         * @description Fill a bounded current-board window after an explicit checkpoint.
-         *
-         *     The policy schedule establishes the rule.  It does *not* bulk-requeue
-         *     every existing score: a false V11 clear remains observable before more than
-         *     the configured window of V10 scores is touched.  A non-verdict leaves its
-         *     row paused, prevents the window from widening, and requires an explicit
-         *     retry rather than silently advancing.
+         * @description Retired: scored agents are never rescreened for a review policy.
          */
         post: operations["advance_scored_rescreen_api_v1_admin_screener_policy_activation_advance_scored_rescreen_post"];
         delete?: never;
@@ -3626,7 +3618,7 @@ export interface paths {
         put?: never;
         /**
          * Schedule V13 Review Clock
-         * @description Schedule a future first-claim clock; never backfill existing attempts.
+         * @description Retired: source review no longer runs, so no review clock is scheduled.
          */
         post: operations["schedule_v13_review_clock_api_v1_admin_screener_policy_activation_review_clock_post"];
         delete?: never;
@@ -3927,6 +3919,33 @@ export interface paths {
         get: operations["get_quarantine_api_v1_admin_screening_quarantines__quarantine_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screening-quarantines/{quarantine_id}/amend-reason": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Amend Quarantine Reject Reason
+         * @description Correct the miner-visible reason on a resolved reject (SN-439).
+         *
+         *     The reject stands: status, decision-maker, moderation record and evidence
+         *     are untouched. The quarantine's resolution reason, the attempt's public
+         *     reason and the agent's screening reason -- wherever they still carry the
+         *     replaced text -- take the corrected text. The replaced text stays in the
+         *     append-only resolution history, seeded with the original decision when
+         *     the reject (an automated confirmed violation, say) wrote no history row.
+         */
+        post: operations["amend_quarantine_reject_reason_api_v1_admin_screening_quarantines__quarantine_id__amend_reason_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10661,7 +10680,7 @@ export interface components {
              */
             status: "applied" | "already_applied" | "failed";
             /** Steps Applied */
-            steps_applied?: ("open" | "clear" | "attest" | "reject")[];
+            steps_applied?: ("open" | "clear" | "attest" | "reject" | "close_terminal")[];
             /** Would Change Crown */
             would_change_crown: boolean | null;
             /**
@@ -10714,7 +10733,7 @@ export interface components {
             /** Stale Guard */
             stale_guard: boolean;
             /** Steps */
-            steps?: ("open" | "clear" | "attest" | "reject")[];
+            steps?: ("open" | "clear" | "attest" | "reject" | "close_terminal")[];
             /** Would Change Crown */
             would_change_crown: boolean;
         };
@@ -14111,6 +14130,65 @@ export interface components {
              */
             terminal_ghost_count: number;
         };
+        /**
+         * AdminQuarantineReasonAmendRequest
+         * @description Guarded correction of the public reason on a resolved reject (SN-439).
+         *
+         *     The rejection itself stands; only the miner-visible reason changes, and
+         *     the text it replaces is kept in the quarantine's resolution history.
+         */
+        AdminQuarantineReasonAmendRequest: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "AMEND PUBLIC REJECT REASON";
+            /**
+             * Expected Agent Id
+             * Format: uuid
+             */
+            expected_agent_id: string;
+            /** Expected Artifact Sha256 */
+            expected_artifact_sha256: string;
+            /**
+             * Expected Attempt Id
+             * Format: uuid
+             */
+            expected_attempt_id: string;
+            /** Expected Reason */
+            expected_reason: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminQuarantineReasonAmendResponse */
+        AdminQuarantineReasonAmendResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Idempotent
+             * @default false
+             */
+            idempotent: boolean;
+            /** Previous Reason */
+            previous_reason: string;
+            /**
+             * Quarantine Id
+             * Format: uuid
+             */
+            quarantine_id: string;
+            /** Reason */
+            reason: string;
+            /** Resolved By */
+            resolved_by?: string | null;
+        };
         /** AdminQuarantineResolutionEvent */
         AdminQuarantineResolutionEvent: {
             /** Actor */
@@ -17097,37 +17175,6 @@ export interface components {
              */
             idempotent: boolean;
             quarantine: components["schemas"]["AdminQuarantineItem"];
-        };
-        /**
-         * AdvanceScoredPolicyRescreenRequest
-         * @description Fill a bounded top-down scored-rescreen window, or retry one pause.
-         */
-        AdvanceScoredPolicyRescreenRequest: {
-            /** Actor */
-            actor?: string | null;
-            /** Confirmation */
-            confirmation: string;
-            /** Expected Activation Revision */
-            expected_activation_revision: number;
-            /**
-             * Expected Agent Id
-             * Format: uuid
-             */
-            expected_agent_id: string;
-            /**
-             * Max Active Releases
-             * @default 1
-             */
-            max_active_releases: number;
-            /** Reason */
-            reason: string;
-            /**
-             * Retry Paused
-             * @default false
-             */
-            retry_paused: boolean;
-            /** Review Settings Revision */
-            review_settings_revision?: number | null;
         };
         /**
          * AgentEmissionEligibility
@@ -21999,16 +22046,22 @@ export interface components {
             expires_at: string;
             /**
              * Harness Budget Microusd
-             * @default 5000000
-             * @constant
+             * @default 150000
+             * @enum {integer}
              */
-            harness_budget_microusd: 5000000;
+            harness_budget_microusd: 5000000 | 150000;
+            /**
+             * Instrument
+             * @default conversational-continuity-v1
+             * @enum {string}
+             */
+            instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
             /**
              * Judge Budget Microusd
-             * @default 25000000
-             * @constant
+             * @default 850000
+             * @enum {integer}
              */
-            judge_budget_microusd: 25000000;
+            judge_budget_microusd: 25000000 | 850000;
             /**
              * Lease Token
              * Format: uuid
@@ -22018,6 +22071,17 @@ export interface components {
             screened_image_sha256: string;
             /** Seed */
             seed: string;
+        };
+        /**
+         * ConversationClaimRequest
+         * @description What an enrolled worker can run. A worker that sends no body predates
+         *     v2 and is offered nothing while Platform admits v2.
+         */
+        ConversationClaimRequest: {
+            /** Instruments */
+            instruments: string[];
+            /** Reservation Microusd */
+            reservation_microusd?: number | null;
         };
         /**
          * ConversationLaunch
@@ -22045,16 +22109,22 @@ export interface components {
             expires_at: string;
             /**
              * Harness Budget Microusd
-             * @default 5000000
-             * @constant
+             * @default 150000
+             * @enum {integer}
              */
-            harness_budget_microusd: 5000000;
+            harness_budget_microusd: 5000000 | 150000;
+            /**
+             * Instrument
+             * @default conversational-continuity-v1
+             * @enum {string}
+             */
+            instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
             /**
              * Judge Budget Microusd
-             * @default 25000000
-             * @constant
+             * @default 850000
+             * @enum {integer}
              */
-            judge_budget_microusd: 25000000;
+            judge_budget_microusd: 25000000 | 850000;
             /**
              * Lease Token
              * Format: uuid
@@ -22096,15 +22166,52 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Empty Answers */
+            empty_answers?: number | null;
             /** Error Code */
             error_code: string | null;
+            /** Exchange Count */
+            exchange_count?: number | null;
             /**
              * Expires At
              * Format: date-time
              */
             expires_at: string;
+            /** Failed Turns */
+            failed_turns?: number[] | null;
+            /** Harness Failure Code */
+            harness_failure_code?: string | null;
+            /** Harness Failure Http Status */
+            harness_failure_http_status?: number | null;
+            /** Harness Failure Stage */
+            harness_failure_stage?: string | null;
+            /** Harness Provider Retries */
+            harness_provider_retries?: number | null;
+            /** Harness Requests */
+            harness_requests?: number | null;
+            /** Harness Spent Microusd */
+            harness_spent_microusd?: number | null;
+            /** Instrument */
+            instrument?: string | null;
+            /** Judge Cost Basis */
+            judge_cost_basis?: string | null;
+            /** Judge Input Tokens */
+            judge_input_tokens?: number | null;
+            /** Judge Model */
+            judge_model?: string | null;
+            /** Judge Output Tokens */
+            judge_output_tokens?: number | null;
+            /** Judge Requests */
+            judge_requests?: number | null;
+            /** Judge Spent Microusd */
+            judge_spent_microusd?: number | null;
             /** Proposed Quality Micros */
             proposed_quality_micros: number | null;
+            /**
+             * Repeat Index
+             * @default 0
+             */
+            repeat_index: number;
             /** Report Sha256 */
             report_sha256?: string | null;
             /** Reserved Microusd */
@@ -22114,6 +22221,8 @@ export interface components {
             retry_authorization?: components["schemas"]["ConversationRetryAuthorization"] | null;
             /** Retry Of */
             retry_of?: string | null;
+            /** Spent Is Upper Bound */
+            spent_is_upper_bound?: boolean | null;
             /** Spent Microusd */
             spent_microusd: number | null;
             /**
@@ -22121,6 +22230,8 @@ export interface components {
              * @enum {string}
              */
             status: "leased" | "completed" | "incomplete" | "expired";
+            /** Truncated Answers */
+            truncated_answers?: number | null;
         };
         /** ConversationObservations */
         ConversationObservations: {
@@ -22189,10 +22300,12 @@ export interface components {
             input_tokens: number;
             /**
              * Instrument
-             * @default conversational-continuity-v1
-             * @constant
+             * @default conversational-continuity-v2
+             * @enum {string}
              */
-            instrument: "conversational-continuity-v1";
+            instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
+            /** Judge Cost Basis */
+            judge_cost_basis?: ("billed" | "tariff" | "reservation") | null;
             /**
              * Judge Cost Is Upper Bound
              * @default true
@@ -22202,10 +22315,10 @@ export interface components {
             judge_requests: number;
             /**
              * Model
-             * @default gpt-6-astra
-             * @constant
+             * @default claude-opus-5-5
+             * @enum {string}
              */
-            model: "gpt-6-astra";
+            model: "gpt-6-astra" | "claude-opus-5-5";
             /** Output Tokens */
             output_tokens: number;
             /** Provider Model */
@@ -22214,7 +22327,7 @@ export interface components {
             reserved_microusd: number;
             /**
              * Rubric Sha256
-             * @default 0ad55fd9b1c2df67935db3431b4448212203c9d67ec2d21f23516fd51e024a40
+             * @default 49155f2deed7339bffd5bf2584cd3742a044fba0aef4dafaa64b6e4b2bff02fb
              */
             rubric_sha256: string;
             /** Screened Image Sha256 */
@@ -24389,6 +24502,13 @@ export interface components {
         Exchange: {
             /** Assistant */
             assistant: string;
+            /**
+             * Assistant Truncated
+             * @default false
+             */
+            assistant_truncated: boolean;
+            /** Failure */
+            failure?: ("harness_run_timeout" | "harness_run_failed" | "harness_seed_timeout" | "harness_seed_failed") | null;
             /** Session */
             session: number;
             /** Turn Id */
@@ -26684,6 +26804,11 @@ export interface components {
              * @constant
              */
             profile: "conversation-openrouter-oss20b-pplx768-v1";
+            /**
+             * Provider Retries
+             * @default 0
+             */
+            provider_retries: number;
             /** Requests */
             requests: number;
             /** Spent Microusd */
@@ -29449,6 +29574,7 @@ export interface components {
             /** Posture */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
             priced_cost?: components["schemas"]["PricedCostSummary"] | null;
+            run_budget?: components["schemas"]["RunBudgetSummary"] | null;
             /** Run Id */
             run_id: string;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
@@ -38363,6 +38489,71 @@ export interface components {
             /** Speed Weight */
             speed_weight: number;
         };
+        /**
+         * RunBudgetSummary
+         * @description Run-level bench v18 per-run cost budget (``details.run_budget``).
+         *
+         *     The scorer stops admitting cases, in dispatch order, once the run's
+         *     metered priced cost reaches ``budget_nano_usd``; every unrun case scores
+         *     0 with ``budget_exhausted``. A spent budget is the harness's own cost,
+         *     never an infrastructure failure. ``reason`` is ``run_budget_exhausted``,
+         *     or ``run_budget_meter_lost`` when the run's metering session disappeared
+         *     and the scorer stopped admitting cases (``spent_nano_usd_at_cutoff`` is
+         *     then the last successful reading).
+         */
+        RunBudgetSummary: {
+            /**
+             * Admitted Cases
+             * @default 0
+             */
+            admitted_cases: number;
+            /**
+             * Budget Nano Usd
+             * @default 0
+             */
+            budget_nano_usd: number;
+            /** Budget Usd */
+            budget_usd?: number | null;
+            /**
+             * Cases
+             * @default 0
+             */
+            cases: number;
+            /** Contract Id */
+            contract_id?: string | null;
+            /**
+             * Exhausted
+             * @default false
+             */
+            exhausted: boolean;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Spent Nano Usd At Cutoff
+             * @default 0
+             */
+            spent_nano_usd_at_cutoff: number;
+            /**
+             * Unrun Cases
+             * @default 0
+             */
+            unrun_cases: number;
+            /**
+             * Unrun Memory Cases
+             * @default 0
+             */
+            unrun_memory_cases: number;
+            /**
+             * Unrun Slice Cases
+             * @default 0
+             */
+            unrun_slice_cases: number;
+            /**
+             * Unrun Tool Cases
+             * @default 0
+             */
+            unrun_tool_cases: number;
+        };
         /** RuntimeInterfaceReport */
         RuntimeInterfaceReport: {
             /** Block */
@@ -38466,74 +38657,6 @@ export interface components {
              * @enum {string}
              */
             surface: "source_emission" | "treasury_receipt";
-        };
-        /**
-         * ScheduleScreenerPolicyActivationRequest
-         * @description Append one optimistic, confirmation-gated schedule revision.
-         *
-         *     ``activate_at`` MUST carry a UTC offset (or be an explicit ``Z`` instant):
-         *     a timezone-naive datetime is rejected so an operator who means 9 a.m.
-         *     Eastern cannot silently schedule 9 a.m. server time. The row stores UTC.
-         */
-        ScheduleScreenerPolicyActivationRequest: {
-            /**
-             * Activate At
-             * Format: date-time
-             */
-            activate_at: string;
-            /** Actor */
-            actor?: string | null;
-            /**
-             * Canary Only
-             * @default false
-             */
-            canary_only: boolean;
-            /** Confirmation */
-            confirmation: string;
-            /** Expected Revision */
-            expected_revision: number;
-            /** Reason */
-            reason: string;
-            /**
-             * Rescreen Scored
-             * @default true
-             */
-            rescreen_scored: boolean;
-            /** Target Policy Version */
-            target_policy_version: number;
-        };
-        /**
-         * ScheduleV13ReviewClockRequest
-         * @description A future, manifest-bound deadline schedule; never a retroactive clock.
-         */
-        ScheduleV13ReviewClockRequest: {
-            /**
-             * Activate At
-             * Format: date-time
-             */
-            activate_at: string;
-            /** Actor */
-            actor: string;
-            /**
-             * Confirmation
-             * @constant
-             */
-            confirmation: "SCHEDULE V13 REVIEW CLOCK";
-            /** Expected Revision */
-            expected_revision: number;
-            /** Policy Document Digest */
-            policy_document_digest: string;
-            /** Policy Manifest Digest */
-            policy_manifest_digest: string;
-            /**
-             * Policy Version
-             * @constant
-             */
-            policy_version: 13;
-            /** Reason */
-            reason: string;
-            /** Window Seconds */
-            window_seconds: number;
         };
         /**
          * ScoreReport
@@ -53824,19 +53947,15 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleScreenerPolicyActivationRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScreenerPolicyActivationView"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -53859,19 +53978,15 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AdvanceScoredPolicyRescreenRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScoredPolicyRescreenView"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -53960,19 +54075,15 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleV13ReviewClockRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description screening source review is retired (owner decision 2026-11-07): new review-policy activations, review clocks and scored-policy rescreens are no longer scheduled; build and safety checks are the whole screen */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["V13ReviewClockSchedule"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -54575,6 +54686,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminQuarantineItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    amend_quarantine_reject_reason_api_v1_admin_screening_quarantines__quarantine_id__amend_reason_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                quarantine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminQuarantineReasonAmendRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminQuarantineReasonAmendResponse"];
                 };
             };
             /** @description Validation Error */
@@ -63610,7 +63759,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ConversationClaimRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

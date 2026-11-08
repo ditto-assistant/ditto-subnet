@@ -224,6 +224,7 @@ func TestPracticeDatasetAndCatalogRejectUnsupportedVersions(t *testing.T) {
 	for _, path := range []string{
 		"/v1/dataset?bench_version=7",
 		"/v1/catalog?bench_version=19",
+		"/v1/catalog?bench_version=18", // v18 has no seed-free surface
 		"/v1/dataset?bench_version=not-a-number",
 	} {
 		rr := httptest.NewRecorder()
