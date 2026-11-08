@@ -332,6 +332,12 @@ class EmissionAllocation:
     mode: Literal["ranked", "score_ceiling_pool"]
     members: tuple[KothEntry, ...]
     shares: tuple[float, ...]
+    unfilled_share: float = 0.0
+    """Protocol-36: the curve's fixed fraction no member fills, which burns.
+
+    ``0.0`` unless the unfilled-slot burn is on and the board is short, so
+    ``sum(shares) + unfilled_share`` is the curve total (one) under the burn and
+    ``sum(shares)`` otherwise."""
 
 
 def _dethrone_band_scale(
@@ -437,6 +443,7 @@ def emission_allocation(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     rank_shares: Sequence[float] | None = None,
+    burn_unfilled: bool = False,
 ) -> EmissionAllocation:
     """Return the exact validator payout mode, membership, and shares.
 
@@ -445,6 +452,10 @@ def emission_allocation(
     cannot mathematically clear the incumbent before reaching its frozen score
     ceiling, the highest evidence-tied cohort becomes an uncapped joint crown
     and splits the full miner pool equally.
+
+    ``burn_unfilled`` (protocol 36) reports the curve's unfilled tail as
+    ``unfilled_share`` instead of leaving the occupied shares to be renormalised
+    by the caller. The joint crown pays the whole pool and has none.
     """
     if projection is None:
         return EmissionAllocation(mode="ranked", members=(), shares=())
@@ -462,14 +473,20 @@ def emission_allocation(
                 members=ceiling_cohort,
                 shares=(share,) * len(ceiling_cohort),
             )
+    members = emission_set(projection)
+    curve = KOTH_RANK_SHARES if rank_shares is None else tuple(rank_shares)
     return EmissionAllocation(
         mode="ranked",
-        members=emission_set(projection),
+        members=members,
         shares=emission_shares(
             projection,
             tie_pooling=tie_pooling,
             statistical_band_cap=statistical_band_cap,
             rank_shares=rank_shares,
+        ),
+        # Summed from the curve like the validator, so a full board is exactly 0.
+        unfilled_share=(
+            math.fsum(curve[len(members) :]) if burn_unfilled and members else 0.0
         ),
     )
 

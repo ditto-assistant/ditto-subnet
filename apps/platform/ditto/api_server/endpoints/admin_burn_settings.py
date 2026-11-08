@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.burn_settings import (
     RANK_SHARES_PROTOCOL,
+    UNFILLED_BURN_PROTOCOL,
     AdminBurnSettingsRequest,
     AdminBurnSettingsResponse,
     BurnSettings,
@@ -108,6 +109,21 @@ async def _rank_shares_served(
         return None
 
 
+async def _unfilled_burn_served(
+    session: AsyncSession, settings: BurnSettings
+) -> bool | None:
+    """Advisory: whether the unfilled-slot burn passes the protocol-36 fleet gate."""
+    if not settings.burn_unfilled_rank_shares:
+        return False
+    try:
+        return await live_weight_setter_fleet_supports_protocol(
+            session, minimum_protocol=UNFILLED_BURN_PROTOCOL, now=datetime.now(UTC)
+        )
+    except SQLAlchemyError:
+        logger.warning("could not read unfilled-burn fleet readiness", exc_info=True)
+        return None
+
+
 def _effective(
     latest: RevisionRow | None,
     settings: BurnSettings,
@@ -115,6 +131,7 @@ def _effective(
     ttl_seconds: float,
     live_validators: int | None,
     rank_shares_served: bool | None = None,
+    unfilled_burn_served: bool | None = None,
 ) -> EffectiveBurnSettings:
     return EffectiveBurnSettings(
         revision=latest.revision if latest is not None else 0,
@@ -126,6 +143,7 @@ def _effective(
         miner_emission_share=1.0 - settings.burn_share,
         live_validator_count=live_validators,
         rank_shares_served=rank_shares_served,
+        unfilled_burn_served=unfilled_burn_served,
     )
 
 
@@ -147,6 +165,7 @@ async def get_settings(
             ttl_seconds=resolver.ttl_seconds,
             live_validators=await _live_validators(session),
             rank_shares_served=await _rank_shares_served(session, settings),
+            unfilled_burn_served=await _unfilled_burn_served(session, settings),
         ),
     )
 
@@ -219,6 +238,26 @@ async def create_settings_revision(
                 ),
             )
         settings = settings.model_copy(update={"rank_shares": carried})
+    if "burn_unfilled_rank_shares" not in settings.model_fields_set:
+        # Same rule as the curve: a write that does not mention the burn keeps
+        # the current value rather than silently switching it off.
+        try:
+            carried_burn = (
+                BurnSettings.model_validate(latest.settings).burn_unfilled_rank_shares
+                if latest is not None
+                else False
+            )
+        except ValidationError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "current burn settings revision is unreadable; send "
+                    "burn_unfilled_rank_shares explicitly"
+                ),
+            ) from error
+        settings = settings.model_copy(
+            update={"burn_unfilled_rank_shares": carried_burn}
+        )
     try:
         row = await insert_burn_settings_revision(
             session,
@@ -239,8 +278,10 @@ async def create_settings_revision(
     await session.refresh(row)
     _resolver(request).invalidate()
     logger.warning(
-        "burn share set to %.4f by %s (revision %d): %s",
+        "burn share set to %.4f (burn unfilled rank shares: %s) by %s "
+        "(revision %d): %s",
         settings.burn_share,
+        settings.burn_unfilled_rank_shares,
         row.actor,
         row.revision,
         row.reason,

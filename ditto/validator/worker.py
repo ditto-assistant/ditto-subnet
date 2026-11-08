@@ -323,6 +323,17 @@ def _ledger_rank_shares(
     return shares
 
 
+def _ledger_unfilled_burn(ledger: LedgerResponse) -> bool:
+    """Whether the served ledger burns the rank slots no agent fills (protocol 36).
+
+    Platform withholds ``unfilled_share_mode`` until every recently-live weight
+    setter reports v36, so the whole fleet switches in the same epoch. Anything
+    other than the exact marker ``"burn"`` keeps the renormalising fold, so a
+    malformed value is ignored identically by every validator.
+    """
+    return getattr(ledger, "unfilled_share_mode", None) == "burn"
+
+
 def _ledger_crown_incumbent(ledger: LedgerResponse) -> UUID | None:
     """The served incumbent the fold defends, or ``None`` for the classic walk.
 
@@ -2815,6 +2826,7 @@ class ValidatorWorker:
                 statistical_band_cap=_ledger_statistical_band_cap(ledger),
                 incumbent_agent_id=_ledger_crown_incumbent(ledger),
                 crown_gate=_ledger_crown_gate(ledger),
+                burn_unfilled=_ledger_unfilled_burn(ledger),
                 unpaid_agent_id=(
                     provisional.agent_id if provisional is not None else None
                 ),

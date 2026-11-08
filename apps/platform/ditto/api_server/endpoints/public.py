@@ -163,7 +163,10 @@ from ditto.api_models import bench_glossary as bench_glossary_data
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
-from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL
+from ditto.api_models.burn_settings import (
+    RANK_SHARES_PROTOCOL,
+    UNFILLED_BURN_PROTOCOL,
+)
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.continual_retest_settings import (
@@ -313,6 +316,7 @@ from ditto.api_server.ledger_pin import (
     pin_provisional_incumbent,
     served_crown_gate,
     served_rank_shares,
+    served_unfilled_burn,
 )
 from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.model_use import model_use_factor, model_use_policy
@@ -2985,6 +2989,7 @@ def _public_koth_emissions(
     incumbent_agent_id: UUID | None = None,
     provisional_incumbent: LedgerRow | None = None,
     rank_shares: Sequence[float] | None = None,
+    unfilled_burn_active: bool = False,
     crown_gate: CrownGate | None = None,
     crown_rules: CrownGate | None = None,
     duel_history: Mapping[UUID, Sequence[Any]] | None = None,
@@ -3121,9 +3126,12 @@ def _public_koth_emissions(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
         rank_shares=rank_shares,
+        burn_unfilled=unfilled_burn_active,
     )
     curve = tuple(rank_shares) if rank_shares is not None else KOTH_RANK_SHARES
-    share_total = sum(allocation.shares)
+    # Under the protocol-36 burn the unfilled tail stays in the denominator, so
+    # recipients show their fixed fraction of the pool and the rest burns.
+    share_total = sum(allocation.shares) + allocation.unfilled_share
     normalized_shares = tuple(share / share_total for share in allocation.shares)
     recipients = [
         PublicEmissionRecipient(
@@ -3190,6 +3198,8 @@ def _public_koth_emissions(
         band_decay_rate=KOTH_BAND_DECAY_RATE,
         champion_share=curve[0],
         rank_shares=curve,
+        unfilled_burn_active=unfilled_burn_active,
+        unfilled_share_burned=allocation.unfilled_share / share_total,
         tie_weighting_active=tie_weighting_active,
         tie_weighting_required_protocol=_TIE_WEIGHTING_PROTOCOL,
         ceiling_headroom_share=KOTH_CEILING_HEADROOM_SHARE,
@@ -3774,6 +3784,20 @@ async def build_public_leaderboard(
             freshness=_VALIDATOR_STALE_WINDOW,
         )
         else None
+    )
+    # The protocol-36 unfilled-slot burn, projected exactly when the ledger
+    # serves it: switched on in burn settings and withheld until the weight
+    # setters report v36.
+    board_unfilled_burn = (
+        burn_resolver is not None
+        and bench_version is None
+        and (await burn_resolver.resolve(session_maker)).burn_unfilled_rank_shares
+        and await live_weight_setter_fleet_supports_protocol(
+            session,
+            minimum_protocol=UNFILLED_BURN_PROTOCOL,
+            now=now,
+            freshness=_VALIDATOR_STALE_WINDOW,
+        )
     )
     crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
@@ -4584,6 +4608,7 @@ async def build_public_leaderboard(
                 incumbent_agent_id=emission_incumbent_id,
                 provisional_incumbent=provisional_incumbent,
                 rank_shares=board_rank_shares,
+                unfilled_burn_active=bool(board_unfilled_burn),
                 crown_gate=crown_gate_active_rules,
                 crown_rules=crown_rules,
                 duel_history=(
@@ -4764,6 +4789,7 @@ async def ledger_epochs(
                 == "headroom_capped",
                 statistical_band_cap=served.get("statistical_band_mode") == "capped",
                 rank_shares=served_rank_shares(served),
+                burn_unfilled=served_unfilled_burn(served),
             )
             if projection is not None
             else None
@@ -4798,7 +4824,7 @@ async def ledger_epochs(
         previous = rows[index + 1] if index + 1 < len(rows) else None
         recipients: list[PublicLedgerEpochRecipient] = []
         if allocation is not None:
-            total = sum(allocation.shares) or 1.0
+            total = (sum(allocation.shares) + allocation.unfilled_share) or 1.0
             for position, member in enumerate(allocation.members):
                 base = actor(member.agent_id)
                 if base is None:
