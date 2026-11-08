@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Bench v18 tool encounters (docs/bench-versions.md, "Tool encounters").
@@ -94,13 +96,21 @@ func (c EncounterCall) Matches(name string, args json.RawMessage) bool {
 }
 
 var (
-	encounterThousands = regexp.MustCompile(`(\d)[,\x{00a0}\x{202f}](\d{3})\b`)
-	encounterDashes    = strings.NewReplacer("‐", "-", "‑", "-", "‒", "-", "–", "-", "—", "-", "−", "-")
+	// Thousands separators: comma, no-break space, narrow no-break space and
+	// thin space. An ordinary space is deliberately not one: "12 450" in a
+	// sentence is as often two numbers as one.
+	encounterThousands = regexp.MustCompile(`(\d)[,\x{00a0}\x{202f}\x{2009}](\d{3})\b`)
+	encounterDashes    = strings.NewReplacer("\u2010", "-", "\u2011", "-", "\u2012", "-", "\u2013", "-", "\u2014", "-",
+		"\u2015", "-", "\u2212", "-", "\u00ad", "")
+	// Currency signs become spaces, never nothing: "US$18,420" must keep 18420
+	// a bounded token rather than become "us18420".
+	encounterSigns = strings.NewReplacer("$", " ", "\u20ac", " ", "\u00a3", " ", "*", " ", "`", " ")
 )
 
 // NormalizeEncounterText folds the surface differences a value may pick up
-// on its way through a model: case, typographic dashes, thousands separators
-// and currency signs. "$18,420" and "18420" normalize alike.
+// on its way through a model: case, typographic dashes and soft hyphens,
+// thousands separators and currency signs. "$18,420" and "18420" normalize
+// alike.
 func NormalizeEncounterText(s string) string {
 	s = strings.ToLower(encounterDashes.Replace(s))
 	for {
@@ -110,17 +120,23 @@ func NormalizeEncounterText(s string) string {
 		}
 		s = next
 	}
-	return strings.NewReplacer("$", "", "€", "", "£", "", "*", "", "`", "").Replace(s)
+	return strings.TrimSpace(encounterSigns.Replace(s))
 }
 
 // EncounterContains reports whether normalized text carries value as a
 // bounded token: the characters on either side are not letters or digits,
-// so "run-1234" does not match inside "run-12345".
+// so "run-1234" does not match inside "run-12345". A URL value must match a
+// whole URL: "https://x.com/pricing" does not match inside
+// "https://x.com/pricing/notice-7" (an optional trailing slash is allowed).
 func EncounterContains(text, value string) bool {
 	hay := NormalizeEncounterText(text)
 	want := NormalizeEncounterText(strings.TrimSpace(value))
 	if want == "" {
 		return false
+	}
+	isURL := strings.Contains(want, "://")
+	if isURL {
+		want = strings.TrimSuffix(want, "/")
 	}
 	for from := 0; ; {
 		at := strings.Index(hay[from:], want)
@@ -128,19 +144,46 @@ func EncounterContains(text, value string) bool {
 			return false
 		}
 		start, end := from+at, from+at+len(want)
-		if !encounterAlnumAt(hay, start-1) && !encounterAlnumAt(hay, end) {
+		if isURL && end < len(hay) && hay[end] == '/' {
+			end++
+		}
+		bounded := !encounterAlnumBefore(hay, start) && !encounterAlnumAfter(hay, end)
+		if bounded && (!isURL || !encounterURLContinues(hay, end)) {
 			return true
 		}
 		from = start + 1
 	}
 }
 
-func encounterAlnumAt(s string, i int) bool {
-	if i < 0 || i >= len(s) {
+// encounterAlnumBefore / encounterAlnumAfter report whether the rune next to
+// a match is a letter or digit (Unicode-aware: a curly quote is a boundary).
+func encounterAlnumBefore(s string, i int) bool {
+	if i <= 0 {
 		return false
 	}
-	c := s[i]
-	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c >= 0x80
+	r, _ := utf8.DecodeLastRuneInString(s[:i])
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+func encounterAlnumAfter(s string, i int) bool {
+	if i >= len(s) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(s[i:])
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// encounterURLContinues reports whether a URL match is followed by more URL
+// path or query (so it is a prefix of a longer URL, not the URL itself).
+func encounterURLContinues(s string, i int) bool {
+	if i >= len(s) {
+		return false
+	}
+	switch s[i] {
+	case '/', '-', '_', '.', '~', '%', '?', '#', '&', '=', '+':
+		return i+1 < len(s) && encounterAlnumAfter(s, i+1)
+	}
+	return false
 }
 
 // EncounterArgText flattens a call's JSON arguments into the text of their
@@ -167,7 +210,11 @@ func EncounterArgText(raw json.RawMessage) string {
 		case bool:
 			if x {
 				parts = append(parts, "true")
+			} else {
+				parts = append(parts, "false")
 			}
+		case nil:
+			parts = append(parts, "null")
 		case []any:
 			for _, item := range x {
 				walk(item)
@@ -204,24 +251,33 @@ func EncounterArgsMatch(raw json.RawMessage, values []string) bool {
 // Respond answers one call against the mock world. prior is how many times
 // this tool was already called in the case. matched=false means no rule
 // applied and the caller serves Fallback.
+//
+// The first rule that matches decides, in Rules order. When it is a Page
+// rule, every matching Page rule of the tool contributes (a read of two links
+// returns both pages); a matching Page rule with an Error fails the call with
+// the first such error.
 func (e *Encounter) Respond(name string, args json.RawMessage, prior int) (result, errText string, matched bool) {
-	var pages []string
-	for _, rule := range e.Rules {
-		if rule.Page && rule.Tool == name && prior >= rule.MinPrior && EncounterArgsMatch(args, rule.Contains) {
-			pages = append(pages, rule.Result)
-		}
+	matches := func(rule EncounterRule) bool {
+		return rule.Tool == name && prior >= rule.MinPrior && EncounterArgsMatch(args, rule.Contains)
 	}
-	if len(pages) > 0 {
+	for _, rule := range e.Rules {
+		if !matches(rule) {
+			continue
+		}
+		if !rule.Page {
+			return rule.Result, rule.Error, true
+		}
+		var pages []string
+		for _, page := range e.Rules {
+			if !page.Page || !matches(page) {
+				continue
+			}
+			if page.Error != "" {
+				return "", page.Error, true
+			}
+			pages = append(pages, page.Result)
+		}
 		return strings.Join(pages, "\n\n---\n\n"), "", true
-	}
-	for _, rule := range e.Rules {
-		if rule.Page {
-			continue
-		}
-		if rule.Tool != name || prior < rule.MinPrior || !EncounterArgsMatch(args, rule.Contains) {
-			continue
-		}
-		return rule.Result, rule.Error, true
 	}
 	return "", "", false
 }

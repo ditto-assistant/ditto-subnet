@@ -12,7 +12,7 @@ import (
 // profile, public surface salt 0), built from the embedded production catalog
 // snapshot pinned by catalog.V18CatalogSnapshotSHA256. docs/bench-versions.md
 // and the README publish the same string.
-const v18KnownVectorWant = "892f5ede283c6f41593dbc7b4b8794fa66de17a5c8118a731cdce5f0aa3412a8"
+const v18KnownVectorWant = "f216f9473780a7af5105567180e23c3e2d2418c574bfed4c700296f69cd2459d"
 
 // V18 is supported (promoted from staging by the cross-layer PR, with the epoch
 // and seed domain it was staged with, so this vector did not move). Every lever is gated on bench_version >= 18; the v2..v17 vectors

@@ -321,12 +321,20 @@ func (w *v18EncounterWorld) errataChain(plan catalog.V16ConnectorPlan) protocol.
 	second := first - w.between(1, 4)
 	otherListed := w.between(8, 90)
 	otherFixed := otherListed - w.between(2, 6)
+	// The other plan's corrected total is a hedge, so it must never equal the
+	// right answer.
+	for otherFixed == listed {
+		otherListed = w.between(8, 90)
+		otherFixed = otherListed - w.between(2, 6)
+	}
 	forum := listed + w.between(2, 7)
 	seats := w.between(12, 95)
 	annual := func(price int) string { return commaInt(price * seats * 12) }
 	pricing := fmt.Sprintf("https://%s.com/pricing", host)
-	notice := fmt.Sprintf("https://%s.com/pricing/notice-%d", host, w.between(100, 499))
-	later := fmt.Sprintf("https://%s.com/pricing/notice-%d", host, w.between(500, 999))
+	// Notices live on a path disjoint from the pricing page, so no URL is a
+	// prefix of another.
+	notice := fmt.Sprintf("https://%s.com/notices/notice-%d", host, w.between(100, 499))
+	later := fmt.Sprintf("https://%s.com/notices/notice-%d", host, w.between(500, 999))
 	thread := fmt.Sprintf("https://forum.%s.net/t/%s-pricing-%d", strings.ToLower(w.stem("forum")), host, w.between(1000, 9999))
 	date1, date2 := w.dates()
 	perSeat := func(price int) string {
@@ -537,15 +545,13 @@ func (w *v18EncounterWorld) jobFollowthrough(plan catalog.V16ConnectorPlan, ordi
 	app := linkedApp(plan, ordinal)
 	name := w.stem("workflow") + " " + w.pick(v18EncounterWorkflowNouns)
 	metric := w.pick(v18EncounterMetrics)
-	active := fmt.Sprintf("wf-%04d", w.between(1000, 4999))
-	archived := fmt.Sprintf("wf-%04d", w.between(5000, 9999))
-	other := fmt.Sprintf("wf-%04d", w.between(1000, 9999))
-	if other == active || other == archived {
-		other = fmt.Sprintf("wf-%04d", w.between(1000, 9999))
-	}
-	job := fmt.Sprintf("job-%05d", w.between(10000, 54999))
-	retry := fmt.Sprintf("job-%05d", w.between(55000, 99999))
-	stale := fmt.Sprintf("job-%05d", w.between(10000, 99999))
+	// Disjoint ranges: no two IDs of one encounter can coincide.
+	active := fmt.Sprintf("wf-%04d", w.between(1000, 3999))
+	other := fmt.Sprintf("wf-%04d", w.between(4000, 6999))
+	archived := fmt.Sprintf("wf-%04d", w.between(7000, 9999))
+	job := fmt.Sprintf("job-%05d", w.between(10000, 39999))
+	retry := fmt.Sprintf("job-%05d", w.between(40000, 69999))
+	stale := fmt.Sprintf("job-%05d", w.between(70000, 99999))
 	value := w.between(120, 9800)
 	previous := value + w.between(15, 400)
 	lastWeek := fmt.Sprintf("%s (%s, last week): completed, %s %s", stale, name, commaInt(previous), metric)
@@ -673,6 +679,9 @@ func (w *v18EncounterWorld) memoryHandoff(plan catalog.V16ConnectorPlan, ordinal
 		w.say("and email their billing contact the amount due and the invoice number.",
 			"and email it to their billing contact along with the invoice number.",
 			"then send their billing contact an email with that amount and the invoice number."),
+		w.say("Then tell me the amount and who you sent it to.",
+			"Let me know the amount and who it went to.",
+			"Afterwards, tell me how much was due and which contact you emailed."),
 	)
 	return protocol.ToolCase{
 		Prompt:            prompt,
@@ -763,6 +772,8 @@ func (w *v18EncounterWorld) statusTriage(plan catalog.V16ConnectorPlan, ordinal 
 		},
 		Answer: []protocol.EncounterAnswer{{Value: incident, Hedges: []string{resolved}}},
 	}
+	// Filing anywhere but the named tracker has no business in the request.
+	enc.Forbidden = append(enc.Forbidden, otherLinkedWrites(plan, "nothing was to be filed in another linked app", app.WriteTool)...)
 	switch variant {
 	case v18TriageTracked:
 		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Why: "the incident is already tracked"})

@@ -240,7 +240,7 @@ func serveOnce(t *testing.T, srv *toolexec.Server, caseID string, call protocol.
 // vector (gen.TestV18KnownVector) hashes only what reaches the artifact, and
 // an encounter's mock world and grading sets are grader-only, so they get
 // their own pin. Changing either is a new bench version.
-const v18EncounterVector = "530f57350ccd8c192bfe16c70aec1071518e1c9a15a21fef361d9658b5864f8d"
+const v18EncounterVector = "b0e7efca174af341ff09f794d64f906192b5b74d036dc930d5c66f67b30872f0"
 
 func TestV18EncounterVector(t *testing.T) {
 	type pinned struct {
@@ -261,5 +261,17 @@ func TestV18EncounterVector(t *testing.T) {
 	sum := sha256.Sum256(raw)
 	if got := hex.EncodeToString(sum[:]); got != v18EncounterVector {
 		t.Fatalf("v18 encounter vector: got %s, want %s (%d encounters)", got, v18EncounterVector, len(all))
+	}
+}
+
+// One observed call that matches several forbidden entries is charged once.
+func TestV18EncounterForbiddenCallChargedOnce(t *testing.T) {
+	e := &protocol.Encounter{
+		Forbidden: []protocol.EncounterCall{{Tool: "gmail_send"}, {Tool: "gmail_send", Contains: []string{"old@x.com"}}},
+		Answer:    []protocol.EncounterAnswer{{Value: "42"}},
+	}
+	one := []protocol.ObservedToolCall{{Name: "gmail_send", Args: json.RawMessage(`{"to":"old@x.com"}`)}}
+	if v := grade.Encounter(e, one, encounterReply("42")); v.ForbiddenHits != 1 || v.Score != 0.5 {
+		t.Fatalf("one call charged %d times (score %.3f)", v.ForbiddenHits, v.Score)
 	}
 }
