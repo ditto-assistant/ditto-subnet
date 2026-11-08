@@ -101,15 +101,12 @@ func V13FamilyOfVersion(seed int64, caseIndex, benchVersion int) V13Family {
 	if benchVersion < protocol.BenchVersionV14 {
 		return V13FamilyOf(caseIndex)
 	}
-	return V14FamilyFor(seed, caseIndex/4)
+	return v13FamilyForVersion(seed, caseIndex/4, benchVersion)
 }
 
 // family returns the family of a group under the draw's contract.
 func (d *v13Draws) family(group int) V13Family {
-	if d.benchVersion < protocol.BenchVersionV14 {
-		return V13Families[group%len(V13Families)]
-	}
-	return V14FamilyFor(d.seed, group)
+	return v13FamilyForVersion(d.seed, group, d.benchVersion)
 }
 
 // v14GroupExtra carries the draws only the v14 role families use. v13 groups
