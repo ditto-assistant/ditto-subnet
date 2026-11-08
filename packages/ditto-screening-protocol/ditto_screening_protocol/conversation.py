@@ -283,7 +283,10 @@ class ConversationReport(WireModel):
             e.assistant_truncated or e.failure for e in self.exchanges
         ):
             raise ValueError("v1 never truncates an answer or records a failure")
-        if any(e.failure in RUN_FAILURES and e.assistant for e in self.exchanges):
+        if any(
+            e.failure in RUN_FAILURES and (e.assistant or e.assistant_truncated)
+            for e in self.exchanges
+        ):
             raise ValueError("a failed run has no reply")
         if [e.turn_id for e in self.exchanges] != list(
             range(1, len(self.exchanges) + 1)

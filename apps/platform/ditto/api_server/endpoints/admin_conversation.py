@@ -50,8 +50,13 @@ AdminDep = Annotated[None, Depends(require_admin)]
 DAILY_BUDGET_MICROUSD = 180_000_000
 RUN_RESERVATION_MICROUSD = 30_000_000
 LEASE_MINUTES = 125
-"""30 exchanges at the bench's 5-minute /run envelope plus a 15-minute judge
-window. v1's 65 minutes fit only its 120-second operation deadline."""
+"""The worker derives its own deadlines from this lease: the conversation gets
+the lease minus a 15-minute judge window and 3 minutes for settlement and
+delivery, and ends as ``deadline_exceeded`` (still delivered before expiry)
+when slow turns use it up. 125 minutes allows ~3.5 minutes per exchange on
+average, each capped at the bench's 5-minute /run envelope. A lease that covered
+the worst case (30 x 5 min + judge = 165) would hold the single global slot for
+harnesses that are failing anyway. v1's 65 minutes fit only its 120 s deadline."""
 ADMISSION_IDLE_COOLDOWN_SECONDS = 30.0
 """How long a process waits after a no-work admission before rebuilding.
 

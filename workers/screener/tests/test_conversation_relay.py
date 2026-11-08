@@ -479,3 +479,25 @@ def test_real_socket_deadline_survives_stdio_without_paid_requests(monkeypatch, 
     assert json.loads(output.out) == {"error": "timeout"}
     assert output.err == "" and "private" not in output.out
     assert calls == ["/run"]
+
+
+def test_retries_stop_inside_one_harness_operation(tmp_path, monkeypatch):
+    """A slow 429 near the operation deadline is not retried past it."""
+    calls = []
+    clock = [1_000.0]
+
+    class Opener:
+        def open(self, _request, *, timeout):
+            calls.append(timeout)
+            clock[0] += 260  # The provider took most of the operation.
+            raise HTTPError("https://x", 429, "busy", {"Retry-After": "20"}, None)
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("time.sleep", lambda _s: pytest.fail("must not back off"))
+    relay = Relay("secret", tmp_path / "usage.json")
+    with pytest.raises(HTTPError):
+        relay.post("/v1/chat/completions", chat())
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert calls == [240] and usage.provider_retries == 0
+    assert usage.failure.http_status == 429

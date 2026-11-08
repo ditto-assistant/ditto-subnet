@@ -427,3 +427,10 @@ def test_claim_without_instrument_reads_as_v1():
     assert ConversationClaim.model_validate(claim).instrument == INSTRUMENT_V1
     claim["instrument"] = INSTRUMENT_V2
     assert ConversationClaim.model_validate(claim).instrument == INSTRUMENT_V2
+
+
+async def test_failed_run_cannot_claim_a_truncated_reply():
+    report = (await Rig(run_timeouts=(13,)).run()).model_dump(mode="json")
+    report["exchanges"][12]["assistant_truncated"] = True
+    with pytest.raises(ValidationError, match="failed run has no reply"):
+        ConversationReport.model_validate(report)

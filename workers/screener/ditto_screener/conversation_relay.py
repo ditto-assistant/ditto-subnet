@@ -397,8 +397,15 @@ class Relay:
         return result
 
     def _dispatch(self, route: str, encoded: bytes) -> dict[str, Any]:
-        """One billed completion; retries only unbilled HTTP error responses."""
+        """One billed completion; retries only unbilled HTTP error responses.
+
+        Every attempt and backoff fits inside one harness operation, so the
+        relay never keeps dispatching for a caller that has already timed out."""
+        deadline = time.monotonic() + MAX_HARNESS_SECONDS - 30
         for attempt in range(PROVIDER_ATTEMPTS):
+            remaining = deadline - time.monotonic()
+            if remaining <= 1:
+                raise RelayError("provider_deadline_exceeded")
             request = urllib.request.Request(
                 "https://openrouter.ai/api/v1/" + route,
                 data=encoded,
@@ -412,7 +419,8 @@ class Relay:
                 urllib.request.ProxyHandler({}), NoRedirect()
             )
             try:
-                with opener.open(request, timeout=PROVIDER_TIMEOUT_SECONDS) as response:
+                timeout = min(PROVIDER_TIMEOUT_SECONDS, remaining)
+                with opener.open(request, timeout=timeout) as response:
                     data = response.read(MAX_RESPONSE + 1)
             except HTTPError as exc:
                 if (
@@ -421,12 +429,15 @@ class Relay:
                 ):
                     raise
                 delay = 2.0 ** (attempt + 1)
-                with contextlib.suppress(TypeError, ValueError):
+                with contextlib.suppress(TypeError, ValueError, AttributeError):
                     delay = float(exc.headers.get("Retry-After", delay))
+                delay = min(max(delay, 0.5), 20.0)
+                if time.monotonic() + delay + 1 >= deadline:
+                    raise  # No time left for another attempt: keep this status.
                 with self.lock:
                     self.provider_retries += 1
                     self.save()
-                time.sleep(min(max(delay, 0.5), 20.0))
+                time.sleep(delay)
                 continue
             if len(data) > MAX_RESPONSE:
                 raise RelayError("oversized_provider_response")
