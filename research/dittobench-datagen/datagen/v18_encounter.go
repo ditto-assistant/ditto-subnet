@@ -603,7 +603,8 @@ func (w *v18EncounterWorld) jobFollowthrough(plan catalog.V16ConnectorPlan, ordi
 			Rules: []protocol.EncounterRule{
 				{Tool: "list_workflows", Result: "Saved workflows: " + strings.Join(workflows, "; ") + "."},
 				{Tool: "run_workflow", Contains: []string{archived}, Error: fmt.Sprintf("Workflow %s is archived and cannot run.", archived)},
-				{Tool: "run_workflow", Contains: []string{other}, Result: fmt.Sprintf("Started workflow %s as job job-%05d.", other, w.between(10000, 99999))},
+				// The decoy's job comes from below every real job range.
+				{Tool: "run_workflow", Contains: []string{other}, Result: fmt.Sprintf("Started workflow %s as job job-%05d.", other, w.between(0, 9999))},
 				{Tool: "run_workflow", Result: fmt.Sprintf("Started %s as job %s. %s", name, job,
 					w.say("It takes a minute or two; list_agent_jobs shows when it has finished.", "Check list_agent_jobs for progress.", ""))},
 				{Tool: "list_agent_jobs", MinPrior: 1, Result: done},
@@ -780,9 +781,10 @@ func (w *v18EncounterWorld) statusTriage(plan catalog.V16ConnectorPlan, ordinal 
 		enc.Answer = append(enc.Answer, protocol.EncounterAnswer{Value: ref})
 	default:
 		enc.Required = append(enc.Required, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{incident}, Why: "file the untracked incident"})
-		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{resolved}, Why: "the resolved incident"})
+		// Filing the wrong incident, not quoting it beside the right one.
+		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{resolved}, Excludes: []string{incident}, Why: "the resolved incident"})
 		if variant == v18TriageRegion {
-			enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{otherIncident}, Why: "the other region's incident is already tracked"})
+			enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{otherIncident}, Excludes: []string{incident}, Why: "the other region's incident is already tracked"})
 		}
 	}
 	prompt := sentence(

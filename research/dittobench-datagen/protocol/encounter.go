@@ -75,6 +75,10 @@ type EncounterRule struct {
 type EncounterCall struct {
 	Tool     string
 	Contains []string
+	// Excludes are values whose presence means the call is not this one: a
+	// filing that names the right incident and only quotes a resolved one as
+	// context is not "filing the resolved incident".
+	Excludes []string
 	// Why is the documented reason (reported in the grader notes).
 	Why string
 }
@@ -92,7 +96,18 @@ type EncounterAnswer struct {
 
 // Matches reports whether a call satisfies the EncounterCall.
 func (c EncounterCall) Matches(name string, args json.RawMessage) bool {
-	return name == c.Tool && EncounterArgsMatch(args, c.Contains)
+	if name != c.Tool || !EncounterArgsMatch(args, c.Contains) {
+		return false
+	}
+	if len(c.Excludes) > 0 {
+		text := EncounterArgText(args)
+		for _, value := range c.Excludes {
+			if EncounterContains(text, value) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 var (
