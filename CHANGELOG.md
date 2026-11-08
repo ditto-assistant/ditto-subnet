@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.462.2 (2026-11-08)
+
+### Bug Fixes
+
+- **screener**: Return invalid reviewer tool arguments to the model (SN-430)
+  ([#3400](https://github.com/ditto-assistant/ditto-subnet/pull/3400),
+  [`9539cfd`](https://github.com/ditto-assistant/ditto-subnet/commit/9539cfdb47d2b1606bb65af69a59627523b05aa4))
+
+
 ## v0.462.1 (2026-11-08)
 
 ### Bug Fixes
