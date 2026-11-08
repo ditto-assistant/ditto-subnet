@@ -76,6 +76,9 @@ RUN chown 65532:65532 /app
 # Admission runs the image with a read-only root and a writable /tmp tmpfs.
 # Override this path with a mounted volume when persistence is required.
 ENV DITTOBENCH_DB=/tmp/dittobench.db
+# Canary agent variant: serve the opt-in Jev hybrid path (src/hybrid.rs).
+# The decision lane URL is injected by the validator sandbox on bench 15+.
+ENV DITTOBENCH_JEV_HYBRID=1
 EXPOSE 8080
 USER dittobench:dittobench
 
