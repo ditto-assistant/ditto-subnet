@@ -127,6 +127,8 @@ class JudgeMeter:
         self.unmetered = False
         self.cost_is_upper_bound = False
         self.basis: Literal["billed", "tariff", "reservation"] | None = None
+        self.unsettled = 0
+        """Dispatched requests whose hold was neither released nor reconciled."""
         self._resolved_model: str | None = None
 
     def reserve(self, body: dict[str, Any]) -> tuple[int, int]:
@@ -145,6 +147,7 @@ class JudgeMeter:
             raise AssessmentFailure("judge_cost_limit")
         self.spent += reserve  # A timeout or missing usage keeps the full charge.
         self.requests += 1
+        self.unsettled += 1
         return reserve, input_bound
 
     def preflight(self) -> None:
@@ -160,6 +163,13 @@ class JudgeMeter:
     def release(self, reservation: tuple[int, int]) -> None:
         """An HTTP error response is not billed; return its hold."""
         self.spent -= reservation[0]
+        self.unsettled -= 1
+
+    def settle_report(self) -> None:
+        """Label every retained hold (timeout, malformed or missing usage, any
+        failure after dispatch) as a reservation upper bound, not a bill."""
+        if self.unsettled:
+            self.keep_reservation()
 
     def keep_reservation(self) -> None:
         """A timeout may have been billed; its hold stays as an upper bound."""
@@ -221,6 +231,7 @@ class JudgeMeter:
         if self._resolved_model is not None and self._resolved_model != model:
             raise AssessmentFailure("judge_model_changed")
         self.spent += actual - reservation[0]
+        self.unsettled -= 1
         self.input_tokens += prompt
         self.output_tokens += counts["output_tokens"]
         self._resolved_model = model
@@ -572,6 +583,7 @@ async def evaluate(
         except (anthropic.AnthropicError, ValueError, KeyError, TypeError):
             reason = "judge_unavailable"
     meter = examiner.meter
+    meter.settle_report()
     fields = {
         "instrument": INSTRUMENT_V2,
         "model": JUDGE_MODEL_V2,

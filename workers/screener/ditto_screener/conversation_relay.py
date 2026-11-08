@@ -40,6 +40,7 @@ MAX_CONCURRENT_DISPATCHES = 4
 lock made every turn wait for the sum of them. The budget is still reserved
 under the lock before any dispatch, so concurrency cannot overspend."""
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+UNDISPATCHED = frozenset({"relay_busy", "provider_deadline_exceeded"})
 PROVIDER_ATTEMPTS = 3
 """An HTTP error response is not billed by the router, so a bounded retry of a
 rate limit or upstream outage costs nothing and keeps the assessment alive.
@@ -287,6 +288,7 @@ class Relay:
         return "chat/completions", payload, False
 
     def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        deadline = time.monotonic() + MAX_HARNESS_SECONDS - 30
         try:
             route, payload, embed = self.payload(path, body)
         except Exception as exc:
@@ -320,8 +322,14 @@ class Relay:
             self.unmetered = True
             self.save()  # Persist before a possibly billed dispatch.
         try:
-            with self.slots:
-                result = self._dispatch(route, encoded)
+            # One deadline from the caller's arrival: waiting for a dispatch
+            # slot spends the same harness operation as the provider call.
+            if not self.slots.acquire(timeout=max(0.0, deadline - time.monotonic())):
+                raise RelayError("relay_busy")
+            try:
+                result = self._dispatch(route, encoded, deadline)
+            finally:
+                self.slots.release()
             usage = result["usage"]
             prompt = usage.get(
                 "prompt_tokens",
@@ -380,8 +388,13 @@ class Relay:
         except Exception as exc:
             with self.lock:
                 self.in_flight -= 1
-                self.uncertain = True  # The reservation stays charged.
-                self.unmetered = True
+                if isinstance(exc, RelayError) and str(exc) in UNDISPATCHED:
+                    # Nothing billable was answered: no slot, or only error
+                    # responses before the deadline. Return the hold.
+                    self.spent -= reservation
+                else:
+                    self.uncertain = True  # The reservation stays charged.
+                self.unmetered = self.uncertain or self.in_flight > 0
                 self.fail(exc, "provider")  # Never issue a paid fallback.
                 self.save()
             raise
@@ -396,12 +409,11 @@ class Relay:
             self.save()
         return result
 
-    def _dispatch(self, route: str, encoded: bytes) -> dict[str, Any]:
+    def _dispatch(self, route: str, encoded: bytes, deadline: float) -> dict[str, Any]:
         """One billed completion; retries only unbilled HTTP error responses.
 
         Every attempt and backoff fits inside one harness operation, so the
         relay never keeps dispatching for a caller that has already timed out."""
-        deadline = time.monotonic() + MAX_HARNESS_SECONDS - 30
         for attempt in range(PROVIDER_ATTEMPTS):
             remaining = deadline - time.monotonic()
             if remaining <= 1:
@@ -431,6 +443,8 @@ class Relay:
                 delay = 2.0 ** (attempt + 1)
                 with contextlib.suppress(TypeError, ValueError, AttributeError):
                     delay = float(exc.headers.get("Retry-After", delay))
+                if not math.isfinite(delay):
+                    delay = 2.0 ** (attempt + 1)
                 delay = min(max(delay, 0.5), 20.0)
                 if time.monotonic() + delay + 1 >= deadline:
                     raise  # No time left for another attempt: keep this status.

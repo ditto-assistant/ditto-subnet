@@ -434,3 +434,48 @@ async def test_failed_run_cannot_claim_a_truncated_reply():
     report["exchanges"][12]["assistant_truncated"] = True
     with pytest.raises(ValidationError, match="failed run has no reply"):
         ConversationReport.model_validate(report)
+
+
+class _MalformedUsageRig(Rig):
+    def __init__(self, *, script):
+        super().__init__()
+        self.script = list(script)
+
+    def judge(self, request):
+        step = self.script.pop(0) if self.script else "ok"
+        if step == "ok":
+            return super().judge(request)
+        self.judge_bodies.append(json.loads(request.content))
+        if step == "rate_limited":
+            return httpx2.Response(429, json={"error": {"message": "slow"}})
+        usage = None if step == "no_usage" else {"input_tokens": "many"}
+        return httpx2.Response(
+            200,
+            json={
+                "model": OPENROUTER_MODEL,
+                "stop_reason": "end_turn",
+                "usage": usage,
+                "content": [{"type": "text", "text": "{}"}],
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "script",
+    [("no_usage",), ("bad_usage",), ("rate_limited", "no_usage")],
+)
+async def test_unreconciled_hold_is_labelled_an_upper_bound(script):
+    report = await _MalformedUsageRig(script=script).run()
+    assert report.status == "incomplete"
+    assert report.error_code == "judge_usage_unverifiable"
+    assert report.spent_microusd > 0  # The hold is retained...
+    assert report.judge_cost_is_upper_bound  # ...and never presented as a bill.
+    assert report.judge_cost_basis == "reservation"
+
+
+async def test_released_errors_and_valid_settlement_stay_exact():
+    report = await Rig(judge_script=("rate_limited", "bad_quote", "ok")).run()
+    assert report.status == "completed" and report.judge_requests == 3
+    assert report.spent_microusd == 600_000
+    assert not report.judge_cost_is_upper_bound
+    assert report.judge_cost_basis == "tariff"
