@@ -2120,7 +2120,9 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		optional := make([]bool, len(cats))
 		for i, c := range cats {
 			weights[i] = toolCategoryWeightV13(c.name)
-			if benchVersion >= protocol.BenchVersionV18 {
+			// Like every v18 tool override, only in the 50-79-case full half;
+			// medium and small keep the v13 weights.
+			if benchVersion >= protocol.BenchVersionV18 && n >= V18FullToolHalf && n < 80 {
 				weights[i] = toolCategoryWeightV18(c.name)
 			}
 			optional[i] = v13OptionalFamilies[c.name]

@@ -18,6 +18,7 @@ from ditto.api_models.benchmark_contract import (
     benchmark_contract,
     benchmark_contracts,
 )
+from ditto.api_models.inference_concurrency_settings import InferenceConcurrencySettings
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.benchmark_rollout import (
     admit_stranded_previous_era_agent,
@@ -364,6 +365,7 @@ async def _decision_lane_start_blocker(
     session: AsyncSession,
     desired_version: int,
     inference_config: InferenceProxyConfig | None,
+    settings_cache: dict[str, InferenceConcurrencySettings] | None = None,
 ) -> str | None:
     """A v15+ rollout needs the operator's decision lane on with a pinned model.
 
@@ -375,9 +377,17 @@ async def _decision_lane_start_blocker(
     """
     if desired_version < DECISION_LANE_MIN_BENCH_VERSION or inference_config is None:
         return None
-    settings = settings_from_row(
-        await latest_inference_concurrency_settings_revision(session)
-    )
+    # One status read evaluates every decision-lane contract (v15 and later);
+    # the caller passes one cache so the settings row is read once per read,
+    # not once per shipped contract.
+    if settings_cache is not None and "settings" in settings_cache:
+        settings = settings_cache["settings"]
+    else:
+        settings = settings_from_row(
+            await latest_inference_concurrency_settings_revision(session)
+        )
+        if settings_cache is not None:
+            settings_cache["settings"] = settings
     lane = settings.decision_lane
     if not lane.enabled or lane.model is None:
         return (
@@ -484,6 +494,7 @@ async def get_rollout_control(
     degraded: list[str] = []
     candidates: list[dict[str, object]] = []
     start_readiness: dict[int, tuple[bool, list[str]]] = {}
+    lane_settings_cache: dict[str, InferenceConcurrencySettings] = {}
     try:
         async with asyncio.timeout(_remaining(deadline)):
             for version in targets:
@@ -501,7 +512,7 @@ async def get_rollout_control(
                 )
                 if config_blocker is None:
                     config_blocker = await _decision_lane_start_blocker(
-                        session, version, inference_config
+                        session, version, inference_config, lane_settings_cache
                     )
                 if config_blocker is None:
                     config_blocker = await _dueling_start_blocker(

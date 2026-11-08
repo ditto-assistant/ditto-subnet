@@ -306,18 +306,18 @@ class TestRoundBenchContract:
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A version with no pack grading policy (v18 today) keeps rounds on
+        """A version with no pack grading policy (v19 today) keeps rounds on
         the newest round contract below it, and the round says why."""
-        assert GENERATOR_ROUND_BENCH_VERSIONS == (13, 14, 15, 16, 17)
+        assert GENERATOR_ROUND_BENCH_VERSIONS == (13, 14, 15, 16, 17, 18)
         _install(app, session_maker)
-        fleet = _Fleet(monkeypatch, active=18, scorer_versions=(13, 14, 15, 16, 17))
-        fleet.capable = {13, 14, 15, 16, 17}
+        fleet = _Fleet(monkeypatch, active=19, scorer_versions=(13, 14, 15, 16, 17, 18))
+        fleet.capable = {13, 14, 15, 16, 17, 18}
         await _open_round(client, session_maker, monkeypatch)
         row = await _round(session_maker)
-        assert row.status == "generating" and row.bench_version == 17
+        assert row.status == "generating" and row.bench_version == 18
         contract = (row.generation or {})["bench_contract"]
-        assert contract["active_version"] == 18 and contract["bench_version"] == 17
-        assert "v18 has no generator-round contract" in contract["reason"]
+        assert contract["active_version"] == 19 and contract["bench_version"] == 18
+        assert "v19 has no generator-round contract" in contract["reason"]
 
     async def test_v14_round_generation_names_and_records_the_pack_policy(
         self,
@@ -658,7 +658,7 @@ class TestRoundPreviewBenchContract:
         preview = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()
         contract = preview["bench_contract"]
         assert contract["active_version"] == 14 and contract["bench_version"] == 13
-        assert contract["round_contracts"] == [13, 14, 15, 16, 17]
+        assert contract["round_contracts"] == [13, 14, 15, 16, 17, 18]
         assert contract["capable_validators"]["13"] > 0
         assert contract["capable_validators"]["14"] == 0
         assert "at bench v14" in contract["reason"]
@@ -838,7 +838,7 @@ def test_round_capacity_requires_the_scorer_round_mode_for_the_version() -> None
 
 
 @pytest.mark.parametrize(
-    ("active", "contract"), [(13, 13), (14, 14), (15, 15), (16, 16), (17, 17)]
+    ("active", "contract"), [(13, 13), (14, 14), (15, 15), (16, 16), (17, 17), (18, 18)]
 )
 def test_round_contract_for_the_active_version(active: int, contract: int) -> None:
     assert round_contract_for(active) == contract
@@ -908,7 +908,14 @@ def test_request_refusals_from_the_window_are_scorer_faults(
 
 @pytest.mark.parametrize(
     ("round_version", "accepted"),
-    [(13, (13,)), (14, (13, 14)), (15, (14, 15)), (16, (15, 16)), (17, (16, 17))],
+    [
+        (13, (13,)),
+        (14, (13, 14)),
+        (15, (14, 15)),
+        (16, (15, 16)),
+        (17, (16, 17)),
+        (18, (17, 18)),
+    ],
 )
 def test_a_round_accepts_its_version_and_the_one_before(
     round_version: int, accepted: tuple[int, ...]

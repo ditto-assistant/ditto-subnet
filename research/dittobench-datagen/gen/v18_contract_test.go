@@ -13,8 +13,8 @@ import (
 // the README publish the same string.
 const v18KnownVectorWant = "9029ef85b86ac44832ae5f3d7dadd0475cd14fb4271c00db2a6f78c8c5dc46d3"
 
-// V18 is staged: generatable with its own epoch and seed domain, not yet
-// supported. Every lever is gated on bench_version >= 18; the v2..v17 vectors
+// V18 is supported (promoted from staging by the cross-layer PR, with the epoch
+// and seed domain it was staged with, so this vector did not move). Every lever is gated on bench_version >= 18; the v2..v17 vectors
 // (TestV17KnownVector and the earlier ones) prove nothing below moved.
 func TestV18KnownVector(t *testing.T) {
 	prof, ok := ProfileForVersion("full", protocol.BenchVersionV18)
@@ -34,6 +34,9 @@ func TestV18KnownVector(t *testing.T) {
 	}
 	if a.BenchVersion != 18 || a.GeneratedAt != "2027-10-01T00:00:00Z" {
 		t.Fatalf("v18 envelope: version=%d epoch=%s", a.BenchVersion, a.GeneratedAt)
+	}
+	if !protocol.SupportedBenchVersion(protocol.BenchVersionV18) || protocol.CurrentBenchVersion != protocol.BenchVersionV8 {
+		t.Fatal("v18 is supported, and supporting it does not move the preactivation default")
 	}
 	if len(a.ToolCases) != 50 || len(a.MemoryCases) != 125 {
 		t.Fatalf("v18 datagen half: %d tool + %d memory cases, want 50 + 125", len(a.ToolCases), len(a.MemoryCases))
