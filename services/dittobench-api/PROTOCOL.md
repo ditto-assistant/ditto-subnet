@@ -19,7 +19,7 @@ budget, no further case is admitted.
 
 - **Budget:** the cost at which the factor reaches its floor, derived from the
   curve: the last breakpoint ratio (2.0x) times the reference ($0.50), so $1.00
-  per 350-case run, scaled to the run's case count. Spending past it cannot
+  per 350-case run, scaled to the run's case count and rounded up. Spending past it cannot
   lower the factor further, so v18 converts it into lost accuracy instead.
 - **Window:** the whole run, the datagen half and the generator slice, the
   priced-cost window. Cases are admitted in the run's deterministic dispatch

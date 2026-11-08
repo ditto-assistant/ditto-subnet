@@ -2168,6 +2168,8 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertIsNone(COST.run_budget_nano_usd(17, 350))
         self.assertEqual(COST.run_budget_nano_usd(18, 350), 1_000_000_000)
         self.assertEqual(COST.run_budget_nano_usd(18, 175), 500_000_000)
+        # Rounded up exactly as the scorer rounds (11,428,571.4 -> 11,428,572).
+        self.assertEqual(COST.run_budget_nano_usd(18, 4), 11_428_572)
         under = COST._with_budget({"cases": 350, "cost_nano_usd": 600_000_000}, 18)
         self.assertFalse(under["budget_exhausted"])
         self.assertIsNone(under["budget_stop_case"])
@@ -2199,6 +2201,11 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertEqual(block["budget_nano_usd"], 7)
         self.assertTrue(block["budget_exhausted"])
         self.assertIsNone(block["budget_stop_case"])
+        unknown = COST.format_estimate(
+            {"source": "scorer", "cost_nano_usd": 1, "normalized_cost_nano_usd": 1,
+             "factor_bps": 10000, **block}, 18)
+        self.assertIn("stopped admitting cases", unknown)
+        self.assertNotIn("case None", unknown)
         self.assertNotIn("budget_nano_usd", COST._with_budget({"cases": 350, "cost_nano_usd": 1}, 17))
 
     def test_rule_matches_the_shared_go_vectors(self) -> None:
