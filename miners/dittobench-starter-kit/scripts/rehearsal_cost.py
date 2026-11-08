@@ -399,7 +399,11 @@ def meter_for_environment(env: dict[str, str]) -> CostMeter | None:
         return CostMeter(OPENROUTER_BASE_URL, key, OPENROUTER_DECISIONS_PATH)
     if provider in ("platform", "chutes"):
         base = env.get("DITTOBENCH_INFERENCE_BASE_URL") or env.get("CHUTES_BASE_URL")
-        return CostMeter(base, None, PLATFORM_DECISIONS_PATH) if base else None
+        if not base:
+            return None
+        # Only the platform broker serves the decision lane beside chat.
+        decisions_path = PLATFORM_DECISIONS_PATH if provider == "platform" else None
+        return CostMeter(base, None, decisions_path)
     return None
 
 

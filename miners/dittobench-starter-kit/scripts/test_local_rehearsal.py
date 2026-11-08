@@ -2429,6 +2429,17 @@ class PricedCostEstimateTest(unittest.TestCase):
         ollama = COST.meter_for_environment({"DITTOBENCH_PROVIDER": "ollama"})
         assert ollama is not None
         self.assertIsNone(ollama.decisions_path)
+        # Only the platform broker serves decisions beside chat; Chutes does not.
+        chutes = COST.meter_for_environment(
+            {"DITTOBENCH_PROVIDER": "chutes", "CHUTES_BASE_URL": "http://127.0.0.1:9/v1"}
+        )
+        assert chutes is not None
+        self.assertIsNone(chutes.decisions_path)
+        platform = COST.meter_for_environment(
+            {"DITTOBENCH_PROVIDER": "platform", "DITTOBENCH_INFERENCE_BASE_URL": "http://127.0.0.1:9/v1"}
+        )
+        assert platform is not None
+        self.assertEqual(platform.decisions_path, COST.PLATFORM_DECISIONS_PATH)
 
     def test_scorer_block_wins_and_unmeterable_providers_say_so(self) -> None:
         scored = {"result": "priced", "cases": 350, "cost_nano_usd": 1_816_989_710,

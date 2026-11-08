@@ -611,9 +611,18 @@ async fn without_a_decision_lane_it_falls_back_to_code_only_selection() {
 
 #[tokio::test]
 async fn a_failing_decision_lane_degrades_instead_of_failing_the_case() {
+    // A loopback listener that accepts and drops every connection.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            drop(stream);
+        }
+    });
     let client = DecisionClient::new(
         reqwest::Client::new(),
-        "http://127.0.0.1:9/decisions",
+        format!("http://{addr}/decisions"),
         "typesafe/jev-1.14",
         None,
     );
@@ -699,6 +708,155 @@ async fn a_malformed_success_body_is_retried_and_reported() {
         .unwrap_err();
     assert!(err.to_string().contains("unparseable"), "{err}");
     let (calls, _, _, failures) = usage.snapshot();
-    assert_eq!(calls, 3, "retried");
+    assert_eq!(calls, 1, "a 2xx is not retryable, so it is not re-sent");
     assert_eq!(failures, 1, "reported");
+}
+
+fn legacy_call(name: &str, args: Value) -> ChatChunk {
+    ChatChunk {
+        tool_call: Some(ToolCall {
+            id: format!("legacy-{name}"),
+            name: name.into(),
+            args,
+        }),
+        ..ChatChunk::default()
+    }
+}
+
+#[tokio::test]
+async fn a_wrap_up_that_emits_calls_still_executes_and_records_them() {
+    let catalog = catalog();
+    for (label, wrap_up, want_text) in [
+        ("list", call("search_web", json!({"query": "b"})), ""),
+        (
+            "legacy",
+            legacy_call("search_web", json!({"query": "c"})),
+            "",
+        ),
+        (
+            "mixed",
+            {
+                let mut c = call("search_web", json!({"query": "d"}));
+                c.text = "Partial answer.".into();
+                c
+            },
+            "Partial answer.",
+        ),
+    ] {
+        let executed = Arc::new(Mutex::new(Vec::new()));
+        let model = ScriptedModel::new(vec![call("search_web", json!({"query": "a"})), wrap_up]);
+        let cfg = HybridConfig {
+            max_hops: 1,
+            ..HybridConfig::default()
+        };
+        let out = run_case(&model, None, &cfg, case(&catalog, &executed))
+            .await
+            .unwrap();
+        assert_eq!(
+            executed.lock().unwrap().len(),
+            2,
+            "{label}: both calls executed"
+        );
+        assert_eq!(out.tool_calls.len(), 2, "{label}: both calls recorded");
+        assert_eq!(out.tool_calls[1].hop, 1, "{label}");
+        assert_eq!(out.chat_calls, 2, "{label}: the budget is not exceeded");
+        assert_eq!(out.final_text, want_text, "{label}");
+        assert_eq!(
+            model.calls.lock().unwrap().len(),
+            2,
+            "{label}: no third model call"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_completion_prompt_is_added_once_per_case() {
+    let stub = JevStub {
+        prefer: vec![
+            "act".into(),
+            "calendar_create_event".into(),
+            "search_web".into(),
+        ],
+        nouls: HashMap::from([("done".to_string(), 0.9)]),
+        ..JevStub::default()
+    };
+    let url = serve_jev(stub).await;
+    let client = DecisionClient::new(reqwest::Client::new(), url, "typesafe/jev-1.14", None);
+    let catalog = catalog();
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let model = ScriptedModel::new(vec![
+        call("search_web", json!({"query": "1"})),
+        call("search_web", json!({"query": "2"})),
+        call("search_web", json!({"query": "3"})),
+        text("Done."),
+    ]);
+    let out = run_case(
+        &model,
+        Some(&client),
+        &HybridConfig::default(),
+        case(&catalog, &executed),
+    )
+    .await
+    .unwrap();
+    let prompts = out
+        .messages
+        .iter()
+        .filter(|m| m.role == "user")
+        .filter(|m| {
+            m.content
+                .iter()
+                .any(|c| c.content.contains("request looks complete"))
+        })
+        .count();
+    assert_eq!(prompts, 1);
+}
+
+#[test]
+fn a_failed_tool_call_sets_the_protocol_error_field() {
+    let failed = tool_message("id-1", "search_web", json!({"error": "not connected"}), 100);
+    let ok = tool_message("id-2", "search_web", json!({"result": "fine"}), 100);
+    let field = |m: &ChatMessage| {
+        m.content[0]
+            .tool_call_response
+            .as_ref()
+            .unwrap()
+            .error
+            .clone()
+    };
+    assert_eq!(field(&failed), "not connected");
+    assert_eq!(field(&ok), "");
+}
+
+#[tokio::test]
+async fn the_remember_route_asks_the_model_to_save_the_fact() {
+    let stub = JevStub {
+        prefer: vec!["remember".into()],
+        ..JevStub::default()
+    };
+    let url = serve_jev(stub).await;
+    let client = DecisionClient::new(reqwest::Client::new(), url, "typesafe/jev-1.14", None);
+    let catalog = catalog();
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let model = ScriptedModel::new(vec![text("Noted.")]);
+    let mut c = case(&catalog, &executed);
+    c.executable.insert(
+        "save_memory".into(),
+        Arc::new(RecordingTool {
+            def: ToolDefinition {
+                name: "save_memory".into(),
+                ..ToolDefinition::default()
+            },
+            seen: Arc::clone(&executed),
+        }),
+    );
+    c.memory_tools.push("save_memory".into());
+    c.user_input = "My dentist is Dr. Okafor.";
+    run_case(&model, Some(&client), &HybridConfig::default(), c)
+        .await
+        .unwrap();
+    let calls = model.calls.lock().unwrap();
+    let prompt = user_prompt(&calls[0].0);
+    assert!(prompt.contains("save it with save_memory"), "{prompt}");
+    assert!(!prompt.contains("No action seems to be needed"), "{prompt}");
+    assert!(calls[0].1.contains(&"save_memory".to_string()));
 }

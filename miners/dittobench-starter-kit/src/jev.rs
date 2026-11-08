@@ -42,6 +42,8 @@ pub const MAX_CHOICE_OPTIONS: usize = 255;
 pub const MAX_QUESTION_TOKENS: usize = 32_000;
 /// Per-request context limit (state plus all questions), in tokens.
 pub const MAX_REQUEST_TOKENS: usize = 64_000;
+/// Longest `Retry-After` a decision call waits before retrying, in seconds.
+pub const MAX_RETRY_AFTER_SECS: u64 = 30;
 /// Headroom kept under each limit, because [`estimate_tokens`] is an estimate.
 const LIMIT_HEADROOM: f64 = 0.85;
 
@@ -140,13 +142,28 @@ pub fn choice_chunks(
             &opts,
         ));
     };
+    // The most one option may cost so that it fits a question on its own.
+    let room = budget.saturating_sub(base + extra_tokens);
     for option in options {
-        let cost = estimate_tokens(&option.0) + estimate_tokens(&option.1) + 6;
+        let mut option = option.clone();
+        let mut cost = estimate_tokens(&option.0) + estimate_tokens(&option.1) + 6;
+        if cost > room {
+            // Shorten the description (3 chars per estimated token); a name
+            // too long to fit even alone is dropped rather than sent over the
+            // provider's per-question limit.
+            let name_cost = estimate_tokens(&option.0) + 6;
+            if name_cost > room {
+                continue;
+            }
+            let keep = (room - name_cost) * 3;
+            option.1 = option.1.chars().take(keep).collect();
+            cost = estimate_tokens(&option.0) + estimate_tokens(&option.1) + 6;
+        }
         if !current.is_empty() && (current.len() >= cap || current_tokens + cost > budget) {
             flush(&mut current, &mut out);
             current_tokens = base + extra_tokens;
         }
-        current.push(option.clone());
+        current.push(option);
         current_tokens += cost;
     }
     flush(&mut current, &mut out);
@@ -332,7 +349,7 @@ impl DecisionClient {
     }
 
     /// Sends one request. Retries 429/5xx twice with a short backoff
-    /// (honouring `Retry-After`), then gives up and returns an error; callers
+    /// (honouring `Retry-After` up to [`MAX_RETRY_AFTER_SECS`]), then gives up and returns an error; callers
     /// fall back to code-only decisions rather than failing the case.
     pub async fn ask_one(
         &self,
@@ -372,6 +389,9 @@ impl DecisionClient {
                                 "decision lane returned {status} with an unparseable body: {err}: {}",
                                 text.chars().take(300).collect::<String>()
                             ));
+                            if !(status.as_u16() == 429 || status.is_server_error()) {
+                                break;
+                            }
                             tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
                             continue;
                         }
@@ -393,11 +413,11 @@ impl DecisionClient {
                         if let Some(answers) = parsed.get("answers").filter(|a| a.is_object()) {
                             return Ok(answers.clone());
                         }
+                        // Not retried: a metered 2xx would be billed again.
                         last_err = Some(anyhow::anyhow!(
                             "decision lane returned {status} without an answers object"
                         ));
-                        tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
-                        continue;
+                        break;
                     }
                     last_err = Some(anyhow::anyhow!(
                         "decision lane returned {status}: {}",
@@ -406,7 +426,9 @@ impl DecisionClient {
                     if !(status.as_u16() == 429 || status.is_server_error()) {
                         break;
                     }
-                    let wait = retry_after.unwrap_or(1 + attempt).min(5);
+                    // Honour Retry-After, capped so one throttled call cannot
+                    // hold a case past the validator's case deadline.
+                    let wait = retry_after.unwrap_or(1 + attempt).min(MAX_RETRY_AFTER_SECS);
                     tokio::time::sleep(Duration::from_secs(wait)).await;
                 }
                 Err(err) => {
@@ -472,6 +494,16 @@ mod tests {
             assert!(q.estimated_tokens() < MAX_QUESTION_TOKENS);
         }
         assert_eq!(seen, 1454, "every tool is asked about exactly once");
+    }
+
+    #[test]
+    fn an_oversized_option_is_shortened_to_fit_one_question() {
+        let huge = vec![("big".to_string(), "y".repeat(200_000))];
+        let qs = choice_chunks("t", "Which?", &huge, &[], 255, 0);
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].estimated_tokens() <= MAX_QUESTION_TOKENS);
+        let name = vec![("n".repeat(200_000), String::new())];
+        assert!(choice_chunks("t", "Which?", &name, &[], 255, 0).is_empty());
     }
 
     #[test]
