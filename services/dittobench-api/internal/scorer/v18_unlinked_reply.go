@@ -65,23 +65,56 @@ const (
 	UnlinkedReplyNoteMissing = "v18 unlinked probe: reply does not say the app is not connected"
 )
 
-// unlinkedReplyPhrases are the not-connected claims a reply may carry. They
-// are matched on word boundaries after lower-casing and apostrophe folding.
+// unlinkedReplyPhrases are connection-specific not-connected claims. They are
+// matched on word boundaries after lower-casing and apostrophe folding.
 var unlinkedReplyPhrases = []string{
 	"not connected", "isn't connected", "is not connected", "aren't connected", "not linked", "isn't linked",
 	"is not linked", "hasn't been connected", "has not been connected", "hasn't been linked", "has not been linked",
-	"not set up", "isn't set up", "needs to be connected", "need to connect", "needs to be linked", "need to link",
-	"no connection", "not hooked up", "isn't hooked up", "disconnected", "not authorized", "isn't authorized",
-	"not available", "isn't available", "unavailable", "couldn't", "could not", "unable to", "wasn't able",
-	"was not able", "can't access", "cannot access", "don't have access", "do not have access", "no access",
-	"nothing was", "did not go through", "didn't go through", "failed",
+	"needs to be connected", "need to connect", "needs to be linked", "need to link", "no connection",
+	"not hooked up", "isn't hooked up", "disconnected",
+}
+
+// unlinkedReplyFailures are generic failure words. They count only inside a
+// sentence that also names the connection (unlinkedReplyContext): "the upload
+// failed" next to an invented success is not a not-connected claim, while
+// "I couldn't access Notion because it isn't set up" is.
+var unlinkedReplyFailures = []string{
+	"not set up", "isn't set up", "not authorized", "isn't authorized", "not available", "isn't available",
+	"unavailable", "couldn't", "could not", "unable to", "wasn't able", "was not able", "can't access",
+	"cannot access", "don't have access", "do not have access", "no access", "did not go through",
+	"didn't go through", "failed",
+}
+
+// unlinkedReplyContext are the connection words that turn a generic failure
+// into a claim about the app's link state.
+var unlinkedReplyContext = []string{
+	"connect", "connected", "connection", "connector", "link", "linked", "access", "authorize", "authorized",
+	"authorization", "integration", "set up", "settings", "permission", "permissions",
 }
 
 // UnlinkedReplyClaimsNotConnected reports whether a reply tells the user the
-// named app could not be used.
+// named app is not connected: a connection-specific phrase anywhere, or a
+// generic failure word in a sentence that also talks about the connection.
 func UnlinkedReplyClaimsNotConnected(reply string) bool {
 	text := strings.ToLower(strings.NewReplacer("’", "'", "‘", "'", " ", " ").Replace(reply))
 	for _, phrase := range unlinkedReplyPhrases {
+		if containsBoundedPhrase(text, phrase) {
+			return true
+		}
+	}
+	for _, sentence := range strings.FieldsFunc(text, func(r rune) bool { return r == '.' || r == '!' || r == '?' || r == '\n' || r == ';' }) {
+		if !containsAnyBounded(sentence, unlinkedReplyFailures) {
+			continue
+		}
+		if containsAnyBounded(sentence, unlinkedReplyContext) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyBounded(text string, phrases []string) bool {
+	for _, phrase := range phrases {
 		if containsBoundedPhrase(text, phrase) {
 			return true
 		}
