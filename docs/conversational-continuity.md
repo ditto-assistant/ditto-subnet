@@ -1,4 +1,10 @@
-# Conversational Continuity v1
+# Conversational Continuity
+
+Platform admits `conversational-continuity-v2` (Claude Opus 5.5 judge) from
+2026-11-08. `conversational-continuity-v1` (GPT-6 Astra) reports stay stored and
+verifiable under their own rubric digest, model and request count. Each
+artifact, benchmark epoch and instrument is still assessed at most once, so
+every top-five identity gets one v2 assessment regardless of its v1 outcome.
 
 ## Product question
 
@@ -8,7 +14,35 @@ correction, carry a decision into another discussion, or admit that it does not
 know something. This assessment is a black-box product evaluation, separate from
 source screening and cheating allegations.
 
-## Instrument
+## Instrument v2
+
+The host runs the same seeded 30-exchange schedule (unchanged story bank and
+story digest) against the harness, then Claude Opus 5.5 grades probes 11-30 in
+one request: the full transcript plus the private expectations, with the v2
+rubric (`RUBRIC_PROMPT_V2`, digest bound to instrument and model). v1's 31
+forced `converse` tool calls are gone. They carried no information (the judge
+could only echo the next turn id), each was a billed request that could fail
+mid-conversation, and Opus 5.5 rejects a forced `tool_choice`.
+
+| | v1 | v2 |
+| --- | --- | --- |
+| Judge | `gpt-6-astra`, OpenRouter Responses | `claude-opus-5-5` (`anthropic/claude-opus-5.5`), Anthropic SDK against OpenRouter's Messages endpoint, same fleet key |
+| Judge requests | exactly 31 | 1, at most 3 (unbilled 429/5xx retry, or one stateless repair when a quote is not an exact substring) |
+| Effort / output | Responses reasoning low/high | adaptive thinking, `effort: high`, 16,000 max tokens |
+| `/run`, `/seed` deadline | 120 s | 300 s, the bench's v7+ per-case envelope |
+| Failed or slow `/run` | aborts the assessment | empty reply for that turn (graded 0, as the bench scores a missing response); three consecutive failed turns end it as `harness_unresponsive` |
+| Reply over 8,000 chars | `invalid_harness_answer` | first 8,000 chars kept, `assistant_truncated`, the judge treats the excess as a coherence cost |
+| Relay provider 429/5xx | poisons the relay | up to 3 attempts with backoff (error responses are not billed); timeouts are never retried |
+| Relay dispatch | serial | up to 4 concurrent, budget reserved under the lock first |
+| Lease | 65 min | 125 min |
+| Judge spend | pinned-tariff upper bound | provider `usage.cost` when present (`billed`), otherwise reported usage at the Opus 5.5 list price ($4 input, $5 cache write, $0.20 cache read, $20 output per M tokens; `tariff`) |
+
+Workers advertise the instruments they run in the claim body; a worker that
+sends none predates v2 and is offered nothing while Platform admits v2. A v2
+worker that receives a v1 claim from an older Platform files an empty
+`instrument_unsupported` report without starting a sandbox.
+
+## Instrument v1
 
 GPT-6 Astra conducts exactly 30 exchanges, in ten three-turn sessions, starting
 with an empty, randomly named memory graph. Ten onboarding exchanges establish
@@ -223,9 +257,11 @@ after any billed attempt. A failed upload should resend the same report and leas
 token, not rerun the assessment. The result endpoint is idempotent for byte-equivalent
 canonical reports and rejects conflicting replacements.
 
-`get_conversation_assessments` in Backroom lists state, reserved cost, observed
-combined actual spend when both receipts are known, proposed composite and the
-fee-change payload. Supply `assessment_id` for the private transcript, grades,
+`get_conversation_assessments` in Backroom lists state, reserved cost, judge and
+harness spend with `spent_is_upper_bound`, per-row failure evidence without the
+transcript (`exchange_count`, `empty_answers`, `truncated_answers`,
+`failed_turns`, `harness_failure_code`/`http_status`, provider retries, judge
+requests and tokens), proposed composite and the fee-change payload. Supply `assessment_id` for the private transcript, grades,
 judge usage and harness usage. Upper bounds remain labelled in the private
 report; a $30 reservation is not a claim of $30 actual spend.
 

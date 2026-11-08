@@ -49,6 +49,14 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 DAILY_BUDGET_MICROUSD = 180_000_000
 RUN_RESERVATION_MICROUSD = 30_000_000
+LEASE_MINUTES = 125
+"""The worker derives its own deadlines from this lease: the conversation gets
+the lease minus a 15-minute judge window and 3 minutes for settlement and
+delivery, and ends as ``deadline_exceeded`` (still delivered before expiry)
+when slow turns use it up. 125 minutes allows ~3.5 minutes per exchange on
+average, each capped at the bench's 5-minute /run envelope. A lease that covered
+the worst case (30 x 5 min + judge = 165) would hold the single global slot for
+harnesses that are failing anyway. v1's 65 minutes fit only its 120 s deadline."""
 ADMISSION_IDLE_COOLDOWN_SECONDS = 30.0
 """How long a process waits after a no-work admission before rebuilding.
 
@@ -159,20 +167,49 @@ def _observation(
         if score is not None
         else None,
         reserved_microusd=row.reserved_microusd,
-        spent_microusd=report.spent_microusd + report.harness_usage.spent_microusd
+        spent_microusd=report.spent_microusd
+        + (report.harness_usage.spent_microusd if report.harness_usage else 0)
         if report
-        and not report.unmetered
-        and report.harness_usage
-        and not report.harness_usage.unmetered
-        and not report.harness_usage.cost_is_upper_bound
-        and not report.judge_cost_is_upper_bound
         else None,
         error_code=report.error_code if report else None,
         report_sha256=digest(row.report) if row.report is not None else None,
+        instrument=row.instrument,
+        **(_evidence_summary(report) if report else {}),
         retry_of=row.retry_of,
         retry_authorization=row.retry_authorization,
         retry_assessment_id=retry_id,
     )
+
+
+def _evidence_summary(report: ConversationReport) -> dict[str, object]:
+    """Failure-class fields an operator can read without the transcript."""
+    usage = report.harness_usage
+    failure = usage.failure if usage else None
+    return {
+        "judge_model": report.model,
+        "spent_is_upper_bound": bool(
+            report.unmetered
+            or report.judge_cost_is_upper_bound
+            or usage is None
+            or usage.unmetered
+            or usage.cost_is_upper_bound
+        ),
+        "judge_spent_microusd": report.spent_microusd,
+        "harness_spent_microusd": usage.spent_microusd if usage else None,
+        "judge_cost_basis": report.judge_cost_basis,
+        "judge_requests": report.judge_requests,
+        "judge_input_tokens": report.input_tokens,
+        "judge_output_tokens": report.output_tokens,
+        "exchange_count": len(report.exchanges),
+        "empty_answers": sum(1 for e in report.exchanges if not e.assistant),
+        "truncated_answers": sum(1 for e in report.exchanges if e.assistant_truncated),
+        "failed_turns": [e.turn_id for e in report.exchanges if e.failure],
+        "harness_requests": usage.requests if usage else None,
+        "harness_provider_retries": usage.provider_retries if usage else None,
+        "harness_failure_code": failure.code if failure else None,
+        "harness_failure_stage": failure.stage if failure else None,
+        "harness_failure_http_status": failure.http_status if failure else None,
+    }
 
 
 @router.get("", response_model=ConversationObservations)
@@ -460,7 +497,7 @@ async def _claim_assessment(
             seed=existing.seed if existing is not None else secrets.token_hex(32),
             lease_token=uuid4(),
             created_at=now,
-            expires_at=now + timedelta(minutes=65),
+            expires_at=now + timedelta(minutes=LEASE_MINUTES),
             base_quality_micros=existing.base_quality_micros
             if existing is not None
             else round(entry.official_composite * 1_000_000),
@@ -471,6 +508,7 @@ async def _claim_assessment(
         session.add(row)
         await session.commit()
         return ConversationClaim(
+            instrument=INSTRUMENT,
             assessment_id=row.assessment_id,
             agent_id=row.agent_id,
             artifact_sha256=row.artifact_sha256,

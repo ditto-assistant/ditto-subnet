@@ -7,6 +7,8 @@ import pytest
 
 from ditto_screener.conversation_worker import consume
 from ditto_screening_protocol.conversation import (
+    INSTRUMENT_V1,
+    INSTRUMENT_V2,
     ConversationLaunch,
     ConversationReport,
     HarnessUsage,
@@ -35,7 +37,8 @@ async def test_failed_delivery_keeps_private_evidence_and_cannot_rebill_same_cla
         seed="c" * 64,
         lease_token=uuid4(),
         bench_version=12,
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        expires_at=datetime.now(UTC) + timedelta(hours=2),
+        instrument=INSTRUMENT_V2,
     )
     calls = []
 
@@ -53,7 +56,7 @@ async def test_failed_delivery_keeps_private_evidence_and_cannot_rebill_same_cla
         async def start(self):
             return "http://127.0.0.1:8080"
 
-        def transport(self):
+        def transport(self, **_kwargs):
             return None
 
         async def stop(self):
@@ -78,9 +81,9 @@ async def test_failed_delivery_keeps_private_evidence_and_cannot_rebill_same_cla
             screened_image_sha256=claim.screened_image_sha256,
             bench_version=12,
             story_sha256=story_digest(claim.seed),
-            provider_model="gpt-6-astra",
+            provider_model="anthropic/claude-opus-5.5",
             status="incomplete",
-            error_code="judge_incomplete",
+            error_code="judge_refused",
             exchanges=[],
             judge_requests=1,
             input_tokens=100,
@@ -109,3 +112,53 @@ async def test_failed_delivery_keeps_private_evidence_and_cannot_rebill_same_cla
     }
     assert json.loads(saved)["grades"] is None
     assert len([p for p, _ in calls if p.endswith("/result")]) == 1
+    assert calls[0] == ("/claim", {"instruments": [INSTRUMENT_V2]})
+
+
+@pytest.mark.asyncio
+async def test_v1_claim_from_older_platform_frees_the_slot_without_running(
+    tmp_path, monkeypatch
+):
+    key = tmp_path / "key"
+    key.write_text("provider-only-secret")
+    key.chmod(0o600)
+    monkeypatch.setenv("SCREENER_CONVERSATION_OPENROUTER_KEY_FILE", str(key))
+    monkeypatch.setenv("SCREENER_CONVERSATION_SPOOL_DIR", str(tmp_path / "spool"))
+    claim = ConversationLaunch(
+        assessment_id=uuid4(),
+        agent_id=uuid4(),
+        artifact_sha256="a" * 64,
+        screened_image_sha256="b" * 64,
+        screened_image_id="sha256:" + "b" * 64,
+        screened_image_url="https://artifact.example/image.tar",
+        screened_image_size_bytes=1,
+        seed="c" * 64,
+        lease_token=uuid4(),
+        bench_version=17,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    assert claim.instrument == INSTRUMENT_V1
+    results = []
+
+    class Platform:
+        async def conversation_request(self, path, payload=None):
+            if path == "/claim":
+                return claim.model_dump(mode="json", exclude={"instrument"})
+            results.append(payload)
+            return {}
+
+    class Runtime:
+        def __init__(self, *_args):
+            pass
+
+        async def start(self):
+            raise AssertionError("a v1 claim must not start a sandbox")
+
+    monkeypatch.setattr(
+        "ditto_screener.conversation_worker.ConversationRuntime", Runtime
+    )
+    assert await consume(SimpleNamespace(require_rootless_docker=True), Platform())
+    report = ConversationReport.model_validate(results[0]["report"])
+    assert report.instrument == INSTRUMENT_V1 and report.status == "incomplete"
+    assert report.error_code == "instrument_unsupported"
+    assert report.spent_microusd == 0 and report.harness_usage is None

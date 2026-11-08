@@ -52,7 +52,7 @@ def provider(monkeypatch, body):
     class Opener:
         def open(self, request, *, timeout):
             calls.append(request)
-            assert timeout == 110
+            assert timeout == 240
             return io.BytesIO(json.dumps(body).encode())
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_args: Opener())
@@ -198,6 +198,7 @@ def test_private_provider_failure_retains_reservation_and_first_status(
     tmp_path, monkeypatch
 ):
     calls = []
+    sleeps = []
 
     class Opener:
         def open(self, request, **_kwargs):
@@ -205,6 +206,7 @@ def test_private_provider_failure_retains_reservation_and_first_status(
             raise HTTPError("https://secret.example", 429, "secret body", {}, None)
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    monkeypatch.setattr("time.sleep", sleeps.append)
     relay = Relay("secret", tmp_path / "usage.json")
     with pytest.raises(HTTPError):
         relay.post("/v1/chat/completions", chat())
@@ -217,7 +219,107 @@ def test_private_provider_failure_retains_reservation_and_first_status(
         "http_status": 429,
     }
     assert usage.failed and usage.unmetered and usage.spent_microusd > 0
-    assert len(calls) == 1 and "secret" not in relay.state_file.read_text()
+    # Rate limits are retried (unbilled), then the first status is kept.
+    assert len(calls) == 3 and usage.provider_retries == 2 and sleeps == [2.0, 4.0]
+    assert "secret" not in relay.state_file.read_text()
+
+
+@pytest.mark.parametrize("status", [429, 502, 503])
+def test_transient_provider_error_is_retried_then_metered(
+    tmp_path, monkeypatch, status
+):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, _limit):
+            return json.dumps(
+                {
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 20,
+                        "completion_tokens": 10,
+                        "cost": 0.00004,
+                    },
+                }
+            ).encode()
+
+    class Opener:
+        def open(self, request, **_kwargs):
+            calls.append(request)
+            if len(calls) == 1:
+                raise HTTPError("https://x", status, "busy", {"Retry-After": "1"}, None)
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    relay = Relay("secret", tmp_path / "usage.json")
+    relay.post("/v1/chat/completions", chat())
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert len(calls) == 2 and usage.provider_retries == 1
+    assert not usage.failed and not usage.unmetered and usage.spent_microusd == 40
+
+
+def test_timeouts_are_never_retried(tmp_path, monkeypatch):
+    calls = []
+
+    class Opener:
+        def open(self, request, **_kwargs):
+            calls.append(request)
+            raise TimeoutError
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    relay = Relay("secret", tmp_path / "usage.json")
+    with pytest.raises(TimeoutError):
+        relay.post("/v1/chat/completions", chat())
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert len(calls) == 1 and usage.failed and usage.unmetered
+    assert usage.failure.code == "timeout"
+
+
+def test_dispatches_overlap_up_to_the_slot_limit(tmp_path, monkeypatch):
+    import threading
+
+    active, peak, lock = [0], [0], threading.Lock()
+    full = threading.Event()
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, _limit):
+            usage = {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0}
+            return json.dumps({"choices": [], "usage": usage}).encode()
+
+    class Opener:
+        def open(self, _request, **_kwargs):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+                if active[0] == 4:
+                    full.set()
+            # Hold the call until four dispatches are inside the provider at
+            # once; a serial relay would time out here with a peak of one.
+            assert full.wait(timeout=10), "dispatches never overlapped"
+            with lock:
+                active[0] -= 1
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    relay = Relay("secret", tmp_path / "usage.json")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: relay.post("/v1/chat/completions", chat()), range(8)))
+    assert peak[0] == 4  # Overlapping, and never past the slot limit.
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert usage.requests == 8 and not usage.unmetered and not usage.failed
 
 
 def test_concurrent_requests_reserve_before_dispatch(tmp_path, monkeypatch):
@@ -269,7 +371,7 @@ def test_harness_ingress_is_fixed_target_and_response_bounded(monkeypatch):
     class Opener:
         def open(self, request, *, timeout):
             requests.append(request)
-            assert timeout == 120
+            assert timeout == 300
             response = io.BytesIO(b'{"pairs":1}')
             response.status = 200
             return response
@@ -377,3 +479,84 @@ def test_real_socket_deadline_survives_stdio_without_paid_requests(monkeypatch, 
     assert json.loads(output.out) == {"error": "timeout"}
     assert output.err == "" and "private" not in output.out
     assert calls == ["/run"]
+
+
+def test_retries_stop_inside_one_harness_operation(tmp_path, monkeypatch):
+    """A slow 429 near the operation deadline is not retried past it."""
+    calls = []
+    clock = [1_000.0]
+
+    class Opener:
+        def open(self, _request, *, timeout):
+            calls.append(timeout)
+            clock[0] += 260  # The provider took most of the operation.
+            raise HTTPError("https://x", 429, "busy", {"Retry-After": "20"}, None)
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("time.sleep", lambda _s: pytest.fail("must not back off"))
+    relay = Relay("secret", tmp_path / "usage.json")
+    with pytest.raises(HTTPError):
+        relay.post("/v1/chat/completions", chat())
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert calls == [240] and usage.provider_retries == 0
+    assert usage.failure.http_status == 429
+
+
+def test_nan_retry_after_falls_back_to_bounded_backoff(tmp_path, monkeypatch):
+    sleeps = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, _limit):
+            return json.dumps(
+                {
+                    "choices": [],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0},
+                }
+            ).encode()
+
+    class Opener:
+        calls = 0
+
+        def open(self, _request, **_kwargs):
+            Opener.calls += 1
+            if Opener.calls == 1:
+                raise HTTPError("https://x", 503, "busy", {"Retry-After": "NaN"}, None)
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    relay = Relay("secret", tmp_path / "usage.json")
+    relay.post("/v1/chat/completions", chat())
+    assert sleeps == [2.0] and Opener.calls == 2 and not relay.failed
+
+
+def test_slot_wait_spends_the_caller_deadline_and_refunds(tmp_path, monkeypatch):
+    calls = provider(monkeypatch, {"choices": [], "usage": {"cost": 0}})
+    clock = [0.0]
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    relay = Relay("secret", tmp_path / "usage.json")
+
+    class Busy:
+        def acquire(self, timeout):
+            assert 0 < timeout <= 270
+            clock[0] += timeout  # Every slot stayed busy for the whole wait.
+            return False
+
+        def release(self):
+            pytest.fail("a slot that was never acquired is never released")
+
+    relay.slots = Busy()
+    with pytest.raises(RelayError, match="relay_busy"):
+        relay.post("/v1/chat/completions", chat())
+    usage = HarnessUsage.model_validate_json(relay.state_file.read_text())
+    assert not calls and usage.spent_microusd == 0 and not usage.unmetered
+    assert usage.failure.code == "relay_busy"
+    raw = json.loads(relay.state_file.read_text())
+    assert raw["requests"] == 0 and raw["chat_dispatches"] == 0

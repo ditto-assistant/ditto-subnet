@@ -96,7 +96,7 @@ class ConversationRuntime:
             raise AssessmentFailure("sandbox_operation_failed")
         return out.decode().strip()
 
-    def transport(self, *, timeout: int = 120) -> httpx.AsyncBaseTransport:
+    def transport(self, *, timeout: int = 300) -> httpx.AsyncBaseTransport:
         return HarnessTransport(self, timeout=timeout)
 
     async def preflight(self) -> None:
@@ -364,8 +364,9 @@ class ConversationRuntime:
 
 
 class HarnessTransport(httpx.AsyncBaseTransport):
-    def __init__(self, runtime: ConversationRuntime, *, timeout: int = 120):
-        if type(timeout) is not int or not 1 <= timeout <= 120:
+    def __init__(self, runtime: ConversationRuntime, *, timeout: int = 300):
+        # The bench's v7+ /run deadline; the relay enforces the same ceiling.
+        if type(timeout) is not int or not 1 <= timeout <= 300:
             raise ValueError("invalid harness timeout")
         self.runtime = runtime
         self.timeout = timeout

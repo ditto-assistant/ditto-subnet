@@ -22046,6 +22046,12 @@ export interface components {
              */
             harness_budget_microusd: 5000000;
             /**
+             * Instrument
+             * @default conversational-continuity-v1
+             * @enum {string}
+             */
+            instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
+            /**
              * Judge Budget Microusd
              * @default 25000000
              * @constant
@@ -22060,6 +22066,15 @@ export interface components {
             screened_image_sha256: string;
             /** Seed */
             seed: string;
+        };
+        /**
+         * ConversationClaimRequest
+         * @description What an enrolled worker can run. A worker that sends no body predates
+         *     v2 and is offered nothing while Platform admits v2.
+         */
+        ConversationClaimRequest: {
+            /** Instruments */
+            instruments: string[];
         };
         /**
          * ConversationLaunch
@@ -22091,6 +22106,12 @@ export interface components {
              * @constant
              */
             harness_budget_microusd: 5000000;
+            /**
+             * Instrument
+             * @default conversational-continuity-v1
+             * @enum {string}
+             */
+            instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
             /**
              * Judge Budget Microusd
              * @default 25000000
@@ -22138,13 +22159,45 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Empty Answers */
+            empty_answers?: number | null;
             /** Error Code */
             error_code: string | null;
+            /** Exchange Count */
+            exchange_count?: number | null;
             /**
              * Expires At
              * Format: date-time
              */
             expires_at: string;
+            /** Failed Turns */
+            failed_turns?: number[] | null;
+            /** Harness Failure Code */
+            harness_failure_code?: string | null;
+            /** Harness Failure Http Status */
+            harness_failure_http_status?: number | null;
+            /** Harness Failure Stage */
+            harness_failure_stage?: string | null;
+            /** Harness Provider Retries */
+            harness_provider_retries?: number | null;
+            /** Harness Requests */
+            harness_requests?: number | null;
+            /** Harness Spent Microusd */
+            harness_spent_microusd?: number | null;
+            /** Instrument */
+            instrument?: string | null;
+            /** Judge Cost Basis */
+            judge_cost_basis?: string | null;
+            /** Judge Input Tokens */
+            judge_input_tokens?: number | null;
+            /** Judge Model */
+            judge_model?: string | null;
+            /** Judge Output Tokens */
+            judge_output_tokens?: number | null;
+            /** Judge Requests */
+            judge_requests?: number | null;
+            /** Judge Spent Microusd */
+            judge_spent_microusd?: number | null;
             /** Proposed Quality Micros */
             proposed_quality_micros: number | null;
             /** Report Sha256 */
@@ -22156,6 +22209,8 @@ export interface components {
             retry_authorization?: components["schemas"]["ConversationRetryAuthorization"] | null;
             /** Retry Of */
             retry_of?: string | null;
+            /** Spent Is Upper Bound */
+            spent_is_upper_bound?: boolean | null;
             /** Spent Microusd */
             spent_microusd: number | null;
             /**
@@ -22163,6 +22218,8 @@ export interface components {
              * @enum {string}
              */
             status: "leased" | "completed" | "incomplete" | "expired";
+            /** Truncated Answers */
+            truncated_answers?: number | null;
         };
         /** ConversationObservations */
         ConversationObservations: {
@@ -22231,10 +22288,12 @@ export interface components {
             input_tokens: number;
             /**
              * Instrument
-             * @default conversational-continuity-v1
-             * @constant
+             * @default conversational-continuity-v2
+             * @enum {string}
              */
-            instrument: "conversational-continuity-v1";
+            instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
+            /** Judge Cost Basis */
+            judge_cost_basis?: ("billed" | "tariff" | "reservation") | null;
             /**
              * Judge Cost Is Upper Bound
              * @default true
@@ -22244,10 +22303,10 @@ export interface components {
             judge_requests: number;
             /**
              * Model
-             * @default gpt-6-astra
-             * @constant
+             * @default claude-opus-5-5
+             * @enum {string}
              */
-            model: "gpt-6-astra";
+            model: "gpt-6-astra" | "claude-opus-5-5";
             /** Output Tokens */
             output_tokens: number;
             /** Provider Model */
@@ -22256,7 +22315,7 @@ export interface components {
             reserved_microusd: number;
             /**
              * Rubric Sha256
-             * @default 0ad55fd9b1c2df67935db3431b4448212203c9d67ec2d21f23516fd51e024a40
+             * @default 49155f2deed7339bffd5bf2584cd3742a044fba0aef4dafaa64b6e4b2bff02fb
              */
             rubric_sha256: string;
             /** Screened Image Sha256 */
@@ -24431,6 +24490,13 @@ export interface components {
         Exchange: {
             /** Assistant */
             assistant: string;
+            /**
+             * Assistant Truncated
+             * @default false
+             */
+            assistant_truncated: boolean;
+            /** Failure */
+            failure?: ("harness_run_timeout" | "harness_run_failed" | "harness_seed_timeout" | "harness_seed_failed") | null;
             /** Session */
             session: number;
             /** Turn Id */
@@ -26726,6 +26792,11 @@ export interface components {
              * @constant
              */
             profile: "conversation-openrouter-oss20b-pplx768-v1";
+            /**
+             * Provider Retries
+             * @default 0
+             */
+            provider_retries: number;
             /** Requests */
             requests: number;
             /** Spent Microusd */
@@ -63610,7 +63681,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ConversationClaimRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
