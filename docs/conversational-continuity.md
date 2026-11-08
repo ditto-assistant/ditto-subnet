@@ -32,10 +32,18 @@ mid-conversation, and Opus 5.5 rejects a forced `tool_choice`.
 | `/run`, `/seed` deadline | 120 s | 300 s, the bench's v7+ per-case envelope |
 | Failed or slow `/run` | aborts the assessment | empty reply for that turn (graded 0, as the bench scores a missing response); three consecutive failed turns end it as `harness_unresponsive` |
 | Reply over 8,000 chars | `invalid_harness_answer` | first 8,000 chars kept, `assistant_truncated`, the judge treats the excess as a coherence cost |
-| Relay provider 429/5xx | poisons the relay | up to 3 attempts with backoff (error responses are not billed); timeouts are never retried |
+| Relay provider 429/5xx | poisons the relay | up to 4 attempts with 4/8/16 s backoff inside one operation deadline (error responses are not billed); timeouts are never retried |
+| gpt-oss-20b routing | `allow_fallbacks: false`, OpenRouter's default provider | the bench's aggregate throughput route: `sort: throughput`, CoreWeave ignored, fallbacks on, ZDR, same `max_price` ceiling |
 | Relay dispatch | serial | up to 4 concurrent, budget reserved under the lock first |
 | Lease | 65 min | 125 min |
 | Judge spend | pinned-tariff upper bound | provider `usage.cost` when present (`billed`), otherwise reported usage at the Opus 5.5 list price ($4 input, $5 cache write, $0.20 cache read, $20 output per M tokens; `tariff`) |
+
+The first v2 production assessment (`fa504f65`, 2026-11-08) proved the Opus
+judge path (one request, $0.12 billed) but still ended
+`harness_inference_incomplete`: three 429s on the single-provider route
+poisoned the relay with 11 replies left. Twenty of the 21 v1
+`harness_inference_incomplete` rows were also 429s; one was a 402. That is why
+the relay now uses the bench's fallback route.
 
 Workers advertise the instruments they run in the claim body; a worker that
 sends none predates v2 and is offered nothing while Platform admits v2. A v2
