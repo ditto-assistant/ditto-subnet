@@ -978,7 +978,9 @@ pub fn log_usage(case_id: &str, outcome: &HybridOutcome) {
         .append(true)
         .open(path.trim())
     {
-        let _ = writeln!(file, "{line}");
+        // One write per line: cases run concurrently and `writeln!` may
+        // split a line across writes, interleaving two cases' records.
+        let _ = file.write_all(format!("{line}\n").as_bytes());
     }
 }
 
