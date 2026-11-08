@@ -37,7 +37,11 @@ if TYPE_CHECKING:
     from ditto_screening_protocol.conversation import HarnessUsage
 
 logger = logging.getLogger(__name__)
-HARNESS_BUDGET_CODES = frozenset({"inference_budget_exhausted"})
+HARNESS_BUDGET_CODES = frozenset(
+    # The first recorded failure is kept, so "unavailable" here means a budget
+    # wait ran out of time with holds still in flight, not a prior failure.
+    {"inference_budget_exhausted", "inference_budget_unavailable"}
+)
 
 
 def private_write(path: Path, text: str) -> None:

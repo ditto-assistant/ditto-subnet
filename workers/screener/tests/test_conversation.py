@@ -516,6 +516,7 @@ def test_worst_case_evidence_is_cut_to_fit_the_judge_hold():
         JUDGE_EVIDENCE_BYTES,
         grade_evidence,
         judge_body,
+        wire_bytes,
     )
     from ditto_screening_protocol.conversation import Exchange
 
@@ -525,12 +526,13 @@ def test_worst_case_evidence_is_cut_to_fit_the_judge_hold():
             turn_id=t.turn_id,
             session=(t.turn_id - 1) // 3 + 1,
             user=t.user,
-            assistant=("é" * 7_999) + "!",  # 2-byte characters, at the 8k cap.
+            # Quotes and newlines double when the body re-escapes them.
+            assistant=('"\n' * 3_999) + "é!",
         )
         for t in turns
     ]
     evidence = grade_evidence(exchanges, turns)
-    assert len(evidence.encode()) <= JUDGE_EVIDENCE_BYTES
+    assert wire_bytes(evidence) <= JUDGE_EVIDENCE_BYTES
     shown = json.loads(evidence.split("instruction.\n", 1)[1])["exchanges"]
     assert all(e["truncated"] for e in shown)
     assert all(

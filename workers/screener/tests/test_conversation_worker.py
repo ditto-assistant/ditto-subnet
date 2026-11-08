@@ -169,7 +169,10 @@ async def test_v1_claim_from_older_platform_frees_the_slot_without_running(
 
 
 @pytest.mark.asyncio
-async def test_exhausted_harness_hold_is_a_budget_outcome(tmp_path):
+@pytest.mark.parametrize(
+    "code", ["inference_budget_exhausted", "inference_budget_unavailable"]
+)
+async def test_exhausted_harness_hold_is_a_budget_outcome(tmp_path, code):
     from ditto_screener import conversation_worker as module
 
     usage = HarnessUsage(
@@ -179,7 +182,7 @@ async def test_exhausted_harness_hold_is_a_budget_outcome(tmp_path):
         spent_microusd=149_000,
         unmetered=False,
         failed=True,
-        failure={"code": "inference_budget_exhausted", "stage": "request"},
+        failure={"code": code, "stage": "request"},
     )
     claim = ConversationLaunch(
         assessment_id=uuid4(),

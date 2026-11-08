@@ -162,7 +162,8 @@ class JudgeMeter:
     def preflight(self) -> None:
         """Refuse before the conversation unless the largest grading request
         the host will ever send (evidence at ``JUDGE_EVIDENCE_BYTES``) fits."""
-        need, _ = self._hold(judge_body("x" * JUDGE_EVIDENCE_BYTES))
+        # Plain ASCII serializes 1:1 plus its two quotes: exactly the cap.
+        need, _ = self._hold(judge_body("x" * (JUDGE_EVIDENCE_BYTES - 2)))
         if self.spent + need > self.limits.judge_microusd:
             raise AssessmentFailure("judge_cost_limit")
 
@@ -429,6 +430,12 @@ def judge_client(
     )
 
 
+def wire_bytes(content: str) -> int:
+    """Size of ``content`` as the request body carries it: JSON-escaped again,
+    so quote- or newline-heavy replies cost what they really cost."""
+    return len(json.dumps(content, ensure_ascii=False).encode())
+
+
 def judge_body(content: str) -> dict[str, Any]:
     return {
         "model": OPENROUTER_MODEL,
@@ -456,14 +463,14 @@ def grade_evidence(
         return _render_evidence(exchanges, turns, cap)
 
     text = render(None)
-    if len(text.encode()) <= limit_bytes:
+    if wire_bytes(text) <= limit_bytes:
         return text
     low, high = 0, max((len(e.assistant) for e in exchanges), default=0)
-    if len(render(0).encode()) > limit_bytes:
+    if wire_bytes(render(0)) > limit_bytes:
         raise AssessmentFailure("judge_cost_limit")
     while low < high:  # Largest per-reply cap whose evidence still fits.
         middle = (low + high + 1) // 2
-        if len(render(middle).encode()) <= limit_bytes:
+        if wire_bytes(render(middle)) <= limit_bytes:
             low = middle
         else:
             high = middle - 1
