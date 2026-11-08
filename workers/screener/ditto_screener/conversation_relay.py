@@ -636,10 +636,24 @@ def serve(relay: Relay) -> None:
     finally:
         for listener in servers:
             listener.shutdown()
-        # Join in-flight handlers before the host reads settled usage. Docker's
-        # outer stop deadline still bounds hostile or stalled connections.
+        # ThreadingHTTPServer handlers are daemon threads, so closing the
+        # listeners does not wait for them: wait for in-flight dispatches to
+        # settle before the process exits and the host reads usage.json.
+        drain_in_flight(relay, MAX_HARNESS_SECONDS)
         for listener in servers:
             listener.server_close()
+
+
+def drain_in_flight(relay: Relay, timeout_seconds: float) -> bool:
+    """Block until no dispatch is in flight, or the timeout passes."""
+    deadline = time.monotonic() + timeout_seconds
+    with relay.lock:
+        while relay.in_flight > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            relay.settled_cv.wait(timeout=remaining)
+    return True
 
 
 if __name__ == "__main__":

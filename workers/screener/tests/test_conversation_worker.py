@@ -212,3 +212,109 @@ async def test_exhausted_harness_hold_is_a_budget_outcome(tmp_path, code):
     sent = ConversationReport.model_validate(delivered[0]["report"])
     assert sent.error_code == "harness_budget_exhausted"
     assert sent.reserved_microusd == 850_000
+
+
+@pytest.mark.asyncio
+async def test_unsettled_harness_usage_at_stop_has_its_own_outcome(tmp_path):
+    from ditto_screener import conversation_worker as module
+
+    usage = HarnessUsage(
+        profile="conversation-openrouter-oss20b-pplx768-v1",
+        requests=140,
+        tokens=100,
+        spent_microusd=41_538,
+        unmetered=True,  # A dispatch was still in flight when the relay stopped.
+        failed=False,
+    )
+    claim = ConversationLaunch(
+        assessment_id=uuid4(),
+        agent_id=uuid4(),
+        artifact_sha256="a" * 64,
+        screened_image_sha256="b" * 64,
+        screened_image_id="sha256:" + "b" * 64,
+        screened_image_url="https://artifact.example/image.tar",
+        screened_image_size_bytes=1,
+        seed="c" * 64,
+        lease_token=uuid4(),
+        bench_version=17,
+        expires_at=datetime.now(UTC) + timedelta(hours=2),
+        instrument=INSTRUMENT_V2,
+    )
+    delivered = []
+
+    class Platform:
+        async def conversation_request(self, _path, payload=None):
+            delivered.append(payload)
+            return {}
+
+    from ditto_screening_protocol.conversation import DIMENSIONS
+    from ditto_screening_protocol.conversation_story import story
+
+    turns = story(claim.seed)
+    completed = ConversationReport(
+        assessment_id=claim.assessment_id,
+        agent_id=claim.agent_id,
+        artifact_sha256=claim.artifact_sha256,
+        screened_image_sha256=claim.screened_image_sha256,
+        bench_version=17,
+        story_sha256=story_digest(claim.seed),
+        provider_model="anthropic/claude-opus-5.5",
+        status="completed",
+        exchanges=[
+            {
+                "turn_id": t.turn_id,
+                "session": (t.turn_id - 1) // 3 + 1,
+                "user": t.user,
+                "assistant": f"Answer {t.turn_id}",
+            }
+            for t in turns
+        ],
+        grades={
+            "probes": [
+                {
+                    "turn_id": i,
+                    "dimension": DIMENSIONS[(i - 11) % 5],
+                    "score": 3,
+                    "quote": f"Answer {i}",
+                    "rationale": "The reply meets the stated expectation here.",
+                }
+                for i in range(11, 31)
+            ]
+        },
+        judge_requests=1,
+        input_tokens=20_000,
+        output_tokens=4_000,
+        reserved_microusd=850_000,
+        spent_microusd=170_000,
+        judge_cost_is_upper_bound=False,
+        judge_cost_basis="billed",
+    )
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    await module._deliver(Platform(), spool, claim, completed, usage)
+    sent = ConversationReport.model_validate(delivered[0]["report"])
+    assert sent.status == "incomplete" and sent.grades is None
+    assert sent.error_code == "harness_usage_unsettled"
+    # An already-incomplete report keeps its own reason.
+    await module._deliver(
+        Platform(),
+        spool / "..",
+        claim.model_copy(update={"assessment_id": uuid4()}),
+        module._empty_report(claim, "harness_unresponsive"),
+        usage,
+    )
+    assert (
+        ConversationReport.model_validate(delivered[1]["report"]).error_code
+        == "harness_unresponsive"
+    )
+
+
+def test_relay_settle_window_outlasts_a_dispatch():
+    from ditto_screener.conversation_relay import MAX_HARNESS_SECONDS
+    from ditto_screener.conversation_runtime import RELAY_SETTLE_SECONDS
+    from ditto_screener.conversation_worker import SETTLE_MARGIN_SECONDS
+
+    # A dispatch ends by its deadline, MAX_HARNESS_SECONDS - 30 after arrival;
+    # the relay drains for MAX_HARNESS_SECONDS and Docker waits longer still.
+    assert RELAY_SETTLE_SECONDS > MAX_HARNESS_SECONDS
+    assert SETTLE_MARGIN_SECONDS > RELAY_SETTLE_SECONDS

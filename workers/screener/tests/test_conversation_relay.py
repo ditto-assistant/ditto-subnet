@@ -669,3 +669,26 @@ def test_a_failure_wakes_budget_waiters(tmp_path, monkeypatch):
         relay.fail(RelayError("unsupported_message_content"), "request")
     thread.join(timeout=5)
     assert not thread.is_alive() and outcome == ["inference_budget_unavailable"]
+
+
+def test_shutdown_drains_in_flight_dispatches(tmp_path):
+    import threading
+    import time as clock
+
+    from ditto_screener.conversation_relay import drain_in_flight
+
+    relay = Relay("secret", tmp_path / "usage.json")
+    relay.in_flight = 1
+
+    def settle():
+        clock.sleep(0.2)
+        with relay.lock:
+            relay.in_flight -= 1
+            relay.settled_cv.notify_all()
+
+    threading.Thread(target=settle).start()
+    started = clock.monotonic()
+    assert drain_in_flight(relay, 5) is True
+    assert 0.1 < clock.monotonic() - started < 4
+    relay.in_flight = 1  # A dispatch that never settles is bounded.
+    assert drain_in_flight(relay, 0.1) is False
