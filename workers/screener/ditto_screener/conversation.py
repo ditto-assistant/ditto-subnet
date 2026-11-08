@@ -45,12 +45,14 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api"
 """OpenRouter's Anthropic-compatible Messages endpoint (``/api/v1/messages``).
 The fleet's existing, owner-only provider key authorizes it; no new secret."""
 OPENROUTER_MODEL = "anthropic/claude-opus-5.5"
-JUDGE_MAX_TOKENS = 16_000
-"""Adaptive thinking plus twenty rationales; non-streaming stays well inside
-the SDK's request timeout at this ceiling."""
+JUDGE_MAX_TOKENS = 10_000
+"""Adaptive thinking plus twenty rationales. Production v2 grading used 3.2k
+to 5.3k output tokens; 10k keeps the worst-case hold of one request inside the
+$0.85 judge budget."""
 JUDGE_EFFORT = "high"
 """Opus 5.5 defaults to ``medium``; grading twenty probes is judgement work."""
 ANSWER_CHARS = 8_000
+PREFLIGHT_EVIDENCE_BYTES = 100_000
 TRANSIENT_STATUSES = frozenset({408, 429, 500, 502, 503, 504, 529})
 
 
@@ -151,11 +153,12 @@ class JudgeMeter:
         return reserve, input_bound
 
     def preflight(self) -> None:
-        """Refuse before the conversation when one typical grading request
-        (300 KB of transcript at the cache-write rate) could not be reserved."""
+        """Refuse before the conversation when one grading request over a
+        100 KB transcript (production v2 used ~65 KB) could not be reserved."""
         rate = max(self.limits.input_decimicros, self.limits.cache_write_decimicros)
         need = _decimicros_to_micros(
-            300_000 * rate + JUDGE_MAX_TOKENS * self.limits.output_decimicros
+            PREFLIGHT_EVIDENCE_BYTES * rate
+            + JUDGE_MAX_TOKENS * self.limits.output_decimicros
         )
         if self.spent + (need * 105 + 99) // 100 > self.limits.judge_microusd:
             raise AssessmentFailure("judge_cost_limit")

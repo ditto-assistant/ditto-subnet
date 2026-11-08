@@ -112,7 +112,10 @@ async def test_failed_delivery_keeps_private_evidence_and_cannot_rebill_same_cla
     }
     assert json.loads(saved)["grades"] is None
     assert len([p for p, _ in calls if p.endswith("/result")]) == 1
-    assert calls[0] == ("/claim", {"instruments": [INSTRUMENT_V2]})
+    assert calls[0] == (
+        "/claim",
+        {"instruments": [INSTRUMENT_V2], "reservation_microusd": 1_000_000},
+    )
 
 
 @pytest.mark.asyncio
@@ -162,3 +165,46 @@ async def test_v1_claim_from_older_platform_frees_the_slot_without_running(
     assert report.instrument == INSTRUMENT_V1 and report.status == "incomplete"
     assert report.error_code == "instrument_unsupported"
     assert report.spent_microusd == 0 and report.harness_usage is None
+
+
+@pytest.mark.asyncio
+async def test_exhausted_harness_hold_is_a_budget_outcome(tmp_path):
+    from ditto_screener import conversation_worker as module
+
+    usage = HarnessUsage(
+        profile="conversation-openrouter-oss20b-pplx768-v1",
+        requests=40,
+        tokens=100,
+        spent_microusd=149_000,
+        unmetered=False,
+        failed=True,
+        failure={"code": "inference_budget_exhausted", "stage": "request"},
+    )
+    claim = ConversationLaunch(
+        assessment_id=uuid4(),
+        agent_id=uuid4(),
+        artifact_sha256="a" * 64,
+        screened_image_sha256="b" * 64,
+        screened_image_id="sha256:" + "b" * 64,
+        screened_image_url="https://artifact.example/image.tar",
+        screened_image_size_bytes=1,
+        seed="c" * 64,
+        lease_token=uuid4(),
+        bench_version=17,
+        expires_at=datetime.now(UTC) + timedelta(hours=2),
+        instrument=INSTRUMENT_V2,
+    )
+    delivered = []
+
+    class Platform:
+        async def conversation_request(self, _path, payload=None):
+            delivered.append(payload)
+            return {}
+
+    report = module._empty_report(claim, "harness_unresponsive")
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    await module._deliver(Platform(), spool, claim, report, usage)
+    sent = ConversationReport.model_validate(delivered[0]["report"])
+    assert sent.error_code == "harness_budget_exhausted"
+    assert sent.reserved_microusd == 850_000

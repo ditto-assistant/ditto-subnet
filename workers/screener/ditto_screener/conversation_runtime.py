@@ -47,6 +47,9 @@ class RuntimeImageLaunch(Protocol):
     @property
     def screened_image_id(self) -> str: ...
 
+    @property
+    def harness_budget_microusd(self) -> int: ...
+
 
 class ConversationRuntime:
     def __init__(
@@ -226,7 +229,13 @@ class ConversationRuntime:
             "--ipc",
             "none",
         ]
-        relay_args = ["--env", "OPENROUTER_API_KEY"]
+        relay_args = [
+            "--env",
+            "OPENROUTER_API_KEY",
+            # The claim's harness hold; the relay refuses anything above it.
+            "--env",
+            f"CONVERSATION_RELAY_BUDGET_MICROUSD={self.launch.harness_budget_microusd}",
+        ]
         await self.docker(
             "create",
             "--name",

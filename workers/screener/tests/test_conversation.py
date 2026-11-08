@@ -479,3 +479,33 @@ async def test_released_errors_and_valid_settlement_stay_exact():
     assert report.spent_microusd == 600_000
     assert not report.judge_cost_is_upper_bound
     assert report.judge_cost_basis == "tariff"
+
+
+def test_one_dollar_hold_bounds_judge_and_harness():
+    from ditto_screener.conversation_relay import BUDGET
+    from ditto_screening_protocol.conversation import (
+        HARNESS_BUDGET_MICROUSD,
+        JUDGE_BUDGET_MICROUSD,
+        RUN_RESERVATION_MICROUSD,
+    )
+
+    assert RUN_RESERVATION_MICROUSD == 1_000_000
+    assert JUDGE_BUDGET_MICROUSD + HARNESS_BUDGET_MICROUSD == RUN_RESERVATION_MICROUSD
+    assert HARNESS_BUDGET_MICROUSD <= BUDGET
+    meter = JudgeMeter(Limits(judge_microusd=JUDGE_BUDGET_MICROUSD))
+    meter.preflight()  # One grading request fits the judge hold.
+
+
+async def test_judge_hold_stops_a_repair_chain_as_a_budget_outcome():
+    rig = Rig(judge_script=("bad_quote", "bad_quote", "ok"))
+    report = await rig.run(Limits(judge_microusd=850_000))
+    assert report.status == "incomplete"
+    assert report.error_code == "judge_cost_limit"
+    assert report.judge_requests == 2 and len(rig.judge_bodies) == 2
+    assert report.spent_microusd == 600_000 <= report.reserved_microusd == 850_000
+
+
+async def test_typical_grading_completes_inside_the_judge_hold():
+    report = await Rig().run(Limits(judge_microusd=850_000))
+    assert report.status == "completed"
+    assert report.spent_microusd == 300_000 and report.reserved_microusd == 850_000

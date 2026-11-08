@@ -19,8 +19,10 @@ from ditto_screening_protocol.conversation import (
     DIMENSIONS,
     INSTRUMENT_V1,
     INSTRUMENT_V2,
+    JUDGE_BUDGET_MICROUSD,
     JUDGE_MODEL_V1,
     RUBRIC_SHA256_V1,
+    RUN_RESERVATION_MICROUSD,
     ConversationReport,
 )
 from ditto_screening_protocol.conversation_story import story, story_digest
@@ -120,7 +122,7 @@ def report_for(claim):
         judge_requests=1,
         input_tokens=100,
         output_tokens=100,
-        reserved_microusd=25_000_000,
+        reserved_microusd=JUDGE_BUDGET_MICROUSD,
         spent_microusd=6000,
         judge_cost_is_upper_bound=False,
         judge_cost_basis="tariff",
@@ -184,15 +186,32 @@ async def test_worker_claim_is_image_bound_and_result_requires_its_owner(
     legacy = await client.post(worker_base + "/claim")
     assert legacy.status_code == 200 and legacy.json() is None
     stale = await client.post(
-        worker_base + "/claim", json={"instruments": [INSTRUMENT_V1]}
+        worker_base + "/claim",
+        json={
+            "instruments": [INSTRUMENT_V1],
+            "reservation_microusd": RUN_RESERVATION_MICROUSD,
+        },
     )
     assert stale.status_code == 200 and stale.json() is None
+    # A v2 worker still sized for the old $30 hold is offered nothing either.
+    for hold in (None, 30_000_000):
+        old_hold = await client.post(
+            worker_base + "/claim",
+            json={"instruments": [INSTRUMENT_V2], "reservation_microusd": hold},
+        )
+        assert old_hold.status_code == 200 and old_hold.json() is None
     response = await client.post(
-        worker_base + "/claim", json={"instruments": [INSTRUMENT_V2]}
+        worker_base + "/claim",
+        json={
+            "instruments": [INSTRUMENT_V2],
+            "reservation_microusd": RUN_RESERVATION_MICROUSD,
+        },
     )
     assert response.status_code == 200, response.text
     claim = response.json()
     assert claim["instrument"] == INSTRUMENT_V2
+    assert claim["judge_budget_microusd"] == 850_000
+    assert claim["harness_budget_microusd"] == 150_000
     expires = datetime.fromisoformat(claim["expires_at"])
     assert (
         timedelta(minutes=124) < expires - datetime.now(UTC) <= timedelta(minutes=125)
@@ -254,7 +273,9 @@ async def test_concurrent_claims_only_admit_top_five_once(
     assert {c["agent_id"] for c in claims} == {str(e.agent_id) for e in entries[:5]}
     assert len({c["seed"] for c in claims}) == 5
     listing = (await client.get(BASE, headers=HEADERS)).json()
-    assert listing["reserved_last_day_microusd"] == 150_000_000
+    # Four settled at their recorded $0.006, the open claim at its full hold.
+    assert listing["reserved_last_day_microusd"] == 4 * 6000 + 1_000_000
+    assert listing["daily_budget_microusd"] == 30_000_000
     assert sum(i["proposed_quality_micros"] is None for i in listing["items"]) == 1
 
 
@@ -387,7 +408,8 @@ async def test_changed_story_and_expired_lease_cannot_score(
     assert (await client.post(path, headers=HEADERS, json=payload)).status_code == 409
     listing = (await client.get(BASE, headers=HEADERS)).json()
     assert listing["items"][0]["status"] == "expired"
-    assert listing["reserved_last_day_microusd"] == 30_000_000
+    # An expired claim's spend is unknown, so it keeps the full hold.
+    assert listing["reserved_last_day_microusd"] == 1_000_000
 
 
 async def test_fee_proposal_uses_existing_audited_revision_and_preserves_cooldown(
@@ -518,7 +540,7 @@ async def test_manual_retry_preserves_history_and_never_retries_twice(
     ).status_code == 200
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
     listing = (await client.get(BASE, headers=HEADERS)).json()
-    assert listing["reserved_last_day_microusd"] == 60_000_000
+    assert listing["reserved_last_day_microusd"] == 2 * 6000
     parent = next(
         i for i in listing["items"] if i["assessment_id"] == original["assessment_id"]
     )
@@ -533,44 +555,54 @@ async def test_manual_retry_preserves_history_and_never_retries_twice(
         assert await db.scalar(select(func.count()).select_from(Score)) == 0
 
 
-async def test_cap_admits_one_extra_retry_then_waits_without_erasing_reservations(
+async def test_cap_counts_recorded_spend_and_full_holds_for_open_claims(
     app, client, session_maker, monkeypatch
 ):
+    """The $30 cap bounds what the lane spent: settled runs count their
+    recorded spend, an open or expired claim counts its whole $1 hold, and an
+    authorized retry waits for headroom instead of erasing anything."""
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    monkeypatch.setattr(module, "DAILY_BUDGET_MICROUSD", 2_500_000)
     await install(app, session_maker, monkeypatch, count=5)
     original, _, approval = await failed_attempt(client)
-    second, _, second_approval = await failed_attempt(client)
-    for _ in range(3):
-        await failed_attempt(client)
+    await failed_attempt(client)
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    assert listing["reserved_last_day_microusd"] == 2 * 6000
+    open_claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    async with session_maker() as db, db.begin():
+        row = await db.get(ConversationAssessment, UUID(open_claim["assessment_id"]))
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    _pass_idle_cooldown(monkeypatch)
+    leased = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    assert leased is not None
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    # Two settled runs plus two full holds: one expired, one live.
+    assert listing["reserved_last_day_microusd"] == 2 * 6000 + 2_000_000
+    assert listing["next_budget_slot_at"] is not None
     response = await client.post(
         BASE + "/authorize-retry", headers=HEADERS, json=approval
     )
     assert response.status_code == 200, response.text
-    assert response.json()["daily_budget_microusd"] == 180_000_000
-    assert response.json()["reserved_last_day_microusd"] == 150_000_000
-    assert response.json()["next_budget_slot_at"] is None
-    retry, _, _ = await failed_attempt(client)
-    assert retry["seed"] == original["seed"]
-    assert retry["agent_id"] == original["agent_id"]
-    # Even an independently authorized second retry cannot reserve a seventh slot.
-    response = await client.post(
-        BASE + "/authorize-retry", headers=HEADERS, json=second_approval
+    report = report_for(leased)
+    report.update(
+        status="incomplete", error_code="judge_cost_limit", grades=None, exchanges=[]
     )
-    assert response.status_code == 200, response.text
-    assert response.json()["reserved_last_day_microusd"] == 180_000_000
-    assert response.json()["next_budget_slot_at"] is not None
-    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
-    async with session_maker() as db, db.begin():
-        parent = await db.get(ConversationAssessment, UUID(original["assessment_id"]))
-        parent.created_at = datetime.now(UTC) - timedelta(days=1, seconds=1)
-    # A day has passed for the reservation, so the idle cooldown has too.
+    result = await client.post(
+        BASE + f"/{leased['assessment_id']}/result",
+        headers=HEADERS,
+        json={"lease_token": leased["lease_token"], "report": report},
+    )
+    assert result.status_code == 200, result.text
     _pass_idle_cooldown(monkeypatch)
     retried = (await client.post(BASE + "/claim", headers=HEADERS)).json()
-    assert retried["seed"] == second["seed"]
+    assert retried["seed"] == original["seed"]
     listing = (await client.get(BASE, headers=HEADERS)).json()
-    assert listing["reserved_last_day_microusd"] == 180_000_000
-    assert listing["current_submission_fee_rao"] == 40_000_000
-    assert len(listing["items"]) == 7
-    assert all(item["reserved_microusd"] == 30_000_000 for item in listing["items"])
+    assert listing["reserved_last_day_microusd"] == 3 * 6000 + 2_000_000
+    assert all(
+        item["reserved_microusd"] == RUN_RESERVATION_MICROUSD
+        for item in listing["items"]
+    )
 
 
 @pytest.mark.parametrize("guard", ["image", "expired", "changed_report"])

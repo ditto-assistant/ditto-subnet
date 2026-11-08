@@ -45,6 +45,32 @@ poisoned the relay with 11 replies left. Twenty of the 21 v1
 `harness_inference_incomplete` rows were also 429s; one was a 402. That is why
 the relay now uses the bench's fallback route.
 
+### Budget (2026-11-08)
+
+Each assessment holds **$1.00**: $0.85 for the judge and $0.15 for the harness
+(was $25 + $5). The rolling 24-hour cap is **$30** (was $180). Measured v2
+spend was ~$0.18 a run: judge ~$0.17 in one request, harness under $0.01.
+
+- The judge reserves each request at its worst-case token bound (one token per
+  UTF-8 byte at the $5/M cache-write rate, plus 10,000 output tokens at $20/M).
+  One grading request over a transcript of up to ~120 KB fits the hold
+  (production transcripts are ~65 KB). A request that would not fit is never
+  sent and ends as `judge_cost_limit`.
+- The relay reserves each dispatch at the route's price ceiling, $0.10/M input
+  and $0.40/M output (every gpt-oss-20b provider was at or under $0.075/$0.30).
+  A dispatch that does not fit waits for in-flight holds to settle; with
+  nothing in flight it is refused as `inference_budget_exhausted`, and the
+  report ends `harness_budget_exhausted`, not `harness_inference_incomplete`.
+- The cap counts what the lane spent. A settled assessment counts its recorded
+  judge + harness spend (retained holds and price-ceiling bounds included). A
+  leased or expired claim keeps its full hold, because its spend is unknown.
+  This replaced counting every hold for 24 hours, which would have kept six
+  settled $30 holds (about $1 of real spend) blocking a $30 cap for a day.
+- Workers advertise their hold (`reservation_microusd`) on claim. Platform
+  offers a claim only when it matches the hold it reserves, so a worker still
+  sized for $30 is never handed a $1 claim. Reports filed against older $30
+  holds still verify against their $25 judge budget.
+
 Workers advertise the instruments they run in the claim body; a worker that
 sends none predates v2 and is offered nothing while Platform admits v2. A v2
 worker that receives a v1 claim from an older Platform files an empty
@@ -171,8 +197,8 @@ The default is off. There is no enforce mode.
 
 Idle enrolled workers call the `/api/v1/screener/conversation-assessments` claim
 and result endpoints using their rotating node principal. Claim admission is
-serialized globally: at most one live assessment, $25 reserved for Astra and $5
-for the harness, with a $180 rolling daily cap. Failed/expired identities are
+serialized globally: at most one live assessment, $0.85 reserved for the judge and
+$0.15 for the harness, within a $30 rolling daily cap (see Budget above). Failed/expired identities are
 never automatically reissued. Image download capabilities and story seeds stay
 private. Reports bind artifact, screened archive, instrument and claim owner.
 

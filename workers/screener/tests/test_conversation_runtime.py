@@ -126,6 +126,9 @@ async def test_verified_image_is_fresh_isolated_and_never_receives_provider_key(
     assert miner[miner.index("--network-alias") + 1] == "agent"
     relay = next(args for args, _ in calls if args[0] == "create")
     assert "--publish" not in relay
+    assert (
+        f"CONVERSATION_RELAY_BUDGET_MICROUSD={launch.harness_budget_microusd}" in relay
+    )
     assert any(
         args[:3] == ("exec", "--interactive", runtime.relay) for args, _ in calls
     )

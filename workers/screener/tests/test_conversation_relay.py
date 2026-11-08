@@ -37,7 +37,7 @@ def test_route_and_model_override_cannot_escape_budget_profile():
     )
     assert route == "chat/completions" and not embed
     assert payload["model"] == MODEL
-    assert payload["provider"]["max_price"] == {"prompt": 2, "completion": 2}
+    assert payload["provider"]["max_price"] == {"prompt": 0.1, "completion": 0.4}
     # The bench's aggregate route: fall back across providers on a rate limit,
     # never onto the excluded 4-bit endpoint, always under the price ceiling.
     assert payload["provider"]["allow_fallbacks"] is True
@@ -69,7 +69,7 @@ def test_private_slice_rejects_paid_dispatch_before_provider_call(
 ):
     calls = provider(monkeypatch, {"usage": {"cost": 0}})
     relay = Relay("secret", tmp_path / "usage.json", budget_microusd=1)
-    with pytest.raises(RelayError, match="inference_budget_unavailable"):
+    with pytest.raises(RelayError, match="inference_budget_exhausted"):
         relay.post("/v1/chat/completions", chat())
     assert calls == []
     assert relay.requests == 0 and relay.spent == 0
@@ -92,12 +92,12 @@ def test_larger_client_allowance_uses_unchanged_ceiling(
 ):
     calls = provider(
         monkeypatch,
-        {"usage": {"prompt_tokens": 20, "completion_tokens": 8192, "cost": 0.016424}},
+        {"usage": {"prompt_tokens": 20, "completion_tokens": 8192, "cost": 0.0025}},
     )
     relay = Relay("secret", tmp_path / "usage.json")
     relay.post(route, body)
     assert json.loads(calls[0].data)[field] == 8192
-    assert relay.tokens == 8212 and relay.spent == 16424 and not relay.failed
+    assert relay.tokens == 8212 and relay.spent == 2500 and not relay.failed
     assert relay.chat_dispatches == relay.successful_chat_responses == 1
 
 
@@ -134,7 +134,8 @@ def test_embedding_without_dollars_is_a_labelled_cost_bound(tmp_path, monkeypatc
     relay = Relay("secret", tmp_path / "usage.json")
     result = relay.post("/api/embed", {"input": ["notebook"]})
     assert len(result["embeddings"][0]) == 768
-    assert relay.spent == 20 and relay.cost_is_upper_bound
+    # 10 tokens at the $0.10/M ceiling, rounded up to a whole microUSD.
+    assert relay.spent == 1 and relay.cost_is_upper_bound
     assert not relay.unmetered and not relay.failed
 
 
@@ -367,7 +368,7 @@ def test_byok_zero_router_fee_retains_provider_price_bound(tmp_path, monkeypatch
     )
     relay = Relay("secret", tmp_path / "usage.json")
     relay.post("/v1/chat/completions", chat())
-    assert relay.spent == 60 and relay.cost_is_upper_bound
+    assert relay.spent == 6 and relay.cost_is_upper_bound
     assert not relay.unmetered and not relay.failed
 
 
@@ -566,3 +567,63 @@ def test_slot_wait_spends_the_caller_deadline_and_refunds(tmp_path, monkeypatch)
     assert usage.failure.code == "relay_busy"
     raw = json.loads(relay.state_file.read_text())
     assert raw["requests"] == 0 and raw["chat_dispatches"] == 0
+
+
+def test_budget_waits_for_in_flight_holds_then_exhausts_distinctly(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    class Opener:
+        def open(self, request, **_kwargs):
+            calls.append(request)
+            if len(calls) == 1:
+                started.set()
+                assert release.wait(timeout=10)
+            usage = {"prompt_tokens": 10, "completion_tokens": 10, "cost": 0.00001}
+            return Response(json.dumps({"choices": [], "usage": usage}).encode())
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    # One dispatch reserves ~2.6k microUSD at the ceiling: two cannot be held
+    # at once inside 4k, but each settles at 10 microUSD.
+    relay = Relay("secret", tmp_path / "usage.json", budget_microusd=4_000)
+    first = threading.Thread(target=lambda: relay.post("/v1/chat/completions", chat()))
+    first.start()
+    assert started.wait(timeout=10)
+    second_done = threading.Event()
+
+    def second():
+        relay.post("/v1/chat/completions", chat())
+        second_done.set()
+
+    waiter = threading.Thread(target=second)
+    waiter.start()
+    assert not second_done.wait(timeout=0.3)  # Waiting, not failed.
+    release.set()
+    first.join(timeout=10)
+    waiter.join(timeout=10)
+    assert second_done.is_set() and len(calls) == 2 and relay.spent == 20
+    assert not relay.failed
+    relay.spent = 2_000  # Less than one hold left, with nothing in flight.
+    with pytest.raises(RelayError, match="inference_budget_exhausted"):
+        relay.post("/v1/chat/completions", chat())
+    assert len(calls) == 2
+
+
+def test_ceiling_prices_cover_every_listed_provider():
+    from ditto_screener.conversation_relay import CHAT_PROVIDER, ceiling_microusd
+
+    # Highest gpt-oss-20b list price on 2026-11-08: Groq $0.075 in / $0.30 out.
+    assert CHAT_PROVIDER["max_price"] == {"prompt": 0.1, "completion": 0.4}
+    assert ceiling_microusd(1_000_000, 0) == 100_000
+    assert ceiling_microusd(0, 1_000_000) == 400_000

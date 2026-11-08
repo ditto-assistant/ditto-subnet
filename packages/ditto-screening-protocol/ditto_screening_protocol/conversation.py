@@ -27,6 +27,19 @@ JUDGE_MODEL = JUDGE_MODEL_V2
 JUDGE_MODELS = {INSTRUMENT_V1: JUDGE_MODEL_V1, INSTRUMENT_V2: JUDGE_MODEL_V2}
 Instrument = Literal["conversational-continuity-v1", "conversational-continuity-v2"]
 JudgeModel = Literal["gpt-6-astra", "claude-opus-5-5"]
+JUDGE_BUDGET_MICROUSD = 850_000
+HARNESS_BUDGET_MICROUSD = 150_000
+RUN_RESERVATION_MICROUSD = JUDGE_BUDGET_MICROUSD + HARNESS_BUDGET_MICROUSD
+"""$1.00 per assessment (2026-11-08, Peyton). Measured v2 cost was ~$0.18:
+judge ~$0.17 in one request, harness under $0.01. The judge hold covers one
+grading request at its worst-case token bound plus a repair of a typical one;
+the harness hold covers several concurrent dispatches at the relay's ceiling."""
+LEGACY_RUN_BUDGETS = {30_000_000: (25_000_000, 5_000_000)}
+"""Holds claimed before the resize: total -> (judge, harness)."""
+RUN_BUDGETS = {
+    **LEGACY_RUN_BUDGETS,
+    RUN_RESERVATION_MICROUSD: (JUDGE_BUDGET_MICROUSD, HARNESS_BUDGET_MICROUSD),
+}
 V2_MAX_JUDGE_REQUESTS = 3
 """One grading request plus at most two bounded repair or retry attempts."""
 TURN_COUNT = 30
@@ -165,8 +178,8 @@ class ConversationClaim(WireModel):
     seed: Digest
     lease_token: UUID
     expires_at: datetime
-    judge_budget_microusd: Literal[25_000_000] = 25_000_000
-    harness_budget_microusd: Literal[5_000_000] = 5_000_000
+    judge_budget_microusd: Literal[25_000_000, 850_000] = JUDGE_BUDGET_MICROUSD
+    harness_budget_microusd: Literal[5_000_000, 150_000] = HARNESS_BUDGET_MICROUSD
     instrument: Instrument = INSTRUMENT_V1
     """A Platform that predates v2 sends no instrument; that claim is v1."""
 

@@ -22041,10 +22041,10 @@ export interface components {
             expires_at: string;
             /**
              * Harness Budget Microusd
-             * @default 5000000
-             * @constant
+             * @default 150000
+             * @enum {integer}
              */
-            harness_budget_microusd: 5000000;
+            harness_budget_microusd: 5000000 | 150000;
             /**
              * Instrument
              * @default conversational-continuity-v1
@@ -22053,10 +22053,10 @@ export interface components {
             instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
             /**
              * Judge Budget Microusd
-             * @default 25000000
-             * @constant
+             * @default 850000
+             * @enum {integer}
              */
-            judge_budget_microusd: 25000000;
+            judge_budget_microusd: 25000000 | 850000;
             /**
              * Lease Token
              * Format: uuid
@@ -22075,6 +22075,8 @@ export interface components {
         ConversationClaimRequest: {
             /** Instruments */
             instruments: string[];
+            /** Reservation Microusd */
+            reservation_microusd?: number | null;
         };
         /**
          * ConversationLaunch
@@ -22102,10 +22104,10 @@ export interface components {
             expires_at: string;
             /**
              * Harness Budget Microusd
-             * @default 5000000
-             * @constant
+             * @default 150000
+             * @enum {integer}
              */
-            harness_budget_microusd: 5000000;
+            harness_budget_microusd: 5000000 | 150000;
             /**
              * Instrument
              * @default conversational-continuity-v1
@@ -22114,10 +22116,10 @@ export interface components {
             instrument: "conversational-continuity-v1" | "conversational-continuity-v2";
             /**
              * Judge Budget Microusd
-             * @default 25000000
-             * @constant
+             * @default 850000
+             * @enum {integer}
              */
-            judge_budget_microusd: 25000000;
+            judge_budget_microusd: 25000000 | 850000;
             /**
              * Lease Token
              * Format: uuid

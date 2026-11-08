@@ -12,7 +12,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.conversation import (
@@ -39,6 +39,8 @@ from ditto.db.queries.submission_settings import effective_submission_settings
 from ditto_screening_protocol.conversation import (
     INSTRUMENT,
     JUDGE_MODEL,
+    RUN_BUDGETS,
+    RUN_RESERVATION_MICROUSD,
     digest,
     proposed_quality_micros,
 )
@@ -47,8 +49,10 @@ from ditto_screening_protocol.conversation_story import story, story_digest
 router = APIRouter(prefix="/admin/conversation-assessments", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
-DAILY_BUDGET_MICROUSD = 180_000_000
-RUN_RESERVATION_MICROUSD = 30_000_000
+DAILY_BUDGET_MICROUSD = 30_000_000
+"""$30 rolling 24 h cap (2026-11-08, Peyton: "30 or 50 a day"; the conservative
+end). With the $1 hold that admits up to 30 assessments a day; measured spend
+is ~$0.18 each."""
 LEASE_MINUTES = 125
 """The worker derives its own deadlines from this lease: the conversation gets
 the lease minus a 15-minute judge window and 3 minutes for settlement and
@@ -135,15 +139,38 @@ async def set_settings(
     return await observations(request, None, session)
 
 
-async def _reserved(session: AsyncSession, now: datetime) -> int:
-    return int(
-        await session.scalar(
+def _charge(reserved_microusd: int, report: dict | None) -> int:
+    """What one assessment counts against the rolling cap.
+
+    A leased or expired assessment keeps its full hold: its spend is unknown.
+    A settled one counts its recorded judge + harness spend, which already
+    includes any retained hold or price-ceiling upper bound. The cap therefore
+    bounds what the lane actually spent (2026-11-08, Peyton), not the
+    worst-case holds of runs that are long finished."""
+    if report is None:
+        return reserved_microusd
+    settled = ConversationReport.model_validate(report)
+    usage = settled.harness_usage
+    return settled.spent_microusd + (usage.spent_microusd if usage else 0)
+
+
+async def _rolling(session: AsyncSession, now: datetime) -> list[tuple[datetime, int]]:
+    rows = (
+        await session.execute(
             select(
-                func.coalesce(func.sum(ConversationAssessment.reserved_microusd), 0)
-            ).where(ConversationAssessment.created_at >= now - timedelta(days=1))
+                ConversationAssessment.created_at,
+                ConversationAssessment.reserved_microusd,
+                ConversationAssessment.report,
+            )
+            .where(ConversationAssessment.created_at >= now - timedelta(days=1))
+            .order_by(ConversationAssessment.created_at)
         )
-        or 0
-    )
+    ).all()
+    return [(created, _charge(hold, report)) for created, hold, report in rows]
+
+
+async def _reserved(session: AsyncSession, now: datetime) -> int:
+    return sum(charge for _, charge in await _rolling(session, now))
 
 
 def _observation(
@@ -245,19 +272,10 @@ async def observations(
         )
     ).all()
     retries = {parent: child for parent, child in retry_rows if parent is not None}
-    reserved = await _reserved(session, now)
+    rolling = await _rolling(session, now)
+    reserved = sum(charge for _, charge in rolling)
     next_slot = None
     if reserved + RUN_RESERVATION_MICROUSD > DAILY_BUDGET_MICROUSD:
-        rolling = (
-            await session.execute(
-                select(
-                    ConversationAssessment.created_at,
-                    ConversationAssessment.reserved_microusd,
-                )
-                .where(ConversationAssessment.created_at >= now - timedelta(days=1))
-                .order_by(ConversationAssessment.created_at)
-            )
-        ).all()
         remaining = reserved
         for created_at, amount in rolling:
             remaining -= amount
@@ -507,8 +525,11 @@ async def _claim_assessment(
         )
         session.add(row)
         await session.commit()
+        judge_budget, harness_budget = RUN_BUDGETS[row.reserved_microusd]
         return ConversationClaim(
             instrument=INSTRUMENT,
+            judge_budget_microusd=judge_budget,
+            harness_budget_microusd=harness_budget,
             assessment_id=row.assessment_id,
             agent_id=row.agent_id,
             artifact_sha256=row.artifact_sha256,
@@ -554,7 +575,7 @@ async def submit_result(
         row.bench_version,
         row.instrument,
         story_digest(row.seed),
-        25_000_000,
+        RUN_BUDGETS.get(row.reserved_microusd, (None, None))[0],
     ):
         raise HTTPException(409, "conversation identity mismatch")
     expected = story(row.seed)
