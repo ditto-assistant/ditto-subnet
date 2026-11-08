@@ -8,7 +8,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import monotonic
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -26,6 +26,7 @@ from ditto.api_models.conversation import (
     ConversationRetryRequest,
     ConversationSettingsRequest,
 )
+from ditto.api_models.public import PublicLeaderboardEntry
 from ditto.api_models.submission_settings import AdminSubmissionSettingsRequest
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -53,6 +54,13 @@ DAILY_BUDGET_MICROUSD = 30_000_000
 """$30 rolling 24 h cap (2026-11-08, Peyton: "30 or 50 a day"; the conservative
 end). With the $1 hold that admits up to 30 assessments a day; measured spend
 is ~$0.18 each."""
+ADMISSION_RANK_LIMIT = 15
+"""Finalized, owner-deduplicated public ranks admitted (2026-11-08: widened from
+the top five so a rank-change estimate covers more than the podium)."""
+REPEAT_RANK_LIMIT = 5
+REPEAT_SAMPLES = 2
+"""Fresh-seed repeats per leading artifact, after every eligible artifact has
+its canonical assessment: three judged samples measure judge noise."""
 LEASE_MINUTES = 125
 """The worker derives its own deadlines from this lease: the conversation gets
 the lease minus a 15-minute judge window and 3 minutes for settlement and
@@ -201,6 +209,7 @@ def _observation(
         error_code=report.error_code if report else None,
         report_sha256=digest(row.report) if row.report is not None else None,
         instrument=row.instrument,
+        repeat_index=row.repeat_index,
         **(_evidence_summary(report) if report else {}),
         retry_of=row.retry_of,
         retry_authorization=row.retry_authorization,
@@ -436,7 +445,7 @@ async def _claim_assessment(
             for entry in board.entries
             if entry.finalized
             and entry.rank is not None
-            and entry.rank <= 5
+            and entry.rank <= ADMISSION_RANK_LIMIT
             and entry.bench_version is not None
             and entry.bench_version >= 9
         ),
@@ -461,6 +470,7 @@ async def _claim_assessment(
         return None
     if await _reserved(session, now) + RUN_RESERVATION_MICROUSD > DAILY_BUDGET_MICROUSD:
         return None
+    eligible: list[tuple[PublicLeaderboardEntry, Agent]] = []
     for entry in candidates:
         agent = await session.get(Agent, entry.agent_id)
         if (
@@ -471,15 +481,26 @@ async def _claim_assessment(
             or not agent.screened_image_upload_id
             or not agent.screened_image_size_bytes
             or not agent.screened_image_verified_at
+            or not 0 <= entry.official_composite <= 1
+            or entry.bench_version is None
         ):
-            continue
+            continue  # Legacy efficiency-adjusted values cannot be base quality.
+        eligible.append((entry, agent))
+
+    def identity(agent: Agent, entry: PublicLeaderboardEntry) -> tuple[Any, ...]:
+        return (
+            ConversationAssessment.agent_id == agent.agent_id,
+            ConversationAssessment.artifact_sha256 == agent.sha256,
+            ConversationAssessment.bench_version == entry.bench_version,
+            ConversationAssessment.instrument == INSTRUMENT,
+            ConversationAssessment.retry_of.is_(None),
+        )
+
+    # Pass 1: one canonical assessment per eligible artifact, best rank first.
+    for entry, agent in eligible:
         existing = await session.scalar(
             select(ConversationAssessment).where(
-                ConversationAssessment.agent_id == agent.agent_id,
-                ConversationAssessment.artifact_sha256 == agent.sha256,
-                ConversationAssessment.bench_version == entry.bench_version,
-                ConversationAssessment.instrument == INSTRUMENT,
-                ConversationAssessment.retry_of.is_(None),
+                *identity(agent, entry), ConversationAssessment.repeat_index == 0
             )
         )
         if existing is not None:
@@ -503,43 +524,102 @@ async def _claim_assessment(
                 or existing.report.get("error_code") != "harness_inference_incomplete"
             ):
                 continue
-        if not 0 <= entry.official_composite <= 1:
-            continue  # Legacy efficiency-adjusted values cannot be base quality.
-        row = ConversationAssessment(
-            assessment_id=uuid4(),
-            agent_id=agent.agent_id,
-            artifact_sha256=agent.sha256,
-            screened_image_sha256=agent.screened_image_sha256,
-            bench_version=entry.bench_version,
-            instrument=INSTRUMENT,
+        return await _admit(
+            session,
+            agent,
+            entry.bench_version or 0,  # Filtered to a real version above.
             seed=existing.seed if existing is not None else secrets.token_hex(32),
-            lease_token=uuid4(),
-            created_at=now,
-            expires_at=now + timedelta(minutes=LEASE_MINUTES),
             base_quality_micros=existing.base_quality_micros
             if existing is not None
             else round(entry.official_composite * 1_000_000),
-            reserved_microusd=RUN_RESERVATION_MICROUSD,
+            now=now,
             worker_hotkey=worker_hotkey,
             retry_of=existing.assessment_id if existing is not None else None,
         )
-        session.add(row)
-        await session.commit()
-        judge_budget, harness_budget = RUN_BUDGETS[row.reserved_microusd]
-        return ConversationClaim(
-            instrument=INSTRUMENT,
-            judge_budget_microusd=judge_budget,
-            harness_budget_microusd=harness_budget,
-            assessment_id=row.assessment_id,
-            agent_id=row.agent_id,
-            artifact_sha256=row.artifact_sha256,
-            screened_image_sha256=row.screened_image_sha256,
-            bench_version=row.bench_version,
-            seed=row.seed,
-            lease_token=row.lease_token,
-            expires_at=row.expires_at,
+    # Pass 2: only when every eligible artifact has its canonical assessment,
+    # spend spare capacity on fresh-seed repeats of the leaders. Repeats never
+    # change a score; they measure how far the judge moves on the same agent.
+    for entry, agent in eligible:
+        if (entry.rank or 0) > REPEAT_RANK_LIMIT:
+            continue
+        canonical = await session.scalar(
+            select(ConversationAssessment).where(
+                *identity(agent, entry), ConversationAssessment.repeat_index == 0
+            )
+        )
+        if (
+            canonical is None
+            or canonical.report is None
+            or canonical.report.get("status") != "completed"
+        ):
+            continue  # Repeat only an artifact the judge has actually scored.
+        repeats = list(
+            await session.scalars(
+                select(ConversationAssessment.repeat_index).where(
+                    *identity(agent, entry), ConversationAssessment.repeat_index > 0
+                )
+            )
+        )
+        if len(repeats) >= REPEAT_SAMPLES:
+            continue
+        return await _admit(
+            session,
+            agent,
+            entry.bench_version or 0,  # Filtered to a real version above.
+            seed=secrets.token_hex(32),
+            base_quality_micros=canonical.base_quality_micros,
+            now=now,
+            worker_hotkey=worker_hotkey,
+            repeat_index=max(repeats, default=0) + 1,
         )
     return None
+
+
+async def _admit(
+    session: AsyncSession,
+    agent: Agent,
+    bench_version: int,
+    *,
+    seed: str,
+    base_quality_micros: int,
+    now: datetime,
+    worker_hotkey: str | None,
+    retry_of: UUID | None = None,
+    repeat_index: int = 0,
+) -> ConversationClaim:
+    row = ConversationAssessment(
+        assessment_id=uuid4(),
+        agent_id=agent.agent_id,
+        artifact_sha256=agent.sha256,
+        screened_image_sha256=agent.screened_image_sha256,
+        bench_version=bench_version,
+        instrument=INSTRUMENT,
+        seed=seed,
+        lease_token=uuid4(),
+        created_at=now,
+        expires_at=now + timedelta(minutes=LEASE_MINUTES),
+        base_quality_micros=base_quality_micros,
+        reserved_microusd=RUN_RESERVATION_MICROUSD,
+        worker_hotkey=worker_hotkey,
+        retry_of=retry_of,
+        repeat_index=repeat_index,
+    )
+    session.add(row)
+    await session.commit()
+    judge_budget, harness_budget = RUN_BUDGETS[row.reserved_microusd]
+    return ConversationClaim(
+        instrument=INSTRUMENT,
+        judge_budget_microusd=judge_budget,
+        harness_budget_microusd=harness_budget,
+        assessment_id=row.assessment_id,
+        agent_id=row.agent_id,
+        artifact_sha256=row.artifact_sha256,
+        screened_image_sha256=row.screened_image_sha256,
+        bench_version=row.bench_version,
+        seed=row.seed,
+        lease_token=row.lease_token,
+        expires_at=row.expires_at,
+    )
 
 
 @router.post("/{assessment_id}/result", response_model=ConversationObservation)

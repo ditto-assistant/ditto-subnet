@@ -22202,6 +22202,11 @@ export interface components {
             judge_spent_microusd?: number | null;
             /** Proposed Quality Micros */
             proposed_quality_micros: number | null;
+            /**
+             * Repeat Index
+             * @default 0
+             */
+            repeat_index: number;
             /** Report Sha256 */
             report_sha256?: string | null;
             /** Reserved Microusd */

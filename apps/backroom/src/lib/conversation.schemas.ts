@@ -51,6 +51,7 @@ export const conversationObservationsSchema = z.object({
     spent_microusd: z.number().int().nullable(),
     error_code: z.string().nullable(),
     instrument: z.string().nullable().optional(),
+    repeat_index: z.number().int().nonnegative().default(0),
     judge_model: z.string().nullable().optional(),
     spent_is_upper_bound: z.boolean().nullable().optional(),
     judge_spent_microusd: z.number().int().nullable().optional(),

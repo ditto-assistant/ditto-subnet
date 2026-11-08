@@ -69,6 +69,8 @@ class ConversationObservation(WireModel):
     whether part of it is a retained hold or a price ceiling, not a bill."""
     error_code: str | None
     instrument: str | None = None
+    repeat_index: int = 0
+    """0 is the canonical assessment; 1..N are fresh-seed noise samples."""
     judge_model: str | None = None
     spent_is_upper_bound: bool | None = None
     judge_spent_microusd: int | None = None
