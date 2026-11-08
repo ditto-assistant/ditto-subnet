@@ -1130,8 +1130,12 @@ async def open_review(
                 )
             if existing.status != "resolved":
                 raise HTTPException(status_code=409, detail="ATH review already exists")
+            # A stranded review closed behind a terminal agent (SN-434) did
+            # not ban it, so it is not a reject this path can withdraw.
             reconsidering_rejection = (
-                existing.resolution == "reject" and agent.status == AgentStatus.BANNED
+                existing.resolution == "reject"
+                and agent.status == AgentStatus.BANNED
+                and "terminal_close" not in (existing.algorithm_provenance or {})
             )
             if agent.status not in openable and not reconsidering_rejection:
                 raise HTTPException(

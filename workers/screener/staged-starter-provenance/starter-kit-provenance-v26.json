@@ -10,7 +10,7 @@
     "Dockerfile": "db986ab58b22f541ca372b7d4f282f5b4efcecd229101ea31e57c02ba0df0df3",
     "LICENSE": "31930afa24e664ca57a2fa3e6ab4cea9307c55a8f9e6c0c9818340ea3181eac1",
     "PROTOCOL.md": "5352b64acab76ec3499a3a10fb2a52310181a1114db373460812ee637627a585",
-    "README.md": "c45d8934b48fe450d130da34bc015c3e6bd2fb7f2b36baa03947903e7cdb4dcb",
+    "README.md": "bca4fcce77f359c817ff2dabcb8c40becb6cc33a5ca7c29841778cca5109f057",
     "SETUP.md": "16fa641d6ee6bc41cf30b6a8a9ca5d59f40d29b370c43b233bfc77028ed8bb57",
     "UPSTREAM.md": "be89588e1f1182b888dfee48a55806a343067bcb1c43243ceccaa81381d21392",
     "fixtures/models/README.md": "193c8621bfe782733a4a4c0ff2ad37d98179c3ef5186348107cfa71dc3226a32",
@@ -24,7 +24,7 @@
     "fixtures/seed-user/subject_links.json": "91b826124e7b93055afa3bc4f2317bcdc8326cdcaeb368267b76ca5b13befd22",
     "fixtures/seed-user/subjects.json": "12881b1f26c348d9b9ceaadbddf1c477309b8390dae62b51c1fe4fe5b4cb6f36",
     "scripts/build-seed-user.py": "8c6da852ecca97247beb73309713a5815a1cd835b6e0ae1cc011437e52eac303",
-    "scripts/local-rehearsal.py": "2d9abed4ec6e43d47fa323ad21fd2fb2331822e86b14b1b1f0c8eb3ba3c3a07a",
+    "scripts/local-rehearsal.py": "0d29090ca62704bfe5173640b3f0085bafa07fca36b5d29f71a63d13d8ab89be",
     "scripts/rehearsal_cost.py": "47743214232400addf9769fca4456916aaa7b71a71d870365b7a437e0588054d",
     "scripts/rehearsal_gates.py": "903cedd8ed3ead62352692f1967a2192c69b774b35bbd182a1e27209ea2473c2",
     "scripts/submission-lab.py": "d6a422063e94e18317f98bbcd53e4002b4704ad84cf6a873aa2a53aa2a90cc6e",
@@ -44,7 +44,7 @@
     "src/playground/prompt.rs": "e66083e24476ff7135db794cb3d157c20e970154cfc4f625d44fc1b1a928bb47",
     "src/playground/submit.rs": "a6ef0fb1164520f24935ca89483d0aefaa82f91ddfdc00721b10a92129ed5af2",
     "src/playground/tools.rs": "c3774937221668573c69a7d3dc1798565f513c470f20ed4734811183204745b5",
-    "src/protocol.rs": "626162d38a9798cdd58cb6f0e431de0a3eeafb6054633ce110b14b963ec4e4e1",
+    "src/protocol.rs": "35efc1fe6fd1a90c5221ccff216705fc32daf40f53bc745f300d2860b5f9f62e",
     "src/reranker.rs": "42031f30134abfa7adf6375b7922ba788809a748d26ab08e8ce792e1cb307b13",
     "src/scorer.rs": "ac8c4cfda344f1dad7b9d674d53639949a3620a4be66710c780f120e526ebeff",
     "src/seed.rs": "2e24f760464c68a9e77a304ae59e8559f5ef077f7056be85e81ca83b8d12de9c",
@@ -52,6 +52,6 @@
     "tests/store_concurrency.rs": "7cf956ffa08d2632ecb400f1f5aa7580df6e684fa831861beca8ba947c8578cd"
   },
   "origin": "ditto-assistant/ditto-subnet/miners/dittobench-starter-kit",
-  "revision": "cfa71b9f77696a66f0e6da6e3ea30ec1ae90569e",
+  "revision": "0e92577b7e3f76d7658591a618e4f28044b07760",
   "version": 1
 }

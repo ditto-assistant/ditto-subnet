@@ -19,6 +19,7 @@ from uuid import UUID
 import httpx
 
 from ditto_screener.conversation import AssessmentFailure
+from ditto_screener.conversation_relay import MAX_HARNESS_SECONDS
 from ditto_screener.gate import (
     _CANARY_IMAGE,
     BuildGate,
@@ -26,6 +27,11 @@ from ditto_screener.gate import (
     _write_openrouter_shim_certs,
 )
 from ditto_screening_protocol.conversation import HarnessUsage
+
+RELAY_SETTLE_SECONDS = MAX_HARNESS_SECONDS + 15
+"""A dispatch may run until its operation deadline (under MAX_HARNESS_SECONDS
+after arrival); the relay drains in-flight dispatches for that long on SIGTERM,
+and Docker allows a little more before it kills the relay."""
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -46,6 +52,9 @@ class RuntimeImageLaunch(Protocol):
 
     @property
     def screened_image_id(self) -> str: ...
+
+    @property
+    def harness_budget_microusd(self) -> int: ...
 
 
 class ConversationRuntime:
@@ -96,7 +105,7 @@ class ConversationRuntime:
             raise AssessmentFailure("sandbox_operation_failed")
         return out.decode().strip()
 
-    def transport(self, *, timeout: int = 120) -> httpx.AsyncBaseTransport:
+    def transport(self, *, timeout: int = 300) -> httpx.AsyncBaseTransport:
         return HarnessTransport(self, timeout=timeout)
 
     async def preflight(self) -> None:
@@ -226,7 +235,13 @@ class ConversationRuntime:
             "--ipc",
             "none",
         ]
-        relay_args = ["--env", "OPENROUTER_API_KEY"]
+        relay_args = [
+            "--env",
+            "OPENROUTER_API_KEY",
+            # The claim's harness hold; the relay refuses anything above it.
+            "--env",
+            f"CONVERSATION_RELAY_BUDGET_MICROUSD={self.launch.harness_budget_microusd}",
+        ]
         await self.docker(
             "create",
             "--name",
@@ -345,7 +360,16 @@ class ConversationRuntime:
         with contextlib.suppress(Exception):
             await self.docker("rm", "--force", self.container)
         with contextlib.suppress(Exception):
-            await self.docker("stop", "--time", "120", self.relay, timeout=130)
+            # Let an in-flight dispatch finish and settle: a 120 s stop killed the
+            # relay mid-call and left the run's harness usage unsettled
+            # (cc5c4114). The relay drains for up to MAX_HARNESS_SECONDS.
+            await self.docker(
+                "stop",
+                "--time",
+                str(RELAY_SETTLE_SECONDS),
+                self.relay,
+                timeout=RELAY_SETTLE_SECONDS + 15,
+            )
         with contextlib.suppress(Exception):
             await self.docker("rm", "--force", self.relay)
         usage = None
@@ -364,8 +388,9 @@ class ConversationRuntime:
 
 
 class HarnessTransport(httpx.AsyncBaseTransport):
-    def __init__(self, runtime: ConversationRuntime, *, timeout: int = 120):
-        if type(timeout) is not int or not 1 <= timeout <= 120:
+    def __init__(self, runtime: ConversationRuntime, *, timeout: int = 300):
+        # The bench's v7+ /run deadline; the relay enforces the same ceiling.
+        if type(timeout) is not int or not 1 <= timeout <= 300:
             raise ValueError("invalid harness timeout")
         self.runtime = runtime
         self.timeout = timeout

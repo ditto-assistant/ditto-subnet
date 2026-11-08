@@ -147,3 +147,49 @@ def test_model_timeout_parked_codes_are_registered_source_review_codes() -> None
     for code in public._SOURCE_REVIEW_MODEL_TIMEOUT_REASON_CODES:
         assert ADMISSION_LANE_BY_REASON_CODE[code] == "source_review"
         assert code not in INFRA_AUTO_RETRY_REASON_CODES
+
+
+def test_static_safety_reject_public_reason_passes_only_strict_locations() -> None:
+    """The mechanical lane's static reject names what matched, safely."""
+    detail = (
+        "static safety check matched categories=[credential_exfiltration, "
+        "docker_socket] locations=[src/main.rs:12, app/run.py:3]; remove or "
+        "make the flagged code unreachable and resubmit"
+    )
+    reason = screener._public_screening_reason(detail, "static-malicious-source")
+    assert "credential_exfiltration, docker_socket" in reason
+    assert "src/main.rs:12, app/run.py:3" in reason
+
+    hostile = (
+        "static safety check matched categories=[Bad Category, ok_cat] "
+        "locations=[../../etc/passwd:1, $(curl x):2, fine.py:9]; token=SECRET"
+    )
+    reason = screener._public_screening_reason(hostile, "static-malicious-source")
+    assert "SECRET" not in reason
+    assert "$(curl" not in reason
+    assert "Bad Category" not in reason
+    assert "ok_cat" in reason
+    assert "fine.py:9" in reason
+    assert "../../etc/passwd:1" not in reason
+
+    spaced = (
+        "static safety check matched categories=[docker_socket] "
+        "locations=[src/my file.py:4, .hidden/x.py:2]; remove"
+    )
+    reason = screener._public_screening_reason(spaced, "static-malicious-source")
+    assert "src/my file.py:4, .hidden/x.py:2" in reason
+
+    bare = screener._public_screening_reason("garbage", "static-malicious-source")
+    assert bare.startswith("Static safety check found malicious-source patterns")
+
+
+def test_static_safety_reject_public_reason_survives_a_truncated_detail() -> None:
+    truncated = (
+        "static safety check matched categories=[docker_socket] "
+        "locations=[src/a.py:1, src/b.py:2, big.py:12345678, Dockerfile, "
+        "src/very/long/partial/pa:"
+    )
+    reason = screener._public_screening_reason(truncated, "static-malicious-source")
+    assert "docker_socket" in reason
+    assert "src/a.py:1, src/b.py:2, big.py:12345678, Dockerfile" in reason
+    assert "partial" not in reason

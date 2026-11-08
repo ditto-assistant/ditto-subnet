@@ -2,6 +2,150 @@
 
 <!-- version list -->
 
+## v0.465.0 (2026-11-08)
+
+### Features
+
+- **datagen**: Stage the bench v18 accuracy datagen half
+  ([#3412](https://github.com/ditto-assistant/ditto-subnet/pull/3412),
+  [`b320b33`](https://github.com/ditto-assistant/ditto-subnet/commit/b320b33a465eca335845557b34a1e2d75839464b))
+
+
+## v0.464.1 (2026-11-08)
+
+### Bug Fixes
+
+- **screener**: Let the conversation relay settle in-flight calls before stopping
+  ([#3441](https://github.com/ditto-assistant/ditto-subnet/pull/3441),
+  [`1713509`](https://github.com/ditto-assistant/ditto-subnet/commit/17135098dd186fe26442ed942c3157f96011536f))
+
+
+## v0.464.0 (2026-11-08)
+
+### Features
+
+- **platform**: Widen conversation admission to ranks 1-15 and add fresh-seed repeats
+  ([#3439](https://github.com/ditto-assistant/ditto-subnet/pull/3439),
+  [`be40005`](https://github.com/ditto-assistant/ditto-subnet/commit/be4000560e1c1bc8a2ef19ffba152e43dd8cd71a))
+
+
+## v0.463.0 (2026-11-08)
+
+### Features
+
+- **screener**: Resize conversation assessments to a $1 hold and a $30 daily spend cap
+  ([#3436](https://github.com/ditto-assistant/ditto-subnet/pull/3436),
+  [`6fd21e4`](https://github.com/ditto-assistant/ditto-subnet/commit/6fd21e4e5473a05acf14cdfeff06bfd8a6a61c94))
+
+
+## v0.462.2 (2026-11-08)
+
+### Bug Fixes
+
+- **screener**: Return invalid reviewer tool arguments to the model (SN-430)
+  ([#3400](https://github.com/ditto-assistant/ditto-subnet/pull/3400),
+  [`9539cfd`](https://github.com/ditto-assistant/ditto-subnet/commit/9539cfdb47d2b1606bb65af69a59627523b05aa4))
+
+
+## v0.462.1 (2026-11-08)
+
+### Bug Fixes
+
+- **screener**: Route conversation gpt-oss-20b like the bench so a rate-limited provider falls back
+  ([#3434](https://github.com/ditto-assistant/ditto-subnet/pull/3434),
+  [`7545e87`](https://github.com/ditto-assistant/ditto-subnet/commit/7545e8741ce988d0d0ed23a2a81c1a49fb7769f7))
+
+
+## v0.462.0 (2026-11-08)
+
+### Features
+
+- **screener**: Judge conversation assessments with Claude Opus 5.5 (v2) and fix harness failure
+  classes ([#3433](https://github.com/ditto-assistant/ditto-subnet/pull/3433),
+  [`3370604`](https://github.com/ditto-assistant/ditto-subnet/commit/33706049d2ea3f0e3c7952ca266af73254dd1b40))
+
+
+## v0.461.0 (2026-11-07)
+
+### Documentation
+
+- Describe build-and-safety-only screening for miners and operators
+  ([#3429](https://github.com/ditto-assistant/ditto-subnet/pull/3429),
+  [`5a7c2bf`](https://github.com/ditto-assistant/ditto-subnet/commit/5a7c2bf4f632952723e2a2775e21cd5a9f0cbfe0))
+
+### Features
+
+- **platform**: Lease every screening attempt build-only
+  ([#3428](https://github.com/ditto-assistant/ditto-subnet/pull/3428),
+  [`bd57cf4`](https://github.com/ditto-assistant/ditto-subnet/commit/bd57cf49e039e058d49d3586d7d826b655e7123b))
+
+
+## v0.460.1 (2026-11-07)
+
+### Bug Fixes
+
+- **platform**: Read payment extrinsics from archives when Pylon misses them
+  ([`75ddb2c`](https://github.com/ditto-assistant/ditto-subnet/commit/75ddb2c36cc546c48a76f7e26fbe0394da7cd010))
+
+- **platform**: Try the next archive when one returns an empty block body
+  ([`5e6d941`](https://github.com/ditto-assistant/ditto-subnet/commit/5e6d9419ff84e0c91981d2bacbb2cd96f5f2af85))
+
+### Testing
+
+- **platform**: Name the SN-455 owner address so gitleaks reads it as public
+  ([`ac8dcc4`](https://github.com/ditto-assistant/ditto-subnet/commit/ac8dcc46cc01f9d93b29c9754c19d46af6fa8c5c))
+
+
+## v0.460.0 (2026-11-07)
+
+### Features
+
+- **platform**: Lease on the screened-image contract floor, not the review policy
+  ([#3426](https://github.com/ditto-assistant/ditto-subnet/pull/3426),
+  [`8aef2c5`](https://github.com/ditto-assistant/ditto-subnet/commit/8aef2c5f79c3d6988662c6f14e8f5a030ea4e6f0))
+
+- **platform,backroom**: Retire review-policy activation, review-clock and scored-rescreen
+  scheduling ([#3427](https://github.com/ditto-assistant/ditto-subnet/pull/3427),
+  [`cfbd8e4`](https://github.com/ditto-assistant/ditto-subnet/commit/cfbd8e4ce207d80562f5009da0124ea4b352aacb))
+
+- **screener,platform**: Run the static malicious-source check on the build-only lane
+  ([#3424](https://github.com/ditto-assistant/ditto-subnet/pull/3424),
+  [`22538ef`](https://github.com/ditto-assistant/ditto-subnet/commit/22538ef2a6166afa43d17147e155940fed3f0c72))
+
+
+## v0.459.0 (2026-11-07)
+
+### Features
+
+- **platform**: Retire automatic score-finalization holds
+  ([#3425](https://github.com/ditto-assistant/ditto-subnet/pull/3425),
+  [`1dee6a1`](https://github.com/ditto-assistant/ditto-subnet/commit/1dee6a13d1317eee915e35c4c713b05bcc511682))
+
+
+## v0.458.6 (2026-11-07)
+
+### Bug Fixes
+
+- **backroom**: Close stranded ATH holds and amend reject reasons
+  ([#3356](https://github.com/ditto-assistant/ditto-subnet/pull/3356),
+  [`e0c6ddd`](https://github.com/ditto-assistant/ditto-subnet/commit/e0c6ddd7a1aac8729d3a5557048cc436a8214eab))
+
+
+## v0.458.5 (2026-11-07)
+
+### Bug Fixes
+
+- Update vulnerable Pylon image dependencies
+  ([#3408](https://github.com/ditto-assistant/ditto-subnet/pull/3408),
+  [`c59d7bf`](https://github.com/ditto-assistant/ditto-subnet/commit/c59d7bf9d63c9ed5aaed8e51c8d2008d78b031df))
+
+### Chores
+
+- **tests**: Pin the bench v17 datagen known vector
+  ([#3411](https://github.com/ditto-assistant/ditto-subnet/pull/3411),
+  [`8541c0a`](https://github.com/ditto-assistant/ditto-subnet/commit/8541c0ad225bb99da86802818c88ba043bab45bf))
+
+
 ## v0.458.4 (2026-11-07)
 
 ### Bug Fixes
