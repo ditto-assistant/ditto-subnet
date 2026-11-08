@@ -347,6 +347,7 @@ function validationProgress(e: PipelineEntryExt): string {
   if (e.status === "below_score_floor") return count + " of " + quorum + " · queued last";
   if (e.status === "not_queued") return "Not in active benchmark queue";
   if (e.status === "retired") return count + " of " + quorum + " · benchmark closed";
+  if (e.status === "scoring_failed") return count + " of " + quorum + " · cannot finish";
   const hasStarted =
     count > 0 ||
     ["waiting_validator", "evaluating", "scored", "live", "under_review"].indexOf(

@@ -7258,6 +7258,12 @@ export const validationQueueWithdrawalSchema = z.object({
   // routine cleanup. `nullish` tolerates an older platform where the field is
   // absent rather than null.
   evicted_validator_hotkeys: z.array(z.string()).nullish().default(null),
+  // The agent-attributable code that made scoring quorum unreachable, when
+  // every remaining slot agreed on one. Set on the platform's own close-out
+  // (actor `platform:terminal-artifact-failure`) and on an operator withdrawal
+  // of the same evidence; public surfaces then report `scoring_failed`.
+  // Nullish for a platform that predates the column.
+  terminal_failure_code: z.string().nullish().default(null),
   created_at: z.string(),
   // Set once an eviction has been reversed (ditto-platform reinstatement). A
   // non-null `withdrawal` therefore no longer means "this submission is out of

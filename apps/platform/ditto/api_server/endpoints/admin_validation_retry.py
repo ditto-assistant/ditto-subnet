@@ -135,6 +135,10 @@ from ditto.db.queries.score_retests import (
     score_retest_queue_positions,
 )
 from ditto.db.queries.scores import SCORING_QUORUM
+from ditto.db.queries.terminal_failure import (
+    terminal_failure_code,
+    ticket_snapshot_wire,
+)
 from ditto.db.queries.tickets import (
     release_foreign_dataset_pin,
     scoring_retry_ticket,
@@ -171,22 +175,7 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-def _ticket_wire(ticket: ValidatorTicket) -> dict[str, object]:
-    return {
-        "validator_hotkey": ticket.validator_hotkey,
-        "status": ticket.status.value,
-        "issued_at": _aware(ticket.issued_at).isoformat(timespec="microseconds"),
-        "deadline": _aware(ticket.deadline).isoformat(timespec="microseconds"),
-        "bench_version": ticket.bench_version,
-        "attempt_count": ticket.attempt_count,
-        "manual_retry_grants": ticket.manual_retry_grants,
-        "infra_retry_grants": ticket.infra_retry_grants,
-        "retry_after": (
-            _aware(ticket.retry_after).isoformat(timespec="microseconds")
-            if ticket.retry_after is not None
-            else None
-        ),
-    }
+_ticket_wire = ticket_snapshot_wire
 
 
 def _snapshot(
@@ -356,6 +345,7 @@ def _withdrawal_item(
         expected_snapshot=row.expected_snapshot,
         score_count=row.score_count,
         evicted_validator_hotkeys=row.evicted_validator_hotkeys,
+        terminal_failure_code=row.terminal_failure_code,
         created_at=row.created_at,
         reinstated_at=row.reinstated_at,
     )
@@ -1071,6 +1061,10 @@ async def withdraw_failed_validation_from_queue(
             expected_snapshot=current_snapshot,
             score_count=len(scores),
             ticket_snapshot=[_ticket_wire(ticket) for ticket in tickets],
+            # Same evidence the automatic close-out reads, so an operator
+            # withdrawal of a terminal artifact reports ``scoring_failed``
+            # publicly instead of a neutral ``not_queued``.
+            terminal_failure_code=terminal_failure_code(scores=scores, tickets=tickets),
             created_at=datetime.now(UTC),
         )
         session.add(withdrawal)

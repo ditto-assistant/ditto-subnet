@@ -8980,6 +8980,17 @@ class ValidatorQueueWithdrawal(Base):
     table. The reinstatement's own actor, reason, and evidence live in
     :class:`ValidatorQueueReinstatement`; this column carries only the fact.
     """
+    terminal_failure_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The agent-attributable code that made quorum unreachable, or ``NULL``.
+
+    Set only when every remaining quorum slot died on the same named
+    agent-attributable failure (see
+    :data:`ditto.db.queries.retry_state.AGENT_ATTRIBUTABLE_FAILURE_DETAILS`).
+    An in-force row with a code is what public surfaces report as
+    ``scoring_failed``: the artifact cannot finish scoring on this benchmark
+    version and the miner has to ship a new one. A withdrawal without a code
+    stays a neutral ``not_queued``.
+    """
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -8990,6 +9001,11 @@ class ValidatorQueueWithdrawal(Base):
             ["agents.agent_id"],
             ondelete="RESTRICT",
             name="validator_queue_withdrawals_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "terminal_failure_code IS NULL "
+            "OR length(trim(terminal_failure_code)) BETWEEN 1 AND 120",
+            name="validator_queue_withdrawals_terminal_failure_code_length",
         ),
         CheckConstraint(
             "bench_version > 0",

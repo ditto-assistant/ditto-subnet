@@ -25,6 +25,7 @@ from ditto.db.models import (
     Score,
     ScreeningAttempt,
     SubmissionRetirement,
+    ValidatorQueueWithdrawal,
 )
 from ditto.db.queries.benchmark_admission import (
     admission_rollout_for_active_version,
@@ -517,6 +518,21 @@ async def query_public_activity_page(
         .correlate(Agent)
         .exists()
     )
+    # An in-force withdrawal that names the agent's own terminal failure. The
+    # submission cannot finish scoring on this version, which is a more
+    # specific answer than the neutral ``not_queued`` the withdrawal would
+    # otherwise project as.
+    terminal_failure = (
+        select(ValidatorQueueWithdrawal.agent_id)
+        .where(
+            ValidatorQueueWithdrawal.agent_id == Agent.agent_id,
+            ValidatorQueueWithdrawal.bench_version == bench_version,
+            ValidatorQueueWithdrawal.terminal_failure_code.is_not(None),
+            ValidatorQueueWithdrawal.reinstated_at.is_(None),
+        )
+        .correlate(Agent)
+        .exists()
+    )
     admitted = validator_queue_admission_predicate(bench_version=bench_version)
     if rollout is not None:
         admitted &= benchmark_admission_predicate(
@@ -573,6 +589,7 @@ async def query_public_activity_page(
             literal("screening_failed"),
         ),
         (waiting_state & retired, literal("retired")),
+        (waiting_state & terminal_failure, literal("scoring_failed")),
         (
             waiting_state & ~admitted & ~active_validation & ~live_assignment,
             literal("not_queued"),

@@ -492,6 +492,7 @@ from ditto.db.queries.source_review_queue_slo import (
     ORDINARY_REVIEW_ACTIONABLE_STATUSES,
     load_source_review_queue_slo_snapshot,
 )
+from ditto.db.queries.terminal_failure import terminal_failure_codes
 from ditto.db.queries.tickets import (
     generator_round_free_ticket,
     get_score_continuation_floor,
@@ -655,6 +656,7 @@ _PUBLIC_ACTIVITY_STATUSES = frozenset(
         "below_score_floor",
         "not_queued",
         "retired",
+        "scoring_failed",
         "under_review",
         "rejected",
         "scored",
@@ -6225,6 +6227,7 @@ def _public_activity_status(
     score_continuation_floor: float | None = None,
     benchmark_admitted: bool = True,
     retired: bool = False,
+    terminal_failure: bool = False,
     screening_retry_authorized: bool = False,
 ) -> str:
     """Collapse internal moderation detail into stable public lifecycle labels."""
@@ -6251,6 +6254,13 @@ def _public_activity_status(
         # while an already-issued ticket drains, so the label cannot flicker.
         if retired:
             return "retired"
+        # Every remaining quorum slot failed on the agent's own named failure,
+        # so no validator will produce the scores still owed. Checked before
+        # ``not_queued`` (the withdrawal that records it also removes the row
+        # from the queue) because it names why, and before the waiting labels
+        # because waiting would be false.
+        if terminal_failure:
+            return "scoring_failed"
         if (
             not benchmark_admitted
             and not has_active_validation
@@ -6372,6 +6382,7 @@ def _public_activity_statuses(
     active_bench_version: int | None = None,
     benchmark_admitted_agent_ids: set[UUID] | None = None,
     retired_agent_ids: set[UUID] | None = None,
+    terminal_failure_agent_ids: set[UUID] | None = None,
 ) -> dict[UUID, str]:
     """Public lifecycle label per submission, keyed by agent id.
 
@@ -6386,6 +6397,7 @@ def _public_activity_statuses(
     }
     admitted = benchmark_admitted_agent_ids
     retired = retired_agent_ids or set()
+    terminal = terminal_failure_agent_ids or set()
     return {
         row.agent.agent_id: _public_activity_status(
             row.agent.status,
@@ -6398,6 +6410,7 @@ def _public_activity_statuses(
             score_continuation_floor=score_continuation_floor,
             benchmark_admitted=(admitted is None or row.agent.agent_id in admitted),
             retired=row.agent.agent_id in retired,
+            terminal_failure=row.agent.agent_id in terminal,
         )
         for row in rows
     }
@@ -6448,6 +6461,7 @@ def _public_activity_response(
     active_bench_version: int | None = None,
     benchmark_admitted_agent_ids: set[UUID] | None = None,
     retry_states: dict[UUID, AgentRetryState] | None = None,
+    terminal_failure_codes: dict[UUID, str] | None = None,
     duplicate_metadata: dict[UUID, _DuplicateSubmissionMetadata] | None = None,
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] | None = None,
     ath_review_composite: dict[UUID, float] | None = None,
@@ -6491,6 +6505,7 @@ def _public_activity_response(
         )
     }
     retry_by_agent = retry_states or {}
+    terminal_codes = terminal_failure_codes or {}
     statuses = (
         precomputed_statuses
         if precomputed_statuses is not None
@@ -6502,6 +6517,7 @@ def _public_activity_response(
             active_bench_version=active_bench_version,
             benchmark_admitted_agent_ids=benchmark_admitted_agent_ids,
             retired_agent_ids=retired_agent_ids,
+            terminal_failure_agent_ids=set(terminal_codes),
         )
     )
     projected = [(row, statuses[row.agent.agent_id]) for row in rows]
@@ -6746,6 +6762,8 @@ def _public_activity_response(
                     retry_by_agent[row.agent.agent_id].disposition
                     if row_status in ("waiting_validator", "below_score_floor")
                     and row.agent.agent_id in retry_by_agent
+                    else "terminal_artifact_failure"
+                    if row_status == "scoring_failed"
                     else None
                 ),
                 terminal_failure_code=(
@@ -6754,6 +6772,10 @@ def _public_activity_response(
                     )
                     if row_status in ("waiting_validator", "below_score_floor")
                     and row.agent.agent_id in retry_by_agent
+                    else public_validation_failure_code(
+                        terminal_codes.get(row.agent.agent_id)
+                    )
+                    if row_status == "scoring_failed"
                     else None
                 ),
                 hold_failure_code=(
@@ -7356,6 +7378,15 @@ async def activity(
             now=now,
             canonical_version=active_version,
         ),
+        terminal_failure_codes=await terminal_failure_codes(
+            session,
+            agent_ids=[
+                agent_id
+                for agent_id, row_status in statuses.items()
+                if row_status == "scoring_failed"
+            ],
+            bench_version=active_version,
+        ),
         duplicate_metadata=await _duplicate_submission_metadata(session, rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
@@ -7619,6 +7650,15 @@ async def operations(
         ),
         active_bench_version=active_version,
         retry_states=retry_states,
+        terminal_failure_codes=await terminal_failure_codes(
+            session,
+            agent_ids=[
+                agent_id
+                for agent_id, row_status in activity_statuses.items()
+                if row_status == "scoring_failed"
+            ],
+            bench_version=active_version,
+        ),
         duplicate_metadata=await _duplicate_submission_metadata(session, activity_rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
@@ -7912,6 +7952,13 @@ async def agent_summary(
         if needs_queue_state
         else False
     )
+    entry_terminal_codes = (
+        await terminal_failure_codes(
+            session, agent_ids=[agent_id], bench_version=active_version
+        )
+        if needs_queue_state
+        else {}
+    )
     score_floor = (
         await get_score_continuation_floor(
             session,
@@ -7936,6 +7983,7 @@ async def agent_summary(
         score_continuation_floor=score_floor,
         benchmark_admitted=admitted,
         retired=retired,
+        terminal_failure=agent_id in entry_terminal_codes,
         screening_retry_authorized=bool(
             await session.scalar(
                 select(Agent.agent_id).where(
@@ -8360,6 +8408,35 @@ async def agent_pipeline(
         if validator_retry_state is not None
         else None
     )
+    # A terminal close-out is a withdrawal, and the retry classifier skips
+    # withdrawn rows, so the verdict would vanish from the wire exactly when
+    # it became final. Publish it from the withdrawal instead. The same
+    # verdict read live (not yet withdrawn) counts too, so a row stranded
+    # before the platform began writing these does not read as waiting.
+    pipeline_terminal_code: str | None = None
+    if agent.status == AgentStatus.EVALUATING:
+        pipeline_terminal_code = (
+            await terminal_failure_codes(
+                session, agent_ids=[agent_id], bench_version=canonical_version
+            )
+        ).get(agent_id)
+    if (
+        pipeline_terminal_code is None
+        and validator_retry_state is not None
+        and validator_retry_state.disposition == "terminal_artifact_failure"
+        and validator_retry_state.bench_version == canonical_version
+    ):
+        pipeline_terminal_code = validator_retry_state.terminal_failure_code
+    if pipeline_terminal_code is not None and validator_retry is None:
+        validator_retry = PublicValidatorRetry(
+            state="exhausted",
+            disposition="terminal_artifact_failure",
+            terminal_failure_code=public_validation_failure_code(
+                pipeline_terminal_code
+            ),
+            hold_failure_code=None,
+            retry_after=None,
+        )
     # Read every generation before owner reduction, then run the same current
     # official-score resolver and canonical owner dedupe used by ranking/floor
     # authority. The old detail path read the SQL pre-efficiency representative,
@@ -8588,6 +8665,7 @@ async def agent_pipeline(
             score_continuation_floor=score_continuation_floor,
             benchmark_admitted=benchmark_admitted,
             retired=agent_retired,
+            terminal_failure=pipeline_terminal_code is not None,
         ),
         submission_family=submission_family,
         # Why this exact artifact is or is not earning, separate from ``status``

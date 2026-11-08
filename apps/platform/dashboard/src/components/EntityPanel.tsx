@@ -941,7 +941,7 @@ const PROFILE_BANDS: ReadonlyArray<{ key: string; label: string; statuses: reado
   },
   { key: "under_review", label: "Under review", statuses: ["under_review"] },
   { key: "rejected", label: "Rejected", statuses: ["rejected"] },
-  { key: "closed", label: "Closed", statuses: ["not_queued", "retired"] },
+  { key: "closed", label: "Closed", statuses: ["not_queued", "retired", "scoring_failed"] },
   { key: "other", label: "Other", statuses: [] },
 ];
 

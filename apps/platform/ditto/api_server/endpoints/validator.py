@@ -393,6 +393,7 @@ from ditto.db.queries.similarity_grouping import (
     SimilarityBudgetPolicy,
     policy_from_settings,
 )
+from ditto.db.queries.terminal_failure import withdraw_terminal_artifact_failure
 from ditto.db.queries.tickets import (
     OWNER_CONCURRENT_SUBMISSION_LIMIT_DEFAULT,
     RETRY_COOLDOWN,
@@ -6767,6 +6768,7 @@ async def fail_job(
     )
 
     reopened = False
+    failed_purpose: TicketPurpose | None = None
     async with session.begin():
         try:
             await consume_validator_nonce(
@@ -6946,6 +6948,24 @@ async def fail_job(
             await session.flush()
             await revoke_ticket_inference(session, ticket=ticket, now=now)
             reopened = True
+            failed_purpose = ticket.purpose
+    if reopened and failed_purpose != TicketPurpose.CONTINUAL_RETEST:
+        # Once every remaining quorum slot has died on the agent's own named
+        # failure, record that the artifact cannot finish scoring. Without this
+        # the row stays "waiting for validators" and each fresh validator still
+        # burns a full first-assignment run on it. Its own transaction, after
+        # the report above has committed: a failure here must never lose or
+        # undo the validator's report.
+        try:
+            async with session.begin():
+                await withdraw_terminal_artifact_failure(
+                    session, agent_id=payload.agent_id, now=now
+                )
+        except Exception:
+            logger.exception(
+                "terminal artifact failure withdrawal failed agent=%s",
+                payload.agent_id,
+            )
     logger.info(
         "validator=%s reported job failure agent=%s reason=%s reopened=%s",
         payload.validator_hotkey,

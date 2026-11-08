@@ -30,6 +30,7 @@ export const ACTIVITY_STATUSES: readonly string[] = [
   "below_score_floor",
   "not_queued",
   "retired",
+  "scoring_failed",
   "under_review",
   "rejected",
   "scored",
@@ -69,6 +70,57 @@ export const ACTIVITY_FILTER_LABELS: Record<string, string> = {
  * operator-owned outcomes. The public status alone does not identify which. */
 export const SCREENING_INCOMPLETE_LABEL = "Screening incomplete";
 
+/** The stage label for a submission whose own failures ended its scoring. */
+export const SCORING_FAILED_LABEL = "Cannot finish scoring";
+
+/** Plain language for each allowlisted agent-attributable failure code.
+ *
+ * Only codes the API is willing to publish appear here. An unknown code keeps
+ * the terminal sentence without inventing a cause for it. */
+export const TERMINAL_FAILURE_CAUSES: Record<string, string> = {
+  inference_allowance_exhausted:
+    "The agent used its whole inference allowance before finishing its run.",
+  inference_request_rejected:
+    "The platform rejected the agent's inference requests, so no run could complete.",
+  model_inference_required:
+    "The agent answered without the model inference the benchmark requires.",
+  harness_oom:
+    "The harness exceeded its published sandbox memory cap while the validator host had memory to spare.",
+};
+
+/** Whether the platform has said this artifact cannot finish scoring.
+ *
+ * ``scoring_failed`` is the closed-out form. A row stranded before the
+ * platform began closing these out still reads ``waiting_validator`` while
+ * carrying the same verdict in its retry disposition, and it must not be
+ * described as waiting either. */
+export function isTerminalScoringFailure(
+  status: string | null | undefined,
+  entry?: TerminalFailureFields | null,
+): boolean {
+  if (status === "scoring_failed") return true;
+  if (status !== "waiting_validator" && status !== "below_score_floor") return false;
+  return (
+    entry?.retry_disposition === "terminal_artifact_failure" ||
+    entry?.validator_retry?.disposition === "terminal_artifact_failure"
+  );
+}
+
+/** The published code behind a terminal scoring failure, if any. */
+export function terminalFailureCode(entry?: TerminalFailureFields | null): string | null {
+  return entry?.validator_retry?.terminal_failure_code || entry?.terminal_failure_code || null;
+}
+
+/** The fields that carry a terminal scoring verdict, from either payload. */
+export interface TerminalFailureFields {
+  retry_disposition?: string | null;
+  terminal_failure_code?: string | null;
+  validator_retry?: {
+    disposition?: string | null;
+    terminal_failure_code?: string | null;
+  } | null;
+}
+
 /**
  * Stage pill per status (activityStage 6832–6850). Terminal states for a
  * closed benchmark generation (#462) read as history, not failure:
@@ -80,8 +132,9 @@ export const SCREENING_INCOMPLETE_LABEL = "Screening incomplete";
  */
 export function activityStage(
   status: string | null | undefined,
-  entry?: DeferredReviewFields,
+  entry?: DeferredReviewFields & TerminalFailureFields,
 ): ChipState {
+  if (isTerminalScoringFailure(status, entry)) return [SCORING_FAILED_LABEL, "bad"];
   const stages: Record<string, ChipState> = {
     uploaded: ["Waiting for admission", "progress"],
     waiting_screening: ["Waiting for admission", "progress"],
@@ -93,6 +146,7 @@ export function activityStage(
     below_score_floor: ["Low-priority completion", "warn"],
     not_queued: ["Historical · not queued", ""],
     retired: ["Retired · earlier benchmark", ""],
+    scoring_failed: [SCORING_FAILED_LABEL, "bad"],
     scored: ["Scored", "good"],
     live: ["Live", "good"],
     under_review: ["Under review", "warn"],
@@ -295,7 +349,7 @@ export interface ActivityStatusFields {
   screening_build_only?: boolean | null;
 }
 
-export type ActivityStatusEntry = ActivityEntry & ActivityStatusFields;
+export type ActivityStatusEntry = ActivityEntry & ActivityStatusFields & TerminalFailureFields;
 
 /**
  * The Validation column line (validationProgress 6790–6798). #458/#462:
@@ -308,6 +362,7 @@ export function validationProgress(e: ActivityStatusEntry): string {
   if (e.status === "below_score_floor") return count + " of " + quorum + " · queued last";
   if (e.status === "not_queued") return "Not in active benchmark queue";
   if (e.status === "retired") return count + " of " + quorum + " · benchmark closed";
+  if (isTerminalScoringFailure(e.status, e)) return count + " of " + quorum + " · cannot finish";
   const hasStarted =
     count > 0 ||
     ["waiting_validator", "evaluating", "scored", "live", "under_review"].indexOf(e.status || "") >=
@@ -399,6 +454,19 @@ export function validationDetail(e: ActivityStatusEntry): string {
       ". " +
       scoreFloorAttribution(e) +
       " The third score is still queued at low priority so this benchmark record reaches 3 of 3."
+    );
+  }
+  if (isTerminalScoringFailure(e.status, e)) {
+    const code = terminalFailureCode(e);
+    const cause = (code && TERMINAL_FAILURE_CAUSES[code]) || "";
+    return (
+      "This submission cannot finish scoring. " +
+      (cause ? cause + " " : "") +
+      "That happened on every remaining validator run, so " +
+      count +
+      " of " +
+      quorum +
+      " scores is final for this benchmark version: no validator will be assigned again and re-running the same artifact would repeat the failure. Fix the artifact and submit a new version. This is not a rejection; the submission, its screening record and its validator history stay on file."
     );
   }
   if (e.status === "not_queued") {

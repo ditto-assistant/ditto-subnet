@@ -7792,9 +7792,11 @@ CREATE TABLE public.validator_queue_withdrawals (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     evicted_validator_hotkeys jsonb,
     reinstated_at timestamp with time zone,
+    terminal_failure_code text,
     CONSTRAINT ck_validator_queue_withdrawals_validator_queue_withdraw_089f CHECK ((score_count >= 0)),
     CONSTRAINT ck_validator_queue_withdrawals_validator_queue_withdraw_6794 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT ck_validator_queue_withdrawals_validator_queue_withdraw_6f52 CHECK ((bench_version > 0)),
+    CONSTRAINT ck_validator_queue_withdrawals_validator_queue_withdraw_778c CHECK (((terminal_failure_code IS NULL) OR ((length(TRIM(BOTH FROM terminal_failure_code)) >= 1) AND (length(TRIM(BOTH FROM terminal_failure_code)) <= 120)))),
     CONSTRAINT ck_validator_queue_withdrawals_validator_queue_withdraw_f0b4 CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
 );
 
