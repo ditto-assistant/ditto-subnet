@@ -722,7 +722,15 @@ input tokens. The estimate it prints is then the whole priced cost:
 DITTOBENCH_JEV_HYBRID=1 uv run ditto practice --bench-version 18 --run-size medium
 ```
 
-The measured comparison against the default path is in [BASELINES.md](BASELINES.md).
+Measured on bench v18 (seed 42, full, 350 cases; details in
+[BASELINES.md](BASELINES.md)):
+
+| Path | composite | priced cost / 350 cases | factor |
+| --- | ---: | ---: | ---: |
+| default, unmodified | 0.000 (the menu exceeds the 131k context) | $0.00 | 1.00 |
+| default, `DITTOBENCH_PRELOAD_TOP_K=32` | 0.093 | $0.856 | 0.50 |
+| hybrid, `full` menu | 0.263 | $0.270 | 1.00 |
+| hybrid, `grouped` menu | 0.268 | $0.197 | 1.00 |
 
 ## Changing the retrieval algorithm
 

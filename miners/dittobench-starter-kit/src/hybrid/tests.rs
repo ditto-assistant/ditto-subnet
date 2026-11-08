@@ -410,7 +410,7 @@ async fn jev_selects_tools_and_values_and_the_model_sees_a_small_prompt() {
     }
     // A small prompt: the request, the chosen note, the confirmed value.
     let prompt = user_prompt(messages);
-    assert!(prompt.contains("Roadmap review moved to Thursday"));
+    assert!(prompt.contains("roadmap review moved to Thursday"));
     assert!(
         !prompt.contains("Miso"),
         "unchosen notes stay out: {prompt}"
