@@ -11,8 +11,10 @@ and sign. Validators would stop running the bench.
 
 ## Recommendation in five lines
 
-1. **Fix the inputs before the run.** Derive each seed from a drand round fixed
-   by the miner's on-chain payment block, not from a block Platform picks.
+1. **Fix the inputs before the run.** The miner makes an on-chain commitment to
+   the exact harness bytes, batched with the upload payment. Each seed comes
+   from a drand round at least `Δ_min` after that commitment, never from a
+   block Platform picks, and no Platform-assigned value feeds the seed.
    Pre-register every attempt in an append-only log and anchor its root on
    chain once per epoch, so runs cannot be rerolled silently.
 2. **Attest the execution.** Run the scorer, sandbox and inference broker in an
@@ -90,6 +92,7 @@ These matter for any proof design. Several are worth fixing anyway.
 | G4 | The transcript artifact alone does not hold everything the v13+ gates read | `transcriptArtifact` holds responses, observed calls, execution and a relay summary. Claim-span hashes, tool-emission matches and priced-cost meters live in report details and base evidence | "Re-grade the transcript" (seed-and-scoring.md, step 4) needs the full witness. That witness must be defined before anything can be proven |
 | G5 | The scoring path reads postures from the environment | 5 `os.Getenv` sites in `internal/scorer` (transform audit, v13 postures, twin rule and rate); more in `cmd/dittobench-api` | The scoring function is not yet a pure function of explicit inputs |
 | G6 | Public transcripts are off | `public_transcript_url_template: null` (live); #2204 put the mirror behind an operator setting because transcripts carry behavioral data before quorum | Third-party re-grading is unavailable today. That makes witness-hiding verification valuable, not just nice to have |
+| G7 | The upload payment names no artifact or agent, and `agent_id` is assigned by Platform | Payment is a bare `Balances.transfer_keep_alive` (`payment_verifier/verifier.py`); the payment→agent binding lives only in `evaluation_payments`, and credits can move a payment to a different artifact; `agent_id = uuid.uuid4()` at upload (`endpoints/upload.py`) | Nobody outside Platform can check on chain which payment anchors which agent. `agent_id` is a Platform-chosen seed input. Section 4.5 replaces both |
 
 ---
 
@@ -137,7 +140,7 @@ Non-goals:
 | **Operator edits a score number** | Three validators compute and sign; median | zk proof that `score = scorecore(P, D, W)` for the approved program `P` | None, given a sound zkVM and reviewed `P` |
 | **Operator edits the transcript or witness** (changes a miner's answer) | Validator-owned run; signed transcript digest | Witness root signed by the attested runtime key. Forging it means breaking the attestation | AWS Nitro is the trust root; bugs inside the measured image |
 | **Operator swaps the scorer binary or a posture** | Validator verifies scorer identity against its stack descriptor | Program id, config digest and PCRs pinned in an epoch-pinned verifier policy | The policy is ours, but public and versioned; changes need `fleet_ready` |
-| **Operator grinds seeds or task selection** | G1 and G2 above: a real window | drand round fixed by the miner's payment block + Δ; validators verify the BLS signature and check the block against their own chain node | Honesty of a drand threshold |
+| **Operator grinds seeds or task selection** | G1, G2 and G7 above: a real window | drand round fixed by the miner's on-chain artifact commitment + `Δ`, where validator code enforces `Δ ≥ Δ_min`. Validators check the commitment extrinsic (signer, remark, first match, unique use), the BLS signature and the block on their own chain node. No Platform-assigned value feeds the seed (§4.5) | Honesty of a drand threshold; Platform–miner collusion on admission-token timing (open question 11) |
 | **Operator cherry-picks runs** (reruns until the LLM noise helps, kills unfavourable runs) | Retries are audited and append-only but **private** (`docs/no-automatic-retries.md`) | Public, chain-anchored attempt log; the first terminal attempt wins; failures need a signed failure statement; retries reuse the same seed | We can still refuse or delay a run (liveness), and run unlogged previews to *learn* about a harness. That leaks information but cannot change a score |
 | **Operator degrades inference for one miner** (other model, truncation, latency) | Same trust as today; validators cannot see it | Relay inside the attested boundary; route profile in the statement; provider-reported model and usage in the witness; sampled independent audits | **No cryptographic guarantee.** The provider and OpenRouter's dynamic route remain trusted |
 | **Operator replays an old result** | Validator signs run id + seed + deadline | Statement binds agent, image digest, ticket, replicate, seed, beacon round and log leaf; leaves are unique | None |
@@ -163,7 +166,8 @@ Given those, a validator that accepts a statement knows that:
    version `v`, source revision `r`) computes from dataset `D` and witness `W`;
 2. `D` hashes to the pinned `dataset_sha256`, and for public datasets it
    regenerates from the seed;
-3. the seed comes from a beacon round that did not exist when the miner paid;
+3. the seed comes from a beacon round that was not yet published when the
+   miner's on-chain commitment to these harness bytes was included (§4.5);
 4. `W` was committed by a runtime whose measured boot chain matches the
    published reference measurements. That runtime ran image digest `I`, the
    screened image for this agent;
@@ -301,27 +305,120 @@ bump.
 ### 4.5 Commit-reveal with a randomness beacon
 
 The current design already makes the seed postdate the miner's commit
-(`seed-and-scoring.md`). The problems are gaps G1–G3: *who picks the block*,
-and *whether the block hash can be biased*. Proposed:
+(`seed-and-scoring.md`). The problems are gaps G1–G3 and G7: *who picks the
+block*, *whether the block hash can be biased*, and *whether the anchor can be
+tied to the agent on chain at all*. Two facts about today's upload flow shape
+the fix:
 
-- `anchor_block` = the block holding the miner's upload payment. It is on
-  chain, was created by the miner, and Platform already verifies it.
-- `R` = the first drand quicknet round whose timestamp is ≥
-  `timestamp(anchor_block) + Δ`. Quicknet has a 3 s period, scheme
-  `bls-unchained-g1-rfc9380`, and is run by the League of Entropy. Bittensor's
-  CR v3 already timelocks weights to quicknet.
-- `seed_j = SHA-256("dittobench-seed-v2" ‖ drand_randomness(R) ‖ agent_id ‖ bench_version ‖ j)[:8] & (2^63-1)`,
-  for replicate `j ∈ {0,1,2}`.
+- **The payment names nothing.** It is a bare `Balances.transfer_keep_alive`
+  (`payment_verifier/verifier.py`). Platform binds a payment to an agent only
+  in its own `evaluation_payments` table. A payment can also become a credit
+  later spent on a *different* artifact (`EvaluationPayment.credit_for_agent_id`).
+  So a validator cannot check on chain that a given payment block belongs to a
+  given agent. Pointing at "the payment block" would let a malicious Platform
+  pick among a miner's payments, or cite any later block.
+- **`agent_id` is assigned by Platform.** It is a server-side `uuid4()`
+  created at upload, after payment (`endpoints/upload.py`). Any value Platform
+  assigns after the beacon round is known is a grinding knob, so it must not
+  feed the seed.
 
-Platform then has **no choice** of `R`. The block author cannot predict `R`,
-which lies in the future. Validators verify the BLS signature and fetch
-`anchor_block` from their own node. A classic hidden commit-then-reveal is
-unnecessary, because no party contributes secret entropy. Retries **reuse**
-`seed_j`, so an engineered "infrastructure failure" cannot reroll the dataset.
-CRN confirmation seeds stay as they are (`crn.py`), but confirmation runs go
-through the same attempt log.
+Proposed design:
 
-Cost is negligible: one BLS verification and one chain read per statement.
+**Anchor commitment (on chain, made by the miner).** `/upload/check` already
+issues a single-use, expiring admission token. Platform appends an issuance
+leaf to the attempt log, committing to `SHA-256(admission_token)`, the
+hotkey, the `artifact_sha256` and the chain block at issuance.
+
+The miner then submits **one** extrinsic, signed by the coldkey that owns
+`miner_hotkey` at payment time:
+
+- paid uploads: `utility.batch_all([balances.transfer_keep_alive(payment_address, quote), system.remark(C)])`;
+- credit-funded uploads: `system.remark(C)` alone.
+
+Here `C = SHA-256("dittobench-anchor-v1" ‖ miner_hotkey ‖ artifact_sha256 ‖ admission_token)`.
+
+The **anchor** is that extrinsic, identified by
+`(anchor_block_hash, anchor_extrinsic_index)`. It is the first point where the
+miner is bound on chain to these exact harness bytes. This needs changes to
+the miner CLI and the payment verifier, which today accepts only a bare
+`transfer_keep_alive`.
+
+**Beacon round.** `R` is the first drand quicknet round whose scheduled time is
+≥ `timestamp(anchor_block) + Δ`. Quicknet has a 3 s period, uses scheme
+`bls-unchained-g1-rfc9380`, and is run by the League of Entropy. Bittensor's
+CR v3 already timelocks weights to quicknet.
+
+`Δ` must guarantee that `R` was **unpublished when the anchor was included**.
+Two facts make that possible:
+
+- A round's randomness does not exist before its scheduled time, as long as
+  fewer than a threshold of drand nodes collude.
+- The only way to pull an already-published round into the window is a block
+  timestamp set *earlier* than real time. A later timestamp only selects a
+  later round.
+
+Therefore:
+
+- `Δ_min = 3 s (one quicknet period) + S`. `S` is the maximum backward skew
+  Subtensor admits between a block's timestamp and real time. Aura's slot rule
+  and the timestamp pallet bound `S`, but I have not read its exact value from
+  the runtime (**unknown**). Phase 2 reads it from the runtime and pins it.
+- The verifier policy pins `Δ` and `Δ_min` as separate values. **Validator
+  code**, not the policy, enforces `Δ ≥ Δ_min`, and it rejects any policy
+  below that. A policy edit cannot quietly shrink the window.
+- In operation `Δ` should sit far above `Δ_min`: for example 120 s, which is a
+  design choice, not a measurement. `Δ` only delays when the seed becomes
+  known, and screening already takes longer than that.
+
+**Seed.**
+`seed_j = SHA-256("dittobench-seed-v2" ‖ drand_randomness(R) ‖ anchor_block_hash ‖ anchor_extrinsic_index ‖ artifact_sha256 ‖ bench_version ‖ j)[:8] & (2^63-1)`
+for replicate `j ∈ {0,1,2}`. Every input is fixed once the anchor is included,
+and none of them is chosen by Platform. `agent_id` remains the database key
+but is no longer a seed input.
+
+**Anchor checks.** Each validator runs these against its **own** chain node
+(§6.5 step 4) and rejects the statement if any fails:
+
+1. The anchor block is finalized and its hash equals `anchor_block_hash`.
+2. The extrinsic at `anchor_extrinsic_index` succeeded. It was signed by the
+   payment-time coldkey owner of `miner_hotkey`, the same rule Platform's
+   payment verifier applies today.
+3. Its remark equals `C`, recomputed from the statement's `miner_hotkey` and
+   `artifact_sha256` and the admission token. The token is revealed in the
+   statement and must hash to the logged issuance commitment. On the paid
+   path, the batched transfer pays the published payment address at least the
+   logged quote.
+4. The issuance leaf precedes the anchor block. No earlier extrinsic from the
+   same signer carries the same `C` between issuance and the anchor; the scan
+   is bounded by the token's expiry. This makes the *first* matching
+   commitment the canonical one, so a miner cannot post several commitments
+   and keep the one with the luckiest round.
+5. No other published statement (across anchored statement roots) uses the
+   same anchor.
+6. `R` follows the rule above under a pinned `Δ ≥ Δ_min`, and its BLS
+   signature verifies against the pinned drand chain hash.
+
+**Residual risk.**
+
+- A miner can still buy another seed for byte-identical source by paying
+  again. That is what `allow_identical_rescore` permits today, so each seed
+  still costs one evaluation fee.
+- On the credit path a remark costs only the transaction fee. The single-use
+  token and the first-match rule still limit it to one anchor per token.
+- Platform and a miner could collude to backdate a token's issuance leaf. That
+  would hide an earlier commitment, and it shows only in log timing (open
+  question 11).
+- A block author can delay the anchor extrinsic by a few blocks. With
+  `Δ ≫ S`, though, the candidate rounds are all still in the future, so the
+  delay cannot be aimed at a known dataset.
+
+No classic hidden commit-then-reveal step is needed, because no party
+contributes secret entropy. Retries **reuse** `seed_j`, so an engineered
+"infrastructure failure" cannot reroll the dataset. CRN confirmation seeds stay
+as they are (`crn.py`), but confirmation runs go through the same attempt log.
+
+Cost per statement: one BLS verification, a few block reads, and a scan no
+longer than the token's validity window.
 
 ### 4.6 Optimistic verification and fraud-proof spot checks
 
@@ -368,7 +465,14 @@ Treat the fraction as a budget (open question 3).
 ## 5. Recommended hybrid
 
 ```
- miner pays (block B) ──► drand round R = first ≥ ts(B)+Δ ──► seeds s0,s1,s2
+ miner: batch_all[pay, remark(C = H(hotkey‖artifact_sha256‖admission_token))]
+        = anchor extrinsic in block A
+                │
+                ▼
+ drand round R = first ≥ ts(A)+Δ   (Δ ≥ Δ_min, enforced by validator code)
+                │
+                ▼
+ seeds s0,s1,s2 = H(R ‖ anchor id ‖ artifact_sha256 ‖ v ‖ j)
                                                                │
  Platform registers attempt (ticket, j, a) in the attempt log ◄┘
                 │ log leaf, anchored per epoch via the commitments pallet
@@ -383,8 +487,9 @@ Treat the fraction as a budget (open question 3).
    Ziren receipt: P(D, W, config) → journal == statement fields
                 │
                 ▼
- validators: verify attestation (cached per K), statement signature, BLS(R),
-             anchor block on own node, log inclusion, receipt → sign off
+ validators: verify attestation (cached per K), statement signature,
+             anchor extrinsic + BLS(R) on own node (§4.5 checks),
+             log inclusion, receipt → sign off
                 │
                 ▼
  Platform: q-of-n signoffs per replicate → median of 3 → epoch-pinned ledger
@@ -409,7 +514,9 @@ into every epoch pin:
   as reviewed identities, e.g. `openrouter-route-6a097486af3c178d-v1`.
 - `config_digest`: the canonical posture and config set (claim provenance,
   twin rule, priced-cost posture, …) that today comes from the environment.
-- `beacon`: drand chain hash and Δ.
+- `beacon`: drand chain hash, `Δ`, and `Δ_min` with the Subtensor skew bound
+  `S` it is derived from. Validator code rejects any policy where
+  `Δ < Δ_min` (§4.5).
 - `canary_rate` and `signoff_quorum`.
 
 A policy change takes effect at an epoch pin. It is gated on every
@@ -417,6 +524,10 @@ recently-live weight-setting validator advertising the verifier protocol, with
 no force override, exactly like protocols 20, 27, 29 and 34.
 
 ### 6.2 Commitments
+
+**Admission-token issuance leaf**: `{schema, miner_hotkey, artifact_sha256, SHA-256(admission_token), issued_block, expires_at}`.
+This leaf is appended when `/upload/check` issues the token. The token itself
+is revealed only in the statement, after the upload has consumed it.
 
 **Attempt log leaf** (canonical JSON, SHA-256):
 `{schema, ticket_id, agent_id, image_digest, bench_version, replicate j, attempt a, reason (initial | authorized_retry:<backroom audit id>), registered_at, R}`.
@@ -438,8 +549,11 @@ runtime key `K`:
   "bench_version": 17, "scorer_revision": "…", "scoring_program_id": "…",
   "config_digest": "…", "verifier_policy_digest": "…",
   "ticket_id": "…", "replicate": 0, "attempt": 1, "log_leaf": "…",
-  "seed": {"anchor_block": 0, "anchor_block_hash": "…", "drand_round": 0,
-           "drand_randomness": "…", "derivation": "dittobench-seed-v2", "seed": 0},
+  "artifact_sha256": "…",
+  "seed": {"anchor_block": 0, "anchor_block_hash": "…", "anchor_extrinsic_index": 0,
+           "admission_token": "…", "issuance_leaf": "…",
+           "drand_round": 0, "drand_randomness": "…", "delta_s": 0,
+           "derivation": "dittobench-seed-v2", "seed": 0},
   "dataset_sha256": "…", "run_size": "full",
   "witness_root": "…",            // Merkle root over transcript, broker evidence,
                                   // base evidence, projection commitment
@@ -461,7 +575,7 @@ the hashes against the journal.
 
 | Item | Where | Size and cost |
 | --- | --- | --- |
-| Miner payment (anchor block) | On chain, existing | — |
+| Anchor extrinsic: payment batched with the artifact-commitment remark (a remark alone on the credit path) | On chain, **new**: the miner CLI submits `utility.batch_all` instead of a bare transfer | one extrinsic per upload, as today, plus a 32-byte remark |
 | drand round | Public beacon; also consumed by Subtensor for CR v3 | — |
 | Epoch root = `H(epoch_index ‖ log_root ‖ statement_root ‖ ledger_digest ‖ verifier_policy_digest)` | On chain: one `Raw` (≤128 B) commitment per epoch via the `commitments` pallet | 32 B + index. The pallet allows 3 fields, `Raw` ≤128 B, `BigRaw` ≤512 B, and the hotkey must be registered on the subnet (open question 7) |
 | Weights | On chain, existing commit-reveal | unchanged |
@@ -498,9 +612,16 @@ For each new statement (cached by digest):
    the PCR set, then check that the document binds `runtime_key`. This is
    cached per boot key, so it costs milliseconds per boot *(inferred)*.
 3. Statement signature under `runtime_key`.
-4. Seed: fetch `anchor_block` from the validator's **own** chain node (closes
-   G1). Verify the drand BLS signature for `R` and the rule
-   `R = first ≥ ts + Δ`, then re-derive `s_j`.
+4. Seed: run the §4.5 anchor checks against the validator's **own** chain node.
+   This closes G1 and G7. The block must be finalized and match. The extrinsic
+   must have succeeded and be signed by the payment-time coldkey owner of
+   `miner_hotkey`. Its remark must equal `C` for this `artifact_sha256` and
+   admission token, and on the paid path the batched transfer must pay the
+   quote. It must be the first matching commitment since token issuance, and
+   no other statement may use this anchor. Then check that
+   `Δ ≥ Δ_min` in the pinned policy, verify the drand BLS signature for `R`
+   and the rule `R = first ≥ ts(anchor) + Δ`, and re-derive `s_j`. Reject on
+   any mismatch.
 5. Dataset: for public datasets, optionally regenerate and compare
    `dataset_sha256`. This is cached; cost **unknown**, seconds of CPU.
 6. Receipt: about 25 ms to verify a 290 KB Ziren proof *(vendor)*, then check
@@ -545,6 +666,7 @@ replicate.
 | Attestation invalid (unknown PCRs, all-zero debug PCRs, expired key) | Statement rejected; attempt treated as an infra failure; a retry needs a Backroom-authorized retry leaf (existing no-automatic-retry policy) and reuses the seed |
 | Dangling attempt (registered, no terminal leaf by deadline) | Platform writes an `aborted` leaf; it counts as an attempt; a retry needs authorization; the dashboard shows aborted attempts per agent |
 | Repeated aborts for one agent | Visible pattern; policy threshold to flag for review (open question) |
+| Anchor check fails (wrong signer, missing or wrong remark, earlier matching commitment, anchor already used, `Δ < Δ_min`) | Statement rejected; the agent cannot be scored on that anchor. Backroom shows it as an operator or miner fault, not an infra retry. A miner with a malformed anchor re-uploads with a fresh token |
 | drand unavailable at `R` | Wait (drand rounds are recoverable later); no fallback to an operator-chosen seed. The current CSPRNG fallback is not carried forward |
 | Chain anchoring failed | Roots queue; entries finalize only after their root is anchored |
 | Validator signs a forced-invalid canary | Its signoffs stop counting toward `q` for a cooling-off period; the event is public |
@@ -562,7 +684,7 @@ stay separate.
 | --- | --- | --- |
 | **0: witness and purity** (no runtime behaviour change) | Extract `scorecore` as a pure package. Replace environment posture reads with an explicit `Config`. Define the scoring witness v1. Add a `rescore` CLI. Audit float determinism | `rescore(witness)` is byte-equal to the signed composite and report on ≥ 50 recent v17 production runs (operator-run against the private bucket); golden vectors unchanged for v2–v17; no `os.Getenv`, clock or network in `scorecore` (enforced by test) |
 | **1: PoC**: prove the scoring step | Build `scorecore` as a Ziren guest. Execute one public practice-run witness, then prove and verify it | Measured cycles, prover hardware, wall-clock, proof size, verify time, ZK property; journal equals native `rescore` |
-| **2: commitments** (also improves today's system) | Validators verify the seed block against their own chain node (G1). Beacon seed v2 as a new `seed_scope`. Attempt log with public read API and Backroom read tool. Per-epoch chain anchor | Log inclusion proofs verify; seed v2 vectors pinned in Go and Python; anchor visible on chain |
+| **2: commitments** (also improves today's system) | Validators verify the seed block against their own chain node (G1). Anchor commitment extrinsic in the miner CLI and payment verifier (G7). Read and pin Subtensor's timestamp skew bound `S`. Beacon seed v2 as a new `seed_scope`. Attempt log, including issuance leaves, with public read API and Backroom read tool. Per-epoch chain anchor | Log inclusion proofs verify; anchor-check and seed v2 vectors pinned in Go and Python, including negative vectors (wrong signer, missing remark, earlier match, reused anchor, `Δ < Δ_min`); anchor visible on chain |
 | **3: hosted shadow** | Attestable AMI runner (AWS Terraform module), runtime key and RunStatement. Hosted replicates run **beside** validator runs. Validators verify in shadow (new heartbeat protocol). Canaries | Hosted and validator composite distributions compared per agent; 0 verifier disagreements across the fleet; `shadow_only=true`, `weight_eligible=false` |
 | **4: activation** (owner decision) | Proof-referenced ledger entries; validators stop leasing routine scoring tickets; audits on crown-moving decisions | `fleet_ready` at 100%; rollback means re-enabling validator leases (code path kept) |
 | 5: optional | Self-hosted gpt-oss-20b in an attested GPU instance (needs a bench bump); threshold key custody for private datasets; zk-wrapped attestation only if an EVM consumer appears | Separate designs |
@@ -619,7 +741,7 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 6 | Ziren PoC: prove and verify | Proof time / GPU / size / verify time recorded; ZK property determined; journal equals native `rescore` | 5 | M |
 | 7 | Verifier library spike | Go verifier callable from the validator (cgo or sidecar); latency measured | 6 | S |
 | 8 | Validator checks seed block against its own chain node | Closes G1; refusal code on mismatch; test with a forged hash | — | S |
-| 9 | Beacon seed derivation v2 (`seed_scope: beacon-v2`) | drand quicknet BLS verification in Go and Python; shared vectors; the rule is "first round ≥ payment block timestamp + Δ"; retries reuse the seed | 8 | M |
+| 9 | Beacon seed derivation v2 (`seed_scope: beacon-v2`) | drand quicknet BLS verification in Go and Python; shared vectors; the rule is "first round ≥ anchor block timestamp + Δ"; validator code rejects `Δ < Δ_min` (with `S` read from the Subtensor runtime and pinned); no Platform-assigned input; retries reuse the seed | 8, 20 | M |
 | 10 | Public attempt log | Append-only Merkle log of attempt and terminal leaves; public read API; Backroom read tool; aborted-attempt leaves | — | M |
 | 11 | Per-epoch chain anchor | One `commitments` write per epoch with the epoch root; anchor hotkey decided; monitor for missed anchors | 10 | S |
 | 12 | Attestable AMI hosted runner | Reproducible image (scorer + sandbox-docker + broker); reference PCRs published by release; AWS Terraform module through protected plan/apply | 1 | L |
@@ -630,6 +752,7 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 17 | Crown-decision audits | Beacon-sampled audit selection; paired CRN comparison; Backroom surface | 14 | M |
 | 18 | Dispute workflow | Quarantine and re-prove tools; owner-gated witness access | 15 | M |
 | 19 | Article and X draft (after the Phase 1 numbers) | Per the feature-article convention; owner Peyton | 6 | S |
+| 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged. A shared Go/Python anchor-check library covers all six §4.5 checks, with negative vectors | 10 | M |
 
 ---
 
@@ -664,6 +787,12 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
    production scorer?
 10. **Volume.** Runs per day per bench, needed to turn §8 into a monthly
     budget.
+11. **Anchor extrinsic and credits.** Is it acceptable to require miners to pay
+    with a `batch_all` that carries the artifact commitment? That means a miner
+    CLI update and a payment-verifier change. Should credit-funded uploads stay
+    eligible for proof-backed scoring? On the credit path, a Platform–miner pair
+    that backdates a token's issuance leaf could hide an earlier commitment.
+    The log's timing makes that visible, but nothing prevents it.
 
 ---
 
@@ -677,7 +806,9 @@ Monorepo (at `999f23d`): `services/dittobench-api/PROTOCOL.md`,
 `services/dittobench-api/docs/{seed-and-scoring,judge-determinism,calibration-trust}.md`,
 `services/dittobench-api/cmd/dittobench-api/transcript.go`,
 `ditto/validator/{signing,onchain_seed,worker,dittobench}.py`,
-`apps/platform/ditto/api_server/endpoints/{screener,validator,public}.py`,
+`apps/platform/ditto/api_server/endpoints/{screener,validator,public,upload}.py`,
+`apps/platform/ditto/api_server/payment_verifier/verifier.py`,
+`apps/platform/ditto/api_models/upload.py`, `apps/platform/ditto/db/models.py` (`EvaluationPayment`),
 `docs/{VALIDATOR,no-automatic-retries,coding-platform-private-execution-v2}.md`,
 `.agents/skills/ditto-subnet-benchmark/references/bench-runtime.md`, PR #2204 and issue #464.
 Public API: `https://platform-api.heyditto.ai/api/v1/public/{bench/config,leaderboard,agent/{id}/scores,bench/transcript/{sha}/telemetry}`.
