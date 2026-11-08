@@ -120,7 +120,12 @@ func (s *encounterScript) reconcile() {
 func (s *encounterScript) job() {
 	enc := s.tc.Encounter
 	post := enc.Required[len(enc.Required)-1].Tool
-	run := s.call("run_workflow", map[string]any{"name": "workflow"})
+	// The plain path runs the workflow the request names.
+	name := ""
+	if m := regexp.MustCompile(`(?:Run my|Kick off the|Please start the) (.+?) workflow`).FindStringSubmatch(s.tc.Prompt); m != nil {
+		name = m[1]
+	}
+	run := s.call("run_workflow", map[string]any{"name": name})
 	job := scriptJob.FindString(run)
 	figure := ""
 	for poll := 0; poll < 4 && figure == "" && job != ""; poll++ {
