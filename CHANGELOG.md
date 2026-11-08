@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.465.0 (2026-11-08)
+
+### Features
+
+- **datagen**: Stage the bench v18 accuracy datagen half
+  ([#3412](https://github.com/ditto-assistant/ditto-subnet/pull/3412),
+  [`b320b33`](https://github.com/ditto-assistant/ditto-subnet/commit/b320b33a465eca335845557b34a1e2d75839464b))
+
+
 ## v0.464.1 (2026-11-08)
 
 ### Bug Fixes
