@@ -48,6 +48,7 @@ from ditto.api_models.gate_evidence import (
     MinerGateNotesRun,
     PricedCostSummary,
     PublicGateEvidence,
+    RunBudgetSummary,
     StoredGateCase,
     StoredGateEvidence,
     TwinPostPassSummary,
@@ -93,6 +94,7 @@ _RUN_SUMMARIES: dict[str, type[BaseModel]] = {
     "twin_post_pass": TwinPostPassSummary,
     "inference_cost": InferenceCostSummary,
     "priced_cost": PricedCostSummary,
+    "run_budget": RunBudgetSummary,
 }
 
 
@@ -316,6 +318,7 @@ def build_gate_evidence(
         twin_post_pass=summaries["twin_post_pass"],  # type: ignore[arg-type]
         inference_cost=summaries["inference_cost"],  # type: ignore[arg-type]
         priced_cost=summaries["priced_cost"],  # type: ignore[arg-type]
+        run_budget=summaries["run_budget"],  # type: ignore[arg-type]
         catalog_suppression_rate=(
             catalog_gate.catalog_suppression_rate if catalog_gate is not None else None
         ),
@@ -324,7 +327,11 @@ def build_gate_evidence(
         flagged_case_share=(round(len(cases) / total, 6) if total else None),
         cases=cases,
     )
-    return evidence.model_dump(mode="json")
+    stored = evidence.model_dump(mode="json")
+    # Pre-v18 projections keep their exact shape: no run_budget key at all.
+    if stored.get("run_budget") is None:
+        stored.pop("run_budget", None)
+    return stored
 
 
 def stored_gate_evidence(raw: object) -> StoredGateEvidence | None:

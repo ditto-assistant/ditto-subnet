@@ -70,9 +70,11 @@ type Options struct {
 	// A dueling slice uses it to drop a case another column already claimed
 	// (challenge.SliceExecutionCases).
 	Include func(packCaseID string) bool
-	// Admit, when set, is asked before each included case starts. A case it
-	// refuses is not sent to the harness and comes back BudgetExhausted
-	// (bench v18 per-run cost budget). Rounds and qualification leave it nil.
+	// Admit, when set, is asked before each included case starts, in pack
+	// order on the dispatching goroutine (never from a worker), so the cases
+	// it admits are a prefix of the dispatch order. A case it refuses is not
+	// sent to the harness and comes back BudgetExhausted (bench v18 per-run
+	// cost budget). Rounds and qualification leave it nil.
 	Admit func() bool
 }
 
@@ -136,9 +138,9 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 					run = append(run, i)
 				}
 			}
-			runBounded(len(run), concurrency, func(j int) {
+			runBoundedAdmitted(len(run), concurrency, opts.Admit, func(j int, admitted bool) {
 				i := run[j]
-				if opts.Admit != nil && !opts.Admit() {
+				if !admitted {
 					outcomes[i] = CaseOutcome{
 						PanelCaseResult: challenge.PanelCaseResult{CaseID: p.Cases[i].ID},
 						Notes:           []string{protocol.RunBudgetExhaustedReason},
@@ -240,16 +242,24 @@ func (p *projection) waves(in []protocol.SeedRequest) []protocol.SeedRequest {
 }
 
 func runBounded(n, limit int, fn func(i int)) {
+	runBoundedAdmitted(n, limit, nil, func(i int, _ bool) { fn(i) })
+}
+
+// runBoundedAdmitted asks admit for case i on the dispatching goroutine after
+// its slot is acquired and before its worker starts, so admission follows
+// case order whatever order the workers finish in. A nil admit admits all.
+func runBoundedAdmitted(n, limit int, admit func() bool, fn func(i int, admitted bool)) {
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int) {
+		admitted := admit == nil || admit()
+		go func(i int, admitted bool) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			fn(i)
-		}(i)
+			fn(i, admitted)
+		}(i, admitted)
 	}
 	wg.Wait()
 }

@@ -2183,6 +2183,22 @@ class PricedCostEstimateTest(unittest.TestCase):
             {"cases": 350, "cost_nano_usd": 1_200_000_000,
              "run_budget": {"exhausted": True, "admitted_cases": 291}}, 18)
         self.assertEqual(scored["budget_stop_case"], 291)
+        # Even spend: case k runs while k x cost / cases is below the budget.
+        exact = COST._with_budget({"cases": 350, "cost_nano_usd": 1_000_000_000}, 18)
+        self.assertFalse(exact["budget_exhausted"])
+        self.assertIsNone(exact["budget_stop_case"])
+        one_and_half = COST._with_budget({"cases": 350, "cost_nano_usd": 1_500_000_000}, 18)
+        self.assertEqual(one_and_half["budget_stop_case"], 234)
+        uneven = COST._with_budget({"cases": 350, "cost_nano_usd": 1_300_000_000}, 18)
+        self.assertEqual(uneven["budget_stop_case"], 270)
+        # The scorer's block wins, even on a version the kit would not budget,
+        # and an exhausted block without admitted_cases names no stop case.
+        block = COST._with_budget(
+            {"cases": 350, "cost_nano_usd": 1,
+             "run_budget": {"exhausted": True, "budget_nano_usd": 7}}, 17)
+        self.assertEqual(block["budget_nano_usd"], 7)
+        self.assertTrue(block["budget_exhausted"])
+        self.assertIsNone(block["budget_stop_case"])
         self.assertNotIn("budget_nano_usd", COST._with_budget({"cases": 350, "cost_nano_usd": 1}, 17))
 
     def test_rule_matches_the_shared_go_vectors(self) -> None:

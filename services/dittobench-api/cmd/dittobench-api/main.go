@@ -124,6 +124,13 @@ func envFloatDefault(key string, def float64) float64 {
 // independent of completion order. Acquisition honors ctx cancellation so a
 // timed-out or cancelled run stops scheduling new cases promptly.
 func runBounded(ctx context.Context, n, concurrency int, fn func(i int)) {
+	runBoundedDispatch(ctx, n, concurrency, nil, func(i int, _ bool) { fn(i) })
+}
+
+// runBoundedDispatch is the bounded worker pool. decide, when set, is called
+// for case i on the dispatching goroutine after its slot is acquired and
+// before its worker starts; its answer is passed to fn.
+func runBoundedDispatch(ctx context.Context, n, concurrency int, decide func(i int) bool, run func(i int, admitted bool)) {
 	if concurrency < 1 {
 		concurrency = 1
 	}
@@ -136,8 +143,12 @@ func runBounded(ctx context.Context, n, concurrency int, fn func(i int)) {
 			return
 		case sem <- struct{}{}:
 		}
+		admitted := true
+		if decide != nil {
+			admitted = decide(i)
+		}
 		wg.Add(1)
-		go func(i int) {
+		go func(i int, admitted bool) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			// A panic in one worker must not kill the whole process (the
@@ -149,8 +160,8 @@ func runBounded(ctx context.Context, n, concurrency int, fn func(i int)) {
 					log.Printf("bounded worker %d panicked: %v", i, rec)
 				}
 			}()
-			fn(i)
-		}(i)
+			run(i, admitted)
+		}(i, admitted)
 	}
 	wg.Wait()
 }
@@ -2118,13 +2129,13 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	if runAfter.pending() > 0 {
 		log.Printf("run %s: %d tool case(s) gated on an earlier mutation (v13 run-after)", runID, runAfter.pending())
 	}
-	runBounded(ctx, len(toolCases), effectiveCaseConcurrency, func(i int) {
+	runBoundedAdmitted(ctx, len(toolCases), effectiveCaseConcurrency, budget.admitter(), func(i int, admitted bool) {
 		defer runAfter.release(i)
 		if !runAfter.wait(ctx, i) {
 			return
 		}
 		c := toolCases[i]
-		if !budget.admit() {
+		if !admitted {
 			budget.refuse(protocol.KindTool)
 			transcriptID := c.ID
 			if harnessProjection != nil {
@@ -2310,7 +2321,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		waveResults := make([]protocol.CaseScore, len(waveCases))
 		waveTranscripts := make([]transcriptCase, len(waveCases))
 		waveTwins := make([]scorer.TwinEvidence, len(waveCases))
-		runBounded(ctx, len(waveCases), effectiveCaseConcurrency, func(i int) {
+		runBoundedAdmitted(ctx, len(waveCases), effectiveCaseConcurrency, budget.admitter(), func(i int, admitted bool) {
 			sc := waveCases[i]
 			mc := sc.Case
 			// Scope the query to the case's memory graph: isolation cases carry an
@@ -2319,19 +2330,28 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			if uid == "" {
 				uid = wave.UserID
 			}
-			if !budget.admit() {
+			if !admitted {
 				budget.refuse(protocol.KindMemory)
 				transcriptID := mc.ID
+				transcriptUser := uid
 				if harnessProjection != nil {
 					internalID, reverseErr := harnessProjection.InternalCaseID(mc.ID)
+					if reverseErr == nil {
+						_, reverseErr = harnessProjection.InternalUserID(uid)
+					}
 					if reverseErr != nil {
 						recordProjectionFailure(reverseErr)
 						return
 					}
-					transcriptID = internalID
+					// As on the graded path: no role labels in the transcript.
+					transcriptID, transcriptUser = internalID, ""
 				}
-				waveResults[i] = budgetExhaustedCase(transcriptID, mc.QuestionType, protocol.KindMemory)
-				waveTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindMemory}
+				category := mc.QuestionType
+				if category == "" {
+					category = "memory"
+				}
+				waveResults[i] = budgetExhaustedCase(transcriptID, category, protocol.KindMemory)
+				waveTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindMemory, UserID: transcriptUser}
 				s.store.AppendPartial(runID, waveResults[i])
 				return
 			}
@@ -2588,7 +2608,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// rather than picking up slice completions.
 	sessionTotals = s.datagenSessionTotalsAtScoring(slice != nil, sessionTotals, req.BenchVersion, inferenceSessionID)
 	toolProvenanceTotals, catalogTotals := sessionTotals.toolProvenance, sessionTotals.catalog
-	catalogGateSummary := summarizeV13CatalogGate(req.BenchVersion, v13CatalogGatePosture, perCase, catalogTotals)
+	// The published gate factors and telemetry read the same population the
+	// composite gate applied: from the v18 run budget, without the cases the
+	// budget refused (they stay in the raw means and in PerCase).
+	gated := scorer.GatedPopulationForVersion(perCase, req.BenchVersion)
+	catalogGateSummary := summarizeV13CatalogGate(req.BenchVersion, v13CatalogGatePosture, gated, catalogTotals)
 	logV13CatalogCoverageGap(runID, catalogGateSummary)
 	report.Details = &protocol.RunDetails{
 		BenchVersion:      req.BenchVersion,
@@ -2602,12 +2626,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		RawPairsCases:     memSuite.TierBCases,
 		ObservedToolCases: observedTool,
 		CappedToolCases:   cappedTool,
-		ToolProvenance:    summarizeV10ToolProvenance(perCase, toolProvenanceTotals),
-		ClaimProvenance:   summarizeV13ClaimProvenance(req.BenchVersion, v13ClaimProvenancePosture, perCase),
+		ToolProvenance:    summarizeV10ToolProvenance(gated, toolProvenanceTotals),
+		ClaimProvenance:   summarizeV13ClaimProvenance(req.BenchVersion, v13ClaimProvenancePosture, gated),
 		CatalogGate:       catalogGateSummary,
 		IsolationCases:    len(iso.Cases),
 		LifecycleCases:    memSuite.LifecycleCases,
-		ToolEfficiency:    scorer.ToolEfficiencyFactorForVersion(perCase, req.BenchVersion),
+		ToolEfficiency:    scorer.ToolEfficiencyFactorForVersion(gated, req.BenchVersion),
 		// Generation and grading are both deterministic and non-LLM; the only
 		// model in a run is the locked one the harness talks to.
 		Models: &protocol.ModelInfo{
@@ -2625,15 +2649,15 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// v5 conversational-sanity metric (first-class on the report; mirrored into the
 	// details blob so it survives the platform wire alongside the other factors).
 	report.Details.ConversationalSanity = report.ConversationalSanity
-	report.Details.MetamorphicConsistency = scorer.MetamorphicConsistency(perCase)
-	report.Details.Metamorphic = scorer.MetamorphicTierForVersion(perCase, req.BenchVersion)
+	report.Details.MetamorphicConsistency = scorer.MetamorphicConsistency(gated)
+	report.Details.Metamorphic = scorer.MetamorphicTierForVersion(gated, req.BenchVersion)
 	// The memory over-call multiplier the composite gate applied (issue #533):
 	// the same function AggregateForVersion folds in, so a published composite
 	// decomposes into its factors from the record alone.
-	if factor, ok := scorer.MemoryOverCallFactorForVersion(perCase, req.BenchVersion); ok {
+	if factor, ok := scorer.MemoryOverCallFactorForVersion(gated, req.BenchVersion); ok {
 		report.Details.MemoryOverCall = &factor
 	}
-	if tr, pairs := scorer.TransformRobustness(perCase); tr != nil {
+	if tr, pairs := scorer.TransformRobustness(gated); tr != nil {
 		report.Details.TransformRobustness = tr
 		report.Details.AuditCaseCount = pairs
 	}
@@ -2642,10 +2666,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// across runs and validators, and they preserve the direction of a split,
 	// which is the only part of the signal that separates a brittle harness from
 	// a noisy honest one.
-	if ap := scorer.AuditPairs(perCase); ap.Total() > 0 {
+	if ap := scorer.AuditPairs(gated); ap.Total() > 0 {
 		report.Details.AuditPairs = &ap
 	}
-	if brier, cn := scorer.CalibrationBrier(perCase); brier != nil {
+	if brier, cn := scorer.CalibrationBrier(gated); brier != nil {
 		report.Details.CalibrationBrier = brier
 		report.Details.CalibrationN = cn
 	}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"sync"
 
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
@@ -22,18 +24,29 @@ import (
 //
 // The meter reads the broker session counters, which settle as each
 // completion returns; the priced-cost factor reads the relay's whole-run
-// interval. Both count the same completions at the same rates.
+// interval. Both count the same completions at the same rates. A completion
+// without provider usage is not in the counters, so the meter is a lower
+// bound; the final priced-cost completeness check, not the meter, is what
+// refuses an underpriced score. A session that vanishes mid-run (cancel or
+// expiry) fails closed: no further case is admitted.
+//
+// Admission is index-ordered (runBoundedAdmitted): the dispatch loop asks for
+// each case, in case order, before its worker starts. The admitted cases are
+// therefore always a prefix of the dispatch order, whatever order the
+// workers finish in, so every validator scores a comparable prefix.
 
 type runBudget struct {
 	benchVersion int
 	budget       uint64
 	cases        int
-	meter        func() scoregates.PricedCostUsage
+	// meter prices the session so far; ok=false means the session is gone.
+	meter func() (usage scoregates.PricedCostUsage, ok bool)
 
 	mu            sync.Mutex
 	exhausted     bool
 	admitted      int
 	spentAtCutoff uint64
+	meterLost     bool
 	unrunTool     int
 	unrunMemory   int
 	unrunSlice    int
@@ -51,17 +64,20 @@ func (s *server) newRunBudget(benchVersion int, sessionID string, cases int) *ru
 	}
 	return &runBudget{
 		benchVersion: benchVersion, budget: budget, cases: cases,
-		meter: func() scoregates.PricedCostUsage {
-			session, _ := s.broker.sessionPricedUsage(sessionID)
+		meter: func() (scoregates.PricedCostUsage, bool) {
+			session, ok := s.broker.sessionPricedUsage(sessionID)
+			if !ok {
+				return scoregates.PricedCostUsage{}, false
+			}
 			return scoregates.PricedCostUsage{
-				ChatComplete:         true,
+				ChatComplete:         session.usageUnavailable == 0 && session.decisionUsageMissing == 0,
 				PromptTokens:         session.promptTokens,
 				CompletionTokens:     session.completionTokens,
 				EmbeddingTokens:      session.embeddingTokens,
 				DecisionCalls:        session.decisionCalls,
 				DecisionInputTokens:  session.decisionInputTokens,
 				DecisionOutputTokens: session.decisionOutputTokens,
-			}
+			}, true
 		},
 	}
 }
@@ -77,7 +93,16 @@ func (b *runBudget) admit() bool {
 	if b.exhausted {
 		return false
 	}
-	if spent := scoregates.MeteredCostNanoUSD(b.benchVersion, b.meter()); spent >= b.budget {
+	usage, ok := b.meter()
+	if !ok {
+		// The broker session is gone: fail closed rather than price zero.
+		if !b.meterLost {
+			log.Printf("run budget: broker session vanished after %d admitted cases; refusing the rest", b.admitted)
+		}
+		b.exhausted, b.meterLost = true, true
+		return false
+	}
+	if spent := scoregates.MeteredCostNanoUSD(b.benchVersion, usage); spent >= b.budget {
 		b.exhausted, b.spentAtCutoff = true, spent
 		return false
 	}
@@ -132,4 +157,28 @@ func budgetExhaustedCase(caseID, category, kind string) protocol.CaseScore {
 		Expected:        []string{},
 		Notes:           []string{protocol.RunBudgetExhaustedReason + ": the run's priced cost reached its budget before this case started; scored 0"},
 	}
+}
+
+// admitter is the admission function runBoundedAdmitted asks, or nil when
+// there is no budget (every case is admitted).
+func (b *runBudget) admitter() func() bool {
+	if b == nil {
+		return nil
+	}
+	return b.admit
+}
+
+// runBoundedAdmitted is runBounded with index-ordered admission: the
+// dispatch loop (one goroutine, cases in increasing order, after each slot is
+// acquired) asks admit before case i's worker starts. runBudget refusals are
+// sticky, so the admitted cases are a prefix of the dispatch order however
+// the workers are scheduled. A refused case still runs fn with
+// admitted=false, inside the same bound, to record its score and release its
+// dependents. A nil admit admits everything: runBounded exactly.
+func runBoundedAdmitted(ctx context.Context, n, concurrency int, admit func() bool, fn func(i int, admitted bool)) {
+	var decide func(int) bool
+	if admit != nil {
+		decide = func(int) bool { return admit() }
+	}
+	runBoundedDispatch(ctx, n, concurrency, decide, fn)
 }

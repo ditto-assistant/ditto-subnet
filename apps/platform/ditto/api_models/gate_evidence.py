@@ -269,6 +269,31 @@ class PricedCostSummary(BaseModel):
     rule_consistent: bool | None = None
 
 
+class RunBudgetSummary(BaseModel):
+    """Run-level bench v18 per-run cost budget (``details.run_budget``).
+
+    The scorer stops admitting cases, in dispatch order, once the run's
+    metered priced cost reaches ``budget_nano_usd``; every unrun case scores
+    0 with ``budget_exhausted``. A spent budget is the harness's own cost,
+    never an infrastructure failure.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    contract_id: Annotated[str | None, Field(max_length=64)] = None
+    budget_nano_usd: _Count = 0
+    budget_usd: Annotated[float | None, Field(ge=0.0)] = None
+    cases: _Count = 0
+    exhausted: bool = False
+    admitted_cases: _Count = 0
+    unrun_cases: _Count = 0
+    unrun_tool_cases: _Count = 0
+    unrun_memory_cases: _Count = 0
+    unrun_slice_cases: _Count = 0
+    spent_nano_usd_at_cutoff: _Count = 0
+    reason: Annotated[str | None, Field(max_length=64)] = None
+
+
 class StoredGateCase(BaseModel):
     """One flagged case in the persisted projection (``scores.gate_evidence``).
 
@@ -307,6 +332,8 @@ class StoredGateEvidence(BaseModel):
     twin_post_pass: TwinPostPassSummary | None = None
     inference_cost: InferenceCostSummary | None = None
     priced_cost: PricedCostSummary | None = None
+    run_budget: RunBudgetSummary | None = None
+    """Bench v18+; omitted from the stored projection when absent."""
     catalog_suppression_rate: _UnitFloat | None = None
     gate_counts: dict[str, int] = Field(default_factory=dict)
     flagged_case_count: _Count = 0

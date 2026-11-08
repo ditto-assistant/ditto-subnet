@@ -407,21 +407,34 @@ def estimate(
 
 def _with_budget(estimate_: dict[str, Any], bench_version: int) -> dict[str, Any]:
     """Add the bench 18+ budget and, when the run spent past it, where a scored
-    run would have stopped (spend assumed even across cases; the scorer's own
-    ``details.run_budget`` wins when the report carries one)."""
+    run would have stopped. The scorer's own ``details.run_budget`` wins when
+    the report carries one. Otherwise spend is assumed even across cases: the
+    scorer admits case k while the spend before it, k x cost / cases, is below
+    the budget, so ceil(budget x cases / cost) cases run, and a run that costs
+    exactly its budget runs every case."""
     cases = int(estimate_.get("cases") or 0)
+    scored = estimate_.get("run_budget")
+    if isinstance(scored, dict):
+        budget = scored.get("budget_nano_usd")
+        if budget is None:
+            budget = run_budget_nano_usd(bench_version, cases)
+        if budget is not None:
+            estimate_["budget_nano_usd"] = int(budget)
+        exhausted = bool(scored.get("exhausted"))
+        admitted = scored.get("admitted_cases")
+        estimate_["budget_exhausted"] = exhausted
+        estimate_["budget_stop_case"] = (
+            int(admitted) if exhausted and admitted is not None else None
+        )
+        return estimate_
     budget = run_budget_nano_usd(bench_version, cases)
     if budget is None:
         return estimate_
     estimate_["budget_nano_usd"] = budget
-    scored = estimate_.get("run_budget")
-    if isinstance(scored, dict):
-        estimate_["budget_exhausted"] = bool(scored.get("exhausted"))
-        estimate_["budget_stop_case"] = int(scored.get("admitted_cases") or 0) if scored.get("exhausted") else None
-        return estimate_
     cost = int(estimate_.get("cost_nano_usd") or 0)
-    estimate_["budget_exhausted"] = cost >= budget
-    estimate_["budget_stop_case"] = (budget * cases) // cost if cost >= budget and cost > 0 else None
+    admitted = -(-budget * cases // cost) if cost > 0 else cases
+    estimate_["budget_exhausted"] = admitted < cases
+    estimate_["budget_stop_case"] = admitted if admitted < cases else None
     return estimate_
 
 

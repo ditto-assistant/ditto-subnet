@@ -445,7 +445,9 @@ func metamorphicGroupCounts(perCase []protocol.CaseScore) (consistent, total int
 		// An undelivered sibling makes the whole family unusable: a 3-member group
 		// with one timeout would otherwise read as split and charge phrasing
 		// brittleness for a transport failure.
-		if cs.Undelivered {
+		// A budget-refused member (bench v18) never ran, so it drops the family
+		// the same way.
+		if cs.Undelivered || cs.BudgetExhausted {
 			undelivered[cs.TwinGroup] = true
 			continue
 		}
@@ -513,7 +515,8 @@ func AuditPairs(perCase []protocol.CaseScore) protocol.AuditPairCounts {
 		// Never delivered: leave the side nil so the pair is dropped below. Before
 		// this, a timed-out case still produced a (wrong) verdict, so the pair
 		// looked complete and the guard below could never fire.
-		if cs.Undelivered {
+		// A budget-refused case (bench v18) never ran either: no verdict.
+		if cs.Undelivered || cs.BudgetExhausted {
 			continue
 		}
 		g := groups[cs.TwinGroup]
@@ -1106,6 +1109,12 @@ func datagenHalf(perCase []protocol.CaseScore, benchVersion int) DatagenHalf {
 // audit, metamorphic consistency, over-call, canary) must not charge it a
 // second time as if the harness had answered badly. Below v18 no case carries
 // the flag and the population is unchanged.
+// GatedPopulationForVersion is gatedPopulation for the run's published gate
+// factors and signed gate evidence, so they decompose the applied gate.
+func GatedPopulationForVersion(perCase []protocol.CaseScore, benchVersion int) []protocol.CaseScore {
+	return gatedPopulation(perCase, benchVersion)
+}
+
 func gatedPopulation(perCase []protocol.CaseScore, benchVersion int) []protocol.CaseScore {
 	if !protocol.RunBudgetBenchVersion(benchVersion) {
 		return perCase
@@ -1187,7 +1196,7 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 	// score cannot hide inside the memory mean. nil (omitted) for pre-v5 runs and
 	// runs that drew no conversational case.
 	if benchVersion >= protocol.BenchVersionV5 {
-		report.ConversationalSanity = ConversationalSanity(perCase)
+		report.ConversationalSanity = ConversationalSanity(gatedPopulation(perCase, benchVersion))
 	}
 	return report
 }

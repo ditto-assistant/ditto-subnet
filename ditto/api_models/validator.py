@@ -1311,6 +1311,14 @@ class CaseScore(BaseModel):
         # cases carry no expected tools); coerce null/absent to an empty list.
         return v if v is not None else []
 
+    @field_validator("budget_exhausted", mode="before")
+    @classmethod
+    def _budget_false_is_absent(cls, v: object) -> object:
+        # Only a refused case carries the flag. An explicit false means the
+        # same as absent; store it as absent so exact retries of reports
+        # accepted before the field existed rebuild identical details.
+        return None if v is False else v
+
 
 class CategoryStat(BaseModel):
     """Per-category aggregate inside a :class:`ScoreReport`.

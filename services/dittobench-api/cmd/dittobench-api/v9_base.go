@@ -7,6 +7,7 @@ import (
 
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
+	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-api/internal/v9base"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -114,6 +115,11 @@ func applyV9BaseEvidence(
 			report.RunID, inconsistent,
 		)
 	}
+	// From the v18 run budget, a case the budget refused never ran: it is not
+	// an eligible case with missing model or claim evidence, so the signed
+	// gate populations leave it out exactly as the composite gate does. Its
+	// zero score stays in the report.
+	perCase, transcripts = v18GatedEvidence(req.BenchVersion, perCase, transcripts)
 	model := v9AggregateModelTelemetry(usage, execution, perCase, transcripts)
 	// Per-case model-reach, delay-fingerprint, inference-latency, dependence,
 	// and answer-stuffing gates required exclusive inference windows. Concurrent
@@ -202,4 +208,26 @@ func v9EligibleModelCases(perCase []protocol.CaseScore) int {
 		}
 	}
 	return eligible
+}
+
+// v18GatedEvidence drops budget-refused cases (and their empty transcripts)
+// from the signed gate inputs. Below v18 no case carries the flag.
+func v18GatedEvidence(benchVersion int, perCase []protocol.CaseScore, transcripts []transcriptCase) ([]protocol.CaseScore, []transcriptCase) {
+	refused := map[string]bool{}
+	for _, cs := range perCase {
+		if cs.BudgetExhausted {
+			refused[cs.CaseID] = true
+		}
+	}
+	if len(refused) == 0 {
+		return perCase, transcripts
+	}
+	gated := scorer.GatedPopulationForVersion(perCase, benchVersion)
+	kept := make([]transcriptCase, 0, len(transcripts))
+	for _, tc := range transcripts {
+		if !refused[tc.CaseID] {
+			kept = append(kept, tc)
+		}
+	}
+	return gated, kept
 }
