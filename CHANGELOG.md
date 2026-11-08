@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.466.0 (2026-11-08)
+
+### Features
+
+- **scorer**: Read the bench v18 unlinked-connector probe reply
+  ([#3413](https://github.com/ditto-assistant/ditto-subnet/pull/3413),
+  [`3e453ee`](https://github.com/ditto-assistant/ditto-subnet/commit/3e453eecac918ad22c21477e1a1338a21f3e2554))
+
+
 ## v0.465.0 (2026-11-08)
 
 ### Features
