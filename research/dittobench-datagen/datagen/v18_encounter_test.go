@@ -14,6 +14,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/ditto-assistant/dittobench-datagen/toolexec"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 func v18Encounters(t *testing.T, seed int64, n int) []protocol.ToolCase {
@@ -294,5 +295,37 @@ func TestV18EncounterForbiddenExcludesContext(t *testing.T) {
 	}
 	if v := grade.Encounter(e, wrong, encounterReply("VEL-4821")); v.ForbiddenHits != 1 {
 		t.Fatalf("filing the wrong incident was not charged: %+v", v)
+	}
+}
+
+// The encounter pass never offers the world carrier as a slot, even when the
+// carrier looks like an ordinary prerequisite-bearing case (the last slot
+// tier). Across seeds 1..100 the generator never puts the carrier there, so
+// the slot function is tested directly with a carrier dressed as one.
+func TestV18EncountersKeepTheWorldCarrier(t *testing.T) {
+	checked := 0
+	for seed := int64(1); seed <= 20; seed++ {
+		ds, err := GenerateForVersion(seed, V18FullToolHalf, protocol.BenchVersionV18)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cases := append([]protocol.ToolCase(nil), ds.ToolCases...)
+		world := universe.GenerateForVersion(seed, ToolWorldScale(len(cases), protocol.BenchVersionV18), protocol.BenchVersionV18)
+		carrier := v13WorldCarrier(world, cases)
+		if carrier < 0 {
+			continue
+		}
+		checked++
+		pairs := cases[carrier].PrerequisitePairs
+		cases[carrier] = protocol.ToolCase{ID: cases[carrier].ID, Category: "stale_context_web",
+			ExpectedTools: []protocol.ToolSpec{{Name: "search_web"}}, PrerequisitePairs: pairs}
+		for _, slot := range v18EncounterSlots(seed, protocol.BenchVersionV18, cases) {
+			if slot == carrier {
+				t.Fatalf("seed %d: the world carrier is offered as an encounter slot", seed)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no seed had a world carrier to check")
 	}
 }
