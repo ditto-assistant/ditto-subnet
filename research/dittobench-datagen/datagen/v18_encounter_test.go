@@ -86,7 +86,11 @@ func TestV18EncountersAreAbsentBelowV18(t *testing.T) {
 func encounterOracle(tc protocol.ToolCase) []protocol.ObservedToolCall {
 	var calls []protocol.ObservedToolCall
 	for _, required := range tc.Encounter.Required {
-		args, _ := json.Marshal(map[string]string{"q": strings.Join(required.Contains, " ")})
+		values := append([]string(nil), required.Contains...)
+		if len(required.AnyContains) > 0 {
+			values = append(values, required.AnyContains[0])
+		}
+		args, _ := json.Marshal(map[string]string{"q": strings.Join(values, " ")})
 		calls = append(calls, protocol.ObservedToolCall{Name: required.Tool, Args: args})
 	}
 	return calls
@@ -135,7 +139,7 @@ func TestV18EncountersAreSolvableAndDiscriminate(t *testing.T) {
 				if !menu[required.Tool] {
 					t.Fatalf("seed %d %s: required %s is not on the menu", seed, tc.ID, required.Tool)
 				}
-				for _, value := range required.Contains {
+				for _, value := range append(append([]string(nil), required.Contains...), required.AnyContains...) {
 					if !protocol.EncounterContains(world, value) {
 						t.Fatalf("seed %d %s: required value %q is not discoverable", seed, tc.ID, value)
 					}
@@ -240,7 +244,7 @@ func serveOnce(t *testing.T, srv *toolexec.Server, caseID string, call protocol.
 // vector (gen.TestV18KnownVector) hashes only what reaches the artifact, and
 // an encounter's mock world and grading sets are grader-only, so they get
 // their own pin. Changing either is a new bench version.
-const v18EncounterVector = "e7c620fadb3fc2ee9cf5e6e204aa4baf49f7f216bfc45393810fa2672e5a1c36"
+const v18EncounterVector = "5a3d94c6d856a4e91fe1b011ebe96b2a0481da0988b80f8550435c7ddecdffba"
 
 func TestV18EncounterVector(t *testing.T) {
 	type pinned struct {

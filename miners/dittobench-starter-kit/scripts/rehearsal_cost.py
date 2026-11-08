@@ -467,6 +467,9 @@ def estimate(
             decision_output_tokens=totals.decision_output_tokens,
         )
     )
+    # The scorer's own budget verdict wins even when it did not price the run.
+    if isinstance(details.get("run_budget"), dict):
+        out["run_budget"] = details["run_budget"]
     return _with_budget(out, bench_version)
 
 
