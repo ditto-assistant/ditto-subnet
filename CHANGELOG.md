@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.468.1 (2026-11-08)
+
+### Bug Fixes
+
+- **security**: Bump dittobench-starter-kit quinn-proto to 0.11.15
+  ([#3449](https://github.com/ditto-assistant/ditto-subnet/pull/3449),
+  [`c9098b1`](https://github.com/ditto-assistant/ditto-subnet/commit/c9098b11886f77f2eabf6b1910f73c1bfd98beb4))
+
+
 ## v0.468.0 (2026-11-08)
 
 ### Bug Fixes
