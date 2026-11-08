@@ -385,14 +385,25 @@ but is no longer a seed input.
    payment verifier applies today.
 3. Its remark equals `C`, recomputed from the statement's `miner_hotkey` and
    `artifact_sha256` and the admission token. The token is revealed in the
-   statement and must hash to the logged issuance commitment. On the paid
-   path, the batched transfer pays the published payment address at least the
-   logged quote.
-4. The issuance leaf precedes the anchor block. No earlier extrinsic from the
-   same signer carries the same `C` between issuance and the anchor; the scan
-   is bounded by the token's expiry. This makes the *first* matching
-   commitment the canonical one, so a miner cannot post several commitments
-   and keep the one with the luckiest round.
+   statement and must hash to the commitment in the issuance leaf. That leaf
+   must come with a Merkle inclusion proof against an epoch root **already
+   anchored on chain**. Until that root is anchored the statement stays
+   pending and cannot verify, so Platform cannot present an issuance record
+   made up after the fact. On the paid path, the batched transfer pays the
+   published payment address at least the logged quote.
+4. Let `W` be the token validity in blocks, pinned in the verifier policy.
+   - The leaf's `issued_block` must satisfy
+     `0 ≤ anchor_block − issued_block ≤ W`, and its `expires_block` may not
+     exceed `issued_block + W`.
+   - No earlier extrinsic from the same signer may carry the same `C` in the
+     fixed window `[anchor_block − W, anchor_block)`.
+   - The window ends at the anchor and does **not** start at the reported
+     `issued_block`, so post-dating the issuance record cannot hide an earlier
+     commitment. A token is valid for at most `W` blocks, so any earlier
+     commitment carrying `C` must fall inside that window.
+
+   This makes the *first* matching commitment the canonical one, so a miner
+   cannot post several commitments and keep the one with the luckiest round.
 5. No other published statement (across anchored statement roots) uses the
    same anchor.
 6. `R` follows the rule above under a pinned `Δ ≥ Δ_min`, and its BLS
@@ -405,9 +416,15 @@ but is no longer a seed input.
   still costs one evaluation fee.
 - On the credit path a remark costs only the transaction fee. The single-use
   token and the first-match rule still limit it to one anchor per token.
-- Platform and a miner could collude to backdate a token's issuance leaf. That
-  would hide an earlier commitment, and it shows only in log timing (open
-  question 11).
+- Platform alone cannot exploit the issuance record. The leaf is fixed by an
+  anchored inclusion proof, and the first-match scan does not depend on its
+  reported time. A fabricated leaf is useless without a remark signed by the
+  miner that carries its token.
+- Collusion is still possible. Platform could hand a miner a token whose
+  *real* validity exceeds `W`, or issue it before logging it. The miner then
+  commits once early and again more than `W` blocks later, and Platform logs
+  the issuance just before the second commitment. Only an honest Platform
+  enforces real token validity (open question 11).
 - A block author can delay the anchor extrinsic by a few blocks. With
   `Δ ≫ S`, though, the candidate rounds are all still in the future, so the
   delay cannot be aimed at a known dataset.
@@ -517,6 +534,8 @@ into every epoch pin:
 - `beacon`: drand chain hash, `Δ`, and `Δ_min` with the Subtensor skew bound
   `S` it is derived from. Validator code rejects any policy where
   `Δ < Δ_min` (§4.5).
+- `token_validity_blocks` (`W`): the maximum admission-token lifetime. It is
+  also the width of the fixed first-match scan window (§4.5 check 4).
 - `canary_rate` and `signoff_quorum`.
 
 A policy change takes effect at an epoch pin. It is gated on every
@@ -525,9 +544,12 @@ no force override, exactly like protocols 20, 27, 29 and 34.
 
 ### 6.2 Commitments
 
-**Admission-token issuance leaf**: `{schema, miner_hotkey, artifact_sha256, SHA-256(admission_token), issued_block, expires_at}`.
-This leaf is appended when `/upload/check` issues the token. The token itself
-is revealed only in the statement, after the upload has consumed it.
+**Admission-token issuance leaf**: `{schema, miner_hotkey, artifact_sha256, SHA-256(admission_token), issued_block, expires_block}`,
+where `expires_block − issued_block ≤ W` (`token_validity_blocks` in the
+verifier policy). This leaf is appended when `/upload/check` issues the token.
+It lands in the same append-only log, and so in the same anchored epoch roots,
+as attempt and terminal leaves. The token itself is revealed only in the
+statement, after the upload has consumed it.
 
 **Attempt log leaf** (canonical JSON, SHA-256):
 `{schema, ticket_id, agent_id, image_digest, bench_version, replicate j, attempt a, reason (initial | authorized_retry:<backroom audit id>), registered_at, R}`.
@@ -617,7 +639,9 @@ For each new statement (cached by digest):
    must have succeeded and be signed by the payment-time coldkey owner of
    `miner_hotkey`. Its remark must equal `C` for this `artifact_sha256` and
    admission token, and on the paid path the batched transfer must pay the
-   quote. It must be the first matching commitment since token issuance, and
+   quote. Its issuance leaf must be proven against an anchored root, with
+   `0 ≤ anchor_block − issued_block ≤ W`. It must be the first matching
+   commitment in the fixed window `[anchor_block − W, anchor_block)`, and
    no other statement may use this anchor. Then check that
    `Δ ≥ Δ_min` in the pinned policy, verify the drand BLS signature for `R`
    and the rule `R = first ≥ ts(anchor) + Δ`, and re-derive `s_j`. Reject on
@@ -626,8 +650,11 @@ For each new statement (cached by digest):
    `dataset_sha256`. This is cached; cost **unknown**, seconds of CPU.
 6. Receipt: about 25 ms to verify a 290 KB Ziren proof *(vendor)*, then check
    that the journal matches the statement.
-7. Log: verify inclusion of the attempt and terminal leaves against the
-   anchored root. Check the attempt policy: the first terminal scored attempt
+7. Log: verify a Merkle inclusion proof for **each** of the statement's
+   issuance, attempt and terminal leaves. Each proof must check against an
+   epoch root already anchored on chain, read from the validator's own node.
+   A statement with any leaf not yet in an anchored root stays pending and
+   cannot verify. Check the attempt policy: the first terminal scored attempt
    is the one counted, and any earlier attempt has a signed failure statement
    or an authorized retry leaf.
 8. Sign `VerifiedStatement{statement_digest, verdict, verifier_policy_digest, validator_hotkey}`
@@ -668,7 +695,7 @@ replicate.
 | Repeated aborts for one agent | Visible pattern; policy threshold to flag for review (open question) |
 | Anchor check fails (wrong signer, missing or wrong remark, earlier matching commitment, anchor already used, `Δ < Δ_min`) | Statement rejected; the agent cannot be scored on that anchor. Backroom shows it as an operator or miner fault, not an infra retry. A miner with a malformed anchor re-uploads with a fresh token |
 | drand unavailable at `R` | Wait (drand rounds are recoverable later); no fallback to an operator-chosen seed. The current CSPRNG fallback is not carried forward |
-| Chain anchoring failed | Roots queue; entries finalize only after their root is anchored |
+| Chain anchoring failed | Roots queue. Statements stay pending, and entries finalize only once every referenced leaf (issuance, attempt, terminal) is in an anchored root |
 | Validator signs a forced-invalid canary | Its signoffs stop counting toward `q` for a cooling-off period; the event is public |
 | Miner disputes a score | Owner-authorized witness access → native re-grade (4.2b). A mismatch with the journal is a P0 bug. A match with a claim of bad serving goes to a CRN audit run |
 | Audit lands outside the noise band | Freeze the entry's eligibility pending review; it is a lead, not proof (serving noise) |
@@ -742,7 +769,7 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 7 | Verifier library spike | Go verifier callable from the validator (cgo or sidecar); latency measured | 6 | S |
 | 8 | Validator checks seed block against its own chain node | Closes G1; refusal code on mismatch; test with a forged hash | — | S |
 | 9 | Beacon seed derivation v2 (`seed_scope: beacon-v2`) | drand quicknet BLS verification in Go and Python; shared vectors; the rule is "first round ≥ anchor block timestamp + Δ"; validator code rejects `Δ < Δ_min` (with `S` read from the Subtensor runtime and pinned); no Platform-assigned input; retries reuse the seed | 8, 20 | M |
-| 10 | Public attempt log | Append-only Merkle log of attempt and terminal leaves; public read API; Backroom read tool; aborted-attempt leaves | — | M |
+| 10 | Public attempt log | Append-only Merkle log of issuance, attempt and terminal leaves; inclusion proofs served per leaf; public read API; Backroom read tool; aborted-attempt leaves | — | M |
 | 11 | Per-epoch chain anchor | One `commitments` write per epoch with the epoch root; anchor hotkey decided; monitor for missed anchors | 10 | S |
 | 12 | Attestable AMI hosted runner | Reproducible image (scorer + sandbox-docker + broker); reference PCRs published by release; AWS Terraform module through protected plan/apply | 1 | L |
 | 13 | Runtime key and RunStatement v1 | Key generated in the runner and bound by the NitroTPM document; statement schema and signature; failure statements | 2, 12 | M |
@@ -752,7 +779,7 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 17 | Crown-decision audits | Beacon-sampled audit selection; paired CRN comparison; Backroom surface | 14 | M |
 | 18 | Dispute workflow | Quarantine and re-prove tools; owner-gated witness access | 15 | M |
 | 19 | Article and X draft (after the Phase 1 numbers) | Per the feature-article convention; owner Peyton | 6 | S |
-| 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged. A shared Go/Python anchor-check library covers all six §4.5 checks, with negative vectors | 10 | M |
+| 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged with `expires_block ≤ issued_block + W`. A shared Go/Python anchor-check library covers all six §4.5 checks, including the anchored issuance inclusion proof and the fixed-window `[anchor − W, anchor)` first-match scan, with negative vectors: post-dated issuance, an unanchored leaf, an earlier commitment inside the window | 10, 11 | M |
 
 ---
 
@@ -790,9 +817,11 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 11. **Anchor extrinsic and credits.** Is it acceptable to require miners to pay
     with a `batch_all` that carries the artifact commitment? That means a miner
     CLI update and a payment-verifier change. Should credit-funded uploads stay
-    eligible for proof-backed scoring? On the credit path, a Platform–miner pair
-    that backdates a token's issuance leaf could hide an earlier commitment.
-    The log's timing makes that visible, but nothing prevents it.
+    eligible for proof-backed scoring? A colluding Platform–miner pair can
+    still give a token a real lifetime longer than `W` and log it late, hiding
+    an earlier commitment (§4.5, residual risk). The anchored log makes the
+    claimed issuance immutable, but it cannot prove when a token was really
+    handed out. What `W` should be is part of this question.
 
 ---
 
