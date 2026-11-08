@@ -38,7 +38,8 @@ const result = spawnSync(
     "install",
     ...specs,
     "--prefix",
-    openclawDir,
+    // Windows shell mode joins args; quote so spaces in the checkout path stay one token.
+    process.platform === "win32" ? `"${openclawDir}"` : openclawDir,
     "--no-save",
     "--no-package-lock",
     "--no-fund",
