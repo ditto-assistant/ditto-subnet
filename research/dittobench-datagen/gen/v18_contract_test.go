@@ -154,3 +154,26 @@ func TestV18MixGate(t *testing.T) {
 		}
 	}
 }
+
+// A pool that under-supplies one absence family still fills the 12-pair slot:
+// the quota pass runs first, then the remaining pairs top it up in pool order.
+func TestV18AbstentionSubsetFillsTheSlot(t *testing.T) {
+	pair := func(family string, n int) [][2]StagedCase {
+		var out [][2]StagedCase
+		for i := 0; i < n; i++ {
+			c := StagedCase{Case: protocol.MemoryCase{QuestionType: QTAbsence + family}}
+			out = append(out, [2]StagedCase{c, c})
+		}
+		return out
+	}
+	var pool [][2]StagedCase
+	pool = append(pool, pair(universe.V13FamilyPureAbsence, 4)...)
+	pool = append(pool, pair(universe.V13FamilyNearMiss, 3)...)
+	pool = append(pool, pair(universe.V13FamilyStaleRemoved, 3)...)
+	pool = append(pool, pair(universe.V13FamilyCrossUser, 1)...) // quota 2
+	pool = append(pool, pair(universe.V13FamilyFalsePremise, 3)...)
+	pool = append(pool, pair(universe.V13FamilyInsufficient, 2)...)
+	if got := len(v18AbstentionSubset(pool, 12)); got != 12 {
+		t.Fatalf("slot holds %d pairs, want 12", got)
+	}
+}
