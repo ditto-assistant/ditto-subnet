@@ -71,6 +71,18 @@ spend was ~$0.18 a run: judge ~$0.17 in one request, harness under $0.01.
   sized for $30 is never handed a $1 claim. Reports filed against older $30
   holds still verify against their $25 judge budget.
 
+### Coverage and repeatability (2026-11-08)
+
+To estimate how an enforced conversation score would move rankings, admission
+covers finalized, owner-deduplicated public ranks 1-15 (was the top five). Pass
+1 gives every eligible artifact one canonical assessment (`repeat_index` 0),
+best rank first. Only when all of them have one does pass 2 run up to two
+fresh-seed repeats (`repeat_index` 1-2) for ranks 1-5 whose canonical
+assessment completed. Repeats reuse the canonical base quality, never change a
+score, and measure judge noise: the spread of the conversation score for the
+same artifact. Manual retries stay canonical-only. At ~$0.18 a run, covering
+one bench version is about 25 runs, or ~$4.50, inside the $30 cap.
+
 Workers advertise the instruments they run in the claim body; a worker that
 sends none predates v2 and is offered nothing while Platform admits v2. A v2
 worker that receives a v1 claim from an older Platform files an empty
