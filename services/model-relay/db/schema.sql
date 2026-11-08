@@ -3695,9 +3695,11 @@ CREATE TABLE public.conversation_assessments (
     worker_hotkey text,
     retry_of uuid,
     retry_authorization jsonb,
+    repeat_index smallint DEFAULT '0'::smallint NOT NULL,
     CONSTRAINT ck_conversation_assessments_conversation_base_quality CHECK (((base_quality_micros >= 0) AND (base_quality_micros <= 1000000))),
     CONSTRAINT ck_conversation_assessments_conversation_bench_version CHECK ((bench_version >= 9)),
-    CONSTRAINT ck_conversation_assessments_conversation_reserved_cost CHECK ((reserved_microusd = 30000000)),
+    CONSTRAINT ck_conversation_assessments_conversation_repeat_index_range CHECK (((repeat_index >= 0) AND (repeat_index <= 8))),
+    CONSTRAINT ck_conversation_assessments_conversation_reserved_cost CHECK ((reserved_microusd = ANY (ARRAY[(30000000)::bigint, (1000000)::bigint]))),
     CONSTRAINT ck_conversation_assessments_conversation_retry_lineage CHECK (((retry_of IS NULL) OR ((retry_of <> assessment_id) AND (retry_authorization IS NULL))))
 );
 
@@ -12225,7 +12227,7 @@ CREATE UNIQUE INDEX continual_retest_settings_scope_revision_idx ON public.conti
 -- Name: conversation_assessment_identity; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX conversation_assessment_identity ON public.conversation_assessments USING btree (agent_id, artifact_sha256, bench_version, instrument) WHERE (retry_of IS NULL);
+CREATE UNIQUE INDEX conversation_assessment_identity ON public.conversation_assessments USING btree (agent_id, artifact_sha256, bench_version, instrument, repeat_index) WHERE (retry_of IS NULL);
 
 
 --

@@ -8182,74 +8182,6 @@ class TestPublicActivity:
         assert entry["score_count"] == 3
         assert datetime.fromisoformat(entry["last_scored_at"]) == recorded_at
 
-    async def test_active_rescreen_projects_yellow_and_exposes_version_history(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = UUID(
-            await _seed_agent(
-                session_maker,
-                miner=_MINER_A,
-                status=AgentStatus.SCREENING,
-                screening_reason="Container failed the health check",
-                screening_policy_version=SCREENING_POLICY_VERSION - 1,
-            )
-        )
-        now = datetime.now(UTC)
-        old_attempt_id = uuid4()
-        active_attempt_id = uuid4()
-        async with session_maker() as session, session.begin():
-            session.add_all(
-                [
-                    ScreeningAttempt(
-                        attempt_id=old_attempt_id,
-                        agent_id=agent_id,
-                        screener_hotkey=_MINER_B,
-                        policy_version=SCREENING_POLICY_VERSION - 1,
-                        status="rejected",
-                        started_at=now - timedelta(hours=1),
-                        deadline=now - timedelta(minutes=40),
-                        finished_at=now - timedelta(minutes=45),
-                        public_reason="Container failed the health check",
-                    ),
-                    ScreeningAttempt(
-                        attempt_id=active_attempt_id,
-                        agent_id=agent_id,
-                        screener_hotkey=_MINER_B,
-                        policy_version=SCREENING_POLICY_VERSION,
-                        status="running",
-                        started_at=now,
-                        deadline=now + timedelta(minutes=30),
-                    ),
-                ]
-            )
-        _install_db(app, session_maker)
-
-        activity = (await client.get("/api/v1/public/activity")).json()["entries"][0]
-        assert activity["status"] == "screening"
-        assert activity["screening_reason"] is None
-        assert activity["screening_policy_version"] == SCREENING_POLICY_VERSION - 1
-        assert activity["required_screening_policy_version"] == SCREENING_POLICY_VERSION
-        assert activity["screening_attempt_id"] == str(active_attempt_id)
-        assert activity["screening_build_only"] is False
-
-        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
-        assert response.status_code == 200
-        body = response.json()
-        assert body["status"] == "screening"
-        assert [
-            attempt["policy_version"] for attempt in body["screening_attempts"]
-        ] == [
-            SCREENING_POLICY_VERSION,
-            SCREENING_POLICY_VERSION - 1,
-        ]
-        assert [attempt["status"] for attempt in body["screening_attempts"]] == [
-            "running",
-            "rejected",
-        ]
-
     async def test_each_score_carries_its_own_bench_versions_dataset_digest(
         self,
         app: FastAPI,
@@ -8339,43 +8271,6 @@ class TestPublicActivity:
         entry = (await client.get("/api/v1/public/activity")).json()["entries"][0]
         assert entry["status"] == "rejected"
         assert entry["screening_reason"] == "Container failed the health check"
-
-    async def test_policy_bump_projects_unadmitted_stale_agent_as_not_queued(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """A stale policy version alone is not a rescreen ticket.
-
-        Only era-admitted agents return to ``waiting_screening`` on a policy
-        bump; a historical submission outside the active benchmark era stays
-        ``not_queued``. The waiting_screening count drives screener
-        autoscaling, so projecting the whole stale backlog there also bought
-        capacity for work no screener would ever be allowed to claim.
-        """
-        historical = await _seed_agent(
-            session_maker,
-            miner=_MINER_A,
-            name="stale-historical",
-            status=AgentStatus.EVALUATING,
-            created_at=datetime(2026, 5, 1, tzinfo=UTC),
-            screening_policy_version=SCREENING_POLICY_VERSION - 1,
-        )
-        current_era = await _seed_agent(
-            session_maker,
-            miner=_MINER_B,
-            name="stale-current-era",
-            status=AgentStatus.EVALUATING,
-            screening_policy_version=SCREENING_POLICY_VERSION - 1,
-        )
-        await _activate_era(session_maker)
-        _install_db(app, session_maker)
-
-        body = (await client.get("/api/v1/public/activity")).json()
-        by_id = {entry["agent_id"]: entry["status"] for entry in body["entries"]}
-        assert by_id[historical] == "not_queued"
-        assert by_id[current_era] == "waiting_screening"
 
     async def test_released_quarantine_resolution_is_public_in_attempt_history(
         self,

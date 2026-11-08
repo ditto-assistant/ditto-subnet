@@ -2,16 +2,6 @@ import { z } from 'zod'
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/)
 
-export const scheduleV13ReviewClockInputSchema = z.object({
-  expectedRevision: z.number().int().nonnegative(),
-  policyDocumentDigest: sha256,
-  policyManifestDigest: sha256,
-  activateAt: z.string().datetime({ offset: true }),
-  windowSeconds: z.number().int().min(3600).max(604800),
-  reason: z.string().trim().min(8),
-  confirmation: z.literal('SCHEDULE V13 REVIEW CLOCK'),
-})
-
 const reviewClockRevisionSchema = z.object({
   revision: z.number().int().positive(),
   policy_version: z.literal(13),

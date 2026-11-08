@@ -42,7 +42,6 @@ from ditto.db.queries.dueling_season_window import (
     dueling_season_window,
     season_scope_predicate,
 )
-from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
@@ -1802,21 +1801,13 @@ def rollout_member_policy_predicate(
 ) -> ColumnElement[bool]:
     """Screening-policy gate shared by every rollout-member lease path.
 
-    A lease is only worth issuing if ``POST /validator/score`` will accept the
-    result, and that endpoint requires the platform's *effective* screening
-    policy, not merely the contract's floor. After a scheduled activation raises
-    the required version, members still on the old version re-enter screening;
-    leasing them during that window produced scores that were all rejected with
-    ``agent is not evaluatable`` and burned their fail-once retry budget (bench
-    v17, 2026-11-06: crown-v210 and dan0l exhausted inside the v14 rescreen
-    window). Hold the member until it passes the required policy instead.
-
-    Read at statement-build time, matching ``queue_candidate_predicate``.
+    Only the contract's floor applies: it pins the screened-image handoff the
+    validator requires. ``POST /validator/score`` accepts the same floor, so a
+    lease issued here can always land. Source review and scheduled
+    review-policy activations are retired (2026-11-07); a member is never held
+    for a later review policy.
     """
-    return Agent.screening_policy_version >= max(
-        contract.minimum_screening_policy_version,
-        effective_screening_policy_version(),
-    )
+    return Agent.screening_policy_version >= contract.minimum_screening_policy_version
 
 
 def _rollout_member_candidates(

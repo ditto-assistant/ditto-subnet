@@ -92,7 +92,6 @@ from ditto.db.queries.similarity_grouping import (
     SimilarityMatch,
     similar_submissions,
 )
-from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
@@ -278,7 +277,10 @@ def queue_candidate_predicate(
     contract = benchmark_contract(bench_version)
     predicates: list[ColumnElement[bool]] = [
         agent.status == AgentStatus.EVALUATING,
-        agent.screening_policy_version >= effective_screening_policy_version(),
+        # The benchmark contract's floor is the only screening-policy gate: it
+        # pins the screened-image handoff validators require. No lease waits on
+        # a later review-policy activation (source review retired 2026-11-07).
+        agent.screening_policy_version >= contract.minimum_screening_policy_version,
         validator_queue_admission_predicate(bench_version=bench_version, agent=agent),
         # A retirement can only be written against an era older than the active
         # one, so this is a no-op for current-era work. It is here so that
@@ -399,7 +401,8 @@ def _top_provisional_contenders(
         )
         .where(
             contender.status == AgentStatus.EVALUATING,
-            contender.screening_policy_version >= effective_screening_policy_version(),
+            contender.screening_policy_version
+            >= benchmark_contract(bench_version).minimum_screening_policy_version,
             contender_accepted_score_count.between(1, SCORING_QUORUM - 1),
             contender_recorded_score_count >= contender_accepted_score_count,
             (

@@ -91,6 +91,8 @@ def _make_verifier(
     block_hash_side_effect: Exception | None = None,
     extrinsic_info: MagicMock | None = None,
     extrinsic_side_effect: Exception | None = None,
+    archive_extrinsic_info: MagicMock | None = None,
+    archive_extrinsic_side_effect: Exception | None = None,
     success: bool = True,
     success_side_effect: Exception | None = None,
     coldkey: str = "5Coldkey",
@@ -110,6 +112,14 @@ def _make_verifier(
     else:
         chain.get_extrinsic = AsyncMock(
             return_value=extrinsic_info or _make_extrinsic_info()
+        )
+    if archive_extrinsic_side_effect is not None:
+        chain.get_extrinsic_at_block_hash = AsyncMock(
+            side_effect=archive_extrinsic_side_effect
+        )
+    else:
+        chain.get_extrinsic_at_block_hash = AsyncMock(
+            return_value=archive_extrinsic_info or _make_extrinsic_info()
         )
     if success_side_effect is not None:
         chain.check_extrinsic_success = AsyncMock(side_effect=success_side_effect)
@@ -216,9 +226,59 @@ class TestExtrinsicLookup:
             "5Hotkey", "0xblock"
         )
 
-    async def test_not_found_raises_typed(self):
-        verifier = _make_verifier(extrinsic_side_effect=ExtrinsicNotFoundError("nope"))
+    async def test_found_by_pylon_skips_archive_read(self):
+        verifier = _make_verifier()
+
+        await verifier.verify_payment(
+            _make_proof(), expected_hotkey="5Hotkey", expected_amount_rao=QUOTE_RAO
+        )
+
+        verifier._chain.get_extrinsic_at_block_hash.assert_not_awaited()
+
+    async def test_not_found_on_pylon_and_archive_raises_typed(self):
+        verifier = _make_verifier(
+            extrinsic_side_effect=ExtrinsicNotFoundError("pylon: nope"),
+            archive_extrinsic_side_effect=ExtrinsicNotFoundError("archive: nope"),
+        )
         with pytest.raises(PaymentNotFoundOnChain):
+            await verifier.verify_payment(
+                _make_proof(), expected_hotkey="5Hotkey", expected_amount_rao=QUOTE_RAO
+            )
+
+    @pytest.mark.parametrize(
+        "pylon_error",
+        [
+            ExtrinsicNotFoundError("pylon lags the head"),
+            ChainConnectionError("pylon down"),
+        ],
+    )
+    async def test_sn455_pylon_miss_reads_extrinsic_from_archive(
+        self, pylon_error: Exception
+    ):
+        """SN-455: a confirmed payment Pylon cannot see must not 402/3201."""
+        verifier = _make_verifier(
+            extrinsic_side_effect=pylon_error,
+            archive_extrinsic_info=_make_extrinsic_info(),
+        )
+
+        result = await verifier.verify_payment(
+            _make_proof(), expected_hotkey="5Hotkey", expected_amount_rao=QUOTE_RAO
+        )
+
+        assert result.amount_rao == QUOTE_RAO
+        assert result.miner_coldkey == "5Coldkey"
+        # The archive read is keyed by the canonical hash bound in step 1.
+        chain: Any = verifier._chain
+        chain.get_extrinsic_at_block_hash.assert_awaited_once_with(100, "0xblock", 7)
+
+    async def test_pylon_miss_with_archive_outage_stays_retryable(self):
+        """Neither backend answered, so the proof is unproven, not missing:
+        surface the ChainError (503, retried by the CLI), never 3201."""
+        verifier = _make_verifier(
+            extrinsic_side_effect=ExtrinsicNotFoundError("pylon lags the head"),
+            archive_extrinsic_side_effect=ChainConnectionError("archives down"),
+        )
+        with pytest.raises(ChainConnectionError):
             await verifier.verify_payment(
                 _make_proof(), expected_hotkey="5Hotkey", expected_amount_rao=QUOTE_RAO
             )
@@ -227,7 +287,8 @@ class TestExtrinsicLookup:
         """ChainConnectionError must NOT be swallowed; envelope handler
         already maps it to 503. Catching it here would lose typed signal."""
         verifier = _make_verifier(
-            extrinsic_side_effect=ChainConnectionError("pylon down")
+            extrinsic_side_effect=ChainConnectionError("pylon down"),
+            archive_extrinsic_side_effect=ChainConnectionError("archives down"),
         )
         with pytest.raises(ChainConnectionError):
             await verifier.verify_payment(

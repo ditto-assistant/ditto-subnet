@@ -53,7 +53,6 @@ from ditto.db.queries.benchmark_rollout import (
     open_rollout,
 )
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.screener_policy_state import effective_screening_policy_version
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -163,7 +162,9 @@ async def scoring_readiness(
             f"agent status is '{agent.status.value}', not {expected} "
             f"(the {lane} lane leases no other status)"
         )
-    required_version = effective_screening_policy_version()
+    # The contract minimum is the gate the allocator applies; it is never a
+    # later review-policy activation (source review retired 2026-11-07).
+    required_version = contract.minimum_screening_policy_version
     if agent.screening_policy_version < required_version:
         blocking.append(
             f"screening policy v{agent.screening_policy_version} is below the "
@@ -207,7 +208,7 @@ async def scoring_readiness(
             )
         ),
         screening_policy_version=agent.screening_policy_version,
-        required_screening_policy_version=effective_screening_policy_version(),
+        required_screening_policy_version=contract.minimum_screening_policy_version,
         requires_screened_image=contract.requires_screened_image,
         has_versioned_dataset=has_versioned_dataset,
         screened_image=ScreenedImageReadiness(

