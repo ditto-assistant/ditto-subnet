@@ -1,8 +1,10 @@
 # Reference baseline
 
 What the stock kit (unmodified `baseline.rs`) scores under the locked model.
-From bench 18 the stock kit serves the Jev hybrid by default (`src/hybrid.rs`);
-older benches keep the classic `Baseline::run` path. This
+From bench 18 the stock kit serves the Jev hybrid by default (`src/hybrid.rs`):
+it switches on any tool menu over 64k estimated tokens, because scored runs
+send wire `bench_version: 9` whatever the contract. Older benches keep the
+classic `Baseline::run` path. This
 is the target to beat: a competitive submission has to clear the composite below,
 and the weakest categories are where the reference harness leaves the most on the
 table.

@@ -669,8 +669,11 @@ drop it in. To run the exact production stack, use Vertex `text-embedding-005`
 `src/hybrid.rs` is a second served path that uses the scored decision lane
 (`DITTOBENCH_DECISIONS_URL`, TypeSafe Jev System One) for every *decision* and
 the locked chat model only for *strings*. With `DITTOBENCH_JEV_HYBRID` unset it
-serves every bench 18+ request, and anything older takes the classic path above
-unchanged (so bench 17 scoring of an unmodified kit does not move).
+serves any request whose tool menu is over 64k estimated tokens (scored runs
+send `bench_version: 9` whatever the contract, so in live scoring the v18 menu
+size is the switch) and every bench 18+ request in local rehearsal. Anything
+else takes the classic path above unchanged (so bench 17 scoring of an
+unmodified kit does not move).
 `DITTOBENCH_JEV_HYBRID=1` forces it on for every bench and `0` forces the
 classic path everywhere. `serve` prints which path each bench takes at startup.
 It is a worked example, not a required library; the competition stays
@@ -714,7 +717,7 @@ Knobs (environment):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DITTOBENCH_JEV_HYBRID` | unset | Unset: on from bench 18, off below. `1` forces it on for every bench, `0` forces the classic path. |
+| `DITTOBENCH_JEV_HYBRID` | unset | Unset: on for a tool menu over 64k estimated tokens (v18) or a bench 18+ request, off otherwise. `1` forces it on for every request, `0` forces the classic path. |
 | `DITTOBENCH_JEV_MENU` | `full` | `grouped` asks about toolkits (name prefixes) first, then only the tools of the top 5 toolkits. It reads about a fifth of the decision tokens, at some recall risk. |
 | `DITTOBENCH_JEV_OFFER_K` | `3` | Tools Jev hands the chat model, before the safe-harbor top-3. |
 | `DITTOBENCH_JEV_NOTES` | `8` | Most memory notes in a prompt. |
