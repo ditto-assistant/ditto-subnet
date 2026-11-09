@@ -548,6 +548,46 @@ func TestExecuteDuelingSliceAggregatesColumnsWithoutCaseText(t *testing.T) {
 	}
 }
 
+// A slice that starts after the bench v18 budget is spent seeds nothing and
+// runs nothing: every wanted case is a budget-refused 0 inside its column.
+func TestExecuteDuelingSliceSkipsSeedingOnceTheBudgetIsSpent(t *testing.T) {
+	runner.Configure(true)
+	t.Cleanup(func() { runner.Configure(false) })
+	slice := decodedTestSlice(t, 99, [5]int{0, 1, 2, 3, 4})
+	policy := map[string]string{"c0": "gold", "c1": "gold", "c2": "gold", "c3": "gold", "c4": "gold"}
+	h := &sliceHarness{answer: sliceAnswers(t, slice, policy)}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	budget := &runBudget{benchVersion: protocol.BenchVersionV18, cases: 350, exhausted: true}
+	result, err := executeDuelingSlice(context.Background(), slice, duelingSliceEnv{
+		harnessURL: srv.URL, benchVersion: protocol.DuelingMinBenchVersion, seed: slice.dataset.RunSeed,
+		toolSrv: toolexec.NewServer(), concurrency: 4, budget: budget,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.seeds) != 0 || len(h.runs) != 0 {
+		t.Fatalf("a spent budget seeded %d waves and ran %d cases", len(h.seeds), len(h.runs))
+	}
+	n := protocol.DuelingSliceCasesPerColumn
+	for _, col := range result.columns {
+		if col.N != n || col.BudgetExhausted != n || col.Sum != 0 {
+			t.Fatalf("column %+v, want %d refused zeros", col, n)
+		}
+	}
+	if len(result.rows) != protocol.DuelingSliceColumns*n {
+		t.Fatalf("got %d rows, want %d", len(result.rows), protocol.DuelingSliceColumns*n)
+	}
+	for _, row := range result.rows {
+		if !row.BudgetExhausted || row.Score != 0 || len(row.Notes) != 1 || !strings.HasPrefix(row.Notes[0], protocol.RunBudgetExhaustedReason) {
+			t.Fatalf("refused slice row %+v", row)
+		}
+	}
+	if got := budget.summary(); got.UnrunSliceCases != protocol.DuelingSliceColumns*n {
+		t.Fatalf("summary %+v", got)
+	}
+}
+
 func TestExecuteDuelingSliceSeedFailureIsHarnessUnavailable(t *testing.T) {
 	runner.Configure(true)
 	t.Cleanup(func() { runner.Configure(false) })
