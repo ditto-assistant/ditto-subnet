@@ -42,13 +42,14 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
@@ -72,10 +73,13 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 
+logger = logging.getLogger(__name__)
+
 FRONTIER_AUDIT_DOMAIN = b"dittobench-frontier-audit/v1"
 FRONTIER_DOCUMENT_VERSION = 1
-# Oracle leases that end without results (failed, or expired) before the
-# round settles with no attestations, so a broken oracle cannot pin a round.
+# Oracle leases a round issues before it settles with no attestations, so a
+# broken oracle cannot pin a round. A lease still running is always allowed to
+# finish (its ticket TTL bounds it), so the last attempt can still deliver.
 MAX_ORACLE_ATTEMPTS = 4
 
 STATE_ORACLE_PENDING = "oracle_pending"
@@ -298,25 +302,61 @@ async def live_oracle_lease(
     )
 
 
+async def close_stale_oracle_attempts(
+    session: AsyncSession, row: GeneratorRound, *, now: datetime
+) -> None:
+    """Close oracle attempts still marked leased whose ticket is no longer
+    live (it expired without results). Call only with no live oracle lease:
+    a scored round never runs the round-close sweep that closes them."""
+    await session.execute(
+        update(GeneratorRoundAttempt)
+        .where(
+            GeneratorRoundAttempt.round_index == row.round_index,
+            GeneratorRoundAttempt.kind == "oracle",
+            GeneratorRoundAttempt.status == "leased",
+        )
+        .values(status="failed", detail="oracle lease expired", finished_at=now)
+    )
+
+
 async def oracle_round(
     session: AsyncSession, *, now: datetime
 ) -> GeneratorRound | None:
     """The oldest scored round waiting on an oracle run with no open lease,
-    locked for the caller."""
-    rows = await session.scalars(
-        select(GeneratorRound)
-        .options(*_SCAN_DEFERRED)
-        .where(
-            GeneratorRound.status == "scored",
-            _open_frontier(STATE_ORACLE_PENDING),
-            GeneratorRound.dataset_sha256.is_not(None),
+    locked for the caller.
+
+    Candidates are read unlocked and only the chosen round is locked: a
+    result submission locks its ticket and then its round, so locking every
+    pending round here (before the lease locks tickets) could deadlock with
+    it. A round whose oracle timed out or exhausted its attempts is left for
+    the loop to settle rather than leased again."""
+    indexes = list(
+        await session.scalars(
+            select(GeneratorRound.round_index)
+            .where(
+                GeneratorRound.status == "scored",
+                _open_frontier(STATE_ORACLE_PENDING),
+                GeneratorRound.dataset_sha256.is_not(None),
+            )
+            .order_by(GeneratorRound.round_index)
         )
-        .order_by(GeneratorRound.round_index)
-        .with_for_update(skip_locked=True)
     )
-    for row in rows:
-        if await live_oracle_lease(session, row, now=now) is not None:
+    for index in indexes:
+        row = await session.scalar(
+            select(GeneratorRound)
+            .options(*_SCAN_DEFERRED)
+            .where(
+                GeneratorRound.round_index == index,
+                GeneratorRound.status == "scored",
+                _open_frontier(STATE_ORACLE_PENDING),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        if row is None or await live_oracle_lease(session, row, now=now) is not None:
             continue
+        if settle_reason(row, now=now) is not None:
+            continue
+        await close_stale_oracle_attempts(session, row, now=now)
         return row
     return None
 
@@ -346,6 +386,14 @@ def validate_oracle_results(
     if len(got) != len(set(got)) or set(got) != set(expected):
         raise FrontierRejected(
             "oracle results must cover exactly the round's frontier candidates"
+        )
+    if all(r.fault for r in results):
+        # Like a panel run that faulted every case, this is an infrastructure
+        # failure, not an answer: refused, so the lease fails and the oracle
+        # runs again instead of forfeiting the round's frontier credit.
+        raise FrontierRejected(
+            "every oracle case faulted; hand the lease back as an infrastructure "
+            "failure"
         )
 
 
@@ -450,11 +498,19 @@ def rule_audit(
     return audit
 
 
-def settle_reason(row: GeneratorRound, *, now: datetime) -> str | None:
-    """Why the round's frontier lane should settle now, or None to wait."""
+def settle_reason(
+    row: GeneratorRound, *, now: datetime, oracle_running: bool = False
+) -> str | None:
+    """Why the round's frontier lane should settle now, or None to wait.
+
+    While an oracle lease is running the lane waits for it, past the timeout
+    and the attempt cap alike: its ticket TTL bounds the wait, and settling
+    under it would throw away a run that may yet deliver."""
     frontier = row.frontier or {}
     state = frontier.get("state")
     if state == STATE_ORACLE_PENDING:
+        if oracle_running:
+            return None
         created = _parse(frontier.get("created_at")) or now
         timeout = timedelta(hours=int(frontier.get("oracle_timeout_hours") or 12))
         if now - created >= timeout:
@@ -489,6 +545,15 @@ async def settle_frontier(
     frontier = dict(row.frontier or {})
     if frontier.get("state") == STATE_SETTLED:
         return dict(frontier.get("applied") or {})
+    if frontier.get("state") == STATE_ORACLE_PENDING:
+        # An operator settle can land under a running oracle lease: expire it
+        # (revoking its inference) and close its attempt, so the validator
+        # stops spending on a run whose result would be refused.
+        from ditto.api_server.generator_rounds import expire_round_tickets
+
+        await expire_round_tickets(
+            session, row, now=now, detail=f"frontier settled: {reason}"[:500]
+        )
     attested: dict[str, list[str]] = (
         frontier.get("attested") or {}
         if frontier.get("state") == STATE_AUDIT_PENDING
@@ -569,12 +634,26 @@ async def advance_frontier_rounds(
         .with_for_update(skip_locked=True)
     )
     for row in rows:
-        reason = settle_reason(row, now=now)
+        running = (row.frontier or {}).get("state") == STATE_ORACLE_PENDING and (
+            await live_oracle_lease(session, row, now=now) is not None
+        )
+        reason = settle_reason(row, now=now, oracle_running=running)
         if reason is None:
             continue
-        applied = await settle_frontier(
-            session, row, params=await params_for(row), reason=reason, now=now
-        )
+        # One round's failure (a malformed document, an unreadable settings
+        # revision) must not roll back the others or the caller's work.
+        try:
+            async with session.begin_nested():
+                applied = await settle_frontier(
+                    session, row, params=await params_for(row), reason=reason, now=now
+                )
+        except Exception as exc:  # noqa: BLE001 - isolate one round
+            logger.exception("frontier settle failed for round %s", row.round_index)
+            notes.append(
+                f"round {row.round_index} frontier settle failed: "
+                f"{type(exc).__name__}: {exc}"[:300]
+            )
+            continue
         cases = sum(len(ids) for ids in applied.values())
         notes.append(
             f"round {row.round_index} frontier settled ({reason}): "

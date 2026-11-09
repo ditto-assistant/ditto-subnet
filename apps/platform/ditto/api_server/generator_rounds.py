@@ -2812,6 +2812,21 @@ class GeneratorRoundLoop:
             block=schedule.block,
         )
 
+    async def _settle_frontier(self, now: datetime) -> list[str]:
+        """Settle every frontier lane that is ready; never raises."""
+        try:
+            async with self._session_maker() as session, session.begin():
+
+                async def params_for(row: GeneratorRound) -> dict[str, Any]:
+                    return dict((await round_settings(session, row)).score_params())
+
+                return await advance_frontier_rounds(
+                    session, params_for=params_for, now=now
+                )
+        except Exception as exc:  # noqa: BLE001 - never block round progress
+            logger.exception("generator frontier settlement failed")
+            return [f"frontier settlement failed: {type(exc).__name__}: {exc}"[:300]]
+
     async def tick(self, *, now: datetime | None = None) -> RoundActions:
         from ditto.api_server.generator_competition import load_settings
 
@@ -2822,6 +2837,12 @@ class GeneratorRoundLoop:
             async with self._session_maker() as session:
                 resolved = await load_settings(session)
             per = resolved.settings.epochs_per_round
+            # Frontier lanes settle on their own clock (audit grace, oracle
+            # timeout), in their own transaction, and whatever the mode: a
+            # settle failure never rolls back round progress, and switching
+            # the competition off never strands an audit past its grace.
+            for note in await self._settle_frontier(now):
+                actions.note(note)
             if resolved.settings.mode == "off":
                 self.schedule = GeneratorRoundSchedule(
                     mode="off", epochs_per_round=per, observed_at=now
@@ -2841,17 +2862,11 @@ class GeneratorRoundLoop:
                 observed_at=now,
             )
             async with self._session_maker() as session, session.begin():
-                actions = await advance_rounds(
+                advanced = await advance_rounds(
                     session, resolved=resolved, position=position, now=now
                 )
-
-                async def params_for(row: GeneratorRound) -> dict[str, Any]:
-                    return dict((await round_settings(session, row)).score_params())
-
-                for note in await advance_frontier_rounds(
-                    session, params_for=params_for, now=now
-                ):
-                    actions.note(note)
+            # advance_rounds already logged its own actions.
+            actions.actions.extend(advanced.actions)
             return actions
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"[:500]

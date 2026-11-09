@@ -33,6 +33,7 @@ from ditto.api_models.generator_rounds import (
     frontier_settle_confirmation,
 )
 from ditto.api_models.private_dataset import PrivateDatasetRequest
+from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.generator_frontier import (
     MAX_ORACLE_ATTEMPTS,
     STATE_AUDIT_PENDING,
@@ -48,6 +49,7 @@ from ditto.db.models import (
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
+    ValidatorTicket,
 )
 from ditto.tests.api_server.endpoints.test_generator_rounds import (
     _ADMIN,
@@ -66,6 +68,7 @@ from ditto.tests.api_server.endpoints.test_generator_rounds import (
     _report,
     _seed_agent,
     _seed_generator,
+    _signed_fail,
     _signed_job,
     _signed_score,
     round_capable_fleet,  # noqa: F401 - autouse: one round-capable validator
@@ -681,3 +684,129 @@ class TestFrontierLane:
         resp = await client.get(f"{_ROUNDS_URL}/{round_index}/frontier", headers=_ADMIN)
         assert resp.status_code == 404
         assert await _lease_job(client) is None
+
+
+class TestFrontierOracleLeases:
+    async def test_an_all_faulted_oracle_run_is_refused_and_retried(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        faulted = _signed_score(job, job["oracle_case_ids"], 0.0, fault=True)
+        resp = await client.post(
+            f"/api/v1/validator/agent/{job['agent_id']}/generator-round-score",
+            json=faulted,
+        )
+        # An infrastructure failure, not an answer: nothing is recorded.
+        assert resp.status_code == 422, resp.text
+        assert (await lane.frontier(round_index))["state"] == STATE_ORACLE_PENDING
+        # The validator hands the lease back and another attempt runs.
+        resp = await client.post(
+            f"/api/v1/validator/agent/{job['agent_id']}/generator-round-fail",
+            json=_signed_fail(job),
+        )
+        assert resp.status_code == 200, resp.text
+        retry = await lane.lease_oracle()
+        assert retry["oracle_case_ids"] == lane.candidates
+        assert (await lane.frontier(round_index))["oracle_attempts"] == 2
+
+    async def test_a_running_oracle_lease_is_never_settled_under(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_oracle_timeout_hours=1)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        async with session_maker() as session, session.begin():
+            row = await get_round(session, round_index, for_update=True)
+            assert row is not None
+            capped = dict(row.frontier or {})
+            capped["oracle_attempts"] = MAX_ORACLE_ATTEMPTS
+            row.frontier = capped
+        # Past the cap and the timeout, the live lease still gets to deliver.
+        later = datetime.now(UTC) + timedelta(hours=1, minutes=1)
+        assert await lane.tick(now=later) == []
+        await lane.report_oracle(job, set(lane.candidates))
+        assert (await lane.frontier(round_index))["state"] == STATE_AUDIT_PENDING
+
+    async def test_an_operator_settle_expires_the_running_oracle_lease(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        resp = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/settle",
+            headers=_ADMIN,
+            json={
+                "reason": "oracle agent misconfigured for this round",
+                "actor": "backroom:test",
+                "confirmation": frontier_settle_confirmation(round_index),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        async with session_maker() as session:
+            ticket = await session.scalar(
+                select(ValidatorTicket).where(
+                    ValidatorTicket.agent_id == lane.oracle,
+                    ValidatorTicket.deadline == datetime.fromisoformat(job["deadline"]),
+                )
+            )
+            assert ticket is not None and ticket.status == TicketStatus.EXPIRED
+            attempt = await session.scalar(
+                select(GeneratorRoundAttempt).where(
+                    GeneratorRoundAttempt.round_index == round_index,
+                    GeneratorRoundAttempt.kind == "oracle",
+                )
+            )
+            assert attempt is not None and attempt.status == "failed"
+        # The run's late result is refused.
+        await lane.report_oracle(job, set(lane.candidates), status=409)
+
+    async def test_an_expired_oracle_lease_is_closed_and_released(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        async with session_maker() as session, session.begin():
+            ticket = await session.scalar(
+                select(ValidatorTicket).where(
+                    ValidatorTicket.agent_id == lane.oracle,
+                    ValidatorTicket.deadline == datetime.fromisoformat(job["deadline"]),
+                )
+            )
+            assert ticket is not None
+            ticket.status = TicketStatus.EXPIRED
+        await lane.lease_oracle()
+        async with session_maker() as session:
+            statuses = sorted(
+                a.status
+                for a in await session.scalars(
+                    select(GeneratorRoundAttempt).where(
+                        GeneratorRoundAttempt.round_index == round_index,
+                        GeneratorRoundAttempt.kind == "oracle",
+                    )
+                )
+            )
+        assert statuses == ["failed", "leased"]
