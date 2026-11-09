@@ -48,7 +48,7 @@ type ScoreParams struct {
 	// smaller pack is normalized as if it had this many cases.
 	TargetCases int `json:"target_cases"`
 	// FrontierWeight is the share of full credit a frontier case earns (a
-	// case the panel left unsolved that ScoreInput.FrontierCaseIDs attests
+	// case the panel left unsolved that ScoreInput.FrontierCases attests
 	// as valid). Zero, the shipped default, turns frontier scoring off: every
 	// attested case stays unsolved, so scores are byte-identical to the
 	// original contract. Platform serves its own operator default.
@@ -113,14 +113,17 @@ type ScoreInput struct {
 	// ClaimedFingerprints are case fingerprints an earlier pack already holds
 	// credit for. Copies score zero for the later pack.
 	ClaimedFingerprints []string `json:"claimed_fingerprints,omitempty"`
-	// FrontierCaseIDs are cases an independent witness attested as valid:
-	// the oracle solved them on their bounded oracle context (OracleContext),
-	// and no operator audit of the column found an invalid case. A listed
-	// case the panel leaves unsolved scores as frontier instead of unsolved.
-	// Listing a case the panel solved changes nothing. Platform owns the
-	// attestations; the scorer only applies them, so scoring stays a pure
-	// function of (cases, panel, attestations, params).
-	FrontierCaseIDs []string `json:"frontier_case_ids,omitempty"`
+	// FrontierCases are cases an independent witness attested as valid: the
+	// oracle solved them on their bounded oracle context (OracleContext), and
+	// no operator audit of the column found an invalid case. An attestation
+	// names the case's id AND fingerprint, so it matches only the exact case
+	// content it was earned on: a different case that reuses the id (another
+	// seed, another column) never inherits it. A listed case the panel leaves
+	// unsolved scores as frontier instead of unsolved; listing a case the
+	// panel solved changes nothing. Platform owns the attestations; the scorer
+	// only applies them, so scoring stays a pure function of (cases, panel,
+	// attestations, params).
+	FrontierCases []CaseRef `json:"frontier_cases,omitempty"`
 }
 
 // CaseVerdict is the judged outcome of one pack case.
@@ -243,9 +246,9 @@ func ScoreCases(cases []CaseRef, in ScoreInput, params ScoreParams) (PackScore, 
 	for _, fp := range in.ClaimedFingerprints {
 		claimed[fp] = true
 	}
-	attested := map[string]bool{}
-	for _, id := range in.FrontierCaseIDs {
-		attested[id] = true
+	attested := map[CaseRef]bool{}
+	for _, ref := range in.FrontierCases {
+		attested[ref] = true
 	}
 
 	out := PackScore{Status: PackScored, Cases: make([]CaseVerdict, 0, len(cases))}
@@ -287,7 +290,7 @@ func ScoreCases(cases []CaseRef, in ScoreInput, params ScoreParams) (PackScore, 
 		case cv.PanelSize < params.MinPanel:
 			cv.Status = CaseInsufficientPanel
 			out.Status = PackInsufficientPanel
-		case cv.SolverOwners < params.MinSolverOwners && params.FrontierWeight > 0 && attested[c.CaseID]:
+		case cv.SolverOwners < params.MinSolverOwners && params.FrontierWeight > 0 && attested[c]:
 			cv.Status = CaseFrontier
 			out.Frontier++
 			cv.Credit = 1 - cv.MeanScore
@@ -351,9 +354,9 @@ type RunInput struct {
 	// ClaimedFingerprints are case fingerprints earlier runs (of any
 	// generator) already hold credit for.
 	ClaimedFingerprints []string `json:"claimed_fingerprints,omitempty"`
-	// FrontierCaseIDs are attested-valid case ids across every seed; see
-	// ScoreInput.FrontierCaseIDs.
-	FrontierCaseIDs []string `json:"frontier_case_ids,omitempty"`
+	// FrontierCases are attested-valid cases across every seed, each scoped
+	// to its content by fingerprint; see ScoreInput.FrontierCases.
+	FrontierCases []CaseRef `json:"frontier_cases,omitempty"`
 }
 
 // RunScore is a generator's score for one evaluation.
@@ -384,7 +387,7 @@ func ScoreRun(in RunInput, params ScoreParams) (RunScore, error) {
 			GeneratorOwnerKey:   in.GeneratorOwnerKey,
 			Panel:               seed.Panel,
 			ClaimedFingerprints: claimed,
-			FrontierCaseIDs:     in.FrontierCaseIDs,
+			FrontierCases:       in.FrontierCases,
 		}, params)
 		if err != nil {
 			return RunScore{}, fmt.Errorf("seed %s: %w", seed.Seed, err)

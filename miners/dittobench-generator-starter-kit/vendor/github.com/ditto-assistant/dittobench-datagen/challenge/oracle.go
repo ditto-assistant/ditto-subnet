@@ -230,7 +230,13 @@ func VerifyOracleContext(p Pack, c OracleCase) error {
 	if err != nil {
 		return err
 	}
-	if c.ContextSHA256 != want.ContextSHA256 {
+	// Hash what was supplied: a context whose memories or question were
+	// changed must not pass by carrying the canonical digest.
+	digest, err := oracleContextDigest(c)
+	if err != nil {
+		return err
+	}
+	if digest != want.ContextSHA256 || c.ContextSHA256 != want.ContextSHA256 {
 		return errors.New("oracle context does not match the pack")
 	}
 	return nil

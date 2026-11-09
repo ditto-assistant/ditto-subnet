@@ -374,10 +374,7 @@ func frontierRound() RoundInput {
 	zero := map[string]float64{}
 	fill(zero, c0, 0)
 	fill(zero, c1, 0)
-	attested := make([]string, len(c0))
-	for i, c := range c0 {
-		attested[i] = c.CaseID
-	}
+	attested := append([]CaseRef(nil), c0...)
 	return RoundInput{
 		Columns: []RoundColumn{
 			{ColumnID: "c0", OwnerKey: "g0", Counted: true, Cases: c0},
@@ -388,7 +385,7 @@ func frontierRound() RoundInput {
 			{AgentID: "b", OwnerKey: "o2", Results: agentResults(zero)},
 			{AgentID: "c", OwnerKey: "o3", Results: agentResults(zero)},
 		},
-		FrontierCaseIDs: attested,
+		FrontierCases: attested,
 	}
 }
 
@@ -408,7 +405,7 @@ func TestScoreRoundFrontier(t *testing.T) {
 		t.Fatalf("an unattested column every agent fails stays unsolved: %+v", p)
 	}
 	// Attestations score generators only; agent standings are unchanged.
-	in.FrontierCaseIDs = nil
+	in.FrontierCases = nil
 	plain, err := ScoreRound(in, params)
 	if err != nil {
 		t.Fatal(err)

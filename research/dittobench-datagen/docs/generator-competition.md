@@ -584,9 +584,12 @@ overfitting should do.
 
 ### The contract (`challenge.ScoreCases`, shipped)
 
-`ScoreInput.FrontierCaseIDs` (and `RoundInput.FrontierCaseIDs`, in round case
-ids) lists cases an independent witness attested as valid. A listed case that
-the panel leaves unsolved scores `frontier`:
+`ScoreInput.FrontierCases` (and `RoundInput.FrontierCases`, with round case
+ids) lists cases an independent witness attested as valid, each as its case id
+**and fingerprint**. An attestation therefore matches only the exact case
+content it was earned on: a different case that reuses the id in another seed
+or column never inherits it. A listed case that the panel leaves unsolved
+scores `frontier`:
 
 - credit `(1 − mean) × (1 + champion_bonus·[champion failed]) × frontier_weight`
   (a case every agent fails, so it always carries the champion bonus);
@@ -638,7 +641,9 @@ haystack is, and the oracle still has to choose the right fact among the
 closest competitors. A pass is a uniqueness witness, not a grounding check
 (validation already proves the gold appears in the cited text).
 `ContextSHA256` commits to the exact context, and `VerifyOracleContext`
-re-derives it, so every attestation can be reproduced from the revealed round.
+re-derives it from the pack and hashes the supplied context itself (a context
+with altered memories or question is refused even if it carries the canonical
+digest), so every attestation can be reproduced from the revealed round.
 
 The oracle is not a panel member. It never counts toward `solvers`, the mean,
 or `min_solver_owners`, and it is not an agent miners compete with. It only

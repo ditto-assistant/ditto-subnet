@@ -852,15 +852,39 @@
             ]
           }
         ],
-        "frontier_case_ids": [
-          "c0/ka",
-          "c0/kb",
-          "c0/kc",
-          "c0/kd",
-          "c0/ke",
-          "c0/kf",
-          "c0/kg",
-          "c0/kh"
+        "frontier_cases": [
+          {
+            "case_id": "c0/ka",
+            "fingerprint": "63302f6b61"
+          },
+          {
+            "case_id": "c0/kb",
+            "fingerprint": "63302f6b62"
+          },
+          {
+            "case_id": "c0/kc",
+            "fingerprint": "63302f6b63"
+          },
+          {
+            "case_id": "c0/kd",
+            "fingerprint": "63302f6b64"
+          },
+          {
+            "case_id": "c0/ke",
+            "fingerprint": "63302f6b65"
+          },
+          {
+            "case_id": "c0/kf",
+            "fingerprint": "63302f6b66"
+          },
+          {
+            "case_id": "c0/kg",
+            "fingerprint": "63302f6b67"
+          },
+          {
+            "case_id": "c0/kh",
+            "fingerprint": "63302f6b68"
+          }
         ]
       },
       "params": {

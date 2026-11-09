@@ -188,3 +188,30 @@ func TestOraclePackIsolatesEachCase(t *testing.T) {
 		t.Fatal("an empty oracle pack must be refused")
 	}
 }
+
+func TestVerifyOracleContextRejectsTamperedContent(t *testing.T) {
+	p := ReferencePack(21, testHotkey)
+	oc, err := OracleContext(p, p.Cases[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyOracleContext(p, oc); err != nil {
+		t.Fatalf("the derived context verifies: %v", err)
+	}
+	tampered := oc
+	tampered.Memories = append([]OracleMemory(nil), oc.Memories...)
+	tampered.Memories[0].Response = "a planted answer"
+	if VerifyOracleContext(p, tampered) == nil {
+		t.Fatal("changed memories carrying the canonical digest must be refused")
+	}
+	question := oc
+	question.Question = "a different question"
+	if VerifyOracleContext(p, question) == nil {
+		t.Fatal("a changed question carrying the canonical digest must be refused")
+	}
+	wrongDigest := oc
+	wrongDigest.ContextSHA256 = strings.Repeat("0", 64)
+	if VerifyOracleContext(p, wrongDigest) == nil {
+		t.Fatal("a wrong digest must be refused")
+	}
+}
