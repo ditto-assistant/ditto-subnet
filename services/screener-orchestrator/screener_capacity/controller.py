@@ -27,9 +27,16 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
+from screener_capacity.aws import AwsError, EC2Primary
+
 ProviderName = Literal["hetzner", "aws", "targon", "gcp"]
 # Providers whose enrolled node can be the primary in front of GCE overflow.
 PRIMARY_PROVIDERS: tuple[ProviderName, ...] = ("hetzner", "aws")
+
+
+# How the controller sees an on-demand primary that is not ready: None (no
+# on-demand primary, or its state is unknown), "waking", or "asleep".
+PrimarySleep = Literal["waking", "asleep"] | None
 
 
 class ControllerError(RuntimeError):
@@ -131,8 +138,13 @@ def gce_overflow_target(
     primary_node: dict[str, Any] | None,
     jobs_per_slot: int,
     global_cap: int,
+    primary_sleep: PrimarySleep = None,
 ) -> tuple[int, str]:
     """Choose GCE only for an explicit GCP route, outage, or queue overflow.
+
+    An on-demand primary that is not ready is not an outage while it is
+    ``"waking"`` (started within its grace) or ``"asleep"`` (confirmed stopped
+    with nothing runnable): GCE then covers only backlog above the threshold.
 
     A primary whose admission is
     known to be closed (``admission_open`` false, or ``screening_concurrency ==
@@ -184,13 +196,17 @@ def gce_overflow_target(
     cap = min(global_cap, policy.max_instances)
     if cap == 0:
         return 0, "GCE_OVERFLOW_CAPPED_AT_ZERO"
-    if not primary_ready:
+    if not primary_ready and primary_sleep == "asleep" and demand.runnable == 0:
+        return 0, f"{label}_PRIMARY_ASLEEP"
+    if not primary_ready and primary_sleep != "waking":
         return min(cap, demand.desired), f"{label}_PRIMARY_UNAVAILABLE"
     threshold = max(
         policy.min_backlog,
         screening_concurrency * policy.backlog_multiplier,
     )
     if demand.runnable <= threshold:
+        if not primary_ready:
+            return 0, f"{label}_PRIMARY_WAKING"
         return 0, f"{label}_PRIMARY_HANDLING_BASE_LOAD"
     overflow_jobs = demand.runnable - threshold
     return (
@@ -763,6 +779,15 @@ class Settings:
     # Consecutive passes that keep the GCE target while a Platform routing or
     # node-inventory read fails, so a Platform deploy cannot flap the MIG.
     inventory_failure_hold_passes: int = 4
+    # The on-demand AWS primary, started keylessly when work waits for it.
+    # Unset keeps the controller GCE-only, as for a Hetzner primary.
+    aws_primary_instance_id: str | None = None
+    aws_region: str = "us-east-1"
+    aws_primary_role_arn: str | None = None
+    aws_web_identity_audience: str = "ditto-screener-capacity"
+    # How long a started primary may take to heartbeat ready before its
+    # backlog is treated as an outage and overflows to GCE.
+    primary_wake_grace_seconds: int = 600
 
 
 def _snapshot(
@@ -910,6 +935,123 @@ def _plan_gce_scale_in(
     return [], "per_instance_claim_fence_unavailable"
 
 
+def _on_demand_primary(settings: Settings) -> EC2Primary | None:
+    if not settings.aws_primary_instance_id or not settings.aws_primary_role_arn:
+        return None
+    try:
+        return EC2Primary(
+            region=settings.aws_region,
+            instance_id=settings.aws_primary_instance_id,
+            role_arn=settings.aws_primary_role_arn,
+            audience=settings.aws_web_identity_audience,
+        )
+    except AwsError as error:
+        raise ControllerError(str(error)) from None
+
+
+def _parse_state_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _record_wake_started(path: Path, started_at: datetime | None) -> None:
+    state = _load_state(path)
+    value = started_at.isoformat() if started_at else None
+    if state.get("primary_wake_started_at") != value:
+        state["primary_wake_started_at"] = value
+        _write_state(path, state)
+
+
+def _wake_on_demand_primary(
+    *,
+    settings: Settings,
+    platform: PlatformControl,
+    ec2: EC2Primary,
+    primary_node: dict[str, Any] | None,
+    demand: Demand,
+    now: datetime,
+) -> tuple[PrimarySleep, list[dict[str, Any]]]:
+    """Start a stopped on-demand primary when work waits for it.
+
+    Only an active primary whose admission is known to be open is ever woken,
+    so an operator closure or an unknown primary still fails closed. The start
+    is fenced by the controller lease; without one (the first pass) the start
+    waits for the next pass. A failed AWS read or start is reported and leaves
+    the primary unavailable, so its backlog overflows to GCE as for an outage.
+    """
+    primary = primary_node or {}
+    if primary.get("ready") is True:
+        _record_wake_started(settings.state_file, None)
+        return None, []
+    if primary.get("status") != "active" or primary.get("admission_open") is not True:
+        return None, []
+    try:
+        status = ec2.status()
+    except AwsError as error:
+        return None, [
+            {
+                "event_type": "primary_wake_failed",
+                "provider": "aws",
+                "detail": f"describe {ec2.instance_id}: {error}",
+            }
+        ]
+    started_at = _parse_state_time(
+        _load_state(settings.state_file).get("primary_wake_started_at")
+    )
+    grace = settings.primary_wake_grace_seconds
+    if status.state in ("pending", "running"):
+        since = started_at or status.launched_at
+        if since is not None and (now - since).total_seconds() < grace:
+            return "waking", []
+        # Running past its grace without a ready heartbeat is an outage.
+        return None, []
+    if status.state not in ("stopping", "stopped"):
+        return None, []
+    if demand.runnable == 0:
+        _record_wake_started(settings.state_file, None)
+        return "asleep", []
+    if status.state == "stopping":
+        # It is powering off after an idle exit; start it once it has stopped.
+        if started_at is None:
+            _record_wake_started(settings.state_file, now)
+        elif (now - started_at).total_seconds() >= grace:
+            return None, []
+        return "waking", []
+    if settings.dry_run:
+        return "waking", []
+    try:
+        platform.fence(epoch=settings.epoch)
+    except ControllerError:
+        # No lease yet, or another writer: never start unfenced.
+        return "waking", []
+    try:
+        ec2.start()
+    except AwsError as error:
+        return None, [
+            {
+                "event_type": "primary_wake_failed",
+                "provider": "aws",
+                "detail": f"start {ec2.instance_id}: {error}",
+            }
+        ]
+    _record_wake_started(settings.state_file, now)
+    return "waking", [
+        {
+            "event_type": "primary_wake_requested",
+            "provider": "aws",
+            "detail": (
+                f"started {ec2.instance_id} for {demand.runnable} runnable "
+                f"submission(s); grace {grace}s"
+            ),
+        }
+    ]
+
+
 def reconcile(settings: Settings) -> dict[str, Any]:
     token = _read_secret_file(settings.platform_token_file)
     platform = PlatformControl(
@@ -996,6 +1138,24 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_success_at = datetime.now(UTC).isoformat()
 
     primary_node = node_states.get(provider_routing.overflow.primary_node_id or "")
+    primary_sleep: PrimarySleep = None
+    wake_events: list[dict[str, Any]] = []
+    ec2 = _on_demand_primary(settings)
+    if (
+        ec2 is not None
+        and provider_routing_available
+        and node_states_available
+        and not holding
+        and provider_routing.primary_provider == "aws"
+    ):
+        primary_sleep, wake_events = _wake_on_demand_primary(
+            settings=settings,
+            platform=platform,
+            ec2=ec2,
+            primary_node=primary_node,
+            demand=demand,
+            now=datetime.now(UTC),
+        )
     if provider_routing_available:
         target, reason = gce_overflow_target(
             demand=demand,
@@ -1003,6 +1163,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
             primary_node=primary_node,
             jobs_per_slot=settings.jobs_per_slot,
             global_cap=settings.global_cap,
+            primary_sleep=primary_sleep,
         )
     else:
         # A cached revision can retain claim compatibility, but cannot
@@ -1039,7 +1200,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         == (current_target, target)
         else None
     )
-    events: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = list(wake_events)
     if target != current_target and continuing_deferral is None:
         # A decision, sent before any mutation: a deferred scale-in that later
         # goes ahead does not send it again.
@@ -1253,6 +1414,11 @@ def _settings(args: argparse.Namespace) -> Settings:
         lock_file=Path(args.lock_file),
         dry_run=args.dry_run,
         inventory_failure_hold_passes=args.inventory_failure_hold_passes,
+        aws_primary_instance_id=args.aws_primary_instance_id,
+        aws_region=args.aws_region,
+        aws_primary_role_arn=args.aws_primary_role_arn,
+        aws_web_identity_audience=args.aws_web_identity_audience,
+        primary_wake_grace_seconds=args.primary_wake_grace_seconds,
     )
 
 
@@ -1281,6 +1447,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gce-region", required=True)
     parser.add_argument("--gce-mig", required=True)
     parser.add_argument("--gce-impersonate-service-account")
+    # The on-demand AWS primary. Both the instance and the role are required
+    # to wake it; omitting either keeps the controller GCE-only.
+    parser.add_argument("--aws-primary-instance-id")
+    parser.add_argument("--aws-region", default="us-east-1")
+    parser.add_argument("--aws-primary-role-arn")
+    parser.add_argument(
+        "--aws-web-identity-audience", default="ditto-screener-capacity"
+    )
+    parser.add_argument(
+        "--primary-wake-grace-seconds", type=_non_negative_int, default=600
+    )
     parser.add_argument("--lock-file", default="/run/lock/ditto-screener-capacity.lock")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
