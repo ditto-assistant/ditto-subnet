@@ -157,7 +157,9 @@ function countsOf(column: GeneratorRoundColumn): Record<CaseOutcome, number> {
   return {
     discriminating: n(column.discriminating),
     trivial: n(column.trivial),
-    unsolved: n(column.unsolved),
+    // Frontier cases are ones no agent solved too; the arena shows them as
+    // stumping the panel, which is what happened.
+    unsolved: n(column.unsolved) + n(column.frontier),
     duplicate: n(column.duplicate),
   };
 }

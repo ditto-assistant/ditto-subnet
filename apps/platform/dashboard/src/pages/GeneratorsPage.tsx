@@ -516,6 +516,8 @@ function RoundDetail(props: {
   };
   const columns = () => [...(props.detail?.columns ?? [])].sort((a, b) => b.score - a.score);
   const grading = () => hasGradingVersions(props.detail?.columns ?? []);
+  // Shown once any column has frontier cases (none before frontier scoring).
+  const frontier = () => (props.detail?.columns ?? []).some((c) => (c.frontier ?? 0) > 0);
   return (
     <section class="gen-section" aria-labelledby="gen-round-title">
       <div class="gen-section-title">
@@ -576,6 +578,15 @@ function RoundDetail(props: {
                 <th scope="col" class="num hide-sm">
                   Unsolved
                 </th>
+                <Show when={frontier()}>
+                  <th
+                    scope="col"
+                    class="num hide-sm"
+                    title="Cases no agent solved that the frontier oracle answered and an audit found fair"
+                  >
+                    Frontier
+                  </th>
+                </Show>
                 <th scope="col" class="num hide-sm">
                   Duplicate
                 </th>
@@ -613,6 +624,9 @@ function RoundDetail(props: {
                       <td class="num">{column.discriminating}</td>
                       <td class="num hide-sm">{column.trivial}</td>
                       <td class="num hide-sm">{column.unsolved}</td>
+                      <Show when={frontier()}>
+                        <td class="num hide-sm">{column.frontier ?? 0}</td>
+                      </Show>
                       <td class="num hide-sm">{column.duplicate}</td>
                       <Show when={grading()}>
                         <td class="hide-sm">

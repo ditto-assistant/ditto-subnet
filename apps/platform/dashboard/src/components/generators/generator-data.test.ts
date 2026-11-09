@@ -131,6 +131,15 @@ describe("round helpers", () => {
     expect(latestScoredRound(ascending)?.round_index).toBe(25967);
   });
 
+  it("counts frontier cases in the column total", () => {
+    const base = round.columns[0];
+    if (!base) throw new Error("fixture round has no columns");
+    const settled = { ...base, unsolved: base.unsolved - 6, frontier: 6 };
+    // Settling moves cases from unsolved to frontier; the total holds.
+    expect(columnCases(settled)).toBe(columnCases(base));
+    expect(columnCases({ ...base, frontier: null })).toBe(columnCases(base));
+  });
+
   it("maps the next round's first epoch back to its round index", () => {
     expect(nextRoundIndex(rounds.schedule)).toBe(25968);
     expect(
