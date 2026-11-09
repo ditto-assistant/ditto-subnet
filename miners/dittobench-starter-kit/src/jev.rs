@@ -409,8 +409,9 @@ impl DecisionClient {
                     let parsed: Value = match serde_json::from_str(&text) {
                         Ok(parsed) => parsed,
                         Err(err) => {
-                            // Unreadable even on a 2xx: a failure to retry and
-                            // report, never a silent empty answer set.
+                            // Unreadable even on a 2xx: a reported failure,
+                            // never a silent empty answer set. Only 429/5xx
+                            // retry; a metered 2xx would be billed again.
                             usage.calls.fetch_add(1, Ordering::Relaxed);
                             last_err = Some(anyhow::anyhow!(
                                 "decision lane returned {status} with an unparseable body: {err}: {}",
