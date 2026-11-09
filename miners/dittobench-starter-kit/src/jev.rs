@@ -47,11 +47,30 @@ pub const MAX_RETRY_AFTER_SECS: u64 = 30;
 /// Headroom kept under each limit, because [`estimate_tokens`] is an estimate.
 const LIMIT_HEADROOM: f64 = 0.85;
 
-/// Conservative token estimate for JSON text: about 3 characters per token,
-/// rounded up. Real tokenizers average closer to 4 on English, so this
-/// over-counts and keeps packed requests under the provider limit.
+/// Conservative token estimate for JSON text: about 3 ASCII characters per
+/// token, rounded up, plus one token per non-ASCII byte. Real tokenizers
+/// average closer to 4 characters on English and never emit more tokens than
+/// bytes, so CJK or emoji text (often a token a character) is not undercounted
+/// and packed requests stay under the provider limit.
 pub fn estimate_tokens(text: &str) -> usize {
-    text.chars().count().div_ceil(3)
+    let ascii = text.bytes().filter(u8::is_ascii).count();
+    ascii.div_ceil(3) + (text.len() - ascii)
+}
+
+/// The longest prefix of `text` whose [`estimate_tokens`] is at most `tokens`.
+fn truncate_to_tokens(text: &str, tokens: usize) -> &str {
+    let (mut ascii, mut other) = (0usize, 0usize);
+    for (i, c) in text.char_indices() {
+        if c.is_ascii() {
+            ascii += 1;
+        } else {
+            other += c.len_utf8();
+        }
+        if ascii.div_ceil(3) + other > tokens {
+            return &text[..i];
+        }
+    }
+    text
 }
 
 fn estimate_value_tokens(value: &Value) -> usize {
@@ -153,15 +172,14 @@ pub fn choice_chunks(
         let mut option = option.clone();
         let mut cost = estimate_tokens(&option.0) + estimate_tokens(&option.1) + 6;
         if cost > room {
-            // Shorten the description (3 chars per estimated token); a name
-            // too long to fit even alone is dropped rather than sent over the
-            // provider's per-question limit.
+            // Shorten the description to the room left; a name too long to
+            // fit even alone is dropped rather than sent over the provider's
+            // per-question limit.
             let name_cost = estimate_tokens(&option.0) + 6;
             if name_cost > room {
                 continue;
             }
-            let keep = (room - name_cost) * 3;
-            option.1 = option.1.chars().take(keep).collect();
+            option.1 = truncate_to_tokens(&option.1, room - name_cost).to_string();
             cost = estimate_tokens(&option.0) + estimate_tokens(&option.1) + 6;
         }
         if !current.is_empty() && (current.len() >= cap || current_tokens + cost > budget) {
@@ -513,6 +531,19 @@ mod tests {
         assert!(qs[0].estimated_tokens() <= MAX_QUESTION_TOKENS);
         let name = vec![("n".repeat(200_000), String::new())];
         assert!(choice_chunks("t", "Which?", &name, &[], 255, 0).is_empty());
+    }
+
+    #[test]
+    fn non_ascii_text_is_not_undercounted() {
+        assert_eq!(estimate_tokens("abcdefg"), 3);
+        let cjk = "日本語".repeat(1000);
+        assert!(estimate_tokens(&cjk) >= cjk.chars().count());
+        assert_eq!(truncate_to_tokens("ab日c", 1), "ab");
+        assert_eq!(truncate_to_tokens("ab日c", 4), "ab日c");
+        let huge = vec![("big".to_string(), "語".repeat(200_000))];
+        let qs = choice_chunks("t", "Which?", &huge, &[], 255, 0);
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].estimated_tokens() <= MAX_QUESTION_TOKENS);
     }
 
     #[test]
