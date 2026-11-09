@@ -109,7 +109,8 @@ impl Question {
 /// Splits `options` into `choice` questions `<prefix>0`, `<prefix>1`, ...
 /// Each holds at most `max_per_question` options (capped at 255) plus the
 /// `extra` options (a "none of these" reference, for example) and stays under
-/// the per-question token limit given `state_tokens`.
+/// the per-question token limit given `state_tokens`. Returns no questions
+/// when `extra` alone fills the 255-option cap.
 pub fn choice_chunks(
     prefix: &str,
     instructions: &str,
@@ -118,8 +119,12 @@ pub fn choice_chunks(
     max_per_question: usize,
     state_tokens: usize,
 ) -> Vec<Question> {
+    // Extras that fill the cap leave no room for a regular option.
+    if extra.len() >= MAX_CHOICE_OPTIONS {
+        return Vec::new();
+    }
     let cap = max_per_question
-        .min(MAX_CHOICE_OPTIONS.saturating_sub(extra.len()))
+        .min(MAX_CHOICE_OPTIONS - extra.len())
         .max(1);
     let budget = ((MAX_QUESTION_TOKENS as f64) * LIMIT_HEADROOM) as usize;
     let base = estimate_tokens(instructions) + 40 + state_tokens;
@@ -508,6 +513,26 @@ mod tests {
         assert!(qs[0].estimated_tokens() <= MAX_QUESTION_TOKENS);
         let name = vec![("n".repeat(200_000), String::new())];
         assert!(choice_chunks("t", "Which?", &name, &[], 255, 0).is_empty());
+    }
+
+    #[test]
+    fn extras_that_fill_the_cap_yield_no_questions() {
+        let extras = |n: usize| -> Vec<(String, String)> {
+            (0..n)
+                .map(|i| (format!("ref_{i}"), String::new()))
+                .collect()
+        };
+        let extra = extras(MAX_CHOICE_OPTIONS);
+        assert!(choice_chunks("t", "Which?", &opts(3, "d"), &extra, 255, 0).is_empty());
+        let extra = extras(MAX_CHOICE_OPTIONS - 1);
+        let qs = choice_chunks("t", "Which?", &opts(3, "d"), &extra, 255, 0);
+        assert_eq!(qs.len(), 3);
+        for q in &qs {
+            assert_eq!(
+                q.body["criteria"].as_object().unwrap().len(),
+                MAX_CHOICE_OPTIONS
+            );
+        }
     }
 
     #[test]
