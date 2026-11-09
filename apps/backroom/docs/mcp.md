@@ -292,6 +292,27 @@ opens, once it is scored or void.
     publish the on-chain commitment of a round that has not opened.
   - `release_generator_round_lease` (`RELEASE GENERATOR ROUND LEASE`) frees a
     quiet validator's round lease.
+  - Frontier cases. A round case no two independent panel owners solved is
+    `unsolved`, but every agent failing a case does not prove it broken.
+    With `frontier_weight > 0` and `frontier_oracle_agent_id` set, a scored
+    round's unsolved miner-column cases go to the frontier oracle (that
+    reference agent, answering each case from a bounded context derived from
+    its answer key) on a validator whose scorer runs
+    `generator-frontier-oracle-v1`. Cases it passes are attested, and each
+    column's secret-seed audit sample waits for a ruling.
+    `list_generator_frontier_audits` is the queue and
+    `get_generator_round_frontier` the round's lane (candidates, oracle
+    results, attestations, audits, applied credit, pre-frontier scores).
+    `get_generator_frontier_audit` (`backroom:artifact:read`, private case
+    content) shows each sampled case's question, gold, declared competitors,
+    cited evidence, panel and oracle scores, and the user's visible memory
+    with a `q` search for a contradicting fact. `rule_generator_frontier_audit`
+    (`RULE FRONTIER AUDIT {round} {column} VALID|INVALID`) keeps the
+    column's attestations or, naming the invalid sampled cases, voids all of
+    its frontier credit for the round; the round settles once every audit is
+    ruled, after `frontier_audit_grace_hours`, or when the oracle times out.
+    `settle_generator_round_frontier` (`SETTLE GENERATOR FRONTIER {round}`)
+    settles it now. Until a round settles it pays its unattested score.
   - `rotate_dueling_season` (`ROTATE DUELING SEASON`, audited reason) closes
     the open dueling season at the next round boundary, or on the next
     round-driver tick with `immediate: true`; the next season opens at the

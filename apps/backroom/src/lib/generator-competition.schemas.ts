@@ -11,6 +11,7 @@ import { auditReasonSchema } from './admin.schemas'
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/)
 const uuid = z.string().uuid()
+const frontierState = z.enum(['oracle_pending', 'audit_pending', 'settled'])
 const ss58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/)
 
 export const GENERATOR_SETTINGS_SCOPE = '*'
@@ -27,6 +28,15 @@ export function voidRoundConfirmation(roundIndex: number) {
 
 export function closeRoundConfirmation(roundIndex: number) {
   return `CLOSE GENERATOR ROUND ${roundIndex}`
+}
+
+// Platform frontier_audit_confirmation / frontier_settle_confirmation.
+export function frontierAuditConfirmation(roundIndex: number, columnId: string, valid: boolean) {
+  return `RULE FRONTIER AUDIT ${roundIndex} ${columnId} ${valid ? 'VALID' : 'INVALID'}`
+}
+
+export function frontierSettleConfirmation(roundIndex: number) {
+  return `SETTLE GENERATOR FRONTIER ${roundIndex}`
 }
 
 export function generatorSettingsConfirmation(mode: string) {
@@ -90,6 +100,17 @@ export const generatorCompetitionSettingsSchema = z.object({
   // params): no generation or panel inference, and the ledger keeps paying
   // that scored round. Ships on; a write that omits it keeps it on.
   skip_unchanged_rounds: z.boolean().default(true),
+  // Frontier cases: a case no two panel owners solved that the frontier
+  // oracle (frontier_oracle_agent_id, a subnet-run reference agent answering
+  // from a bounded context) passed and no failed sampled audit voided earns
+  // frontier_weight of full credit instead of the unsolved penalty. Off while
+  // frontier_oracle_agent_id is null (the default); a write that omits these
+  // keeps the shipped defaults.
+  frontier_weight: z.number().min(0).max(1).default(1),
+  frontier_oracle_agent_id: uuid.nullable().default(null),
+  frontier_audit_cases: z.number().int().min(0).max(16).default(3),
+  frontier_audit_grace_hours: z.number().int().min(1).max(336).default(24),
+  frontier_oracle_timeout_hours: z.number().int().min(1).max(168).default(12),
 })
 
 // The shortest safe dueling season in subnet epochs (dueling-bench.md
@@ -489,6 +510,10 @@ const columnViewSchema = z.object({
   trivial: z.number().int().nullable().optional(),
   unsolved: z.number().int().nullable().optional(),
   duplicate: z.number().int().nullable().optional(),
+  // Oracle-attested cases scored as frontier, and the round's frontier lane
+  // state. Optional so an older Platform parses.
+  frontier: z.number().int().nullable().optional(),
+  frontier_state: frontierState.nullable().optional(),
 })
 
 export const generatorRoundDetailSchema = z.object({
@@ -503,6 +528,9 @@ export const generatorRoundDetailSchema = z.object({
   generation: z.record(z.string(), z.unknown()).nullable(),
   column_case_counts: z.record(z.string(), z.number().int()),
   dataset_bytes: z.number().int().nullable(),
+  // The scored round's frontier lane (oracle, audits, applied credit).
+  // Optional so an older Platform parses.
+  frontier: z.lazy(() => generatorFrontierSchema).nullable().optional(),
   lease_id: uuid.nullable(),
   lease_expires_at: z.string().nullable(),
   lease_attempts: z.number().int(),
@@ -746,3 +774,153 @@ export const defaultGeneratorUploadResponseSchema = z.object({
   expires_in: z.number().int().positive(),
   max_bytes: z.number().int().positive(),
 })
+
+// --- frontier cases ----------------------------------------------------------
+
+const frontierAuditStatus = z.enum(['pending', 'passed', 'failed'])
+
+export const generatorFrontierAuditSchema = z.object({
+  round_index: z.number().int(),
+  column_id: z.string(),
+  submission_id: uuid.nullable(),
+  miner_hotkey: z.string().nullable(),
+  status: frontierAuditStatus,
+  sample: z.array(z.string()),
+  attested_cases: z.number().int(),
+  invalid_case_ids: z.array(z.string()).default([]),
+  reason: z.string().nullable().optional(),
+  actor: z.string().nullable().optional(),
+  ruled_at: z.string().nullable().optional(),
+  audit_deadline: z.string().nullable().optional(),
+})
+
+export const generatorFrontierSchema = z.object({
+  round_index: z.number().int(),
+  state: frontierState,
+  oracle_agent_id: uuid,
+  frontier_weight: z.number(),
+  audit_cases: z.number().int(),
+  candidates: z.array(z.string()),
+  oracle_attempts: z.number().int(),
+  oracle_deadline: z.string().nullable(),
+  oracle: z
+    .object({
+      validator_hotkey: z.string(),
+      run_id: z.string(),
+      recorded_at: z.string(),
+      passed: z.number().int(),
+      failed: z.number().int(),
+      faulted: z.number().int(),
+      results: z.array(
+        z.object({ case_id: z.string(), score: z.number(), fault: z.boolean() }),
+      ),
+    })
+    .nullable(),
+  attested: z.record(z.string(), z.array(z.string())),
+  audits: z.array(generatorFrontierAuditSchema),
+  applied: z.record(z.string(), z.array(z.string())).nullable().optional(),
+  column_scores: z.record(z.string(), z.number()),
+  base_column_scores: z.record(z.string(), z.number()).nullable().optional(),
+  created_at: z.string(),
+  settled_at: z.string().nullable().optional(),
+  settle_reason: z.string().nullable().optional(),
+})
+
+export const generatorFrontierAuditListSchema = z.object({
+  audits: z.array(generatorFrontierAuditSchema),
+  count: z.number().int(),
+})
+
+const frontierMemoryPair = z.object({
+  pair_id: z.string(),
+  timestamp: z.string(),
+  wave: z.number().int(),
+  prompt: z.string(),
+  response: z.string(),
+})
+
+export const generatorFrontierAuditDetailSchema = z.object({
+  audit: generatorFrontierAuditSchema,
+  cases: z.array(
+    z.object({
+      case_id: z.string(),
+      question: z.string(),
+      expected_answer: z.string(),
+      answer_kind: z.string().nullable().optional(),
+      answer_items: z.array(z.string()).default([]),
+      accept_any: z.array(z.string()).default([]),
+      distractor_answers: z.array(z.string()).default([]),
+      forbidden_answer: z.string().nullable().optional(),
+      dump_guard: z.array(z.string()).default([]),
+      user_id: z.string(),
+      run_after_wave: z.number().int(),
+      evidence: z.array(frontierMemoryPair),
+      visible_pairs: z.number().int(),
+      memory_matches: z.array(frontierMemoryPair),
+      memory_truncated: z.boolean(),
+      panel_mean_score: z.number().nullable().optional(),
+      panel_solvers: z.number().int().nullable().optional(),
+      panel_size: z.number().int().nullable().optional(),
+      oracle_score: z.number().nullable().optional(),
+      oracle_fault: z.boolean().nullable().optional(),
+    }),
+  ),
+})
+
+export const listGeneratorFrontierAuditsInputSchema = z.object({
+  includeRuled: z.boolean().default(false),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).default(0),
+})
+
+export const generatorFrontierAuditInputSchema = z.object({
+  roundIndex: z.number().int().nonnegative(),
+  columnId: z.string().min(1).max(32),
+  q: z.string().max(200).optional(),
+})
+
+export const ruleGeneratorFrontierAuditInputSchema = z
+  .object({
+    roundIndex: z.number().int().nonnegative(),
+    columnId: z.string().min(1).max(32),
+    valid: z.boolean(),
+    invalidCaseIds: z.array(z.string().min(1)).max(16).default([]),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = frontierAuditConfirmation(input.roundIndex, input.columnId, input.valid)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+    if (input.valid !== (input.invalidCaseIds.length === 0)) {
+      context.addIssue({
+        code: 'custom',
+        message: input.valid
+          ? 'a valid ruling names no invalid cases'
+          : 'an invalid ruling names the sampled cases that are invalid',
+        path: ['invalidCaseIds'],
+      })
+    }
+  })
+
+export const settleGeneratorFrontierInputSchema = z
+  .object({
+    roundIndex: z.number().int().nonnegative(),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = frontierSettleConfirmation(input.roundIndex)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
