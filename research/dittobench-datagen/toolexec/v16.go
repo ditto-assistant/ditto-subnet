@@ -60,7 +60,9 @@ func (f Fixture) connectorRefusedV16(name string) (string, bool) {
 	if _, linked := f.linkedConnector(name); linked {
 		return "", false
 	}
-	if catalog.IsV18FirstPartyTool(name) {
+	// Only a v18 menu holds first-party snapshot tools; an older fixture
+	// never loads the snapshot for this check.
+	if f.benchVersion >= protocol.BenchVersionV18 && catalog.IsV18FirstPartyTool(name) {
 		return fmt.Sprintf("%s is not available in this benchmark workspace; the request was not performed.", name), true
 	}
 	return fmt.Sprintf("%s is not connected for this workspace. Link %s in Settings before retrying; the request was not performed.", name, app), true
