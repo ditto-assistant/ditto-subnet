@@ -291,6 +291,20 @@ fn candidates_cover_the_general_value_shapes() {
         assert!(got.iter().any(|g| g == want), "missing {want} in {got:?}");
     }
     assert_eq!(extract_candidates(&["a b c"], 40), Vec::<String>::new());
+    // A name that opens the text keeps its first word; a lone capitalised
+    // sentence opener is not a candidate.
+    assert_eq!(
+        extract_candidates(&["John Smith emailed me"], 40),
+        vec!["John Smith".to_string()]
+    );
+    assert_eq!(
+        extract_candidates(&["Please email the team"], 40),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        extract_candidates(&["Hi, Bob asked"], 40),
+        vec!["Bob".to_string()]
+    );
 }
 
 #[test]

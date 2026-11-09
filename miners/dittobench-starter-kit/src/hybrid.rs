@@ -376,7 +376,17 @@ pub fn extract_candidates(texts: &[&str], limit: usize) -> Vec<String> {
                 continue;
             }
             let starts_upper = bare.chars().next().is_some_and(char::is_uppercase);
-            if starts_upper && bare.chars().count() > 1 && i > 0 {
+            // A sentence-initial word is capitalised anyway; keep it only when
+            // it opens a capitalised run ("John Smith emailed me").
+            let opens_run = i == 0
+                && !raw.ends_with(['.', ',', ';', ':', '?', '!'])
+                && words.get(1).is_some_and(|next| {
+                    next.trim_matches(EDGE_PUNCT)
+                        .chars()
+                        .next()
+                        .is_some_and(char::is_uppercase)
+                });
+            if starts_upper && bare.chars().count() > 1 && (i > 0 || opens_run) {
                 caps.push(bare.to_string());
                 if raw.ends_with(['.', ',', ';', ':', '?', '!']) || caps.len() == 4 {
                     flush_caps(&mut caps, &mut out, &mut push);
