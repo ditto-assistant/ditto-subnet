@@ -4,6 +4,7 @@ import { loadFixture } from "../../test-fixtures";
 import type { GeneratorRoundDetail } from "../generators/generator-data";
 import {
   BEAT_MS,
+  FLIGHT_TOP_MARGIN,
   agentMood,
   arenaLayout,
   catchPoint,
@@ -219,6 +220,17 @@ describe("round → arena script", () => {
     const heads = script.agents.map((_, i) => headPoint(layout, i));
     for (const head of heads) expect(flight.to).not.toEqual(head);
     expect(flight.to.y).toBeLessThan(Math.min(...heads.map((p) => p.y)));
+    // The arc stays on stage in both layouts (it peaks over the panel).
+    for (const kind of ["wide", "tall"] as const) {
+      const stage = arenaLayout(kind, script.generators.length, script.agents.length);
+      for (const shot of frontier) {
+        const arc = flightFor(stage, shot);
+        for (const peak of arc.peaks) {
+          expect(peak).toBeGreaterThanOrEqual(FLIGHT_TOP_MARGIN);
+          expect(peak).toBeLessThanOrEqual(stage.height);
+        }
+      }
+    }
     // No agent reacts as if it missed (or caught) it.
     for (let i = 0; i < script.agents.length; i++) {
       expect(agentMood(frontier[0]!, i, "rest")).toBe("idle");

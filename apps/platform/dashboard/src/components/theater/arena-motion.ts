@@ -146,6 +146,9 @@ export interface Flight {
   durationMs: number;
 }
 
+/** The highest a flight may peak: inside the stage's viewBox. */
+export const FLIGHT_TOP_MARGIN = 12;
+
 /** The arc a case flies: trivial into the target's hands, unsolved onto its
  * head, a split case off the misser's head into the catcher's hands, a
  * frontier case over the whole panel without landing on anyone, a duplicate
@@ -181,7 +184,9 @@ export function flightFor(layout: ArenaLayout, shot: ArenaThrow): Flight {
       from,
       to,
       bounce: null,
-      peaks: [apex(from, to)],
+      // The target already sits a lift above the panel, so the usual apex
+      // (another lift above it) would leave the stage: keep it inside.
+      peaks: [Math.max(FLIGHT_TOP_MARGIN, apex(from, to))],
       durationMs: flightMs(shot.outcome),
     };
   }
