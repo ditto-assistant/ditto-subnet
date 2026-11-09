@@ -700,14 +700,33 @@ async def advance_frontier_rounds(
     """Settle every scored round whose frontier lane is ready. ``params_for``
     resolves a round's own ``score_params()`` (its settings revision)."""
     notes: list[str] = []
-    rows = await session.scalars(
-        select(GeneratorRound)
-        .options(*_SCAN_DEFERRED)
-        .where(GeneratorRound.status == "scored", _open_frontier())
-        .order_by(GeneratorRound.round_index)
-        .with_for_update(skip_locked=True)
+    indexes = list(
+        await session.scalars(
+            select(GeneratorRound.round_index)
+            .where(GeneratorRound.status == "scored", _open_frontier())
+            .order_by(GeneratorRound.round_index)
+        )
     )
-    for row in rows:
+    for index in indexes:
+        # Ticket locks first, then the round, as a result submission takes
+        # them. A submission can lock its ticket just before the deadline and
+        # then wait on the round; once the deadline passes the lease no longer
+        # counts as live, so a settle here may expire that very ticket. Taking
+        # the tickets first makes the sweep wait for the submission instead of
+        # holding the round it waits on.
+        await lock_oracle_tickets(session, index)
+        row = await session.scalar(
+            select(GeneratorRound)
+            .options(*_SCAN_DEFERRED)
+            .where(
+                GeneratorRound.round_index == index,
+                GeneratorRound.status == "scored",
+                _open_frontier(),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        if row is None:
+            continue
         running = (row.frontier or {}).get("state") == STATE_ORACLE_PENDING and (
             await live_oracle_lease(session, row, now=now) is not None
         )

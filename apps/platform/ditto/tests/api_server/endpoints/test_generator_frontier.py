@@ -959,3 +959,52 @@ def test_the_oracle_bound_is_the_largest_column_not_the_total() -> None:
     assert oracle_column_cases(row) == 70  # type: ignore[arg-type]
     unscored = SimpleNamespace(score=None, cases_per_column=32)
     assert oracle_column_cases(unscored) == 32  # type: ignore[arg-type]
+
+
+async def test_the_settlement_sweep_locks_an_expired_oracle_ticket_first(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A submission can lock its ticket just before the deadline and then wait
+    on the round. Past the deadline the lease no longer counts as live, so the
+    sweep may settle and expire that ticket: it must lock the ticket before
+    the round, as the submission does, or the two can deadlock."""
+    import ditto.api_server.generator_frontier as frontier_mod
+
+    lane = _Lane(client, session_maker)
+    await lane.setup(app, monkeypatch, frontier_oracle_timeout_hours=1)
+    round_index = await lane.score_round()
+    job = await lane.lease_oracle()
+    deadline = datetime.fromisoformat(job["deadline"])
+    order: list[str] = []
+    real_lock, real_settle = (
+        frontier_mod.lock_oracle_tickets,
+        frontier_mod.settle_frontier,
+    )
+
+    async def lock(session: AsyncSession, index: int) -> Any:
+        tickets = await real_lock(session, index)
+        order.append(f"tickets:{index}:{len(tickets)}")
+        return tickets
+
+    async def settle(session: AsyncSession, row: Any, **kwargs: Any) -> Any:
+        order.append(f"settle:{row.round_index}")
+        return await real_settle(session, row, **kwargs)
+
+    monkeypatch.setattr(frontier_mod, "lock_oracle_tickets", lock)
+    monkeypatch.setattr(frontier_mod, "settle_frontier", settle)
+    # Past the ticket deadline (the lease no longer counts as live) and the
+    # oracle timeout, with the ticket still ISSUED.
+    notes = await lane.tick(now=deadline + timedelta(hours=2))
+    assert notes and "oracle timed out" in notes[0]
+    assert order == [f"tickets:{round_index}:1", f"settle:{round_index}"]
+    async with session_maker() as session:
+        ticket = await session.scalar(
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id == lane.oracle,
+                ValidatorTicket.deadline == deadline,
+            )
+        )
+        assert ticket is not None and ticket.status == TicketStatus.EXPIRED
