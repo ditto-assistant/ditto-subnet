@@ -92,17 +92,24 @@ impl Question {
         }
     }
 
-    /// A `choice` over `options` (`name -> description`, in order). Panics in
-    /// debug builds when given more than [`MAX_CHOICE_OPTIONS`]; use
-    /// [`choice_chunks`] for longer lists.
+    /// A `choice` over `options` (`name -> description`, in order). Never
+    /// panics: a repeated name keeps its first description, and past
+    /// [`MAX_CHOICE_OPTIONS`] options the middle is dropped so the trailing
+    /// reference option ("none of these") survives. Both are reported on
+    /// stderr; use [`choice_chunks`] for longer lists.
     pub fn choice(
         id: impl Into<String>,
         instructions: impl Into<Value>,
         options: &[(String, String)],
     ) -> Question {
-        debug_assert!(options.len() <= MAX_CHOICE_OPTIONS);
+        let id = id.into();
         let mut criteria = Map::new();
+        let mut duplicates = 0usize;
         for (name, description) in options {
+            if criteria.contains_key(name) {
+                duplicates += 1;
+                continue;
+            }
             let description = if description.is_empty() {
                 Value::Null
             } else {
@@ -110,8 +117,28 @@ impl Question {
             };
             criteria.insert(name.clone(), description);
         }
+        let dropped = criteria.len().saturating_sub(MAX_CHOICE_OPTIONS);
+        if dropped > 0 {
+            let last = options.last().map(|(name, _)| name.as_str());
+            let excess: Vec<String> = options
+                .iter()
+                .map(|(name, _)| name)
+                .filter(|name| Some(name.as_str()) != last && criteria.contains_key(*name))
+                .skip(MAX_CHOICE_OPTIONS - 1)
+                .take(dropped)
+                .cloned()
+                .collect();
+            for name in excess {
+                criteria.remove(&name);
+            }
+        }
+        if duplicates > 0 || dropped > 0 {
+            eprintln!(
+                "jev: choice {id}: dropped {duplicates} repeated and {dropped} over-limit option(s)"
+            );
+        }
         Question {
-            id: id.into(),
+            id,
             body: json!({
                 "type": "choice",
                 "instructions": instructions.into(),
@@ -522,6 +549,28 @@ mod tests {
             assert!(q.estimated_tokens() < MAX_QUESTION_TOKENS);
         }
         assert_eq!(seen, 1454, "every tool is asked about exactly once");
+    }
+
+    #[test]
+    fn a_choice_drops_repeats_and_excess_without_panicking() {
+        let mut options = opts(3, "d");
+        options.push(("tool_1".to_string(), "later".to_string()));
+        let q = Question::choice("c", "Which?", &options);
+        let criteria = q.body["criteria"].as_object().unwrap();
+        assert_eq!(criteria.len(), 3);
+        assert_eq!(criteria["tool_1"], json!("d"), "the first description wins");
+
+        let mut options = opts(300, "d");
+        options.push(("none_of_these".to_string(), String::new()));
+        let q = Question::choice("c", "Which?", &options);
+        let criteria = q.body["criteria"].as_object().unwrap();
+        assert_eq!(criteria.len(), MAX_CHOICE_OPTIONS);
+        assert!(
+            criteria.contains_key("none_of_these"),
+            "the reference survives"
+        );
+        assert!(criteria.contains_key("tool_253"));
+        assert!(!criteria.contains_key("tool_254"));
     }
 
     #[test]
