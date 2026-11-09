@@ -949,7 +949,9 @@ fn concurrent_usage_appends_stay_whole_lines() {
     std::thread::scope(|s| {
         for i in 0..16 {
             let (path, outcome) = (&path, &outcome);
-            s.spawn(move || append_usage(path.to_str().unwrap(), &format!("case-{i}"), outcome));
+            s.spawn(move || {
+                append_usage(path.to_str().unwrap(), &format!("case-{i}"), outcome).unwrap()
+            });
         }
     });
     let text = std::fs::read_to_string(&path).unwrap();
@@ -959,4 +961,7 @@ fn concurrent_usage_appends_stay_whole_lines() {
         let record: Value = serde_json::from_str(line).unwrap();
         assert_eq!(record["route"].as_str().unwrap().len(), 64 * 1024);
     }
+    // An unopenable path is reported to log_usage, which warns once.
+    let missing = dir.path().join("absent").join("usage.jsonl");
+    assert!(append_usage(missing.to_str().unwrap(), "case-x", &outcome).is_err());
 }

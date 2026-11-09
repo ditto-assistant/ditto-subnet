@@ -1081,10 +1081,19 @@ pub fn log_usage(case_id: &str, outcome: &HybridOutcome) {
     if path.trim().is_empty() {
         return;
     }
-    append_usage(path.trim(), case_id, outcome);
+    if let Err(err) = append_usage(path.trim(), case_id, outcome) {
+        // Once per process: concurrent cases would otherwise repeat it.
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            eprintln!(
+                "{USAGE_LOG_ENV}: cannot append to {}: {err}; the usage log is incomplete",
+                path.trim()
+            );
+        });
+    }
 }
 
-fn append_usage(path: &str, case_id: &str, outcome: &HybridOutcome) {
+fn append_usage(path: &str, case_id: &str, outcome: &HybridOutcome) -> std::io::Result<()> {
     let mut line = serde_json::to_value(outcome).unwrap_or(Value::Null);
     if let Some(map) = line.as_object_mut() {
         map.insert("case_id".to_string(), json!(case_id));
@@ -1096,13 +1105,11 @@ fn append_usage(path: &str, case_id: &str, outcome: &HybridOutcome) {
     // after a partial one: hold a lock so two cases' records never interleave.
     static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if let Ok(mut file) = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
-    {
-        let _ = file.write_all(format!("{line}\n").as_bytes());
-    }
+        .open(path)?
+        .write_all(format!("{line}\n").as_bytes())
 }
 
 #[cfg(test)]
