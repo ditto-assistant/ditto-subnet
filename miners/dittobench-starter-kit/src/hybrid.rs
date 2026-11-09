@@ -889,10 +889,15 @@ pub async fn run_case(
     let mut hint: Option<String> = None;
     if plan.act_unlikely {
         // Restraint stays the model's choice: the safe harbor is still offered.
-        for name in &jev_top {
-            if case.memory_tools.contains(name) {
-                offer(name, &mut offered);
-            }
+        // The menu was not read, so rank the memory tools by the request.
+        let memory: Vec<ToolDefWire> = case
+            .catalog
+            .iter()
+            .filter(|t| case.memory_tools.contains(&t.name))
+            .cloned()
+            .collect();
+        for name in v13::semantic_top_k(case.user_input, &memory, cfg.offer_k) {
+            offer(&name, &mut offered);
         }
         hint = Some(if plan.route == "remember" {
             "This is a fact the user wants kept: save it with save_memory unless the notes already hold it, then confirm briefly."
@@ -1097,6 +1102,10 @@ pub fn log_usage(case_id: &str, outcome: &HybridOutcome) {
     if path.trim().is_empty() {
         return;
     }
+    append_usage(path.trim(), case_id, outcome);
+}
+
+fn append_usage(path: &str, case_id: &str, outcome: &HybridOutcome) {
     let mut line = serde_json::to_value(outcome).unwrap_or(Value::Null);
     if let Some(map) = line.as_object_mut() {
         map.insert("case_id".to_string(), json!(case_id));
@@ -1104,13 +1113,15 @@ pub fn log_usage(case_id: &str, outcome: &HybridOutcome) {
         map.remove("final_text");
     }
     use std::io::Write;
+    // Cases run concurrently, and `write_all` may split a line across writes
+    // after a partial one: hold a lock so two cases' records never interleave.
+    static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path.trim())
+        .open(path)
     {
-        // One write per line: cases run concurrently and `writeln!` may
-        // split a line across writes, interleaving two cases' records.
         let _ = file.write_all(format!("{line}\n").as_bytes());
     }
 }

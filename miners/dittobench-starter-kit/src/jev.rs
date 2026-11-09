@@ -47,11 +47,30 @@ pub const MAX_RETRY_AFTER_SECS: u64 = 30;
 /// Headroom kept under each limit, because [`estimate_tokens`] is an estimate.
 const LIMIT_HEADROOM: f64 = 0.85;
 
-/// Conservative token estimate for JSON text: about 3 characters per token,
-/// rounded up. Real tokenizers average closer to 4 on English, so this
-/// over-counts and keeps packed requests under the provider limit.
+/// Conservative token estimate for JSON text: about 3 ASCII characters per
+/// token, rounded up, plus one token per non-ASCII byte. Real tokenizers
+/// average closer to 4 characters on English and never emit more tokens than
+/// bytes, so CJK or emoji text (often a token a character) is not undercounted
+/// and packed requests stay under the provider limit.
 pub fn estimate_tokens(text: &str) -> usize {
-    text.chars().count().div_ceil(3)
+    let ascii = text.bytes().filter(u8::is_ascii).count();
+    ascii.div_ceil(3) + (text.len() - ascii)
+}
+
+/// The longest prefix of `text` whose [`estimate_tokens`] is at most `tokens`.
+fn truncate_to_tokens(text: &str, tokens: usize) -> &str {
+    let (mut ascii, mut other) = (0usize, 0usize);
+    for (i, c) in text.char_indices() {
+        if c.is_ascii() {
+            ascii += 1;
+        } else {
+            other += c.len_utf8();
+        }
+        if ascii.div_ceil(3) + other > tokens {
+            return &text[..i];
+        }
+    }
+    text
 }
 
 fn estimate_value_tokens(value: &Value) -> usize {
@@ -109,7 +128,8 @@ impl Question {
 /// Splits `options` into `choice` questions `<prefix>0`, `<prefix>1`, ...
 /// Each holds at most `max_per_question` options (capped at 255) plus the
 /// `extra` options (a "none of these" reference, for example) and stays under
-/// the per-question token limit given `state_tokens`.
+/// the per-question token limit given `state_tokens`. Returns no questions
+/// when `extra` alone fills the 255-option cap.
 pub fn choice_chunks(
     prefix: &str,
     instructions: &str,
@@ -118,8 +138,12 @@ pub fn choice_chunks(
     max_per_question: usize,
     state_tokens: usize,
 ) -> Vec<Question> {
+    // Extras that fill the cap leave no room for a regular option.
+    if extra.len() >= MAX_CHOICE_OPTIONS {
+        return Vec::new();
+    }
     let cap = max_per_question
-        .min(MAX_CHOICE_OPTIONS.saturating_sub(extra.len()))
+        .min(MAX_CHOICE_OPTIONS - extra.len())
         .max(1);
     let budget = ((MAX_QUESTION_TOKENS as f64) * LIMIT_HEADROOM) as usize;
     let base = estimate_tokens(instructions) + 40 + state_tokens;
@@ -148,15 +172,14 @@ pub fn choice_chunks(
         let mut option = option.clone();
         let mut cost = estimate_tokens(&option.0) + estimate_tokens(&option.1) + 6;
         if cost > room {
-            // Shorten the description (3 chars per estimated token); a name
-            // too long to fit even alone is dropped rather than sent over the
-            // provider's per-question limit.
+            // Shorten the description to the room left; a name too long to
+            // fit even alone is dropped rather than sent over the provider's
+            // per-question limit.
             let name_cost = estimate_tokens(&option.0) + 6;
             if name_cost > room {
                 continue;
             }
-            let keep = (room - name_cost) * 3;
-            option.1 = option.1.chars().take(keep).collect();
+            option.1 = truncate_to_tokens(&option.1, room - name_cost).to_string();
             cost = estimate_tokens(&option.0) + estimate_tokens(&option.1) + 6;
         }
         if !current.is_empty() && (current.len() >= cap || current_tokens + cost > budget) {
@@ -316,7 +339,11 @@ impl DecisionClient {
             http,
             url: url.into(),
             model: model.into(),
-            api_key: api_key.filter(|k| !k.trim().is_empty()),
+            // Trimmed: a key pasted with a trailing newline is not a valid
+            // header value, and every call would fail.
+            api_key: api_key
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty()),
         }
     }
 
@@ -382,8 +409,9 @@ impl DecisionClient {
                     let parsed: Value = match serde_json::from_str(&text) {
                         Ok(parsed) => parsed,
                         Err(err) => {
-                            // Unreadable even on a 2xx: a failure to retry and
-                            // report, never a silent empty answer set.
+                            // Unreadable even on a 2xx: a reported failure,
+                            // never a silent empty answer set. Only 429/5xx
+                            // retry; a metered 2xx would be billed again.
                             usage.calls.fetch_add(1, Ordering::Relaxed);
                             last_err = Some(anyhow::anyhow!(
                                 "decision lane returned {status} with an unparseable body: {err}: {}",
@@ -507,6 +535,39 @@ mod tests {
     }
 
     #[test]
+    fn non_ascii_text_is_not_undercounted() {
+        assert_eq!(estimate_tokens("abcdefg"), 3);
+        let cjk = "日本語".repeat(1000);
+        assert!(estimate_tokens(&cjk) >= cjk.chars().count());
+        assert_eq!(truncate_to_tokens("ab日c", 1), "ab");
+        assert_eq!(truncate_to_tokens("ab日c", 4), "ab日c");
+        let huge = vec![("big".to_string(), "語".repeat(200_000))];
+        let qs = choice_chunks("t", "Which?", &huge, &[], 255, 0);
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].estimated_tokens() <= MAX_QUESTION_TOKENS);
+    }
+
+    #[test]
+    fn extras_that_fill_the_cap_yield_no_questions() {
+        let extras = |n: usize| -> Vec<(String, String)> {
+            (0..n)
+                .map(|i| (format!("ref_{i}"), String::new()))
+                .collect()
+        };
+        let extra = extras(MAX_CHOICE_OPTIONS);
+        assert!(choice_chunks("t", "Which?", &opts(3, "d"), &extra, 255, 0).is_empty());
+        let extra = extras(MAX_CHOICE_OPTIONS - 1);
+        let qs = choice_chunks("t", "Which?", &opts(3, "d"), &extra, 255, 0);
+        assert_eq!(qs.len(), 3);
+        for q in &qs {
+            assert_eq!(
+                q.body["criteria"].as_object().unwrap().len(),
+                MAX_CHOICE_OPTIONS
+            );
+        }
+    }
+
+    #[test]
     fn chunks_split_on_tokens_before_the_option_cap() {
         let long = "x".repeat(1200);
         let qs = choice_chunks("t", "Which?", &opts(255, &long), &[], 255, 0);
@@ -529,6 +590,15 @@ mod tests {
             pack_requests(qs, &state).len() > 1,
             "a 4,000-tool menu splits"
         );
+    }
+
+    #[test]
+    fn the_api_key_is_trimmed_before_bearer_use() {
+        let client = |key: &str| {
+            DecisionClient::new(reqwest::Client::new(), "http://x", "m", Some(key.into())).api_key
+        };
+        assert_eq!(client(" sk-test\n").as_deref(), Some("sk-test"));
+        assert_eq!(client(" \n"), None);
     }
 
     #[test]

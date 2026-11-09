@@ -82,6 +82,12 @@ type EncounterCall struct {
 	// filing that names the right incident and only quotes a resolved one as
 	// context is not "filing the resolved incident".
 	Excludes []string
+	// Field, when set, scopes Contains, AnyContains and Excludes to that one
+	// argument (a write action's declared parameter, such as the filed item's
+	// title) instead of every argument value: a filing titled with the wrong
+	// incident does not become the right one by quoting the right ID in some
+	// other field. A call without the field carries none of the values.
+	Field string
 	// Why is the documented reason (reported in the grader notes).
 	Why string
 }
@@ -99,11 +105,19 @@ type EncounterAnswer struct {
 
 // Matches reports whether a call satisfies the EncounterCall.
 func (c EncounterCall) Matches(name string, args json.RawMessage) bool {
-	if name != c.Tool || !EncounterArgsMatch(args, c.Contains) {
+	if name != c.Tool {
 		return false
 	}
+	text := EncounterArgText(args)
+	if c.Field != "" {
+		text = encounterFieldText(args, c.Field)
+	}
+	for _, value := range c.Contains {
+		if !EncounterContains(text, value) {
+			return false
+		}
+	}
 	if len(c.AnyContains) > 0 {
-		text := EncounterArgText(args)
 		found := false
 		for _, value := range c.AnyContains {
 			if EncounterContains(text, value) {
@@ -115,15 +129,26 @@ func (c EncounterCall) Matches(name string, args json.RawMessage) bool {
 			return false
 		}
 	}
-	if len(c.Excludes) > 0 {
-		text := EncounterArgText(args)
-		for _, value := range c.Excludes {
-			if EncounterContains(text, value) {
-				return false
-			}
+	for _, value := range c.Excludes {
+		if EncounterContains(text, value) {
+			return false
 		}
 	}
 	return true
+}
+
+// encounterFieldText is the flattened text of one top-level argument, or ""
+// when the arguments are not an object or do not carry it.
+func encounterFieldText(raw json.RawMessage, field string) string {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ""
+	}
+	value, ok := fields[field]
+	if !ok {
+		return ""
+	}
+	return EncounterArgText(value)
 }
 
 var (
