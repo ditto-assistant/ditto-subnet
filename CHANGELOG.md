@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.468.2 (2026-11-09)
+
+### Bug Fixes
+
+- **security**: Bump hippius-probe requirements pip HIGH floors
+  ([#3453](https://github.com/ditto-assistant/ditto-subnet/pull/3453),
+  [`e17c242`](https://github.com/ditto-assistant/ditto-subnet/commit/e17c242b3fb5daf5f5922fda6c3e1d92bf4422f2))
+
+- **security**: Bump platform/screener uv.lock pip HIGH floors
+  ([#3451](https://github.com/ditto-assistant/ditto-subnet/pull/3451),
+  [`2d7e6e8`](https://github.com/ditto-assistant/ditto-subnet/commit/2d7e6e8f768d4ba9918d25a1f67b4b2d1de26c8c))
+
+### Chores
+
+- **agents**: Add .ditto profile for the SN118 subnet endpoint [DITTO-2591]
+  ([#3456](https://github.com/ditto-assistant/ditto-subnet/pull/3456),
+  [`1d4d21e`](https://github.com/ditto-assistant/ditto-subnet/commit/1d4d21ee432b5efad9f28c1afb32fa5267c172a4))
+
+- **openclaw**: Remediate Dependabot HIGH npm alerts
+  ([#3455](https://github.com/ditto-assistant/ditto-subnet/pull/3455),
+  [`23dd97d`](https://github.com/ditto-assistant/ditto-subnet/commit/23dd97dbc34d9b7b52ae100887ecec96bd34adc3))
+
+
 ## v0.468.1 (2026-11-08)
 
 ### Bug Fixes
