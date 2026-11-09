@@ -51514,6 +51514,7 @@ export interface operations {
             query?: {
                 include_ruled?: boolean;
                 limit?: number;
+                offset?: number;
             };
             header?: {
                 authorization?: string | null;

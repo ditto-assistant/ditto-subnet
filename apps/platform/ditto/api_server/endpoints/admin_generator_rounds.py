@@ -403,11 +403,14 @@ async def admin_frontier_audits(
     session: SessionDep,
     include_ruled: bool = False,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> GeneratorFrontierAuditListResponse:
     """The frontier audit queue: sampled oracle-attested cases awaiting an
     operator ruling, oldest round first. ``include_ruled`` also lists ruled
     audits of rounds that have not settled yet."""
-    audits = await pending_audits(session, include_ruled=include_ruled, limit=limit)
+    audits = await pending_audits(
+        session, include_ruled=include_ruled, limit=limit, offset=offset
+    )
     return GeneratorFrontierAuditListResponse(audits=audits, count=len(audits))
 
 

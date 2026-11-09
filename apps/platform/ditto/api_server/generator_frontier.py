@@ -680,7 +680,11 @@ def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
 
 
 async def pending_audits(
-    session: AsyncSession, *, include_ruled: bool = False, limit: int = 50
+    session: AsyncSession,
+    *,
+    include_ruled: bool = False,
+    limit: int = 50,
+    offset: int = 0,
 ) -> list[GeneratorFrontierAuditView]:
     """Frontier audits awaiting an operator ruling, oldest round first."""
     stmt = (
@@ -699,9 +703,9 @@ async def pending_audits(
             for audit in audit_views(row)
             if include_ruled or audit.status == AUDIT_PENDING
         )
-        if len(out) >= limit:
+        if len(out) >= offset + limit:
             break
-    return out[:limit]
+    return out[offset : offset + limit]
 
 
 def _pairs_by_user(pack: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
