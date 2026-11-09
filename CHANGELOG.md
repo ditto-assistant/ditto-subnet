@@ -2,6 +2,67 @@
 
 <!-- version list -->
 
+## v0.468.2 (2026-11-09)
+
+### Bug Fixes
+
+- **security**: Bump hippius-probe requirements pip HIGH floors
+  ([#3453](https://github.com/ditto-assistant/ditto-subnet/pull/3453),
+  [`e17c242`](https://github.com/ditto-assistant/ditto-subnet/commit/e17c242b3fb5daf5f5922fda6c3e1d92bf4422f2))
+
+- **security**: Bump platform/screener uv.lock pip HIGH floors
+  ([#3451](https://github.com/ditto-assistant/ditto-subnet/pull/3451),
+  [`2d7e6e8`](https://github.com/ditto-assistant/ditto-subnet/commit/2d7e6e8f768d4ba9918d25a1f67b4b2d1de26c8c))
+
+### Chores
+
+- **agents**: Add .ditto profile for the SN118 subnet endpoint [DITTO-2591]
+  ([#3456](https://github.com/ditto-assistant/ditto-subnet/pull/3456),
+  [`1d4d21e`](https://github.com/ditto-assistant/ditto-subnet/commit/1d4d21ee432b5efad9f28c1afb32fa5267c172a4))
+
+- **openclaw**: Remediate Dependabot HIGH npm alerts
+  ([#3455](https://github.com/ditto-assistant/ditto-subnet/pull/3455),
+  [`23dd97d`](https://github.com/ditto-assistant/ditto-subnet/commit/23dd97dbc34d9b7b52ae100887ecec96bd34adc3))
+
+
+## v0.468.1 (2026-11-08)
+
+### Bug Fixes
+
+- **security**: Bump dittobench-starter-kit quinn-proto to 0.11.15
+  ([#3449](https://github.com/ditto-assistant/ditto-subnet/pull/3449),
+  [`c9098b1`](https://github.com/ditto-assistant/ditto-subnet/commit/c9098b11886f77f2eabf6b1910f73c1bfd98beb4))
+
+
+## v0.468.0 (2026-11-08)
+
+### Bug Fixes
+
+- **security**: Bump model-relay compress and gRPC deps
+  ([#3448](https://github.com/ditto-assistant/ditto-subnet/pull/3448),
+  [`9dbcbf3`](https://github.com/ditto-assistant/ditto-subnet/commit/9dbcbf3a2207e149d5cbf31bc20f5ed4fd427f9e))
+
+- **security**: Bump root uv.lock pip HIGH floors
+  ([#3450](https://github.com/ditto-assistant/ditto-subnet/pull/3450),
+  [`e92fcbb`](https://github.com/ditto-assistant/ditto-subnet/commit/e92fcbb91802b91bc1d4113c1cba033aac6d121d))
+
+### Chores
+
+- **backroom**: Remediate Dependabot HIGH npm alerts
+  ([#3452](https://github.com/ditto-assistant/ditto-subnet/pull/3452),
+  [`e5db244`](https://github.com/ditto-assistant/ditto-subnet/commit/e5db244383b78ac29cb703db7faae325040b4246))
+
+- **dashboard**: Remediate Dependabot HIGH npm alerts
+  ([#3454](https://github.com/ditto-assistant/ditto-subnet/pull/3454),
+  [`d7fedc9`](https://github.com/ditto-assistant/ditto-subnet/commit/d7fedc9198a02bc2548a179278ff50d61b9d9274))
+
+### Features
+
+- **generator-starter-kit**: Bump to version 7 with policy 18 and hardened families
+  ([#3415](https://github.com/ditto-assistant/ditto-subnet/pull/3415),
+  [`2c8443e`](https://github.com/ditto-assistant/ditto-subnet/commit/2c8443ea3acaf866dc2a43f782218f4e8442df14))
+
+
 ## v0.467.1 (2026-11-08)
 
 ### Bug Fixes

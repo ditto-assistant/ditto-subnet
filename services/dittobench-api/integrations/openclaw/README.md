@@ -84,10 +84,12 @@ docker run --rm -p 8080:8080 \
   openclaw-dittobench
 ```
 
-Run adapter tests:
+Run adapter tests (lifecycle hooks stay off; nested OpenClaw shrinkwrap
+floors are applied by the explicit repair script, same as the Dockerfile):
 
 ```sh
 npm ci --ignore-scripts
+node ./scripts/force-patched-transitives.mjs
 npm test
 ```
 
