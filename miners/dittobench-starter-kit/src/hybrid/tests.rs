@@ -20,6 +20,8 @@ use super::*;
 struct JevStub {
     prefer: Vec<String>,
     nouls: HashMap<String, f64>,
+    /// Question ids left unanswered (a pass-1 reply missing its route).
+    omit: Vec<String>,
     seen: Arc<Mutex<Vec<Value>>>,
 }
 
@@ -27,6 +29,9 @@ async fn jev_handler(State(stub): State<JevStub>, Json(body): Json<Value>) -> Js
     stub.seen.lock().unwrap().push(body.clone());
     let mut answers = serde_json::Map::new();
     for (id, q) in body["questions"].as_object().unwrap() {
+        if stub.omit.contains(id) {
+            continue;
+        }
         match q["type"].as_str().unwrap() {
             "noul" => {
                 let p = stub.nouls.get(id).copied().unwrap_or(0.1);
@@ -305,6 +310,12 @@ fn candidates_cover_the_general_value_shapes() {
         extract_candidates(&["Hi, Bob asked"], 40),
         vec!["Bob".to_string()]
     );
+    // A function word or an acronym/identifier after the opener never makes
+    // the opener a candidate.
+    let api = extract_candidates(&["The API server crashed"], 40);
+    assert!(!api.iter().any(|c| c.starts_with("The")), "{api:?}");
+    let invoice = extract_candidates(&["Invoice INV-2041 is due"], 40);
+    assert!(!invoice.iter().any(|c| c == "Invoice"), "{invoice:?}");
 }
 
 #[test]
@@ -685,6 +696,33 @@ async fn an_act_route_reads_the_menu_despite_a_high_no_change() {
     .unwrap();
     assert_eq!(out.route, "act");
     assert!(out.menu_asked, "an act route reads the menu");
+    let calls = model.calls.lock().unwrap();
+    assert!(!user_prompt(&calls[0].0).contains("No action seems to be needed"));
+    assert!(calls[0].1.contains(&"calendar_create_event".to_string()));
+}
+
+#[tokio::test]
+async fn a_missing_route_falls_back_despite_a_high_no_change() {
+    let stub = JevStub {
+        omit: vec!["route".into()],
+        nouls: HashMap::from([("no_change".to_string(), 0.9)]),
+        ..JevStub::default()
+    };
+    let url = serve_jev(stub).await;
+    let client = DecisionClient::new(reqwest::Client::new(), url, "typesafe/jev-1.14", None);
+    let catalog = catalog();
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let model = ScriptedModel::new(vec![text("ok")]);
+    let out = run_case(
+        &model,
+        Some(&client),
+        &HybridConfig::default(),
+        case(&catalog, &executed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.route, "");
+    assert!(!out.menu_asked, "no route never reads the menu");
     let calls = model.calls.lock().unwrap();
     assert!(!user_prompt(&calls[0].0).contains("No action seems to be needed"));
     assert!(calls[0].1.contains(&"calendar_create_event".to_string()));
