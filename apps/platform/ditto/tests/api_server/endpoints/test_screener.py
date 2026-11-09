@@ -4275,6 +4275,9 @@ class TestClaim:
             ("fresh-zero-mismatch", "gcp-first", False, False),
             ("missing", "mixed-gcp-first", True, True),
             ("stale", "retired-open", True, True),
+            ("stale", "aws-open", True, True),
+            ("fresh-zero", "aws-open", False, False),
+            ("stale", "aws-route-hetzner-node", False, False),
         ],
     )
     async def test_legacy_gcp_and_watchdog_share_fallback_admission(
@@ -4309,6 +4312,8 @@ class TestClaim:
                     primary.environment = "dev"
                 if policy == "wrong-provider":
                     primary.provider = "gcp"
+                if policy == "aws-open":
+                    primary.provider = "aws"
                 if policy in ("no-admission", "gcp-first-no-admission"):
                     channels = await session.scalar(
                         select(ScreenerNodeChannelSettingsRevision)
@@ -4320,6 +4325,8 @@ class TestClaim:
                 if policy.startswith(("gcp-first", "mixed-gcp-first"))
                 else "targon"
                 if policy.startswith(("retired-", "mixed-retired"))
+                else "aws"
+                if policy.startswith("aws-")
                 else "hetzner"
             )
             priorities = [provider] if provider == "gcp" else [provider, "gcp"]
@@ -4340,7 +4347,7 @@ class TestClaim:
                             else priorities
                         ),
                         "gce_overflow_enabled": (
-                            policy != "disabled" and provider == "hetzner"
+                            policy != "disabled" and provider in ("hetzner", "aws")
                         ),
                         "primary_node_id": "subnet-screener-1",
                         "gce_overflow_max_instances": (

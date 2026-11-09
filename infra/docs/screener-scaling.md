@@ -80,6 +80,13 @@ fenced failing pass records a
 `platform_inventory_hold_expired`. A failed pre-event read or first fenced
 renew leaves the transition pending for the next pass.
 
+The primary may be the fixed-cost Hetzner node or an on-demand AWS EC2 node
+(provider `aws`). Overflow requires every lane to name the same primary
+provider first, and the controller's reason codes carry that provider's name:
+`HETZNER_PRIMARY_UNAVAILABLE` for a Hetzner primary, `AWS_PRIMARY_UNAVAILABLE`
+for an AWS one, and likewise for the other `*_PRIMARY_*` and `*_BACKLOG_OVERFLOW`
+codes.
+
 Capacity transition events are delivered at least once, not exactly once. The
 controller records an event as sent, in its state file, only after the renew
 that carries it succeeds, and Platform has no event idempotency key. A renew

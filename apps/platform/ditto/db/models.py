@@ -6129,7 +6129,7 @@ class ScreenerNodeBootstrapGrant(Base):
             name="screener_node_bootstrap_grants_node_id_length_check",
         ),
         CheckConstraint(
-            "provider IN ('gcp', 'targon', 'hetzner', 'home', 'test')",
+            "provider IN ('gcp', 'targon', 'hetzner', 'aws', 'home', 'test')",
             name="screener_node_bootstrap_grants_provider_check",
         ),
         CheckConstraint(
@@ -6191,7 +6191,7 @@ class ScreenerNode(Base):
             name="screener_nodes_node_id_length_check",
         ),
         CheckConstraint(
-            "provider IN ('gcp', 'targon', 'hetzner', 'home', 'test')",
+            "provider IN ('gcp', 'targon', 'hetzner', 'aws', 'home', 'test')",
             name="screener_nodes_provider_check",
         ),
         CheckConstraint(
@@ -6375,7 +6375,7 @@ class ScreenerCapacityEvent(Base):
     __table_args__ = (
         CheckConstraint(
             "provider IS NULL OR "
-            "provider IN ('gcp', 'targon', 'hetzner', 'home', 'test')",
+            "provider IN ('gcp', 'targon', 'hetzner', 'aws', 'home', 'test')",
             name="screener_capacity_events_provider_check",
         ),
         Index(
@@ -6538,7 +6538,7 @@ class TrustedImageBuild(Base):
             name="trusted_image_builds_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner')",
+            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner', 'aws')",
             name="trusted_image_builds_provider_check",
         ),
         CheckConstraint(
@@ -6658,7 +6658,7 @@ class SubmissionImageBuild(Base):
             name="submission_image_builds_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner')",
+            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner', 'aws')",
             name="submission_image_builds_provider_check",
         ),
         CheckConstraint(
@@ -6783,7 +6783,7 @@ class SubmissionSourceReview(Base):
             name="submission_source_reviews_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner')",
+            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner', 'aws')",
             name="submission_source_reviews_provider_check",
         ),
         CheckConstraint(
