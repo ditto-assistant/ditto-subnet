@@ -653,6 +653,37 @@ async fn a_failing_decision_lane_degrades_instead_of_failing_the_case() {
     .unwrap();
     assert_eq!(out.final_text, "ok");
     assert!(out.decision_failures >= 1);
+    assert!(!out.menu_asked, "a failed first pass never reads the menu");
+    assert!(model.calls.lock().unwrap()[0]
+        .1
+        .contains(&"calendar_create_event".to_string()));
+}
+
+#[tokio::test]
+async fn an_act_route_reads_the_menu_despite_a_high_no_change() {
+    let stub = JevStub {
+        prefer: vec!["act".into(), "calendar_create_event".into()],
+        nouls: HashMap::from([("no_change".to_string(), 0.9)]),
+        ..JevStub::default()
+    };
+    let url = serve_jev(stub).await;
+    let client = DecisionClient::new(reqwest::Client::new(), url, "typesafe/jev-1.14", None);
+    let catalog = catalog();
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let model = ScriptedModel::new(vec![text("ok")]);
+    let out = run_case(
+        &model,
+        Some(&client),
+        &HybridConfig::default(),
+        case(&catalog, &executed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.route, "act");
+    assert!(out.menu_asked, "an act route reads the menu");
+    let calls = model.calls.lock().unwrap();
+    assert!(!user_prompt(&calls[0].0).contains("No action seems to be needed"));
+    assert!(calls[0].1.contains(&"calendar_create_event".to_string()));
 }
 
 #[test]

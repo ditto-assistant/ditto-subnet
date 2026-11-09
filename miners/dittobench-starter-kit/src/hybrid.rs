@@ -562,10 +562,14 @@ async fn plan(
         .find(|(n, _)| *n == plan.route)
         .map(|(_, p)| p)
         .unwrap_or(0.0);
+    // An explicit act route outranks a contradictory no_change score;
+    // already_done still stops a case whose records show the work is done.
     plan.act_unlikely = (plan.route != "act" && !plan.route.is_empty() && route_p >= 0.5)
-        || answers.noul("no_change").unwrap_or(0.0) >= 0.6
+        || (plan.route != "act" && answers.noul("no_change").unwrap_or(0.0) >= 0.6)
         || answers.noul("already_done").unwrap_or(0.0) >= 0.6;
-    if plan.act_unlikely {
+    // No route means pass 1 failed: skip the costly menu and let run_case
+    // fall back to code-only selection, as it does without a decision lane.
+    if plan.act_unlikely || plan.route.is_empty() {
         return plan;
     }
 
