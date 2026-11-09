@@ -263,28 +263,54 @@ fn user_prompt(messages: &[ChatMessage]) -> String {
 
 #[test]
 fn hybrid_is_the_default_from_bench_18_only() {
-    // Unset: the classic path below v18 (live scoring of an unmodified kit
-    // does not change), the hybrid from v18 (the menu exceeds the context).
+    // Unset: the classic path below v18 for an ordinary menu (live scoring of
+    // an unmodified kit does not change), the hybrid from v18.
     assert_eq!(DEFAULT_FROM_BENCH_VERSION, 18);
     for unset in [None, Some(""), Some("  "), Some("maybe")] {
-        assert!(!enabled_from(unset, 17), "{unset:?} at 17");
-        assert!(enabled_from(unset, 18), "{unset:?} at 18");
-        assert!(enabled_from(unset, 19), "{unset:?} at 19");
+        assert!(!enabled_from(unset, 17, 0), "{unset:?} at 17");
+        assert!(enabled_from(unset, 18, 0), "{unset:?} at 18");
+        assert!(enabled_from(unset, 19, 0), "{unset:?} at 19");
     }
-    // An explicit value wins on every bench.
+    // An explicit value wins on every bench and menu size.
     for off in ["0", "false", " OFF ", "no"] {
-        assert!(!enabled_from(Some(off), 17), "{off} at 17");
-        assert!(!enabled_from(Some(off), 18), "{off} at 18");
+        assert!(!enabled_from(Some(off), 17, 0), "{off} at 17");
+        assert!(!enabled_from(Some(off), 18, usize::MAX), "{off} at 18");
     }
     for on in ["1", " TRUE ", "yes", "on"] {
-        assert!(enabled_from(Some(on), 9), "{on} at 9");
-        assert!(enabled_from(Some(on), 18), "{on} at 18");
+        assert!(enabled_from(Some(on), 9, 0), "{on} at 9");
+        assert!(enabled_from(Some(on), 18, 0), "{on} at 18");
     }
 }
 
 #[test]
+fn an_oversized_menu_takes_the_hybrid_at_wire_version_9() {
+    // Scored runs send bench_version 9 whatever the contract, so a v18 menu
+    // must switch on its size alone.
+    let tool = |i: usize| ToolDefWire {
+        name: format!("toolkit_action_{i}"),
+        description: "Creates, updates or lists records in a connected workspace app. ".repeat(4),
+        parameters: json!({"type": "object", "properties": {"input": {"type": "string"}}}),
+    };
+    let v17: Vec<ToolDefWire> = (0..235).map(tool).collect();
+    let v18: Vec<ToolDefWire> = (0..1_400).map(tool).collect();
+    assert!(
+        menu_tokens(&v17) < CLASSIC_MENU_TOKEN_LIMIT,
+        "{}",
+        menu_tokens(&v17)
+    );
+    assert!(
+        menu_tokens(&v18) > CLASSIC_MENU_TOKEN_LIMIT,
+        "{}",
+        menu_tokens(&v18)
+    );
+    assert!(!enabled_from(None, 9, menu_tokens(&v17)));
+    assert!(enabled_from(None, 9, menu_tokens(&v18)));
+    assert!(!enabled_from(Some("0"), 9, menu_tokens(&v18)));
+}
+
+#[test]
 fn startup_note_names_the_path_per_bench() {
-    assert!(served_path_note_from(None).contains("Jev hybrid from 18"));
+    assert!(served_path_note_from(None).contains("Jev hybrid for a tool menu over"));
     assert!(served_path_note_from(Some("1")).contains("Jev hybrid on every bench"));
     assert!(served_path_note_from(Some("0")).contains("classic Baseline::run on every bench"));
 }
