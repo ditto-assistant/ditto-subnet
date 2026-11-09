@@ -240,7 +240,7 @@ const OUTCOME_COLUMNS: readonly {
     key: "frontier",
     label: "Frontier",
     title:
-      "Frontier: got past the panel (no two agent owners solved it), but the frontier oracle answered it and an audit found it fair; it earns credit",
+      "Frontier: got past the panel (fewer than two agent owners solved it), but the frontier oracle answered it and no sampled audit of its column ruled it out; it earns credit",
   },
   { key: "duplicate", label: "Dupes", title: "Duplicate: discarded, never counted" },
 ];

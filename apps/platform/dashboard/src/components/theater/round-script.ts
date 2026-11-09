@@ -27,8 +27,9 @@ export const OUTCOME_PROP: Record<CaseOutcome, "maze" | "sticky" | "knot" | "cop
   discriminating: "maze",
   trivial: "sticky",
   unsolved: "knot",
-  // A frontier case also gets past the panel (no two owners solved it); it
-  // flies like a knot, but is counted, labeled and captioned on its own.
+  // A frontier case gets past the panel (fewer than two owners solved it)
+  // and arcs over it without naming any agent: per-case results are not
+  // public, and one owner may have solved it.
   frontier: "knot",
   duplicate: "copy",
 };
@@ -232,7 +233,10 @@ function caption(
     case "unsolved":
       return `${thrower}'s case stumps the whole panel${missers[0] ? `, ${missers[0]} included` : ""}.`;
     case "frontier":
-      return `${thrower}'s frontier case gets past the panel${missers[0] ? `, ${missers[0]} included` : ""}, and an oracle and an audit found it fair, so it earns credit.`;
+      // Names no agent: fewer than two owners solved it, and which ones did
+      // is not public. Audits are sampled per column, so no individual
+      // audit is claimed either.
+      return `${thrower}'s frontier case gets past the panel. The frontier oracle answered it and no audit of its column ruled it out, so it earns credit.`;
     case "duplicate":
       return `${thrower} throws a repeat. Duplicates are stamped and never count.`;
     default:
@@ -293,7 +297,7 @@ export function buildRoundScript(
     let missers: number[] = [];
     const target = index % n;
     if (outcome === "trivial") catchers = [target];
-    else if (outcome === "unsolved" || outcome === "frontier") missers = [target];
+    else if (outcome === "unsolved") missers = [target];
     else if (outcome === "discriminating") {
       const catcher = weightedPick(
         random,
@@ -336,7 +340,7 @@ export function roundSummary(script: RoundScript): string {
     `(${t.discriminating} separated the agents, ${t.trivial} every agent solved, ` +
     `${t.unsolved} no agent solved, ` +
     (t.frontier
-      ? `${t.frontier} frontier cases that got past the panel but were attested valid, `
+      ? `${t.frontier} frontier cases that got past the panel but the frontier oracle answered, `
       : "") +
     `${t.duplicate} duplicates). ` +
     (sharpest

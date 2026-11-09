@@ -47,7 +47,8 @@ export function CaseLegend(): JSX.Element {
       </li>
       <li>
         <span class="gen-case frontier" aria-hidden="true" /> Frontier: too few agent owners solve
-        it, but the frontier oracle answered it and an operator audit found it fair (earns credit)
+        it, but the frontier oracle answered it and no sampled audit of its column ruled it out
+        (earns credit)
       </li>
       <li>
         <span class="gen-case trivial" aria-hidden="true" /> Trivial: every eligible agent solves it

@@ -148,7 +148,8 @@ export interface Flight {
 
 /** The arc a case flies: trivial into the target's hands, unsolved onto its
  * head, a split case off the misser's head into the catcher's hands, a
- * duplicate halfway across before it is stamped. */
+ * frontier case over the whole panel without landing on anyone, a duplicate
+ * halfway across before it is stamped. */
 export function flightFor(layout: ArenaLayout, shot: ArenaThrow): Flight {
   const from = handPoint(layout, shot.generator);
   const lift = layout.kind === "wide" ? 90 : 60;
@@ -163,6 +164,25 @@ export function flightFor(layout: ArenaLayout, shot: ArenaThrow): Flight {
       bounce: null,
       peaks: [apex(from, to)],
       durationMs: flightMs("duplicate"),
+    };
+  }
+  if (shot.outcome === "frontier") {
+    // Over the panel, landing on nobody: the case beat it, but which agents
+    // missed is not public.
+    const heads = layout.agents.map((_, i) => headPoint(layout, i));
+    const to = heads.length
+      ? {
+          x: heads.reduce((sum, p) => sum + p.x, 0) / heads.length,
+          y: Math.min(...heads.map((p) => p.y)) - lift,
+        }
+      : headPoint(layout, 0);
+    return {
+      kind: "single",
+      from,
+      to,
+      bounce: null,
+      peaks: [apex(from, to)],
+      durationMs: flightMs(shot.outcome),
     };
   }
   if (shot.outcome === "discriminating" && shot.missers.length && shot.catchers.length) {
