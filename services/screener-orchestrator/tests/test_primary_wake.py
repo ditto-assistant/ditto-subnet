@@ -433,6 +433,190 @@ class ReconcileWakeTests(unittest.TestCase):
             self.assertEqual(snapshot["fallback_reason"], "AWS_PRIMARY_UNAVAILABLE")
 
 
+class WakeReviewRegressionTests(unittest.TestCase):
+    def _state(self, settings: Settings) -> dict[str, Any]:
+        if not settings.state_file.exists():
+            return {}
+        loaded: dict[str, Any] = json.loads(settings.state_file.read_text())
+        return loaded
+
+    def test_dry_runs_never_write_wake_state(self) -> None:
+        recorded = datetime.now(UTC).isoformat()
+        for primary, state in (
+            (_primary(ready=True), "running"),
+            (_primary(), "stopping"),
+            (_primary(), "stopped"),
+        ):
+            with self.subTest(state=state), TemporaryDirectory() as tmp:
+                settings = replace(_settings(Path(tmp)), dry_run=True)
+                settings.state_file.write_text(
+                    json.dumps({"primary_wake_started_at": recorded})
+                )
+                before = settings.state_file.read_text()
+                platform = _Platform(runnable=3, primary=primary)
+
+                _run(settings, platform, _EC2(state, platform.operations))
+
+                self.assertEqual(settings.state_file.read_text(), before)
+
+    def test_a_repeated_failure_is_reported_once(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            ec2 = _EC2("stopped", [], status_error=True)
+            reported = []
+            for _ in range(3):
+                platform = _Platform(runnable=3, primary=_primary())
+                _run(settings, platform, ec2)
+                reported.append(
+                    [
+                        event["event_type"]
+                        for event in platform.renewed[0]["events"]
+                        if event["event_type"] == "primary_wake_failed"
+                    ]
+                )
+
+            self.assertEqual(reported, [["primary_wake_failed"], [], []])
+            # Recovery clears it, so a later failure is reported again.
+            ec2.status_error = False
+            _run(settings, _Platform(runnable=3, primary=_primary()), ec2)
+            self.assertIsNone(self._state(settings)["primary_wake_failure"])
+
+    def test_start_failures_are_reported_once(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            ec2 = _EC2("stopped", [], start_error=True)
+            first = _Platform(runnable=3, primary=_primary())
+            second = _Platform(runnable=3, primary=_primary())
+
+            _run(settings, first, ec2)
+            _run(settings, second, ec2)
+
+            def failures(platform: _Platform) -> int:
+                return sum(
+                    event["event_type"] == "primary_wake_failed"
+                    for event in platform.renewed[0]["events"]
+                )
+
+            self.assertEqual((failures(first), failures(second)), (1, 0))
+
+    def test_a_primary_on_another_resource_is_never_started(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            platform = _Platform(
+                runnable=3, primary=_primary(provider_resource_id="i-0fffffffffffffff0")
+            )
+            ec2 = _EC2("stopped", platform.operations)
+
+            snapshot = _run(settings, platform, ec2)
+
+            self.assertEqual(ec2.starts, 0)
+            self.assertEqual(snapshot["fallback_reason"], "AWS_PRIMARY_UNAVAILABLE")
+            details = [event["detail"] for event in platform.renewed[0]["events"]]
+            self.assertTrue(any("not configured" in detail for detail in details))
+
+    def test_a_wake_gets_one_grace_period_across_restarts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            first_start = (datetime.now(UTC) - timedelta(minutes=11)).isoformat()
+            settings.state_file.write_text(
+                json.dumps({"primary_wake_started_at": first_start})
+            )
+            # It stopped again before it ever reported ready.
+            platform = _Platform(runnable=3, primary=_primary())
+            ec2 = _EC2("stopped", platform.operations)
+
+            snapshot = _run(settings, platform, ec2)
+
+            self.assertEqual(ec2.starts, 0)
+            self.assertEqual(snapshot["fallback_reason"], "AWS_PRIMARY_UNAVAILABLE")
+            self.assertEqual(
+                self._state(settings)["primary_wake_started_at"], first_start
+            )
+
+    def test_a_restart_within_grace_keeps_the_first_wake_time(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            first_start = (datetime.now(UTC) - timedelta(minutes=2)).isoformat()
+            settings.state_file.write_text(
+                json.dumps({"primary_wake_started_at": first_start})
+            )
+            platform = _Platform(runnable=3, primary=_primary())
+            ec2 = _EC2("stopped", platform.operations)
+
+            _run(settings, platform, ec2)
+
+            self.assertEqual(ec2.starts, 1)
+            self.assertEqual(
+                self._state(settings)["primary_wake_started_at"], first_start
+            )
+
+    def test_invalid_aws_settings_never_break_a_hetzner_route(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = replace(_settings(Path(tmp)), aws_primary_instance_id="web-1")
+            platform = _Platform(
+                runnable=3,
+                primary=_primary(provider="hetzner", provider_resource_id="robot-1"),
+                routing=_hetzner_routing(),
+            )
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch(
+                    "screener_capacity.controller.GCEFleet",
+                    return_value=_GCE(platform.operations),
+                ),
+            ):
+                snapshot = reconcile(settings)
+
+            self.assertEqual(snapshot["fallback_reason"], "HETZNER_PRIMARY_UNAVAILABLE")
+
+    def test_invalid_aws_settings_on_the_aws_route_fail_over_to_gce(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = replace(_settings(Path(tmp)), aws_region="nowhere")
+            platform = _Platform(runnable=3, primary=_primary())
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch(
+                    "screener_capacity.controller.GCEFleet",
+                    return_value=_GCE(platform.operations),
+                ),
+            ):
+                snapshot = reconcile(settings)
+
+            self.assertEqual(snapshot["fallback_reason"], "AWS_PRIMARY_UNAVAILABLE")
+            details = [event["detail"] for event in platform.renewed[0]["events"]]
+            self.assertTrue(any(d.startswith("configuration:") for d in details))
+
+    def test_one_ec2_client_serves_every_pass_of_a_process(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            ec2 = _EC2("running", [], launched_at=datetime.now(UTC))
+            aws_clients: dict[str, Any] = {}
+            with patch(
+                "screener_capacity.controller.EC2Primary", return_value=ec2
+            ) as ec2_class:
+                for _ in range(3):
+                    platform = _Platform(runnable=3, primary=_primary())
+                    with (
+                        patch(
+                            "screener_capacity.controller.PlatformControl",
+                            return_value=platform,
+                        ),
+                        patch(
+                            "screener_capacity.controller.GCEFleet",
+                            return_value=_GCE(platform.operations),
+                        ),
+                    ):
+                        reconcile(settings, aws_clients=aws_clients)
+
+            self.assertEqual(ec2_class.call_count, 1)
+
+
 class WakeFlagTests(unittest.TestCase):
     def test_wake_flags_reach_settings(self) -> None:
         args = build_parser().parse_args(

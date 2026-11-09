@@ -20,12 +20,18 @@ ExecStart={{ screener_capacity_venv }}/bin/python -m screener_capacity.controlle
   --state-file {{ screener_capacity_state_dir }}/state.json \
   --gce-project {{ screener_capacity_gce_project }} \
   --gce-region {{ screener_capacity_gce_region }} \
-  --gce-mig {{ screener_capacity_gce_mig }}{% if screener_capacity_aws_primary_instance_id and screener_capacity_aws_primary_role_arn %} \
+{# Each branch ends its own command: Ansible renders with trim_blocks, which
+   drops the newline after a block tag, so no tag may close a command line. #}
+{% if screener_capacity_aws_primary_instance_id and screener_capacity_aws_primary_role_arn %}
+  --gce-mig {{ screener_capacity_gce_mig }} \
   --aws-primary-instance-id {{ screener_capacity_aws_primary_instance_id }} \
   --aws-primary-role-arn {{ screener_capacity_aws_primary_role_arn }} \
   --aws-region {{ screener_capacity_aws_region }} \
   --aws-web-identity-audience {{ screener_capacity_aws_web_identity_audience }} \
-  --primary-wake-grace-seconds {{ screener_capacity_primary_wake_grace_seconds }}{% endif %}
+  --primary-wake-grace-seconds {{ screener_capacity_primary_wake_grace_seconds }}
+{% else %}
+  --gce-mig {{ screener_capacity_gce_mig }}
+{% endif %}
 Restart=always
 RestartSec=10
 NoNewPrivileges=true
