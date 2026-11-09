@@ -854,10 +854,15 @@ pub async fn run_case(
     let mut hint: Option<String> = None;
     if plan.act_unlikely {
         // Restraint stays the model's choice: the safe harbor is still offered.
-        for name in &jev_top {
-            if case.memory_tools.contains(name) {
-                offer(name, &mut offered);
-            }
+        // The menu was not read, so rank the memory tools by the request.
+        let memory: Vec<ToolDefWire> = case
+            .catalog
+            .iter()
+            .filter(|t| case.memory_tools.contains(&t.name))
+            .cloned()
+            .collect();
+        for name in v13::semantic_top_k(case.user_input, &memory, cfg.offer_k) {
+            offer(&name, &mut offered);
         }
         hint = Some(if plan.route == "remember" {
             "This is a fact the user wants kept: save it with save_memory unless the notes already hold it, then confirm briefly."

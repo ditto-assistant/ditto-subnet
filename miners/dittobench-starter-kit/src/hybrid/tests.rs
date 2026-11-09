@@ -860,3 +860,35 @@ async fn the_remember_route_asks_the_model_to_save_the_fact() {
     assert!(!prompt.contains("No action seems to be needed"), "{prompt}");
     assert!(calls[0].1.contains(&"save_memory".to_string()));
 }
+
+#[tokio::test]
+async fn restraint_offers_the_request_s_memory_tools() {
+    let stub = JevStub {
+        prefer: vec!["recall".into()],
+        ..JevStub::default()
+    };
+    let url = serve_jev(stub).await;
+    let client = DecisionClient::new(reqwest::Client::new(), url, "typesafe/jev-1.14", None);
+    let mut catalog = catalog();
+    catalog.push(ToolDefWire {
+        name: "search_subjects".into(),
+        description: "Search the subjects the user's memories are filed under.".into(),
+        parameters: json!({"type": "object"}),
+    });
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let model = ScriptedModel::new(vec![text("Thursday at 10:00.")]);
+    let mut c = case(&catalog, &executed);
+    c.memory_tools.push("search_subjects".into());
+    c.user_input = "Which subjects do my memories about the roadmap fall under?";
+    let out = run_case(&model, Some(&client), &HybridConfig::default(), c)
+        .await
+        .unwrap();
+    assert_eq!(out.route, "recall");
+    assert!(!out.menu_asked);
+    let calls = model.calls.lock().unwrap();
+    assert!(
+        calls[0].1.contains(&"search_subjects".to_string()),
+        "{:?}",
+        calls[0].1
+    );
+}
