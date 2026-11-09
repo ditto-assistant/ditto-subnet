@@ -278,6 +278,11 @@ type RoundInput struct {
 	Agents  []RoundAgent  `json:"agents"`
 	// ClaimedFingerprints are fingerprints earlier rounds already hold.
 	ClaimedFingerprints []string `json:"claimed_fingerprints,omitempty"`
+	// FrontierCaseIDs are round case ids (RoundCaseID) attested valid by the
+	// oracle with no failed audit on their column; see
+	// ScoreInput.FrontierCaseIDs. Frontier status changes generator column
+	// scores only: agent standings never read it.
+	FrontierCaseIDs []string `json:"frontier_case_ids,omitempty"`
 }
 
 // ColumnScore is one column's generator score for the round.
@@ -369,6 +374,7 @@ func ScoreRound(in RoundInput, params ScoreParams) (RoundScore, error) {
 			GeneratorOwnerKey:   col.OwnerKey,
 			Panel:               panel,
 			ClaimedFingerprints: claimed,
+			FrontierCaseIDs:     in.FrontierCaseIDs,
 		}, params)
 		if err != nil {
 			return RoundScore{}, fmt.Errorf("column %s: %w", col.ColumnID, err)

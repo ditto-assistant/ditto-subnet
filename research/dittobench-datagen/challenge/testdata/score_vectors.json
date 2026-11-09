@@ -3962,5 +3962,1995 @@
         }
       ]
     }
+  },
+  {
+    "name": "frontier_all_attested",
+    "cases": [
+      {
+        "case_id": "code-update-0",
+        "fingerprint": "e321f8620e89c1cb4c69d52375a1aca12665995dcd915bba38f67c5be7d9d193"
+      },
+      {
+        "case_id": "person-update-0",
+        "fingerprint": "d73e973a09e2551b79afdebffb3ec88a3ff5fcf8983e0a86204354fde82aa071"
+      },
+      {
+        "case_id": "allergy-list-0",
+        "fingerprint": "7ed4a8e31892e4bf1ddfc5ef9cd219ec1b6955ee5ae207f55fd78af5a267440a"
+      },
+      {
+        "case_id": "venue-move-0",
+        "fingerprint": "100b22c2caea4e473a236b85f198ae6c7e2283382640d8b172351291ea43dd1e"
+      },
+      {
+        "case_id": "code-update-1",
+        "fingerprint": "95913eeaf036813982c36b699d046318709534fcc215baec88ee47574a553a3c"
+      },
+      {
+        "case_id": "person-update-1",
+        "fingerprint": "09a8fc5a30190d62d763aee89b2f2aad2ca040991184ca7021aa7a41e811a2cf"
+      },
+      {
+        "case_id": "allergy-list-1",
+        "fingerprint": "a3f54ab08071a39c4238cb2f52d0c96d3e7776ac2d07480d16e0da4563b92e3f"
+      },
+      {
+        "case_id": "venue-move-1",
+        "fingerprint": "73ca502a1a09b6a13752a53cd58ca66f7518c34be65b21f30f54c162c5250b9b"
+      },
+      {
+        "case_id": "code-update-2",
+        "fingerprint": "05c9b7ad6d7408ce5fd8e1dfbed023915e5d077f380a740b344e850cb848296c"
+      },
+      {
+        "case_id": "person-update-2",
+        "fingerprint": "a2e7d667cecb8dc3cf21f17fdf5a0ea31ba060a940679c040659261e3f131fe5"
+      },
+      {
+        "case_id": "allergy-list-2",
+        "fingerprint": "343addf70e41024fa7ba29f206df32e0554f3eb93cb32e10868a9dc42b290ab3"
+      },
+      {
+        "case_id": "venue-move-2",
+        "fingerprint": "66ac140e3140075b2b76ef5018b8c7484f390498c253e1da557ea6dba3186894"
+      },
+      {
+        "case_id": "code-update-3",
+        "fingerprint": "f1303e49c82bf4cfebd675d7dc3fdf13b1418c452653199b156ada7dd857096b"
+      },
+      {
+        "case_id": "person-update-3",
+        "fingerprint": "eafbb9eb5aa41def434e3b21fe0d4d03461d69a8c75457cff713bf173a9507f8"
+      },
+      {
+        "case_id": "allergy-list-3",
+        "fingerprint": "8ba0b43f201486487f5d44b1dc6c5cfe6769eca5fc14910c5eb85ecdfa708476"
+      },
+      {
+        "case_id": "venue-move-3",
+        "fingerprint": "0f81b0e28457b7bf476cefde1bd640aaf1970b40764c777a242f0aaa1d368fd0"
+      }
+    ],
+    "input": {
+      "generator_owner_key": "gen",
+      "panel": [
+        {
+          "agent_id": "a1",
+          "owner_key": "o1",
+          "champion": true,
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0
+            }
+          ]
+        },
+        {
+          "agent_id": "a2",
+          "owner_key": "o2",
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0
+            }
+          ]
+        },
+        {
+          "agent_id": "a3",
+          "owner_key": "o3",
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0
+            }
+          ]
+        }
+      ],
+      "frontier_case_ids": [
+        "code-update-0",
+        "person-update-0",
+        "allergy-list-0",
+        "venue-move-0",
+        "code-update-1",
+        "person-update-1",
+        "allergy-list-1",
+        "venue-move-1",
+        "code-update-2",
+        "person-update-2",
+        "allergy-list-2",
+        "venue-move-2",
+        "code-update-3",
+        "person-update-3",
+        "allergy-list-3",
+        "venue-move-3"
+      ]
+    },
+    "params": {
+      "min_panel": 3,
+      "min_solver_owners": 2,
+      "solve_threshold": 0.5,
+      "champion_bonus": 0.5,
+      "target_cases": 16,
+      "frontier_weight": 1
+    },
+    "expected": {
+      "status": "scored",
+      "score": 1,
+      "raw_credit": 24,
+      "discriminating": 0,
+      "trivial": 0,
+      "unsolved": 0,
+      "frontier": 16,
+      "duplicate": 0,
+      "unsolved_rate": 0,
+      "cases": [
+        {
+          "case_id": "code-update-0",
+          "fingerprint": "e321f8620e89c1cb4c69d52375a1aca12665995dcd915bba38f67c5be7d9d193",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "person-update-0",
+          "fingerprint": "d73e973a09e2551b79afdebffb3ec88a3ff5fcf8983e0a86204354fde82aa071",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "allergy-list-0",
+          "fingerprint": "7ed4a8e31892e4bf1ddfc5ef9cd219ec1b6955ee5ae207f55fd78af5a267440a",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "venue-move-0",
+          "fingerprint": "100b22c2caea4e473a236b85f198ae6c7e2283382640d8b172351291ea43dd1e",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "code-update-1",
+          "fingerprint": "95913eeaf036813982c36b699d046318709534fcc215baec88ee47574a553a3c",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "person-update-1",
+          "fingerprint": "09a8fc5a30190d62d763aee89b2f2aad2ca040991184ca7021aa7a41e811a2cf",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "allergy-list-1",
+          "fingerprint": "a3f54ab08071a39c4238cb2f52d0c96d3e7776ac2d07480d16e0da4563b92e3f",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "venue-move-1",
+          "fingerprint": "73ca502a1a09b6a13752a53cd58ca66f7518c34be65b21f30f54c162c5250b9b",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "code-update-2",
+          "fingerprint": "05c9b7ad6d7408ce5fd8e1dfbed023915e5d077f380a740b344e850cb848296c",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "person-update-2",
+          "fingerprint": "a2e7d667cecb8dc3cf21f17fdf5a0ea31ba060a940679c040659261e3f131fe5",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "allergy-list-2",
+          "fingerprint": "343addf70e41024fa7ba29f206df32e0554f3eb93cb32e10868a9dc42b290ab3",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "venue-move-2",
+          "fingerprint": "66ac140e3140075b2b76ef5018b8c7484f390498c253e1da557ea6dba3186894",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "code-update-3",
+          "fingerprint": "f1303e49c82bf4cfebd675d7dc3fdf13b1418c452653199b156ada7dd857096b",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "person-update-3",
+          "fingerprint": "eafbb9eb5aa41def434e3b21fe0d4d03461d69a8c75457cff713bf173a9507f8",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "allergy-list-3",
+          "fingerprint": "8ba0b43f201486487f5d44b1dc6c5cfe6769eca5fc14910c5eb85ecdfa708476",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "venue-move-3",
+          "fingerprint": "0f81b0e28457b7bf476cefde1bd640aaf1970b40764c777a242f0aaa1d368fd0",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        }
+      ]
+    }
+  },
+  {
+    "name": "frontier_half_attested",
+    "cases": [
+      {
+        "case_id": "code-update-0",
+        "fingerprint": "e321f8620e89c1cb4c69d52375a1aca12665995dcd915bba38f67c5be7d9d193"
+      },
+      {
+        "case_id": "person-update-0",
+        "fingerprint": "d73e973a09e2551b79afdebffb3ec88a3ff5fcf8983e0a86204354fde82aa071"
+      },
+      {
+        "case_id": "allergy-list-0",
+        "fingerprint": "7ed4a8e31892e4bf1ddfc5ef9cd219ec1b6955ee5ae207f55fd78af5a267440a"
+      },
+      {
+        "case_id": "venue-move-0",
+        "fingerprint": "100b22c2caea4e473a236b85f198ae6c7e2283382640d8b172351291ea43dd1e"
+      },
+      {
+        "case_id": "code-update-1",
+        "fingerprint": "95913eeaf036813982c36b699d046318709534fcc215baec88ee47574a553a3c"
+      },
+      {
+        "case_id": "person-update-1",
+        "fingerprint": "09a8fc5a30190d62d763aee89b2f2aad2ca040991184ca7021aa7a41e811a2cf"
+      },
+      {
+        "case_id": "allergy-list-1",
+        "fingerprint": "a3f54ab08071a39c4238cb2f52d0c96d3e7776ac2d07480d16e0da4563b92e3f"
+      },
+      {
+        "case_id": "venue-move-1",
+        "fingerprint": "73ca502a1a09b6a13752a53cd58ca66f7518c34be65b21f30f54c162c5250b9b"
+      },
+      {
+        "case_id": "code-update-2",
+        "fingerprint": "05c9b7ad6d7408ce5fd8e1dfbed023915e5d077f380a740b344e850cb848296c"
+      },
+      {
+        "case_id": "person-update-2",
+        "fingerprint": "a2e7d667cecb8dc3cf21f17fdf5a0ea31ba060a940679c040659261e3f131fe5"
+      },
+      {
+        "case_id": "allergy-list-2",
+        "fingerprint": "343addf70e41024fa7ba29f206df32e0554f3eb93cb32e10868a9dc42b290ab3"
+      },
+      {
+        "case_id": "venue-move-2",
+        "fingerprint": "66ac140e3140075b2b76ef5018b8c7484f390498c253e1da557ea6dba3186894"
+      },
+      {
+        "case_id": "code-update-3",
+        "fingerprint": "f1303e49c82bf4cfebd675d7dc3fdf13b1418c452653199b156ada7dd857096b"
+      },
+      {
+        "case_id": "person-update-3",
+        "fingerprint": "eafbb9eb5aa41def434e3b21fe0d4d03461d69a8c75457cff713bf173a9507f8"
+      },
+      {
+        "case_id": "allergy-list-3",
+        "fingerprint": "8ba0b43f201486487f5d44b1dc6c5cfe6769eca5fc14910c5eb85ecdfa708476"
+      },
+      {
+        "case_id": "venue-move-3",
+        "fingerprint": "0f81b0e28457b7bf476cefde1bd640aaf1970b40764c777a242f0aaa1d368fd0"
+      }
+    ],
+    "input": {
+      "generator_owner_key": "gen",
+      "panel": [
+        {
+          "agent_id": "a1",
+          "owner_key": "o1",
+          "champion": true,
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0
+            }
+          ]
+        },
+        {
+          "agent_id": "a2",
+          "owner_key": "o2",
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0
+            }
+          ]
+        },
+        {
+          "agent_id": "a3",
+          "owner_key": "o3",
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0
+            }
+          ]
+        }
+      ],
+      "frontier_case_ids": [
+        "code-update-0",
+        "person-update-0",
+        "allergy-list-0",
+        "venue-move-0",
+        "code-update-1",
+        "person-update-1",
+        "allergy-list-1",
+        "venue-move-1"
+      ]
+    },
+    "params": {
+      "min_panel": 3,
+      "min_solver_owners": 2,
+      "solve_threshold": 0.5,
+      "champion_bonus": 0.5,
+      "target_cases": 16,
+      "frontier_weight": 1
+    },
+    "expected": {
+      "status": "scored",
+      "score": 0.125,
+      "raw_credit": 12,
+      "discriminating": 0,
+      "trivial": 0,
+      "unsolved": 8,
+      "frontier": 8,
+      "duplicate": 0,
+      "unsolved_rate": 0.5,
+      "cases": [
+        {
+          "case_id": "code-update-0",
+          "fingerprint": "e321f8620e89c1cb4c69d52375a1aca12665995dcd915bba38f67c5be7d9d193",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "person-update-0",
+          "fingerprint": "d73e973a09e2551b79afdebffb3ec88a3ff5fcf8983e0a86204354fde82aa071",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "allergy-list-0",
+          "fingerprint": "7ed4a8e31892e4bf1ddfc5ef9cd219ec1b6955ee5ae207f55fd78af5a267440a",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "venue-move-0",
+          "fingerprint": "100b22c2caea4e473a236b85f198ae6c7e2283382640d8b172351291ea43dd1e",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "code-update-1",
+          "fingerprint": "95913eeaf036813982c36b699d046318709534fcc215baec88ee47574a553a3c",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "person-update-1",
+          "fingerprint": "09a8fc5a30190d62d763aee89b2f2aad2ca040991184ca7021aa7a41e811a2cf",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "allergy-list-1",
+          "fingerprint": "a3f54ab08071a39c4238cb2f52d0c96d3e7776ac2d07480d16e0da4563b92e3f",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "venue-move-1",
+          "fingerprint": "73ca502a1a09b6a13752a53cd58ca66f7518c34be65b21f30f54c162c5250b9b",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 1.5
+        },
+        {
+          "case_id": "code-update-2",
+          "fingerprint": "05c9b7ad6d7408ce5fd8e1dfbed023915e5d077f380a740b344e850cb848296c",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "person-update-2",
+          "fingerprint": "a2e7d667cecb8dc3cf21f17fdf5a0ea31ba060a940679c040659261e3f131fe5",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "allergy-list-2",
+          "fingerprint": "343addf70e41024fa7ba29f206df32e0554f3eb93cb32e10868a9dc42b290ab3",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "venue-move-2",
+          "fingerprint": "66ac140e3140075b2b76ef5018b8c7484f390498c253e1da557ea6dba3186894",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "code-update-3",
+          "fingerprint": "f1303e49c82bf4cfebd675d7dc3fdf13b1418c452653199b156ada7dd857096b",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "person-update-3",
+          "fingerprint": "eafbb9eb5aa41def434e3b21fe0d4d03461d69a8c75457cff713bf173a9507f8",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "allergy-list-3",
+          "fingerprint": "8ba0b43f201486487f5d44b1dc6c5cfe6769eca5fc14910c5eb85ecdfa708476",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "venue-move-3",
+          "fingerprint": "0f81b0e28457b7bf476cefde1bd640aaf1970b40764c777a242f0aaa1d368fd0",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "frontier_weight_zero_is_off",
+    "cases": [
+      {
+        "case_id": "code-update-0",
+        "fingerprint": "e321f8620e89c1cb4c69d52375a1aca12665995dcd915bba38f67c5be7d9d193"
+      },
+      {
+        "case_id": "person-update-0",
+        "fingerprint": "d73e973a09e2551b79afdebffb3ec88a3ff5fcf8983e0a86204354fde82aa071"
+      },
+      {
+        "case_id": "allergy-list-0",
+        "fingerprint": "7ed4a8e31892e4bf1ddfc5ef9cd219ec1b6955ee5ae207f55fd78af5a267440a"
+      },
+      {
+        "case_id": "venue-move-0",
+        "fingerprint": "100b22c2caea4e473a236b85f198ae6c7e2283382640d8b172351291ea43dd1e"
+      },
+      {
+        "case_id": "code-update-1",
+        "fingerprint": "95913eeaf036813982c36b699d046318709534fcc215baec88ee47574a553a3c"
+      },
+      {
+        "case_id": "person-update-1",
+        "fingerprint": "09a8fc5a30190d62d763aee89b2f2aad2ca040991184ca7021aa7a41e811a2cf"
+      },
+      {
+        "case_id": "allergy-list-1",
+        "fingerprint": "a3f54ab08071a39c4238cb2f52d0c96d3e7776ac2d07480d16e0da4563b92e3f"
+      },
+      {
+        "case_id": "venue-move-1",
+        "fingerprint": "73ca502a1a09b6a13752a53cd58ca66f7518c34be65b21f30f54c162c5250b9b"
+      },
+      {
+        "case_id": "code-update-2",
+        "fingerprint": "05c9b7ad6d7408ce5fd8e1dfbed023915e5d077f380a740b344e850cb848296c"
+      },
+      {
+        "case_id": "person-update-2",
+        "fingerprint": "a2e7d667cecb8dc3cf21f17fdf5a0ea31ba060a940679c040659261e3f131fe5"
+      },
+      {
+        "case_id": "allergy-list-2",
+        "fingerprint": "343addf70e41024fa7ba29f206df32e0554f3eb93cb32e10868a9dc42b290ab3"
+      },
+      {
+        "case_id": "venue-move-2",
+        "fingerprint": "66ac140e3140075b2b76ef5018b8c7484f390498c253e1da557ea6dba3186894"
+      },
+      {
+        "case_id": "code-update-3",
+        "fingerprint": "f1303e49c82bf4cfebd675d7dc3fdf13b1418c452653199b156ada7dd857096b"
+      },
+      {
+        "case_id": "person-update-3",
+        "fingerprint": "eafbb9eb5aa41def434e3b21fe0d4d03461d69a8c75457cff713bf173a9507f8"
+      },
+      {
+        "case_id": "allergy-list-3",
+        "fingerprint": "8ba0b43f201486487f5d44b1dc6c5cfe6769eca5fc14910c5eb85ecdfa708476"
+      },
+      {
+        "case_id": "venue-move-3",
+        "fingerprint": "0f81b0e28457b7bf476cefde1bd640aaf1970b40764c777a242f0aaa1d368fd0"
+      }
+    ],
+    "input": {
+      "generator_owner_key": "gen",
+      "panel": [
+        {
+          "agent_id": "a1",
+          "owner_key": "o1",
+          "champion": true,
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0
+            }
+          ]
+        },
+        {
+          "agent_id": "a2",
+          "owner_key": "o2",
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0
+            }
+          ]
+        },
+        {
+          "agent_id": "a3",
+          "owner_key": "o3",
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0
+            }
+          ]
+        }
+      ],
+      "frontier_case_ids": [
+        "code-update-0",
+        "person-update-0",
+        "allergy-list-0",
+        "venue-move-0",
+        "code-update-1",
+        "person-update-1",
+        "allergy-list-1",
+        "venue-move-1",
+        "code-update-2",
+        "person-update-2",
+        "allergy-list-2",
+        "venue-move-2",
+        "code-update-3",
+        "person-update-3",
+        "allergy-list-3",
+        "venue-move-3"
+      ]
+    },
+    "params": {
+      "min_panel": 3,
+      "min_solver_owners": 2,
+      "solve_threshold": 0.5,
+      "champion_bonus": 0.5,
+      "target_cases": 32
+    },
+    "expected": {
+      "status": "scored",
+      "score": 0,
+      "raw_credit": 0,
+      "discriminating": 0,
+      "trivial": 0,
+      "unsolved": 16,
+      "duplicate": 0,
+      "unsolved_rate": 1,
+      "cases": [
+        {
+          "case_id": "code-update-0",
+          "fingerprint": "e321f8620e89c1cb4c69d52375a1aca12665995dcd915bba38f67c5be7d9d193",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "person-update-0",
+          "fingerprint": "d73e973a09e2551b79afdebffb3ec88a3ff5fcf8983e0a86204354fde82aa071",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "allergy-list-0",
+          "fingerprint": "7ed4a8e31892e4bf1ddfc5ef9cd219ec1b6955ee5ae207f55fd78af5a267440a",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "venue-move-0",
+          "fingerprint": "100b22c2caea4e473a236b85f198ae6c7e2283382640d8b172351291ea43dd1e",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "code-update-1",
+          "fingerprint": "95913eeaf036813982c36b699d046318709534fcc215baec88ee47574a553a3c",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "person-update-1",
+          "fingerprint": "09a8fc5a30190d62d763aee89b2f2aad2ca040991184ca7021aa7a41e811a2cf",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "allergy-list-1",
+          "fingerprint": "a3f54ab08071a39c4238cb2f52d0c96d3e7776ac2d07480d16e0da4563b92e3f",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "venue-move-1",
+          "fingerprint": "73ca502a1a09b6a13752a53cd58ca66f7518c34be65b21f30f54c162c5250b9b",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "code-update-2",
+          "fingerprint": "05c9b7ad6d7408ce5fd8e1dfbed023915e5d077f380a740b344e850cb848296c",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "person-update-2",
+          "fingerprint": "a2e7d667cecb8dc3cf21f17fdf5a0ea31ba060a940679c040659261e3f131fe5",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "allergy-list-2",
+          "fingerprint": "343addf70e41024fa7ba29f206df32e0554f3eb93cb32e10868a9dc42b290ab3",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "venue-move-2",
+          "fingerprint": "66ac140e3140075b2b76ef5018b8c7484f390498c253e1da557ea6dba3186894",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "code-update-3",
+          "fingerprint": "f1303e49c82bf4cfebd675d7dc3fdf13b1418c452653199b156ada7dd857096b",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "person-update-3",
+          "fingerprint": "eafbb9eb5aa41def434e3b21fe0d4d03461d69a8c75457cff713bf173a9507f8",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "allergy-list-3",
+          "fingerprint": "8ba0b43f201486487f5d44b1dc6c5cfe6769eca5fc14910c5eb85ecdfa708476",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        },
+        {
+          "case_id": "venue-move-3",
+          "fingerprint": "0f81b0e28457b7bf476cefde1bd640aaf1970b40764c777a242f0aaa1d368fd0",
+          "status": "unsolved",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0,
+          "champion_failed": true,
+          "credit": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "frontier_mixed_panel_half_weight",
+    "cases": [
+      {
+        "case_id": "code-update-0",
+        "fingerprint": "e321f8620e89c1cb4c69d52375a1aca12665995dcd915bba38f67c5be7d9d193"
+      },
+      {
+        "case_id": "person-update-0",
+        "fingerprint": "d73e973a09e2551b79afdebffb3ec88a3ff5fcf8983e0a86204354fde82aa071"
+      },
+      {
+        "case_id": "allergy-list-0",
+        "fingerprint": "7ed4a8e31892e4bf1ddfc5ef9cd219ec1b6955ee5ae207f55fd78af5a267440a"
+      },
+      {
+        "case_id": "venue-move-0",
+        "fingerprint": "100b22c2caea4e473a236b85f198ae6c7e2283382640d8b172351291ea43dd1e"
+      },
+      {
+        "case_id": "code-update-1",
+        "fingerprint": "95913eeaf036813982c36b699d046318709534fcc215baec88ee47574a553a3c"
+      },
+      {
+        "case_id": "person-update-1",
+        "fingerprint": "09a8fc5a30190d62d763aee89b2f2aad2ca040991184ca7021aa7a41e811a2cf"
+      },
+      {
+        "case_id": "allergy-list-1",
+        "fingerprint": "a3f54ab08071a39c4238cb2f52d0c96d3e7776ac2d07480d16e0da4563b92e3f"
+      },
+      {
+        "case_id": "venue-move-1",
+        "fingerprint": "73ca502a1a09b6a13752a53cd58ca66f7518c34be65b21f30f54c162c5250b9b"
+      },
+      {
+        "case_id": "code-update-2",
+        "fingerprint": "05c9b7ad6d7408ce5fd8e1dfbed023915e5d077f380a740b344e850cb848296c"
+      },
+      {
+        "case_id": "person-update-2",
+        "fingerprint": "a2e7d667cecb8dc3cf21f17fdf5a0ea31ba060a940679c040659261e3f131fe5"
+      },
+      {
+        "case_id": "allergy-list-2",
+        "fingerprint": "343addf70e41024fa7ba29f206df32e0554f3eb93cb32e10868a9dc42b290ab3"
+      },
+      {
+        "case_id": "venue-move-2",
+        "fingerprint": "66ac140e3140075b2b76ef5018b8c7484f390498c253e1da557ea6dba3186894"
+      },
+      {
+        "case_id": "code-update-3",
+        "fingerprint": "f1303e49c82bf4cfebd675d7dc3fdf13b1418c452653199b156ada7dd857096b"
+      },
+      {
+        "case_id": "person-update-3",
+        "fingerprint": "eafbb9eb5aa41def434e3b21fe0d4d03461d69a8c75457cff713bf173a9507f8"
+      },
+      {
+        "case_id": "allergy-list-3",
+        "fingerprint": "8ba0b43f201486487f5d44b1dc6c5cfe6769eca5fc14910c5eb85ecdfa708476"
+      },
+      {
+        "case_id": "venue-move-3",
+        "fingerprint": "0f81b0e28457b7bf476cefde1bd640aaf1970b40764c777a242f0aaa1d368fd0"
+      }
+    ],
+    "input": {
+      "generator_owner_key": "gen",
+      "panel": [
+        {
+          "agent_id": "x1",
+          "owner_key": "o1",
+          "champion": true,
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0.38672522797763303
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0.6071373680420445
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0.21169951793876526
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0.5150049761989481
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0.09208269912439238
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0.4578978312755732
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0.041190634428897165
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0.6933404121347332
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0.7070467236771343
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0.33337686943995953
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0.02156000084294238
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0.04384656411008957
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0.11685621477265833
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0.48152167845931904
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0.36986297792493406
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0.06563316570032811
+            }
+          ]
+        },
+        {
+          "agent_id": "x2",
+          "owner_key": "o2",
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0.236266400386488
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0.564167256157614
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0.1330904525178614
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0.6147437664835103
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0.25017135337740803
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0.22194641257837863
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0.3643758805044048
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0.7880958906947965
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0.6985238425088927
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0.9329688210618834
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0.8053455419410824
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0.48719563390860343
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0.5941391638789025
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0.17818319201693664
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0.3142396931955196
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0.9276878624500559
+            }
+          ]
+        },
+        {
+          "agent_id": "x3",
+          "owner_key": "o3",
+          "results": [
+            {
+              "case_id": "allergy-list-0",
+              "score": 0.19247069119720203
+            },
+            {
+              "case_id": "allergy-list-1",
+              "score": 0.5736018339019276
+            },
+            {
+              "case_id": "allergy-list-2",
+              "score": 0.06535509233066178
+            },
+            {
+              "case_id": "allergy-list-3",
+              "score": 0.49966776112601613
+            },
+            {
+              "case_id": "code-update-0",
+              "score": 0.6485441791534112
+            },
+            {
+              "case_id": "code-update-1",
+              "score": 0.15255533202253704
+            },
+            {
+              "case_id": "code-update-2",
+              "score": 0.17788141000549632
+            },
+            {
+              "case_id": "code-update-3",
+              "score": 0.16880486092198418
+            },
+            {
+              "case_id": "person-update-0",
+              "score": 0.2829463215709388
+            },
+            {
+              "case_id": "person-update-1",
+              "score": 0.06697055701832305
+            },
+            {
+              "case_id": "person-update-2",
+              "score": 0.9436314576834316
+            },
+            {
+              "case_id": "person-update-3",
+              "score": 0.4450149556869519
+            },
+            {
+              "case_id": "venue-move-0",
+              "score": 0.10400312807333295
+            },
+            {
+              "case_id": "venue-move-1",
+              "score": 0.29775715093242966
+            },
+            {
+              "case_id": "venue-move-2",
+              "score": 0.929005069731155
+            },
+            {
+              "case_id": "venue-move-3",
+              "score": 0.21565160850227036
+            }
+          ]
+        }
+      ],
+      "frontier_case_ids": [
+        "code-update-0",
+        "person-update-0",
+        "allergy-list-0",
+        "venue-move-0",
+        "code-update-1",
+        "person-update-1",
+        "allergy-list-1",
+        "venue-move-1",
+        "code-update-2",
+        "person-update-2",
+        "allergy-list-2",
+        "venue-move-2",
+        "code-update-3",
+        "person-update-3",
+        "allergy-list-3",
+        "venue-move-3"
+      ]
+    },
+    "params": {
+      "min_panel": 3,
+      "min_solver_owners": 2,
+      "solve_threshold": 0.5,
+      "champion_bonus": 0.5,
+      "target_cases": 16,
+      "frontier_weight": 0.5
+    },
+    "expected": {
+      "status": "scored",
+      "score": 0.315609644134997,
+      "raw_credit": 7.574631459239928,
+      "discriminating": 4,
+      "trivial": 1,
+      "unsolved": 0,
+      "frontier": 11,
+      "duplicate": 0,
+      "unsolved_rate": 0,
+      "cases": [
+        {
+          "case_id": "code-update-0",
+          "fingerprint": "e321f8620e89c1cb4c69d52375a1aca12665995dcd915bba38f67c5be7d9d193",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 1,
+          "solver_owners": 1,
+          "mean_score": 0.3302660772184039,
+          "champion_failed": true,
+          "credit": 0.5023004420861972
+        },
+        {
+          "case_id": "person-update-0",
+          "fingerprint": "d73e973a09e2551b79afdebffb3ec88a3ff5fcf8983e0a86204354fde82aa071",
+          "status": "discriminating",
+          "panel_size": 3,
+          "solvers": 2,
+          "solver_owners": 2,
+          "mean_score": 0.5628389625856552,
+          "champion_failed": false,
+          "credit": 0.43716103741434476
+        },
+        {
+          "case_id": "allergy-list-0",
+          "fingerprint": "7ed4a8e31892e4bf1ddfc5ef9cd219ec1b6955ee5ae207f55fd78af5a267440a",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0.2718207731871077,
+          "champion_failed": true,
+          "credit": 0.5461344201096693
+        },
+        {
+          "case_id": "venue-move-0",
+          "fingerprint": "100b22c2caea4e473a236b85f198ae6c7e2283382640d8b172351291ea43dd1e",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 1,
+          "solver_owners": 1,
+          "mean_score": 0.2716661689082979,
+          "champion_failed": true,
+          "credit": 0.5462503733187765
+        },
+        {
+          "case_id": "code-update-1",
+          "fingerprint": "95913eeaf036813982c36b699d046318709534fcc215baec88ee47574a553a3c",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0.2774665252921629,
+          "champion_failed": true,
+          "credit": 0.5419001060308779
+        },
+        {
+          "case_id": "person-update-1",
+          "fingerprint": "09a8fc5a30190d62d763aee89b2f2aad2ca040991184ca7021aa7a41e811a2cf",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 1,
+          "solver_owners": 1,
+          "mean_score": 0.4444387491733886,
+          "champion_failed": true,
+          "credit": 0.4166709381199586
+        },
+        {
+          "case_id": "allergy-list-1",
+          "fingerprint": "a3f54ab08071a39c4238cb2f52d0c96d3e7776ac2d07480d16e0da4563b92e3f",
+          "status": "trivial",
+          "panel_size": 3,
+          "solvers": 3,
+          "solver_owners": 3,
+          "mean_score": 0.5816354860338621,
+          "champion_failed": false,
+          "credit": 0
+        },
+        {
+          "case_id": "venue-move-1",
+          "fingerprint": "73ca502a1a09b6a13752a53cd58ca66f7518c34be65b21f30f54c162c5250b9b",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0.31915400713622843,
+          "champion_failed": true,
+          "credit": 0.5106344946478287
+        },
+        {
+          "case_id": "code-update-2",
+          "fingerprint": "05c9b7ad6d7408ce5fd8e1dfbed023915e5d077f380a740b344e850cb848296c",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0.19448264164626608,
+          "champion_failed": true,
+          "credit": 0.6041380187653005
+        },
+        {
+          "case_id": "person-update-2",
+          "fingerprint": "a2e7d667cecb8dc3cf21f17fdf5a0ea31ba060a940679c040659261e3f131fe5",
+          "status": "discriminating",
+          "panel_size": 3,
+          "solvers": 2,
+          "solver_owners": 2,
+          "mean_score": 0.5901790001558188,
+          "champion_failed": true,
+          "credit": 0.6147314997662718
+        },
+        {
+          "case_id": "allergy-list-2",
+          "fingerprint": "343addf70e41024fa7ba29f206df32e0554f3eb93cb32e10868a9dc42b290ab3",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0.13671502092909613,
+          "champion_failed": true,
+          "credit": 0.6474637343031779
+        },
+        {
+          "case_id": "venue-move-2",
+          "fingerprint": "66ac140e3140075b2b76ef5018b8c7484f390498c253e1da557ea6dba3186894",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 1,
+          "solver_owners": 1,
+          "mean_score": 0.5377025802838696,
+          "champion_failed": true,
+          "credit": 0.3467230647870978
+        },
+        {
+          "case_id": "code-update-3",
+          "fingerprint": "f1303e49c82bf4cfebd675d7dc3fdf13b1418c452653199b156ada7dd857096b",
+          "status": "discriminating",
+          "panel_size": 3,
+          "solvers": 2,
+          "solver_owners": 2,
+          "mean_score": 0.5500803879171713,
+          "champion_failed": false,
+          "credit": 0.4499196120828287
+        },
+        {
+          "case_id": "person-update-3",
+          "fingerprint": "eafbb9eb5aa41def434e3b21fe0d4d03461d69a8c75457cff713bf173a9507f8",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 0,
+          "solver_owners": 0,
+          "mean_score": 0.32535238456854826,
+          "champion_failed": true,
+          "credit": 0.5059857115735888
+        },
+        {
+          "case_id": "allergy-list-3",
+          "fingerprint": "8ba0b43f201486487f5d44b1dc6c5cfe6769eca5fc14910c5eb85ecdfa708476",
+          "status": "discriminating",
+          "panel_size": 3,
+          "solvers": 2,
+          "solver_owners": 2,
+          "mean_score": 0.5431388346028249,
+          "champion_failed": false,
+          "credit": 0.45686116539717514
+        },
+        {
+          "case_id": "venue-move-3",
+          "fingerprint": "0f81b0e28457b7bf476cefde1bd640aaf1970b40764c777a242f0aaa1d368fd0",
+          "status": "frontier",
+          "panel_size": 3,
+          "solvers": 1,
+          "solver_owners": 1,
+          "mean_score": 0.4029908788842181,
+          "champion_failed": true,
+          "credit": 0.4477568408368365
+        }
+      ]
+    }
   }
 ]

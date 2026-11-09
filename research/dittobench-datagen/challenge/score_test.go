@@ -132,6 +132,35 @@ func buildVectors(t *testing.T) []ScoreVector {
 		member("a2", "o2", false, randomScores(rng, cases[:10], 0.5)),
 		member("a3", "o3", false, randomScores(rng, cases[:10], 0.5)),
 	}}, custom)
+
+	// Frontier: every agent fails every case. Attested cases are valid, so
+	// they earn credit instead of the unsolved penalty. Appended last so the
+	// earlier vectors stay byte-identical.
+	ids := func(cs []CaseRef) []string {
+		out := make([]string, len(cs))
+		for i, c := range cs {
+			out[i] = c.CaseID
+		}
+		return out
+	}
+	frontier := params
+	frontier.FrontierWeight = 1
+	frontier.TargetCases = len(cases)
+	zeroPanel := []PanelMember{
+		member("a1", "o1", true, uniform(cases, 0)),
+		member("a2", "o2", false, uniform(cases, 0)),
+		member("a3", "o3", false, uniform(cases, 0)),
+	}
+	add("frontier_all_attested", cases, ScoreInput{GeneratorOwnerKey: "gen", Panel: zeroPanel, FrontierCaseIDs: ids(cases)}, frontier)
+	add("frontier_half_attested", cases, ScoreInput{GeneratorOwnerKey: "gen", Panel: zeroPanel, FrontierCaseIDs: ids(cases[:8])}, frontier)
+	add("frontier_weight_zero_is_off", cases, ScoreInput{GeneratorOwnerKey: "gen", Panel: zeroPanel, FrontierCaseIDs: ids(cases)}, params)
+	partial := frontier
+	partial.FrontierWeight = 0.5
+	add("frontier_mixed_panel_half_weight", cases, ScoreInput{GeneratorOwnerKey: "gen", Panel: []PanelMember{
+		member("x1", "o1", true, randomScores(rng, cases, 0.4)),
+		member("x2", "o2", false, randomScores(rng, cases, 0.4)),
+		member("x3", "o3", false, randomScores(rng, cases, 0.2)),
+	}, FrontierCaseIDs: ids(cases)}, partial)
 	return vs
 }
 
@@ -200,6 +229,30 @@ func TestScoreSemantics(t *testing.T) {
 	m := vs["mixed_random_panel"].Expected
 	if m.Score <= 0 || m.Score > 1 || m.Discriminating == 0 {
 		t.Errorf("mixed: %+v", m)
+	}
+
+	// Every agent fails, the oracle attests every case: full credit
+	// (1 − 0)·1.5 per case over 1.5·n, and no unsolved penalty.
+	if f := vs["frontier_all_attested"].Expected; f.Frontier != 16 || f.Unsolved != 0 || math.Abs(f.Score-1) > 1e-12 || f.Cases[0].Status != CaseFrontier {
+		t.Errorf("frontier all attested: %+v", f)
+	}
+	// Half attested: 8 frontier cases earn 8·1.5/(1.5·16) = 0.5 credit, times
+	// the (1 − 8/16)² penalty for the 8 still unsolved.
+	if f := vs["frontier_half_attested"].Expected; f.Frontier != 8 || f.Unsolved != 8 || math.Abs(f.Score-0.125) > 1e-12 {
+		t.Errorf("frontier half attested: %+v", f)
+	}
+	if f := vs["frontier_weight_zero_is_off"].Expected; f.Frontier != 0 || f.Unsolved != 16 || f.Score != 0 {
+		t.Errorf("frontier off: %+v", f)
+	}
+	// Attestation never touches a case the panel decided.
+	mp := vs["frontier_mixed_panel_half_weight"].Expected
+	for _, c := range mp.Cases {
+		if c.Status == CaseFrontier && c.SolverOwners >= 2 {
+			t.Errorf("solvable case %s scored frontier", c.CaseID)
+		}
+	}
+	if mp.Frontier == 0 || mp.Unsolved != 0 {
+		t.Errorf("frontier mixed: %+v", mp)
 	}
 }
 

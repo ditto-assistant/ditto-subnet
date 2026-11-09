@@ -23,9 +23,12 @@
 //     and whole-memory-dump answers do not); ScoreCases and ScoreRun turn panel
 //     verdicts into a discrimination score.
 //
-// No model is involved anywhere: generation is CPU compute, validation is
-// deterministic, and every rule is reproducible by the miner locally with
-// `go run ./cmd/challenge rehearse -dir <generator>`.
+// No model is involved in this package: generation is CPU compute,
+// validation is deterministic, and every rule is reproducible by the miner
+// locally with `go run ./cmd/challenge rehearse -dir <generator>`. The one
+// model in the competition is the frontier oracle (oracle.go), which answers
+// a bounded context derived here and is graded by the production grader; its
+// attestations reach scoring as plain inputs (ScoreInput.FrontierCaseIDs).
 package challenge
 
 import (

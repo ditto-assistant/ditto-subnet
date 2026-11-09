@@ -3,7 +3,9 @@ package challenge
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -14,6 +16,17 @@ import (
 type RoundVectors struct {
 	Derivations []RoundDerivationVector `json:"derivations"`
 	Scores      []RoundScoreVector      `json:"scores"`
+	// FrontierAudits pin FrontierAuditSample, which Platform ports to pick
+	// the operator-audited frontier cases of each column.
+	FrontierAudits []FrontierAuditVector `json:"frontier_audits"`
+}
+
+type FrontierAuditVector struct {
+	RoundSeed string   `json:"round_seed"`
+	ColumnID  string   `json:"column_id"`
+	CaseIDs   []string `json:"case_ids"`
+	N         int      `json:"n"`
+	Sample    []string `json:"sample"`
 }
 
 type RoundDerivationVector struct {
@@ -334,7 +347,75 @@ func buildRoundVectors(t *testing.T) RoundVectors {
 		v.Scores = append(v.Scores, RoundScoreVector{Name: name, Input: in, Params: p, Expected: got})
 	}
 	add("handshake", handshakeRound(), params)
+	frontier := params
+	frontier.FrontierWeight = 1
+	frontier.TargetCases = 8
+	add("frontier_attested", frontierRound(), frontier)
+
+	for _, d := range v.Derivations {
+		ids := make([]string, 12)
+		for i := range ids {
+			ids[i] = RoundCaseID("c0", fmt.Sprintf("case-%02d", i))
+		}
+		for _, n := range []int{0, 3, 20} {
+			v.FrontierAudits = append(v.FrontierAudits, FrontierAuditVector{
+				RoundSeed: d.Seed, ColumnID: "c0", CaseIDs: ids, N: n,
+				Sample: FrontierAuditSample(d.Seed, "c0", ids, n),
+			})
+		}
+	}
 	return v
+}
+
+// frontierRound is a round no panel agent solves any case of: column c0's
+// cases are oracle-attested, c1's are not.
+func frontierRound() RoundInput {
+	c0, c1 := roundCases("c0", 8), roundCases("c1", 8)
+	zero := map[string]float64{}
+	fill(zero, c0, 0)
+	fill(zero, c1, 0)
+	attested := make([]string, len(c0))
+	for i, c := range c0 {
+		attested[i] = c.CaseID
+	}
+	return RoundInput{
+		Columns: []RoundColumn{
+			{ColumnID: "c0", OwnerKey: "g0", Counted: true, Cases: c0},
+			{ColumnID: "c1", OwnerKey: "g1", Counted: true, Cases: c1},
+		},
+		Agents: []RoundAgent{
+			{AgentID: "a", OwnerKey: "o1", Champion: true, Results: agentResults(zero)},
+			{AgentID: "b", OwnerKey: "o2", Results: agentResults(zero)},
+			{AgentID: "c", OwnerKey: "o3", Results: agentResults(zero)},
+		},
+		FrontierCaseIDs: attested,
+	}
+}
+
+func TestScoreRoundFrontier(t *testing.T) {
+	params := DefaultScoreParams()
+	params.FrontierWeight = 1
+	params.TargetCases = 8
+	in := frontierRound()
+	rs, err := ScoreRound(in, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := rs.Columns[0].Pack; p.Frontier != 8 || p.Score != 1 {
+		t.Fatalf("an attested column every agent fails earns full credit: %+v", p)
+	}
+	if p := rs.Columns[1].Pack; p.Unsolved != 8 || p.Score != 0 {
+		t.Fatalf("an unattested column every agent fails stays unsolved: %+v", p)
+	}
+	// Attestations score generators only; agent standings are unchanged.
+	in.FrontierCaseIDs = nil
+	plain, err := ScoreRound(in, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(plain.Agents, rs.Agents) {
+		t.Fatalf("frontier attestations moved agent standings:\n%+v\n%+v", plain.Agents, rs.Agents)
+	}
 }
 
 func TestRoundVectorsGolden(t *testing.T) {
