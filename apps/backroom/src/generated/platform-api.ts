@@ -9120,6 +9120,9 @@ export interface paths {
         /**
          * Refresh Screener Node
          * @description Rotate a node bearer while it still owns valid signed authority.
+         *
+         *     An on-demand (AWS) node may also rotate an expired bearer after a bounded
+         *     dormancy; every other node must rotate before expiry or re-enroll.
          */
         post: operations["refresh_screener_node_api_v1_screener_nodes_refresh_post"];
         delete?: never;
