@@ -25243,6 +25243,14 @@ export interface components {
             audits: components["schemas"]["GeneratorFrontierAuditView"][];
             /** Count */
             count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Returned */
+            returned: number;
         };
         /**
          * GeneratorFrontierAuditRuling

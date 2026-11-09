@@ -148,10 +148,16 @@ def frontier_audit_sample(
 
 
 def apply_frontier(
-    pack: dict[str, Any], attested: Iterable[str], params: dict[str, Any]
+    pack: dict[str, Any],
+    attested: Iterable[tuple[str, str]],
+    params: dict[str, Any],
 ) -> dict[str, Any]:
     """The pack score ``challenge.ScoreCases`` gives with ``attested`` as its
-    ``FrontierCaseIDs``, from the score it gave without them.
+    ``FrontierCases``, from the score it gave without them.
+
+    ``attested`` names each case as ``(case_id, fingerprint)``, as the Go
+    contract does: an attestation applies only to the exact case content it
+    was earned on, never to a different case that reuses its id.
 
     Frontier status only rewrites ``unsolved`` verdicts, and every input it
     reads (mean score, champion failure) is on the stored verdict, so the
@@ -168,7 +174,14 @@ def apply_frontier(
     bonus = float(params["champion_bonus"])
     cases: list[dict[str, Any]] = out["cases"]
     for case in cases:
-        if case["status"] != CASE_UNSOLVED or case["case_id"] not in wanted:
+        if (
+            case["status"] != CASE_UNSOLVED
+            or (
+                case["case_id"],
+                case["fingerprint"],
+            )
+            not in wanted
+        ):
             continue
         credit = 1 - float(case["mean_score"])
         if case.get("champion_failed"):
@@ -302,6 +315,39 @@ async def live_oracle_lease(
     )
 
 
+async def lock_oracle_tickets(
+    session: AsyncSession, round_index: int
+) -> list[ValidatorTicket]:
+    """Lock the tickets of a round's open oracle attempts, before its round.
+
+    A result submission locks its ticket and then its round. A writer that
+    may expire an oracle lease (an operator settle) must take the same locks
+    in the same order, ticket first, or the two can deadlock."""
+    return list(
+        await session.scalars(
+            select(ValidatorTicket)
+            .join(
+                GeneratorRoundAttempt,
+                (GeneratorRoundAttempt.agent_id == ValidatorTicket.agent_id)
+                & (
+                    GeneratorRoundAttempt.validator_hotkey
+                    == ValidatorTicket.validator_hotkey
+                )
+                & (GeneratorRoundAttempt.ticket_deadline == ValidatorTicket.deadline),
+            )
+            .where(
+                GeneratorRoundAttempt.round_index == round_index,
+                GeneratorRoundAttempt.kind == "oracle",
+                GeneratorRoundAttempt.status == "leased",
+                ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+            )
+            .order_by(ValidatorTicket.validator_hotkey, ValidatorTicket.deadline)
+            .with_for_update(of=ValidatorTicket)
+        )
+    )
+
+
 async def close_stale_oracle_attempts(
     session: AsyncSession, row: GeneratorRound, *, now: datetime
 ) -> None:
@@ -422,6 +468,13 @@ def record_oracle_results(
     passed = [r.case_id for r in results if not r.fault and float(r.score) >= threshold]
     order = {case_id: i for i, case_id in enumerate(frontier["candidates"])}
     attested = _columns_of(sorted(passed, key=order.__getitem__))
+    # Each attestation is bound to the content it was earned on (the case's
+    # fingerprint in the scored round), as the Go contract's FrontierCases.
+    fingerprints = {
+        case["case_id"]: case["fingerprint"]
+        for column in (row.score or {}).get("columns", ())
+        for case in column["pack"].get("cases", ())
+    }
     audits: dict[str, Any] = {}
     n = int(frontier.get("audit_cases") or 0)
     for column_id, case_ids in attested.items():
@@ -446,6 +499,9 @@ def record_oracle_results(
                 "results": [r.model_dump(mode="json") for r in results],
             },
             "attested": attested,
+            "attested_fingerprints": {
+                case_id: fingerprints[case_id] for case_id in passed
+            },
             "audits": audits,
             "audit_opened_at": _iso(now),
         }
@@ -574,7 +630,12 @@ async def settle_frontier(
         if not case_ids:
             continue
         before = column["pack"]
-        after = apply_frontier(before, case_ids, post_params)
+        bound = frontier.get("attested_fingerprints") or {}
+        after = apply_frontier(
+            before,
+            [(case_id, bound[case_id]) for case_id in case_ids if case_id in bound],
+            post_params,
+        )
         column["pack"] = after
         changed = {
             case["case_id"]: case
@@ -764,8 +825,10 @@ async def pending_audits(
     include_ruled: bool = False,
     limit: int = 50,
     offset: int = 0,
-) -> list[GeneratorFrontierAuditView]:
-    """Frontier audits awaiting an operator ruling, oldest round first."""
+) -> tuple[list[GeneratorFrontierAuditView], int]:
+    """One page of frontier audits awaiting an operator ruling, oldest round
+    first, and the total. Only rounds with an open frontier lane are read, so
+    the whole queue is small (a few columns per unsettled round)."""
     stmt = (
         select(GeneratorRound)
         .options(*_SCAN_DEFERRED)
@@ -782,9 +845,7 @@ async def pending_audits(
             for audit in audit_views(row)
             if include_ruled or audit.status == AUDIT_PENDING
         )
-        if len(out) >= offset + limit:
-            break
-    return out[offset : offset + limit]
+    return out[offset : offset + limit], len(out)
 
 
 def _pairs_by_user(pack: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

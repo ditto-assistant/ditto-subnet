@@ -86,12 +86,28 @@ def test_apply_frontier_replays_the_go_vectors() -> None:
     vectors = json.loads((_CHALLENGE / "frontier_vectors.json").read_text())
     assert vectors
     for vector in vectors:
-        got = apply_frontier(
-            vector["base"], vector["frontier_case_ids"] or [], vector["params"]
-        )
+        attested = [
+            (ref["case_id"], ref["fingerprint"])
+            for ref in vector["frontier_cases"] or []
+        ]
+        got = apply_frontier(vector["base"], attested, vector["params"])
         # Bit-identical: the settled score is exactly ScoreCases' with the
         # attestations, so the post-pass never drifts from the contract.
         assert got == vector["expected"], vector["name"]
+
+
+def test_an_attestation_never_applies_to_other_content_with_its_id() -> None:
+    vector = next(
+        v
+        for v in json.loads((_CHALLENGE / "frontier_vectors.json").read_text())
+        if v["name"] == "all_fail_all_attested"
+    )
+    stale = [
+        (ref["case_id"], "other-content-" + ref["fingerprint"])
+        for ref in vector["frontier_cases"]
+    ]
+    # The ids match but the content does not: nothing becomes frontier.
+    assert apply_frontier(vector["base"], stale, vector["params"]) == vector["base"]
 
 
 def test_audit_sample_replays_the_go_vectors() -> None:
@@ -111,6 +127,17 @@ def test_frontier_off_keeps_the_unchanged_round_signature() -> None:
     on = off.model_copy(update={"frontier_oracle_agent_id": uuid4()})
     assert on.frontier_enabled
     assert on.measurement_params() != on.score_params()
+    # Every frontier policy field decides what a round measures, timing
+    # included: a longer oracle timeout or audit grace can change which
+    # attestations apply, so changing one never skips the next round.
+    for field, value in (
+        ("frontier_weight", 0.5),
+        ("frontier_audit_cases", 5),
+        ("frontier_audit_grace_hours", 48),
+        ("frontier_oracle_timeout_hours", 24),
+    ):
+        changed = on.model_copy(update={field: value})
+        assert changed.measurement_params() != on.measurement_params(), field
 
 
 # --- lane -------------------------------------------------------------------
@@ -294,7 +321,7 @@ class _Lane:
     async def setup(
         self, app: FastAPI, monkeypatch: pytest.MonkeyPatch, **settings: Any
     ) -> None:
-        _install(app, self.maker)
+        self.chain = _install(app, self.maker)
         app.state.generator_round_loop = None
         agents = [await _seed_agent(self.maker, rank) for rank in range(4)]
         self.oracle = agents[3]
@@ -470,6 +497,16 @@ class TestFrontierLane:
 
         queue = (await client.get(_AUDITS_URL, headers=_ADMIN)).json()
         assert [a["column_id"] for a in queue["audits"]] == [lane.miner_column]
+        assert (queue["count"], queue["returned"], queue["has_more"]) == (1, 1, False)
+        assert (queue["limit"], queue["offset"]) == (50, 0)
+        past = (
+            await client.get(_AUDITS_URL, headers=_ADMIN, params={"offset": 1})
+        ).json()
+        assert (past["count"], past["returned"], past["audits"]) == (1, 0, [])
+        first = (
+            await client.get(_AUDITS_URL, headers=_ADMIN, params={"limit": 1})
+        ).json()
+        assert first["has_more"] is False and first["returned"] == 1
 
         detail = await client.get(
             f"{_ROUNDS_URL}/{round_index}/frontier/audits/{lane.miner_column}",
@@ -810,3 +847,79 @@ class TestFrontierOracleLeases:
                 )
             )
         assert statuses == ["failed", "leased"]
+
+
+class TestFrontierOracleWithARunningRound:
+    async def test_an_unreadable_chain_head_still_leases_the_oracle(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, skip_unchanged_rounds=False)
+        scored = await lane.score_round()
+        # The next round opens and runs, so a panel lease is possible too.
+        await _advance(session_maker, 8)
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        assert work["kind"] == "generate" and work["round_index"] == scored + 1
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work),
+        )
+        assert resp.status_code == 200 and resp.json()["status"] == "running"
+        # The head read only gates panel leases; the oracle never reads it.
+        lane.chain.read_epoch_schedule.side_effect = RuntimeError("rpc down")
+        job = await _lease_job(client)
+        assert job is not None
+        assert job["dataset_mode"] == "generator-frontier-oracle-v1"
+        assert job["round_index"] == scored
+        # Nothing else is claimable while the head stays unreadable.
+        assert await _lease_job(client) is None
+
+
+async def test_operator_settle_locks_oracle_tickets_before_the_round(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result submission locks its ticket, then its round; an operator
+    settle must take them in the same order or the two can deadlock."""
+    import ditto.api_server.endpoints.admin_generator_rounds as admin_mod
+
+    lane = _Lane(client, session_maker)
+    await lane.setup(app, monkeypatch)
+    round_index = await lane.score_round()
+    job = await lane.lease_oracle()
+    order: list[str] = []
+    real_lock, real_get = admin_mod.lock_oracle_tickets, admin_mod.get_round
+
+    async def lock(session: AsyncSession, index: int) -> Any:
+        tickets = await real_lock(session, index)
+        order.append(f"tickets:{len(tickets)}")
+        return tickets
+
+    async def get(session: AsyncSession, index: int, **kwargs: Any) -> Any:
+        if kwargs.get("for_update"):
+            order.append("round")
+        return await real_get(session, index, **kwargs)
+
+    monkeypatch.setattr(admin_mod, "lock_oracle_tickets", lock)
+    monkeypatch.setattr(admin_mod, "get_round", get)
+    resp = await client.post(
+        f"{_ROUNDS_URL}/{round_index}/frontier/settle",
+        headers=_ADMIN,
+        json={
+            "reason": "oracle agent misconfigured for this round",
+            "actor": "backroom:test",
+            "confirmation": frontier_settle_confirmation(round_index),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert order[:2] == ["tickets:1", "round"]
+    await lane.report_oracle(job, set(lane.candidates), status=409)

@@ -244,22 +244,23 @@ async def request_generator_round_job(
         # a pooled connection spans the RPC. It is read on whichever process
         # serves the request because the round loop runs on one role only and
         # its last read can be stale. An unreadable chain declines the panel
-        # lease; the validator polls again.
+        # lease; the validator polls again. The oracle lease below never
+        # reads the head, so it is still tried.
         try:
             head = await chain.read_epoch_schedule(config.chain.netuid)
         except Exception as exc:  # noqa: BLE001 - any read failure declines
             logger.warning("generator round lease: chain head unreadable: %s", exc)
-            return _no_work()
-        job = await _lease_panel_job(
-            session,
-            request=request,
-            payload=payload,
-            now=now,
-            head=head,
-            inference_config=inference_config,
-            inference_settings=inference_settings,
-            slot_settings=slot_settings,
-        )
+        else:
+            job = await _lease_panel_job(
+                session,
+                request=request,
+                payload=payload,
+                now=now,
+                head=head,
+                inference_config=inference_config,
+                inference_settings=inference_settings,
+                slot_settings=slot_settings,
+            )
     if job is None:
         job = await _lease_oracle_job(
             session,

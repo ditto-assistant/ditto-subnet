@@ -305,6 +305,8 @@ class GeneratorCompetitionSettings(BaseModel):
             params["frontier_weight"] = self.frontier_weight
             params["frontier_oracle_agent_id"] = str(self.frontier_oracle_agent_id)
             params["frontier_audit_cases"] = self.frontier_audit_cases
+            params["frontier_audit_grace_hours"] = self.frontier_audit_grace_hours
+            params["frontier_oracle_timeout_hours"] = self.frontier_oracle_timeout_hours
         return params
 
 

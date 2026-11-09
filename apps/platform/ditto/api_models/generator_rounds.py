@@ -733,6 +733,13 @@ class GeneratorFrontierView(RoundModel):
 class GeneratorFrontierAuditListResponse(RoundModel):
     audits: list[GeneratorFrontierAuditView]
     count: int
+    """Every audit matching the filter (the queue total)."""
+    returned: int
+    """Audits in this page."""
+    limit: int
+    offset: int
+    has_more: bool
+    """Another page exists past ``offset + returned``."""
 
 
 class GeneratorFrontierMemoryPair(RoundModel):

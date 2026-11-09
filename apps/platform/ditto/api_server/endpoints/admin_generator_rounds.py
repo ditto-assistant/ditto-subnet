@@ -74,6 +74,7 @@ from ditto.api_server.generator_frontier import (
     audit_case_views,
     audit_views,
     frontier_view,
+    lock_oracle_tickets,
     pending_audits,
     rule_audit,
     settle_frontier,
@@ -408,10 +409,17 @@ async def admin_frontier_audits(
     """The frontier audit queue: sampled oracle-attested cases awaiting an
     operator ruling, oldest round first. ``include_ruled`` also lists ruled
     audits of rounds that have not settled yet."""
-    audits = await pending_audits(
+    audits, total = await pending_audits(
         session, include_ruled=include_ruled, limit=limit, offset=offset
     )
-    return GeneratorFrontierAuditListResponse(audits=audits, count=len(audits))
+    return GeneratorFrontierAuditListResponse(
+        audits=audits,
+        count=total,
+        returned=len(audits),
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(audits) < total,
+    )
 
 
 @router.get("/rounds/{round_index}/frontier", response_model=GeneratorFrontierView)
@@ -533,6 +541,9 @@ async def admin_settle_frontier(
             status_code=409, detail=f"confirmation must be exactly {expected}"
         )
     reason, actor = _check_reason(payload.reason, payload.actor)
+    # Ticket locks first, then the round: the order a concurrent oracle result
+    # submission takes them, so the two never deadlock.
+    await lock_oracle_tickets(session, round_index)
     row = await get_round(session, round_index, for_update=True)
     if row is None:
         raise HTTPException(status_code=404, detail="unknown round")
