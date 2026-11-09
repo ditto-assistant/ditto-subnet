@@ -407,6 +407,19 @@ async def oracle_round(
     return None
 
 
+def oracle_column_cases(row: GeneratorRound) -> int:
+    """The largest column an oracle run decodes: what the validator's scorer
+    must be able to run, exactly as for a panel run. Read from the scored
+    packs (the oracle scans defer ``column_cases``), falling back to the
+    frozen ``cases_per_column``. The oracle's total case count may exceed it:
+    each column runs on its own, so only the per-column bound applies."""
+    sizes = [
+        len(column["pack"].get("cases") or ())
+        for column in (row.score or {}).get("columns", ())
+    ]
+    return max(sizes, default=row.cases_per_column or 0)
+
+
 def is_oracle_run(row: GeneratorRound, agent_id: UUID) -> bool:
     """A result or dataset read on ``row`` from ``agent_id`` is the frontier
     oracle's: the round is scored and waiting on its oracle."""

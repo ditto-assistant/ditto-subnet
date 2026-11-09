@@ -923,3 +923,39 @@ async def test_operator_settle_locks_oracle_tickets_before_the_round(
     assert resp.status_code == 200, resp.text
     assert order[:2] == ["tickets:1", "round"]
     await lane.report_oracle(job, set(lane.candidates), status=409)
+
+
+async def test_an_oracle_lease_needs_the_rounds_column_size(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Like a panel run, an oracle run decodes the round's columns, so a
+    validator whose scorer runs smaller columns is never leased one."""
+    lane = _Lane(client, session_maker)
+    await lane.setup(app, monkeypatch)
+    await lane.score_round()  # 8-case columns
+    monkeypatch.setattr(lane_mod, "_round_column_capacity", lambda *_a, **_k: 4)
+    assert await _lease_job(client) is None
+    monkeypatch.setattr(lane_mod, "_round_column_capacity", lambda *_a, **_k: 8)
+    job = await lane.lease_oracle()
+    assert job["case_count"] == len(lane.candidates)
+
+
+def test_the_oracle_bound_is_the_largest_column_not_the_total() -> None:
+    from types import SimpleNamespace
+
+    from ditto.api_server.generator_frontier import oracle_column_cases
+
+    def column(n: int) -> dict[str, Any]:
+        return {"pack": {"cases": [{"case_id": f"k{i}"} for i in range(n)]}}
+
+    # Two 70-case columns: 140 candidates at most, but each column is 70,
+    # which an 80-case scorer runs one column at a time.
+    row = SimpleNamespace(
+        score={"columns": [column(70), column(70)]}, cases_per_column=70
+    )
+    assert oracle_column_cases(row) == 70  # type: ignore[arg-type]
+    unscored = SimpleNamespace(score=None, cases_per_column=32)
+    assert oracle_column_cases(unscored) == 32  # type: ignore[arg-type]

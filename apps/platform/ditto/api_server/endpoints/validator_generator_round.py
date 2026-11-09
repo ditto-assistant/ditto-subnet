@@ -73,6 +73,7 @@ from ditto.api_server.generator_frontier import (
     is_oracle_run,
     note_oracle_lease,
     oracle_capable,
+    oracle_column_cases,
     oracle_round,
     record_oracle_results,
 )
@@ -438,10 +439,13 @@ async def _lease_oracle_job(
         if row is None or row.dataset_sha256 is None:
             return None
         bench_version = round_bench_version(row)
-        if (
-            _round_column_capacity(heartbeat, now=now, bench_version=bench_version)
-            is None
-        ):
+        capacity = _round_column_capacity(
+            heartbeat, now=now, bench_version=bench_version
+        )
+        # The panel path's bound: the scorer decodes and runs the round's
+        # columns, so the largest must fit. Not the candidate total, which
+        # spans every column and may legitimately exceed one column's size.
+        if capacity is None or oracle_column_cases(row) > capacity:
             return None
         slot = await v._idle_retest_slot(
             session,
