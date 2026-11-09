@@ -91,10 +91,20 @@ func encounterOracle(tc protocol.ToolCase) []protocol.ObservedToolCall {
 		if len(required.AnyContains) > 0 {
 			values = append(values, required.AnyContains[0])
 		}
-		args, _ := json.Marshal(map[string]string{"q": strings.Join(values, " ")})
-		calls = append(calls, protocol.ObservedToolCall{Name: required.Tool, Args: args})
+		calls = append(calls, protocol.ObservedToolCall{Name: required.Tool, Args: encounterArgs(required, values...)})
 	}
 	return calls
+}
+
+// encounterArgs carries values in the call's scoped field, or in a free "q"
+// argument when the call matches every field.
+func encounterArgs(call protocol.EncounterCall, values ...string) json.RawMessage {
+	key := "q"
+	if call.Field != "" {
+		key = call.Field
+	}
+	args, _ := json.Marshal(map[string]string{key: strings.Join(values, " ")})
+	return args
 }
 
 func encounterReply(values ...string) protocol.RunResponse {
@@ -184,8 +194,7 @@ func TestV18EncountersAreSolvableAndDiscriminate(t *testing.T) {
 				}
 			}
 			for _, forbidden := range enc.Forbidden {
-				args, _ := json.Marshal(map[string]string{"q": strings.Join(forbidden.Contains, " ")})
-				withForbidden := append(append([]protocol.ObservedToolCall(nil), calls...), protocol.ObservedToolCall{Name: forbidden.Tool, Args: args})
+				withForbidden := append(append([]protocol.ObservedToolCall(nil), calls...), protocol.ObservedToolCall{Name: forbidden.Tool, Args: encounterArgs(forbidden, forbidden.Contains...)})
 				if v := grade.Encounter(enc, withForbidden, encounterReply(values...)); v.Score > 0.5 {
 					t.Fatalf("seed %d %s: forbidden %s scored %.3f", seed, tc.ID, forbidden.Tool, v.Score)
 				}
@@ -245,7 +254,7 @@ func serveOnce(t *testing.T, srv *toolexec.Server, caseID string, call protocol.
 // vector (gen.TestV18KnownVector) hashes only what reaches the artifact, and
 // an encounter's mock world and grading sets are grader-only, so they get
 // their own pin. Changing either is a new bench version.
-const v18EncounterVector = "5a3d94c6d856a4e91fe1b011ebe96b2a0481da0988b80f8550435c7ddecdffba"
+const v18EncounterVector = "84b5244da2408effa4fc6f6a9bf6982a08f1b308c1faa6495ee19156813901d1"
 
 func TestV18EncounterVector(t *testing.T) {
 	type pinned struct {
@@ -295,6 +304,65 @@ func TestV18EncounterForbiddenExcludesContext(t *testing.T) {
 	}
 	if v := grade.Encounter(e, wrong, encounterReply("VEL-4821")); v.ForbiddenHits != 1 {
 		t.Fatalf("filing the wrong incident was not charged: %+v", v)
+	}
+}
+
+// The triage filing is graded on the incident the item's title names, not on
+// any ID in the arguments: filing the wrong incident while quoting the right
+// ID in a body field is the wrong filing (coverage lost and the forbidden
+// charge), and filing the right one while quoting the other is clean.
+func TestV18TriageGradesTheFiledTitle(t *testing.T) {
+	checked := 0
+	for seed := int64(1); seed <= 12; seed++ {
+		for _, tc := range v18Encounters(t, seed, V18FullToolHalf) {
+			enc := tc.Encounter
+			if enc.Archetype != V18EncounterTriage || enc.Variant == v18TriageTracked {
+				continue
+			}
+			var file protocol.EncounterCall
+			for _, required := range enc.Required {
+				if required.Field != "" {
+					file = required
+				}
+			}
+			if file.Field == "" || len(file.Contains) != 1 {
+				t.Fatalf("seed %d %s: no title-scoped filing in %+v", seed, tc.ID, enc.Required)
+			}
+			incident := file.Contains[0]
+			var calls []protocol.ObservedToolCall
+			for _, call := range encounterOracle(tc) {
+				if call.Name != file.Tool {
+					calls = append(calls, call)
+				}
+			}
+			filing := func(title, body string) []protocol.ObservedToolCall {
+				args, _ := json.Marshal(map[string]string{file.Field: title, "body": body})
+				return append(append([]protocol.ObservedToolCall(nil), calls...), protocol.ObservedToolCall{Name: file.Tool, Args: args})
+			}
+			reply := encounterReply(incident)
+			for _, wrong := range enc.Forbidden {
+				if wrong.Tool != file.Tool || len(wrong.Contains) == 0 {
+					continue
+				}
+				other := wrong.Contains[0]
+				if v := grade.Encounter(enc, filing(other+" outage", "Context: the active incident is "+incident+"."), reply); v.Score >= 1 || v.ForbiddenHits != 1 {
+					t.Fatalf("seed %d %s: filing %s with %s only as context scored %.3f (forbidden %d)", seed, tc.ID, other, incident, v.Score, v.ForbiddenHits)
+				}
+				if v := grade.Encounter(enc, filing(other+" outage", ""), reply); v.Score >= 1 || v.ForbiddenHits != 1 {
+					t.Fatalf("seed %d %s: filing %s scored %.3f (forbidden %d)", seed, tc.ID, other, v.Score, v.ForbiddenHits)
+				}
+				if v := grade.Encounter(enc, filing(incident+" outage", "Not the earlier "+other+"."), reply); v.Score != 1 {
+					t.Fatalf("seed %d %s: right title quoting %s in the body scored %.3f: %v", seed, tc.ID, other, v.Score, v.Notes)
+				}
+				if v := grade.Encounter(enc, filing(incident+" outage (not "+other+")", ""), reply); v.Score != 1 {
+					t.Fatalf("seed %d %s: right title quoting %s scored %.3f: %v", seed, tc.ID, other, v.Score, v.Notes)
+				}
+				checked++
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no untracked triage filing inspected")
 	}
 }
 

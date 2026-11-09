@@ -795,11 +795,16 @@ func (w *v18EncounterWorld) statusTriage(plan catalog.V16ConnectorPlan, ordinal 
 		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Why: "the incident is already tracked"})
 		enc.Answer = append(enc.Answer, protocol.EncounterAnswer{Value: ref})
 	default:
-		enc.Required = append(enc.Required, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{incident}, Why: "file the untracked incident"})
-		// Filing the wrong incident, not quoting it beside the right one.
-		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{resolved}, Excludes: []string{incident}, Why: "the resolved incident"})
+		// The filed incident is the one the item's title names (the write
+		// action's declared parameter); an ID quoted in any other field is
+		// context. Filing the wrong incident, not quoting it beside the right
+		// one, is forbidden, and quoting the right ID outside the title does
+		// not file it.
+		title := app.WriteParam
+		enc.Required = append(enc.Required, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Contains: []string{incident}, Why: "file the untracked incident"})
+		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Contains: []string{resolved}, Excludes: []string{incident}, Why: "the resolved incident"})
 		if variant == v18TriageRegion {
-			enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{otherIncident}, Excludes: []string{incident}, Why: "the other region's incident is already tracked"})
+			enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Contains: []string{otherIncident}, Excludes: []string{incident}, Why: "the other region's incident is already tracked"})
 		}
 	}
 	prompt := sentence(
