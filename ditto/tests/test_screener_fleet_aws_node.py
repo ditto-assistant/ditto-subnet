@@ -831,3 +831,27 @@ def test_full_render_hetzner_defaults_are_unchanged() -> None:
         "openssl x509 -checkend 1209600"
         in rendered["materialize-source-review-secret.sh"]
     )
+
+
+def test_aws_playbook_refuses_a_release_whose_worker_cannot_idle_out() -> None:
+    play = yaml.safe_load(PLAYBOOK.read_text())[0]
+    tasks = {task["name"]: task for task in play["pre_tasks"]}
+    read = tasks["Read the release worker's configuration source"]
+    check = tasks["Require a release whose worker supports idle exit"]
+
+    # The playbook runs from the exact release checkout it installs.
+    assert read["ansible.builtin.slurp"]["src"] == (
+        "{{ playbook_dir }}/../../../workers/screener/ditto_screener/config.py"
+    )
+    assert (PLAYBOOK.parent / "../../../workers/screener/ditto_screener").resolve() == (
+        ROOT / "workers/screener/ditto_screener"
+    )
+    assert (
+        "'SCREENER_IDLE_EXIT_SECONDS' in" in check["ansible.builtin.assert"]["that"][0]
+    )
+    for task in (read, check):
+        assert task["when"] == "screener_fleet_idle_exit_seconds | string | length > 0"
+    names = list(tasks)
+    assert names.index(check["name"]) < names.index(
+        "Apply the shared base packages, journald, upgrades, and uv"
+    )

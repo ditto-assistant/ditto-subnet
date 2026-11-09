@@ -210,16 +210,35 @@ def test_user_data_uses_imdsv2_and_powers_off_only_an_unenrolled_host() -> None:
     assert "-X PUT" in USER_DATA
     assert "latest/meta-data/instance-id" in USER_DATA
     # A failed converge stays up for SSM inspection; the only poweroff is the
-    # cost guard, which fires two hours after a boot that never enrolled.
-    assert USER_DATA.count("ExecStart=/usr/bin/systemctl poweroff") == 1
+    # cost guard for a host that never enrolled.
+    assert USER_DATA.count("exec /usr/bin/systemctl poweroff") == 1
     assert "ConditionPathExists=!/etc/ditto-screener-fleet/node.json" in USER_DATA
     assert "OnBootSec=2h" in USER_DATA
+    assert "OnUnitActiveSec=15min" in USER_DATA
     guard = USER_DATA.index("ditto-screener-unenrolled-poweroff.timer")
     assert guard < USER_DATA.index("amazon-ssm-agent.deb")
-    stripped = USER_DATA.replace("ExecStart=/usr/bin/systemctl poweroff", "")
-    stripped = stripped.replace("unenrolled-poweroff", "")
+    code = "\n".join(
+        line for line in USER_DATA.splitlines() if not line.lstrip().startswith("#")
+    )
+    stripped = code.replace("exec /usr/bin/systemctl poweroff", "")
+    stripped = stripped.replace("unenrolled-poweroff", "").replace("powering off", "")
     for forbidden in ("poweroff", "shutdown", "halt", "systemctl stop", "reboot"):
         assert forbidden not in stripped, forbidden
+
+
+def test_cost_guard_defers_to_a_live_first_converge_that_is_bounded() -> None:
+    # The guard skips while the bootstrap pid on /run is alive ...
+    assert 'kill -0 "$(cat "$pid_file")"' in USER_DATA
+    assert 'echo "$$" >"$bootstrap_pid_file"' in USER_DATA
+    assert 'rm -f "$bootstrap_pid_file"' in USER_DATA
+    # ... and the converge cannot outlive its timeouts.
+    assert "timeout --kill-after=5m 30m" in USER_DATA
+    assert "timeout --kill-after=5m 3h" in USER_DATA
+    pid_written = USER_DATA.index('echo "$$" >"$bootstrap_pid_file"')
+    assert pid_written < USER_DATA.index("ansible-playbook")
+
+
+def test_user_data_installs_the_exact_ssm_agent() -> None:
     # Same exact-bytes SSM agent install as the generator scorer.
     assert (
         'echo "$ssm_sha256  $workdir/amazon-ssm-agent.deb" | sha256sum --check --strict'

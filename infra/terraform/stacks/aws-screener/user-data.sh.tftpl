@@ -38,13 +38,28 @@ vars_file="$config_dir/bootstrap-vars.json"
 [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]]
 
 workdir="$(mktemp -d)"
-trap 'rm -rf "$workdir"' EXIT
+bootstrap_pid_file=/run/ditto-screener-bootstrap.pid
+trap 'rm -rf "$workdir"; rm -f "$bootstrap_pid_file"' EXIT
 
 # --- 0. cost guard -----------------------------------------------------------
 # Installed first, so it covers a failure anywhere below. On every boot, a host
 # that has still not enrolled (no node credential) two hours after booting
-# powers itself off instead of billing until someone notices. A converged node
-# has node.json, so this never fires for it; its idle shutdown takes over.
+# powers itself off instead of billing until someone notices, rechecking every
+# 15 minutes. It defers while this first converge is still alive (its pid file
+# is on /run, so a reboot clears it), and the converge is itself bounded by
+# timeouts below, so a hung converge still ends in a poweroff (about 3.5 h at
+# worst). A converged node has node.json, so the guard never fires for it; its
+# idle shutdown takes over.
+install -m 0755 -o root -g root /dev/stdin /usr/local/sbin/ditto-screener-unenrolled-poweroff <<'GUARD'
+#!/bin/sh
+pid_file=/run/ditto-screener-bootstrap.pid
+if [ -s "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+  echo "ditto-screener-unenrolled-poweroff: first converge still running; deferring"
+  exit 0
+fi
+echo "ditto-screener-unenrolled-poweroff: not enrolled; powering off"
+exec /usr/bin/systemctl poweroff
+GUARD
 cat >/etc/systemd/system/ditto-screener-unenrolled-poweroff.service <<'UNIT'
 [Unit]
 Description=Power off an on-demand screener host that never enrolled
@@ -52,7 +67,7 @@ ConditionPathExists=!/etc/ditto-screener-fleet/node.json
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/systemctl poweroff
+ExecStart=/usr/local/sbin/ditto-screener-unenrolled-poweroff
 UNIT
 cat >/etc/systemd/system/ditto-screener-unenrolled-poweroff.timer <<'UNIT'
 [Unit]
@@ -60,6 +75,7 @@ Description=Bound the uptime of an unenrolled on-demand screener host
 
 [Timer]
 OnBootSec=2h
+OnUnitActiveSec=15min
 AccuracySec=1min
 
 [Install]
@@ -67,6 +83,7 @@ WantedBy=timers.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now ditto-screener-unenrolled-poweroff.timer
+echo "$$" >"$bootstrap_pid_file"
 
 # --- 1. SSM agent (same exact-bytes install as the generator scorer) ---------
 if ! command -v curl >/dev/null; then
@@ -133,8 +150,11 @@ mv -f "$vars_file.tmp" "$vars_file"
 export ANSIBLE_CONFIG="$repo/infra/ansible/ansible.cfg"
 export ANSIBLE_COLLECTIONS_PATH="$boot/collections"
 cd "$repo/infra/ansible"
-"$boot/venv/bin/ansible-galaxy" collection install -r requirements.yml -p "$boot/collections"
-"$boot/venv/bin/ansible-playbook" -i localhost, -c local \
+# Bounded, so a hung converge ends and the cost guard can power the host off.
+timeout --kill-after=5m 30m \
+  "$boot/venv/bin/ansible-galaxy" collection install -r requirements.yml -p "$boot/collections"
+timeout --kill-after=5m 3h \
+  "$boot/venv/bin/ansible-playbook" -i localhost, -c local \
   playbooks/aws-screener-node.yml -e "@$vars_file"
 
 echo "ditto-screener-bootstrap: converged $release_sha as $instance_id at $(date -u +%Y-%m-%dT%H:%M:%SZ)"

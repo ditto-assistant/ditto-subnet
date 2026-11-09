@@ -78,6 +78,30 @@
           none. It must not switch the node to x509, hetzner, or rehearsal mode.
         quiet: true
 
+    # The idle-shutdown timer powers the host off only after every worker
+    # exits with the idle status, which a worker gains in the same release as
+    # SCREENER_IDLE_EXIT_SECONDS. This playbook runs from the checkout of the
+    # exact release it installs, so refuse a release whose worker cannot idle
+    # out rather than leave the host up until its uptime bound.
+    - name: Read the release worker's configuration source
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../../../workers/screener/ditto_screener/config.py"
+      register: aws_screener_release_worker_config
+      when: screener_fleet_idle_exit_seconds | string | length > 0
+
+    - name: Require a release whose worker supports idle exit
+      ansible.builtin.assert:
+        that:
+          - >-
+            'SCREENER_IDLE_EXIT_SECONDS' in
+            (aws_screener_release_worker_config.content | b64decode)
+        fail_msg: >-
+          Release {{ screener_fleet_release_sha }} predates the worker's
+          SCREENER_IDLE_EXIT_SECONDS; pin a release that includes it, or set
+          screener_fleet_idle_exit_seconds to empty.
+        quiet: true
+      when: screener_fleet_idle_exit_seconds | string | length > 0
+
     - name: Apply the shared base packages, journald, upgrades, and uv
       ansible.builtin.include_role:
         name: ../roles/base
