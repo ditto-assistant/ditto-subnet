@@ -848,6 +848,11 @@ async def require_screener_controller(
 ControllerDep = Annotated[None, Depends(require_screener_controller)]
 _CONTROLLER_HEARTBEAT_READY_SECONDS = 180
 _NODE_TOKEN_ROTATION_GRACE_SECONDS = 120
+# On-demand providers power their node off between bursts, often for longer
+# than one bearer lifetime. Their expired bearer still proves possession of
+# node.json, so with a fresh hotkey signature it may rotate within the
+# configured dormancy bound. Always-on providers keep the strict expiry.
+_ON_DEMAND_NODE_PROVIDERS = frozenset({"aws"})
 _TRUSTED_BUILD_LEASE_TTL = timedelta(minutes=45)
 _SUBMISSION_BUILD_LEASE_TTL = timedelta(minutes=50)
 _SUBMISSION_BUILD_JOB_TTL = timedelta(minutes=45)
@@ -1190,7 +1195,11 @@ async def refresh_screener_node(
     session: SessionDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> ScreenerNodeCredentialResponse:
-    """Rotate a node bearer while it still owns valid signed authority."""
+    """Rotate a node bearer while it still owns valid signed authority.
+
+    An on-demand (AWS) node may also rotate an expired bearer after a bounded
+    dormancy; every other node must rotate before expiry or re-enroll.
+    """
     prefix = "Bearer "
     if authorization is None or not authorization.startswith(prefix):
         raise ScreenerAuthError("missing screener bearer token")
@@ -1234,20 +1243,46 @@ async def refresh_screener_node(
             and secrets.compare_digest(node.previous_token_hash, presented_hash)
         )
         same_request = node.last_refresh_id == payload.refresh_id
-        if node.status == "revoked" or not (
-            current_matches or (same_request and previous_matches)
-        ):
-            raise ScreenerAuthError("invalid screener node authority")
         prior_expiry = node.token_expires_at
         if prior_expiry.tzinfo is None:
             prior_expiry = prior_expiry.replace(tzinfo=UTC)
-        if now >= prior_expiry:
-            raise ScreenerAuthError("screener bearer token has expired")
+        dormant = now >= prior_expiry
+        if dormant:
+            # A woken on-demand node presents the bearer it held when it
+            # stopped. That is the current one, or, when the stop interrupted a
+            # rotation whose response was lost, the previous one for the same
+            # request even though its short overlap grace has lapsed.
+            max_dormancy = timedelta(
+                seconds=request.app.state.config.screener_auth.node_reauth_max_dormancy_seconds
+            )
+            previous_held = bool(
+                same_request
+                and node.previous_token_hash is not None
+                and secrets.compare_digest(node.previous_token_hash, presented_hash)
+            )
+            if (
+                node.provider not in _ON_DEMAND_NODE_PROVIDERS
+                or node.status not in ("active", "draining")
+                or not (current_matches or previous_held)
+                or now - prior_expiry > max_dormancy
+            ):
+                raise ScreenerAuthError("screener bearer token has expired")
+        elif node.status == "revoked" or not (
+            current_matches or (same_request and previous_matches)
+        ):
+            raise ScreenerAuthError("invalid screener node authority")
         derived_hash = hashlib.sha256(api_token.encode()).hexdigest()
         if same_request:
             if not secrets.compare_digest(node.token_hash, derived_hash):
                 raise ScreenerAuthError("refresh request identity is inconsistent")
-            expires_at = node.token_expires_at
+            if dormant:
+                # The derived bearer is retry-stable; only its lifetime renews.
+                node.token_expires_at = expires_at
+                node.previous_token_hash = None
+                node.previous_token_expires_at = None
+                node.rotated_at = now
+            else:
+                expires_at = node.token_expires_at
         else:
             # Keep the prior bearer usable only for an identical request. This
             # closes the response-loss window without granting general overlap.

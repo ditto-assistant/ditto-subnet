@@ -2305,6 +2305,54 @@ async def test_run_forever_exits_immediately_when_stopped(
     await asyncio.wait_for(worker.run_forever(stop), timeout=2.0)
 
 
+async def test_idle_worker_exits_after_its_idle_bound(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(
+        make_config(idle_exit_seconds=0.05, poll_seconds=0.01), platform, gate
+    )
+
+    idle = await asyncio.wait_for(worker.run_forever(asyncio.Event()), timeout=2.0)
+
+    assert idle is True
+    assert platform.claim_calls >= 1
+
+
+async def test_screening_work_resets_the_idle_bound(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent = uuid4()
+    platform = _FakePlatform([[_item(agent)], []])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(
+        make_config(idle_exit_seconds=0.05, poll_seconds=0.01), platform, gate
+    )
+
+    idle = await asyncio.wait_for(worker.run_forever(asyncio.Event()), timeout=2.0)
+
+    # The claimed attempt finished with its signed verdict before the exit.
+    assert idle is True
+    assert gate.calls == [agent]
+    assert [verdict["agent_id"] for verdict in platform.verdicts] == [agent]
+
+
+async def test_worker_without_idle_bound_reports_a_plain_stop(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[], []])
+    stop = asyncio.Event()
+    platform.stop_after_queue = stop
+    worker = _worker(
+        make_config(poll_seconds=0.01),
+        platform,
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+    )
+
+    assert await asyncio.wait_for(worker.run_forever(stop), timeout=2.0) is False
+
+
 async def test_policy_below_floor_does_not_claim(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

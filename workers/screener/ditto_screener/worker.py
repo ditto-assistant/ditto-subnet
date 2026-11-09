@@ -421,8 +421,13 @@ class ScreenerWorker:
         ).total_seconds() - _LEASE_SUBMIT_MARGIN_SECONDS
         return LeaseDeadline(asyncio.get_running_loop().time() + remaining)
 
-    async def run_forever(self, stop: asyncio.Event) -> None:
-        """Sweep until ``stop`` is set, sleeping when the queue is empty."""
+    async def run_forever(self, stop: asyncio.Event) -> bool:
+        """Sweep until ``stop`` is set, sleeping when the queue is empty.
+
+        Returns True when the worker exited because it stayed idle for
+        ``idle_exit_seconds``. That check runs only after a sweep has returned,
+        so no claim is in flight and no lease can be stranded by the exit.
+        """
         logger.info(
             "screener worker started hotkey=%s netuid=%d platform=%s",
             self._config.screener_hotkey,
@@ -432,6 +437,9 @@ class ScreenerWorker:
         # A lease file left by a process that died mid-review describes no live
         # work in this process; the updater must not wait on it.
         self._clear_active_lease()
+        loop = asyncio.get_running_loop()
+        last_work = loop.time()
+        idle_limit = self._config.idle_exit_seconds
         while not stop.is_set():
             await self._report_heartbeat("polling")
             try:
@@ -439,9 +447,20 @@ class ScreenerWorker:
             except PlatformError as e:
                 logger.warning("sweep failed (retrying next cycle): %s", e)
                 processed = 0
+            if processed > 0:
+                last_work = loop.time()
+            elif idle_limit is not None and loop.time() - last_work >= idle_limit:
+                # A failing Platform also counts as idle: an on-demand host that
+                # cannot reach work must still power off rather than bill.
+                logger.info(
+                    "screener worker idle for %.0fs; exiting for host shutdown",
+                    loop.time() - last_work,
+                )
+                return True
             if processed == 0 and not stop.is_set():
                 await self._sleep_or_stop(stop, self._config.poll_seconds)
         logger.info("screener worker stopped")
+        return False
 
     async def _report_heartbeat(
         self,
