@@ -435,18 +435,23 @@ async def _lease_oracle_job(
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
         if not oracle_capable(heartbeat):
             return None
-        row = await oracle_round(session, now=now)
-        if row is None or row.dataset_sha256 is None:
+
+        def runnable(candidate: GeneratorRound) -> bool:
+            # The panel path's bound, at the round's frozen bench version: the
+            # scorer decodes and runs the round's columns, so the largest must
+            # fit. Not the candidate total, which spans every column and may
+            # legitimately exceed one column's size.
+            capacity = _round_column_capacity(
+                heartbeat, now=now, bench_version=round_bench_version(candidate)
+            )
+            return capacity is not None and oracle_column_cases(candidate) <= capacity
+
+        # Skips rounds this validator cannot run, so an older incompatible
+        # round never hides a younger one it can.
+        row = await oracle_round(session, now=now, runnable=runnable)
+        if row is None or row.dataset_sha256 is None or not runnable(row):
             return None
         bench_version = round_bench_version(row)
-        capacity = _round_column_capacity(
-            heartbeat, now=now, bench_version=bench_version
-        )
-        # The panel path's bound: the scorer decodes and runs the round's
-        # columns, so the largest must fit. Not the candidate total, which
-        # spans every column and may legitimately exceed one column's size.
-        if capacity is None or oracle_column_cases(row) > capacity:
-            return None
         slot = await v._idle_retest_slot(
             session,
             heartbeat=heartbeat,

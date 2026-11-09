@@ -340,9 +340,9 @@ class _Lane:
         )
         await _qualify_all(self.maker)
 
-    async def score_round(self) -> int:
-        await _advance(self.maker, 3)
-        await _advance(self.maker, 4)
+    async def score_round(self, epochs: tuple[int, ...] = (3, 4)) -> int:
+        for epoch in epochs:
+            await _advance(self.maker, epoch)
         work = (
             await self.client.get(
                 "/api/v1/generator-scorer/round-work", headers=_SCORER
@@ -1008,3 +1008,44 @@ async def test_the_settlement_sweep_locks_an_expired_oracle_ticket_first(
             )
         )
         assert ticket is not None and ticket.status == TicketStatus.EXPIRED
+
+
+async def test_an_older_incompatible_round_never_hides_younger_oracle_work(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rounds wait on the oracle oldest first, but a validator that cannot
+    run the oldest (here: frozen at a bench version its scorer does not run)
+    must still be leased a younger round it can run."""
+    lane = _Lane(client, session_maker)
+    await lane.setup(app, monkeypatch, skip_unchanged_rounds=False)
+    older = await lane.score_round()
+    # Round 2's panel runs while round 1 awaits its oracle: keep the oracle
+    # lane off meanwhile so the panel loop leases only panel work.
+    monkeypatch.setattr(lane_mod, "oracle_capable", lambda _heartbeat: False)
+    younger = await lane.score_round(epochs=(8,))
+    monkeypatch.setattr(lane_mod, "oracle_capable", lambda _heartbeat: True)
+    assert younger == older + 1
+    async with session_maker() as session, session.begin():
+        row = await get_round(session, older, for_update=True)
+        assert row is not None
+        row.bench_version = 14
+
+    def capacity(_heartbeat: Any, *, bench_version: int, **_: Any) -> int | None:
+        return None if bench_version == 14 else 80
+
+    monkeypatch.setattr(lane_mod, "_round_column_capacity", capacity)
+    job = await lane.lease_oracle()
+    assert job["round_index"] == younger
+    # The older round stays pending for a validator that can run it.
+    async with session_maker() as session:
+        row = await get_round(session, older)
+        assert row is not None and (row.frontier or {})["state"] == STATE_ORACLE_PENDING
+        assert (row.frontier or {})["oracle_attempts"] == 0
+    # Once the younger run reports (one live lease per agent and slot) and a
+    # validator can run v14 rounds, the older round is leased too.
+    await lane.report_oracle(job, set(job["oracle_case_ids"]))
+    monkeypatch.setattr(lane_mod, "_round_column_capacity", lambda *_a, **_k: 80)
+    assert (await lane.lease_oracle())["round_index"] == older

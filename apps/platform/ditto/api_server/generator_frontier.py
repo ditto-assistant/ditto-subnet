@@ -43,7 +43,7 @@ import copy
 import hashlib
 import json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -366,19 +366,29 @@ async def close_stale_oracle_attempts(
 
 
 async def oracle_round(
-    session: AsyncSession, *, now: datetime
+    session: AsyncSession,
+    *,
+    now: datetime,
+    runnable: Callable[[GeneratorRound], bool] = lambda _row: True,
 ) -> GeneratorRound | None:
-    """The oldest scored round waiting on an oracle run with no open lease,
-    locked for the caller.
+    """The oldest scored round waiting on an oracle run that this validator
+    can run (``runnable``) and that has no open lease, locked for the caller.
+
+    ``runnable`` is the caller's compatibility test (the round's frozen bench
+    version and largest column against this validator's scorer). It is
+    applied before anything is locked, so an older round this validator
+    cannot run neither hides younger rounds it can, nor is held from the
+    validators that can run it.
 
     Candidates are read unlocked and only the chosen round is locked: a
     result submission locks its ticket and then its round, so locking every
     pending round here (before the lease locks tickets) could deadlock with
     it. A round whose oracle timed out or exhausted its attempts is left for
     the loop to settle rather than leased again."""
-    indexes = list(
+    candidates = list(
         await session.scalars(
-            select(GeneratorRound.round_index)
+            select(GeneratorRound)
+            .options(*_SCAN_DEFERRED)
             .where(
                 GeneratorRound.status == "scored",
                 _open_frontier(STATE_ORACLE_PENDING),
@@ -387,6 +397,7 @@ async def oracle_round(
             .order_by(GeneratorRound.round_index)
         )
     )
+    indexes = [row.round_index for row in candidates if runnable(row)]
     for index in indexes:
         row = await session.scalar(
             select(GeneratorRound)
