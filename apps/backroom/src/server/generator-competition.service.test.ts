@@ -770,7 +770,7 @@ describe('generator competition MCP tools', () => {
       const method = init?.method ?? 'GET'
       calls.push([method, path, init?.body ? JSON.parse(String(init.body)) : null])
       if (path.startsWith('/api/v1/admin/generator-competition/frontier/audits')) {
-        return Response.json({ audits: [audit], count: 1 })
+        return Response.json({ audits: [audit], count: 3, returned: 1, limit: 1, offset: 0, has_more: true })
       }
       if (path.startsWith('/api/v1/admin/generator-competition/rounds/7/frontier/audits/c1') && method === 'GET') {
         return Response.json({
@@ -793,7 +793,11 @@ describe('generator competition MCP tools', () => {
     const reader = await connect([BACKROOM_READ_SCOPE])
     try {
       expect(json(await reader.client.callTool({ name: 'list_generator_frontier_audits', arguments: {} })))
-        .toMatchObject({ count: 1, audits: [{ column_id: 'c1', sample: ['c1/k2', 'c1/k5'] }] })
+        // The paging contract survives parsing: count is the queue total.
+        .toMatchObject({
+          count: 3, returned: 1, limit: 1, offset: 0, has_more: true,
+          audits: [{ column_id: 'c1', sample: ['c1/k2', 'c1/k5'] }],
+        })
       expect(calls[0][1]).toBe('/api/v1/admin/generator-competition/frontier/audits?include_ruled=false&limit=50&offset=0')
       expect(json(await reader.client.callTool({ name: 'get_generator_round_frontier', arguments: { roundIndex: 7 } })))
         .toMatchObject({ state: 'audit_pending', attested: { c1: ['c1/k2', 'c1/k5'] }, oracle: { passed: 2 } })

@@ -826,9 +826,16 @@ export const generatorFrontierSchema = z.object({
   settle_reason: z.string().nullable().optional(),
 })
 
+// The MCP paging contract (docs/mcp.md, Paging): count is the queue total,
+// returned this page, has_more whether another page exists. Platform serves
+// them; optional so an older Platform still parses.
 export const generatorFrontierAuditListSchema = z.object({
   audits: z.array(generatorFrontierAuditSchema),
   count: z.number().int(),
+  returned: z.number().int().nonnegative().optional(),
+  limit: z.number().int().optional(),
+  offset: z.number().int().nonnegative().optional(),
+  has_more: z.boolean().optional(),
 })
 
 const frontierMemoryPair = z.object({
