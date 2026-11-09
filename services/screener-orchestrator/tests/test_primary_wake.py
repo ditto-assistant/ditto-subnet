@@ -405,6 +405,28 @@ class ReconcileWakeTests(unittest.TestCase):
             self.assertIsNotNone(state["primary_wake_started_at"])
             self.assertIsNone(state["primary_stopping_since"])
 
+    def test_a_running_instance_ends_a_stale_stop_cycle(self) -> None:
+        stale = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
+        for launched, reason in (
+            (datetime.now(UTC), "AWS_PRIMARY_WAKING"),
+            (datetime.now(UTC) - timedelta(minutes=20), "AWS_PRIMARY_UNAVAILABLE"),
+        ):
+            with self.subTest(reason=reason), TemporaryDirectory() as tmp:
+                settings = _settings(Path(tmp))
+                # A crash after ec2.start() left the old stop cycle persisted.
+                settings.state_file.write_text(
+                    json.dumps({"primary_stopping_since": stale})
+                )
+                ec2 = _EC2("running", [], launched_at=launched)
+
+                snapshot = _run(
+                    settings, _Platform(runnable=3, primary=_primary()), ec2
+                )
+
+                self.assertEqual(snapshot["fallback_reason"], reason)
+                state = json.loads(settings.state_file.read_text())
+                self.assertIsNone(state["primary_stopping_since"])
+
     def test_a_stuck_stop_fails_over_to_gce(self) -> None:
         with TemporaryDirectory() as tmp:
             settings = _settings(Path(tmp))

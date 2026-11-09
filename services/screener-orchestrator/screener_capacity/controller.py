@@ -1038,10 +1038,15 @@ def _wake_on_demand_primary(
     grace = settings.primary_wake_grace_seconds
     if status.state in ("pending", "running"):
         since = started_at or status.launched_at
+        # A running instance ends any stop cycle, even one whose start plan a
+        # crash never persisted, so a later stop gets its own full bound.
         if since is not None and (now - since).total_seconds() < grace:
-            return WakePlan("waking", state={"primary_wake_failure": None})
+            return WakePlan(
+                "waking",
+                state={"primary_wake_failure": None, "primary_stopping_since": None},
+            )
         # Running past its grace without a ready heartbeat is an outage.
-        return WakePlan()
+        return WakePlan(state={"primary_stopping_since": None})
     if status.state not in ("stopping", "stopped"):
         return WakePlan()
     if demand.runnable == 0:
