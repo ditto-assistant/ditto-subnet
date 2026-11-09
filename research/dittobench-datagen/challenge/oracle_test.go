@@ -157,3 +157,34 @@ func TestFrontierAuditSample(t *testing.T) {
 		t.Fatal("the sample must depend on the secret round seed")
 	}
 }
+
+func TestOraclePackIsolatesEachCase(t *testing.T) {
+	p := ReferencePack(21, testHotkey)
+	ids := []string{p.Cases[3].ID, p.Cases[0].ID, p.Cases[9].ID}
+	op, contexts, err := OraclePack(p, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(op.Cases) != 3 || len(op.MemoryWaves) != 3 || len(contexts) != 3 || op.GradingBenchVersion != p.GradingBenchVersion {
+		t.Fatalf("shape: %d cases, %d waves, %d contexts", len(op.Cases), len(op.MemoryWaves), len(contexts))
+	}
+	for i, c := range op.Cases {
+		if c.ID != ids[i] || c.RunAfterWave != 2 || c.UserID != op.MemoryWaves[i].UserID {
+			t.Fatalf("case %d: %+v", i, c)
+		}
+		if len(op.MemoryWaves[i].Pairs) != len(contexts[i].Memories) {
+			t.Fatalf("case %d seeds %d pairs for a %d-pair context", i, len(op.MemoryWaves[i].Pairs), len(contexts[i].Memories))
+		}
+		// The oracle grades the source case unchanged.
+		src := p.GradingCase(map[string]int{p.Cases[3].ID: 3, p.Cases[0].ID: 0, p.Cases[9].ID: 9}[c.ID])
+		if got := op.GradingCase(i); got.ExpectedAnswer != src.ExpectedAnswer || got.AnswerKind != src.AnswerKind {
+			t.Fatalf("case %d grading drifted", i)
+		}
+	}
+	if _, _, err := OraclePack(p, []string{ids[0], ids[0]}); err == nil {
+		t.Fatal("a repeated case must be refused")
+	}
+	if _, _, err := OraclePack(p, nil); err == nil {
+		t.Fatal("an empty oracle pack must be refused")
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/ditto-assistant/dittobench-datagen/grade"
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 // Frontier oracle.
@@ -354,4 +355,66 @@ func FrontierAuditSample(roundSeed, columnID string, caseIDs []string, n int) []
 		out[i] = all[i].id
 	}
 	return out
+}
+
+// OraclePack derives the pack the frontier oracle runs: one memory graph per
+// listed case, seeded with only that case's OracleContext memories. Each case
+// keeps its question, gold, and grading fields, and the pack keeps the source
+// pack's grading policy, so the oracle is graded exactly like a panel agent.
+//
+// Every user is seeded before any case runs (each case runs after the last
+// wave), so cases execute concurrently. The derived pack is not a valid
+// generator pack (it has one user and one wave per case, beyond MaxUsers and
+// MaxWaves); a runner validates the source pack and executes this one as a
+// trusted derivation. Cases are returned in the order of caseIDs, which must
+// be distinct pack case ids.
+func OraclePack(p Pack, caseIDs []string) (Pack, []OracleCase, error) {
+	if len(caseIDs) == 0 {
+		return Pack{}, nil, errors.New("oracle pack needs at least one case")
+	}
+	byID := map[string]Case{}
+	for _, c := range p.Cases {
+		byID[c.ID] = c
+	}
+	out := Pack{
+		Contract:            p.Contract,
+		GradingBenchVersion: p.GradingBenchVersion,
+		MinerHotkey:         p.MinerHotkey,
+		Generator:           p.Generator,
+		MemoryWaves:         make([]protocol.SeedRequest, 0, len(caseIDs)),
+		Cases:               make([]Case, 0, len(caseIDs)),
+	}
+	contexts := make([]OracleCase, 0, len(caseIDs))
+	seen := map[string]bool{}
+	for i, id := range caseIDs {
+		c, ok := byID[id]
+		if !ok || seen[id] {
+			return Pack{}, nil, fmt.Errorf("oracle case %q is not a distinct pack case", id)
+		}
+		seen[id] = true
+		oc, err := OracleContext(p, id)
+		if err != nil {
+			return Pack{}, nil, err
+		}
+		user := fmt.Sprintf("oracle-%03d", i)
+		wave := protocol.SeedRequest{UserID: user, Wave: i, Pairs: make([]protocol.MemoryPair, len(oc.Memories))}
+		for j, m := range oc.Memories {
+			wave.Pairs[j] = protocol.MemoryPair{
+				PairID:    fmt.Sprintf("%s-%02d", user, j),
+				SessionID: user,
+				Timestamp: m.Timestamp,
+				Prompt:    m.Prompt,
+				Response:  m.Response,
+			}
+		}
+		out.MemoryWaves = append(out.MemoryWaves, wave)
+		c.UserID = user
+		c.EvidencePairIDs = nil
+		out.Cases = append(out.Cases, c)
+		contexts = append(contexts, oc)
+	}
+	for i := range out.Cases {
+		out.Cases[i].RunAfterWave = len(out.MemoryWaves) - 1
+	}
+	return out, contexts, nil
 }

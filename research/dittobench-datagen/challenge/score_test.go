@@ -3,6 +3,7 @@ package challenge
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -422,5 +423,103 @@ func TestScoreRunSemantics(t *testing.T) {
 	}
 	if _, err := ScoreRun(RunInput{}, DefaultScoreParams()); err == nil {
 		t.Error("empty run accepted")
+	}
+}
+
+// FrontierVector pins frontier scoring as a post-pass over an unattested
+// score. Platform scores rounds without attestations and applies them later
+// (once the oracle reports and the audit settles) from the stored verdicts;
+// its port (apps/platform/ditto/api_server/generator_frontier.py) replays
+// testdata/frontier_vectors.json and must reproduce Expected exactly from
+// Base, FrontierCaseIDs and Params.
+type FrontierVector struct {
+	Name            string      `json:"name"`
+	Params          ScoreParams `json:"params"`
+	FrontierCaseIDs []string    `json:"frontier_case_ids"`
+	Base            PackScore   `json:"base"`
+	Expected        PackScore   `json:"expected"`
+}
+
+func buildFrontierVectors(t *testing.T) []FrontierVector {
+	t.Helper()
+	cases := ReferencePack(21, testHotkey).Refs()
+	rng := rand.New(rand.NewSource(4242))
+	var vs []FrontierVector
+	add := func(name string, in ScoreInput, p ScoreParams, attested []string) {
+		base, err := ScoreCases(cases, in, p)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		in.FrontierCaseIDs = attested
+		got, err := ScoreCases(cases, in, p)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		vs = append(vs, FrontierVector{Name: name, Params: p, FrontierCaseIDs: attested, Base: base, Expected: got})
+	}
+	every := make([]string, len(cases))
+	for i, c := range cases {
+		every[i] = c.CaseID
+	}
+	p := DefaultScoreParams()
+	p.FrontierWeight = 1
+	zero := []PanelMember{
+		member("a1", "o1", true, uniform(cases, 0)),
+		member("a2", "o2", false, uniform(cases, 0)),
+		member("a3", "o3", false, uniform(cases, 0.25)),
+	}
+	add("all_fail_all_attested", ScoreInput{GeneratorOwnerKey: "gen", Panel: zero}, p, every)
+	add("all_fail_some_attested", ScoreInput{GeneratorOwnerKey: "gen", Panel: zero}, p, every[:5])
+	add("nothing_attested", ScoreInput{GeneratorOwnerKey: "gen", Panel: zero}, p, nil)
+	for _, w := range []float64{0.3, 0.75, 1} {
+		pw := p
+		pw.FrontierWeight = w
+		pw.TargetCases = 16
+		add(fmt.Sprintf("random_panel_weight_%g", w), ScoreInput{GeneratorOwnerKey: "gen", Panel: []PanelMember{
+			member("x1", "o1", true, randomScores(rng, cases, 0.35)),
+			member("x2", "o2", false, randomScores(rng, cases, 0.45)),
+			member("x3", "o3", false, randomScores(rng, cases, 0.2)),
+			member("x4", "gen", false, uniform(cases, 1)),
+		}, ClaimedFingerprints: []string{cases[2].Fingerprint}}, pw, every)
+	}
+	noBonus := p
+	noBonus.ChampionBonus = 0
+	add("no_champion_bonus", ScoreInput{GeneratorOwnerKey: "gen", Panel: []PanelMember{
+		member("y1", "o1", true, randomScores(rng, cases, 0.3)),
+		member("y2", "o2", false, randomScores(rng, cases, 0.3)),
+		member("y3", "o3", false, randomScores(rng, cases, 0.3)),
+	}}, noBonus, every[3:])
+	return vs
+}
+
+func TestFrontierVectorsGolden(t *testing.T) {
+	vs := buildFrontierVectors(t)
+	path := "testdata/frontier_vectors.json"
+	if *update {
+		b, err := json.MarshalIndent(vs, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run go test ./challenge -run TestFrontierVectorsGolden -update)", err)
+	}
+	var golden []FrontierVector
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := json.Marshal(vs)
+	want, _ := json.Marshal(golden)
+	if string(got) != string(want) {
+		t.Fatal("frontier vectors drifted; rerun with -update if intended")
+	}
+	for _, v := range vs {
+		if v.Base.Frontier != 0 {
+			t.Fatalf("%s: a base score has no frontier cases", v.Name)
+		}
 	}
 }
