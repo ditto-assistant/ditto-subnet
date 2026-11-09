@@ -1098,7 +1098,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	version, msg := requestedPracticeBenchVersion(req.BenchVersion)
-	if req.PrivateDatasetMode != "" || len(req.PrivateDatasetBytes) != 0 {
+	if req.PrivateDatasetMode != "" || len(req.PrivateDatasetBytes) != 0 || len(req.OracleCaseIDs) != 0 {
 		writeError(w, http.StatusBadRequest, "private datasets are not accepted on practice")
 		return
 	}

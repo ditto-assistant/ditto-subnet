@@ -143,3 +143,12 @@ func TestOracleCasesByColumn(t *testing.T) {
 		t.Fatal("a case outside the dataset must be refused")
 	}
 }
+
+// oracle_case_ids select the frontier oracle mode, which practice never runs:
+// they are refused there rather than silently ignored.
+func TestPracticeRefusesOracleCaseIDs(t *testing.T) {
+	rr := submitOn(newPracticeTestServer(), `{"bench_version":15,"run_size":"small","harness_url":"http://127.0.0.1:9","oracle_case_ids":["c0/k1"]}`)
+	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "not accepted on practice") {
+		t.Fatalf("practice with oracle_case_ids = %d %s", rr.Code, rr.Body.String())
+	}
+}
