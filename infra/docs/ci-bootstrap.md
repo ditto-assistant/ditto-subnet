@@ -69,7 +69,7 @@ the same change plan.
 
 ## AWS roots
 
-AWS roots (today only `aws-generator-scorer`) use the same `infra-plan` and
+AWS roots (`aws-generator-scorer` and `aws-screener`) use the same `infra-plan` and
 `infra-apply` environments. GCP auth still seals and fetches the saved plan in
 `gs://ditto-app-dev-tfstate/ci-plans/`; the plan and apply jobs then assume
 `ditto-subnet-infra-plan` or `ditto-subnet-infra-apply` in account
@@ -93,13 +93,14 @@ terraform -chdir=infra/terraform/stacks/aws-bootstrap apply bootstrap.tfplan
 
 The plan should import the five bucket resources and create the bucket
 lifecycle and TLS-only policy, the OIDC provider, and the two roles with their
-inline policies. The plan role reads state, takes the lock and reads
-the scorer's resources. The apply role can also write that state object, make
-region-scoped EC2 network/instance changes on resources carrying the
-`aws-generator-scorer` `stack` tag, read the `ditto-generator-scorer` role and
-instance profile and pass that role to EC2 only, and manage only the scorer's
-SSM transfer bucket. Widen it in this root, reviewed, when a new AWS root is
-added.
+inline policies. The plan role reads each AWS root's state, takes its lock and
+reads its resources. The apply role can also write those state objects, make
+region-scoped EC2 network/instance changes on resources carrying an
+`aws-generator-scorer` or `aws-screener` `stack` tag, read the
+`ditto-generator-scorer` and `ditto-screener-node` roles and instance profiles,
+pass those two roles to EC2 only, and manage only the scorer's SSM transfer
+bucket. It can write no IAM role or instance profile. Widen it in this root,
+reviewed, when a new AWS root is added.
 
 ### Generator scorer identity
 
@@ -111,8 +112,8 @@ that role name, so the CI apply role is explicitly denied every IAM write on
 the role and profile (create, delete, update, retrust, tag, policy and
 permissions-boundary changes, instance-profile membership); it cannot replace
 the role with one it trusts. The security groups it can change are only the
-ones it created with the stack tag: it can tag a security group only in the
-call that creates it.
+ones it created with a stack tag: it can tag a security group only in the
+call that creates it, so neither AWS root manages its VPC's default group.
 
 Create the identity before the first `aws-generator-scorer` apply, with an SSO
 administrator session:
@@ -127,6 +128,55 @@ Expect only the role, its SSM policy attachment and the instance profile. Keep
 the value in every later bootstrap plan (or the identity is destroyed). The
 scorer root reads the profile by name and fails its plan unless the profile
 wraps `ditto-generator-scorer`.
+
+### On-demand screener identities
+
+`aws-bootstrap` (`screener.tf`), not the CI-applied `aws-screener` root, owns
+the screener's two IAM roles, so no workflow run can change which instance role
+GCP trusts or which Google identity may start the instance. The CI roles are
+denied `iam:UpdateAssumeRolePolicy` on both roles and every IAM write on them.
+
+- `ditto-screener-node` and its instance profile (`enable_aws_screener`): EC2
+  trust, only `AmazonSSMManagedInstanceCore` attached. GCP's `screener-aws`
+  pool (`gcp-platform/screener-aws.tf`) maps its sessions to a principal set
+  that reads the screener review keys and the `screener-aws-registration-token`
+  grant.
+- `ditto-screener-capacity-wake` (`screener_capacity_controller_unique_id`):
+  trusts `accounts.google.com` for exactly the capacity controller service
+  account (`:aud` = its unique ID, the token's `azp`; `:sub` = the same ID;
+  `:oaud` = `ditto-screener-capacity`, the token's audience). It may call
+  `ec2:DescribeInstances` and `ec2:StartInstances` on `stack = aws-screener`
+  instances in `us-east-1`, nothing else.
+
+Enabling the screener is a sequence of reviewed steps; each is inert until the
+next:
+
+1. Protected `gcp-platform` apply with `enable_screener_aws_identity = true`.
+   Read outputs `screener_capacity_controller_unique_id` and
+   `screener_aws_wif_provider`. An operator adds the single-use Platform
+   registration grant as the one version of `screener-aws-registration-token`.
+2. Re-apply this bootstrap locally with an SSO administrator session (the CI
+   roles cannot create these identities):
+
+   ```bash
+   terraform -chdir=infra/terraform/stacks/aws-bootstrap plan -out=bootstrap.tfplan \
+     -var enable_aws_screener=true \
+     -var screener_capacity_controller_unique_id=<numeric unique id>
+   terraform -chdir=infra/terraform/stacks/aws-bootstrap apply bootstrap.tfplan
+   ```
+
+   Expect only the two roles, the instance profile, the SSM attachment, the
+   wake role's inline policy, and in-place updates to the two CI role policies.
+   Keep both values in every later bootstrap plan (or the roles are destroyed),
+   together with `enable_generator_scorer_identity=true` once the generator
+   scorer identity exists.
+3. Protected `aws-screener` plan/apply with `enable_aws_screener = true`,
+   `screener_fleet_release_sha` (a semantic-release commit),
+   `screener_fleet_builder_image` (digest-pinned) and
+   `screener_fleet_aws_wif_provider` set in that root's reviewed tfvars. First
+   boot checks out that exact commit and runs
+   `infra/ansible/playbooks/aws-screener-node.yml` against localhost; progress
+   is in `/var/log/ditto-screener-bootstrap.log` (reach it over SSM).
 
 ## `preview`
 

@@ -2,9 +2,9 @@
 Description=Check for an authenticated Ditto screener fleet release
 
 [Timer]
-OnBootSec=10min
+OnBootSec={{ screener_fleet_auto_update_on_boot_sec }}
 OnUnitActiveSec=10min
-RandomizedDelaySec=3min
+RandomizedDelaySec={{ screener_fleet_auto_update_randomized_delay }}
 Persistent=true
 
 [Install]

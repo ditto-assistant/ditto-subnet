@@ -1,5 +1,9 @@
 # Federated screener capacity
 
+The on-demand AWS EC2 replacement primary (`subnet-screener-3`, stopped
+when idle and started by this controller) is described in
+[`docs/aws-screener-node.md`](../../docs/aws-screener-node.md).
+
 The normal production path is one fixed-cost 64 GB Hetzner node named
 `subnet-screener-1`, with the existing GCE MIG retained at zero as outage and
 backlog-overflow capacity. Platform owns admission and leases; Backroom owns

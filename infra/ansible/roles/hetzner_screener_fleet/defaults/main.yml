@@ -2,6 +2,9 @@
 screener_fleet_node_id: subnet-screener-1
 screener_fleet_runtime_enabled: true
 screener_fleet_environment: prod
+# Provider the node enrolls under: hetzner (Robot server id) or aws (EC2
+# instance id). The enrollment grant binds the exact provider/resource pair.
+screener_fleet_provider: hetzner
 screener_fleet_provider_resource_id: ""
 screener_fleet_platform_url: https://platform-api.heyditto.ai
 screener_fleet_netuid: 118
@@ -21,7 +24,31 @@ screener_fleet_active_worker_venv: "{{ screener_fleet_current }}/worker-venv"
 screener_fleet_state_dir: /var/lib/ditto-screener-fleet
 screener_fleet_config_dir: /etc/ditto-screener-fleet
 screener_fleet_secret_agent_user: ditto-screener-secrets
+# How the isolated secret agent proves its identity to Google:
+#   x509  the operator-run Hetzner path. screener_fleet_x509_enabled turns the
+#         offline-CA client certificate on; without it the review key comes
+#         from Ansible Vault (today's behaviour, unchanged).
+#   aws   the self-bootstrapping EC2 path. gcloud signs an STS
+#         GetCallerIdentity request with the instance role from IMDSv2 and
+#         exchanges it at screener_fleet_aws_wif_provider. The GCP side grants
+#         secretAccessor directly to the ditto-screener-node role principalSet,
+#         so there is no service-account impersonation and no key on disk.
+screener_fleet_google_identity: x509
+screener_fleet_aws_wif_provider: ""
+# Secret Manager id holding the single-use enrollment grant for an aws node.
+# Read once, only while node.json is absent, and consumed by the enroll unit.
+screener_fleet_registration_token_secret: ""
+# Root-only gcloud state used for that one read; never the secret agent's.
+screener_fleet_aws_enrollment_cloudsdk_config: "{{ screener_fleet_state_dir }}/enrollment-gcloud"
+# Pinned packages.cloud.google.com/apt/doc/apt-key.gpg (same pin as the
+# generator_scorer aws-wif path). A rotated key fails closed.
+screener_fleet_google_cloud_apt_key_sha256: "3ecc63922b7795eb23fdc449ff9396f9114cb3cf186d6f5b53ad4cc3ebfbb11f"
 screener_fleet_x509_enabled: false
+# Both identity modes share the agent's private directory, credential file, and
+# gcloud config below; only how the credential configuration is produced
+# differs.
+screener_fleet_secret_agent_enabled: >-
+  {{ (screener_fleet_x509_enabled | bool) or screener_fleet_google_identity == 'aws' }}
 screener_fleet_x509_subject: "spiffe://dittobench.ai/screener/{{ screener_fleet_node_id }}"
 screener_fleet_x509_provider: ""
 screener_fleet_x509_service_account_email: ""
@@ -84,7 +111,7 @@ screener_fleet_credential_file: "{{ screener_fleet_config_dir }}/node.json"
 screener_fleet_registration_token_file: "{{ screener_fleet_config_dir }}/registration-token"
 screener_fleet_source_review_key_file: >-
   {{ screener_fleet_secrets_dir + '/source-review-api-key'
-     if screener_fleet_x509_enabled
+     if screener_fleet_secret_agent_enabled | bool
      else screener_fleet_config_dir + '/source-review-api-key' }}
 # Which OpenAI-compatible gateway the private review layers (L1-L4) call with
 # the source-review key: openrouter (historical) or ditto (Ditto Inference,
@@ -113,6 +140,10 @@ screener_fleet_release_env_file: "{{ screener_fleet_config_dir }}/release.env"
 screener_fleet_update_state_dir: "{{ screener_fleet_state_dir }}/updater"
 screener_fleet_updater_path: >-
   {{ screener_fleet_update_state_dir }}/ditto-screener-fleet-auto-update
+# First updater tick after boot. An on-demand host shortens this so a woken
+# node adopts a newer signed release before it claims much work.
+screener_fleet_auto_update_on_boot_sec: 10min
+screener_fleet_auto_update_randomized_delay: 3min
 
 screener_fleet_repo_url: https://github.com/ditto-assistant/ditto-subnet.git
 # Exact public release commit to run. Mutable branches are deliberately rejected.
@@ -132,6 +163,20 @@ screener_fleet_source_review_timeout_seconds: 1800
 screener_fleet_vm_memory_mib: 10240
 screener_fleet_vm_vcpus: 8
 screener_fleet_vm_disk_gib: 80
+# KVM/libvirt, the disposable Debian guest base, and its NAT network. The live
+# build path is the rootless Docker executor; nothing in workers/screener uses
+# libvirt. Kept on for the existing Hetzner inventory; on-demand nodes turn it
+# off.
+screener_fleet_kvm_enabled: true
+
+# On-demand capacity. Empty (the default) keeps workers always on. When set,
+# each worker exits with status 85 after this many idle seconds, systemd does
+# not restart it, and the idle-shutdown timer powers the host off once every
+# worker has done so and nothing else holds the node.
+screener_fleet_idle_exit_seconds: ""
+screener_fleet_idle_shutdown_path: /usr/local/sbin/ditto-screener-idle-shutdown
+# Give a fresh boot time to enroll and run its first updater tick.
+screener_fleet_idle_shutdown_on_boot_sec: 10min
 
 # Both images execute trusted Ditto code and must be immutable release digests.
 screener_fleet_builder_image: ""

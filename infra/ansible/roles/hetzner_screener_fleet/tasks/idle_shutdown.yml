@@ -1,0 +1,64 @@
+---
+# On-demand capacity only. With screener_fleet_idle_exit_seconds empty (every
+# Hetzner node) nothing is installed and any earlier install is removed.
+- name: Install the idle shutdown decision script
+  ansible.builtin.copy:
+    src: idle-shutdown.sh
+    dest: "{{ screener_fleet_idle_shutdown_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_idle_exit_seconds | string | length > 0
+
+- name: Install the idle shutdown units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - ditto-screener-idle-shutdown.service
+    - ditto-screener-idle-shutdown.timer
+  notify: Reload systemd for screener fleet
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_idle_exit_seconds | string | length > 0
+
+- name: Enable the idle shutdown timer
+  ansible.builtin.systemd:
+    name: ditto-screener-idle-shutdown.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_idle_exit_seconds | string | length > 0
+
+- name: Inspect a previously installed idle shutdown timer
+  ansible.builtin.stat:
+    path: /etc/systemd/system/ditto-screener-idle-shutdown.timer
+  register: screener_fleet_idle_shutdown_timer
+  when: not (screener_fleet_runtime_enabled and screener_fleet_idle_exit_seconds | string | length > 0)
+
+- name: Disable a previously installed idle shutdown timer
+  ansible.builtin.systemd:
+    name: ditto-screener-idle-shutdown.timer
+    enabled: false
+    state: stopped
+  when:
+    - not (screener_fleet_runtime_enabled and screener_fleet_idle_exit_seconds | string | length > 0)
+    - screener_fleet_idle_shutdown_timer.stat.exists
+
+- name: Remove a previously installed idle shutdown
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/ditto-screener-idle-shutdown.timer
+    - /etc/systemd/system/ditto-screener-idle-shutdown.service
+    - "{{ screener_fleet_idle_shutdown_path }}"
+  notify: Reload systemd for screener fleet
+  when: not (screener_fleet_runtime_enabled and screener_fleet_idle_exit_seconds | string | length > 0)

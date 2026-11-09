@@ -24,9 +24,10 @@ resource "aws_instance" "this" {
   user_data                   = var.user_data
   user_data_replace_on_change = false
 
-  disable_api_termination = var.deletion_protection
-  ebs_optimized           = true
-  monitoring              = false
+  disable_api_termination              = var.deletion_protection
+  instance_initiated_shutdown_behavior = var.instance_initiated_shutdown_behavior
+  ebs_optimized                        = true
+  monitoring                           = false
 
   # IMDSv2 only. Hop limit 1 means a container behind the Docker bridge cannot
   # reach the role credentials; tags stay out of metadata.

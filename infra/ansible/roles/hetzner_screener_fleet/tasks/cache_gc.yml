@@ -1,9 +1,11 @@
 ---
 # The persistent full screening workers build on this rootless daemon. Reuse
 # only the bounded cache tasks, never the legacy GCP worker provisioning.
+# Resolve the sibling role by path: an on-demand node runs this role from a
+# plain checkout without infra/ansible/ansible.cfg's roles_path.
 - name: Install the bounded cache policy for the full screening workers
   ansible.builtin.include_role:
-    name: screener_worker
+    name: "{{ role_path }}/../screener_worker"
     tasks_from: cache_gc
   vars:
     screener_cache_gc_enabled: "{{ screener_fleet_runtime_enabled and screener_fleet_cache_gc_enabled }}"

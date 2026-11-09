@@ -1,0 +1,92 @@
+---
+# Self-bootstrap an on-demand AWS EC2 screener node. cloud-init runs this once,
+# as root, from a checkout of the exact release SHA:
+#
+#   ansible-playbook -i localhost, -c local \
+#     infra/ansible/playbooks/aws-screener-node.yml \
+#     -e @/etc/ditto-screener-fleet/bootstrap-vars.json
+#
+# The signed pull updater keeps the node current after that. Roles are named
+# by path so the run needs neither infra/ansible/ansible.cfg nor any Ansible
+# collection beyond ansible-core.
+#
+# This uses the Hetzner fleet role with the aws provider: instance-role Google
+# federation instead of the offline X.509 CA, the enrollment grant read from
+# Secret Manager instead of Ansible Vault, no KVM, and idle power-off. Of the
+# shared base role it applies only packages, journald, unattended upgrades,
+# and uv. The node has no SSH ingress (operators use SSM Session Manager), so
+# there are no operator accounts, sudoers grant, sshd allowlist, fail2ban,
+# ufw (the security group admits nothing), or Tailscale log access.
+- name: Converge an on-demand AWS EC2 screener node
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  vars:
+    base_install_go: false
+    base_install_uv: true
+    base_install_caddy: false
+    base_install_postgres_packages: false
+    base_install_ops_agent: false
+    # Blank here so each must come from bootstrap-vars.json (extra vars beat
+    # play vars); a role default such as subnet-screener-1 can never leak in.
+    screener_fleet_node_id: ""
+    screener_fleet_provider_resource_id: ""
+    screener_fleet_release_sha: ""
+    screener_fleet_builder_image: ""
+    screener_fleet_aws_wif_provider: ""
+    screener_fleet_registration_token_secret: ""
+    screener_fleet_provider: aws
+    screener_fleet_google_identity: aws
+    screener_fleet_x509_enabled: false
+    screener_fleet_kvm_enabled: false
+    screener_fleet_runtime_enabled: true
+    # A woken node adopts a newer signed release before it claims much work.
+    screener_fleet_auto_update_on_boot_sec: 1min
+    screener_fleet_auto_update_randomized_delay: 30s
+
+  pre_tasks:
+    - name: Require the rendered bootstrap contract
+      ansible.builtin.assert:
+        that:
+          - screener_fleet_node_id is regex('^subnet-screener-[1-9][0-9]*$')
+          - screener_fleet_provider == 'aws'
+          - screener_fleet_google_identity == 'aws'
+          - not screener_fleet_x509_enabled | bool
+          - screener_fleet_runtime_enabled | bool
+          - screener_fleet_provider_resource_id is regex('^i-[0-9a-f]{8,17}$')
+          - screener_fleet_release_sha is regex('^[0-9a-f]{40}$')
+          - screener_fleet_builder_image is regex('^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$')
+          - screener_fleet_aws_wif_provider is regex('^projects/[0-9]+/locations/global/workloadIdentityPools/screener-aws/providers/aws-ec2$')
+          - screener_fleet_gcp_project is regex('^[a-z][a-z0-9-]{4,28}[a-z0-9]$')
+          - screener_fleet_registration_token_secret is regex('^[A-Za-z0-9_-]{1,255}$')
+          - screener_fleet_platform_url is regex('^https://[^/]+$')
+          - screener_fleet_worker_processes | string is regex('^[0-9]+$')
+          - screener_fleet_worker_processes | int >= 1
+          - screener_fleet_worker_processes | int <= 16
+          - >-
+            screener_fleet_idle_exit_seconds | string | length == 0 or
+            (screener_fleet_idle_exit_seconds | string is regex('^[0-9]+$') and
+             screener_fleet_idle_exit_seconds | int >= 60 and
+             screener_fleet_idle_exit_seconds | int <= 86400)
+        fail_msg: >-
+          bootstrap-vars.json must name a subnet-screener-<n> node id, an EC2
+          instance id (i-...), a 40-hex release SHA, a digest-pinned builder
+          image, the screener-aws/aws-ec2 WIF provider resource, the GCP
+          project, the registration-grant secret id, an https Platform origin,
+          1..16 worker processes, and an idle exit of 60..86400 seconds or
+          none. It must not switch the node to x509, hetzner, or rehearsal mode.
+        quiet: true
+
+    - name: Apply the shared base packages, journald, upgrades, and uv
+      ansible.builtin.include_role:
+        name: ../roles/base
+        tasks_from: "{{ item }}"
+      loop:
+        - packages.yml
+        - journald.yml
+        - unattended_upgrades.yml
+        - uv.yml
+
+  roles:
+    - role: ../roles/hetzner_screener_fleet
