@@ -222,15 +222,23 @@ pub fn choice_chunks(
 
 /// Packs questions into as few requests as the per-request limit allows,
 /// keeping their order. With the v18 menu (about 1,450 tools) and 80-character
-/// descriptions every question fits one request.
-pub fn pack_requests(questions: Vec<Question>, state: &Value) -> Vec<Vec<Question>> {
+/// descriptions every question fits one request. A question that cannot fit
+/// the per-question limit with `state`, even alone, is not sent: its id is
+/// returned second so the caller can report it, and the rest still go out.
+pub fn pack_requests(questions: Vec<Question>, state: &Value) -> (Vec<Vec<Question>>, Vec<String>) {
     let budget = ((MAX_REQUEST_TOKENS as f64) * LIMIT_HEADROOM) as usize;
+    let question_budget = ((MAX_QUESTION_TOKENS as f64) * LIMIT_HEADROOM) as usize;
     let state_tokens = estimate_value_tokens(state);
     let mut out: Vec<Vec<Question>> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     let mut current: Vec<Question> = Vec::new();
     let mut used = state_tokens;
     for question in questions {
         let cost = question.estimated_tokens();
+        if state_tokens + cost > question_budget {
+            skipped.push(question.id);
+            continue;
+        }
         if !current.is_empty() && used + cost > budget {
             out.push(std::mem::take(&mut current));
             used = state_tokens;
@@ -241,7 +249,7 @@ pub fn pack_requests(questions: Vec<Question>, state: &Value) -> Vec<Vec<Questio
     if !current.is_empty() {
         out.push(current);
     }
-    out
+    (out, skipped)
 }
 
 /// The answers of one or more System One requests, keyed by question id.
@@ -497,8 +505,9 @@ impl DecisionClient {
     }
 
     /// Packs `questions` into as few requests as the limits allow, sends them
-    /// concurrently and merges the answers. Requests that fail are skipped:
-    /// their questions are simply unanswered.
+    /// concurrently and merges the answers. Requests that fail, and questions
+    /// too large to send, are skipped and counted as failures: their
+    /// questions are simply unanswered.
     pub async fn ask(
         &self,
         case_id: &str,
@@ -506,7 +515,16 @@ impl DecisionClient {
         questions: Vec<Question>,
         usage: &DecisionUsage,
     ) -> Answers {
-        let batches = pack_requests(questions, state);
+        let (batches, skipped) = pack_requests(questions, state);
+        if !skipped.is_empty() {
+            usage
+                .failures
+                .fetch_add(skipped.len() as i64, Ordering::Relaxed);
+            eprintln!(
+                "jev: {case_id}: not sent, over the per-question limit: {}",
+                skipped.join(", ")
+            );
+        }
         let futures = batches
             .iter()
             .map(|batch| self.ask_one(case_id, state, batch, usage));
@@ -632,13 +650,47 @@ mod tests {
         let desc = "d".repeat(80);
         let state = json!({"request": "Kick off the weekly digest workflow."});
         let qs = choice_chunks("t", "Which tool?", &opts(1454, &desc), &none, 255, 20);
-        let batches = pack_requests(qs, &state);
+        let (batches, skipped) = pack_requests(qs, &state);
         assert_eq!(batches.len(), 1, "names plus 80-char descriptions fit 64k");
+        assert!(skipped.is_empty());
         let qs = choice_chunks("t", "Which tool?", &opts(4000, &desc), &none, 255, 20);
         assert!(
-            pack_requests(qs, &state).len() > 1,
+            pack_requests(qs, &state).0.len() > 1,
             "a 4,000-tool menu splits"
         );
+    }
+
+    #[test]
+    fn an_oversized_question_is_skipped_and_the_rest_still_go() {
+        let state = json!({"request": "Was the invoice already paid?"});
+        let questions = vec![
+            Question::noul("small", "The invoice was paid."),
+            Question::noul("huge", "x".repeat(200_000)),
+            Question::noul("after", "The user asked twice."),
+        ];
+        let (batches, skipped) = pack_requests(questions, &state);
+        assert_eq!(skipped, vec!["huge".to_string()]);
+        let ids: Vec<&str> = batches.iter().flatten().map(|q| q.id.as_str()).collect();
+        assert_eq!(ids, vec!["small", "after"]);
+    }
+
+    #[tokio::test]
+    async fn ask_reports_an_oversized_question_without_sending_it() {
+        // Nothing listens here: a request that were sent would fail as
+        // unreachable after its retries, not instantly.
+        let client = DecisionClient::new(reqwest::Client::new(), "http://127.0.0.1:9", "m", None);
+        let usage = DecisionUsage::default();
+        let answers = client
+            .ask(
+                "case-1",
+                &json!({"request": "x"}),
+                vec![Question::noul("huge", "x".repeat(200_000))],
+                &usage,
+            )
+            .await;
+        assert!(answers.answers.is_empty());
+        let (calls, _, _, failures) = usage.snapshot();
+        assert_eq!((calls, failures), (0, 1));
     }
 
     #[test]
