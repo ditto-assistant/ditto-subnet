@@ -411,7 +411,17 @@ pub fn extract_candidates(texts: &[&str], limit: usize) -> Vec<String> {
                 continue;
             }
             let starts_upper = bare.chars().next().is_some_and(char::is_uppercase);
-            if starts_upper && bare.chars().count() > 1 && i > 0 {
+            // A sentence-initial word is capitalised anyway; keep it only when
+            // it opens a capitalised run ("John Smith emailed me").
+            let opens_run = i == 0
+                && !raw.ends_with(['.', ',', ';', ':', '?', '!'])
+                && words.get(1).is_some_and(|next| {
+                    next.trim_matches(EDGE_PUNCT)
+                        .chars()
+                        .next()
+                        .is_some_and(char::is_uppercase)
+                });
+            if starts_upper && bare.chars().count() > 1 && (i > 0 || opens_run) {
                 caps.push(bare.to_string());
                 if raw.ends_with(['.', ',', ';', ':', '?', '!']) || caps.len() == 4 {
                     flush_caps(&mut caps, &mut out, &mut push);
@@ -522,6 +532,8 @@ async fn plan(
 ) -> Plan {
     let mut plan = Plan::default();
     let Some(client) = client else {
+        // No decision lane: keep the retrieval order, as a failed pass 1 does.
+        plan.notes = pick_notes(&Answers::default(), case.notes.len(), cfg.notes_k);
         return plan;
     };
     let state = json!({"request": case.user_input});
@@ -587,10 +599,14 @@ async fn plan(
         .find(|(n, _)| *n == plan.route)
         .map(|(_, p)| p)
         .unwrap_or(0.0);
+    // An explicit act route outranks a contradictory no_change score;
+    // already_done still stops a case whose records show the work is done.
     plan.act_unlikely = (plan.route != "act" && !plan.route.is_empty() && route_p >= 0.5)
-        || answers.noul("no_change").unwrap_or(0.0) >= 0.6
+        || (plan.route != "act" && answers.noul("no_change").unwrap_or(0.0) >= 0.6)
         || answers.noul("already_done").unwrap_or(0.0) >= 0.6;
-    if plan.act_unlikely {
+    // No route means pass 1 failed: skip the costly menu and let run_case
+    // fall back to code-only selection, as it does without a decision lane.
+    if plan.act_unlikely || plan.route.is_empty() {
         return plan;
     }
 
@@ -1102,10 +1118,19 @@ pub fn log_usage(case_id: &str, outcome: &HybridOutcome) {
     if path.trim().is_empty() {
         return;
     }
-    append_usage(path.trim(), case_id, outcome);
+    if let Err(err) = append_usage(path.trim(), case_id, outcome) {
+        // Once per process: concurrent cases would otherwise repeat it.
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            eprintln!(
+                "{USAGE_LOG_ENV}: cannot append to {}: {err}; the usage log is incomplete",
+                path.trim()
+            );
+        });
+    }
 }
 
-fn append_usage(path: &str, case_id: &str, outcome: &HybridOutcome) {
+fn append_usage(path: &str, case_id: &str, outcome: &HybridOutcome) -> std::io::Result<()> {
     let mut line = serde_json::to_value(outcome).unwrap_or(Value::Null);
     if let Some(map) = line.as_object_mut() {
         map.insert("case_id".to_string(), json!(case_id));
@@ -1117,13 +1142,11 @@ fn append_usage(path: &str, case_id: &str, outcome: &HybridOutcome) {
     // after a partial one: hold a lock so two cases' records never interleave.
     static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if let Ok(mut file) = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
-    {
-        let _ = file.write_all(format!("{line}\n").as_bytes());
-    }
+        .open(path)?
+        .write_all(format!("{line}\n").as_bytes())
 }
 
 #[cfg(test)]

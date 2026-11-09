@@ -310,6 +310,20 @@ fn candidates_cover_the_general_value_shapes() {
         assert!(got.iter().any(|g| g == want), "missing {want} in {got:?}");
     }
     assert_eq!(extract_candidates(&["a b c"], 40), Vec::<String>::new());
+    // A name that opens the text keeps its first word; a lone capitalised
+    // sentence opener is not a candidate.
+    assert_eq!(
+        extract_candidates(&["John Smith emailed me"], 40),
+        vec!["John Smith".to_string()]
+    );
+    assert_eq!(
+        extract_candidates(&["Please email the team"], 40),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        extract_candidates(&["Hi, Bob asked"], 40),
+        vec!["Bob".to_string()]
+    );
 }
 
 #[test]
@@ -623,9 +637,13 @@ async fn without_a_decision_lane_it_falls_back_to_code_only_selection() {
     .await
     .unwrap();
     assert_eq!(out.decision_calls, 0);
-    let offered = &model.calls.lock().unwrap()[0].1;
+    let calls = model.calls.lock().unwrap();
+    let offered = &calls[0].1;
     assert!(!offered.is_empty() && offered.len() <= 8 + 1, "{offered:?}");
     assert!(offered.contains(&"calendar_create_event".to_string()));
+    // Retrieved notes still reach the model, in retrieval order.
+    assert!(out.notes_used > 0);
+    assert!(user_prompt(&calls[0].0).contains("Priya prefers morning meetings"));
 }
 
 #[tokio::test]
@@ -658,6 +676,37 @@ async fn a_failing_decision_lane_degrades_instead_of_failing_the_case() {
     .unwrap();
     assert_eq!(out.final_text, "ok");
     assert!(out.decision_failures >= 1);
+    assert!(!out.menu_asked, "a failed first pass never reads the menu");
+    assert!(model.calls.lock().unwrap()[0]
+        .1
+        .contains(&"calendar_create_event".to_string()));
+}
+
+#[tokio::test]
+async fn an_act_route_reads_the_menu_despite_a_high_no_change() {
+    let stub = JevStub {
+        prefer: vec!["act".into(), "calendar_create_event".into()],
+        nouls: HashMap::from([("no_change".to_string(), 0.9)]),
+        ..JevStub::default()
+    };
+    let url = serve_jev(stub).await;
+    let client = DecisionClient::new(reqwest::Client::new(), url, "typesafe/jev-1.14", None);
+    let catalog = catalog();
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let model = ScriptedModel::new(vec![text("ok")]);
+    let out = run_case(
+        &model,
+        Some(&client),
+        &HybridConfig::default(),
+        case(&catalog, &executed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.route, "act");
+    assert!(out.menu_asked, "an act route reads the menu");
+    let calls = model.calls.lock().unwrap();
+    assert!(!user_prompt(&calls[0].0).contains("No action seems to be needed"));
+    assert!(calls[0].1.contains(&"calendar_create_event".to_string()));
 }
 
 #[test]
@@ -923,7 +972,9 @@ fn concurrent_usage_appends_stay_whole_lines() {
     std::thread::scope(|s| {
         for i in 0..16 {
             let (path, outcome) = (&path, &outcome);
-            s.spawn(move || append_usage(path.to_str().unwrap(), &format!("case-{i}"), outcome));
+            s.spawn(move || {
+                append_usage(path.to_str().unwrap(), &format!("case-{i}"), outcome).unwrap()
+            });
         }
     });
     let text = std::fs::read_to_string(&path).unwrap();
@@ -933,4 +984,7 @@ fn concurrent_usage_appends_stay_whole_lines() {
         let record: Value = serde_json::from_str(line).unwrap();
         assert_eq!(record["route"].as_str().unwrap().len(), 64 * 1024);
     }
+    // An unopenable path is reported to log_usage, which warns once.
+    let missing = dir.path().join("absent").join("usage.jsonl");
+    assert!(append_usage(missing.to_str().unwrap(), "case-x", &outcome).is_err());
 }

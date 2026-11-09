@@ -92,17 +92,24 @@ impl Question {
         }
     }
 
-    /// A `choice` over `options` (`name -> description`, in order). Panics in
-    /// debug builds when given more than [`MAX_CHOICE_OPTIONS`]; use
-    /// [`choice_chunks`] for longer lists.
+    /// A `choice` over `options` (`name -> description`, in order). Never
+    /// panics: a repeated name keeps its first description, and past
+    /// [`MAX_CHOICE_OPTIONS`] options the middle is dropped so the trailing
+    /// reference option ("none of these") survives. Both are reported on
+    /// stderr; use [`choice_chunks`] for longer lists.
     pub fn choice(
         id: impl Into<String>,
         instructions: impl Into<Value>,
         options: &[(String, String)],
     ) -> Question {
-        debug_assert!(options.len() <= MAX_CHOICE_OPTIONS);
+        let id = id.into();
         let mut criteria = Map::new();
+        let mut duplicates = 0usize;
         for (name, description) in options {
+            if criteria.contains_key(name) {
+                duplicates += 1;
+                continue;
+            }
             let description = if description.is_empty() {
                 Value::Null
             } else {
@@ -110,8 +117,28 @@ impl Question {
             };
             criteria.insert(name.clone(), description);
         }
+        let dropped = criteria.len().saturating_sub(MAX_CHOICE_OPTIONS);
+        if dropped > 0 {
+            let last = options.last().map(|(name, _)| name.as_str());
+            let excess: Vec<String> = options
+                .iter()
+                .map(|(name, _)| name)
+                .filter(|name| Some(name.as_str()) != last && criteria.contains_key(*name))
+                .skip(MAX_CHOICE_OPTIONS - 1)
+                .take(dropped)
+                .cloned()
+                .collect();
+            for name in excess {
+                criteria.remove(&name);
+            }
+        }
+        if duplicates > 0 || dropped > 0 {
+            eprintln!(
+                "jev: choice {id}: dropped {duplicates} repeated and {dropped} over-limit option(s)"
+            );
+        }
         Question {
-            id: id.into(),
+            id,
             body: json!({
                 "type": "choice",
                 "instructions": instructions.into(),
@@ -195,15 +222,23 @@ pub fn choice_chunks(
 
 /// Packs questions into as few requests as the per-request limit allows,
 /// keeping their order. With the v18 menu (about 1,450 tools) and 80-character
-/// descriptions every question fits one request.
-pub fn pack_requests(questions: Vec<Question>, state: &Value) -> Vec<Vec<Question>> {
+/// descriptions every question fits one request. A question that cannot fit
+/// the per-question limit with `state`, even alone, is not sent: its id is
+/// returned second so the caller can report it, and the rest still go out.
+pub fn pack_requests(questions: Vec<Question>, state: &Value) -> (Vec<Vec<Question>>, Vec<String>) {
     let budget = ((MAX_REQUEST_TOKENS as f64) * LIMIT_HEADROOM) as usize;
+    let question_budget = ((MAX_QUESTION_TOKENS as f64) * LIMIT_HEADROOM) as usize;
     let state_tokens = estimate_value_tokens(state);
     let mut out: Vec<Vec<Question>> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     let mut current: Vec<Question> = Vec::new();
     let mut used = state_tokens;
     for question in questions {
         let cost = question.estimated_tokens();
+        if state_tokens + cost > question_budget {
+            skipped.push(question.id);
+            continue;
+        }
         if !current.is_empty() && used + cost > budget {
             out.push(std::mem::take(&mut current));
             used = state_tokens;
@@ -214,7 +249,7 @@ pub fn pack_requests(questions: Vec<Question>, state: &Value) -> Vec<Vec<Questio
     if !current.is_empty() {
         out.push(current);
     }
-    out
+    (out, skipped)
 }
 
 /// The answers of one or more System One requests, keyed by question id.
@@ -470,8 +505,9 @@ impl DecisionClient {
     }
 
     /// Packs `questions` into as few requests as the limits allow, sends them
-    /// concurrently and merges the answers. Requests that fail are skipped:
-    /// their questions are simply unanswered.
+    /// concurrently and merges the answers. Requests that fail, and questions
+    /// too large to send, are skipped and counted as failures: their
+    /// questions are simply unanswered.
     pub async fn ask(
         &self,
         case_id: &str,
@@ -479,7 +515,16 @@ impl DecisionClient {
         questions: Vec<Question>,
         usage: &DecisionUsage,
     ) -> Answers {
-        let batches = pack_requests(questions, state);
+        let (batches, skipped) = pack_requests(questions, state);
+        if !skipped.is_empty() {
+            usage
+                .failures
+                .fetch_add(skipped.len() as i64, Ordering::Relaxed);
+            eprintln!(
+                "jev: {case_id}: not sent, over the per-question limit: {}",
+                skipped.join(", ")
+            );
+        }
         let futures = batches
             .iter()
             .map(|batch| self.ask_one(case_id, state, batch, usage));
@@ -522,6 +567,28 @@ mod tests {
             assert!(q.estimated_tokens() < MAX_QUESTION_TOKENS);
         }
         assert_eq!(seen, 1454, "every tool is asked about exactly once");
+    }
+
+    #[test]
+    fn a_choice_drops_repeats_and_excess_without_panicking() {
+        let mut options = opts(3, "d");
+        options.push(("tool_1".to_string(), "later".to_string()));
+        let q = Question::choice("c", "Which?", &options);
+        let criteria = q.body["criteria"].as_object().unwrap();
+        assert_eq!(criteria.len(), 3);
+        assert_eq!(criteria["tool_1"], json!("d"), "the first description wins");
+
+        let mut options = opts(300, "d");
+        options.push(("none_of_these".to_string(), String::new()));
+        let q = Question::choice("c", "Which?", &options);
+        let criteria = q.body["criteria"].as_object().unwrap();
+        assert_eq!(criteria.len(), MAX_CHOICE_OPTIONS);
+        assert!(
+            criteria.contains_key("none_of_these"),
+            "the reference survives"
+        );
+        assert!(criteria.contains_key("tool_253"));
+        assert!(!criteria.contains_key("tool_254"));
     }
 
     #[test]
@@ -583,13 +650,47 @@ mod tests {
         let desc = "d".repeat(80);
         let state = json!({"request": "Kick off the weekly digest workflow."});
         let qs = choice_chunks("t", "Which tool?", &opts(1454, &desc), &none, 255, 20);
-        let batches = pack_requests(qs, &state);
+        let (batches, skipped) = pack_requests(qs, &state);
         assert_eq!(batches.len(), 1, "names plus 80-char descriptions fit 64k");
+        assert!(skipped.is_empty());
         let qs = choice_chunks("t", "Which tool?", &opts(4000, &desc), &none, 255, 20);
         assert!(
-            pack_requests(qs, &state).len() > 1,
+            pack_requests(qs, &state).0.len() > 1,
             "a 4,000-tool menu splits"
         );
+    }
+
+    #[test]
+    fn an_oversized_question_is_skipped_and_the_rest_still_go() {
+        let state = json!({"request": "Was the invoice already paid?"});
+        let questions = vec![
+            Question::noul("small", "The invoice was paid."),
+            Question::noul("huge", "x".repeat(200_000)),
+            Question::noul("after", "The user asked twice."),
+        ];
+        let (batches, skipped) = pack_requests(questions, &state);
+        assert_eq!(skipped, vec!["huge".to_string()]);
+        let ids: Vec<&str> = batches.iter().flatten().map(|q| q.id.as_str()).collect();
+        assert_eq!(ids, vec!["small", "after"]);
+    }
+
+    #[tokio::test]
+    async fn ask_reports_an_oversized_question_without_sending_it() {
+        // Nothing listens here: a request that were sent would fail as
+        // unreachable after its retries, not instantly.
+        let client = DecisionClient::new(reqwest::Client::new(), "http://127.0.0.1:9", "m", None);
+        let usage = DecisionUsage::default();
+        let answers = client
+            .ask(
+                "case-1",
+                &json!({"request": "x"}),
+                vec![Question::noul("huge", "x".repeat(200_000))],
+                &usage,
+            )
+            .await;
+        assert!(answers.answers.is_empty());
+        let (calls, _, _, failures) = usage.snapshot();
+        assert_eq!((calls, failures), (0, 1));
     }
 
     #[test]
