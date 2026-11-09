@@ -383,6 +383,48 @@ class ReconcileWakeTests(unittest.TestCase):
             _run(settings, _Platform(runnable=3, primary=_primary()), ec2)
             self.assertEqual(ec2.starts, 1)
 
+    def test_a_slow_stop_does_not_use_up_the_wake_grace(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            ec2 = _EC2("stopping", [])
+            _run(settings, _Platform(runnable=3, primary=_primary()), ec2)
+            state = json.loads(settings.state_file.read_text())
+            self.assertIsNone(state.get("primary_wake_started_at"))
+            # The stop took longer than the whole grace before completing.
+            state["primary_stopping_since"] = (
+                datetime.now(UTC) - timedelta(minutes=11)
+            ).isoformat()
+            settings.state_file.write_text(json.dumps(state))
+            ec2.state = "stopped"
+
+            snapshot = _run(settings, _Platform(runnable=3, primary=_primary()), ec2)
+
+            self.assertEqual(ec2.starts, 1)
+            self.assertEqual(snapshot["fallback_reason"], "AWS_PRIMARY_WAKING")
+            state = json.loads(settings.state_file.read_text())
+            self.assertIsNotNone(state["primary_wake_started_at"])
+            self.assertIsNone(state["primary_stopping_since"])
+
+    def test_a_stuck_stop_fails_over_to_gce(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            settings.state_file.write_text(
+                json.dumps(
+                    {
+                        "primary_stopping_since": (
+                            datetime.now(UTC) - timedelta(minutes=11)
+                        ).isoformat()
+                    }
+                )
+            )
+            platform = _Platform(runnable=3, primary=_primary())
+            ec2 = _EC2("stopping", platform.operations)
+
+            snapshot = _run(settings, platform, ec2)
+
+            self.assertEqual(ec2.starts, 0)
+            self.assertEqual(snapshot["fallback_reason"], "AWS_PRIMARY_UNAVAILABLE")
+
     def test_dry_run_never_starts_the_primary(self) -> None:
         with TemporaryDirectory() as tmp:
             settings = replace(_settings(Path(tmp)), dry_run=True)

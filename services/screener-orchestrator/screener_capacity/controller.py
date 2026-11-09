@@ -996,8 +996,13 @@ def _wake_on_demand_primary(
     instance_id = settings.aws_primary_instance_id or ""
     primary = primary_node or {}
     started_at = _parse_state_time(state.get("primary_wake_started_at"))
+    stopping_since = _parse_state_time(state.get("primary_stopping_since"))
     last_failure = state.get("primary_wake_failure")
-    cleared = {"primary_wake_started_at": None, "primary_wake_failure": None}
+    cleared = {
+        "primary_wake_started_at": None,
+        "primary_stopping_since": None,
+        "primary_wake_failure": None,
+    }
 
     def failed(detail: str) -> WakePlan:
         event = {
@@ -1044,11 +1049,19 @@ def _wake_on_demand_primary(
     if started_at is not None and (now - started_at).total_seconds() >= grace:
         # This wake already had its grace; do not restart it into a new one.
         return WakePlan()
-    first_wake = {"primary_wake_started_at": (started_at or now).isoformat()}
     if status.state == "stopping":
         # It is powering off after an idle exit; start it once it has stopped.
-        # The grace clock starts now, so a slow stop cannot extend it.
-        return WakePlan("waking", state=first_wake)
+        # The wake grace starts only at a real start, so a slow stop cannot use
+        # it up. Waiting for the stop has its own bound of the same length, so
+        # a stuck stop still fails over to GCE.
+        since = stopping_since or now
+        if (now - since).total_seconds() >= grace:
+            return WakePlan()
+        return WakePlan("waking", state={"primary_stopping_since": since.isoformat()})
+    first_wake = {
+        "primary_wake_started_at": (started_at or now).isoformat(),
+        "primary_stopping_since": None,
+    }
     if settings.dry_run:
         return WakePlan("waking")
     try:
