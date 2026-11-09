@@ -4432,6 +4432,8 @@ CREATE TABLE public.generator_round_attempts (
     detail text,
     issued_at timestamp with time zone NOT NULL,
     finished_at timestamp with time zone,
+    kind text DEFAULT 'panel'::text NOT NULL,
+    CONSTRAINT ck_generator_round_attempts_generator_round_attempts_kind_check CHECK ((kind = ANY (ARRAY['panel'::text, 'oracle'::text]))),
     CONSTRAINT ck_generator_round_attempts_generator_round_attempts_st_8330 CHECK ((status = ANY (ARRAY['leased'::text, 'completed'::text, 'failed'::text])))
 );
 
@@ -4454,7 +4456,7 @@ CREATE TABLE public.generator_round_case_verdicts (
     mean_score double precision NOT NULL,
     champion_failed boolean NOT NULL,
     credit double precision NOT NULL,
-    CONSTRAINT ck_generator_round_case_verdicts_generator_round_case_v_b62d CHECK ((status = ANY (ARRAY['discriminating'::text, 'trivial'::text, 'unsolved'::text, 'duplicate'::text, 'insufficient_panel'::text])))
+    CONSTRAINT ck_generator_round_case_verdicts_generator_round_case_v_b62d CHECK ((status = ANY (ARRAY['discriminating'::text, 'trivial'::text, 'unsolved'::text, 'duplicate'::text, 'insufficient_panel'::text, 'frontier'::text])))
 );
 
 
@@ -4535,6 +4537,7 @@ CREATE TABLE public.generator_rounds (
     revealed_at timestamp with time zone,
     bench_version integer,
     first_epoch_index bigint NOT NULL,
+    frontier jsonb,
     CONSTRAINT ck_generator_rounds_generator_rounds_bench_version_check CHECK (((bench_version IS NULL) OR (bench_version >= 13))),
     CONSTRAINT ck_generator_rounds_generator_rounds_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
     CONSTRAINT ck_generator_rounds_generator_rounds_dataset_check CHECK ((((dataset_sha256 IS NULL) = (dataset_bytes IS NULL)) AND ((dataset_sha256 IS NULL) OR (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text))))),
