@@ -411,18 +411,37 @@ export async function registerDefaultGenerator(rawInput: unknown, actor: string)
 
 // --- frontier cases ----------------------------------------------------------
 
-// A frontier write refused for state (already ruled, nothing to audit, not
-// sampled) is fixed by re-reading the round's frontier, never by retrying.
-async function frontierWrite<T>(operation: () => Promise<T>): Promise<T> {
+type FrontierWriteKind = 'rule' | 'settle'
+
+// Keep Platform's refusal text and name what was not applied. A 409 is a
+// state conflict (already ruled or settled, no open audit, a case outside the
+// sample, a wrong confirmation): re-read the lane. A 422 is the request
+// itself (a short reason, malformed case ids): correct it; re-reading fixes
+// nothing.
+export function frontierRefusal(kind: FrontierWriteKind, cause: unknown) {
+  if (!(cause instanceof PlatformAdminError)) return null
+  if (cause.status !== 409 && cause.status !== 422) return null
+  const nothing =
+    kind === 'rule' ? 'Nothing was ruled' : 'Nothing was settled'
+  const recovery =
+    cause.status === 422
+      ? kind === 'rule'
+        ? 'correct the refused fields (a reason of at least 8 characters, invalidCaseIds a list of round case ids) and resubmit.'
+        : 'correct the refused fields (a reason of at least 8 characters) and resubmit.'
+      : kind === 'rule'
+        ? 're-read get_generator_round_frontier and get_generator_frontier_audit: the audit may already be ruled or the round settled, and an invalid ruling may name only cases from the sample; resubmit with the exact confirmation they imply.'
+        : 're-read get_generator_round_frontier: the round may already be settled or have no frontier lane.'
+  return new Error(`${cause.message}. ${nothing}: ${recovery}`)
+}
+
+async function frontierWrite<T>(
+  kind: FrontierWriteKind,
+  operation: () => Promise<T>,
+): Promise<T> {
   try {
     return await operation()
   } catch (cause) {
-    if (cause instanceof PlatformAdminError && (cause.status === 409 || cause.status === 422)) {
-      throw new Error(
-        `${cause.message}. Nothing was ruled: re-read get_generator_round_frontier (and get_generator_frontier_audit for the sample) and resubmit with the exact confirmation it implies.`,
-      )
-    }
-    throw cause
+    throw frontierRefusal(kind, cause) ?? cause
   }
 }
 
@@ -454,7 +473,7 @@ export async function fetchGeneratorFrontierAudit(rawInput: unknown) {
 
 export async function ruleGeneratorFrontierAudit(rawInput: unknown, actor: string) {
   const input = ruleGeneratorFrontierAuditInputSchema.parse(rawInput)
-  return frontierWrite(async () =>
+  return frontierWrite('rule', async () =>
     generatorFrontierSchema.parse(
       await platformAdminRequest(
         `${BASE}/rounds/${input.roundIndex}/frontier/audits/${encodeURIComponent(input.columnId)}`,
@@ -476,7 +495,7 @@ export async function ruleGeneratorFrontierAudit(rawInput: unknown, actor: strin
 
 export async function settleGeneratorRoundFrontier(rawInput: unknown, actor: string) {
   const input = settleGeneratorFrontierInputSchema.parse(rawInput)
-  return frontierWrite(async () =>
+  return frontierWrite('settle', async () =>
     generatorFrontierSchema.parse(
       await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/frontier/settle`, {
         method: 'POST',

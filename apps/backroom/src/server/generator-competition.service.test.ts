@@ -8,6 +8,8 @@ import {
   createBackroomMcpServer,
   type McpGrantProps,
 } from './mcp.server'
+import { PlatformAdminError } from './ditto.server'
+import { frontierRefusal } from './generator-competition.service'
 import {
   generatorCompetitionSettingsSchema,
   generatorRunDetailSchema,
@@ -872,5 +874,31 @@ describe('generator competition MCP tools', () => {
       frontier_audit_grace_hours: 24, frontier_oracle_timeout_hours: 12,
     })
     expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, frontier_weight: 1.5 })).toThrow()
+  })
+
+  it('names the frontier write that was refused and the recovery its status implies', () => {
+    const conflict = (message: string) => new PlatformAdminError('request', message, 409)
+    const invalid = (message: string) => new PlatformAdminError('request', message, 422)
+
+    const ruled = frontierRefusal('rule', conflict('column c1 audit is already passed'))!.message
+    expect(ruled).toContain('Nothing was ruled')
+    expect(ruled).toContain('re-read get_generator_round_frontier')
+
+    // A settle refusal says nothing about ruling or an audit sample.
+    const settled = frontierRefusal('settle', conflict('frontier is already settled'))!.message
+    expect(settled).toContain('Nothing was settled')
+    expect(settled).not.toMatch(/ruled|sample/)
+
+    // A 422 is the request itself: correct it; re-reading fixes nothing.
+    for (const kind of ['rule', 'settle'] as const) {
+      const message = frontierRefusal(kind, invalid('request validation failed'))!.message
+      expect(message).toContain('correct the refused fields')
+      expect(message).not.toContain('re-read')
+    }
+    expect(frontierRefusal('settle', invalid('x'))!.message).not.toContain('invalidCaseIds')
+
+    // Anything else passes through untouched.
+    expect(frontierRefusal('rule', new PlatformAdminError('server', 'boom', 503))).toBeNull()
+    expect(frontierRefusal('rule', new Error('plain'))).toBeNull()
   })
 })
