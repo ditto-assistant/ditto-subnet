@@ -316,7 +316,11 @@ impl DecisionClient {
             http,
             url: url.into(),
             model: model.into(),
-            api_key: api_key.filter(|k| !k.trim().is_empty()),
+            // Trimmed: a key pasted with a trailing newline is not a valid
+            // header value, and every call would fail.
+            api_key: api_key
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty()),
         }
     }
 
@@ -529,6 +533,15 @@ mod tests {
             pack_requests(qs, &state).len() > 1,
             "a 4,000-tool menu splits"
         );
+    }
+
+    #[test]
+    fn the_api_key_is_trimmed_before_bearer_use() {
+        let client = |key: &str| {
+            DecisionClient::new(reqwest::Client::new(), "http://x", "m", Some(key.into())).api_key
+        };
+        assert_eq!(client(" sk-test\n").as_deref(), Some("sk-test"));
+        assert_eq!(client(" \n"), None);
     }
 
     #[test]
