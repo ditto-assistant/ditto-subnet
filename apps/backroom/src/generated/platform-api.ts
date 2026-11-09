@@ -25702,10 +25702,12 @@ export interface components {
         };
         /**
          * GeneratorRoundJobResponse
-         * @description One leased round panel run.
+         * @description One leased round panel run, or one frontier oracle run.
          *
          *     ``seed`` is a positive placeholder the scorer requires on ``/v2/score``;
-         *     the round dataset, not the seed, determines every case.
+         *     the round dataset, not the seed, determines every case. An oracle run
+         *     (``dataset_mode`` ``generator-frontier-oracle-v1``) answers only
+         *     ``oracle_case_ids``, and its results must name exactly those cases.
          */
         GeneratorRoundJobResponse: {
             /**
@@ -25724,9 +25726,9 @@ export interface components {
             /**
              * Dataset Mode
              * @default generator-round-v1
-             * @constant
+             * @enum {string}
              */
-            dataset_mode: "generator-round-v1";
+            dataset_mode: "generator-round-v1" | "generator-frontier-oracle-v1";
             /** Dataset Sha256 */
             dataset_sha256: string;
             /**
@@ -25739,6 +25741,8 @@ export interface components {
             miner_hotkey: string;
             /** Minimum Screening Policy Version */
             minimum_screening_policy_version?: number | null;
+            /** Oracle Case Ids */
+            oracle_case_ids?: string[] | null;
             /**
              * Requires Screened Image
              * @default true
@@ -38807,6 +38811,11 @@ export interface components {
             deterministic_v13_datasets: boolean;
             /** Dueling Slice Bench Versions */
             dueling_slice_bench_versions?: number[] | null;
+            /**
+             * Generator Frontier Oracle
+             * @default false
+             */
+            generator_frontier_oracle: boolean;
             /** Generator Round Bench Versions */
             generator_round_bench_versions?: number[] | null;
             /** Generator Round Max Cases */
