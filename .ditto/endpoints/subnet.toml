@@ -1,0 +1,18 @@
+# The Router endpoint coding agents use in this monorepo: @omniaura's `subnet`
+# ("Subnet Dev"). Its tool catalog carries the OAuth-protected SN118 Backroom
+# MCP (https://backroom.dittobench.ai/mcp, tools `sn118_backroom__*`) plus Jira
+# and Confluence. `heyditto repo apply` makes the endpoint match this file.
+# Only the keys below are written; the model, tool list, approvals, provider
+# keys and spend cap stay as configured in the console. No credentials here:
+# launches mint a short-lived session key from your own Ditto login.
+managed = true
+name = "subnet"
+slug = "subnet"
+description = "Subnet Dev"
+
+[settings]
+owner = "@omniaura"
+# `heyditto claude` (and T3) attach the endpoint's tools as Claude Code's own
+# MCP servers, so SN118 Backroom tools list as `mcp__ditto-sn118_backroom__*`.
+claude_tool_surface = "mcp"
+required_connections = ["confluence", "jira", "sn118_backroom"]
