@@ -602,8 +602,14 @@ column. Frontier never touches agent standings: pairwise comparisons read panel
 scores only (`TestScoreRoundFrontier`).
 
 Scoring stays a pure function of `(cases, panel results, attestations,
-params)`. Platform owns the attestations and passes them to the scorer with the
-matrix, so a scored round is reproducible from its stored inputs.
+params)`. Frontier status only rewrites `unsolved` verdicts, and every input it
+needs (mean score, champion failure) is already on the stored verdict. So
+Platform scores a round without attestations, as before, and applies them later
+as a post-pass over the stored verdicts. The post-pass is pinned to
+`ScoreCases` by `challenge/testdata/frontier_vectors.json` (unattested score,
+attestations and params → the score `ScoreCases` gives with the attestations).
+The scorer needs no change, and an older scorer can never silently drop
+attestations.
 
 ### Witness 1: the frontier oracle (`challenge.OracleContext`)
 
@@ -666,35 +672,58 @@ cases into n attested ones is caught with probability
 `1 − C(n−k, s)/C(n, s)` for a sample of s, and loses all its frontier credit
 when caught, not just the broken cases' share.
 
-### Lifecycle (Platform, next)
+### Who the oracle is
 
-The contract above ships first and is inert until Platform passes
+The oracle is a subnet-run reference **harness**, named by the Platform
+setting `frontier_oracle_agent_id`: a screened agent image like any other, run
+by validators on a Platform-issued ticket with ticket inference. Only its
+memory changes. `challenge.OraclePack(pack, case_ids)` derives a pack with one
+memory graph per candidate case, seeded with that case's `OracleContext` and
+nothing else, keeping each case's question, gold answer and grading policy. All
+graphs are seeded before any case runs, so cases run concurrently. The oracle
+is then graded by the production grader exactly as a panel agent would be.
+Reusing the harness path means the oracle needs no new inference credential,
+sandbox, or grader. A stronger oracle is an operator choice of a different
+reference agent, not a contract change.
+
+### Lifecycle (Platform)
+
+The contract above ships first and is inert until Platform applies
 attestations. The lane that produces them:
 
-1. **Close.** The round closes as today.
-2. **Attest.** Platform computes the panel verdicts and leases one oracle job
-   for the round's unsolved cases to a validator running the `frontier-oracle`
-   mode (the round dataset, `OracleContext` per case, the configured oracle
-   model through ticket inference, the production grader). Results are signed
-   per case with the context digest. Only unsolved cases are sent, so the
-   cost is proportional to how hard the round was, not to its size.
-3. **Audit.** Columns with attested cases get their `FrontierAuditSample` in a
-   Backroom review queue. The round scores at once with the oracle
-   attestations (status `scored`, audit `pending`). The ledger marks a column
-   with frontier credit `weight_eligible` only once its audit is ruled, or once
-   `frontier_audit_grace_rounds` pass with no ruling, in which case the
-   attestations stand (operator silence never zeroes a miner).
-4. **Re-score.** A failed audit re-scores the round with that column's
-   attestations removed. Scoring is a pure function, so the re-score is exact.
+1. **Score.** The round closes and scores exactly as before: its `unsolved`
+   cases are the frontier candidates.
+2. **Oracle.** If `frontier_weight > 0`, an oracle agent is configured and
+   any column has unsolved cases, Platform leases one oracle job for the
+   round's candidates (dataset mode `generator-frontier-oracle-v1`, the
+   candidate round case ids) to a validator that advertises the mode. The
+   validator posts signed per-case scores. Only unsolved cases are sent, so
+   the cost tracks how hard the round was, not its size. A case the oracle
+   passes is attested; a faulted case is not.
+3. **Audit.** For each column with attested cases, Platform draws
+   `FrontierAuditSample(round_seed, column, attested, frontier_audit_cases)`
+   into a Backroom audit. With `frontier_audit_cases = 0` there is no audit.
+4. **Apply.** When every audit is ruled, or `frontier_audit_grace_hours` pass
+   with audits unruled, Platform applies the post-pass. Columns whose audit
+   failed get no attestations. The rewritten verdicts, column score and
+   generator `round_score` replace the unattested ones, and the pre-frontier
+   column scores stay on the round for audit. Until then the round pays its
+   unattested score, so frontier credit never reaches the ledger before its
+   audit, and operator silence never withholds it forever.
+
+The oracle job and the audit window run after scoring and never hold a round
+open. A round whose oracle job does not complete within
+`frontier_oracle_timeout_hours` settles with no attestations.
 
 Dueling seasons read the same verdicts. A frontier case is not unsolved, so it
 does not count against a column's `u / (n − dup) ≤ 0.20` eligibility. That is
-intended: frontier cases are the ones the agent benchmark most needs. Audited
-columns enter canonical runs only after their audit is ruled.
+intended: frontier cases are the ones the agent benchmark most needs, and they
+reach the verdicts only after their audit settles.
 
 New settings (Platform, revisioned): `frontier_weight` (operator default 1.0),
-`frontier_oracle_model`, `frontier_audit_cases` (default 3),
-`frontier_audit_grace_rounds`. `skip_unchanged_rounds` compares
+`frontier_oracle_agent_id` (unset: no oracle, frontier off),
+`frontier_audit_cases` (default 3), `frontier_audit_grace_hours` (default 24),
+`frontier_oracle_timeout_hours` (default 12). `skip_unchanged_rounds` compares
 `frontier_weight` with the other score parameters.
 
 ## Copies
