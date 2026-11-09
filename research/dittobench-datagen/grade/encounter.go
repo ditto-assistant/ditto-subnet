@@ -115,6 +115,9 @@ func describeEncounterCall(c protocol.EncounterCall) string {
 	out := c.Tool
 	if len(c.Contains) > 0 {
 		out += " with " + strings.Join(c.Contains, ", ")
+		if c.Field != "" {
+			out += " in " + c.Field
+		}
 	}
 	if c.Why != "" {
 		out += " (" + c.Why + ")"

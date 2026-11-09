@@ -24,6 +24,7 @@ ignored_paths = [
   ".agents/**",
   ".claude/**",
   ".codex/**",
+  ".ditto/**", # Agent endpoint profile for heyditto/T3 launches; no runtime component
   ".depot/**", # Validation workflows only; protected releases remain on GitHub
   ".github/**",
   ".gitignore",

@@ -41,6 +41,12 @@ func (f Fixture) isLinkedReadBearer(category, name string) bool {
 // connectorRefusedV16 is the v16 connector branch of unavailable: a linked
 // app's tool is served, every other connector is refused.
 func (f Fixture) connectorRefusedV16(name string) (string, bool) {
+	// A seed decoy keeps its own handling even if its coined name collides
+	// with a v18 snapshot slug: unavailable already refused a non-bearer
+	// decoy, and the bearer must fall through to serve the needle.
+	if _, isDecoy := f.decoys[name]; isDecoy {
+		return "", false
+	}
 	// From v18 the bulk toolkits are connectors too (never linked). An
 	// unavailable v18 snapshot fails closed: nothing outside the served
 	// product surface can be classified, so the call is refused.

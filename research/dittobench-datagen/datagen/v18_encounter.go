@@ -8,6 +8,7 @@ import (
 
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 // Bench v18 tool encounters (docs/bench-versions.md, "Tool encounters").
@@ -90,8 +91,12 @@ func v18EncounterSlots(seed int64, benchVersion int, cases []protocol.ToolCase) 
 			referenced[tc.RunAfterCaseID] = true
 		}
 	}
+	// The world carrier holds the shared world pairs every world-memory case
+	// cites by pair id: never replace it, whatever its category.
+	world := universe.GenerateForVersion(seed, ToolWorldScale(len(cases), benchVersion), benchVersion)
+	carrier := v13WorldCarrier(world, cases)
 	for i, tc := range cases {
-		if used[i] || len(tc.PrerequisitePairs) == 0 || referenced[tc.ID] || tc.Encounter != nil ||
+		if used[i] || i == carrier || len(tc.PrerequisitePairs) == 0 || referenced[tc.ID] || tc.Encounter != nil ||
 			strings.HasPrefix(tc.Category, "world_") || v9WorldFamily(tc.Category) || v13WorldDerived(tc.Category) ||
 			tc.Restraint != nil || tc.EffectAnswer != "" || tc.TwinGroup != "" || tc.RunAfterCaseID != "" ||
 			len(tc.ForbiddenTools) != 0 || len(tc.AlternativeExpectedTools) != 0 ||
@@ -790,11 +795,16 @@ func (w *v18EncounterWorld) statusTriage(plan catalog.V16ConnectorPlan, ordinal 
 		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Why: "the incident is already tracked"})
 		enc.Answer = append(enc.Answer, protocol.EncounterAnswer{Value: ref})
 	default:
-		enc.Required = append(enc.Required, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{incident}, Why: "file the untracked incident"})
-		// Filing the wrong incident, not quoting it beside the right one.
-		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{resolved}, Excludes: []string{incident}, Why: "the resolved incident"})
+		// The filed incident is the one the item's title names (the write
+		// action's declared parameter); an ID quoted in any other field is
+		// context. Filing the wrong incident, not quoting it beside the right
+		// one, is forbidden, and quoting the right ID outside the title does
+		// not file it.
+		title := app.WriteParam
+		enc.Required = append(enc.Required, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Contains: []string{incident}, Why: "file the untracked incident"})
+		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Contains: []string{resolved}, Excludes: []string{incident}, Why: "the resolved incident"})
 		if variant == v18TriageRegion {
-			enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Contains: []string{otherIncident}, Excludes: []string{incident}, Why: "the other region's incident is already tracked"})
+			enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Contains: []string{otherIncident}, Excludes: []string{incident}, Why: "the other region's incident is already tracked"})
 		}
 	}
 	prompt := sentence(
