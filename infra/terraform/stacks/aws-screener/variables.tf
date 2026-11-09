@@ -159,12 +159,12 @@ variable "screener_fleet_registration_token_secret" {
 }
 
 variable "screener_fleet_idle_exit_seconds" {
-  description = "Worker idle period after which it exits and the host powers itself off (EC2 stop)."
+  description = "Worker idle period after which it exits and the host powers itself off (EC2 stop); 900 is the intended value. No default: the worker gains idle exit in the DITTO-2594 runtime release (#3459), so enabling the root requires setting it explicitly, and the first-boot playbook refuses a release_sha whose worker lacks it."
   type        = number
-  default     = 900
+  default     = null
 
   validation {
-    condition     = var.screener_fleet_idle_exit_seconds >= 60 && var.screener_fleet_idle_exit_seconds <= 86400 && floor(var.screener_fleet_idle_exit_seconds) == var.screener_fleet_idle_exit_seconds
+    condition     = var.screener_fleet_idle_exit_seconds == null || (var.screener_fleet_idle_exit_seconds >= 60 && var.screener_fleet_idle_exit_seconds <= 86400 && floor(var.screener_fleet_idle_exit_seconds) == var.screener_fleet_idle_exit_seconds)
     error_message = "screener_fleet_idle_exit_seconds must be a whole number from 60 to 86400."
   }
 }

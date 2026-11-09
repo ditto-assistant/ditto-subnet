@@ -34,7 +34,9 @@ Cost guards, so nobody has to watch it:
 - A host whose workers never idle-exit powers off after 6 h up with no active
   lease (`SCREENER_IDLE_MAX_UPTIME_SECONDS`).
 - A host that has not enrolled 2 h after boot powers off
-  (`ditto-screener-unenrolled-poweroff.timer`, installed first by user data).
+  (`ditto-screener-unenrolled-poweroff.timer`, installed first by user data),
+  deferring only while the exact first-boot process is alive. The whole first
+  boot runs under a 4 h deadline, so this ends within about 4.5 h.
 - The controller never stops or terminates the instance, and Terraform never
   starts or stops it.
 
@@ -58,7 +60,10 @@ happens automatically; each step is a reviewed operator action.
 3. **Instance (protected workflow).** Plan/apply root `aws-screener` with
    `enable_aws_screener = true`, an exact `screener_fleet_release_sha`, the
    digest-pinned `screener_fleet_builder_image`, and
-   `screener_fleet_aws_wif_provider` (the step 2 output). The instance boots and converges
+   `screener_fleet_aws_wif_provider` (the step 2 output), and
+   `screener_fleet_idle_exit_seconds = 900`. The plan refuses to enable the
+   root without it, and the first boot refuses a release whose worker cannot
+   idle out. The instance boots and converges
    itself. Its first converge stops at enrollment because the grant does not
    exist yet; the host stays up (up to 2 h) for the next step.
 4. **Enroll (Backroom + gcloud, within the grant TTL).** Read the controller

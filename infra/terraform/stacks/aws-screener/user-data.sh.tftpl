@@ -11,6 +11,14 @@
 # operator can inspect it over SSM; the capacity controller's wake grace routes
 # work to GCE meanwhile. To retry after a fix, rerun this script as root over SSM:
 #   sudo bash /var/lib/cloud/instance/scripts/part-001
+
+# The whole first boot runs under one deadline: every step below (downloads,
+# apt, pip, git, Ansible) ends within 4 h, so the cost guard can never be
+# deferred longer than that. timeout signals the script's whole process group.
+if [ -z "$${DITTO_SCREENER_BOOTSTRAP_DEADLINE:-}" ]; then
+  export DITTO_SCREENER_BOOTSTRAP_DEADLINE=4h
+  exec timeout --kill-after=5m "$DITTO_SCREENER_BOOTSTRAP_DEADLINE" /bin/bash "$0" "$@"
+fi
 set -Eeuo pipefail
 
 log=/var/log/ditto-screener-bootstrap.log
@@ -45,15 +53,29 @@ trap 'rm -rf "$workdir"; rm -f "$bootstrap_pid_file"' EXIT
 # Installed first, so it covers a failure anywhere below. On every boot, a host
 # that has still not enrolled (no node credential) two hours after booting
 # powers itself off instead of billing until someone notices, rechecking every
-# 15 minutes. It defers while this first converge is still alive (its pid file
-# is on /run, so a reboot clears it), and the converge is itself bounded by
-# timeouts below, so a hung converge still ends in a poweroff (about 3.5 h at
-# worst). A converged node has node.json, so the guard never fires for it; its
-# idle shutdown takes over.
+# 15 minutes. It defers only while this exact first-boot process is alive: the
+# pid file on /run (cleared by a reboot) records the pid and its kernel start
+# time, so a later process that reuses the pid after a SIGKILL never defers it.
+# The first boot is bounded by the deadline above, so a hung converge still ends
+# in a poweroff (about 4.5 h at worst). A converged node has node.json, so the
+# guard never fires for it; its idle shutdown takes over.
 install -m 0755 -o root -g root /dev/stdin /usr/local/sbin/ditto-screener-unenrolled-poweroff <<'GUARD'
 #!/bin/sh
 pid_file=/run/ditto-screener-bootstrap.pid
-if [ -s "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+# start_time PID: field 22 of /proc/PID/stat, read after the last ") " so a
+# command name containing spaces or parentheses cannot shift the fields.
+start_time() {
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  rest=$${stat##*) }
+  # shellcheck disable=SC2086
+  set -- $rest
+  [ "$#" -ge 20 ] || return 1
+  shift 19
+  printf '%s' "$1"
+}
+if [ -s "$pid_file" ] && read -r pid recorded <"$pid_file" \
+  && [ -n "$pid" ] && [ -n "$recorded" ] \
+  && [ "$(start_time "$pid")" = "$recorded" ]; then
   echo "ditto-screener-unenrolled-poweroff: first converge still running; deferring"
   exit 0
 fi
@@ -83,7 +105,11 @@ WantedBy=timers.target
 UNIT
 systemctl daemon-reload
 systemctl enable --now ditto-screener-unenrolled-poweroff.timer
-echo "$$" >"$bootstrap_pid_file"
+# Record this process's pid and kernel start time (field 22 of /proc/PID/stat,
+# parsed after the last ") ") as one identity the guard can verify.
+read -r bootstrap_stat <"/proc/$$/stat"
+read -r -a bootstrap_fields <<<"$${bootstrap_stat##*) }"
+printf '%s %s\n' "$$" "$${bootstrap_fields[19]}" >"$bootstrap_pid_file"
 
 # --- 1. SSM agent (same exact-bytes install as the generator scorer) ---------
 if ! command -v curl >/dev/null; then

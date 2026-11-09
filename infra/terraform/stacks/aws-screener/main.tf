@@ -82,6 +82,12 @@ resource "aws_vpc" "screener" {
       )
       error_message = "enable_aws_screener requires screener_fleet_release_sha, screener_fleet_builder_image and screener_fleet_aws_wif_provider."
     }
+    # An on-demand host that never idles out only stops at its uptime bound.
+    # Fail the plan, not the first boot, until idle exit is set explicitly.
+    precondition {
+      condition     = var.screener_fleet_idle_exit_seconds != null
+      error_message = "enable_aws_screener requires screener_fleet_idle_exit_seconds (900 recommended) and a screener_fleet_release_sha whose worker supports idle exit (the DITTO-2594 runtime release, #3459)."
+    }
   }
 }
 

@@ -21,6 +21,8 @@ variables {
   screener_fleet_release_sha      = "0123456789abcdef0123456789abcdef01234567"
   screener_fleet_builder_image    = "ghcr.io/ditto-assistant/submission-builder@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   screener_fleet_aws_wif_provider = "projects/123456789012/locations/global/workloadIdentityPools/screener-aws/providers/aws-ec2"
+  # Unset by default; the reviewed tfvars sets it with a supporting release.
+  screener_fleet_idle_exit_seconds = 900
 }
 
 run "merging_creates_nothing" {
@@ -77,6 +79,27 @@ run "enabling_requires_release_inputs" {
   variables {
     enable_aws_screener        = true
     screener_fleet_release_sha = ""
+  }
+  expect_failures = [aws_vpc.screener]
+}
+
+run "merging_needs_no_idle_exit_setting" {
+  command = plan
+  variables {
+    screener_fleet_idle_exit_seconds = null
+  }
+
+  assert {
+    condition     = length(module.screener) == 0
+    error_message = "With the root disabled, idle exit may stay unset."
+  }
+}
+
+run "enabling_requires_an_explicit_idle_exit" {
+  command = plan
+  variables {
+    enable_aws_screener              = true
+    screener_fleet_idle_exit_seconds = null
   }
   expect_failures = [aws_vpc.screener]
 }

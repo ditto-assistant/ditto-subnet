@@ -157,7 +157,10 @@ def test_bootstrap_vars_contract_is_exact() -> None:
     ):
         assert literal in MAIN, literal
     assert _default(VARS, "screener_fleet_node_id") == "subnet-screener-3"
-    assert _default(VARS, "screener_fleet_idle_exit_seconds") == "900"
+    # No default: enabling requires an explicit value (plan precondition), and
+    # the first-boot playbook checks the release worker supports it.
+    assert _default(VARS, "screener_fleet_idle_exit_seconds") == "null"
+    assert "var.screener_fleet_idle_exit_seconds != null" in MAIN
     assert _default(VARS, "screener_fleet_worker_processes") == "1"
     assert _default(VARS, "screener_fleet_gcp_project") == "ditto-app-dev"
     assert (
@@ -227,14 +230,28 @@ def test_user_data_uses_imdsv2_and_powers_off_only_an_unenrolled_host() -> None:
 
 
 def test_cost_guard_defers_to_a_live_first_converge_that_is_bounded() -> None:
-    # The guard skips while the bootstrap pid on /run is alive ...
-    assert 'kill -0 "$(cat "$pid_file")"' in USER_DATA
-    assert 'echo "$$" >"$bootstrap_pid_file"' in USER_DATA
+    # The guard defers only for the exact first-boot process: pid plus kernel
+    # start time (field 22, parsed after the last ") "), so a reused pid after a
+    # SIGKILL cannot defer it.
+    assert "rest=$${stat##*) }" in USER_DATA
+    assert "shift 19" in USER_DATA
+    assert '[ "$(start_time "$pid")" = "$recorded" ]' in USER_DATA
+    assert "kill -0" not in USER_DATA
+    assert 'read -r -a bootstrap_fields <<<"$${bootstrap_stat##*) }"' in USER_DATA
+    assert (
+        'printf \'%s %s\\n\' "$$" "$${bootstrap_fields[19]}" >"$bootstrap_pid_file"'
+        in USER_DATA
+    )
     assert 'rm -f "$bootstrap_pid_file"' in USER_DATA
-    # ... and the converge cannot outlive its timeouts.
-    assert "timeout --kill-after=5m 30m" in USER_DATA
+    # The whole first boot, not just Ansible, runs under one deadline.
+    reexec = USER_DATA.index(
+        'exec timeout --kill-after=5m "$DITTO_SCREENER_BOOTSTRAP_DEADLINE" /bin/bash'
+    )
+    assert "export DITTO_SCREENER_BOOTSTRAP_DEADLINE=4h" in USER_DATA
+    assert reexec < USER_DATA.index("set -Eeuo pipefail")
+    assert reexec < USER_DATA.index("amazon-ssm-agent.deb")
     assert "timeout --kill-after=5m 3h" in USER_DATA
-    pid_written = USER_DATA.index('echo "$$" >"$bootstrap_pid_file"')
+    pid_written = USER_DATA.index('>"$bootstrap_pid_file"')
     assert pid_written < USER_DATA.index("ansible-playbook")
 
 
