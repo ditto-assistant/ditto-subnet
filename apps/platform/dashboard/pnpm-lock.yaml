@@ -6,6 +6,8 @@ settings:
 
 overrides:
   seroval: 1.6.11
+  undici: 8.12.2
+  source-map-js: 1.2.2
 
 importers:
 
@@ -23,7 +25,7 @@ importers:
         version: 0.8.10(solid-js@1.9.15)
       '@testing-library/jest-dom':
         specifier: 7.0.1
-        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.1(@types/node@26.2.0)))
+        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.4(@types/node@26.2.0)))
       '@types/node':
         specifier: 26.2.0
         version: 26.2.0
@@ -40,14 +42,14 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
       vite:
-        specifier: 8.2.1
-        version: 8.2.1(@types/node@26.2.0)
+        specifier: 8.2.4
+        version: 8.2.4(@types/node@26.2.0)
       vite-plugin-solid:
         specifier: 2.11.14
-        version: 2.11.14(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.1(@types/node@26.2.0))))(solid-js@1.9.15)(vite@8.2.1(@types/node@26.2.0))
+        version: 2.11.14(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.4(@types/node@26.2.0))))(solid-js@1.9.15)(vite@8.2.4(@types/node@26.2.0))
       vitest:
         specifier: 4.1.10
-        version: 4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.1(@types/node@26.2.0))
+        version: 4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.4(@types/node@26.2.0))
 
 packages:
 
@@ -1032,8 +1034,8 @@ packages:
     peerDependencies:
       solid-js: ^1.3
 
-  source-map-js@1.2.1:
-    resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
+  source-map-js@1.2.2:
+    resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
 
   stackback@0.0.2:
@@ -1087,8 +1089,8 @@ packages:
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
-  undici@8.10.0:
-    resolution: {integrity: sha512-HvltHd7avK13QIw/oLe4qoOLyoVSoafqJ2jYOrtMRBkbYT31eiBQ8O0ehRKZiEZCMEyLFQNIADpgCWC5fALvYQ==}
+  undici@8.12.2:
+    resolution: {integrity: sha512-XtuDWVdqTLr3NAxm2ly9/hU6kUsJOgGh1RASzMBbsw6aWCOaQzHdW+QQDfdERjfJ2V5vL5pRPa4RetO9UfivDg==}
     engines: {node: '>=22.19.0'}
 
   update-browserslist-db@1.3.1:
@@ -1107,13 +1109,13 @@ packages:
       '@testing-library/jest-dom':
         optional: true
 
-  vite@8.2.1:
-    resolution: {integrity: sha512-EU/eS7BH3XROHh2YnBefjM6DBKA6ZeMZEYQbj7NLWg5wHYlhB8B/Mayd5XsgWq+NFYccDOTemRpdETWR6Ka/lw==}
+  vite@8.2.4:
+    resolution: {integrity: sha512-lfauXnrf2x0p+UoA+wXh0dgFWnUjCyG6Js95KBkgaCwUU9k0DAHI4W6Q0WCx+h+5g+Alce1y4Zi2QjjK0UvGBw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
       '@types/node': ^20.19.0 || >=22.12.0
-      '@vitejs/devtools': ^0.4.0
+      '@vitejs/devtools': ^0.4.0 || ^0.5.0
       esbuild: ^0.27.0 || ^0.28.0
       jiti: '>=1.21.0'
       less: ^4.0.0
@@ -1546,7 +1548,7 @@ snapshots:
       picocolors: 1.1.1
       pretty-format: 27.5.1
 
-  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.1(@types/node@26.2.0)))':
+  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.4(@types/node@26.2.0)))':
     dependencies:
       '@adobe/css-tools': 4.5.0
       '@testing-library/dom': 10.4.1
@@ -1556,7 +1558,7 @@ snapshots:
       picocolors: 1.1.1
       redent: 3.0.0
     optionalDependencies:
-      vitest: 4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.1(@types/node@26.2.0))
+      vitest: 4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.4(@types/node@26.2.0))
 
   '@types/aria-query@5.0.4': {}
 
@@ -1663,13 +1665,13 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.1.1
 
-  '@vitest/mocker@4.1.10(vite@8.2.1(@types/node@26.2.0))':
+  '@vitest/mocker@4.1.10(vite@8.2.4(@types/node@26.2.0))':
     dependencies:
       '@vitest/spy': 4.1.10
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.2.1(@types/node@26.2.0)
+      vite: 8.2.4(@types/node@26.2.0)
 
   '@vitest/pretty-format@4.1.10':
     dependencies:
@@ -1746,7 +1748,7 @@ snapshots:
   css-tree@3.2.1:
     dependencies:
       mdn-data: 2.27.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   css.escape@1.5.1: {}
 
@@ -1831,7 +1833,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 6.0.2
-      undici: 8.10.0
+      undici: 8.12.2
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -1961,7 +1963,7 @@ snapshots:
     dependencies:
       nanoid: 3.3.18
       picocolors: 1.1.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   prettier@3.8.0: {}
 
@@ -2032,7 +2034,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  source-map-js@1.2.1: {}
+  source-map-js@1.2.2: {}
 
   stackback@0.0.2: {}
 
@@ -2094,7 +2096,7 @@ snapshots:
 
   undici-types@8.3.0: {}
 
-  undici@8.10.0: {}
+  undici@8.12.2: {}
 
   update-browserslist-db@1.3.1(browserslist@4.28.8):
     dependencies:
@@ -2102,7 +2104,7 @@ snapshots:
       escalade: 3.2.0
       picocolors: 1.1.1
 
-  vite-plugin-solid@2.11.14(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.1(@types/node@26.2.0))))(solid-js@1.9.15)(vite@8.2.1(@types/node@26.2.0)):
+  vite-plugin-solid@2.11.14(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.4(@types/node@26.2.0))))(solid-js@1.9.15)(vite@8.2.4(@types/node@26.2.0)):
     dependencies:
       '@babel/core': 7.29.7
       '@types/babel__core': 7.20.5
@@ -2110,14 +2112,14 @@ snapshots:
       merge-anything: 5.1.7
       solid-js: 1.9.15
       solid-refresh: 0.6.3(solid-js@1.9.15)
-      vite: 8.2.1(@types/node@26.2.0)
-      vitefu: 1.1.3(vite@8.2.1(@types/node@26.2.0))
+      vite: 8.2.4(@types/node@26.2.0)
+      vitefu: 1.1.3(vite@8.2.4(@types/node@26.2.0))
     optionalDependencies:
-      '@testing-library/jest-dom': 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.1(@types/node@26.2.0)))
+      '@testing-library/jest-dom': 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.4(@types/node@26.2.0)))
     transitivePeerDependencies:
       - supports-color
 
-  vite@8.2.1(@types/node@26.2.0):
+  vite@8.2.4(@types/node@26.2.0):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -2128,14 +2130,14 @@ snapshots:
       '@types/node': 26.2.0
       fsevents: 2.3.3
 
-  vitefu@1.1.3(vite@8.2.1(@types/node@26.2.0)):
+  vitefu@1.1.3(vite@8.2.4(@types/node@26.2.0)):
     optionalDependencies:
-      vite: 8.2.1(@types/node@26.2.0)
+      vite: 8.2.4(@types/node@26.2.0)
 
-  vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.1(@types/node@26.2.0)):
+  vitest@4.1.10(@types/node@26.2.0)(jsdom@30.0.1)(vite@8.2.4(@types/node@26.2.0)):
     dependencies:
       '@vitest/expect': 4.1.10
-      '@vitest/mocker': 4.1.10(vite@8.2.1(@types/node@26.2.0))
+      '@vitest/mocker': 4.1.10(vite@8.2.4(@types/node@26.2.0))
       '@vitest/pretty-format': 4.1.10
       '@vitest/runner': 4.1.10
       '@vitest/snapshot': 4.1.10
@@ -2152,7 +2154,7 @@ snapshots:
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.1
-      vite: 8.2.1(@types/node@26.2.0)
+      vite: 8.2.4(@types/node@26.2.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 26.2.0
