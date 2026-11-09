@@ -892,3 +892,26 @@ async fn restraint_offers_the_request_s_memory_tools() {
         calls[0].1
     );
 }
+
+#[test]
+fn concurrent_usage_appends_stay_whole_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("usage.jsonl");
+    let outcome = HybridOutcome {
+        route: "r".repeat(64 * 1024),
+        ..HybridOutcome::default()
+    };
+    std::thread::scope(|s| {
+        for i in 0..16 {
+            let (path, outcome) = (&path, &outcome);
+            s.spawn(move || append_usage(path.to_str().unwrap(), &format!("case-{i}"), outcome));
+        }
+    });
+    let text = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 16);
+    for line in lines {
+        let record: Value = serde_json::from_str(line).unwrap();
+        assert_eq!(record["route"].as_str().unwrap().len(), 64 * 1024);
+    }
+}

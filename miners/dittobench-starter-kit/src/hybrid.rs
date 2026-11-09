@@ -1067,6 +1067,10 @@ pub fn log_usage(case_id: &str, outcome: &HybridOutcome) {
     if path.trim().is_empty() {
         return;
     }
+    append_usage(path.trim(), case_id, outcome);
+}
+
+fn append_usage(path: &str, case_id: &str, outcome: &HybridOutcome) {
     let mut line = serde_json::to_value(outcome).unwrap_or(Value::Null);
     if let Some(map) = line.as_object_mut() {
         map.insert("case_id".to_string(), json!(case_id));
@@ -1074,13 +1078,15 @@ pub fn log_usage(case_id: &str, outcome: &HybridOutcome) {
         map.remove("final_text");
     }
     use std::io::Write;
+    // Cases run concurrently, and `write_all` may split a line across writes
+    // after a partial one: hold a lock so two cases' records never interleave.
+    static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path.trim())
+        .open(path)
     {
-        // One write per line: cases run concurrently and `writeln!` may
-        // split a line across writes, interleaving two cases' records.
         let _ = file.write_all(format!("{line}\n").as_bytes());
     }
 }
