@@ -306,6 +306,20 @@ operator kill switch. A round request carries the exact round dataset bytes
 Its report goes to Platform's round endpoint and never enters the agent score
 ledger.
 
+`generator-frontier-oracle-v1` is the frontier oracle's run on the same round
+dataset, advertised and admitted alongside the round mode. It carries
+`oracle_case_ids` (1 to 640 distinct `column/case` ids, the round's unsolved
+cases), which every other mode refuses. For each listed case the scorer runs
+`challengerun.ExecuteOracle`: it validates the source pack, seeds one memory
+graph per case with only that case's `challenge.OracleContext` (at most 32
+pairs: cited evidence, pairs stating the declared distractors, and BM25
+competitors, with nothing marking which is which), and grades the reply like a
+panel case at the pack's declared policy. The report lists exactly the oracle
+cases. The validator forwards the feature as
+`scorer_benchmarks.generator_frontier_oracle` and refuses to post a report
+naming any other case set. See `research/dittobench-datagen/docs/generator-competition.md`,
+"Frontier cases".
+
 Alongside it the scorer advertises `generator-round-max-cases-<n>`, the
 largest column (cases per pack) it runs: the pack contract's
 `challenge.MaxCases`, currently 80. The validator forwards it as

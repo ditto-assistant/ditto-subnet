@@ -366,3 +366,45 @@ func TestExecuteIncludeRunsOnlySelectedCases(t *testing.T) {
 		t.Fatalf("harness saw %d runs and %d seeds, want 3 and %d", len(h.runs), len(h.seeded), len(p.MemoryWaves))
 	}
 }
+
+func TestExecuteOracleSeedsOnlyEachCasesContext(t *testing.T) {
+	p := challenge.ReferencePack(4, testHotkey)
+	ids := []string{p.Cases[5].ID, p.Cases[0].ID}
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	out, err := ExecuteOracle(context.Background(), srv.URL, p, ids, Options{Nonce: []byte("pinned")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 2 || out[0].CaseID != ids[0] || out[1].CaseID != ids[1] {
+		t.Fatalf("outcomes must follow caseIDs: %+v", out)
+	}
+	for _, o := range out {
+		if o.Fault || o.Score != 1 {
+			t.Fatalf("a gold answer grades 1 under the oracle: %+v", o)
+		}
+	}
+	// One seeding per case, each with that case's bounded context, under
+	// distinct opaque users, and only the requested cases ran.
+	if len(h.seeded) != 2 || len(h.runs) != 2 {
+		t.Fatalf("seeded %d graphs and ran %d cases", len(h.seeded), len(h.runs))
+	}
+	if h.seeded[0].UserID == h.seeded[1].UserID {
+		t.Fatal("each oracle case needs its own memory graph")
+	}
+	for _, w := range h.seeded {
+		if len(w.Pairs) == 0 || len(w.Pairs) > challenge.OracleMaxPairs {
+			t.Fatalf("an oracle graph holds 1..%d pairs, got %d", challenge.OracleMaxPairs, len(w.Pairs))
+		}
+	}
+	if _, err := ExecuteOracle(context.Background(), srv.URL, p, []string{"missing"}, Options{}); err == nil {
+		t.Fatal("an unknown oracle case must be refused")
+	}
+	bad := p
+	bad.Cases = append([]challenge.Case(nil), p.Cases...)
+	bad.Cases[0].EvidencePairIDs = nil
+	if _, err := ExecuteOracle(context.Background(), srv.URL, bad, ids, Options{}); err == nil {
+		t.Fatal("the source pack must still validate")
+	}
+}

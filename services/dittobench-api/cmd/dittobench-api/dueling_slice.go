@@ -65,7 +65,7 @@ func hasDuelingSliceFields(req submitRequest) bool {
 // bench >= 16 and not a generator round (a round at a dueling version is a
 // private pack dataset and never carries a slice).
 func requiresDuelingSlice(req submitRequest) bool {
-	return protocol.DuelingBenchVersion(req.BenchVersion) && req.PrivateDatasetMode != generatorRoundMode
+	return protocol.DuelingBenchVersion(req.BenchVersion) && !isGeneratorRoundMode(req.PrivateDatasetMode)
 }
 
 // validateDuelingSliceRequest admits the slice fields exactly on a canonical
