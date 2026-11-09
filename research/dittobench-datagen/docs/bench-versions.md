@@ -1664,10 +1664,10 @@ nine agents, and 234 for the tenth. The scorer's catalog capture keeps up to
 8,192 tools per completion, so a harness that forwards everything is still
 captured completely.
 
-**Flagged for the owner (not blocking):** the owner's view is that the
-Composio list is a public API listing; whether its tool names and descriptions
-may be redistributed in the public bench, its dataset reveals and the pinned
-snapshot remains the owner's call.
+**Redistribution (owner decision, recorded 2026-11-09):** the owner approved
+publishing the pinned snapshot, which carries only the public Composio
+listing's toolkit names, tool names and descriptions (no input schemas), in
+the public bench, its dataset reveals and this repository.
 
 **Per-run cost budget (scorer, `run-budget-v1`).** A v18 canonical run stops
 admitting cases once its priced cost reaches $1.00 per 350 cases (the cost at
