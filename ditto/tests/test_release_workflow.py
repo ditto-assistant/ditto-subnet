@@ -622,7 +622,7 @@ def test_release_uses_the_hash_locked_host_semantic_release_cli() -> None:
 
     assert project["dependency-groups"]["release"] == [
         "python-semantic-release==10.6.1",
-        "GitPython>=3.2.0",
+        "GitPython>=3.2.1",
     ]
     assert not any(
         str(step.get("uses", "")).startswith(

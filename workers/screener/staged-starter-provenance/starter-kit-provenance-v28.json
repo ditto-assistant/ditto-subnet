@@ -5,7 +5,7 @@
     "AGENTS.md": "e612c41c0aa6affa278d90a8f78f2e8763d225bd3e7d6ff4246e3d019a1a338e",
     "BASELINES.md": "206a869f23e59d5f87ac39ac8d051fc46c4958ab8d38cab27e66a3acd18e6ee6",
     "CLAUDE.md": "db46c3f7da60461b8f6a0a03e760d37c2998ab4c07e27eee7a4af53c9557661c",
-    "Cargo.lock": "5f22c350e2b3b1eb30f8cea543d5b5381f3b4f6212b2dd7b493f299315b04952",
+    "Cargo.lock": "0d6c9dcec2ccdaa28d83ffa313be8431d17f7da1f7177b694b7e9ac56e2b48f2",
     "Cargo.toml": "6ea9befe96bf1f0ab5ba7f2aacb08f5d68406f81b9baacd508149a0674448397",
     "Dockerfile": "db986ab58b22f541ca372b7d4f282f5b4efcecd229101ea31e57c02ba0df0df3",
     "LICENSE": "31930afa24e664ca57a2fa3e6ab4cea9307c55a8f9e6c0c9818340ea3181eac1",
@@ -25,11 +25,11 @@
     "fixtures/seed-user/subjects.json": "12881b1f26c348d9b9ceaadbddf1c477309b8390dae62b51c1fe4fe5b4cb6f36",
     "scripts/build-seed-user.py": "8c6da852ecca97247beb73309713a5815a1cd835b6e0ae1cc011437e52eac303",
     "scripts/local-rehearsal.py": "2d9abed4ec6e43d47fa323ad21fd2fb2331822e86b14b1b1f0c8eb3ba3c3a07a",
-    "scripts/rehearsal_cost.py": "9868b087a37d651794d7eaf9eb4f0f4f59c1cfc94c45179af875f4872bb5f7d7",
+    "scripts/rehearsal_cost.py": "47743214232400addf9769fca4456916aaa7b71a71d870365b7a437e0588054d",
     "scripts/rehearsal_gates.py": "903cedd8ed3ead62352692f1967a2192c69b774b35bbd182a1e27209ea2473c2",
     "scripts/submission-lab.py": "d6a422063e94e18317f98bbcd53e4002b4704ad84cf6a873aa2a53aa2a90cc6e",
     "scripts/submission-workbench.py": "2643d22f3d7674bf3d9f5a9c935d0e7488292b0dc3e9a4e4b4928daabf72d91b",
-    "scripts/test_local_rehearsal.py": "9c73f561ba4eaf37e7798b768dc8ec3cdf88e8e408fe8ca0e1ec9b7539993fac",
+    "scripts/test_local_rehearsal.py": "62d5767024defb1403ffcb2db98b78e2a5f718baf619b9a4b2a16d58b19a853e",
     "scripts/test_submission_lab.py": "27459bbacf2f97b4f615c30e9ddd7e40b89a5d632a87a38db5e04ee9604cb1cf",
     "scripts/test_submission_workbench.py": "dfb39a8a2a45fecb8c7cd3eaf59db29ad830f907237a3f3e27008c0b1987bbc5",
     "src/baseline.rs": "e828d354a3a0a1f2edcb05f2a0a2c32114c3cbcc3d408a8bddcf18675bbbfce7",
@@ -52,6 +52,6 @@
     "tests/store_concurrency.rs": "7cf956ffa08d2632ecb400f1f5aa7580df6e684fa831861beca8ba947c8578cd"
   },
   "origin": "ditto-assistant/ditto-subnet/miners/dittobench-starter-kit",
-  "revision": "b2b943d322e96060972483239e17350d5b7e50f9",
+  "revision": "377b20098139dee0bfe6766642c1253a6013bfc2",
   "version": 1
 }

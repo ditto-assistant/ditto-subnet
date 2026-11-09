@@ -56,3 +56,40 @@ func TestV16LinkedConnectorServing(t *testing.T) {
 		t.Fatal("connector plan must exist only at v16")
 	}
 }
+
+// A seed decoy whose coined name collides with a v18 snapshot slug keeps the
+// decoy handling: as the bearer of its result-usage case it serves the
+// needle instead of the snapshot's "not connected" refusal.
+func TestV18SnapshotRefusalSkipsFixtureDecoys(t *testing.T) {
+	const seed = int64(7)
+	decoy := catalog.DecoysForSeed(seed)[0]
+	c := protocol.ToolCase{
+		ID: "cdecoy", Category: "decoy_" + decoy.Shape.Key + "_result_usage",
+		ExpectedTools: []protocol.ToolSpec{{Name: decoy.Name}}, MaxToolCalls: 1,
+	}
+	f := BuildFixtureForVersion(seed, c, protocol.BenchVersionV18)
+	if !f.has || f.Bearer() != decoy.Name {
+		t.Fatalf("decoy-correct case must be borne by the decoy: has=%v bearer=%q", f.has, f.Bearer())
+	}
+	slug := ""
+	for _, def := range catalog.V18ProductionToolsForSeed(seed, protocol.BenchVersionV18) {
+		if _, ok := catalog.IsV18ProductionTool(def.Name); ok {
+			slug = def.Name
+			break
+		}
+	}
+	if slug == "" {
+		t.Fatal("seed offers no refusable v18 snapshot tool")
+	}
+	if got := callV16(f, slug, nil); !strings.Contains(got.Error, "not connected") {
+		t.Fatalf("a plain snapshot tool must be refused: %+v", got)
+	}
+	// Re-key the bearer decoy under the snapshot slug to simulate a collision.
+	collided := decoy
+	collided.Name = slug
+	f.decoys = map[string]catalog.Decoy{slug: collided}
+	f.bearer = slug
+	if got := callV16(f, slug, nil); got.Error != "" || !strings.Contains(got.Result, f.NeedleValue()) {
+		t.Fatalf("colliding decoy bearer must serve the needle: %+v", got)
+	}
+}
