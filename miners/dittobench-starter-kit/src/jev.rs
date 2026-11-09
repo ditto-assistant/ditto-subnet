@@ -120,10 +120,16 @@ impl Question {
         let dropped = criteria.len().saturating_sub(MAX_CHOICE_OPTIONS);
         if dropped > 0 {
             let last = options.last().map(|(name, _)| name.as_str());
+            // Each kept name once: a repeated name must not use up a drop.
+            let mut seen = std::collections::HashSet::new();
             let excess: Vec<String> = options
                 .iter()
                 .map(|(name, _)| name)
-                .filter(|name| Some(name.as_str()) != last && criteria.contains_key(*name))
+                .filter(|name| {
+                    Some(name.as_str()) != last
+                        && criteria.contains_key(*name)
+                        && seen.insert(name.as_str())
+                })
                 .skip(MAX_CHOICE_OPTIONS - 1)
                 .take(dropped)
                 .cloned()
@@ -589,6 +595,18 @@ mod tests {
         );
         assert!(criteria.contains_key("tool_253"));
         assert!(!criteria.contains_key("tool_254"));
+
+        // Repeats inside the dropped window must not use up a drop.
+        let mut options = opts(258, "d");
+        for i in 254..258 {
+            options.insert(i + 1, (format!("tool_{i}"), "again".to_string()));
+        }
+        options.push(("none_of_these".to_string(), String::new()));
+        let q = Question::choice("c", "Which?", &options);
+        assert_eq!(
+            q.body["criteria"].as_object().unwrap().len(),
+            MAX_CHOICE_OPTIONS
+        );
     }
 
     #[test]

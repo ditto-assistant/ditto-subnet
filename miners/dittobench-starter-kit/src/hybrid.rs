@@ -362,6 +362,13 @@ pub fn required_string_params(schema: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Words that open a sentence without starting a name ("The API ...").
+const SENTENCE_OPENERS: &[&str] = &[
+    "the", "a", "an", "this", "that", "these", "those", "his", "her", "their", "its", "my", "our",
+    "your", "when", "if", "but", "and", "or", "it", "he", "she", "we", "they", "i", "please",
+    "welcome",
+];
+
 const EDGE_PUNCT: &[char] = &[
     ',', ';', ':', '(', ')', '[', ']', '{', '}', '<', '>', '"', '\'', '“', '”', '‘', '’', '!', '?',
 ];
@@ -436,14 +443,17 @@ pub fn extract_candidates(texts: &[&str], limit: usize) -> Vec<String> {
             }
             let starts_upper = bare.chars().next().is_some_and(char::is_uppercase);
             // A sentence-initial word is capitalised anyway; keep it only when
-            // it opens a capitalised run ("John Smith emailed me").
+            // it opens a run of title-case words ("John Smith emailed me"),
+            // never a function word ("The API ...") or before an acronym or
+            // identifier.
             let opens_run = i == 0
+                && !SENTENCE_OPENERS.contains(&bare.to_ascii_lowercase().as_str())
                 && !raw.ends_with(['.', ',', ';', ':', '?', '!'])
                 && words.get(1).is_some_and(|next| {
-                    next.trim_matches(EDGE_PUNCT)
-                        .chars()
-                        .next()
-                        .is_some_and(char::is_uppercase)
+                    let next = next.trim_matches(EDGE_PUNCT);
+                    next.chars().next().is_some_and(char::is_uppercase)
+                        && next.chars().any(char::is_lowercase)
+                        && !next.chars().any(|c| c.is_ascii_digit())
                 });
             if starts_upper && bare.chars().count() > 1 && (i > 0 || opens_run) {
                 caps.push(bare.to_string());
@@ -626,7 +636,9 @@ async fn plan(
     // An explicit act route outranks a contradictory no_change score;
     // already_done still stops a case whose records show the work is done.
     plan.act_unlikely = (plan.route != "act" && !plan.route.is_empty() && route_p >= 0.5)
-        || (plan.route != "act" && answers.noul("no_change").unwrap_or(0.0) >= 0.6)
+        || (!plan.route.is_empty()
+            && plan.route != "act"
+            && answers.noul("no_change").unwrap_or(0.0) >= 0.6)
         || answers.noul("already_done").unwrap_or(0.0) >= 0.6;
     // No route means pass 1 failed: skip the costly menu and let run_case
     // fall back to code-only selection, as it does without a decision lane.
