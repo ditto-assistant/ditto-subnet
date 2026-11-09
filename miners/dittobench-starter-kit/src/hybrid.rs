@@ -497,6 +497,8 @@ async fn plan(
 ) -> Plan {
     let mut plan = Plan::default();
     let Some(client) = client else {
+        // No decision lane: keep the retrieval order, as a failed pass 1 does.
+        plan.notes = pick_notes(&Answers::default(), case.notes.len(), cfg.notes_k);
         return plan;
     };
     let state = json!({"request": case.user_input});

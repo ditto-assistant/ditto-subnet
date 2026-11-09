@@ -1283,11 +1283,15 @@ impl Baseline {
         let cfg = crate::hybrid::HybridConfig::from_env();
         let decisions = crate::jev::DecisionClient::from_env(self.http.clone());
         if decisions.is_none() {
-            eprintln!(
-                "{}: {} is unset; the hybrid path falls back to code-only tool selection",
-                req.case_id,
-                crate::jev::DECISIONS_URL_ENV
-            );
+            // Once per process: every case would otherwise repeat it.
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "{} is unset; the hybrid path falls back to code-only tool selection \
+                     and the top retrieved notes",
+                    crate::jev::DECISIONS_URL_ENV
+                );
+            });
         }
 
         // Executable tools: catalog tools through the validator endpoint,

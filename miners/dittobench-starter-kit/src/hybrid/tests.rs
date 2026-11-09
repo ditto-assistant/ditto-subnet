@@ -618,9 +618,13 @@ async fn without_a_decision_lane_it_falls_back_to_code_only_selection() {
     .await
     .unwrap();
     assert_eq!(out.decision_calls, 0);
-    let offered = &model.calls.lock().unwrap()[0].1;
+    let calls = model.calls.lock().unwrap();
+    let offered = &calls[0].1;
     assert!(!offered.is_empty() && offered.len() <= 8 + 1, "{offered:?}");
     assert!(offered.contains(&"calendar_create_event".to_string()));
+    // Retrieved notes still reach the model, in retrieval order.
+    assert!(out.notes_used > 0);
+    assert!(user_prompt(&calls[0].0).contains("Priya prefers morning meetings"));
 }
 
 #[tokio::test]
