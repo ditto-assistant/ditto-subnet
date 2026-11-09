@@ -516,8 +516,7 @@ func TestFrontierVectorsGolden(t *testing.T) {
 }
 
 // An attestation names a case's content, not just its id: a different case
-// that reuses the id (another seed of a run, another column) never inherits
-// it, so a generator cannot spend one seed's attestation on another seed.
+// that reuses the id never inherits it.
 func TestFrontierAttestationsAreScopedToCaseContent(t *testing.T) {
 	cases := ReferencePack(21, testHotkey).Refs()[:8]
 	other := make([]CaseRef, len(cases))
@@ -527,28 +526,62 @@ func TestFrontierAttestationsAreScopedToCaseContent(t *testing.T) {
 	params := DefaultScoreParams()
 	params.FrontierWeight = 1
 	params.TargetCases = len(cases)
-	zero := func(cs []CaseRef) []PanelMember {
-		return []PanelMember{
-			member("a1", "o1", true, uniform(cs, 0)),
-			member("a2", "o2", false, uniform(cs, 0)),
-			member("a3", "o3", false, uniform(cs, 0)),
-		}
-	}
-	run, err := ScoreRun(RunInput{
+	ps, err := ScoreCases(other, ScoreInput{
 		GeneratorOwnerKey: "gen",
-		Seeds: []SeedPanel{
-			{Seed: "s0", Cases: cases, Panel: zero(cases)},
-			{Seed: "s1", Cases: other, Panel: zero(other)},
-		},
-		FrontierCases: cases, // attested on seed s0 only
+		Panel:             zeroPanel(other),
+		FrontierCases:     cases, // same ids, other content
 	}, params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s0 := run.Seeds[0]; s0.Frontier != len(cases) || s0.Unsolved != 0 {
-		t.Fatalf("the attested seed earns frontier credit: %+v", s0)
+	if ps.Frontier != 0 || ps.Unsolved != len(other) || ps.Score != 0 {
+		t.Fatalf("a same-id case with other content must stay unsolved: %+v", ps)
 	}
-	if s1 := run.Seeds[1]; s1.Frontier != 0 || s1.Unsolved != len(other) || s1.Score != 0 {
-		t.Fatalf("a same-id case with other content must stay unsolved: %+v", s1)
+}
+
+// Attestations belong to the seed that earned them. A fingerprint covers a
+// case's question and answer, not its haystack, so the same question can
+// appear in two seeds' packs over different memory. An attestation earned on
+// one seed's haystack must never turn the other seed's copy into frontier.
+func TestFrontierAttestationsNeverCrossSeedContexts(t *testing.T) {
+	cases := ReferencePack(21, testHotkey).Refs()[:8]
+	params := DefaultScoreParams()
+	params.FrontierWeight = 1
+	params.TargetCases = len(cases)
+	run := func(attestOn int) RunScore {
+		seeds := []SeedPanel{
+			{Seed: "s0", Cases: cases, Panel: zeroPanel(cases)},
+			{Seed: "s1", Cases: cases, Panel: zeroPanel(cases)},
+		}
+		seeds[attestOn].FrontierCases = cases
+		out, err := ScoreRun(RunInput{GeneratorOwnerKey: "gen", Seeds: seeds}, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	// Attested on s1 only: s0's copy (scored first, so it holds the
+	// fingerprints) stays unsolved, and s1's copy is a duplicate.
+	later := run(1)
+	if s0 := later.Seeds[0]; s0.Frontier != 0 || s0.Unsolved != len(cases) || s0.Score != 0 {
+		t.Fatalf("s1's attestation crossed into s0: %+v", s0)
+	}
+	if s1 := later.Seeds[1]; s1.Duplicate != len(cases) || s1.Frontier != 0 {
+		t.Fatalf("s1 repeats s0's fingerprints, so it scores duplicates: %+v", s1)
+	}
+	if later.Score != 0 {
+		t.Fatalf("no seed earned frontier credit from its own attestation: %+v", later)
+	}
+	// Attested on s0 itself: s0 earns it.
+	if s0 := run(0).Seeds[0]; s0.Frontier != len(cases) || s0.Unsolved != 0 {
+		t.Fatalf("a seed's own attestation applies to it: %+v", s0)
+	}
+}
+
+func zeroPanel(cs []CaseRef) []PanelMember {
+	return []PanelMember{
+		member("a1", "o1", true, uniform(cs, 0)),
+		member("a2", "o2", false, uniform(cs, 0)),
+		member("a3", "o3", false, uniform(cs, 0)),
 	}
 }

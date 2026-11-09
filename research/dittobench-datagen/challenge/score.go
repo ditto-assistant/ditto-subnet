@@ -344,6 +344,12 @@ type SeedPanel struct {
 	Seed  string        `json:"seed"`
 	Cases []CaseRef     `json:"cases"`
 	Panel []PanelMember `json:"panel"`
+	// FrontierCases are this seed's attested cases (see
+	// ScoreInput.FrontierCases). Attestations belong to the seed whose pack
+	// earned them: a fingerprint covers a case's question and answer, not
+	// its memory haystack, so the same question in another seed's pack is a
+	// different case to attest and never inherits this seed's attestation.
+	FrontierCases []CaseRef `json:"frontier_cases,omitempty"`
 }
 
 // RunInput is one generator evaluation: the packs it produced for each of the
@@ -354,9 +360,6 @@ type RunInput struct {
 	// ClaimedFingerprints are case fingerprints earlier runs (of any
 	// generator) already hold credit for.
 	ClaimedFingerprints []string `json:"claimed_fingerprints,omitempty"`
-	// FrontierCases are attested-valid cases across every seed, each scoped
-	// to its content by fingerprint; see ScoreInput.FrontierCases.
-	FrontierCases []CaseRef `json:"frontier_cases,omitempty"`
 }
 
 // RunScore is a generator's score for one evaluation.
@@ -387,7 +390,7 @@ func ScoreRun(in RunInput, params ScoreParams) (RunScore, error) {
 			GeneratorOwnerKey:   in.GeneratorOwnerKey,
 			Panel:               seed.Panel,
 			ClaimedFingerprints: claimed,
-			FrontierCases:       in.FrontierCases,
+			FrontierCases:       seed.FrontierCases,
 		}, params)
 		if err != nil {
 			return RunScore{}, fmt.Errorf("seed %s: %w", seed.Seed, err)

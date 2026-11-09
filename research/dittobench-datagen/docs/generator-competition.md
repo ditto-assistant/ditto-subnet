@@ -588,7 +588,11 @@ overfitting should do.
 ids) lists cases an independent witness attested as valid, each as its case id
 **and fingerprint**. An attestation therefore matches only the exact case
 content it was earned on: a different case that reuses the id in another seed
-or column never inherits it. A listed case that the panel leaves unsolved
+or column never inherits it. A qualification run (`ScoreRun`) carries
+attestations per seed (`SeedPanel.FrontierCases`), because a fingerprint covers
+a case's question and answer but not its memory haystack: the same question in
+another seed's pack sits on different memory, so it is a different case to
+attest. A round needs no such split, since a round case id names its column. A listed case that the panel leaves unsolved
 scores `frontier`:
 
 - credit `(1 − mean) × (1 + champion_bonus·[champion failed]) × frontier_weight`
