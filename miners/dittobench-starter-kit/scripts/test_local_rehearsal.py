@@ -2447,6 +2447,16 @@ class PricedCostEstimateTest(unittest.TestCase):
         # 1000 x 70 + 50 x 150 + 24000 x 42 = 1,085,500 nano-USD.
         self.assertEqual(estimate["cost_nano_usd"], 1_085_500)
         self.assertIn("decision_input:      24000", COST.format_estimate(estimate, 18))
+        self.assertEqual(estimate["usage_missing"], 0)
+        # A decision answer without complete usage is surfaced, not priced as 0.
+        for usage in (None, {}, {"input_tokens": 5}, {"input_tokens": "5", "output_tokens": 1}):
+            meter.record_decision(usage)
+        missing = COST.estimate(meter, {"n": 1}, 18)
+        assert missing is not None
+        self.assertEqual(missing["decision_calls"], 6)
+        self.assertEqual(missing["usage_missing"], 4)
+        self.assertEqual(missing["decision_input_tokens"], 24_000)
+        self.assertIn("4 call(s) returned no usage", COST.format_estimate(missing, 18))
         # A meter with no decision upstream (Ollama) refuses the route.
         ollama = COST.meter_for_environment({"DITTOBENCH_PROVIDER": "ollama"})
         assert ollama is not None

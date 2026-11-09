@@ -348,15 +348,13 @@ class CostMeter:
     def record_decision(self, usage: dict[str, Any] | None) -> None:
         with self._lock:
             self.totals.decision_calls += 1
-            if not usage:
+            input_tokens = usage.get("input_tokens") if usage else None
+            output_tokens = usage.get("output_tokens") if usage else None
+            if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+                self.totals.usage_missing += 1
                 return
-            for key, attr in (
-                ("input_tokens", "decision_input_tokens"),
-                ("output_tokens", "decision_output_tokens"),
-            ):
-                value = usage.get(key)
-                if isinstance(value, int) and value > 0:
-                    setattr(self.totals, attr, getattr(self.totals, attr) + value)
+            self.totals.decision_input_tokens += max(input_tokens, 0)
+            self.totals.decision_output_tokens += max(output_tokens, 0)
 
     @property
     def decisions_url(self) -> str | None:
@@ -562,7 +560,7 @@ def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str
             lines.append(f"run budget:          ${budget_usd:.4f} (bench 18+): not reached")
     if estimate_.get("usage_missing"):
         lines.append(
-            f"warning: {estimate_['usage_missing']} completion(s) returned no usage; "
+            f"warning: {estimate_['usage_missing']} call(s) returned no usage; "
             "the estimate is a lower bound"
         )
     lines += [
