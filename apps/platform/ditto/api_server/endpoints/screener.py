@@ -1264,6 +1264,8 @@ async def refresh_screener_node(
                 node.provider not in _ON_DEMAND_NODE_PROVIDERS
                 or node.status not in ("active", "draining")
                 or not (current_matches or previous_held)
+                # Zero disables dormant rotation, even at the expiry instant.
+                or max_dormancy <= timedelta(0)
                 or now - prior_expiry > max_dormancy
             ):
                 raise ScreenerAuthError("screener bearer token has expired")

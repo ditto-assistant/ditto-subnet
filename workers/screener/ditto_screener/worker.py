@@ -449,7 +449,11 @@ class ScreenerWorker:
                 processed = 0
             if processed > 0:
                 last_work = loop.time()
-            elif idle_limit is not None and loop.time() - last_work >= idle_limit:
+            elif (
+                not stop.is_set()
+                and idle_limit is not None
+                and loop.time() - last_work >= idle_limit
+            ):
                 # A failing Platform also counts as idle: an on-demand host that
                 # cannot reach work must still power off rather than bill.
                 logger.info(

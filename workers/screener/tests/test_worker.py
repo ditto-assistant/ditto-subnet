@@ -2338,6 +2338,22 @@ async def test_screening_work_resets_the_idle_bound(
     assert [verdict["agent_id"] for verdict in platform.verdicts] == [agent]
 
 
+async def test_requested_stop_wins_over_an_elapsed_idle_bound(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[]])
+    stop = asyncio.Event()
+    # The stop lands during a zero-work sweep after the idle bound elapsed.
+    platform.stop_after_queue = stop
+    worker = _worker(
+        make_config(idle_exit_seconds=0.000001, poll_seconds=0.01),
+        platform,
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+    )
+
+    assert await asyncio.wait_for(worker.run_forever(stop), timeout=2.0) is False
+
+
 async def test_worker_without_idle_bound_reports_a_plain_stop(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
