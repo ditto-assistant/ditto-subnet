@@ -128,11 +128,15 @@ pub fn menu_tokens(tools: &[ToolDefWire]) -> usize {
 
 /// True when this request takes the hybrid path.
 pub fn enabled(bench_version: u32, tools: &[ToolDefWire]) -> bool {
-    enabled_from(
-        std::env::var(HYBRID_ENV).ok().as_deref(),
-        bench_version,
-        menu_tokens(tools),
-    )
+    let value = std::env::var(HYBRID_ENV).ok();
+    let value = value.as_deref();
+    // The estimate serializes every tool; skip it when the switch or the
+    // bench version already decides whatever the menu size.
+    let settled = enabled_from(value, bench_version, 0);
+    if settled == enabled_from(value, bench_version, usize::MAX) {
+        return settled;
+    }
+    enabled_from(value, bench_version, menu_tokens(tools))
 }
 
 /// One startup line naming the served path per bench, so a miner who
