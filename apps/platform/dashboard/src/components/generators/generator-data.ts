@@ -119,7 +119,7 @@ export interface GeneratorRoundColumn extends GeneratorIdentity {
   trivial: number;
   unsolved: number;
   duplicate: number;
-  /** Cases no agent solved that the frontier oracle answered and no failed
+  /** Cases too few agent owners solved that the frontier oracle answered and no failed
    * audit voided: they earn credit instead of counting as unsolved. Absent on
    * an older Platform; 0 until the round's frontier lane settles. */
   frontier?: number | null;

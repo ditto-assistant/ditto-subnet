@@ -225,7 +225,7 @@ function Stage(props: {
 }
 
 const OUTCOME_COLUMNS: readonly {
-  key: "discriminating" | "trivial" | "unsolved" | "duplicate";
+  key: "discriminating" | "trivial" | "unsolved" | "frontier" | "duplicate";
   label: string;
   title: string;
 }[] = [
@@ -236,6 +236,12 @@ const OUTCOME_COLUMNS: readonly {
   },
   { key: "trivial", label: "Easy", title: "Trivial: every agent solved it" },
   { key: "unsolved", label: "Stumped", title: "Unsolved: no agent solved it" },
+  {
+    key: "frontier",
+    label: "Frontier",
+    title:
+      "Frontier: got past the panel (no two agent owners solved it), but the frontier oracle answered it and an audit found it fair; it earns credit",
+  },
   { key: "duplicate", label: "Dupes", title: "Duplicate: discarded, never counted" },
 ];
 
@@ -266,6 +272,12 @@ export function ArenaScene(props: {
     return script.throws[replay.index()] ?? null;
   };
   const phase = (): ThrowPhase => (props.motion ? replay.phase() : "rest");
+  // The Frontier column appears once a round has frontier cases, so rounds
+  // scored before frontier scoring keep their board.
+  const outcomeColumns = () =>
+    OUTCOME_COLUMNS.filter(
+      (column) => column.key !== "frontier" || (props.script?.totals.frontier ?? 0) > 0,
+    );
   return (
     <Show
       when={props.script && layout()}
@@ -306,7 +318,7 @@ export function ArenaScene(props: {
             <thead>
               <tr>
                 <th scope="col">Generator</th>
-                <For each={OUTCOME_COLUMNS}>
+                <For each={outcomeColumns()}>
                   {(column) => (
                     <th scope="col" class="num" title={column.title}>
                       {column.label}
@@ -335,7 +347,7 @@ export function ArenaScene(props: {
                         </Show>
                       </span>
                     </th>
-                    <For each={OUTCOME_COLUMNS}>
+                    <For each={outcomeColumns()}>
                       {(column) => <td class="num">{generator.counts[column.key]}</td>}
                     </For>
                     <td class="num">{fx(generator.score)}</td>

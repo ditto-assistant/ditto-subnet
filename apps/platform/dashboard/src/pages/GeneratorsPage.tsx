@@ -582,7 +582,7 @@ function RoundDetail(props: {
                   <th
                     scope="col"
                     class="num hide-sm"
-                    title="Cases no agent solved that the frontier oracle answered and an audit found fair"
+                    title="Cases too few agent owners solved that the frontier oracle answered and an audit found fair"
                   >
                     Frontier
                   </th>

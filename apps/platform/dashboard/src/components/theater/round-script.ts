@@ -19,7 +19,7 @@ import type {
 import type { DittoPersona, HumanPersona } from "./persona";
 import { agentPersona, hashSeed, humanPersona, personaKey, seededRandom } from "./persona";
 
-export const OUTCOMES = ["discriminating", "trivial", "unsolved", "duplicate"] as const;
+export const OUTCOMES = ["discriminating", "trivial", "unsolved", "frontier", "duplicate"] as const;
 export type CaseOutcome = (typeof OUTCOMES)[number];
 
 /** What each kind of case looks like in flight. */
@@ -27,6 +27,9 @@ export const OUTCOME_PROP: Record<CaseOutcome, "maze" | "sticky" | "knot" | "cop
   discriminating: "maze",
   trivial: "sticky",
   unsolved: "knot",
+  // A frontier case also gets past the panel (no two owners solved it); it
+  // flies like a knot, but is counted, labeled and captioned on its own.
+  frontier: "knot",
   duplicate: "copy",
 };
 
@@ -157,9 +160,8 @@ function countsOf(column: GeneratorRoundColumn): Record<CaseOutcome, number> {
   return {
     discriminating: n(column.discriminating),
     trivial: n(column.trivial),
-    // Frontier cases are ones no agent solved too; the arena shows them as
-    // stumping the panel, which is what happened.
-    unsolved: n(column.unsolved) + n(column.frontier),
+    unsolved: n(column.unsolved),
+    frontier: n(column.frontier),
     duplicate: n(column.duplicate),
   };
 }
@@ -229,6 +231,8 @@ function caption(
       return `${thrower} lobs an easy one. Every agent solves it, so it separates nobody.`;
     case "unsolved":
       return `${thrower}'s case stumps the whole panel${missers[0] ? `, ${missers[0]} included` : ""}.`;
+    case "frontier":
+      return `${thrower}'s frontier case gets past the panel${missers[0] ? `, ${missers[0]} included` : ""}, and an oracle and an audit found it fair, so it earns credit.`;
     case "duplicate":
       return `${thrower} throws a repeat. Duplicates are stamped and never count.`;
     default:
@@ -245,7 +249,14 @@ export function buildRoundScript(
   const maxThrows = options.maxThrows ?? 24;
   const generators = arenaGenerators(detail.columns, options.maxGenerators ?? 6);
   const agents = arenaAgents(detail.standings, label, options.maxAgents ?? 5);
-  const totals = { discriminating: 0, trivial: 0, unsolved: 0, duplicate: 0, cases: 0 };
+  const totals = {
+    discriminating: 0,
+    trivial: 0,
+    unsolved: 0,
+    frontier: 0,
+    duplicate: 0,
+    cases: 0,
+  };
   for (const generator of generators) {
     for (const outcome of OUTCOMES) totals[outcome] += generator.counts[outcome];
     totals.cases += generator.cases;
@@ -282,7 +293,7 @@ export function buildRoundScript(
     let missers: number[] = [];
     const target = index % n;
     if (outcome === "trivial") catchers = [target];
-    else if (outcome === "unsolved") missers = [target];
+    else if (outcome === "unsolved" || outcome === "frontier") missers = [target];
     else if (outcome === "discriminating") {
       const catcher = weightedPick(
         random,
@@ -323,7 +334,11 @@ export function roundSummary(script: RoundScript): string {
   return (
     `Generator round ${script.round}: ${script.generators.length} generators produced ${t.cases} cases ` +
     `(${t.discriminating} separated the agents, ${t.trivial} every agent solved, ` +
-    `${t.unsolved} no agent solved, ${t.duplicate} duplicates). ` +
+    `${t.unsolved} no agent solved, ` +
+    (t.frontier
+      ? `${t.frontier} frontier cases that got past the panel but were attested valid, `
+      : "") +
+    `${t.duplicate} duplicates). ` +
     (sharpest
       ? `${sharpest.name} wrote the most separating cases (${sharpest.counts.discriminating}). `
       : "") +

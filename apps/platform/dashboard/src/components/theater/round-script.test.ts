@@ -49,6 +49,16 @@ function withDefault(): GeneratorRoundDetail {
   return detail;
 }
 
+/** withDefault() after its round settled frontier credit: four of the
+ * column with the most unsolved cases became frontier cases. */
+function withFrontier(): GeneratorRoundDetail {
+  const detail = withDefault();
+  const column = [...detail.columns].sort((a, b) => b.unsolved - a.unsolved)[0]!;
+  column.unsolved -= 4;
+  column.frontier = 4;
+  return detail;
+}
+
 describe("apportion and smoothSequence", () => {
   it("splits slots by largest remainder and sums exactly", () => {
     expect(apportion([26, 3, 3, 0], 10)).toEqual([8, 1, 1, 0]);
@@ -97,6 +107,7 @@ describe("round → arena script", () => {
       discriminating: 49,
       trivial: 87,
       unsolved: 24,
+      frontier: 0,
       duplicate: 0,
       cases: 160,
     });
@@ -126,14 +137,14 @@ describe("round → arena script", () => {
   });
 
   it("maps every outcome to its catch and bonk rule", () => {
-    const script = buildRoundScript(withDefault(), () => null, { maxThrows: 192 });
+    const script = buildRoundScript(withFrontier(), () => null, { maxThrows: 192 });
     expect(new Set(script.throws.map((t) => t.outcome))).toEqual(new Set(OUTCOMES));
     for (const shot of script.throws) {
       if (shot.outcome === "trivial") {
         expect(shot.catchers).toHaveLength(1);
         expect(shot.missers).toHaveLength(0);
         expect(shot.prop).toBe("sticky");
-      } else if (shot.outcome === "unsolved") {
+      } else if (shot.outcome === "unsolved" || shot.outcome === "frontier") {
         expect(shot.catchers).toHaveLength(0);
         expect(shot.missers).toHaveLength(1);
         expect(shot.prop).toBe("knot");
@@ -166,6 +177,19 @@ describe("round → arena script", () => {
     expect(summary).toContain("Generator round 25967: 5 generators produced 160 cases");
     expect(summary).toContain("49 separated the agents");
     expect(summary).toContain("Per-agent results on individual cases are not public");
+  });
+
+  it("keeps frontier cases apart from unsolved ones", () => {
+    const plain = buildRoundScript(withDefault()).totals;
+    const settled = buildRoundScript(withFrontier());
+    // Settling moves cases from unsolved to frontier; neither is merged away.
+    expect(settled.totals.frontier).toBe(4);
+    expect(settled.totals.unsolved).toBe(plain.unsolved - 4);
+    expect(settled.totals.cases).toBe(plain.cases);
+    const summary = roundSummary(settled);
+    expect(summary).toContain(`${plain.unsolved - 4} no agent solved`);
+    expect(summary).toContain("4 frontier cases that got past the panel but were attested valid");
+    expect(roundSummary(buildRoundScript(withDefault()))).not.toContain("frontier");
   });
 
   it("skips uncounted columns and survives an empty round", () => {
