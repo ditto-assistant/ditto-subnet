@@ -591,10 +591,14 @@ async def _in_current_pin(
     session: AsyncSession,
     agent_id: UUID,
     settings: ContinualRetestSettings,
+    *,
+    bench_version: int,
 ) -> bool | None:
     """Whether the epoch pin validators fold now lists ``agent_id``.
 
-    ``None`` in live mode, before the first pin, or when it cannot be read.
+    ``None`` in live mode, before the first pin, when it cannot be read, or
+    when the newest pin was frozen under another bench version (its entries
+    say nothing about the active one).
     """
     if settings.ledger_pin_mode != "epoch":
         return None
@@ -603,7 +607,7 @@ async def _in_current_pin(
     except SQLAlchemyError:
         logger.warning("ledger pin read failed for the retest diagnostic")
         return None
-    if pin is None:
+    if pin is None or pin.bench_version != bench_version:
         return None
     return any(
         isinstance(item, dict) and item.get("agent_id") == str(agent_id)
@@ -805,7 +809,9 @@ async def continual_retest_diagnostic(
         and coverage is not None
         and coverage.expired
     )
-    in_current_pin = await _in_current_pin(request, session, agent_id, settings)
+    in_current_pin = await _in_current_pin(
+        request, session, agent_id, settings, bench_version=version
+    )
     reason: _AdmissionReason = (
         "same_owner_challenger"
         if challenger

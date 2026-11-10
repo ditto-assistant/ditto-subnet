@@ -671,6 +671,7 @@ def _expired_coverage() -> SeasonCoverage:
             )
             for index, composite in enumerate((0.95, 0.960714, 0.97), start=1)
         ),
+        opened_seasons=(_SEASON_CURRENT, _SEASON_PREVIOUS, _SEASON_EXPIRED),
     )
 
 

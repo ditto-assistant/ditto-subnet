@@ -16,18 +16,21 @@ board. These tests pin the display contract built on top of it:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import bittensor
 import httpx
 import pytest
-from fastapi import FastAPI
-from sqlalchemy import func, select
+from fastapi import FastAPI, Request
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.endpoints.public as public_endpoints
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_server.endpoints import admin_leaderboard
 from ditto.db.models import (
     Agent,
     DuelingSeason,
@@ -430,3 +433,143 @@ class TestSeasonCoverage:
             assert rows[0][0].eligible is False
             # Inert below the dueling floor.
             assert await season_coverage(session, bench_version=15) == {}
+
+    async def test_median_reads_only_the_last_window_that_held_the_quorum(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A stored row from a season outside the last valid window never
+        shifts the reported last valid score."""
+        maker = session_maker
+        await _activate_era(maker, _VERSION)
+        default = await _generator(
+            maker,
+            hotkey=_hotkey("//ExpiryDefault4"),
+            owner="public-default",
+            salt="expiry-default-4",
+            public_default=True,
+        )
+        ids = []
+        for index in (60, 61, 62, 63):
+            ids.append(await _open_season(maker, default, season_index=index))
+            if index != 63:
+                async with maker() as session, session.begin():
+                    row = await session.get(DuelingSeason, ids[-1])
+                    assert row is not None
+                    row.status = "closed"
+        # V1's row is from 60, already outside the window {61, 62} in which
+        # V2-V4 made the quorum; {62, 63} is live now and holds none of them.
+        agent_id = await _agent(
+            maker, hotkey=_DIANA, name="stale", season_id=ids[1], composite=0.85
+        )
+        spread = await _agent(
+            maker, hotkey=_RIVAL, name="spread", season_id=ids[0], composite=0.9
+        )
+        async with maker() as session, session.begin():
+            for validator, composite in zip(
+                _VALIDATORS, (0.80, 0.85, 0.90), strict=True
+            ):
+                await session.execute(
+                    update(Score)
+                    .where(
+                        Score.agent_id == agent_id,
+                        Score.validator_hotkey == validator,
+                    )
+                    .values(composite=composite)
+                )
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    validator_hotkey="5ExpV0",
+                    bench_version=_VERSION,
+                    run_id="run-stale",
+                    seed=3,
+                    composite=0.10,
+                    tool_mean=0.10,
+                    memory_mean=0.10,
+                    median_ms=10,
+                    n=350,
+                    generated_at=datetime(2026, 11, 10, 9, tzinfo=UTC),
+                    dueling_season_id=ids[0],
+                    dueling={"columns": []},
+                )
+            )
+            # "spread": one row in each of three seasons, so no window ever
+            # held its quorum and it has no last valid score at all.
+            for validator, season in zip(_VALIDATORS, ids[:3], strict=True):
+                await session.execute(
+                    update(Score)
+                    .where(
+                        Score.agent_id == spread,
+                        Score.validator_hotkey == validator,
+                    )
+                    .values(dueling_season_id=season)
+                )
+        async with maker() as session:
+            coverage = await season_coverage(session, bench_version=_VERSION)
+            stale = coverage[agent_id]
+            assert stale.expired
+            assert stale.last_valid_window == frozenset({ids[1], ids[2]})
+            assert stale.median is not None
+            # All four rows would pick 0.80; the counted three pick 0.85.
+            assert stale.median.composite == pytest.approx(0.85)
+            assert not coverage[spread].expired
+            assert coverage[spread].median is None
+            rows = await expired_season_ledger_rows(session, bench_version=_VERSION)
+            assert [(row.agent_id, row.composite) for row, _ in rows] == [
+                (agent_id, pytest.approx(0.85))
+            ]
+
+
+class TestInCurrentPin:
+    async def test_a_pin_frozen_under_another_version_is_not_current(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        maker = session_maker
+        agent_id = uuid4()
+        await _pin(
+            maker,
+            epoch_index=_PIN_EPOCH,
+            pinned_at=_PINNED_AT,
+            entries=[_pin_entry(agent_id, _LOGAN, 0.96, uuid4())],
+            champion=agent_id,
+        )
+        request = cast(
+            Request,
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    state=SimpleNamespace(
+                        config=SimpleNamespace(chain=SimpleNamespace(netuid=118))
+                    )
+                )
+            ),
+        )
+        settings = ContinualRetestSettings(ledger_pin_mode="epoch")
+        async with maker() as session:
+            assert (
+                await admin_leaderboard._in_current_pin(
+                    request, session, agent_id, settings, bench_version=_VERSION
+                )
+                is True
+            )
+            assert (
+                await admin_leaderboard._in_current_pin(
+                    request, session, uuid4(), settings, bench_version=_VERSION
+                )
+                is False
+            )
+            # After a bench-version change the old pin says nothing.
+            assert (
+                await admin_leaderboard._in_current_pin(
+                    request, session, agent_id, settings, bench_version=_VERSION + 1
+                )
+                is None
+            )
+            live = ContinualRetestSettings(ledger_pin_mode="live")
+            assert (
+                await admin_leaderboard._in_current_pin(
+                    request, session, agent_id, live, bench_version=_VERSION
+                )
+                is None
+            )

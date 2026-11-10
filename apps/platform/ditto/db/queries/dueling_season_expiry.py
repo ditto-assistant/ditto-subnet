@@ -23,7 +23,7 @@ from uuid import UUID
 from sqlalchemy import select
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.db.models import Agent, EvaluationPayment, Score
+from ditto.db.models import Agent, DuelingSeason, EvaluationPayment, Score
 from ditto.db.queries.dueling_season_window import (
     DuelingSeasonWindow,
     dueling_season_window,
@@ -52,6 +52,9 @@ class SeasonCoverage:
     bench_version: int
     window: DuelingSeasonWindow
     scores: tuple[SeasonScore, ...]
+    opened_seasons: tuple[UUID, ...] = ()
+    """Every season of the version that ever opened, newest first: the
+    sequence whose consecutive pairs were the ledger's windows."""
 
     @property
     def in_window_count(self) -> int:
@@ -60,10 +63,34 @@ class SeasonCoverage:
         )
 
     @property
+    def last_valid_window(self) -> frozenset[UUID] | None:
+        """The newest window that held this agent's full quorum, if any.
+
+        Window ``i`` is season ``i`` plus the one opened before it, exactly as
+        :func:`~ditto.db.queries.dueling_season_window.dueling_season_window`
+        resolved it while season ``i`` was current.
+        """
+        seasons = self.opened_seasons
+        for index in range(len(seasons)):
+            window = frozenset(seasons[index : index + 2])
+            counted = sum(1 for row in self.scores if row.dueling_season_id in window)
+            if counted >= SCORING_QUORUM:
+                return window
+        return None
+
+    @property
+    def last_valid_scores(self) -> tuple[SeasonScore, ...]:
+        """The rows the ledger counted in :attr:`last_valid_window`."""
+        window = self.last_valid_window
+        if window is None:
+            return ()
+        return tuple(row for row in self.scores if row.dueling_season_id in window)
+
+    @property
     def expired(self) -> bool:
-        """A full quorum was accepted, but the window no longer holds one."""
+        """A full quorum once counted, but the live window no longer holds one."""
         return (
-            len(self.scores) >= SCORING_QUORUM and self.in_window_count < SCORING_QUORUM
+            self.in_window_count < SCORING_QUORUM and self.last_valid_window is not None
         )
 
     @property
@@ -83,13 +110,13 @@ class SeasonCoverage:
     @property
     def median(self) -> SeasonScore | None:
         """The ledger's median row (lower middle by composite, then hotkey)
-        over every accepted score, so the last valid quorum is reported with
-        the same arithmetic the ledger used while it counted."""
-        if not self.scores:
+        over :attr:`last_valid_scores` only, so the last valid quorum is the
+        rows and arithmetic the ledger used while it counted. A stored row
+        from a season outside that window never shifts it."""
+        rows = self.last_valid_scores
+        if not rows:
             return None
-        ordered = sorted(
-            self.scores, key=lambda row: (row.composite, row.validator_hotkey)
-        )
+        ordered = sorted(rows, key=lambda row: (row.composite, row.validator_hotkey))
         return ordered[(len(ordered) + 1) // 2 - 1]
 
     @property
@@ -116,6 +143,17 @@ async def season_coverage(
     window = await dueling_season_window(session, bench_version)
     if window is None or bench_version is None:
         return {}
+    opened = tuple(
+        await session.scalars(
+            select(DuelingSeason.id)
+            .where(
+                DuelingSeason.bench_version == bench_version,
+                # The same "ever opened" set dueling_season_window reads.
+                DuelingSeason.status.in_(("open", "closed", "revealed")),
+            )
+            .order_by(DuelingSeason.season_index.desc())
+        )
+    )
     statement = (
         select(
             Score.agent_id,
@@ -154,6 +192,7 @@ async def season_coverage(
             bench_version=int(bench_version),
             window=window,
             scores=tuple(sorted(rows, key=lambda row: row.validator_hotkey)),
+            opened_seasons=opened,
         )
         for agent_id, rows in grouped.items()
     }
