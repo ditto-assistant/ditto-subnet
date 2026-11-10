@@ -141,7 +141,7 @@ Non-goals:
 | **Operator edits the transcript or witness** (changes a miner's answer) | Validator-owned run; signed transcript digest | Witness root signed by the attested runtime key. Forging it means breaking the attestation | AWS Nitro is the trust root; bugs inside the measured image |
 | **Operator swaps the scorer binary or a posture** | Validator verifies scorer identity against its stack descriptor | Program id, config digest and PCRs pinned in an epoch-pinned verifier policy | The policy is ours, but public and versioned; changes need `fleet_ready` |
 | **Operator grinds seeds or task selection** | G1, G2 and G7 above: a real window | drand round fixed by the miner's on-chain artifact commitment + `Δ`, where validator code enforces `Δ ≥ Δ_min`. Validators check the commitment extrinsic (signer, remark, first match, unique use), the BLS signature and the block on their own chain node. No Platform-assigned value feeds the seed (§4.5) | Honesty of a drand threshold; Platform–miner collusion on admission-token timing (open question 11) |
-| **Operator cherry-picks runs** (reruns until the LLM noise helps, kills unfavourable runs) | Retries are audited and append-only but **private** (`docs/no-automatic-retries.md`) | Public, chain-anchored attempt log; the first terminal attempt wins; failures need a signed failure statement; retries reuse the same seed | We can still refuse or delay a run (liveness), and run unlogged previews to *learn* about a harness. That leaks information but cannot change a score |
+| **Operator cherry-picks runs** (reruns until the LLM noise helps, kills unfavourable runs) | Retries are audited and append-only but **private** (`docs/no-automatic-retries.md`) | Public, chain-anchored attempt log; the first terminal **scored** attempt wins; earlier non-scored terminal attempts need a signed failure statement or an authorized retry leaf; retries reuse the same seed | We can still refuse or delay a run (liveness), and run unlogged previews to *learn* about a harness. That leaks information but cannot change a score |
 | **Operator degrades inference for one miner** (other model, truncation, latency) | Same trust as today; validators cannot see it | Relay inside the attested boundary; route profile in the statement; provider-reported model and usage in the witness; sampled independent audits | **No cryptographic guarantee.** The provider and OpenRouter's dynamic route remain trusted |
 | **Operator replays an old result** | Validator signs run id + seed + deadline | Statement binds agent, image digest, ticket, replicate, seed, beacon round and log leaf; leaves are unique | None |
 | **Operator equivocates** (shows validators different statements) | Ledger digest per epoch | Statement root in the on-chain commitment; inclusion proofs | None once anchored |
@@ -325,12 +325,21 @@ the fix:
 Proposed design:
 
 **Anchor commitment (on chain, made by the miner).** `/upload/check` already
-issues a single-use, expiring admission token. Platform appends an issuance
-leaf to the attempt log, committing to `SHA-256(admission_token)`, the
-hotkey, the `artifact_sha256` and the chain block at issuance.
+issues a single-use, expiring admission token. Each token reserves exactly
+one **evaluation authorization**:
+
+- `paid`: the payment travels inside the anchor extrinsic itself;
+- `credit:<block_hash>:<extrinsic_index>`: names the original on-chain
+  payment that the credit came from.
+
+Platform appends an issuance leaf to the attempt log. It commits to
+`SHA-256(admission_token)`, the hotkey, the `artifact_sha256`, the
+authorization, and the issuance and expiry blocks.
 
 The miner then submits **one** extrinsic, signed by the coldkey that owns
-`miner_hotkey` at payment time:
+`miner_hotkey` at the anchor block. On the paid path the payment is in that
+same extrinsic, so this is exactly the payment-time owner that today's
+payment verifier checks:
 
 - paid uploads: `utility.batch_all([balances.transfer_keep_alive(payment_address, quote), system.remark(C)])`;
 - credit-funded uploads: `system.remark(C)` alone.
@@ -342,6 +351,15 @@ The **anchor** is that extrinsic, identified by
 miner is bound on chain to these exact harness bytes. This needs changes to
 the miner CLI and the payment verifier, which today accepts only a bare
 `transfer_keep_alive`.
+
+**Anchors are final.** An anchor consumes its authorization whether or not
+the miner completes the upload, because the seed is fixed at the anchor.
+- An artifact that is anchored but never uploaded is logged as forfeited.
+- So is an upload whose bytes do not hash to `artifact_sha256`.
+- In both cases the payment never turns back into a credit.
+
+Otherwise a miner could anchor twice, wait for both beacon rounds, upload the
+luckier artifact and recycle the other payment.
 
 **Beacon round.** `R` is the first drand quicknet round whose scheduled time is
 ≥ `timestamp(anchor_block) + Δ`. Quicknet has a 3 s period, uses scheme
@@ -381,8 +399,13 @@ but is no longer a seed input.
 
 1. The anchor block is finalized and its hash equals `anchor_block_hash`.
 2. The extrinsic at `anchor_extrinsic_index` succeeded. It was signed by the
-   payment-time coldkey owner of `miner_hotkey`, the same rule Platform's
-   payment verifier applies today.
+   coldkey that owned `miner_hotkey` **at the anchor block**.
+   - Paid path: the payment is in this extrinsic, so this is the same
+     ownership rule Platform's payment verifier applies today.
+   - Credit path: there is no payment in the anchor. The statement names the
+     credited payment from the issuance leaf's authorization. Validators check
+     that it was a successful payment to the published address by the coldkey
+     that owned `miner_hotkey` at that payment's block.
 3. Its remark equals `C`, recomputed from the statement's `miner_hotkey` and
    `artifact_sha256` and the admission token. The token is revealed in the
    statement and must hash to the commitment in the issuance leaf. That leaf
@@ -392,9 +415,10 @@ but is no longer a seed input.
    made up after the fact. On the paid path, the batched transfer pays the
    published payment address at least the logged quote.
 4. Let `W` be the token validity in blocks, pinned in the verifier policy.
-   - The leaf's `issued_block` must satisfy
-     `0 ≤ anchor_block − issued_block ≤ W`, and its `expires_block` may not
-     exceed `issued_block + W`.
+   - The leaf's blocks must satisfy
+     `issued_block ≤ anchor_block ≤ expires_block ≤ issued_block + W`. The
+     token must still be valid at the anchor, and no token may live longer
+     than `W`.
    - Order extrinsics by position `(block, index)`. No extrinsic from the
      same signer, other than the anchor itself, may carry the same `C` at a
      position `p` with `(anchor_block − W, 0) ≤ p < (anchor_block, anchor_extrinsic_index)`.
@@ -402,9 +426,9 @@ but is no longer a seed input.
      **inclusive**. Within the anchor block it covers only indices below
      `anchor_extrinsic_index`.
    - Without that last rule, a miner could put the same `C` in two
-     extrinsics of one block. The seed includes `anchor_extrinsic_index`
-     (and check 5 only forbids reusing the *same* anchor), so the miner could
-     then choose between two seeds.
+     extrinsics of one block. The seed includes `anchor_extrinsic_index`, and
+     check 5 scopes uniqueness to the anchor itself, so the miner could then
+     choose between two seeds.
    - The window ends at the anchor and does **not** start at the reported
      `issued_block`, so post-dating the issuance record cannot hide an earlier
      commitment. A token is valid for at most `W` blocks, so any earlier
@@ -413,18 +437,39 @@ but is no longer a seed input.
    This makes the *first* matching commitment, by `(block, index)`, the
    canonical one. A miner cannot post several commitments, in different blocks
    or in the same block, and keep the one with the luckiest seed.
-5. No other published statement (across anchored statement roots) uses the
-   same anchor.
-6. `R` follows the rule above under a pinned `Δ ≥ Δ_min`, and its BLS
-   signature verifies against the pinned drand chain hash.
+5. **Uniqueness, scoped correctly.** These rules are checked across all
+   anchored statement roots and the anchored log.
+   - **An anchor backs exactly one ticket.** Every statement that cites it must
+     name the same agent, artifact and ticket.
+   - **Replicates and retries share it by design.** Inside that ticket, the
+     three replicates `j` share the anchor. An authorized retry of replicate
+     `j` reuses both the anchor and `seed_j`.
+   - **One attempt counts per replicate.** For each `(anchor, j)`, only the
+     first terminal **scored** attempt counts. Every earlier attempt for that
+     pair needs a signed failure statement or an authorized retry leaf (§6.5
+     step 7).
+   - **An authorization is spent once.** A paid anchor's payment, or a
+     credit's original payment, appears in exactly one issuance leaf and backs
+     exactly one anchor. A statement whose authorization appears in a second
+     leaf or behind a second anchor is rejected.
+
+   This closes grinding across tokens: a credit cannot be spread over several
+   tokens to compare beacon rounds.
+6. `R` is derived from the `Δ` pinned in the verifier policy, never from the
+   statement. A statement whose `delta_s` differs from that pinned `Δ` is
+   rejected, which removes any reading of `delta_s` as a per-run knob. The
+   pinned `Δ ≥ Δ_min`, and `R`'s BLS signature verifies against the pinned
+   drand chain hash.
 
 **Residual risk.**
 
 - A miner can still buy another seed for byte-identical source by paying
   again. That is what `allow_identical_rescore` permits today, so each seed
   still costs one evaluation fee.
-- On the credit path a remark costs only the transaction fee. The single-use
-  token and the first-match rule still limit it to one anchor per token.
+- On the credit path a remark costs only the transaction fee, but a credit
+  still yields at most one seed. It backs exactly one issuance leaf and one
+  anchor (check 5), the token allows only one first-match anchor (check 4),
+  and anchors are final.
 - Platform alone cannot exploit the issuance record. The leaf is fixed by an
   anchored inclusion proof, and the first-match scan does not depend on its
   reported time. A fabricated leaf is useless without a remark signed by the
@@ -553,7 +598,7 @@ no force override, exactly like protocols 20, 27, 29 and 34.
 
 ### 6.2 Commitments
 
-**Admission-token issuance leaf**: `{schema, miner_hotkey, artifact_sha256, SHA-256(admission_token), issued_block, expires_block}`,
+**Admission-token issuance leaf**: `{schema, miner_hotkey, artifact_sha256, SHA-256(admission_token), authorization (paid | credit:<block_hash>:<extrinsic_index>), issued_block, expires_block}`,
 where `expires_block − issued_block ≤ W` (`token_validity_blocks` in the
 verifier policy). This leaf is appended when `/upload/check` issues the token.
 It lands in the same append-only log, and so in the same anchored epoch roots,
@@ -583,7 +628,9 @@ runtime key `K`:
   "artifact_sha256": "…",
   "seed": {"anchor_block": 0, "anchor_block_hash": "…", "anchor_extrinsic_index": 0,
            "admission_token": "…", "issuance_leaf": "…",
-           "drand_round": 0, "drand_randomness": "…", "delta_s": 0,
+           "authorization": "paid | credit:<block_hash>:<extrinsic_index>",
+           "drand_round": 0, "drand_randomness": "…",
+           "delta_s": 0,                  // must equal the policy-pinned Δ
            "derivation": "dittobench-seed-v2", "seed": 0},
   "dataset_sha256": "…", "run_size": "full",
   "witness_root": "…",            // Merkle root over transcript, broker evidence,
@@ -643,19 +690,24 @@ For each new statement (cached by digest):
    the PCR set, then check that the document binds `runtime_key`. This is
    cached per boot key, so it costs milliseconds per boot *(inferred)*.
 3. Statement signature under `runtime_key`.
-4. Seed: run the §4.5 anchor checks against the validator's **own** chain node.
-   This closes G1 and G7. The block must be finalized and match. The extrinsic
-   must have succeeded and be signed by the payment-time coldkey owner of
-   `miner_hotkey`. Its remark must equal `C` for this `artifact_sha256` and
-   admission token, and on the paid path the batched transfer must pay the
-   quote. Its issuance leaf must be proven against an anchored root, with
-   `0 ≤ anchor_block − issued_block ≤ W`. It must be the first matching
-   commitment by `(block, index)` over blocks `anchor_block − W` through
-   `anchor_block`, including lower indices in the anchor block itself, and
-   no other statement may use this anchor. Then check that
-   `Δ ≥ Δ_min` in the pinned policy, verify the drand BLS signature for `R`
-   and the rule `R = first ≥ ts(anchor) + Δ`, and re-derive `s_j`. Reject on
-   any mismatch.
+4. Seed: run all six §4.5 anchor checks against the validator's **own** chain
+   node. This closes G1 and G7. Reject on any mismatch.
+   - **Block:** finalized, and its hash matches the statement.
+   - **Signer:** the extrinsic succeeded and was signed by the coldkey that
+     owned `miner_hotkey` at the anchor block. On the credit path, the
+     credited payment must also check out.
+   - **Remark:** it equals `C` for this `artifact_sha256` and admission token.
+     On the paid path, the batched transfer pays the quote.
+   - **Token:** the issuance leaf is proven against an anchored root, with
+     `issued_block ≤ anchor_block ≤ expires_block ≤ issued_block + W`.
+   - **First match:** the anchor is the first matching commitment by
+     `(block, index)` over blocks `anchor_block − W` through `anchor_block`,
+     including lower indices in the anchor block itself.
+   - **Scope:** the anchor and its authorization back exactly one ticket.
+     Replicates and authorized retries of that ticket may share the anchor.
+   - **Beacon and seed:** the statement's `delta_s` equals the pinned `Δ`,
+     and the pinned `Δ ≥ Δ_min`. Verify the drand BLS signature for `R` and
+     the rule `R = first ≥ ts(anchor) + Δ`, then re-derive `s_j`.
 5. Dataset: for public datasets, optionally regenerate and compare
    `dataset_sha256`. This is cached; cost **unknown**, seconds of CPU.
 6. Receipt: about 25 ms to verify a 290 KB Ziren proof *(vendor)*, then check
@@ -703,7 +755,8 @@ replicate.
 | Attestation invalid (unknown PCRs, all-zero debug PCRs, expired key) | Statement rejected; attempt treated as an infra failure; a retry needs a Backroom-authorized retry leaf (existing no-automatic-retry policy) and reuses the seed |
 | Dangling attempt (registered, no terminal leaf by deadline) | Platform writes an `aborted` leaf; it counts as an attempt; a retry needs authorization; the dashboard shows aborted attempts per agent |
 | Repeated aborts for one agent | Visible pattern; policy threshold to flag for review (open question) |
-| Anchor check fails (wrong signer, missing or wrong remark, earlier matching commitment, anchor already used, `Δ < Δ_min`) | Statement rejected; the agent cannot be scored on that anchor. Backroom shows it as an operator or miner fault, not an infra retry. A miner with a malformed anchor re-uploads with a fresh token |
+| Anchor check fails: wrong signer, missing or wrong remark, earlier matching commitment, token expired at the anchor, anchor or authorization reused by another ticket, `delta_s ≠` pinned `Δ`, or `Δ < Δ_min` | Statement rejected; the agent cannot be scored on that anchor. Backroom shows it as an operator or miner fault, not an infra retry. A malformed anchor still consumed its authorization (anchors are final), so a new attempt needs a new authorization: a fresh payment or a different credit |
+| Anchored artifact never uploaded, or uploaded bytes do not hash to `artifact_sha256` | Logged as forfeited; the authorization is spent and does not return as a credit |
 | drand unavailable at `R` | Wait (drand rounds are recoverable later); no fallback to an operator-chosen seed. The current CSPRNG fallback is not carried forward |
 | Chain anchoring failed | Roots queue. Statements stay pending, and entries finalize only once every referenced leaf (issuance, attempt, terminal) is in an anchored root |
 | Validator signs a forced-invalid canary | Its signoffs stop counting toward `q` for a cooling-off period; the event is public |
@@ -789,7 +842,7 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 17 | Crown-decision audits | Beacon-sampled audit selection; paired CRN comparison; Backroom surface | 14 | M |
 | 18 | Dispute workflow | Quarantine and re-prove tools; owner-gated witness access | 15 | M |
 | 19 | Article and X draft (after the Phase 1 numbers) | Per the feature-article convention; owner Peyton | 6 | S |
-| 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged with `expires_block ≤ issued_block + W`. A shared Go/Python anchor-check library covers all six §4.5 checks, including the anchored issuance inclusion proof and the fixed-window first-match scan by `(block, index)` from `anchor − W` through the anchor block's lower indices, with negative vectors: post-dated issuance, an unanchored leaf, an earlier commitment in an earlier block, and an earlier commitment at a lower index in the anchor block | 10, 11 | M |
+| 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged with `expires_block ≤ issued_block + W`. A shared Go/Python anchor-check library covers all six §4.5 checks, including the anchored issuance inclusion proof and the fixed-window first-match scan by `(block, index)` from `anchor − W` through the anchor block's lower indices, with negative vectors: post-dated issuance; an unanchored leaf; an earlier commitment in an earlier block; an earlier commitment at a lower index in the anchor block; a token expired at the anchor; `delta_s` ≠ the pinned Δ; a credit authorization in two issuance leaves; one anchor cited by two tickets. Also a positive vector where three replicates and an authorized retry share one anchor. The forfeited-anchor path is logged and never re-credits | 10, 11 | M |
 
 ---
 
