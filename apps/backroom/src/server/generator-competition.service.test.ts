@@ -868,6 +868,23 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('describes the frontier audit memory fields without overstating them', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const tool = (await client.listTools()).tools.find((t) => t.name === 'get_generator_frontier_audit')
+      const help = (await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool: 'get_generator_frontier_audit' } }))
+      const text = [tool?.description ?? '', JSON.stringify(help)].join(' ')
+      // visible_pairs is a count; memory_matches is a capped, possibly
+      // truncated list: neither may read as the user's whole memory.
+      expect(text).toContain('the count of the user')
+      expect(text).toContain('memory_truncated is true when the list was cut')
+      expect(text).not.toContain("visible_pairs (the user's memory at that point)")
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('rejects impossible frontier audit paging from Platform', () => {
     const page = { audits: [], count: 0, returned: 0, limit: 50, offset: 0, has_more: false }
     expect(generatorFrontierAuditListSchema.parse(page)).toMatchObject(page)
