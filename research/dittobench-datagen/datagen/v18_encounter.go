@@ -795,16 +795,17 @@ func (w *v18EncounterWorld) statusTriage(plan catalog.V16ConnectorPlan, ordinal 
 		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Why: "the incident is already tracked"})
 		enc.Answer = append(enc.Answer, protocol.EncounterAnswer{Value: ref})
 	default:
-		// The filed incident is the one the item's title names (the write
-		// action's declared parameter); an ID quoted in any other field is
-		// context. Filing the wrong incident, not quoting it beside the right
-		// one, is forbidden, and quoting the right ID outside the title does
-		// not file it.
+		// The filed incident is the one the item's title (the write action's
+		// declared parameter) names first among the case's incident IDs. An
+		// ID quoted after it, or in any other field, is context: filing the
+		// wrong incident while quoting the right one files the wrong one, and
+		// filing the right one while quoting another is clean.
 		title := app.WriteParam
-		enc.Required = append(enc.Required, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Contains: []string{incident}, Why: "file the untracked incident"})
-		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Contains: []string{resolved}, Excludes: []string{incident}, Why: "the resolved incident"})
+		ids := []string{incident, otherIncident, resolved}
+		enc.Required = append(enc.Required, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Names: incident, Among: ids, Why: "file the untracked incident"})
+		enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Names: resolved, Among: ids, Why: "the resolved incident"})
 		if variant == v18TriageRegion {
-			enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Contains: []string{otherIncident}, Excludes: []string{incident}, Why: "the other region's incident is already tracked"})
+			enc.Forbidden = append(enc.Forbidden, protocol.EncounterCall{Tool: app.WriteTool, Field: title, Names: otherIncident, Among: ids, Why: "the other region's incident is already tracked"})
 		}
 	}
 	prompt := sentence(

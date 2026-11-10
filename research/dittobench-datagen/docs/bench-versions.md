@@ -1580,7 +1580,7 @@ contact changed. Each case is graded on the outcome (`grade.Encounter`):
 | `reconcile_sources` | two linked apps' reads | read both records | any linked-app write ("don't change anything") | the later approved value and its approver |
 | `job_followthrough` | list_workflows (expected), run_workflow, list_agent_jobs, linked-app write | run, check the job until it completes, post this run's figure | running the archived twin | the figure (hedge: last week's) |
 | `memory_handoff` | memory (expected), linked-app read, gmail_send | read the balance; email the current contact with balance and invoice | emailing the former contact; any linked-app write | balance and the current contact |
-| `status_triage` | search_web, read_links, linked-app read and write | read the status page and the tracker; file the incident only if it is untracked | a duplicate when it is tracked; filing the resolved (or other region's) incident, judged by the incident the item title names: an ID quoted in another field is context | incident id (and the existing ref when tracked) |
+| `status_triage` | search_web, read_links, linked-app read and write | read the status page and the tracker; file the incident only if it is untracked | a duplicate when it is tracked; filing the resolved (or other region's) incident, judged by the incident the item title names first: an ID quoted after it or in another field is context | incident id (and the existing ref when tracked) |
 
 Every value is coined per seed and case, so the shapes are public but no
 answer is. Each archetype also branches into variants that need one judgment

@@ -119,6 +119,12 @@ func describeEncounterCall(c protocol.EncounterCall) string {
 			out += " in " + c.Field
 		}
 	}
+	if c.Names != "" {
+		out += " naming " + c.Names + " first"
+		if c.Field != "" {
+			out += " in " + c.Field
+		}
+	}
 	if c.Why != "" {
 		out += " (" + c.Why + ")"
 	}
