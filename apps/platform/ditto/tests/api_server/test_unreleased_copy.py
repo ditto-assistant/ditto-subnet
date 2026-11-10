@@ -537,3 +537,41 @@ def test_renamed_port_of_released_agent_from_another_owner_does_not_flag() -> No
         sum(n for k, n in m.shared_by_kind.items() if k not in {"ident", "short"}) == 0
         for m in refined.matches
     )
+
+
+def test_public_corpus_resolves_kit_constants_across_files(tmp_path) -> None:
+    """A kit constant interpolated in another file is public once resolved."""
+    import importlib.util
+    import subprocess
+    from pathlib import Path
+
+    from ditto.api_server import distinctive_content as dc
+
+    script = Path(__file__).parents[3] / "scripts" / "build_public_items.py"
+    spec = importlib.util.spec_from_file_location("build_public_items", script)
+    assert spec is not None and spec.loader is not None
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+
+    kit = {
+        "app/notes.py": 'BLOCKED = "blocked before execution by the kit"\n',
+        "app/lane.py": (
+            "from app.notes import BLOCKED\n"
+            'NOTE = f"Record {BLOCKED} until the owner signs it off today."\n'
+        ),
+    }
+    for path, text in kit.items():
+        target = tmp_path / "miners" / "kit" / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "kit"], check=True)
+
+    public = builder.collect(tmp_path, ("miners",), dc)
+    shipped = extract_items(_tar(kit))
+    assert shipped is not None
+    resolved = "record blocked before execution by the kit until the owner signs it off"
+    assert any(resolved in item.text for item in shipped.items.values())
+    assert set(shipped.items) <= public

@@ -125,6 +125,46 @@ def collect(repo: Path, paths: tuple[str, ...], dc: ModuleType) -> set[int]:
             constants = dc.file_constants(path, raw)
             if constants:
                 keys.update(item.key for item in dc.file_items(path, raw, constants))
+    keys |= _collect_head_trees(repo, paths, dc)
+    return keys
+
+
+def _artifact_root(path: str, paths: tuple[str, ...]) -> str:
+    """The directory a miner ships as one artifact: ``miners/<kit>`` or a path."""
+    if path.startswith("miners/"):
+        return "/".join(path.split("/")[:2])
+    return next((p for p in paths if p != "." and path.startswith(p + "/")), "")
+
+
+def _collect_head_trees(repo: Path, paths: tuple[str, ...], dc: ModuleType) -> set[int]:
+    """Items of each current kit tree resolved as one artifact.
+
+    :func:`extract_items` resolves a constant defined in one file wherever the
+    artifact interpolates it. History blobs have no single tree to read
+    constants from, so the current tree of each kit is resolved artifact-wide.
+    """
+    files: dict[str, list[tuple[str, str]]] = {}
+    for path_line in _git(repo, "ls-tree", "-r", "HEAD", "--", *paths).splitlines():
+        meta, _, path = path_line.partition("\t")
+        fields = meta.split()
+        if len(fields) >= 3 and fields[1] == "blob" and not dc._skipped_path(path):
+            files.setdefault(_artifact_root(path, paths), []).append((path, fields[2]))
+    keys: set[int] = set()
+    for root, members in files.items():
+        contents = _read_blobs(repo, [sha for _, sha in members])
+        entries = sorted(
+            (path.removeprefix(root + "/") if root else path, contents.get(sha, b""))
+            for path, sha in members
+        )
+        entries = [
+            (p, raw) for p, raw in entries if len(raw) <= dc._MAX_ITEM_FILE_BYTES
+        ]
+        constants: dict[str, str] = {}
+        for path, raw in entries:
+            for name, value in dc.file_constants(path, raw).items():
+                constants.setdefault(name, value)
+        for path, raw in entries:
+            keys.update(item.key for item in dc.file_items(path, raw, constants))
     return keys
 
 
