@@ -364,7 +364,18 @@ authorization until the token is either *consumed* by a valid anchor or
   expiry. A transfer inside such an extrinsic is still paid and is neither
   refunded nor credited.
 - **The first `C`-carrying extrinsic is the token's only anchor candidate.**
-  "First" is by `(block, index)` (check 4). It counts whatever its outcome:
+  "First" means first by `(block, index)` among this signer's extrinsics
+  carrying *this token's* `C`, across check 4's whole fixed window from
+  `anchor_block − W`. That window includes blocks before the logged
+  `issued_block`.
+  - Since `C` contains the token, an honest `C` extrinsic cannot precede the
+    token's real issuance. One found before the logged `issued_block`
+    therefore proves the issuance leaf was post-dated.
+  - In that case it is still the first candidate, so the cited later anchor
+    is rejected and the token is burned. The replicate is also flagged as
+    evidence of the Platform–miner collusion in open question 11.
+
+  Whatever its outcome, the first candidate counts:
   - if it passes every check, it is the anchor and consumes the
     authorization;
   - if it fails any anchor check (failed dispatch, wrong signer, short
@@ -688,8 +699,9 @@ from log order and stamps.
 A runner whose commitment is refused as late gets a rejection instead of a
 receipt and never releases its record. The attempt is then `aborted`.
 Platform assigns the stamps, so it could stamp an honest commitment late. That
-is equivalent to a blind abort, because the record was never released, and it
-consumes a retry slot publicly like any other abort.
+is equivalent to a blind abort, because the record was never released. Like
+any abort, it is logged publicly. The abort itself uses no retry slot; only
+the next attempt (`a ≥ 2`) does.
 
 **Terminal records come only from the attested runtime.** For each attempt,
 the runner emits exactly one terminal record, signed by its attested key `K`:
@@ -908,9 +920,9 @@ replicate.
 | Committed RunStatement fails verification (receipt fails, dataset hash does not regenerate, a field disagrees with the policy or the log) | Not counted; replicate **quarantined**; no later attempt counts without an owner-reviewed dispute; a rejected RunStatement can never be relabelled as a failure |
 | Terminal leaf disagrees with its K-signed record (e.g. a signed RunStatement relabelled as `infra_failure`) | Rejected; replicate flagged; treated as evidence of operator tampering, not as an infra fault |
 | Repeated aborts for one agent | Visible pattern; policy threshold to flag for review (open question) |
-| On-chain anchor defect: the first `C`-carrying extrinsic failed to dispatch, had the wrong signer or a short payment, or came after token expiry; or the cited anchor is not that first extrinsic | Statement rejected and the **token is burned** (§4.5 authorization accounting). A paid transfer is not refunded and a reserved credit is forfeited. A new attempt needs a new token and authorization. Backroom shows it as a miner fault, not an infra retry |
+| On-chain anchor defect **for this token**: the first extrinsic carrying this token's `C` failed to dispatch, had the wrong signer or a short payment, or came after token expiry; or the cited anchor carries this token's `C` but is not that first extrinsic. An anchor whose remark belongs to a *different* token is a statement-level defect (row below) and does not burn this token | Statement rejected and the **token is burned** (§4.5 authorization accounting). A paid transfer is not refunded and a reserved credit is forfeited. A new attempt needs a new token and authorization. Backroom shows it as a miner fault, not an infra retry. If the first `C` extrinsic precedes the logged `issued_block`, the replicate is also flagged as issuance-collusion evidence |
 | Extrinsic with a missing or non-`C` remark | Not a commitment for the token: consumes nothing, and the token stays open until a `C`-carrying extrinsic or expiry. Any transfer in it is not refunded |
-| Statement-level defect on a sound anchor: `delta_s ≠` pinned `Δ`, `authorization` ≠ leaf, the anchor or spend identity cited by another ticket, or `Δ < Δ_min` in the policy | Operator fault. Statement rejected and replicate **quarantined** for owner review; the on-chain anchor stays this ticket's anchor |
+| Statement-level defect: `delta_s ≠` pinned `Δ`, `authorization` ≠ leaf, the anchor or spend identity cited by another ticket, a cited anchor whose remark belongs to a different token, or `Δ < Δ_min` in the policy | Operator fault. Statement rejected and replicate **quarantined** for owner review; the on-chain anchor stays this ticket's anchor |
 | Anchored artifact never uploaded, or uploaded bytes do not hash to `artifact_sha256` | Logged as forfeited; the authorization is spent and does not return as a credit |
 | drand unavailable at `R` | Wait (drand rounds are recoverable later); no fallback to an operator-chosen seed. The current CSPRNG fallback is not carried forward |
 | Chain anchoring failed | Roots queue. Statements stay pending, and entries finalize only once every referenced leaf (issuance, attempt, terminal) is in an anchored root |
