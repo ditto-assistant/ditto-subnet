@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { syncFromLocation } from "../stores/routeStore";
 import { clearMinerSession, minerSession } from "../stores/sessionStore";
+import { API_BASE } from "../lib/config";
 import { ReviewsPage } from "./ReviewsPage";
 
 const memory = new Map<string, string>();
@@ -750,6 +751,66 @@ describe("Ditto account link", () => {
       });
     },
   );
+
+  it("does not restore an in-flight proof after successful unlink", async () => {
+    await signIn();
+    const key = "ditto.miner.ditto-proof.v1:" + API_BASE + ":" + session.hotkey;
+    localStorage.setItem(key, JSON.stringify({ attemptId: "proof-1", subject: "ditto-user-1" }));
+    let finishProof!: (response: Response) => void;
+    let finishStatus!: (response: Response) => void;
+    let proofRequested = false;
+    let unlinked = false;
+    const proof = new Promise<Response>((resolve) => {
+      finishProof = resolve;
+    });
+    const status = new Promise<Response>((resolve) => {
+      finishStatus = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/me")) return Response.json(me);
+        if (url.endsWith("/me/github-link/attempts/proof-1")) {
+          proofRequested = true;
+          return proof;
+        }
+        if (url.endsWith("/me/ditto-link") && init?.method === "DELETE") {
+          unlinked = true;
+          return new Response(null, { status: 204 });
+        }
+        if (url.endsWith("/me/ditto-link")) {
+          if (unlinked) return status;
+          return Response.json({
+            enabled: true,
+            link: {
+              ditto_user_id: "ditto-user-1",
+              ditto_email: "miner@example.com",
+              linked_via: "dashboard",
+              miner_hotkey: session.hotkey,
+              created_at: "2026-09-12T12:00:00Z",
+            },
+          });
+        }
+        return Response.json([]);
+      }),
+    );
+    render(() => <ReviewsPage />);
+    await waitFor(() => expect(proofRequested).toBe(true));
+    const unlink = Array.from(document.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Unlink Ditto account"),
+    );
+    fireEvent.click(unlink!);
+    await waitFor(() => expect(document.body.textContent).toContain("Ditto account unlinked."));
+    finishProof(Response.json({ status: "accepted" }));
+    // Flush the response and Solid updates while the status refresh is held.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.body.textContent).not.toContain("--ditto-attempt proof-1");
+    expect(localStorage.getItem(key)).toBeNull();
+    finishStatus(Response.json({ enabled: true, link: null }));
+    await waitFor(() => expect(document.body.textContent).toContain("Connect Ditto"));
+    expect(document.body.textContent).not.toContain("--ditto-attempt proof-1");
+  });
 
   it("explains when linking is not enabled on this deployment", async () => {
     await signIn();

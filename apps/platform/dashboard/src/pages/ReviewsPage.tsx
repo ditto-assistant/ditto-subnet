@@ -583,6 +583,7 @@ function AccountPanel(): JSX.Element {
   const [dittoNotice, setDittoNotice] = createSignal(readDittoResult());
   const [dittoBusy, setDittoBusy] = createSignal(false);
   const [dittoAttempt, setDittoAttempt] = createSignal<DittoLinkAttempt | null>(null);
+  let dittoLinkGeneration = 0;
   const proofHintKey = () =>
     "ditto.miner.ditto-proof.v1:" + API_BASE + ":" + (minerSession()?.hotkey ?? "");
 
@@ -607,7 +608,11 @@ function AccountPanel(): JSX.Element {
     }
   }
 
-  async function restoreProofHint(link: DittoLinkView, key: string): Promise<void> {
+  async function restoreProofHint(
+    link: DittoLinkView,
+    key: string,
+    generation: number,
+  ): Promise<void> {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) return;
@@ -632,7 +637,12 @@ function AccountPanel(): JSX.Element {
         "/me/github-link/attempts/" + encodeURIComponent(record.attemptId),
         { headers: sessionAuthHeader() },
       );
-      if (key !== proofHintKey() || dittoLink()?.link?.ditto_user_id !== link.ditto_user_id) return;
+      if (
+        generation !== dittoLinkGeneration ||
+        key !== proofHintKey() ||
+        dittoLink()?.link?.ditto_user_id !== link.ditto_user_id
+      )
+        return;
       if (proof.status !== "accepted" && proof.status !== "linked") {
         clearProofHint(key);
         return;
@@ -643,6 +653,7 @@ function AccountPanel(): JSX.Element {
         github_proof_attempt_id: record.attemptId,
       });
     } catch (err) {
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       if (err instanceof HTTPError && (err.status === 404 || err.status === 410)) {
         clearProofHint(key);
       }
@@ -721,19 +732,21 @@ function AccountPanel(): JSX.Element {
 
   async function loadDittoLink(): Promise<void> {
     const key = proofHintKey();
+    const generation = dittoLinkGeneration;
     try {
       const status = await authJSON<DittoLinkStatus>("/me/ditto-link", {
         headers: sessionAuthHeader(),
       });
-      if (key !== proofHintKey()) return;
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       setDittoLink(status);
       if (!status.link) {
         clearProofHint(key);
         if (dittoAttempt()?.status === "linked") setDittoAttempt(null);
       } else if (!dittoAttempt() && !dittoNotice()?.attempt) {
-        await restoreProofHint(status.link, key);
+        await restoreProofHint(status.link, key, generation);
       }
     } catch {
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       // An older Platform has no link endpoint; the card simply stays hidden.
       setDittoLink(null);
     }
@@ -765,6 +778,7 @@ function AccountPanel(): JSX.Element {
     setError("");
     try {
       await authJSON<unknown>("/me/ditto-link", { method: "DELETE", headers: sessionAuthHeader() });
+      dittoLinkGeneration++;
       setDittoAttempt(null);
       clearProofHint(proofKey);
       setSaved("Ditto account unlinked.");
