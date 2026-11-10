@@ -3686,8 +3686,11 @@ class PublicScoringWait(BaseModel):
 
     Set only on a row waiting for validators, and only when the hold is not
     the fleet's: from bench v16 every scored run needs a generator slice from
-    an open dueling season, so while none is open validators turn the work
-    away and the row waits for the next season instead.
+    an open dueling season of the version the row is leased at, so while none
+    is open validators turn the work away and the row waits for a season
+    instead. During a benchmark rollout, rows submitted before it started are
+    finished at the source version and the rest at the target version, so
+    ``bench_version`` is the row's own.
     """
 
     reason: Annotated[
@@ -3723,6 +3726,18 @@ class PublicScoringWait(BaseModel):
             description=("Subnet epoch of that round boundary, or null when unknown."),
         ),
     ] = None
+    season_scheduled: Annotated[
+        bool,
+        Field(
+            default=True,
+            description=(
+                "True when a season for bench_version opens at a generator-round "
+                "boundary. False when none is scheduled (for example the source "
+                "version of an open benchmark rollout, whose seasons pause until "
+                "the rollout ends): the row waits for a season of its version."
+            ),
+        ),
+    ] = True
 
 
 class PublicDuelingSeasonState(BaseModel):

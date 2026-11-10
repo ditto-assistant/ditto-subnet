@@ -23,8 +23,10 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.generator_rounds import GeneratorRoundSchedule
 from ditto.api_server.dueling_season_gate import (
     DuelingSeasonGate,
+    QueueSeasonGates,
     dueling_season_gate,
     epoch_starts_at,
+    queue_season_gates,
     season_opening_epoch,
 )
 from ditto.api_server.dueling_seasons import DuelingTarget
@@ -41,6 +43,7 @@ from ditto.tests.api_server.endpoints.test_public import (
 from ditto_screening_protocol.dueling import season_commitment, season_seed
 
 _NOW = datetime(2026, 11, 10, 22, 0, tzinfo=UTC)
+_ROLLOUT_STARTED = _NOW - timedelta(hours=1)
 _BLOCK_HASH = "0x" + "7c" * 32
 
 
@@ -66,12 +69,20 @@ def _versions(
     active: int,
     desired: int | None = None,
     blocked: str | None = None,
+    adopted: tuple[Any, ...] = (),
 ) -> None:
     async def _active(*_args: Any, **_kwargs: Any) -> int:
         return active
 
     async def _rollout(*_args: Any, **_kwargs: Any) -> Any:
-        return None if desired is None else SimpleNamespace(desired_version=desired)
+        if desired is None:
+            return None
+        return SimpleNamespace(
+            desired_version=desired, from_version=active, created_at=_ROLLOUT_STARTED
+        )
+
+    async def _adopted(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return list(adopted)
 
     async def _target(*_args: Any, **_kwargs: Any) -> DuelingTarget:
         version = desired if desired is not None and desired > active else active
@@ -85,6 +96,7 @@ def _versions(
     monkeypatch.setattr(gate_mod, "active_bench_version", _active)
     monkeypatch.setattr(gate_mod, "open_rollout", _rollout)
     monkeypatch.setattr(gate_mod, "dueling_target", _target)
+    monkeypatch.setattr(gate_mod, "carryover_agent_ids", _adopted)
 
 
 async def _season(
@@ -212,6 +224,7 @@ class TestDuelingSeasonGate:
             "bench_version": 16,
             "next_season_opens_at": None,
             "next_round_epoch": None,
+            "season_scheduled": True,
         }
 
     async def test_a_blocked_target_names_no_boundary(
@@ -219,7 +232,58 @@ class TestDuelingSeasonGate:
     ) -> None:
         _versions(monkeypatch, active=16, blocked="dueling_enabled is false")
         gate = await dueling_season_gate(session, schedule=_schedule(), now=_NOW)
-        assert gate == DuelingSeasonGate(16, False, None, None)
+        assert gate == DuelingSeasonGate(16, False, None, None, scheduled=False)
+
+
+class TestQueueSeasonGates:
+    """Each waiting row gets the gate of the version its next lease uses."""
+
+    def test_rows_follow_the_lease_path_split(self) -> None:
+        desired = DuelingSeasonGate(18, False, 44, _NOW + timedelta(hours=2))
+        source = DuelingSeasonGate(17, False, None, None, scheduled=False)
+        adopted = uuid4()
+        gates = QueueSeasonGates(
+            desired=desired,
+            source=source,
+            rollout_started_at=_ROLLOUT_STARTED,
+            adopted=frozenset({adopted}),
+        )
+        before = _ROLLOUT_STARTED - timedelta(minutes=5)
+        after = _ROLLOUT_STARTED + timedelta(minutes=5)
+        assert gates.for_agent(uuid4(), before) is source
+        assert gates.for_agent(uuid4(), after) is desired
+        assert gates.for_agent(uuid4(), _ROLLOUT_STARTED) is desired
+        assert gates.for_agent(adopted, before) is desired
+        assert QueueSeasonGates(desired=desired).for_agent(uuid4(), before) is desired
+
+    async def test_rollout_gates_the_desired_and_source_versions(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        adopted = uuid4()
+        _versions(monkeypatch, active=17, desired=18, adopted=(adopted,))
+        await _season(
+            session_maker, bench_version=18, season_index=11, status="committed"
+        )
+        async with session_maker() as session:
+            gates = await queue_season_gates(session, schedule=_schedule(), now=_NOW)
+        assert gates.desired is not None and gates.desired.bench_version == 18
+        assert gates.desired.scheduled and gates.desired.next_round_epoch == 44
+        # Source-era seasons pause while the target is the desired version.
+        assert gates.source == DuelingSeasonGate(17, False, None, None, scheduled=False)
+        assert gates.rollout_started_at == _ROLLOUT_STARTED
+        assert gates.adopted == frozenset({adopted})
+        wait = public_endpoint._public_scoring_wait(gates.source)
+        assert wait is not None and wait.season_scheduled is False
+
+    async def test_without_a_rollout_only_the_active_version_is_gated(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _versions(monkeypatch, active=16)
+        gates = await queue_season_gates(session, schedule=_schedule(), now=_NOW)
+        assert gates.source is None and gates.rollout_started_at is None
+        assert gates.desired is not None and gates.desired.bench_version == 16
 
 
 class TestPublicProjection:
@@ -230,7 +294,11 @@ class TestPublicProjection:
         async def _gate(*_args: Any, **_kwargs: Any) -> DuelingSeasonGate:
             return gate
 
+        async def _gates(*_args: Any, **_kwargs: Any) -> QueueSeasonGates:
+            return QueueSeasonGates(desired=gate)
+
         monkeypatch.setattr(public_endpoint, "dueling_season_gate", _gate)
+        monkeypatch.setattr(public_endpoint, "queue_season_gates", _gates)
         return gate
 
     @pytest.mark.usefixtures("closed_gate")
@@ -255,6 +323,7 @@ class TestPublicProjection:
             "bench_version": 18,
             "next_season_opens_at": "2026-11-11T00:00:00Z",
             "next_round_epoch": 44,
+            "season_scheduled": True,
         }
         entries = (await client.get("/api/v1/public/activity")).json()["entries"]
         by_status = {entry["status"]: entry for entry in entries}

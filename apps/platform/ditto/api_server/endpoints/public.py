@@ -257,6 +257,7 @@ from ditto.api_server.dueling_breakdown import public_dueling_breakdown
 from ditto.api_server.dueling_season_gate import (
     DuelingSeasonGate,
     dueling_season_gate,
+    queue_season_gates,
     round_schedule,
 )
 from ditto.api_server.efficiency import (
@@ -6594,7 +6595,37 @@ def _public_scoring_wait(gate: DuelingSeasonGate | None) -> PublicScoringWait | 
         bench_version=gate.bench_version,
         next_season_opens_at=gate.next_opens_at,
         next_round_epoch=gate.next_round_epoch,
+        season_scheduled=gate.scheduled,
     )
+
+
+async def _request_scoring_waits(
+    request: Request,
+    session: AsyncSession,
+    *,
+    agents: list[Agent],
+    now: datetime,
+    active_version: int | None = None,
+) -> dict[UUID, PublicScoringWait]:
+    """Each waiting agent's season hold, keyed by agent id.
+
+    ``agents`` are the waiting rows only; with none, no gate is read. Each row
+    gets the gate of the version its next lease would use.
+    """
+    if not agents:
+        return {}
+    gates = await queue_season_gates(
+        session,
+        schedule=round_schedule(request.app.state),
+        now=now,
+        active_version=active_version,
+    )
+    waits: dict[UUID, PublicScoringWait] = {}
+    for agent in agents:
+        wait = _public_scoring_wait(gates.for_agent(agent.agent_id, agent.created_at))
+        if wait is not None:
+            waits[agent.agent_id] = wait
+    return waits
 
 
 def _public_dueling_season(
@@ -6821,13 +6852,14 @@ def _public_activity_response(
     strike_colliding_names: bool = True,
     avatar_urls: dict[str, str] | None = None,
     miner_uids: dict[str, int] | None = None,
-    scoring_wait: PublicScoringWait | None = None,
+    scoring_waits: dict[UUID, PublicScoringWait] | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health.
 
-    ``scoring_wait`` holds every waiting row (one gate for the whole queue),
-    so it is attached to the waiting lanes only.
+    ``scoring_waits`` holds each waiting row's season hold, keyed by agent id;
+    it is attached to the waiting lanes only.
     """
+    waits = scoring_waits or {}
     claims = handle_claims or {}
     roots = owner_roots or {}
     uids = miner_uids or {}
@@ -7133,7 +7165,9 @@ def _public_activity_response(
                     else None
                 ),
                 scoring_wait=(
-                    scoring_wait if row_status in _SCORING_WAIT_STATUSES else None
+                    waits.get(row.agent.agent_id)
+                    if row_status in _SCORING_WAIT_STATUSES
+                    else None
                 ),
                 screening_policy_version=row.agent.screening_policy_version,
                 required_screening_policy_version=lease_screening_policy_floor(),
@@ -7751,10 +7785,16 @@ async def activity(
         strike_colliding_names=True,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
         miner_uids=registered_uids,
-        scoring_wait=_public_scoring_wait(
-            await _request_season_gate(
-                request, session, now=now, active_version=active_version
-            )
+        scoring_waits=await _request_scoring_waits(
+            request,
+            session,
+            agents=[
+                row.agent
+                for row in rows
+                if statuses.get(row.agent.agent_id) in _SCORING_WAIT_STATUSES
+            ],
+            now=now,
+            active_version=active_version,
         ),
     )
 
@@ -8028,10 +8068,16 @@ async def operations(
         strike_colliding_names=False,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
         miner_uids=registered_uids,
-        scoring_wait=_public_scoring_wait(
-            await _request_season_gate(
-                request, session, now=now, active_version=active_version
-            )
+        scoring_waits=await _request_scoring_waits(
+            request,
+            session,
+            agents=[
+                row.agent
+                for row in activity_rows
+                if activity_statuses.get(row.agent.agent_id) in _SCORING_WAIT_STATUSES
+            ],
+            now=now,
+            active_version=active_version,
         ),
     )
     validator_snapshot = _validator_heartbeats_response(
@@ -8443,14 +8489,14 @@ async def agent_summary(
             for work in active_work
         ],
         scoring_wait=(
-            _public_scoring_wait(
-                await _request_season_gate(
-                    request, session, now=now, active_version=active_version
-                )
+            await _request_scoring_waits(
+                request,
+                session,
+                agents=[row.agent] if status in _SCORING_WAIT_STATUSES else [],
+                now=now,
+                active_version=active_version,
             )
-            if status in _SCORING_WAIT_STATUSES
-            else None
-        ),
+        ).get(row.agent.agent_id),
     )
 
 

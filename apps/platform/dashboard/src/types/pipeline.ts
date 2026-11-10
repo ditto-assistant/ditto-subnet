@@ -34,6 +34,9 @@ export interface ScoringWait {
   /** Approximate UTC time the next season opens; null when unknown. */
   next_season_opens_at?: string | null;
   next_round_epoch?: number | null;
+  /** False when no season is scheduled for bench_version at all (the source
+   * version of an open benchmark rollout); absent means true. */
+  season_scheduled?: boolean;
 }
 
 export interface ActivityEntry {

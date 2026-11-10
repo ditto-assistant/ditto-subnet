@@ -171,14 +171,26 @@ export function seasonOpensText(iso: string | null | undefined, now: Date = new 
 /**
  * The plain-language season sentence: "No dueling season is open for bench
  * 18. Scoring resumes when the next season opens, about 00:45 UTC (in 2h
- * 31m)." Without an estimate it names the round boundary instead.
+ * 31m)." Without an estimate it names the round boundary instead. When no
+ * season is scheduled for the bench at all (a rollout's source version), it
+ * promises no boundary.
  */
 export function seasonWaitSentence(
   benchVersion: number | null | undefined,
   opensAt: string | null | undefined,
   now: Date = new Date(),
+  scheduled: boolean = true,
 ): string {
   const bench = benchVersion != null ? " for bench " + benchVersion : "";
+  if (!scheduled) {
+    return (
+      "No dueling season is scheduled" +
+      bench +
+      " right now. Scoring resumes when a" +
+      (benchVersion != null ? " bench " + benchVersion : "") +
+      " season opens."
+    );
+  }
   const when = seasonOpensText(opensAt, now);
   return (
     "No dueling season is open" +
@@ -529,7 +541,12 @@ export function validationDetail(e: ActivityStatusEntry, now: Date = new Date())
       " of " +
       quorum +
       " scores received. " +
-      seasonWaitSentence(wait.bench_version, wait.next_season_opens_at, now)
+      seasonWaitSentence(
+        wait.bench_version,
+        wait.next_season_opens_at,
+        now,
+        wait.season_scheduled !== false,
+      )
     );
   }
   if (e.status === "below_score_floor") {

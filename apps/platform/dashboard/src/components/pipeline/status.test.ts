@@ -612,6 +612,9 @@ describe("a submission waiting for the next dueling season", () => {
   });
 
   it("falls back to the round boundary without an estimate", () => {
+    expect(seasonWaitSentence(17, null, NOW, false)).toBe(
+      "No dueling season is scheduled for bench 17 right now. Scoring resumes when a bench 17 season opens.",
+    );
     expect(seasonWaitSentence(18, null, NOW)).toBe(
       "No dueling season is open for bench 18. Scoring resumes when the next season opens, " +
         "at the next generator-round boundary.",

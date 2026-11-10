@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -25,6 +26,7 @@ from ditto.api_server.dueling_seasons import dueling_target, open_season
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import CHAIN_BLOCK_SECONDS
 from ditto.db.models import DuelingSeason
+from ditto.db.queries.benchmark_carryover import carryover_agent_ids
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
 from ditto_screening_protocol.dueling import is_dueling_bench_version
 
@@ -44,6 +46,40 @@ class DuelingSeasonGate:
     """Subnet epoch of the round boundary the next season opens at."""
     next_opens_at: datetime | None
     """Approximate UTC instant of ``next_round_epoch``."""
+    scheduled: bool = True
+    """Whether a season for this version opens at a round boundary at all.
+
+    False while the dueling target is another version (the source era of an
+    open rollout) or no season can open: the row waits for a season of its
+    version, not for the next boundary."""
+
+
+@dataclass(frozen=True)
+class QueueSeasonGates:
+    """The season gates of the versions waiting rows are leased at.
+
+    Mirrors the lease path in ``endpoints/validator.py``: during an open
+    rollout, rows submitted at or after the rollout started and adopted
+    carryover rows are leased at the desired version, while earlier rows still
+    owed source-era scores are finished at ``from_version`` (source backfill).
+    """
+
+    desired: DuelingSeasonGate | None
+    source: DuelingSeasonGate | None = None
+    rollout_started_at: datetime | None = None
+    adopted: frozenset[UUID] = frozenset()
+
+    def for_agent(
+        self, agent_id: UUID, created_at: datetime
+    ) -> DuelingSeasonGate | None:
+        """The gate on the version this agent's next lease would use."""
+        if (
+            self.rollout_started_at is not None
+            and created_at < self.rollout_started_at
+            and agent_id not in self.adopted
+        ):
+            return self.source
+        return self.desired
 
 
 def round_schedule(app_state: Any) -> GeneratorRoundSchedule | None:
@@ -126,6 +162,49 @@ async def dueling_season_gate(
         version = active_version
     else:
         version = await active_bench_version(session, open_transition=None)
+    return await _gate_for_version(session, version, schedule=schedule, now=now)
+
+
+async def queue_season_gates(
+    session: AsyncSession,
+    *,
+    schedule: GeneratorRoundSchedule | None,
+    now: datetime,
+    active_version: int | None = None,
+) -> QueueSeasonGates:
+    """Season gates for every version a waiting row can be leased at."""
+    rollout = await open_rollout(session)
+    if rollout is None:
+        version = (
+            active_version
+            if active_version is not None
+            else await active_bench_version(session, open_transition=None)
+        )
+        return QueueSeasonGates(
+            desired=await _gate_for_version(
+                session, version, schedule=schedule, now=now
+            )
+        )
+    return QueueSeasonGates(
+        desired=await _gate_for_version(
+            session, rollout.desired_version, schedule=schedule, now=now
+        ),
+        source=await _gate_for_version(
+            session, rollout.from_version, schedule=schedule, now=now
+        ),
+        rollout_started_at=rollout.created_at,
+        adopted=frozenset(await carryover_agent_ids(session, rollout=rollout)),
+    )
+
+
+async def _gate_for_version(
+    session: AsyncSession,
+    version: int,
+    *,
+    schedule: GeneratorRoundSchedule | None,
+    now: datetime,
+) -> DuelingSeasonGate | None:
+    """The season gate on leases at ``version``, or None below the dueling floor."""
     if not is_dueling_bench_version(version):
         return None
     season = await open_season(session, version)
@@ -144,6 +223,7 @@ async def dueling_season_gate(
             open=False,
             next_round_epoch=None,
             next_opens_at=None,
+            scheduled=False,
         )
     committed = await session.scalar(
         select(DuelingSeason.season_index).where(
