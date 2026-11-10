@@ -1,5 +1,6 @@
 """Connect Ditto reuses provider consent without changing signed miner proofs."""
 
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,7 +14,10 @@ from fastapi import HTTPException, Request
 
 from ditto.api_models.contributor_identity import GithubLinkRequest
 from ditto.api_server.ditto_link import DittoLinkClient, DittoLinkRejected
-from ditto.api_server.endpoints.miner_github_link import confirm
+from ditto.api_server.endpoints.miner_github_link import (
+    _attempt_owned_by_miner,
+    confirm,
+)
 from ditto.chain.models import BlockInfo
 from ditto.tests.api_server.endpoints.test_miner_ditto_link import (
     FakeProvider,
@@ -43,6 +47,17 @@ pytestmark = pytest.mark.asyncio
             "ready": True,
             "requirements": [{"app": "github", "identity": None}],
         },
+        {
+            "sub": "ditto-user-1",
+            "ready": True,
+            "requirements": [
+                {
+                    "app": "github",
+                    "status": "connected",
+                    "identity": {"id": "9223372036854775808", "login": "miner"},
+                }
+            ],
+        },
     ],
 )
 async def test_malformed_connections_are_rejected_as_a_link_failure(document):
@@ -52,7 +67,11 @@ async def test_malformed_connections_are_rejected_as_a_link_failure(document):
 
     def handle(request):
         if request.url.path == "/oauth/connections":
-            return httpx.Response(200, json=document)
+            return httpx.Response(
+                200,
+                content=json.dumps(document),
+                headers={"content-type": "application/json"},
+            )
         return delegate.handle_request(request)
 
     service = DittoLinkClient(_config(), transport=httpx.MockTransport(handle))
@@ -98,10 +117,58 @@ async def test_enabled_ditto_does_not_bypass_a_disabled_direct_github_gate():
     database.rollback.assert_awaited_once()
 
 
+async def test_connection_provider_outage_suggests_retry():
+    provider = FakeProvider()
+    provider.nonce_for_code["outage-code"] = "nonce"
+    delegate = provider.transport()
+
+    def handle(request):
+        if request.url.path == "/oauth/connections":
+            return httpx.Response(503)
+        return delegate.handle_request(request)
+
+    service = DittoLinkClient(_config(), transport=httpx.MockTransport(handle))
+    try:
+        with pytest.raises(DittoLinkRejected, match="Try again"):
+            await service.exchange_code(
+                code="outage-code", code_verifier="verifier", nonce="nonce"
+            )
+    finally:
+        await service.aclose()
+
+
+async def test_only_confirmed_ditto_pairings_allow_same_hotkey_session_handoff():
+    original, cli = uuid4(), uuid4()
+    attempt = SimpleNamespace(session_id=original, hotkey="alice")
+    miner = SimpleNamespace(session_id=cli, miner_hotkey="alice")
+    paired = SimpleNamespace(
+        session_id=original,
+        miner_hotkey="alice",
+        status="linked",
+        user_accepted_at=object(),
+    )
+    assert _attempt_owned_by_miner(attempt, miner, paired)
+    assert not _attempt_owned_by_miner(attempt, miner, None)
+    assert not _attempt_owned_by_miner(
+        attempt, SimpleNamespace(session_id=cli, miner_hotkey="bob"), paired
+    )
+    paired.status = "authenticated"
+    assert not _attempt_owned_by_miner(attempt, miner, paired)
+    paired.status = "linked"
+    paired.user_accepted_at = None
+    assert not _attempt_owned_by_miner(attempt, miner, paired)
+
+
+@pytest.mark.parametrize("separate_session", [False, True])
 @pytest.mark.parametrize("github_link_enabled", [True, False])
 @pytest.mark.parametrize("ditto_link_enabled", [True, False])
 async def test_connect_ditto_then_sign_the_same_github_proof(
-    app, client, session_maker, github_link_enabled, ditto_link_enabled
+    app,
+    client,
+    session_maker,
+    github_link_enabled,
+    ditto_link_enabled,
+    separate_session,
 ):
     _install(app, session_maker)
     provider = FakeProvider()
@@ -144,6 +211,13 @@ async def test_connect_ditto_then_sign_the_same_github_proof(
     )
     assert linked.status_code == 200, linked.text
     assert linked.json()["github_proof_attempt_id"] == attempt
+    if separate_session:
+        auth = {"authorization": f"Bearer {await _sign_in(client, key)}"}
+        polled = await client.get(
+            f"/api/v1/me/github-link/attempts/{attempt}", headers=auth
+        )
+        assert polled.status_code == 200, polled.text
+        assert polled.json()["github_user_id"] == 123
     app.state.ditto_link.config = replace(
         app.state.ditto_link.config, enabled=ditto_link_enabled
     )

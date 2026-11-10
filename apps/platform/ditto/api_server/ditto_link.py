@@ -380,9 +380,13 @@ class DittoLinkClient:
             ):
                 raise ValueError("invalid GitHub connection identity")
             github_id = int(provider_id)
-            if github_id <= 0:
+            if not 0 < github_id <= 9223372036854775807:
                 raise ValueError("invalid GitHub account id")
-        except (httpx.HTTPError, ValueError, KeyError, TypeError, StopIteration) as exc:
+        except httpx.HTTPError as exc:
+            raise DittoLinkRejected(
+                "Ditto couldn't check your GitHub connection. Try again."
+            ) from exc
+        except (ValueError, KeyError, TypeError, StopIteration) as exc:
             raise DittoLinkRejected(
                 "Connect GitHub in your Ditto account before continuing"
             ) from exc

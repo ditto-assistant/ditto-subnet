@@ -156,7 +156,8 @@ def _confirm_pairing(
         )
         return False
     try:
-        answer = input(f"Link hotkey {hotkey} to {who}? [y/N] ").strip().lower()
+        with contextlib.redirect_stdout(sys.stderr if as_json else sys.stdout):
+            answer = input(f"Link hotkey {hotkey} to {who}? [y/N] ").strip().lower()
     except EOFError:
         return False
     return answer in ("y", "yes")
