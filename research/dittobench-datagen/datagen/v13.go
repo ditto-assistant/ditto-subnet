@@ -82,15 +82,24 @@ type v13Quota struct {
 // V18DecoyCases is the decoy-correct quota of the v18 50-case full half.
 const V18DecoyCases = 2
 
+// V18DiscoveryCases is the discovery quota of the v18 50-case full half: the
+// medium three. The full six held a seventh of the half on families every
+// v17 agent saturated; the tool encounters (v18_encounter.go) need the slots.
+const V18DiscoveryCases = 3
+
+// V18UnexpectedCases is the unexpected-tool quota of the v18 50-case full
+// half: the medium two, for the same reason.
+const V18UnexpectedCases = 2
+
 // V18FullToolHalf is the dueling full-profile tool case count from which
 // bench v18 installs the full-run v13 family quotas.
 const V18FullToolHalf = 50
 
-// v13QuotaForVersion is v13QuotaFor under an explicit contract. From v18 the
-// 50-case full dueling half carries the full-run discovery and unexpected
-// quotas (6 and 4) instead of the medium ones its case count selects (3 and
-// 2): on v17 the tool half averaged 0.98-1.00 for every agent, so it is
-// spent on the harder families rather than on more tokens. The decoy-correct
+// v13QuotaForVersion is v13QuotaFor under an explicit contract. The 50-case
+// v18 full dueling half keeps the medium discovery and unexpected quotas its
+// case count selects (V18DiscoveryCases, V18UnexpectedCases): on v17 the
+// tool half averaged 0.98-1.00 for every agent, so its slots go to the
+// multi-call encounters rather than to more single-call cases. The decoy-correct
 // share drops from 10% (5) to V18DecoyCases: every decoy_*_result_usage
 // family averaged 1.000 across the 27 v17 production rows, and the 50-case
 // half cannot hold the full restraint quota and all 11 connector cases
@@ -98,7 +107,7 @@ const V18FullToolHalf = 50
 func v13QuotaForVersion(n, benchVersion int) v13Quota {
 	q := v13QuotaFor(n)
 	if benchVersion >= protocol.BenchVersionV18 && n >= V18FullToolHalf && n < 80 {
-		q.Discovery, q.Unexpected, q.Decoy = 6, 4, V18DecoyCases
+		q.Discovery, q.Unexpected, q.Decoy = V18DiscoveryCases, V18UnexpectedCases, V18DecoyCases
 		if total := q.Discovery + q.Decoy + q.Unexpected; total > n {
 			return v13QuotaFor(n)
 		}

@@ -72,6 +72,11 @@ func buildFixtureV13(masterSeed int64, benchVersion int, c protocol.ToolCase) Fi
 	f.inventory = catalog.InventoryForSeed(masterSeed)
 	f.coined = CoinedForSeed(masterSeed)
 	f.buildV16Connectors(masterSeed)
+	if benchVersion >= protocol.BenchVersionV18 && c.Encounter != nil {
+		// A v18 encounter serves its own mock world and carries no needle.
+		f.encounter = c.Encounter
+		return f
+	}
 	if f.caseCarriesNeedleV13(c) {
 		f.needle = NeedleForVersion(masterSeed, c.ID, benchVersion)
 		if strings.HasPrefix(c.Category, "world_") {

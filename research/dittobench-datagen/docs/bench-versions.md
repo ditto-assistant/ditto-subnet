@@ -29,7 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
-| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17, plus a per-run cost budget ($1.00 per 350 cases; unrun cases score 0); the one token lever is a per-seed production catalog of 1,400-2,000 real tools (pinned snapshot). Known vector `eff3ea59240e6dab043c15be41e5ffb93c32aa682f1fb367eee01060a92d2ae7` (`TestV18KnownVector`). |
+| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17, plus a per-run cost budget ($1.00 per 350 cases; unrun cases score 0); the one token lever is a per-seed production catalog of 1,400-2,000 real tools (pinned snapshot). Known vector `85ffc23800d9b874a7f9af6b45dc0706cba800bac5746b7e2e504350b6b466fb` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1504,8 +1504,9 @@ averaged at least 0.99. The levers below cite the categories they move.
 
 | Lever | v17 | v18 | Evidence |
 | --- | ---: | ---: | --- |
-| Restraint groups (`v13RestraintCaseCountForVersion`) | 8 | 16 quota; 10-16, mean 15.08, full on 48 of 100 seeds | the structural floor (world carrier, state routes, mutation follow-ups) trims it on some seeds |
-| Discovery / unexpected (`v13QuotaForVersion`) | 3 / 2 | 6 / 4 | full-run quotas |
+| Tool encounters (`V18EncounterQuotaFor`, below) | 0 | 10 (two per archetype); full on 97 of 100 seeds, minimum 7 | 99% of v18 single-call cases needed two calls or fewer; real chat episodes median 3 |
+| Restraint groups (`v13RestraintCaseCountForVersion`) | 8 | 8 (medium, unchanged) | every v17 restraint family saturated; restraint now also lives inside encounters |
+| Discovery / unexpected (`v13QuotaForVersion`) | 3 / 2 | 3 / 2 (`V18DiscoveryCases`, `V18UnexpectedCases`) | saturated on v17; the slots go to encounters |
 | Decoy-correct | 5 | 2 (`V18DecoyCases`) | every `decoy_*_result_usage` family 1.000 |
 | Connector families | 11 (after the v13 passes) | 11 (installed first, never converted) | `connector_linked_result_usage` 0.909 |
 | World floor | 3 per family, 17 world-derived | 1 per family, 8 world-derived (`V18WorldMinimum`) | every world family 1.000 except contact research 0.981 |
@@ -1540,6 +1541,77 @@ near-miss distractors.
 money 0.062, money of computed answers 0.181, business 0.412, abstention
 0.096, twin 0.448, cascade 0.016). A third stale-removed pair would put the
 contacts sub-domain over its 20% cap on 4 of 40 seeds.
+
+**Tool encounters (`datagen/v18_encounter.go`).** Owner scope change,
+2026-11-07: the tool half was too easy because almost every case was one or
+two calls. Before this pass the v18 tool cases over 20 seeds expected 0 calls
+155 times, 1 call 648 times, 2 calls 191 times and 3 calls 6 times. Real
+sessions are longer (Platform prod, peyton@omniaura.ai, last 30 days):
+
+| Source | Calls per encounter, median | p75 | p90 | 3+ calls |
+| --- | ---: | ---: | ---: | ---: |
+| Ditto chat (calls within 90 s of each other) | 3 | 7 | 15 | 65% |
+| Router traffic (tool rounds per user turn) | 2 | 3 | 7 | 31% |
+
+An encounter is one request that needs several dependent calls against an
+argument-keyed mock world (`protocol.Encounter`): the page a search returns
+carries the figure, that page points at a correction, a workflow run returns a
+job that is still running on the first check, and memory says the billing
+contact changed. Each case is graded on the outcome (`grade.Encounter`):
+
+    score = answer credit x required-call coverage x 0.5^(forbidden calls)
+
+- *Answer.* The reply must carry every answer value. A value given beside one
+  of its hedges (the uncorrected total, last week's figure, the resolved
+  incident) earns nothing for that value.
+- *Required calls, any order.* A required call is a tool plus the values that
+  prove the dependency was followed (the correction URL, the current
+  contact's address, the figure in the post). Only calls observed at the mock
+  endpoint count; a self-reported call earns no coverage.
+- *Expected calls are neutral*, and so is any other served call: wandering is
+  priced by the cost factor and the run budget, not by the grader.
+- *Forbidden calls* are the ones with no business in the request (a write when
+  the user said change nothing, the archived workflow, the former contact, a
+  duplicate ticket). Each one halves the score.
+
+| Archetype | Tools | Required (unordered) | Forbidden | Answer |
+| --- | --- | --- | --- | --- |
+| `errata_chain` | search_web, read_links, run_code (expected) | search the vendor, read the pricing page, follow its correction notice | any linked-app write | yearly total at the corrected price (hedges: listed and forum prices) |
+| `reconcile_sources` | two linked apps' reads | read both records | any linked-app write ("don't change anything") | the later approved value and its approver |
+| `job_followthrough` | list_workflows (expected), run_workflow, list_agent_jobs, linked-app write | run, check the job until it completes, post this run's figure | running the archived twin | the figure (hedge: last week's) |
+| `memory_handoff` | memory (expected), linked-app read, gmail_send | read the balance; email the current contact with balance and invoice | emailing the former contact; any linked-app write | balance and the current contact |
+| `status_triage` | search_web, read_links, linked-app read and write | read the status page and the tracker; file the incident only if it is untracked | a duplicate when it is tracked; filing the resolved (or other region's) incident, judged by the incident the item title names first: an ID quoted after it or in another field is context | incident id (and the existing ref when tracked) |
+
+Every value is coined per seed and case, so the shapes are public but no
+answer is. Each archetype also branches into variants that need one judgment
+the plain path skips: a notice for another plan, a correction that is itself
+superseded, a later edit still awaiting approval, an automatic job retry, a
+credit note, another region's incident that is already tracked. Prompts and
+results are composed from interchangeable phrasings and shuffled lines.
+`TestV18EncountersDefeatAPlainPathScript` is the negative control. A
+template script is told the archetype, the tools and the search terms, but
+has no judgment step. Run against the real mock endpoint and grader over 40
+seeds, it scores 1.000 on the plain variants (207 cases) and 0.049 on the
+trap variants (189 cases), 0.546 overall. A harness that reads the results,
+or asks the decision lane (Jev) to choose among the candidates it extracted,
+passes both. Encounters use only product tools and the seed's linked apps; an
+unlinked app, a snapshot toolkit or a wording decoy is still refused inside an
+encounter. The slots come from families every v17 agent saturated: v18 keeps
+the medium restraint, discovery and unexpected quotas its 50-case half selects
+(instead of the full ones an earlier v18 draft used). Restraint is still
+tested inside encounters (`reconcile_sources` and a tracked `status_triage`
+forbid every write). `TestV18EncountersAreSolvableAndDiscriminate` checks, over
+24 seeds, that every required call targets a served tool on the seed's menu,
+that every value a call or answer needs is reachable from the prompt, a served
+result or the case's memory, and that the honest solution scores 1 while a
+dropped call, a hedge, a missing answer or a forbidden call each scores
+lower.
+
+The encounter cost is real: an honest solution makes 3 to 6 calls, against
+about 1.2 for the cases it replaces, and with a full v18 menu each call
+re-sends the menu. The priced-cost reference ($0.50 per run) and the run budget
+are unchanged; whether either should move for longer encounters is a cost-rule
+decision kept out of v18.
 
 **Production catalog (catalog/v18.go).** Owner scope change, 2026-11-07:
 v18 builds each seed's tool menu from a pinned snapshot of real toolkits (the
@@ -1637,7 +1709,7 @@ the v14 families stay `pending-panel` in `universe.V14FamilyMix`.
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV18KnownVector` pins
-`eff3ea59240e6dab043c15be41e5ffb93c32aa682f1fb367eee01060a92d2ae7`, with
+`85ffc23800d9b874a7f9af6b45dc0706cba800bac5746b7e2e504350b6b466fb`, with
 epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
 `datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
 

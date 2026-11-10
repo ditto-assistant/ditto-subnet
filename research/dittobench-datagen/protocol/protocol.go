@@ -197,6 +197,11 @@ type ToolCase struct {
 	// mutation has been asked. The harness projection places the follow-up
 	// well after its mutation in the run order. Never serialized.
 	RunAfterCaseID string `json:"-"`
+	// Encounter (bench_version 18, grader-only) is a multi-call tool
+	// encounter: an argument-keyed mock world graded on the final answer, the
+	// required calls (unordered) and the forbidden ones (encounter.go). The
+	// mock endpoint serves Encounter.Rules for the case. Never serialized.
+	Encounter *Encounter `json:"-"`
 }
 
 // AnswerKind values: how a memory case is graded deterministically. Grading is
