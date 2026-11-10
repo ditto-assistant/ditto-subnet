@@ -132,12 +132,13 @@ def test_every_kvm_task_is_gated() -> None:
     gated = []
     for task in _tasks():
         text = yaml.safe_dump(task)
-        if task["name"].startswith("Assert") or not any(
+        name = task.get("name", "<unnamed>")
+        if name.startswith("Assert") or not any(
             marker in text for marker in _KVM_MARKERS
         ):
             continue
-        gated.append(task["name"])
-        assert "screener_fleet_kvm_enabled" in text, task["name"]
+        gated.append(name)
+        assert "screener_fleet_kvm_enabled" in text, name
     # The guest-image pipeline, NAT network, packages, and group membership.
     assert len(gated) >= 13
     service_user = _task("Ensure the dedicated screener service user")
@@ -587,6 +588,36 @@ def test_uptime_bound_never_preempts_a_lease_or_the_updater(
 
     assert not host.powered_off
     assert "staying up" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("lease", "stays_up"),
+    [
+        # Expired well past the grace: a worker killed mid-review left it.
+        ('{"lease_deadline": 1000, "progress_at": 900}', False),
+        ('{"lease_deadline":1000}', False),
+        # Still live, or within the grace.
+        ('{"lease_deadline": 9999999999, "progress_at": 1}', True),
+        # Unreadable deadline: treat as live.
+        ('{"progress_at": 1}', True),
+        ("not json", True),
+    ],
+)
+def test_only_a_live_lease_blocks_the_uptime_bound(
+    tmp_path: Path, lease: str, stays_up: bool
+) -> None:
+    host = IdleHost(tmp_path)
+    host.worker(1, "active", code=0, status=0)
+    host.uptime.write_text("90000.00 1.0\n")
+    (host.state / "workers/1/active-lease.json").write_text(lease)
+
+    result = host.run()
+
+    assert host.powered_off is not stays_up
+    if stays_up:
+        assert "worker 1 holds an active lease" in result.stdout
+    else:
+        assert "ignoring expired lease file" in result.stdout
 
 
 def test_uptime_bound_can_be_disabled(tmp_path: Path) -> None:

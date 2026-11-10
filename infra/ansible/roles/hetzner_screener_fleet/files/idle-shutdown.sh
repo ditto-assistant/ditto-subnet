@@ -30,6 +30,7 @@ UPDATE_LOCK="${SCREENER_IDLE_UPDATE_LOCK:-$STATE_DIR/updater/lock}"
 WORKER_PROCESSES="${SCREENER_IDLE_WORKER_PROCESSES:-}"
 UPTIME_FILE="${SCREENER_IDLE_UPTIME_FILE:-/proc/uptime}"
 MAX_UPTIME="${SCREENER_IDLE_MAX_UPTIME_SECONDS:-21600}"
+LEASE_GRACE="${SCREENER_IDLE_LEASE_GRACE_SECONDS:-300}"
 IDLE_STATUS=85
 UPDATER_UNIT=ditto-screener-fleet-auto-update.service
 ENROLL_UNIT=ditto-screener-enroll.service
@@ -77,10 +78,18 @@ if [ "$state" = activating ]; then
   stay_up "enrollment is activating"
 fi
 
+# A lease file whose wall-clock lease_deadline (epoch seconds, written by the
+# worker) passed more than LEASE_GRACE ago describes no live Platform lease,
+# for example after a worker was killed mid-review; it must not keep the host
+# up forever. An unreadable deadline is treated as live.
+now="$(date +%s)"
 for lease in "$STATE_DIR"/workers/*/active-lease.json; do
-  if [ -e "$lease" ]; then
+  [ -e "$lease" ] || continue
+  deadline="$(sed -n 's/.*"lease_deadline"[[:space:]]*:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' "$lease" 2>/dev/null | head -n 1 || true)"
+  if [ -z "$deadline" ] || [ $((deadline + LEASE_GRACE)) -ge "$now" ]; then
     stay_up "worker $(basename "$(dirname "$lease")") holds an active lease"
   fi
+  log "ignoring expired lease file $lease (deadline $deadline)"
 done
 
 uptime_seconds="$(cut -d. -f1 "$UPTIME_FILE" 2>/dev/null || true)"
