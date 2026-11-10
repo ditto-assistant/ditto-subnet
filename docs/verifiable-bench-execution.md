@@ -350,10 +350,24 @@ ownership on chain.
   `miner_hotkey` at the candidate's own block, for example after a hotkey
   swap between issuance and the anchor.
 
-The miner then submits **one** extrinsic, signed by the coldkey that owns
-`miner_hotkey` at the anchor block. On the paid path the payment is in that
-same extrinsic, so this is exactly the payment-time owner that today's
-payment verifier checks:
+The miner then submits **one** extrinsic, signed by the issuance leaf's
+`owner_coldkey`. That coldkey must still own `miner_hotkey` at the anchor
+block (check 2). On the paid path the payment is in that same extrinsic, so
+it is also signed by `owner_coldkey`. That is the payment-time owner that
+today's payment verifier checks.
+
+If hotkey ownership changes after issuance, neither the new owner nor the
+former owner can produce a valid anchor with that token:
+- the new owner's extrinsic is ignored;
+- the former owner's extrinsic fails check 2.
+
+The token then lapses at expiry under the authorization accounting below.
+Any transfer in an ignored extrinsic still executes and is not refunded. To
+avoid this, the miner CLI must refuse to submit unless the signing key equals
+the token's `owner_coldkey` *and* that key still owns the hotkey. After an
+ownership change, the miner requests a new token.
+
+The extrinsic takes one of two shapes:
 
 - paid uploads: `utility.batch_all([balances.transfer_keep_alive(payment_address, quote), system.remark(C)])`;
 - credit-funded uploads: `system.remark(C)` alone.
@@ -462,7 +476,10 @@ but is no longer a seed input.
    - Credit path: there is no payment in the anchor. The statement names the
      credited payment from the issuance leaf's authorization. Validators check
      that it was a successful payment to the published address by the coldkey
-     that owned `miner_hotkey` at that payment's block.
+     that owned `miner_hotkey` at that payment's block. That payer may differ
+     from `owner_coldkey` if the hotkey changed owners between the payment
+     and the token's issuance. The credit belongs to the hotkey, and only the
+     anchor signer is bound to `owner_coldkey`.
 3. Its remark equals `C`, recomputed from the statement's `miner_hotkey` and
    `artifact_sha256` and the admission token. The token is revealed in the
    statement and must hash to the commitment in the issuance leaf. The
