@@ -25,7 +25,6 @@ MODULE_MAIN = (TF / "modules" / "compute" / "aws" / "main.tf").read_text()
 MODULE_VARS = (TF / "modules" / "compute" / "aws" / "variables.tf").read_text()
 MODULE_LOCALS = (TF / "modules" / "compute" / "aws" / "locals.tf").read_text()
 GCP_LOCALS = (TF / "modules" / "compute" / "gcp" / "locals.tf").read_text()
-WORKFLOW = (REPO / ".github" / "workflows" / "infra-plan-apply.yml").read_text()
 CI = (REPO / ".github" / "workflows" / "infra-ci.yml").read_text()
 
 NODE_ROLE = "ditto-screener-node"
@@ -480,14 +479,8 @@ def test_gcp_federation_is_default_off_and_pins_the_node_role() -> None:
 # --- workflows -------------------------------------------------------------------
 
 
-def test_workflow_plans_the_screener_with_aws_oidc_only() -> None:
-    options = (
-        _search(r"options: \[(gcp-platform[^\]]*)\]", WORKFLOW).group(1).split(", ")
-    )
-    assert "aws-screener" in options
-    assert "aws-bootstrap" not in options
-    assert WORKFLOW.count("aws-generator-scorer|aws-screener)") == 2
-    # aws-* roots take the AWS OIDC role steps and skip every app-credential step.
-    assert WORKFLOW.count("if: startsWith(inputs.root, 'aws-')") >= 4
+def test_infra_ci_validates_the_screener_root() -> None:
+    # Planning and applying it through infra-plan-apply.yml is wired in a
+    # separate change that needs the workflow's independent admin review.
     assert "- infra/terraform/stacks/aws-screener\n" in CI
     assert "if: matrix.root == 'infra/terraform/stacks/aws-screener'" in CI

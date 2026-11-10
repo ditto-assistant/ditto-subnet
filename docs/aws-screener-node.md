@@ -42,8 +42,9 @@ Cost guards, so nobody has to watch it:
 
 ## One-time stand-up
 
-Prerequisites: #3147 (AWS groundwork) and the DITTO-2594 stack are merged and
-released, so Platform, Backroom, and the controller accept `aws`. Nothing below
+Prerequisites: #3147 (AWS groundwork), the DITTO-2594 stack, and the change
+that wires the AWS roots into `infra-plan-apply.yml` (it needs that
+workflow's independent admin review) are merged and released, so Platform, Backroom, and the controller accept `aws`. Nothing below
 happens automatically; each step is a reviewed operator action.
 
 1. **Identities (SSO admin, local).** Apply `infra/terraform/stacks/aws-bootstrap`
