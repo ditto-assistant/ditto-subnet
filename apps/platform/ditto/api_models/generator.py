@@ -229,6 +229,18 @@ class GeneratorCompetitionSettings(BaseModel):
     column scores, and the skip keeps it inside ``window_days``. On by
     default, and a revision written before this field existed reads as on."""
 
+    season_catchup_enabled: bool = True
+    """At a season boundary, re-score once on the new set every paid or
+    public top-five agent with no score in the season that just closed
+    (:func:`ditto.api_server.dueling_seasons.queue_catchup_retests`). Without
+    it, an agent that scored after a season's opening cohort was picked
+    expires one season later, with no re-score. The kill switch: off queues
+    none. On by default, and a revision written before this field existed
+    reads as on."""
+    season_catchup_max_agents: Annotated[int, Field(ge=0, le=10)] = 5
+    """At most this many catch-up agents per season (each re-scored by
+    every validator that scored it), in board order. Zero queues none."""
+
     frontier_weight: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
     """Share of full credit a frontier case earns: a case no two independent
     panel owners solved that the frontier oracle answered and no failed audit

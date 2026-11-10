@@ -388,6 +388,17 @@ Agents scored against different generator sets are not comparable, so the
   quorum score waits on any validator that could instead lease a missing score
   for an activation-blocking priority member. Re-scores that restore an expired
   quorum row for such a member go first (`db/queries/score_retests.py`).
+- **Season catch-up** (`season_catchup_enabled`, on by default;
+  `season_catchup_max_agents`, default 5). An agent scored after a season's
+  opening cohort was picked holds scores only in that season, and neither
+  opening cohort re-scores it before they expire. So at each open, before the
+  window advances, Platform reads the paid set and the public top five and
+  queues one rotation re-score on the new set for every member with no score
+  in the season that just closed and not already in the opening cohort, in
+  board order, behind the cohort. It is recorded on the season as
+  `detail.catchup`. The admin seasons read reports `rotation_spend`: metered
+  grant cost of rotation leases, opening and catch-up apart, per season and
+  over the last 24 hours (`db/queries/dueling_rotation_spend.py`).
 - A ban or copy ruling against a pinned generator mid-season triggers an early
   rotation, not an in-place swap.
 - **Idle seasons extend instead of rotating** (`skip_unchanged_rounds`, on by

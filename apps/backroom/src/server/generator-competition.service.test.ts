@@ -902,6 +902,14 @@ describe('generator competition MCP tools', () => {
     expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, frontier_weight: 1.5 })).toThrow()
   })
 
+  it('defaults the season catch-up settings a write omits and bounds the cap', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse(settings)
+    expect(parsed).toMatchObject({ season_catchup_enabled: true, season_catchup_max_agents: 5 })
+    expect(generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_enabled: false }))
+      .toMatchObject({ season_catchup_enabled: false })
+    expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_max_agents: 11 })).toThrow()
+  })
+
   it('names the frontier write that was refused and the recovery its status implies', () => {
     const conflict = (message: string) => new PlatformAdminError('request', message, 409)
     const invalid = (message: string) => new PlatformAdminError('request', message, 422)

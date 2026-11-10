@@ -2304,3 +2304,399 @@ class TestSeasonSeededRotation:
                 )
                 == frozenset()
             )
+
+
+_CATCHUP_VALIDATORS = ("5CatV1", "5CatV2", "5CatV3")
+
+
+class TestSeasonCatchup:
+    """At a season boundary, a paid or public top-five agent with no score in
+    the season that just closed gets one catch-up re-score on the new set."""
+
+    async def _boundary(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        stale: int,
+        fresh: int = 1,
+        opening_cohort: tuple[int, ...] = (),
+    ) -> tuple[list[UUID], list[UUID], UUID, UUID]:
+        """``stale`` paid agents scored only in the provisional season (31),
+        ``fresh`` scored in the closing one (32). Returns them, the closed
+        season and the newly opened one (33) whose opening cohort holds the
+        stale agents at ``opening_cohort`` positions."""
+        from types import SimpleNamespace
+
+        default = await _generator(
+            maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        _expired, provisional, closing = await _season_sequence(maker, default)
+        stale_ids = [await _seed_agent(maker, 10 + i) for i in range(stale)]
+        fresh_ids = [await _seed_agent(maker, 30 + i) for i in range(fresh)]
+        now = datetime.now(UTC)
+        async with maker() as session, session.begin():
+            for agent_id in [*stale_ids, *fresh_ids]:
+                season_id = provisional if agent_id in stale_ids else closing
+                for validator in _CATCHUP_VALIDATORS:
+                    session.add(
+                        _v16_score(agent_id, validator, season_id, composite=0.9)
+                    )
+                    session.add(
+                        ValidatorTicket(
+                            agent_id=agent_id,
+                            validator_hotkey=validator,
+                            bench_version=16,
+                            slot_id="slot-0",
+                            status=TicketStatus.SCORED,
+                            purpose=TicketPurpose.CANONICAL_QUORUM,
+                            purpose_revision=1,
+                            issued_at=now,
+                            deadline=now + timedelta(minutes=90),
+                            attempt_count=1,
+                            manual_retry_grants=0,
+                            infra_retry_grants=0,
+                            dueling_season_id=season_id,
+                            slice_sha256="ab" * 32,
+                        )
+                    )
+            season = await session.get(DuelingSeason, closing)
+            assert season is not None
+            season.status = "closed"
+
+        # The paid set (folded emission) and the public top five overlap.
+        paid = [SimpleNamespace(agent_id=a) for a in [*fresh_ids, *stale_ids][:3]]
+        top5 = [SimpleNamespace(agent_id=a) for a in [*stale_ids, *fresh_ids][:5]]
+
+        async def _board(*_args: Any, **_kwargs: Any) -> Any:
+            return tuple(paid), tuple(top5), (), frozenset()
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.validator._current_retest_cohort", _board
+        )
+        cohort = [stale_ids[i] for i in opening_cohort]
+
+        async def _cohort(*_args: Any) -> tuple[list[UUID], str]:
+            return cohort, "continual_cohort"
+
+        monkeypatch.setattr(dueling_mod, "_rotation_cohort", _cohort)
+        return stale_ids, fresh_ids, closing, await self._next(maker, default)
+
+    async def _next(
+        self, maker: async_sessionmaker[AsyncSession], default: GeneratorSubmission
+    ) -> UUID:
+        season_id = await _open_season(maker, default, season_index=33)
+        async with maker() as session, session.begin():
+            season = await session.get(DuelingSeason, season_id)
+            assert season is not None
+            _uncommit(season)
+        return season_id
+
+    async def _open(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        season_id: UUID,
+        settings: Any,
+    ) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+        now = datetime.now(UTC)
+        async with maker() as session, session.begin():
+            season = await session.get(DuelingSeason, season_id)
+            assert season is not None
+            candidates = await dueling_mod._catchup_candidates(
+                session, season, settings=settings
+            )
+            season.status = "open"
+            season.opened_at = now
+            season.anchor_block = 1
+            season.anchor_block_hash = _BLOCK
+            season.season_seed = season_seed(33, season.secret, _BLOCK)
+            await session.flush()
+            rotation = await dueling_mod.queue_rotation_retests(
+                session, season, now=now
+            )
+            catchup = await dueling_mod.queue_catchup_retests(
+                session, season, candidates=candidates, settings=settings, now=now
+            )
+        return candidates, rotation, catchup
+
+    async def _queued(
+        self, maker: async_sessionmaker[AsyncSession], *, catch_up: bool
+    ) -> list[tuple[UUID, str | None]]:
+        from ditto.db.models import ScoreAuditEntry
+        from ditto.db.queries.audit import EVENT_SCORE_RETEST_QUEUED
+
+        async with maker() as session:
+            rows = await session.scalars(
+                select(ScoreAuditEntry).where(
+                    ScoreAuditEntry.event == EVENT_SCORE_RETEST_QUEUED,
+                    ScoreAuditEntry.payload["catch_up"].as_boolean() == catch_up,
+                )
+            )
+            return sorted((e.agent_id, e.validator_hotkey) for e in rows)
+
+    async def test_mid_season_scorer_in_the_paid_set_gets_exactly_one_catchup(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        settings = GeneratorCompetitionSettings()
+        (late,), (fresh,), closed, opened = await self._boundary(
+            session_maker, monkeypatch, stale=1
+        )
+        candidates, rotation, catchup = await self._open(
+            session_maker, opened, settings
+        )
+        # Read before the window advanced: the closed season was current.
+        assert candidates.closed_season_id == closed
+        assert candidates.missing == (late,)
+        assert rotation["queued"] == 0
+        assert catchup["agents"] == [str(late)] and catchup["queued"] == 3
+        queued = await self._queued(session_maker, catch_up=True)
+        assert queued == sorted((late, v) for v in _CATCHUP_VALIDATORS)
+        assert fresh not in {agent for agent, _ in queued}
+
+        # Exactly one per season: the same boundary again queues nothing new.
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, opened)
+            assert season is not None
+            again = await dueling_mod.queue_catchup_retests(
+                session,
+                season,
+                candidates=candidates,
+                settings=settings,
+                now=datetime.now(UTC),
+            )
+        assert again["queued"] == 0
+        assert len(await self._queued(session_maker, catch_up=True)) == 3
+        async with session_maker() as session:
+            season = await session.get(DuelingSeason, opened)
+            assert season is not None and season.detail is not None
+            assert season.detail["catchup"]["agents"] == [str(late)]
+
+        # It promotes like any rotation re-test, onto the open season's slice.
+        async with session_maker() as session, session.begin():
+            ticket = await activate_next_score_retest(
+                session,
+                validator_hotkey=_CATCHUP_VALIDATORS[0],
+                now=datetime.now(UTC),
+                supports_version=lambda version: version == 16,
+                required_basis=DUELING_ROTATION_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+            )
+            assert ticket is not None and ticket.agent_id == late
+            assert ticket.dueling_season_id is None
+
+    async def test_an_agent_in_the_opening_cohort_is_not_duplicated(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        (in_cohort, owed), _fresh, _closed, opened = await self._boundary(
+            session_maker, monkeypatch, stale=2, opening_cohort=(0,)
+        )
+        _candidates, rotation, catchup = await self._open(
+            session_maker, opened, GeneratorCompetitionSettings()
+        )
+        assert rotation["queued"] == 3
+        assert catchup["in_opening_cohort"] == [str(in_cohort)]
+        assert catchup["agents"] == [str(owed)] and catchup["queued"] == 3
+        assert {a for a, _ in await self._queued(session_maker, catch_up=True)} == {
+            owed
+        }
+        assert {a for a, _ in await self._queued(session_maker, catch_up=False)} == {
+            in_cohort
+        }
+        # Catch-ups queue behind the opening cohort.
+        async with session_maker() as session:
+            positions = await score_retest_queue_positions(
+                session, validator_hotkey=_CATCHUP_VALIDATORS[0]
+            )
+        assert positions[in_cohort] < positions[owed]
+
+    async def test_cap_and_kill_switch(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        stale, _fresh, _closed, opened = await self._boundary(
+            session_maker, monkeypatch, stale=3, fresh=0
+        )
+        off = GeneratorCompetitionSettings(season_catchup_enabled=False)
+        candidates, _rotation, catchup = await self._open(session_maker, opened, off)
+        assert candidates.missing == ()
+        assert catchup["skipped"] == "season_catchup_enabled is off"
+        assert await self._queued(session_maker, catch_up=True) == []
+
+        # Reopen the same boundary with the switch on and a cap of two.
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, opened)
+            assert season is not None
+            _uncommit(season)
+        capped = GeneratorCompetitionSettings(season_catchup_max_agents=2)
+        _candidates, _rotation, catchup = await self._open(
+            session_maker, opened, capped
+        )
+        assert catchup["agents"] == [str(a) for a in stale[:2]]
+        assert catchup["capped"] == [str(stale[2])]
+        assert {a for a, _ in await self._queued(session_maker, catch_up=True)} == set(
+            stale[:2]
+        )
+
+        with pytest.raises(ValueError):
+            GeneratorCompetitionSettings(season_catchup_max_agents=11)
+
+    async def test_spend_is_the_metered_grant_cost_split_opening_and_catchup(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.db.models import InferenceGrant
+        from ditto.db.queries.audit import (
+            EVENT_SCORE_RETEST_REQUESTED,
+            append_audit_entry,
+        )
+        from ditto.db.queries.dueling_rotation_spend import (
+            OpeningAndCatchup,
+            rotation_spend_by_season,
+            rotation_spend_since,
+        )
+
+        _install(app, session_maker)
+        (late,), (fresh,), _closed, opened = await self._boundary(
+            session_maker, monkeypatch, stale=1
+        )
+        now = datetime.now(UTC)
+
+        def _grant(agent_id: UUID, validator: str, deadline: datetime, **cost: int):
+            return InferenceGrant(
+                grant_id=uuid4(),
+                agent_id=agent_id,
+                bench_version=16,
+                validator_hotkey=validator,
+                slot_id="slot-0",
+                ticket_deadline=deadline,
+                status="revoked",
+                generation=1,
+                allowed_models=["openai/gpt-oss-20b"],
+                route_provider="openrouter",
+                route_profile="openrouter-route-test-v1",
+                request_budget=16384,
+                token_budget=75_000_000,
+                embedding_model="test-embedding",
+                embedding_profile="openrouter-embedding-test-v1",
+                embedding_provider="test-provider",
+                embedding_dimensions=768,
+                embedding_request_budget=1000,
+                embedding_token_budget=1_000_000,
+                expires_at=deadline,
+                created_at=now,
+                updated_at=now,
+                **cost,
+            )
+
+        # Leases: opening (fresh) 2 priced; catch-up (late) 2 priced + 1 that
+        # ended before fetching a grant; plus a decoy grant on a different
+        # lease of the same ticket that must not be attributed.
+        leases = [
+            (fresh, "5CatV1", False, {"cost_microusd": 400_000}),
+            (
+                fresh,
+                "5CatV2",
+                False,
+                {"cost_microusd": 30_000, "embedding_cost_microusd": 1_500},
+            ),
+            (late, "5CatV1", True, {"cost_microusd": 420_000}),
+            (
+                late,
+                "5CatV2",
+                True,
+                {"cost_microusd": 10_000, "decision_cost_microusd": 2_000},
+            ),
+            (late, "5CatV3", True, None),
+        ]
+        async with session_maker() as session, session.begin():
+            for minutes, (agent_id, validator, catch_up, cost) in enumerate(leases):
+                deadline = now + timedelta(minutes=90 + minutes)
+                await append_audit_entry(
+                    session,
+                    agent_id=agent_id,
+                    validator_hotkey=validator,
+                    event=EVENT_SCORE_RETEST_REQUESTED,
+                    payload={
+                        "basis": DUELING_ROTATION_RETEST_BASIS,
+                        "bench_version": 16,
+                        "dueling_season_id": str(opened),
+                        "catch_up": catch_up,
+                        "replacement_deadline": deadline.isoformat(),
+                    },
+                    recorded_at=now,
+                )
+                if cost is not None:
+                    session.add(_grant(agent_id, validator, deadline, **cost))
+            session.add(
+                _grant(
+                    late,
+                    "5CatV3",
+                    now - timedelta(days=2),
+                    cost_microusd=9_000_000,
+                )
+            )
+
+        async with session_maker() as session:
+            by_season = await rotation_spend_by_season(session, [opened])
+            day = await rotation_spend_since(session, now - timedelta(days=1))
+        spend = by_season[opened]
+        assert (spend.opening.runs, spend.opening.priced_runs) == (2, 2)
+        assert spend.opening.cost_microusd == 431_500
+        assert (spend.catchup.runs, spend.catchup.priced_runs) == (3, 2)
+        assert spend.catchup.cost_microusd == 432_000
+        assert spend.catchup.cost_usd == 0.432
+        assert day.catchup.cost_microusd == 432_000
+        async with session_maker() as session:
+            later = await rotation_spend_since(session, now + timedelta(minutes=1))
+        assert later == OpeningAndCatchup()
+
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, opened)
+            assert season is not None
+            season.status = "open"
+            season.opened_at = now
+            season.anchor_block = 1
+            season.anchor_block_hash = _BLOCK
+            season.season_seed = season_seed(33, season.secret, _BLOCK)
+        body = (
+            await client.get(
+                "/api/v1/admin/generator-competition/dueling/seasons", headers=_ADMIN
+            )
+        ).json()["rotation_spend"]
+        assert body["last_24h_catchup"] == {
+            "runs": 3,
+            "priced_runs": 2,
+            "cost_usd": 0.432,
+        }
+        assert body["last_24h_opening"]["cost_usd"] == 0.4315
+        newest = body["seasons"][0]
+        assert newest["season_index"] == 33
+        assert newest["catchup"]["cost_usd"] == 0.432
+
+
+def _uncommit(season: DuelingSeason) -> None:
+    """Back to committed: no anchor or seed until it opens."""
+    season.status = "committed"
+    season.opened_at = None
+    season.anchor_block = None
+    season.anchor_block_hash = None
+    season.season_seed = None

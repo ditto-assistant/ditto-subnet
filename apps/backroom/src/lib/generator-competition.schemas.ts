@@ -100,6 +100,13 @@ export const generatorCompetitionSettingsSchema = z.object({
   // params): no generation or panel inference, and the ledger keeps paying
   // that scored round. Ships on; a write that omits it keeps it on.
   skip_unchanged_rounds: z.boolean().default(true),
+  // At each season boundary, re-score once on the new set every paid or
+  // public top-five agent with no score in the season that just closed, so
+  // it does not expire unscored. season_catchup_enabled is the kill switch
+  // (ships on); season_catchup_max_agents caps the agents per season (0..10,
+  // default 5). A write that omits them keeps the shipped defaults.
+  season_catchup_enabled: z.boolean().default(true),
+  season_catchup_max_agents: z.number().int().min(0).max(10).default(5),
   // Frontier cases: a case no two panel owners solved that the frontier
   // oracle (frontier_oracle_agent_id, a subnet-run reference agent answering
   // from a bounded context) passed and no failed sampled audit voided earns

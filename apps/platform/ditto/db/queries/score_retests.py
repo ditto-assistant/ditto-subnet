@@ -724,10 +724,16 @@ async def queue_dueling_rotation_retests(
     bench_version: int,
     cohort: list[UUID],
     now: datetime,
+    catch_up: bool = False,
+    first_rank: int = 0,
 ) -> dict[str, int]:
     """Queue one rotation re-test per accepted score of every cohort member.
 
-    ``cohort`` is the champion first, then the retest cohort by rank. Every
+    ``cohort`` is the champion first, then the retest cohort by rank. With
+    ``catch_up`` the members are a season-boundary catch-up
+    (:func:`ditto.api_server.dueling_seasons.queue_catchup_retests`), ranked
+    from ``first_rank`` so they queue behind the opening cohort, and tagged
+    ``catch_up`` so their spend is told apart. Every
     ``(agent, validator)`` score at ``bench_version`` from another season is
     queued behind nothing (:func:`_ordered_queued_retests` puts rotation work
     first); a score already in ``season_id``, a live ticket, or an open
@@ -736,7 +742,7 @@ async def queue_dueling_rotation_retests(
     request id is derived from ``(season, agent, validator)``. Caller commits.
     """
     counts = {"queued": 0, "already_current": 0, "busy": 0, "replaced": 0}
-    for rank, agent_id in enumerate(dict.fromkeys(cohort)):
+    for rank, agent_id in enumerate(dict.fromkeys(cohort), start=first_rank):
         rows = list(
             (
                 await session.execute(
@@ -795,8 +801,16 @@ async def queue_dueling_rotation_retests(
                 event=EVENT_SCORE_RETEST_QUEUED,
                 payload={
                     "request_id": str(request_id),
-                    "actor": "platform:dueling-season-rotation",
-                    "reason": "dueling season rotation: re-score on the new set",
+                    "actor": (
+                        "platform:dueling-season-catchup"
+                        if catch_up
+                        else "platform:dueling-season-rotation"
+                    ),
+                    "reason": (
+                        "dueling season catch-up: no score in the closed season"
+                        if catch_up
+                        else "dueling season rotation: re-score on the new set"
+                    ),
                     "basis": DUELING_ROTATION_RETEST_BASIS,
                     "bench_version": bench_version,
                     "run_id": run_id,
@@ -805,6 +819,7 @@ async def queue_dueling_rotation_retests(
                         None if scored_season is None else str(scored_season)
                     ),
                     "rotation_rank": rank,
+                    "catch_up": catch_up,
                     "automatic": True,
                 },
                 recorded_at=now,

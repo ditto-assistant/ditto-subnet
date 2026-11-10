@@ -12482,6 +12482,7 @@ export interface components {
             next: components["schemas"]["DuelingSeasonView"][];
             /** Recent */
             recent: components["schemas"]["DuelingSeasonView"][];
+            rotation_spend?: components["schemas"]["DuelingRotationSpendView"] | null;
             /**
              * Scores Without Dueling
              * @default 0
@@ -23150,6 +23151,38 @@ export interface components {
             slice_sha256: string;
         };
         /**
+         * DuelingRotationSpend
+         * @description Rotation re-test leases started and their metered inference cost.
+         */
+        DuelingRotationSpend: {
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
+            /**
+             * Priced Runs
+             * @default 0
+             */
+            priced_runs: number;
+            /**
+             * Runs
+             * @default 0
+             */
+            runs: number;
+        };
+        /**
+         * DuelingRotationSpendView
+         * @description Opening rotation and catch-up spend side by side, so the catch-up's
+         *     incremental cost reads directly.
+         */
+        DuelingRotationSpendView: {
+            last_24h_catchup: components["schemas"]["DuelingRotationSpend"];
+            last_24h_opening: components["schemas"]["DuelingRotationSpend"];
+            /** Seasons */
+            seasons?: components["schemas"]["DuelingSeasonSpendView"][];
+        };
+        /**
          * DuelingRotationView
          * @description The season-open mini-rollout and how far its re-scoring has got.
          */
@@ -23344,6 +23377,18 @@ export interface components {
              * @default 0
              */
             target: number;
+        };
+        /** DuelingSeasonSpendView */
+        DuelingSeasonSpendView: {
+            catchup: components["schemas"]["DuelingRotationSpend"];
+            opening: components["schemas"]["DuelingRotationSpend"];
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
         };
         /** DuelingSeasonView */
         DuelingSeasonView: {
@@ -25221,6 +25266,16 @@ export interface components {
              * @default 1
              */
             rounds_per_season: number;
+            /**
+             * Season Catchup Enabled
+             * @default true
+             */
+            season_catchup_enabled: boolean;
+            /**
+             * Season Catchup Max Agents
+             * @default 5
+             */
+            season_catchup_max_agents: number;
             /**
              * Seeds Per Run
              * @default 2

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import statistics
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -46,7 +46,10 @@ from ditto.api_models.dueling import (
     AdminGeneratorSourceReleasesResponse,
     DuelingBatteryView,
     DuelingColumnMean,
+    DuelingRotationSpend,
+    DuelingRotationSpendView,
     DuelingRotationView,
+    DuelingSeasonSpendView,
     DuelingSeasonView,
     DuelingSliceStatus,
     DuelingSliceView,
@@ -87,6 +90,11 @@ from ditto.db.queries.audit import (
     SCORE_RETEST_EVENTS,
 )
 from ditto.db.queries.benchmark_rollout import SCORING_QUORUM
+from ditto.db.queries.dueling_rotation_spend import (
+    RotationSpend,
+    rotation_spend_by_season,
+    rotation_spend_since,
+)
 from ditto.db.queries.dueling_season_window import dueling_season_window
 from ditto.db.queries.generator import record_operator_action
 from ditto.db.queries.score_retests import rotation_request_id
@@ -382,6 +390,41 @@ async def _view(
     return DuelingSeasonView(**view)
 
 
+def _spend(spend: RotationSpend) -> DuelingRotationSpend:
+    return DuelingRotationSpend(
+        runs=spend.runs, priced_runs=spend.priced_runs, cost_usd=spend.cost_usd
+    )
+
+
+async def _rotation_spend(
+    session: AsyncSession, seasons: list[DuelingSeason]
+) -> DuelingRotationSpendView:
+    """Opening and catch-up rotation spend per season and over the last day."""
+    opened = sorted(
+        (s for s in seasons if s.opened_at is not None),
+        key=lambda s: s.season_index,
+        reverse=True,
+    )
+    by_season = await rotation_spend_by_season(session, (s.id for s in opened))
+    day = await rotation_spend_since(session, datetime.now(UTC) - timedelta(days=1))
+    rows = []
+    for season in opened:
+        spend = by_season.get(season.id)
+        rows.append(
+            DuelingSeasonSpendView(
+                season_id=season.id,
+                season_index=season.season_index,
+                opening=_spend(spend.opening) if spend else DuelingRotationSpend(),
+                catchup=_spend(spend.catchup) if spend else DuelingRotationSpend(),
+            )
+        )
+    return DuelingRotationSpendView(
+        last_24h_opening=_spend(day.opening),
+        last_24h_catchup=_spend(day.catchup),
+        seasons=rows,
+    )
+
+
 @router.get("/seasons", response_model=AdminDuelingSeasonsResponse)
 async def admin_dueling_seasons(
     _admin: AdminDep, session: SessionDep
@@ -402,6 +445,8 @@ async def admin_dueling_seasons(
             stmt = stmt.limit(limit)
         return list(await session.scalars(stmt))
 
+    current = await _status("open")
+    recent = await _status("closed", "revealed", "void", limit=_RECENT)
     floor = DUELING_MIN_BENCH_VERSION
     missing = await session.scalar(
         select(func.count())
@@ -429,12 +474,10 @@ async def admin_dueling_seasons(
             blocked=target.blocked,
             live_versions=sorted(target.live_versions),
         ),
-        current=[await _view(session, s, full=True) for s in await _status("open")],
+        current=[await _view(session, s, full=True) for s in current],
         next=[await _view(session, s, full=True) for s in await _status("committed")],
-        recent=[
-            await _view(session, s, full=False)
-            for s in await _status("closed", "revealed", "void", limit=_RECENT)
-        ],
+        recent=[await _view(session, s, full=False) for s in recent],
+        rotation_spend=await _rotation_spend(session, [*current, *recent]),
     )
 
 

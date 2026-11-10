@@ -117,6 +117,14 @@ export const duelingSeasonSchema = z.object({
   commitment_publishers_elected: z.array(z.string()).default([]),
 })
 
+// Metered inference cost of rotation re-test leases (grant ledger), opening
+// rotation and season catch-up apart.
+const rotationSpendSchema = z.object({
+  runs: z.number().int().default(0),
+  priced_runs: z.number().int().default(0),
+  cost_usd: z.number().default(0),
+})
+
 export const duelingSeasonsSchema = z.object({
   target: z.object({
     bench_version: nullableInt,
@@ -130,6 +138,16 @@ export const duelingSeasonsSchema = z.object({
   // Bench v16+ rows with no season or aggregates (never rank or pay; should be 0).
   scores_without_dueling: z.number().int().default(0),
   confirmation_scores_without_dueling: z.number().int().default(0),
+  rotation_spend: z.object({
+    last_24h_opening: rotationSpendSchema,
+    last_24h_catchup: rotationSpendSchema,
+    seasons: z.array(z.object({
+      season_id: uuid,
+      season_index: z.number().int(),
+      opening: rotationSpendSchema,
+      catchup: rotationSpendSchema,
+    })).default([]),
+  }).nullable().optional().default(null),
 })
 
 export const duelingSlicesSchema = z.object({
