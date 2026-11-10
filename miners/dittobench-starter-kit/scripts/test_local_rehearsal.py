@@ -38,7 +38,7 @@ class LocalRehearsalTest(unittest.TestCase):
                 "run_size": "small",
             },
         )
-        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 17)
+        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 18)
 
     def test_practice_runs_the_validator_envelope(self) -> None:
         envelope = LOCAL.runtime_envelope()

@@ -39,7 +39,7 @@ LONGMEM_DIR = API_DIR / "integrations" / "longmemeval"
 # constant is only the offline fallback. Keep it at the activated version
 # (Backroom get_benchmark_rollout_control); do not confuse with research
 # CurrentBenchVersion (still v8).
-LIVE_SCORING_BENCH_VERSION = 17
+LIVE_SCORING_BENCH_VERSION = 18
 PUBLIC_ROLLOUT_URL = "https://dittobench.ai/api/v1/public/bench/rollout"
 # Override (or set to "off" to skip the lookup) for air-gapped rehearsals.
 PUBLIC_ROLLOUT_URL_ENV = "DITTOBENCH_PUBLIC_ROLLOUT_URL"

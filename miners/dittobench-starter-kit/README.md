@@ -274,7 +274,7 @@ The command requires Rust and Go, plus the same local provider setup as
 `serve`: Ollama `embeddinggemma` is required for memory, and chat uses the
 provider selected in `.env`. It builds both binaries, uses an isolated temporary
 database, selects free loopback ports, submits a run on the live scoring bench
-(read from the public rollout endpoint at start; currently 17, with the
+(read from the public rollout endpoint at start; currently 18, with the
 script's `LIVE_SCORING_BENCH_VERSION` as the offline fallback),
 displays progress and the final score/provenance counts, and cleans up on exit.
 `--run-size small` is a smoke profile. `--run-size full` is the on-chain-shaped
