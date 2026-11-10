@@ -136,7 +136,24 @@ pub fn enabled(bench_version: u32, tools: &[ToolDefWire]) -> bool {
     if settled == enabled_from(value, bench_version, usize::MAX) {
         return settled;
     }
+    // The names and descriptions alone are a lower bound on the serialized
+    // menu, so a v18-sized menu is decided without serializing it.
+    if text_tokens_lower_bound(tools) > CLASSIC_MENU_TOKEN_LIMIT {
+        return true;
+    }
     enabled_from(value, bench_version, menu_tokens(tools))
+}
+
+/// [`jev::estimate_tokens`] of the tools' names and descriptions taken as one
+/// text: never more than [`menu_tokens`], which serializes the same text.
+fn text_tokens_lower_bound(tools: &[ToolDefWire]) -> usize {
+    let (mut ascii, mut other) = (0usize, 0usize);
+    for text in tools.iter().flat_map(|t| [&t.name, &t.description]) {
+        let a = text.bytes().filter(u8::is_ascii).count();
+        ascii += a;
+        other += text.len() - a;
+    }
+    ascii.div_ceil(3) + other
 }
 
 /// One startup line naming the served path per bench, so a miner who

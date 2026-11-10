@@ -319,6 +319,10 @@ fn an_oversized_menu_takes_the_hybrid_at_wire_version_9() {
     assert!(!enabled_from(None, 9, menu_tokens(&v17)));
     assert!(enabled_from(None, 9, menu_tokens(&v18)));
     assert!(!enabled_from(Some("0"), 9, menu_tokens(&v18)));
+    // The cheap bound never exceeds the full estimate, and already decides v18.
+    assert!(text_tokens_lower_bound(&v17) <= menu_tokens(&v17));
+    assert!(text_tokens_lower_bound(&v18) <= menu_tokens(&v18));
+    assert!(text_tokens_lower_bound(&v18) > CLASSIC_MENU_TOKEN_LIMIT);
 }
 
 #[test]
