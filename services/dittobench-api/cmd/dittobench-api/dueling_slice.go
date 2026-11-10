@@ -206,6 +206,9 @@ type duelingSliceEnv struct {
 	concurrency  int
 	// progress, when set, reports cumulative executed slice cases.
 	progress func(done int)
+	// budget, when set, is the run's bench v18 cost budget; a slice case it
+	// refuses never runs and scores 0 (run_budget.go).
+	budget *runBudget
 }
 
 // duelingSliceResult is everything about a slice run that leaves the scorer:
@@ -262,6 +265,15 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 				ToolEndpoint:  prepareCase,
 				ObservedCalls: env.toolSrv.Observed,
 				Include:       func(packCaseID string) bool { return wanted[packCaseID] },
+				Admit: func() bool {
+					if env.budget.admit() {
+						return true
+					}
+					env.budget.refuse("slice")
+					return false
+				},
+				RefusalNote: env.budget.refusalNote,
+				Exhausted:   env.budget.isExhausted,
 			})
 			if err != nil {
 				return duelingSliceResult{}, fmt.Errorf("column %s: %w", id, err)
@@ -273,15 +285,27 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 				if o.Fault || math.IsNaN(score) {
 					score = 0
 				}
+				if o.BudgetExhausted {
+					// Bench v18: never run; scores 0 inside the column, like a
+					// datagen case the budget refused.
+					score = 0
+					agg.BudgetExhausted++
+				}
 				agg.N++
 				agg.Sum += score
 				agg.SumSq += score * score
-				result.rows = append(result.rows, protocol.CaseScore{
-					CaseID:   challenge.RoundCaseID(id, o.CaseID),
-					Category: challenge.SliceCaseCategory,
-					Kind:     protocol.KindMemory,
-					Score:    score,
-				})
+				row := protocol.CaseScore{
+					CaseID:          challenge.RoundCaseID(id, o.CaseID),
+					Category:        challenge.SliceCaseCategory,
+					Kind:            protocol.KindMemory,
+					Score:           score,
+					BudgetExhausted: o.BudgetExhausted,
+				}
+				if o.BudgetExhausted {
+					// The refusal's specific reason (spent budget or lost meter).
+					row.Notes = append([]string(nil), o.Notes...)
+				}
+				result.rows = append(result.rows, row)
 			}
 			if env.progress != nil {
 				env.progress(len(result.rows))

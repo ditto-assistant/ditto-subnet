@@ -37,6 +37,7 @@ from ditto.api_models.gate_evidence import (
     GATE_EVIDENCE_MIN_BENCH_VERSION,
     GATE_FINDINGS,
     GATE_NOTE_VOCABULARY,
+    RUN_BUDGET_MIN_BENCH_VERSION,
     TWIN_NOTE_MARKERS,
     CatalogGateSummary,
     ClaimProvenanceSummary,
@@ -48,6 +49,7 @@ from ditto.api_models.gate_evidence import (
     MinerGateNotesRun,
     PricedCostSummary,
     PublicGateEvidence,
+    RunBudgetSummary,
     StoredGateCase,
     StoredGateEvidence,
     TwinPostPassSummary,
@@ -80,6 +82,8 @@ _V13_ERA_CASE_KEYS = frozenset(
         "catalog",
         "claim_provenance",
         "inference_cost",
+        # Bench v18 run budget: absent (None) whenever a case ran.
+        "budget_exhausted",
     }
 )
 
@@ -91,6 +95,7 @@ _RUN_SUMMARIES: dict[str, type[BaseModel]] = {
     "twin_post_pass": TwinPostPassSummary,
     "inference_cost": InferenceCostSummary,
     "priced_cost": PricedCostSummary,
+    "run_budget": RunBudgetSummary,
 }
 
 
@@ -113,7 +118,12 @@ def persisted_case_dump(
     ``None`` values the Go engine omits (``omitempty`` / nil pointers).
     """
     if carries_gate_evidence(bench_version):
-        return case.model_dump(mode="json", exclude_none=True)
+        dumped = case.model_dump(mode="json", exclude_none=True)
+        # The budget flag is a bench 18+ term; an earlier report never
+        # persists it.
+        if bench_version is None or bench_version < RUN_BUDGET_MIN_BENCH_VERSION:
+            dumped.pop("budget_exhausted", None)
+        return dumped
     dumped = case.model_dump(mode="json")
     for key in _V13_ERA_CASE_KEYS:
         dumped.pop(key, None)
@@ -199,6 +209,10 @@ def _run_summaries(
         )
     else:
         out["priced_cost"] = None
+    # ``run_budget`` is a bench 18+ term: an earlier report's block never
+    # reaches a projection either.
+    if bench_version is None or bench_version < RUN_BUDGET_MIN_BENCH_VERSION:
+        out["run_budget"] = None
     return out
 
 
@@ -314,6 +328,7 @@ def build_gate_evidence(
         twin_post_pass=summaries["twin_post_pass"],  # type: ignore[arg-type]
         inference_cost=summaries["inference_cost"],  # type: ignore[arg-type]
         priced_cost=summaries["priced_cost"],  # type: ignore[arg-type]
+        run_budget=summaries["run_budget"],  # type: ignore[arg-type]
         catalog_suppression_rate=(
             catalog_gate.catalog_suppression_rate if catalog_gate is not None else None
         ),
@@ -322,6 +337,8 @@ def build_gate_evidence(
         flagged_case_share=(round(len(cases) / total, 6) if total else None),
         cases=cases,
     )
+    # StoredGateEvidence omits an absent run_budget itself, so pre-v18
+    # projections keep their exact shape on this dump and every later one.
     return evidence.model_dump(mode="json")
 
 
@@ -432,6 +449,7 @@ def _run_notes(score: Any, *, agent_id: UUID) -> MinerGateNotesRun | None:
         twin_post_pass=stored.twin_post_pass,
         inference_cost=stored.inference_cost,
         priced_cost=stored.priced_cost,
+        run_budget=stored.run_budget,
         catalog_suppression_rate=stored.catalog_suppression_rate,
         flagged_case_count=stored.flagged_case_count,
         flagged_case_share=stored.flagged_case_share,

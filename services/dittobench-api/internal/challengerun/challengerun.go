@@ -70,6 +70,19 @@ type Options struct {
 	// A dueling slice uses it to drop a case another column already claimed
 	// (challenge.SliceExecutionCases).
 	Include func(packCaseID string) bool
+	// Admit, when set, is asked before each included case starts, in pack
+	// order on the dispatching goroutine (never from a worker), so the cases
+	// it admits are a prefix of the dispatch order. A case it refuses is not
+	// sent to the harness and comes back BudgetExhausted (bench v18 per-run
+	// cost budget). Rounds and qualification leave it nil.
+	Admit func() bool
+	// RefusalNote, when set, is the note a refused case carries (the
+	// specific reason: a spent budget or a lost cost meter).
+	RefusalNote func() string
+	// Exhausted, when set, reports that Admit refuses every later case: a
+	// wave is then not seeded (it would only spend embeddings), and its cases
+	// still dispatch so they come back BudgetExhausted.
+	Exhausted func() bool
 }
 
 // CaseOutcome is one graded case: the panel result the scorer submits plus the
@@ -77,6 +90,8 @@ type Options struct {
 type CaseOutcome struct {
 	challenge.PanelCaseResult
 	Notes []string `json:"notes,omitempty"`
+	// BudgetExhausted marks a case Options.Admit refused: it never ran.
+	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 }
 
 // ErrHarnessUnavailable wraps a failure that prevents grading any case: the
@@ -145,6 +160,9 @@ func execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	}
 	err := runner.RunStagedWaves(ctx, waves, buckets,
 		func(ctx context.Context, _ int, wave protocol.SeedRequest) error {
+			if opts.Exhausted != nil && opts.Exhausted() {
+				return nil
+			}
 			_, err := runner.SeedForVersion(ctx, harnessURL, wave, opts.BenchVersion)
 			return err
 		},
@@ -155,8 +173,20 @@ func execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 					run = append(run, i)
 				}
 			}
-			runBounded(len(run), concurrency, func(j int) {
+			runBoundedAdmitted(len(run), concurrency, opts.Admit, func(j int, admitted bool) {
 				i := run[j]
+				if !admitted {
+					note := protocol.RunBudgetExhaustedReason
+					if opts.RefusalNote != nil {
+						note = opts.RefusalNote()
+					}
+					outcomes[i] = CaseOutcome{
+						PanelCaseResult: challenge.PanelCaseResult{CaseID: p.Cases[i].ID},
+						Notes:           []string{note},
+						BudgetExhausted: true,
+					}
+					return
+				}
 				outcomes[i] = runCase(ctx, harnessURL, p.Cases[i], p.GradingCase(i), proj, opts)
 			})
 			return ctx.Err()
@@ -251,16 +281,24 @@ func (p *projection) waves(in []protocol.SeedRequest) []protocol.SeedRequest {
 }
 
 func runBounded(n, limit int, fn func(i int)) {
+	runBoundedAdmitted(n, limit, nil, func(i int, _ bool) { fn(i) })
+}
+
+// runBoundedAdmitted asks admit for case i on the dispatching goroutine after
+// its slot is acquired and before its worker starts, so admission follows
+// case order whatever order the workers finish in. A nil admit admits all.
+func runBoundedAdmitted(n, limit int, admit func() bool, fn func(i int, admitted bool)) {
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int) {
+		admitted := admit == nil || admit()
+		go func(i int, admitted bool) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			fn(i)
-		}(i)
+			fn(i, admitted)
+		}(i, admitted)
 	}
 	wg.Wait()
 }

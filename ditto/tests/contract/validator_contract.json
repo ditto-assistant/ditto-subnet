@@ -432,6 +432,17 @@
         "default": "",
         "type": "string"
       },
+      "budget_exhausted": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "called": {
         "items": {
           "type": "string"
@@ -6537,6 +6548,17 @@
             "default": "",
             "type": "string"
           },
+          "budget_exhausted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "called": {
             "items": {
               "type": "string"
@@ -7227,6 +7249,17 @@
           "audit_half": {
             "default": "",
             "type": "string"
+          },
+          "budget_exhausted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "called": {
             "items": {

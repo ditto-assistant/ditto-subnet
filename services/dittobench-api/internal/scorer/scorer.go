@@ -445,7 +445,9 @@ func metamorphicGroupCounts(perCase []protocol.CaseScore) (consistent, total int
 		// An undelivered sibling makes the whole family unusable: a 3-member group
 		// with one timeout would otherwise read as split and charge phrasing
 		// brittleness for a transport failure.
-		if cs.Undelivered {
+		// A budget-refused member (bench v18) never ran, so it drops the family
+		// the same way.
+		if cs.Undelivered || cs.BudgetExhausted {
 			undelivered[cs.TwinGroup] = true
 			continue
 		}
@@ -476,6 +478,11 @@ func metamorphicGroupCounts(perCase []protocol.CaseScore) (consistent, total int
 // pair, or "" for everything else. Derived from the validator-internal question
 // id, so no new wire field is needed on the case itself and the harness sees
 // nothing new.
+// AuditHalfFor is a memory case's audit half (base or transform), empty when
+// the case is not in an audit pair: the family identity a budget-refused
+// case must keep.
+func AuditHalfFor(mc protocol.MemoryCase) string { return auditHalf(mc) }
+
 func auditHalf(mc protocol.MemoryCase) string {
 	if !isAuditGroup(mc.TwinGroup) {
 		return ""
@@ -513,7 +520,8 @@ func AuditPairs(perCase []protocol.CaseScore) protocol.AuditPairCounts {
 		// Never delivered: leave the side nil so the pair is dropped below. Before
 		// this, a timed-out case still produced a (wrong) verdict, so the pair
 		// looked complete and the guard below could never fire.
-		if cs.Undelivered {
+		// A budget-refused case (bench v18) never ran either: no verdict.
+		if cs.Undelivered || cs.BudgetExhausted {
 			continue
 		}
 		g := groups[cs.TwinGroup]
@@ -1095,9 +1103,49 @@ func datagenHalf(perCase []protocol.CaseScore, benchVersion int) DatagenHalf {
 	// (CompositeGateForVersion); pre-v5 versions get exactly the v3 gate.
 	half.Gate = 1.0
 	if benchVersion >= protocol.BenchVersionV3 {
-		half.Gate = CompositeGateForVersion(perCase, benchVersion)
+		half.Gate = CompositeGateForVersion(gatedPopulation(perCase, benchVersion), benchVersion)
 	}
 	return half
+}
+
+// gatedPopulation is the population the composite gate reads. From the v18
+// run budget a case the budget refused never ran: it already scores 0 in the
+// means above, and the multiplicative gates (conversational sanity, transform
+// audit, metamorphic consistency, over-call, canary) must not charge it a
+// second time as if the harness had answered badly. Below v18 no case carries
+// the flag and the population is unchanged.
+// GatedPopulationForVersion is gatedPopulation for the run's published gate
+// factors and signed gate evidence, so they decompose the applied gate.
+func GatedPopulationForVersion(perCase []protocol.CaseScore, benchVersion int) []protocol.CaseScore {
+	return gatedPopulation(perCase, benchVersion)
+}
+
+func gatedPopulation(perCase []protocol.CaseScore, benchVersion int) []protocol.CaseScore {
+	if !protocol.RunBudgetBenchVersion(benchVersion) {
+		return perCase
+	}
+	// A twin or audit family that lost a member to the budget cannot establish
+	// agreement any more, exactly like a family with an undelivered member.
+	// Its surviving members stay in the population for every other gate but
+	// are detached from the family, so no family gate reads a lone survivor
+	// as a consistent group.
+	broken := map[string]bool{}
+	for _, cs := range perCase {
+		if cs.BudgetExhausted && cs.TwinGroup != "" {
+			broken[cs.TwinGroup] = true
+		}
+	}
+	out := make([]protocol.CaseScore, 0, len(perCase))
+	for _, cs := range perCase {
+		if cs.BudgetExhausted {
+			continue
+		}
+		if broken[cs.TwinGroup] {
+			cs.TwinGroup = ""
+		}
+		out = append(out, cs)
+	}
+	return out
 }
 
 // AggregateForVersion folds per-case scores into a ScoreReport under an explicit
@@ -1121,7 +1169,10 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 	catOrder := make([]string, 0)
 
 	for _, cs := range perCase {
-		latencies = append(latencies, cs.LatencyMs)
+		// A budget-refused case (bench v18) never ran: it has no latency.
+		if !cs.BudgetExhausted || !protocol.RunBudgetBenchVersion(benchVersion) {
+			latencies = append(latencies, cs.LatencyMs)
+		}
 		if _, seen := catCount[cs.Category]; !seen {
 			catOrder = append(catOrder, cs.Category)
 		}
@@ -1168,7 +1219,7 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 	// score cannot hide inside the memory mean. nil (omitted) for pre-v5 runs and
 	// runs that drew no conversational case.
 	if benchVersion >= protocol.BenchVersionV5 {
-		report.ConversationalSanity = ConversationalSanity(perCase)
+		report.ConversationalSanity = ConversationalSanity(gatedPopulation(perCase, benchVersion))
 	}
 	return report
 }

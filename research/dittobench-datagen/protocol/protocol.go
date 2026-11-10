@@ -1075,6 +1075,14 @@ type CaseScore struct {
 	// gives future bounded per-case recovery an unambiguous gate exclusion
 	// without overloading Undelivered. It is never miner supplied.
 	ValidatorFault bool `json:"validator_fault,omitempty"`
+	// BudgetExhausted (bench_version >= RunBudgetMinBenchVersion) marks a case
+	// the scorer did not run because the run's priced cost had already reached
+	// its budget (details.run_budget). It scores 0. It is the harness's own
+	// spend, never an infrastructure failure: it is not Undelivered or
+	// ValidatorFault, never triggers an infrastructure retry or void, and only
+	// the gates and sibling comparisons skip it (the case had no answer to
+	// compare). Additive-optional.
+	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 	// AllowExtraTools echoes the case's ToolCase.AllowExtraTools so aggregate
 	// factors can tell a case that REQUIRES extra calls (the serving layer forces
 	// the first content-tool call to fail, so a correct harness must retry) from
@@ -1419,6 +1427,10 @@ type RunDetails struct {
 	// inference priced at the contract's locked public rates and the cost
 	// factor it maps to (priced_cost.go). nil for every earlier contract.
 	PricedCost *PricedCostSummary `json:"priced_cost,omitempty"`
+	// RunBudget (bench_version >= RunBudgetMinBenchVersion) is the run's
+	// priced-cost budget and where it stopped the run (run_budget.go). nil for
+	// every earlier contract.
+	RunBudget *RunBudgetSummary `json:"run_budget,omitempty"`
 }
 
 // TokenUsage is validator-observed model consumption for one isolated run.

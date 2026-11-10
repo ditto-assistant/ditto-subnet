@@ -1387,6 +1387,18 @@ class CaseScore(BaseModel):
             description="True when an undelivered case was the validator's fault.",
         ),
     ] = False
+    budget_exhausted: Annotated[
+        bool | None,
+        Field(
+            default=None,
+            description=(
+                "True when the run's priced-cost budget was spent before this "
+                "case started (bench v18+): the case never ran and scores 0. "
+                "The harness's own spend, never an infrastructure failure. "
+                "Absent when the case ran, so pre-v18 rows keep their shape."
+            ),
+        ),
+    ] = None
     allow_extra_tools: Annotated[
         bool,
         Field(
@@ -1449,6 +1461,14 @@ class CaseScore(BaseModel):
         # The Go scorer omits or nulls these on cases that have none (memory
         # cases carry no expected tools); coerce null/absent to an empty list.
         return v if v is not None else []
+
+    @field_validator("budget_exhausted", mode="before")
+    @classmethod
+    def _budget_false_is_absent(cls, v: object) -> object:
+        # Only a refused case carries the flag. An explicit false means the
+        # same as absent; store it as absent so exact retries of reports
+        # accepted before the field existed rebuild identical details.
+        return None if v is False else v
 
 
 class CodeFingerprint(BaseModel):

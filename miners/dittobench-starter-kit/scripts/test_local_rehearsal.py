@@ -2163,6 +2163,58 @@ PRICED_COST_VECTORS = (
 class PricedCostEstimateTest(unittest.TestCase):
     """The rehearsal's copy of the bench 16 priced cost rule and its meter."""
 
+    def test_bench_18_run_budget_and_stop_case(self) -> None:
+        # $1.00 per 350 cases: the cost at which the v2 factor reaches 0.3.
+        self.assertIsNone(COST.run_budget_nano_usd(17, 350))
+        self.assertEqual(COST.run_budget_nano_usd(18, 350), 1_000_000_000)
+        self.assertEqual(COST.run_budget_nano_usd(18, 175), 500_000_000)
+        # Rounded up exactly as the scorer rounds (11,428,571.4 -> 11,428,572).
+        self.assertEqual(COST.run_budget_nano_usd(18, 4), 11_428_572)
+        under = COST._with_budget({"cases": 350, "cost_nano_usd": 600_000_000}, 18)
+        self.assertFalse(under["budget_exhausted"])
+        self.assertIsNone(under["budget_stop_case"])
+        over = COST._with_budget({"cases": 350, "cost_nano_usd": 2_000_000_000}, 18)
+        self.assertTrue(over["budget_exhausted"])
+        self.assertEqual(over["budget_stop_case"], 175)
+        text = COST.format_estimate(
+            {"source": "local_meter", "cost_nano_usd": 2_000_000_000, "normalized_cost_nano_usd": 2_000_000_000,
+             "factor_bps": 3000, **over}, 18)
+        self.assertIn("EXCEEDED", text)
+        self.assertIn("case 175 of 350", text)
+        scored = COST._with_budget(
+            {"cases": 350, "cost_nano_usd": 1_200_000_000,
+             "run_budget": {"exhausted": True, "admitted_cases": 291}}, 18)
+        self.assertEqual(scored["budget_stop_case"], 291)
+        # Even spend: case k runs while k x cost / cases is below the budget.
+        exact = COST._with_budget({"cases": 350, "cost_nano_usd": 1_000_000_000}, 18)
+        self.assertFalse(exact["budget_exhausted"])
+        self.assertIsNone(exact["budget_stop_case"])
+        one_and_half = COST._with_budget({"cases": 350, "cost_nano_usd": 1_500_000_000}, 18)
+        self.assertEqual(one_and_half["budget_stop_case"], 234)
+        uneven = COST._with_budget({"cases": 350, "cost_nano_usd": 1_300_000_000}, 18)
+        self.assertEqual(uneven["budget_stop_case"], 270)
+        # The scorer's block wins, even on a version the kit would not budget,
+        # and an exhausted block without admitted_cases names no stop case.
+        block = COST._with_budget(
+            {"cases": 350, "cost_nano_usd": 1,
+             "run_budget": {"exhausted": True, "budget_nano_usd": 7}}, 17)
+        self.assertEqual(block["budget_nano_usd"], 7)
+        self.assertTrue(block["budget_exhausted"])
+        self.assertIsNone(block["budget_stop_case"])
+        unknown = COST.format_estimate(
+            {"source": "scorer", "cost_nano_usd": 1, "normalized_cost_nano_usd": 1,
+             "factor_bps": 10000, **block}, 18)
+        self.assertIn("stopped admitting cases", unknown)
+        self.assertNotIn("case None", unknown)
+        self.assertNotIn("budget_nano_usd", COST._with_budget({"cases": 350, "cost_nano_usd": 1}, 17))
+        # A scorer-priced run with no budget verdict was not budgeted: its
+        # cost alone never implies a cutoff.
+        priced = COST._with_budget(
+            {"source": "scorer", "cases": 350, "cost_nano_usd": 2_000_000_000}, 18)
+        self.assertNotIn("budget_exhausted", priced)
+        self.assertNotIn("stopped admitting cases", COST.format_estimate(
+            {"normalized_cost_nano_usd": 2_000_000_000, "factor_bps": 3000, **priced}, 18))
+
     def test_rule_matches_the_shared_go_vectors(self) -> None:
         vectors = json.loads(PRICED_COST_VECTORS.read_text(encoding="utf-8"))
         for vector in vectors["vectors"]:
@@ -2305,6 +2357,16 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertEqual(estimate["source"], "scorer")
         self.assertIn("cost factor:         0.6733", COST.format_estimate(estimate, 16))
         self.assertIsNone(COST.estimate(None, {"n": 350}))
+        # An unpriced scorer report still carries the scorer's budget verdict
+        # through the local-meter path.
+        meter = COST.CostMeter("http://127.0.0.1:9/v1", "sk-local")
+        report = {"n": 350, "details": {"priced_cost": {"result": "insufficient_evidence"},
+                  "run_budget": {"exhausted": True, "admitted_cases": 280}}}
+        fallback = COST.estimate(meter, report, 18)
+        assert fallback is not None
+        self.assertEqual(fallback["source"], "local_meter")
+        self.assertTrue(fallback["budget_exhausted"])
+        self.assertEqual(fallback["budget_stop_case"], 280)
         self.assertIn("not metered", COST.format_estimate(None, 16))
         self.assertIsNone(COST.meter_for_environment({"DITTOBENCH_PROVIDER": "openrouter"}))
         self.assertIsNone(COST.meter_for_environment({"DITTOBENCH_PROVIDER": "unknown"}))
