@@ -117,14 +117,21 @@ async def test_enabled_ditto_does_not_bypass_a_disabled_direct_github_gate():
     database.rollback.assert_awaited_once()
 
 
-async def test_connection_provider_outage_suggests_retry():
+@pytest.mark.parametrize("malformed_json", [False, True])
+async def test_connection_provider_outage_suggests_retry(malformed_json):
     provider = FakeProvider()
     provider.nonce_for_code["outage-code"] = "nonce"
     delegate = provider.transport()
 
     def handle(request):
         if request.url.path == "/oauth/connections":
-            return httpx.Response(503)
+            return (
+                httpx.Response(
+                    200, content="{", headers={"content-type": "application/json"}
+                )
+                if malformed_json
+                else httpx.Response(503)
+            )
         return delegate.handle_request(request)
 
     service = DittoLinkClient(_config(), transport=httpx.MockTransport(handle))

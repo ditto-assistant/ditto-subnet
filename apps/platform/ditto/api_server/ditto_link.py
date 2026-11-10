@@ -357,7 +357,17 @@ class DittoLinkClient:
                 headers={"authorization": f"Bearer {access_token}"},
             )
             checked.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise DittoLinkRejected(
+                "Ditto couldn't check your GitHub connection. Try again."
+            ) from exc
+        try:
             result = checked.json()
+        except ValueError as exc:
+            raise DittoLinkRejected(
+                "Ditto couldn't check your GitHub connection. Try again."
+            ) from exc
+        try:
             if not isinstance(result, dict):
                 raise ValueError("connection response is not an object")
             if result.get("sub") != identity.user_id or result.get("ready") is not True:
@@ -382,10 +392,6 @@ class DittoLinkClient:
             github_id = int(provider_id)
             if not 0 < github_id <= 9223372036854775807:
                 raise ValueError("invalid GitHub account id")
-        except httpx.HTTPError as exc:
-            raise DittoLinkRejected(
-                "Ditto couldn't check your GitHub connection. Try again."
-            ) from exc
         except (ValueError, KeyError, TypeError, StopIteration) as exc:
             raise DittoLinkRejected(
                 "Connect GitHub in your Ditto account before continuing"

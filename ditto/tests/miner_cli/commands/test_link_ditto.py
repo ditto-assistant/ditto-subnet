@@ -95,9 +95,9 @@ def test_expected_github_id_uses_the_signed_proof_validator() -> None:
             ).expect_github_id
             == value
         )
-    for value in ("0", "-1", "octocat", str(2**53)):
+    for invalid_value in ("0", "-1", "octocat", str(2**53)):
         with pytest.raises(SystemExit):
-            parser.parse_args(["link-ditto", "--expect-github-id", value])
+            parser.parse_args(["link-ditto", "--expect-github-id", invalid_value])
 
 
 def test_interactive_json_keeps_confirmation_prompt_on_stderr(capsys) -> None:

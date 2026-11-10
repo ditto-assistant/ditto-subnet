@@ -232,7 +232,7 @@ def _finish_github_proof(
                     json=False,
                 )
             )
-    except (LoginRequiredError, ApiResponseError):
+    except (LoginRequiredError, ApiResponseError, ValueError):
         _proof_incomplete(args)
         return
     if result != 0:

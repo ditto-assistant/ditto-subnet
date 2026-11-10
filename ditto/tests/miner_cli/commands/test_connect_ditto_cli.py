@@ -58,9 +58,9 @@ def test_connect_ditto_retains_proofs_and_only_signs_when_needed(existing):
     client.start_github_link.assert_not_called()
 
 
-@pytest.mark.parametrize("transient", [False, True])
+@pytest.mark.parametrize("failure", ["none", "transient", "json", "schema"])
 def test_json_link_has_one_result_when_optional_proof_runs_or_is_unavailable(
-    transient, capsys
+    failure, capsys
 ):
     attempt_id = uuid4()
     client = _client(attempt_id, statuses=[_authenticated(attempt_id)])
@@ -73,8 +73,12 @@ def test_json_link_has_one_result_when_optional_proof_runs_or_is_unavailable(
     client.get_github_link_attempt.return_value = SimpleNamespace(
         github_user_id=123, github_login="miner", status="accepted"
     )
-    if transient:
-        client.get_github_link_attempt.side_effect = TransientApiError("try again")
+    if failure != "none":
+        client.get_github_link_attempt.side_effect = {
+            "transient": TransientApiError("try again"),
+            "json": json.JSONDecodeError("truncated response", "{", 1),
+            "schema": ValueError("invalid GitHub proof fields"),
+        }[failure]
     client.get_github_link.return_value.link = None
     client.get_github_account_link.return_value.link = None
 
@@ -94,7 +98,7 @@ def test_json_link_has_one_result_when_optional_proof_runs_or_is_unavailable(
         assert run(_args(json=True, yes=True, expect_github_id=123)) == 0
     output = capsys.readouterr()
     assert json.loads(output.out)["ditto_user_id"] == "ditto-user-1"
-    if transient:
+    if failure != "none":
         sign.assert_not_called()
         assert "GitHub miner proof is incomplete" in output.err
     else:
