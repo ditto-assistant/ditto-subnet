@@ -654,7 +654,10 @@ function AccountPanel(): JSX.Element {
       });
     } catch (err) {
       if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
-      if (err instanceof HTTPError && (err.status === 404 || err.status === 410)) {
+      if (
+        err instanceof HTTPError &&
+        (err.status === 404 || err.status === 410 || err.status === 422)
+      ) {
         clearProofHint(key);
       }
       // Keep the non-authoritative hint when the service is unavailable.
@@ -672,11 +675,14 @@ function AccountPanel(): JSX.Element {
   /** The callback only parks who signed in on Ditto; the pairing with this
    * hotkey is written when the signed-in miner confirms it here. */
   async function loadDittoAttempt(attemptId: string): Promise<void> {
+    const generation = dittoLinkGeneration;
+    const key = proofHintKey();
     try {
       const attempt = await authJSON<DittoLinkAttempt>(
         "/me/ditto-link/attempts/" + encodeURIComponent(attemptId),
         { headers: sessionAuthHeader() },
       );
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       setDittoAttempt(attempt);
       retainProofHint(attempt);
       if (attempt.status === "identity_verified") {
@@ -696,6 +702,7 @@ function AccountPanel(): JSX.Element {
         });
       }
     } catch (err) {
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       setDittoAttempt(null);
       setDittoNotice({
         ok: false,
@@ -707,6 +714,8 @@ function AccountPanel(): JSX.Element {
   async function confirmDittoLink(): Promise<void> {
     const attempt = dittoAttempt();
     if (!attempt) return;
+    const generation = dittoLinkGeneration;
+    const key = proofHintKey();
     setDittoBusy(true);
     setError("");
     try {
@@ -714,11 +723,14 @@ function AccountPanel(): JSX.Element {
         "/me/ditto-link/attempts/" + encodeURIComponent(attempt.attempt_id) + "/confirm",
         { method: "POST", headers: sessionAuthHeader() },
       );
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
+      dittoLinkGeneration++;
       setDittoAttempt(confirmed.github_proof_attempt_id ? confirmed : null);
       retainProofHint(confirmed);
       setDittoNotice({ ok: confirmed.status === "linked", text: "Ditto account linked." });
       await loadDittoLink();
     } catch (err) {
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       setError(err instanceof Error ? err.message : "Could not confirm the Ditto link.");
     } finally {
       setDittoBusy(false);

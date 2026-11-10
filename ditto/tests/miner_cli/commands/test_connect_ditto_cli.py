@@ -10,7 +10,7 @@ import pytest
 from ditto.api_models.miner_ditto_link import MinerDittoLinkAttemptResponse
 from ditto.miner_cli.__main__ import _build_parser
 from ditto.miner_cli.commands.link_ditto import run
-from ditto.miner_cli.errors import TransientApiError
+from ditto.miner_cli.errors import LoginRequiredError, TransientApiError
 from ditto.tests.miner_cli.commands.test_link_ditto import (
     HOTKEY,
     SESSION,
@@ -59,7 +59,7 @@ def test_connect_ditto_retains_proofs_and_only_signs_when_needed(existing):
     client.start_github_link.assert_not_called()
 
 
-@pytest.mark.parametrize("failure", ["none", "transient", "json", "schema"])
+@pytest.mark.parametrize("failure", ["none", "transient", "json", "schema", "login"])
 def test_json_link_has_one_result_when_optional_proof_runs_or_is_unavailable(
     failure, capsys
 ):
@@ -79,6 +79,7 @@ def test_json_link_has_one_result_when_optional_proof_runs_or_is_unavailable(
             "transient": TransientApiError("try again"),
             "json": json.JSONDecodeError("truncated response", "{", 1),
             "schema": ValueError("invalid GitHub proof fields"),
+            "login": LoginRequiredError("Miner session expired; log in again"),
         }[failure]
     client.get_github_link.return_value.link = None
     client.get_github_account_link.return_value.link = None
@@ -102,6 +103,10 @@ def test_json_link_has_one_result_when_optional_proof_runs_or_is_unavailable(
     if failure != "none":
         sign.assert_not_called()
         assert "GitHub miner proof is incomplete" in output.err
+        assert "GitHub miner proof could not be completed:" in output.err
+        if failure == "login":
+            assert "Miner session expired; log in again" in output.err
+            assert "Run `ditto login` again" in output.err
     else:
         sign.assert_called_once()
         assert "GitHub proof linked" in output.err

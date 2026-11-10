@@ -236,6 +236,17 @@ async def start_link(
                 MinerGithubLinkAttempt.status.in_(
                     ("pending", "identity_verified", "accepted")
                 ),
+                # A matching server-generated Ditto attempt ID is the existing
+                # provenance marker. Those rows did not start direct OAuth.
+                ~select(MinerDittoLinkAttempt.attempt_id)
+                .where(
+                    MinerDittoLinkAttempt.attempt_id
+                    == MinerGithubLinkAttempt.attempt_id,
+                    MinerDittoLinkAttempt.miner_hotkey == MinerGithubLinkAttempt.hotkey,
+                    MinerDittoLinkAttempt.session_id
+                    == MinerGithubLinkAttempt.session_id,
+                )
+                .exists(),
             )
         )
         if pending and pending >= 5:

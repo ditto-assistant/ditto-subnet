@@ -232,7 +232,10 @@ def _finish_github_proof(
                     json=False,
                 )
             )
-    except (LoginRequiredError, ApiResponseError, ValueError):
+    except (LoginRequiredError, ApiResponseError, ValueError) as exc:
+        print(f"GitHub miner proof could not be completed: {exc}", file=sys.stderr)
+        if isinstance(exc, LoginRequiredError):
+            print("Run `ditto login` again before retrying the proof.", file=sys.stderr)
         _proof_incomplete(args)
         return
     if result != 0:
