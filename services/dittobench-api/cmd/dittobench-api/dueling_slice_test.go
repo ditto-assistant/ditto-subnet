@@ -588,6 +588,21 @@ func TestExecuteDuelingSliceSkipsSeedingOnceTheBudgetIsSpent(t *testing.T) {
 	}
 }
 
+// A cancelled run with a spent budget still returns the cancellation.
+func TestExecuteDuelingSliceSpentBudgetHonoursCancellation(t *testing.T) {
+	slice := decodedTestSlice(t, 99, [5]int{0, 1, 2, 3, 4})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	budget := &runBudget{benchVersion: protocol.BenchVersionV18, cases: 350, exhausted: true}
+	_, err := executeDuelingSlice(ctx, slice, duelingSliceEnv{
+		harnessURL: "http://127.0.0.1:9", benchVersion: protocol.DuelingMinBenchVersion, seed: slice.dataset.RunSeed,
+		toolSrv: toolexec.NewServer(), concurrency: 4, budget: budget,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("spent budget on a cancelled run = %v, want context.Canceled", err)
+	}
+}
+
 func TestExecuteDuelingSliceSeedFailureIsHarnessUnavailable(t *testing.T) {
 	runner.Configure(true)
 	t.Cleanup(func() { runner.Configure(false) })

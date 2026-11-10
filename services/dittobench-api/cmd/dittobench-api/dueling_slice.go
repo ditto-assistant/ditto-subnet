@@ -251,6 +251,10 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 		}
 		wanted := include[id]
 		if len(wanted) > 0 && env.budget.isExhausted() {
+			// A cancelled run takes the cancellation path, as Execute would.
+			if err := ctx.Err(); err != nil {
+				return duelingSliceResult{}, err
+			}
 			// Bench v18: the budget is already spent, so every case would be
 			// refused at admission; refuse them here instead of seeding the
 			// column's waves, which would only spend embeddings past it.
