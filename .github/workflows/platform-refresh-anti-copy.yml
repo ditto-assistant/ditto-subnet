@@ -78,7 +78,11 @@ jobs:
           else
             git push origin "HEAD:refs/heads/$BRANCH"
           fi
-          if ! gh pr view "$BRANCH" --json url >/dev/null 2>&1; then
+          # Only an OPEN PR counts. `gh pr view <branch>` also finds the merged
+          # #405, so from 2026-08 every refresh was pushed to the branch and no
+          # PR ever opened: the bundles on main went stale (SN-465).
+          open_pr="$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$open_pr" ]; then
             gh pr create \
               --base main \
               --head "$BRANCH" \

@@ -539,6 +539,41 @@ def test_renamed_port_of_released_agent_from_another_owner_does_not_flag() -> No
     )
 
 
+def test_public_corpus_reads_only_the_published_history(tmp_path) -> None:
+    """An unmerged branch is not a published kit: its content stays evidence."""
+    import importlib.util
+    import subprocess
+    from pathlib import Path
+
+    from ditto.api_server import distinctive_content as dc
+
+    script = Path(__file__).parents[3] / "scripts" / "build_public_items.py"
+    spec = importlib.util.spec_from_file_location("build_public_items", script)
+    assert spec is not None and spec.loader is not None
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
+    kit = tmp_path / "miners" / "kit" / "app.py"
+    kit.parent.mkdir(parents=True)
+    kit.write_text('NOTE = "Rehearse the published kit before you upload it."\n')
+    subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "kit"], check=True)
+    subprocess.run([*git, "checkout", "-q", "-b", "wip"], check=True)
+    wip = 'HINT = "Ledger the courier reroute before the owner signs it off."\n'
+    (kit.parent / "wip.py").write_text(wip)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "wip"], check=True)
+    subprocess.run([*git, "checkout", "-q", "main"], check=True)
+
+    public = builder.collect(tmp_path, ("miners",), dc)
+    published = {item.key for item in dc.file_items("app.py", kit.read_bytes())}
+    unmerged = {item.key for item in dc.file_items("wip.py", wip.encode())}
+    assert published and published <= public
+    assert unmerged and not unmerged & public
+
+
 def test_public_corpus_resolves_kit_constants_across_files(tmp_path) -> None:
     """A kit constant interpolated in another file is public once resolved."""
     import importlib.util

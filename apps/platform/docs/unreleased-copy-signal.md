@@ -110,6 +110,27 @@ What changed in dc3 (2026-11-10), each from a held false positive:
   `scripts/local-rehearsal.py` made two agents shipping the current starter
   kit score 236 against each other (`04017d97`).
 
+Follow-up (SN-465, 2026-11-10):
+
+- **The refresh PR never opened.** The workflow opened a PR only when
+  `gh pr view automation/starter-kit-reference` failed, and that command also
+  finds the merged #405. From August on, every refresh went to the branch and
+  never reached main: the dc2 corpus, the stock-kit file digests (last landed
+  2026-08-13) and the shingle references (2026-10-03). It now looks for an
+  open PR only. The fix landed only the unreleased-copy corpus refresh; the
+  fingerprint references move corpus identity and follow the backfill order
+  in `anti-copy-reference.md`, so they arrive in the next refresh PR.
+- **Only published history.** The builder read `git log --all`, so an
+  unmerged branch's kit or datagen files counted as public, and the bundle
+  depended on which branches the building checkout had fetched. It now reads
+  `HEAD`'s history. `--merge` only adds keys, so the about 6,800 branch-only
+  keys already in the dc3 bundle stay until the next full rebuild (dc4).
+
+The pair score is a weighted count of shared items (`text` and `seq` 1.0,
+`ident` and `short` 0.25, `wordseq` 0.1), not a percentage, so it has no
+ceiling: `04017d97` against uid236 shared 283 items (71 `text`, 150 `seq`,
+28 `ident`, 34 `short`), which weighs 236.5 against a threshold of 100.
+
 An `ITEMS_VERSION` bump re-indexes every artifact before the sentinel
 evaluates anything new (24 per back-to-back tick); signals already recorded
 under `uc3` are not re-scored, so no ruled agent is held again.
