@@ -53,6 +53,7 @@ arm64.
 | `db-staging` | e2-standard-2 | m6i.large |
 | `staging-32gb`, `validator-prod`, `screener-burst` | e2-standard-8 | m6i.2xlarge |
 | `screener-burst-n2d` | n2d-standard-8 | m6a.2xlarge |
+| `screener-on-demand` | c3d-highcpu-8 | c7a.2xlarge |
 | `prod-64gb` | e2-standard-16 | m6i.4xlarge |
 
 ## Provider differences
@@ -62,6 +63,9 @@ arm64.
   for the same two-phase retirement.
 - AWS requires IMDSv2 with a hop limit of 1, so a container on the host cannot
   reach instance credentials. Its root volume is always encrypted.
+- AWS exposes `instance_initiated_shutdown_behavior` (default `stop`). A host
+  that powers itself off when idle keeps its root volume and identity and can
+  be started again; `terminate` would delete it.
 - Hetzner hosts are converged by Ansible against a static inventory. They are
   not a Terraform module; the same Ansible role runs there with a `file` or
   X.509-federated secret source.

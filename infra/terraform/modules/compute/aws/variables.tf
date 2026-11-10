@@ -112,3 +112,14 @@ variable "metadata_hop_limit" {
     error_message = "metadata_hop_limit must be between 1 and 64."
   }
 }
+
+variable "instance_initiated_shutdown_behavior" {
+  description = "What an OS-initiated poweroff does: stop keeps the instance and its root volume so it can be started again; terminate deletes it."
+  type        = string
+  default     = "stop"
+
+  validation {
+    condition     = contains(["stop", "terminate"], var.instance_initiated_shutdown_behavior)
+    error_message = "instance_initiated_shutdown_behavior must be stop or terminate."
+  }
+}

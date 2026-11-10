@@ -57,6 +57,10 @@ run "hardened_defaults" {
     condition     = aws_instance.this.credit_specification[0].cpu_credits == "standard"
     error_message = "Burstable classes default to standard credits."
   }
+  assert {
+    condition     = aws_instance.this.instance_initiated_shutdown_behavior == "stop"
+    error_message = "An OS poweroff stops the instance; it never deletes it by default."
+  }
 }
 
 run "exact_ami_passthrough" {
@@ -89,9 +93,33 @@ run "every_gcp_size_exists_on_aws" {
 
   assert {
     condition = alltrue([
-      for size in ["prod-64gb", "staging-32gb", "db-prod", "db-staging", "app-small", "controller-small", "app-standard", "validator", "validator-prod", "screener-burst", "screener-burst-n2d"] :
+      for size in ["prod-64gb", "staging-32gb", "db-prod", "db-staging", "app-small", "controller-small", "app-standard", "validator", "validator-prod", "screener-burst", "screener-burst-n2d", "screener-on-demand"] :
       contains(keys(local.instance_type_map), size)
     ])
     error_message = "Every logical size in modules/compute/gcp must exist on AWS."
   }
+}
+
+run "on_demand_screener_size" {
+  command = plan
+  variables {
+    size = "screener-on-demand"
+  }
+
+  assert {
+    condition     = aws_instance.this.instance_type == "c7a.2xlarge"
+    error_message = "screener-on-demand maps to the x86 c7a.2xlarge class."
+  }
+  assert {
+    condition     = length(aws_instance.this.credit_specification) == 0
+    error_message = "The screener class is not burstable."
+  }
+}
+
+run "unsupported_shutdown_behavior_fails" {
+  command = plan
+  variables {
+    instance_initiated_shutdown_behavior = "hibernate"
+  }
+  expect_failures = [var.instance_initiated_shutdown_behavior]
 }

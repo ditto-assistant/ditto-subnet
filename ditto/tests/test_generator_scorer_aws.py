@@ -164,7 +164,7 @@ def test_apply_role_cannot_bring_an_existing_security_group_into_scope() -> None
     # ModifySecurityGroupRules could widen a rule, so only groups (and rules)
     # that already carry the stack tag may be modified.
     modify = [s for s in statements if "ec2:ModifySecurityGroupRules" in s]
-    assert [_sid(s) for s in modify] == ["MutateTaggedScorerResources"]
+    assert [_sid(s) for s in modify] == ["MutateTaggedStackResources"]
     assert '"aws:ResourceTag/stack"' in modify[0]
     # Revoke on the untagged default rule also authorizes its group, which the
     # tag-scoped statement must cover.
@@ -174,7 +174,7 @@ def test_apply_role_cannot_bring_an_existing_security_group_into_scope() -> None
             for s in statements
             if f'"ec2:{action}"' in s and '"aws:ResourceTag/stack"' in s
         ]
-        assert [_sid(s) for s in scoped] == ["MutateTaggedScorerResources"], action
+        assert [_sid(s) for s in scoped] == ["MutateTaggedStackResources"], action
         assert 'resources = ["*"]' in scoped[0]
 
 
@@ -210,7 +210,7 @@ def test_apply_role_cannot_write_the_federated_scorer_identity() -> None:
     iam_allows = {
         (_sid(s), a) for s in allows for a in _actions(s) if a.startswith("iam:")
     }
-    assert iam_allows == {("PassScorerRoleToEc2", "iam:PassRole")}
+    assert iam_allows == {("PassHostRolesToEc2", "iam:PassRole")}
     # The plan policy, which apply inherits, only reads IAM.
     plan = BOOTSTRAP[
         BOOTSTRAP.index('data "aws_iam_policy_document" "plan" {') : BOOTSTRAP.index(
@@ -220,7 +220,7 @@ def test_apply_role_cannot_write_the_federated_scorer_identity() -> None:
     plan_iam = {a for a in _actions(plan) if a.startswith("iam:")}
     assert plan_iam
     assert all(a.startswith(("iam:Get", "iam:List")) for a in plan_iam), plan_iam
-    passes = [s for s in allows if _sid(s) == "PassScorerRoleToEc2"]
+    passes = [s for s in allows if _sid(s) == "PassHostRolesToEc2"]
     assert '"iam:PassedToService"' in passes[0]
     assert '"ec2.amazonaws.com"' in passes[0]
     denies = [s for s in statements if _sid(s) == "NeverWriteScorerIdentity"]

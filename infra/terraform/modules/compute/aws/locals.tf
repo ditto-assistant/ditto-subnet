@@ -24,6 +24,11 @@ locals {
 
     # AMD EPYC class, matching the GCP n2d variant.
     "screener-burst-n2d" = "m6a.2xlarge" # 8 vCPU / 32 GiB
+
+    # On-demand screener node that the capacity controller starts from a
+    # stopped state. AMD Genoa, one physical core per vCPU (no SMT), so cargo
+    # builds get dedicated cores; 16 GiB fits one worker process and its build.
+    "screener-on-demand" = "c7a.2xlarge" # 8 vCPU / 16 GiB
   }
 
   # Logical -> SSM public parameter that resolves the newest official x86_64

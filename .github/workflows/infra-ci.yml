@@ -47,6 +47,7 @@ jobs:
           - infra/terraform/stacks/cloudflare-dittobench
           - infra/terraform/stacks/aws-bootstrap
           - infra/terraform/stacks/aws-generator-scorer
+          - infra/terraform/stacks/aws-screener
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,6 +98,10 @@ jobs:
           terraform -chdir=${{ matrix.root }} test
           terraform -chdir=infra/terraform/modules/compute/aws init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/terraform/modules/compute/aws test
+
+      - name: Test the AWS screener root with mocked providers
+        if: matrix.root == 'infra/terraform/stacks/aws-screener'
+        run: terraform -chdir=${{ matrix.root }} test
 
   ansible:
     runs-on: ubuntu-latest
