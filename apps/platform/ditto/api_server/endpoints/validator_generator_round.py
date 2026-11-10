@@ -43,6 +43,7 @@ from sqlalchemy import select
 
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_FRONTIER_ORACLE_DATASET_MODE,
     LEGACY_ROUND_BENCH_VERSION,
     DuelingSeasonCommitmentJobRequest,
     DuelingSeasonCommitmentJobResponse,
@@ -67,6 +68,15 @@ from ditto.api_server.dueling_season_commitments import (
 )
 from ditto.api_server.endpoints import validator as v
 from ditto.api_server.generator_competition import load_settings
+from ditto.api_server.generator_frontier import (
+    FrontierRejected,
+    is_oracle_run,
+    note_oracle_lease,
+    oracle_capable,
+    oracle_column_cases,
+    oracle_round,
+    record_oracle_results,
+)
 from ditto.api_server.generator_rounds import (
     CommitmentReportRejected,
     RoundSubmissionRejected,
@@ -219,41 +229,90 @@ async def request_generator_round_job(
         if settings.mode == "off" or not settings.validator_rounds_enabled:
             return _no_work()
         current = await running_round(session)
-        if current is None:
-            return _no_work()
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
-        if (
-            _round_column_capacity(
+        panel_possible = (
+            current is not None
+            and _round_column_capacity(
                 heartbeat, now=now, bench_version=round_bench_version(current)
             )
-            is None
-        ):
-            return _no_work()
-    # The nonce is consumed and committed above. Read the chain head for the
-    # lease cutoff only for a request that passed the cheap rejections, and
-    # outside any transaction, so neither a row lock nor a pooled connection
-    # spans the RPC. It is read on whichever process serves the request
-    # because the round loop runs on one role only and its last read can be
-    # stale. An unreadable chain declines the lease; the validator polls again.
-    try:
-        head = await chain.read_epoch_schedule(config.chain.netuid)
-    except Exception as exc:  # noqa: BLE001 - any read failure declines
-        logger.warning("generator round lease: chain head unreadable: %s", exc)
+            is not None
+        )
+    job: GeneratorRoundJobResponse | None = None
+    if panel_possible:
+        # The nonce is consumed and committed above. Read the chain head for
+        # the lease cutoff only for a request that passed the cheap
+        # rejections, and outside any transaction, so neither a row lock nor
+        # a pooled connection spans the RPC. It is read on whichever process
+        # serves the request because the round loop runs on one role only and
+        # its last read can be stale. An unreadable chain declines the panel
+        # lease; the validator polls again. The oracle lease below never
+        # reads the head, so it is still tried.
+        try:
+            head = await chain.read_epoch_schedule(config.chain.netuid)
+        except Exception as exc:  # noqa: BLE001 - any read failure declines
+            logger.warning("generator round lease: chain head unreadable: %s", exc)
+        else:
+            job = await _lease_panel_job(
+                session,
+                request=request,
+                payload=payload,
+                now=now,
+                head=head,
+                inference_config=inference_config,
+                inference_settings=inference_settings,
+                slot_settings=slot_settings,
+            )
+    if job is None:
+        job = await _lease_oracle_job(
+            session,
+            request=request,
+            payload=payload,
+            now=now,
+            inference_config=inference_config,
+            inference_settings=inference_settings,
+            slot_settings=slot_settings,
+        )
+    if job is None:
         return _no_work()
+    logger.info(
+        "issued generator round job round=%s agent=%s validator=%s slot=%s "
+        "bench_version=%s mode=%s",
+        job.round_index,
+        job.agent_id,
+        payload.validator_hotkey,
+        job.slot_id,
+        job.bench_version,
+        job.dataset_mode,
+    )
+    return job
+
+
+async def _lease_panel_job(
+    session,  # type: ignore[no-untyped-def]
+    *,
+    request: Request,
+    payload: GeneratorRoundJobRequest,
+    now: datetime,
+    head,  # type: ignore[no-untyped-def]
+    inference_config,  # type: ignore[no-untyped-def]
+    inference_settings,  # type: ignore[no-untyped-def]
+    slot_settings,  # type: ignore[no-untyped-def]
+) -> GeneratorRoundJobResponse | None:
+    """Lease the running round's next pending panel agent, or None."""
     async with session.begin():
         # Re-read under this transaction: the heartbeat feeds slot selection,
         # and the settings may have changed while the chain was being read.
         resolved = await load_settings(session)
         settings = resolved.settings
         if settings.mode == "off" or not settings.validator_rounds_enabled:
-            return _no_work()
+            return None
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
         # Locked so concurrent polls pick pending agents one at a time: the
         # second sees the first's committed attempt instead of leasing the
         # same panel agent.
         row = await running_round(session, for_update=True)
         if row is None or row.dataset_sha256 is None:
-            return _no_work()
+            return None
         # The round's frozen contract, not the active one: a round opened
         # under one version finishes under it.
         bench_version = round_bench_version(row)
@@ -261,17 +320,17 @@ async def request_generator_round_job(
             heartbeat, now=now, bench_version=bench_version
         )
         if capacity is None:
-            return _no_work()
+            return None
         if round_column_cases(row) > capacity:
             # A validator (or scorer) released before this column size would
             # refuse the job; leasing it would strand the panel agent until
             # the ticket expired.
-            return _no_work()
+            return None
         # A panel agent banned or held since the round opened is dropped
         # (never leased), which may void or close the round outright.
         await drop_ineligible_panel_agents(session, row, now=now)
         if row.status != "running":
-            return _no_work()
+            return None
         slot = await v._idle_retest_slot(
             session,
             heartbeat=heartbeat,
@@ -285,12 +344,12 @@ async def request_generator_round_job(
             requested_slot_id=payload.slot_id,
         )
         if slot is None:
-            return _no_work()
+            return None
         left = round_seconds_left(row, head)
         # A head the round cannot place (before it opened) declines too.
         cutoff = round_lease_cutoff(len(round_case_ids(row)))
         if left is None or left < cutoff.total_seconds():
-            return _no_work()
+            return None
         ticket: ValidatorTicket | None = None
         for agent_id in await pending_panel_agents(session, row, now=now):
             ticket = await issue_generator_round_ticket(
@@ -307,7 +366,7 @@ async def request_generator_round_job(
             if ticket is not None:
                 break
         if ticket is None:
-            return _no_work()
+            return None
         agent = await session.get(Agent, ticket.agent_id)
         assert agent is not None
         grant = await ensure_inference_grant(
@@ -348,16 +407,123 @@ async def request_generator_round_job(
                 request=request, grant=grant, bench_version=bench_version
             ),
         )
-    logger.info(
-        "issued generator round job round=%s agent=%s validator=%s slot=%s "
-        "bench_version=%s",
-        job.round_index,
-        job.agent_id,
-        payload.validator_hotkey,
-        job.slot_id,
-        job.bench_version,
-    )
     return job
+
+
+async def _lease_oracle_job(
+    session,  # type: ignore[no-untyped-def]
+    *,
+    request: Request,
+    payload: GeneratorRoundJobRequest,
+    now: datetime,
+    inference_config,  # type: ignore[no-untyped-def]
+    inference_settings,  # type: ignore[no-untyped-def]
+    slot_settings,  # type: ignore[no-untyped-def]
+) -> GeneratorRoundJobResponse | None:
+    """Lease the frontier oracle's run on a scored round's unsolved cases.
+
+    Only once no panel run is claimable: a panel run must finish before its
+    round's epochs end, an oracle run only within its timeout. The oracle is
+    the round's configured reference agent on its own ``generator_round``
+    ticket at the round's frozen bench version, leased only to a validator
+    whose scorer runs ``generator-frontier-oracle-v1``.
+    """
+    async with session.begin():
+        settings = (await load_settings(session)).settings
+        if settings.mode == "off" or not settings.validator_rounds_enabled:
+            return None
+        heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
+        if not oracle_capable(heartbeat):
+            return None
+
+        def runnable(candidate: GeneratorRound) -> bool:
+            # The panel path's bound, at the round's frozen bench version: the
+            # scorer decodes and runs the round's columns, so the largest must
+            # fit. Not the candidate total, which spans every column and may
+            # legitimately exceed one column's size.
+            capacity = _round_column_capacity(
+                heartbeat, now=now, bench_version=round_bench_version(candidate)
+            )
+            return capacity is not None and oracle_column_cases(candidate) <= capacity
+
+        # Skips rounds this validator cannot run, so an older incompatible
+        # round never hides a younger one it can.
+        row = await oracle_round(session, now=now, runnable=runnable)
+        if row is None or row.dataset_sha256 is None or not runnable(row):
+            return None
+        bench_version = round_bench_version(row)
+        slot = await v._idle_retest_slot(
+            session,
+            heartbeat=heartbeat,
+            slot_settings=slot_settings,
+            validator_hotkey=payload.validator_hotkey,
+            now=now,
+            lane="round",
+            round_reservation_active=True,
+            requested_slot_id=payload.slot_id,
+        )
+        if slot is None:
+            return None
+        frontier = row.frontier or {}
+        oracle_agent_id = UUID(frontier["oracle_agent_id"])
+        candidates = list(frontier["candidates"])
+        ticket = await issue_generator_round_ticket(
+            session,
+            agent_id=oracle_agent_id,
+            validator_hotkey=payload.validator_hotkey,
+            now=now,
+            ttl=ROUND_TICKET_TTL,
+            seed=round_ticket_seed(row),
+            dataset_sha256=row.dataset_sha256,
+            slot_id=slot,
+            bench_version=bench_version,
+        )
+        if ticket is None:
+            return None
+        agent = await session.get(Agent, ticket.agent_id)
+        assert agent is not None
+        grant = await ensure_inference_grant(
+            session, ticket=ticket, config=inference_config
+        )
+        if grant is None:
+            raise HTTPException(503, "ticket inference capability is unavailable")
+        session.add(
+            GeneratorRoundAttempt(
+                round_index=row.round_index,
+                agent_id=ticket.agent_id,
+                validator_hotkey=payload.validator_hotkey,
+                ticket_deadline=ticket.deadline,
+                slot_id=ticket.slot_id,
+                status="leased",
+                issued_at=now,
+                kind="oracle",
+            )
+        )
+        note_oracle_lease(row)
+        contract = benchmark_contract(bench_version)
+        return GeneratorRoundJobResponse(
+            round_index=row.round_index,
+            agent_id=agent.agent_id,
+            slot_id=ticket.slot_id,
+            miner_hotkey=agent.miner_hotkey,
+            sha256=agent.sha256,
+            deadline=ticket.deadline,
+            bench_version=bench_version,
+            dataset_sha256=row.dataset_sha256,
+            dataset_mode=GENERATOR_FRONTIER_ORACLE_DATASET_MODE,
+            seed=round_ticket_seed(row),
+            run_size="full",
+            case_count=len(candidates),
+            oracle_case_ids=candidates,
+            minimum_screening_policy_version=contract.minimum_screening_policy_version,
+            requires_screened_image=contract.requires_screened_image,
+            benchmark_runtime=inference_settings.benchmark_runtime.model_dump(
+                mode="json"
+            ),
+            inference=v._inference_grant_offer(
+                request=request, grant=grant, bench_version=bench_version
+            ),
+        )
 
 
 async def _open_round_ticket(
@@ -432,6 +598,44 @@ async def submit_generator_round_score(
             raise HTTPException(409, "round results name another round")
         row = await session.get(GeneratorRound, row.round_index, with_for_update=True)
         assert row is not None
+        if is_oracle_run(row, agent_id):
+            _require_round_version(ticket, row)
+            attempt = await session.get(
+                GeneratorRoundAttempt,
+                (
+                    row.round_index,
+                    agent_id,
+                    payload.validator_hotkey,
+                    payload.ticket_deadline,
+                ),
+                with_for_update=True,
+            )
+            if attempt is None or attempt.kind != "oracle":
+                raise HTTPException(409, "oracle lease is not open")
+            try:
+                record_oracle_results(
+                    row,
+                    payload.results,
+                    validator_hotkey=payload.validator_hotkey,
+                    run_id=payload.run_id,
+                    signature=payload.signature,
+                    now=now,
+                )
+            except FrontierRejected as exc:
+                raise HTTPException(422, str(exc)) from exc
+            await revoke_ticket_inference(session, ticket=ticket, now=now)
+            finish_generator_round_ticket(ticket)
+            attempt.status = "completed"
+            attempt.finished_at = now
+            logger.info(
+                "generator round oracle result round=%s agent=%s validator=%s",
+                payload.round_index,
+                agent_id,
+                payload.validator_hotkey,
+            )
+            return GeneratorRoundScoreResponse(
+                round_index=payload.round_index, agent_id=agent_id, accepted=True
+            )
         if row.status != "running":
             raise HTTPException(409, f"round is {row.status}; results are closed")
         _require_round_version(ticket, row)

@@ -667,8 +667,10 @@ sha256("dittobench-frontier-audit/v1" ‖ 0 ‖ round_seed ‖ 0 ‖ column_id �
 
 lowest first. The round seed is secret until the round reveals, so the miner
 cannot tell which cases will be read, and commit-reveal stops Platform grinding
-the choice. Operators review the sample in Backroom with the case's full
-visible memory, search over it, the oracle context and the oracle's reply.
+the choice. Operators review the sample in Backroom: each case's question,
+gold answer and declared competitors, its cited evidence, the panel's and the
+oracle's scores, and the user's full visible memory with a text search to look
+for a contradicting fact (`get_generator_frontier_audit`).
 
 - **All sampled cases valid:** every oracle attestation on the column stands.
 - **Any sampled case invalid:** every frontier attestation on that column is
@@ -728,6 +730,17 @@ Dueling seasons read the same verdicts. A frontier case is not unsolved, so it
 does not count against a column's `u / (n − dup) ≤ 0.20` eligibility. That is
 intended: frontier cases are the ones the agent benchmark most needs, and they
 reach the verdicts only after their audit settles.
+
+Operator surface (Platform admin API, Backroom MCP): the round's frontier view
+(`GET .../rounds/{round}/frontier`: candidates, oracle results, attestations,
+audits, applied credit, pre-frontier column scores), the audit queue
+(`GET .../frontier/audits`), an audit's cases
+(`GET .../rounds/{round}/frontier/audits/{column}?q=`), the ruling
+(`POST` there, confirmation `RULE FRONTIER AUDIT {round} {column} VALID|INVALID`,
+recorded as an operator action), and a forced settle
+(`POST .../rounds/{round}/frontier/settle`, confirmation
+`SETTLE GENERATOR FRONTIER {round}`). Public round views carry each column's
+`frontier` count and the round's `frontier_state`.
 
 New settings (Platform, revisioned): `frontier_weight` (operator default 1.0),
 `frontier_oracle_agent_id` (unset: no oracle, frontier off),

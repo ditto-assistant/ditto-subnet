@@ -14443,6 +14443,11 @@ class GeneratorRound(Base):
     scored_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     void_reason: Mapped[str | None] = mapped_column(Text)
     revealed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # The frontier lifecycle of a scored round (generator_frontier): oracle
+    # results, attestations, sampled audits, and the pre-frontier column
+    # scores. Null when the round had no frontier candidates or frontier
+    # scoring was off when it scored.
+    frontier: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
 
     __table_args__ = (
         CheckConstraint(
@@ -14544,10 +14549,17 @@ class GeneratorRoundAttempt(Base):
         TIMESTAMP(timezone=True), nullable=False
     )
     finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # ``panel`` for a panel agent's run, ``oracle`` for the frontier oracle's
+    # run on a scored round's unsolved cases.
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="panel")
 
     __table_args__ = (
         ForeignKeyConstraint(
             ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "kind IN ('panel', 'oracle')",
+            name="generator_round_attempts_kind_check",
         ),
         CheckConstraint(
             "status IN ('leased', 'completed', 'failed')",
@@ -14630,7 +14642,7 @@ class GeneratorRoundCaseVerdict(Base):
         ),
         CheckConstraint(
             "status IN ('discriminating', 'trivial', 'unsolved', 'duplicate', "
-            "'insufficient_panel')",
+            "'insufficient_panel', 'frontier')",
             name="generator_round_case_verdicts_status_check",
         ),
         Index("generator_round_case_verdicts_fingerprint_idx", "fingerprint"),

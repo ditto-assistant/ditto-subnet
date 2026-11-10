@@ -65,7 +65,7 @@ import json
 import logging
 import secrets
 import struct
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -116,6 +116,10 @@ from ditto.api_models.generator_rounds import (
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_capabilities import ValidatorCapabilities
 from ditto.api_server.generator_competition import scorer_request_error
+from ditto.api_server.generator_frontier import (
+    advance_frontier_rounds,
+    begin_frontier,
+)
 from ditto.api_server.generator_scorer_capability import (
     ScorerCapability,
     grading_versions,
@@ -621,7 +625,7 @@ def _round_signature(
     panel: Iterable[dict[str, Any]],
     bench_version: int | None,
     cases_per_column: int | None,
-    score_params: dict[str, float | int],
+    score_params: Mapping[str, float | int | str],
 ) -> str:
     """Everything a round measures, order-free: which generator sources hold a
     column, which agents sit on the panel (and which is the champion), the
@@ -652,7 +656,7 @@ def _round_signature(
         ),
         "bench_version": bench_version,
         "cases_per_column": cases_per_column,
-        "score_params": score_params,
+        "score_params": dict(score_params),
     }
     encoded = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -752,14 +756,14 @@ async def unchanged_round_source(
         panel=seated,
         bench_version=source.bench_version,
         cases_per_column=source.cases_per_column,
-        score_params=source_settings.score_params(),
+        score_params=source_settings.measurement_params(),
     )
     after = _round_signature(
         columns=row.columns or (),
         panel=row.panel or (),
         bench_version=row.bench_version,
         cases_per_column=row.cases_per_column,
-        score_params=settings.score_params(),
+        score_params=settings.measurement_params(),
     )
     if before != after:
         return None
@@ -1992,6 +1996,9 @@ async def record_round_score(
     row.status = "scored"
     row.lease_id = None
     row.lease_expires_at = None
+    # Unsolved miner-column cases become frontier candidates for the oracle
+    # (generator_frontier), under the policy the round opened with.
+    begin_frontier(row, await round_settings(session, row), now=now)
     await session.flush()
     return row
 
@@ -2113,6 +2120,7 @@ async def pending_panel_agents(
             )
             .where(
                 GeneratorRoundAttempt.round_index == row.round_index,
+                GeneratorRoundAttempt.kind == "panel",
                 GeneratorRoundAttempt.status == "leased",
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
@@ -2341,6 +2349,8 @@ def column_views(row: GeneratorRound) -> list[GeneratorRoundColumnView]:
                 trivial=pack["trivial"] if pack else None,
                 unsolved=pack["unsolved"] if pack else None,
                 duplicate=pack["duplicate"] if pack else None,
+                frontier=int(pack.get("frontier") or 0) if pack else None,
+                frontier_state=(row.frontier or {}).get("state"),
                 grading_bench_version=declared.get(column["column_id"]),
             )
         )
@@ -2560,6 +2570,7 @@ async def submission_round_views(
                 trivial=int(pack["trivial"]),
                 unsolved=int(pack["unsolved"]),
                 duplicate=int(pack["duplicate"]),
+                frontier=int(pack.get("frontier") or 0),
                 panel_size=sum(
                     1 for slot in row.panel or () if not slot.get("dropped_reason")
                 ),
@@ -2801,6 +2812,21 @@ class GeneratorRoundLoop:
             block=schedule.block,
         )
 
+    async def _settle_frontier(self, now: datetime) -> list[str]:
+        """Settle every frontier lane that is ready; never raises."""
+        try:
+            async with self._session_maker() as session, session.begin():
+
+                async def params_for(row: GeneratorRound) -> dict[str, Any]:
+                    return dict((await round_settings(session, row)).score_params())
+
+                return await advance_frontier_rounds(
+                    session, params_for=params_for, now=now
+                )
+        except Exception as exc:  # noqa: BLE001 - never block round progress
+            logger.exception("generator frontier settlement failed")
+            return [f"frontier settlement failed: {type(exc).__name__}: {exc}"[:300]]
+
     async def tick(self, *, now: datetime | None = None) -> RoundActions:
         from ditto.api_server.generator_competition import load_settings
 
@@ -2811,6 +2837,12 @@ class GeneratorRoundLoop:
             async with self._session_maker() as session:
                 resolved = await load_settings(session)
             per = resolved.settings.epochs_per_round
+            # Frontier lanes settle on their own clock (audit grace, oracle
+            # timeout), in their own transaction, and whatever the mode: a
+            # settle failure never rolls back round progress, and switching
+            # the competition off never strands an audit past its grace.
+            for note in await self._settle_frontier(now):
+                actions.note(note)
             if resolved.settings.mode == "off":
                 self.schedule = GeneratorRoundSchedule(
                     mode="off", epochs_per_round=per, observed_at=now
@@ -2830,9 +2862,11 @@ class GeneratorRoundLoop:
                 observed_at=now,
             )
             async with self._session_maker() as session, session.begin():
-                actions = await advance_rounds(
+                advanced = await advance_rounds(
                     session, resolved=resolved, position=position, now=now
                 )
+            # advance_rounds already logged its own actions.
+            actions.actions.extend(advanced.actions)
             return actions
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"[:500]
