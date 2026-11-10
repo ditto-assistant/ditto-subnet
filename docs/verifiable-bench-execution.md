@@ -141,7 +141,7 @@ Non-goals:
 | **Operator edits the transcript or witness** (changes a miner's answer) | Validator-owned run; signed transcript digest | Witness root signed by the attested runtime key. Forging it means breaking the attestation | AWS Nitro is the trust root; bugs inside the measured image |
 | **Operator swaps the scorer binary or a posture** | Validator verifies scorer identity against its stack descriptor | Program id, config digest and PCRs pinned in an epoch-pinned verifier policy | The policy is ours, but public and versioned; changes need `fleet_ready` |
 | **Operator grinds seeds or task selection** | G1, G2 and G7 above: a real window | drand round fixed by the miner's on-chain artifact commitment + `Δ`, where validator code enforces `Δ ≥ Δ_min`. Validators check the commitment extrinsic (signer, remark, first match, unique use), the BLS signature and the block on their own chain node. No Platform-assigned value feeds the seed (§4.5) | Honesty of a drand threshold; Platform–miner collusion on admission-token timing (open question 11) |
-| **Operator cherry-picks runs** (reruns until the LLM noise helps, kills unfavourable runs) | Retries are audited and append-only but **private** (`docs/no-automatic-retries.md`) | Public, chain-anchored attempt log; the first terminal **scored** attempt wins; earlier non-scored terminal attempts need a signed failure statement or an authorized retry leaf; retries reuse the same seed | We can still refuse or delay a run (liveness), and run unlogged previews to *learn* about a harness. That leaks information but cannot change a score |
+| **Operator cherry-picks runs** (reruns until the LLM noise helps, kills unfavourable runs) | Retries are audited and append-only but **private** (`docs/no-automatic-retries.md`) | Public, chain-anchored attempt log. Only the attested runtime can sign a terminal outcome (scored or failure), and it commits the record's hash to the log before releasing it, so Platform decides on any abort without seeing the result. A scored result cannot be relabelled as a failure. A committed but unrevealed record blocks the replicate. Only the first verified scored attempt counts. Aborts are blind, public and capped by `max_retries`. Retries reuse the same seed | We can still refuse or delay a run (liveness), and run unlogged previews to *learn* about a harness. The relay is ours, so we see model traffic mid-run and could estimate the score and abort *before* the runtime commits. That is at most `max_retries` extra draws of serving noise per replicate, every one public. Closing it fully needs the relay inside the attested boundary (open question 2) |
 | **Operator degrades inference for one miner** (other model, truncation, latency) | Same trust as today; validators cannot see it | Relay inside the attested boundary; route profile in the statement; provider-reported model and usage in the witness; sampled independent audits | **No cryptographic guarantee.** The provider and OpenRouter's dynamic route remain trusted |
 | **Operator replays an old result** | Validator signs run id + seed + deadline | Statement binds agent, image digest, ticket, replicate, seed, beacon round and log leaf; leaves are unique | None |
 | **Operator equivocates** (shows validators different statements) | Ledger digest per epoch | Statement root in the on-chain commitment; inclusion proofs | None once anchored |
@@ -172,7 +172,9 @@ Given those, a validator that accepts a statement knows that:
    published reference measurements. That runtime ran image digest `I`, the
    screened image for this agent;
 5. this is replicate `j`, attempt `a` of a pre-registered ticket. Every other
-   attempt for the ticket is visible in the anchored log; and
+   attempt for the ticket is visible in the anchored log. Each earlier
+   attempt ended in a runtime-signed failure, committed before release, or in
+   a blind abort within `max_retries`. No scored result was relabelled; and
 6. the statement is the one every other validator saw.
 
 ### 3.4 What it cannot guarantee
@@ -352,8 +354,23 @@ miner is bound on chain to these exact harness bytes. This needs changes to
 the miner CLI and the payment verifier, which today accepts only a bare
 `transfer_keep_alive`.
 
-**Anchors are final.** An anchor consumes its authorization whether or not
-the miner completes the upload, because the seed is fixed at the anchor.
+**Authorization accounting.** A token's issuance leaf reserves its
+authorization until one of two things happens: the first matching *valid*
+anchor consumes it, or the token expires. If the token expires with no valid
+anchor, the authorization is forfeited.
+
+- A missing or wrong remark fails check 3. It does not consume the
+  authorization as an anchor. On the paid path, though, the transfer in that
+  extrinsic was still paid and is neither refunded nor credited.
+- On the credit path, a reserved credit with no valid anchor before expiry is
+  forfeited and cannot be reused.
+- Credits exist only for payments made **before** this anchor scheme. A
+  payment inside an anchor extrinsic never becomes a credit (see "Anchors are
+  final" below), so the paid and credit spend identities in check 5 never
+  overlap.
+
+**Anchors are final.** A valid anchor consumes its authorization whether or
+not the miner completes the upload, because the seed is fixed at the anchor.
 - An artifact that is anchored but never uploaded is logged as forfeited.
 - So is an upload whose bytes do not hash to `artifact_sha256`.
 - In both cases the payment never turns back into a credit.
@@ -408,9 +425,11 @@ but is no longer a seed input.
      that owned `miner_hotkey` at that payment's block.
 3. Its remark equals `C`, recomputed from the statement's `miner_hotkey` and
    `artifact_sha256` and the admission token. The token is revealed in the
-   statement and must hash to the commitment in the issuance leaf. That leaf
-   must come with a Merkle inclusion proof against an epoch root **already
-   anchored on chain**. Until that root is anchored the statement stays
+   statement and must hash to the commitment in the issuance leaf. The
+   statement's `authorization` must equal the leaf's, so the paid-or-credit
+   path and the uniqueness checks below all use one value. That leaf must come
+   with a Merkle inclusion proof against an epoch root **already anchored on
+   chain**. Until that root is anchored the statement stays
    pending and cannot verify, so Platform cannot present an issuance record
    made up after the fact. On the paid path, the batched transfer pays the
    published payment address at least the logged quote.
@@ -446,12 +465,23 @@ but is no longer a seed input.
      `j` reuses both the anchor and `seed_j`.
    - **One attempt counts per replicate.** For each `(anchor, j)`, only the
      first terminal **scored** attempt counts. Every earlier attempt for that
-     pair needs a signed failure statement or an authorized retry leaf (§6.5
-     step 7).
-   - **An authorization is spent once.** A paid anchor's payment, or a
-     credit's original payment, appears in exactly one issuance leaf and backs
-     exactly one anchor. A statement whose authorization appears in a second
-     leaf or behind a second anchor is rejected.
+     pair must end in a non-scored terminal record that the runtime signed and
+     committed before releasing it, or in a blind Platform `aborted` leaf
+     within the retry budget (§6.2, §6.5 step 7). Platform cannot relabel a
+     scored result as a failure.
+   - **An authorization is spent once.** Uniqueness is checked on a *spend
+     identity*, which depends on the path:
+     - **Paid:** the transfer inside the anchor extrinsic, i.e.
+       `(anchor_block_hash, anchor_extrinsic_index)`. A paid issuance leaf
+       records only `paid`, because the payment does not exist yet when the
+       token is issued. A single extrinsic is a single anchor, so this
+       identity backs exactly one ticket under the anchor rule above.
+     - **Credit:** the credited payment `credit:<block_hash>:<extrinsic_index>`.
+       It must appear in exactly one issuance leaf in the anchored log and
+       back exactly one anchor.
+
+     A statement whose spend identity appears behind a second anchor, or in a
+     second credit leaf, is rejected.
 
    This closes grinding across tokens: a credit cannot be spread over several
    tokens to compare beacon rounds.
@@ -591,6 +621,8 @@ into every epoch pin:
 - `token_validity_blocks` (`W`): the maximum admission-token lifetime. It is
   also the width of the fixed first-match scan window (§4.5 check 4).
 - `canary_rate` and `signoff_quorum`.
+- `max_retries`: the per-replicate budget of retries after a failure or a
+  Platform `aborted` (§6.2). Every use is public in the log.
 
 A policy change takes effect at an epoch pin. It is gated on every
 recently-live weight-setting validator advertising the verifier protocol, with
@@ -610,9 +642,37 @@ statement, after the upload has consumed it.
 The leaf is appended **before** the runner may start. The runner refuses to
 start without a log receipt containing the leaf hash.
 
-**Terminal leaf**: `{ticket_id, j, a, outcome (scored | infra_failure | harness_fault | aborted), statement_digest | failure_statement_digest}`.
-An attempt with no terminal leaf after its deadline gets an `aborted` leaf
-from Platform. That leaf is visible and counts as an attempt.
+**Terminal records come only from the attested runtime.** For each attempt,
+the runner emits exactly one terminal record, signed by its attested key `K`:
+
+- `scored`: the RunStatement below;
+- `infra_failure` or `harness_fault`: a **FailureStatement**
+  `{schema, ticket_id, j, a, log_leaf, outcome, failure_class, evidence_digest, times, runtime_key}`.
+  The failure class is decided by the measured runtime's own code, not by
+  Platform.
+
+Platform cannot author a `scored`, `infra_failure` or `harness_fault` outcome.
+
+**Commit before release.** Before the runner shows its terminal record to
+anyone, Platform included, it appends a K-signed **terminal-commitment leaf**
+`{ticket_id, j, a, SHA-256(record), runtime_key}`. It waits for the log's
+receipt and only then releases the record. The record exists only inside the
+isolated instance until it is committed. So any decision by Platform to let
+an attempt finish or to kill it is made **without seeing its result**.
+
+**Terminal leaf**: `{ticket_id, j, a, outcome (scored | infra_failure | harness_fault | aborted), record_digest}`.
+
+- For every outcome except `aborted`, `outcome` must equal the K-signed
+  record's outcome, and `record_digest` must equal the hash in the
+  terminal-commitment leaf.
+- `aborted` is the only outcome Platform writes. It is valid only when the
+  attempt has **no** terminal-commitment leaf by its deadline: the runner
+  vanished or was stopped before it committed. Each `aborted` is public and
+  counts against the policy-pinned per-replicate retry budget
+  (`max_retries`, §6.1).
+- If a terminal commitment exists but its record is not revealed by the
+  deadline, the replicate is marked **suppressed**. Validators then refuse to
+  count any later attempt for that `(anchor, j)`.
 
 **RunStatement v1** (canonical JSON, SHA-256 = `statement_digest`), signed by
 runtime key `K`:
@@ -671,8 +731,12 @@ the hashes against the journal.
    lease. It derives `s_j` from the beacon and generates `D(s_j)`, or verifies
    private bytes against the pin. Execution is as today: sandbox, broker,
    relay, grader.
-4. **Seal.** The runner builds the witness, computes `witness_root`, signs the
-   RunStatement with `K`, and writes the terminal leaf.
+4. **Seal.** The runner builds the witness and computes `witness_root`. It
+   signs its terminal record with `K`: the RunStatement, or a
+   FailureStatement if the run failed. It appends the terminal-commitment
+   leaf `SHA-256(record)` and waits for the log receipt. Only then does it
+   release the record, and Platform writes the terminal leaf that points to
+   it.
 5. **Prove.** A prover job (outside the runner; soundness does not depend on
    the prover) proves `scorecore` over `(D, W, config)`.
    - Private witnesses are proven only on our own hardware.
@@ -691,7 +755,9 @@ For each new statement (cached by digest):
    cached per boot key, so it costs milliseconds per boot *(inferred)*.
 3. Statement signature under `runtime_key`.
 4. Seed: run all six §4.5 anchor checks against the validator's **own** chain
-   node. This closes G1 and G7. Reject on any mismatch.
+   node. This closes G1 and G7. Reject on any mismatch. The seven bullets
+   below map onto §4.5 checks 1–6; "Token" and "First match" together form
+   check 4.
    - **Block:** finalized, and its hash matches the statement.
    - **Signer:** the extrinsic succeeded and was signed by the coldkey that
      owned `miner_hotkey` at the anchor block. On the credit path, the
@@ -699,12 +765,15 @@ For each new statement (cached by digest):
    - **Remark:** it equals `C` for this `artifact_sha256` and admission token.
      On the paid path, the batched transfer pays the quote.
    - **Token:** the issuance leaf is proven against an anchored root, with
-     `issued_block ≤ anchor_block ≤ expires_block ≤ issued_block + W`.
+     `issued_block ≤ anchor_block ≤ expires_block ≤ issued_block + W`, and
+     the statement's `authorization` equals the leaf's.
    - **First match:** the anchor is the first matching commitment by
      `(block, index)` over blocks `anchor_block − W` through `anchor_block`,
      including lower indices in the anchor block itself.
-   - **Scope:** the anchor and its authorization back exactly one ticket.
-     Replicates and authorized retries of that ticket may share the anchor.
+   - **Scope:** the anchor and its spend identity back exactly one ticket.
+     The spend identity is the anchor extrinsic on the paid path and the
+     credited payment on the credit path. Replicates and authorized retries
+     of that ticket may share the anchor.
    - **Beacon and seed:** the statement's `delta_s` equals the pinned `Δ`,
      and the pinned `Δ ≥ Δ_min`. Verify the drand BLS signature for `R` and
      the rule `R = first ≥ ts(anchor) + Δ`, then re-derive `s_j`.
@@ -716,9 +785,26 @@ For each new statement (cached by digest):
    issuance, attempt and terminal leaves. Each proof must check against an
    epoch root already anchored on chain, read from the validator's own node.
    A statement with any leaf not yet in an anchored root stays pending and
-   cannot verify. Check the attempt policy: the first terminal scored attempt
-   is the one counted, and any earlier attempt has a signed failure statement
-   or an authorized retry leaf.
+   cannot verify. Then check the attempt policy for every attempt of this
+   `(anchor, j)` up to and including the one being counted:
+   - **Terminals are bound to signed records.** Each non-`aborted` terminal
+     leaf's `outcome` equals the outcome of a record signed by an attested `K`
+     whose PCRs are in policy. Its `record_digest` equals the hash in that
+     attempt's terminal-commitment leaf, and the commitment leaf is itself in
+     an anchored root.
+   - **Scored means verified.** A `scored` outcome needs a RunStatement that
+     passes steps 1–6, including the receipt.
+   - **No relabelling.** If an attempt's terminal commitment points to a
+     K-signed RunStatement, any non-scored terminal for that attempt is
+     rejected. The replicate is flagged.
+   - **Blind aborts only.** `aborted` is accepted only for an attempt with no
+     terminal-commitment leaf.
+   - **Suppression blocks the replicate.** A commitment whose record was never
+     revealed marks the replicate suppressed, and no later attempt counts.
+   - **Budget and authorization.** Retries after failures or aborts stay
+     within `max_retries`, and each has an authorized retry leaf.
+   - **Which attempt counts.** The first attempt with a verified `scored`
+     outcome is the one counted.
 8. Sign `VerifiedStatement{statement_digest, verdict, verifier_policy_digest, validator_hotkey}`
    with sr25519 and submit it.
 
@@ -753,7 +839,9 @@ replicate.
 | Receipt missing or prover failed | Entry not yet eligible; re-prove (deterministic; no new attempt) |
 | Receipt invalid | Escalate: either `scorecore` and program id diverged (a release bug) or someone tampered. Quarantine the entry; Backroom shows it |
 | Attestation invalid (unknown PCRs, all-zero debug PCRs, expired key) | Statement rejected; attempt treated as an infra failure; a retry needs a Backroom-authorized retry leaf (existing no-automatic-retry policy) and reuses the seed |
-| Dangling attempt (registered, no terminal leaf by deadline) | Platform writes an `aborted` leaf; it counts as an attempt; a retry needs authorization; the dashboard shows aborted attempts per agent |
+| Dangling attempt (registered, no terminal commitment by deadline) | Platform writes an `aborted` leaf; it counts as an attempt and against `max_retries`; a retry needs authorization; the dashboard shows aborted attempts per agent |
+| Terminal commitment exists but the record was never revealed | Replicate marked **suppressed**; no later attempt for that `(anchor, j)` counts; public, and resolvable only through an owner-reviewed dispute |
+| Terminal leaf disagrees with its K-signed record (e.g. a signed RunStatement relabelled as `infra_failure`) | Rejected; replicate flagged; treated as evidence of operator tampering, not as an infra fault |
 | Repeated aborts for one agent | Visible pattern; policy threshold to flag for review (open question) |
 | Anchor check fails: wrong signer, missing or wrong remark, earlier matching commitment, token expired at the anchor, anchor or authorization reused by another ticket, `delta_s ≠` pinned `Δ`, or `Δ < Δ_min` | Statement rejected; the agent cannot be scored on that anchor. Backroom shows it as an operator or miner fault, not an infra retry. A malformed anchor still consumed its authorization (anchors are final), so a new attempt needs a new authorization: a fresh payment or a different credit |
 | Anchored artifact never uploaded, or uploaded bytes do not hash to `artifact_sha256` | Logged as forfeited; the authorization is spent and does not return as a credit |
@@ -832,12 +920,12 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 7 | Verifier library spike | Go verifier callable from the validator (cgo or sidecar); latency measured | 6 | S |
 | 8 | Validator checks seed block against its own chain node | Closes G1; refusal code on mismatch; test with a forged hash | — | S |
 | 9 | Beacon seed derivation v2 (`seed_scope: beacon-v2`) | drand quicknet BLS verification in Go and Python; shared vectors; the rule is "first round ≥ anchor block timestamp + Δ"; validator code rejects `Δ < Δ_min` (with `S` read from the Subtensor runtime and pinned); no Platform-assigned input; retries reuse the seed | 8, 20 | M |
-| 10 | Public attempt log | Append-only Merkle log of issuance, attempt and terminal leaves; inclusion proofs served per leaf; public read API; Backroom read tool; aborted-attempt leaves | — | M |
+| 10 | Public attempt log | Append-only Merkle log of issuance, attempt, terminal-commitment and terminal leaves; inclusion proofs served per leaf; public read API; Backroom read tool; aborted-attempt leaves | — | M |
 | 11 | Per-epoch chain anchor | One `commitments` write per epoch with the epoch root; anchor hotkey decided; monitor for missed anchors | 10 | S |
 | 12 | Attestable AMI hosted runner | Reproducible image (scorer + sandbox-docker + broker); reference PCRs published by release; AWS Terraform module through protected plan/apply | 1 | L |
-| 13 | Runtime key and RunStatement v1 | Key generated in the runner and bound by the NitroTPM document; statement schema and signature; failure statements | 2, 12 | M |
+| 13 | Runtime key, RunStatement v1 and FailureStatement | Key generated in the runner and bound by the NitroTPM document. Statement and failure schemas, both signed by `K`; failure class decided by runtime code. The runner commits `SHA-256(record)` to the log and waits for the receipt before releasing any terminal record. Test: Platform cannot obtain the record before the commitment exists | 2, 10, 12 | M |
 | 14 | Hosted shadow lane | Platform issues hosted replicates beside validator runs, `shadow_only`; distribution comparison report per agent | 9–13 | L |
-| 15 | Validator verify-and-sign (shadow) | New heartbeat protocol; the full §6.5 check; signoff submission; forced-invalid canaries | 6, 7, 13 | M |
+| 15 | Validator verify-and-sign (shadow) | New heartbeat protocol; the full §6.5 check including step 7's attempt policy; signoff submission; forced-invalid canaries. Negative vectors: a signed RunStatement relabelled as a failure; `aborted` after a terminal commitment; a committed record never revealed; a retry beyond `max_retries`; a terminal leaf whose digest does not match its commitment | 6, 7, 13 | M |
 | 16 | Activation policy and ledger `proof_ref` | Deterministic exclusion rule; `fleet_ready`, no force; rollback path tested | 14, 15 | M |
 | 17 | Crown-decision audits | Beacon-sampled audit selection; paired CRN comparison; Backroom surface | 14 | M |
 | 18 | Dispute workflow | Quarantine and re-prove tools; owner-gated witness access | 15 | M |
