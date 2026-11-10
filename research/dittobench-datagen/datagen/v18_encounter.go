@@ -599,6 +599,8 @@ func (w *v18EncounterWorld) jobFollowthrough(plan catalog.V16ConnectorPlan, ordi
 			fmt.Sprintf("share this run's number of %s in %s.", metric, app.Name),
 			fmt.Sprintf("put the %s count from this run in %s.", metric, app.Name),
 		),
+		// The answer is graded on the figure, so the request asks for it.
+		w.say("Then tell me the figure you posted.", "Let me know the number when it's done.", "Report the figure back to me afterwards."),
 	)
 	return protocol.ToolCase{
 		Prompt:           prompt,
@@ -698,9 +700,10 @@ func (w *v18EncounterWorld) memoryHandoff(plan catalog.V16ConnectorPlan, ordinal
 			"Afterwards, tell me how much was due and which contact you emailed."),
 	)
 	return protocol.ToolCase{
-		Prompt:            prompt,
-		ExpectedBehavior:  "recall the current billing contact, read the amount due, and email it to the current contact",
-		WritingProtected:  append(v16AppProtected(app), org),
+		Prompt:           prompt,
+		ExpectedBehavior: "recall the current billing contact, read the amount due, and email it to the current contact",
+		// The graded address and surname must survive writing noise.
+		WritingProtected:  append(v16AppProtected(app), org, oldEmail, newEmail, newSurname),
 		PrerequisitePairs: pairs,
 		Encounter: &protocol.Encounter{
 			Variant: variant,

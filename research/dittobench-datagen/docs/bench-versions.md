@@ -29,7 +29,7 @@ applied to an existing version. It ships as a new one.
 | 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 | 16 (shadow, pre-activation) | `2027-08-01` | The dueling contract's datagen half ([dueling-bench.md](dueling-bench.md)): the v15 contract at the dueling profile (50 tool + 125 memory cases; Platform delivers the 175-case generator slice), connector tools that no longer self-identify, two to four linked connectors per seed that some cases need, and wording decoys. The composite carries the enforced priced inference cost factor (`details.priced_cost`: whole-run tokens at locked public rates, $1.00 per 350-case reference, floor 0.6; [PROTOCOL.md](../../../services/dittobench-api/PROTOCOL.md)). Supported and advertised (`dueling-slice-v1`); not active. Rollout: [benchmark-v16-rollout.md](../../../docs/benchmark-v16-rollout.md). |
 | 17 | `2027-09-01` | The v16 dueling datagen half with the answer-pool fix (`answerPoolFixBenchVersion`), scored with priced-cost-v2 (whole-run tokens at locked public rates, $0.50 per 350-case reference, floor 0.3). Active on 2026-11-07 (Backroom leaderboard `active_bench_version`). Known vector `68df415cf0b8b92525f1011b6c1a92bf9fc5d65bae96e76b3fcaa1787c166c48` (`TestV17KnownVector`). |
-| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17, plus a per-run cost budget ($1.00 per 350 cases; unrun cases score 0); the one token lever is a per-seed production catalog of 1,400-2,000 real tools (pinned snapshot). Known vector `7ee1590f87a996550e725e948a9ebbe00fa9ab333ad99692b61ae23568834a93` (`TestV18KnownVector`). |
+| 18 (pre-activation) | `2027-10-01` | The accuracy contract: the v17 dueling datagen half with the first-party mix hardened so accuracy separates agents again (section below). Scored with priced-cost-v2 exactly as v17, plus a per-run cost budget ($1.00 per 350 cases; unrun cases score 0); the one token lever is a per-seed production catalog of 1,400-2,000 real tools (pinned snapshot). Known vector `85ffc23800d9b874a7f9af6b45dc0706cba800bac5746b7e2e504350b6b466fb` (`TestV18KnownVector`). |
 
 ## Answer-pool collision audit
 
@@ -1709,7 +1709,7 @@ the v14 families stay `pending-panel` in `universe.V14FamilyMix`.
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV18KnownVector` pins
-`7ee1590f87a996550e725e948a9ebbe00fa9ab333ad99692b61ae23568834a93`, with
+`85ffc23800d9b874a7f9af6b45dc0706cba800bac5746b7e2e504350b6b466fb`, with
 epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
 `datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
 

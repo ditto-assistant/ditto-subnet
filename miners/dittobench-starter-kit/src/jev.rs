@@ -210,6 +210,10 @@ pub fn choice_chunks(
             // per-question limit.
             let name_cost = estimate_tokens(&option.0) + 6;
             if name_cost > room {
+                eprintln!(
+                    "jev: choice_chunks {prefix}: option {:?} dropped, too large for one question (room {room})",
+                    option.0
+                );
                 continue;
             }
             option.1 = truncate_to_tokens(&option.1, room - name_cost).to_string();
@@ -398,7 +402,8 @@ impl DecisionClient {
         }
         let model = std::env::var(DECISIONS_MODEL_ENV)
             .ok()
-            .filter(|m| !m.trim().is_empty())
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
             .unwrap_or_else(|| DEFAULT_DECISIONS_MODEL.to_string());
         Some(DecisionClient::new(
             http,
@@ -428,7 +433,14 @@ impl DecisionClient {
     ) -> anyhow::Result<Value> {
         let body = self.request_body(state, questions);
         let mut last_err = None;
-        for attempt in 0..3u64 {
+        const ATTEMPTS: u64 = 3;
+        // Only wait when another attempt follows; the last failure returns now.
+        let backoff = |attempt: u64, wait: Duration| async move {
+            if attempt + 1 < ATTEMPTS {
+                tokio::time::sleep(wait).await;
+            }
+        };
+        for attempt in 0..ATTEMPTS {
             let mut req = self
                 .http
                 .post(&self.url)
@@ -461,7 +473,7 @@ impl DecisionClient {
                             if !(status.as_u16() == 429 || status.is_server_error()) {
                                 break;
                             }
-                            tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
+                            backoff(attempt, Duration::from_millis(500 * (attempt + 1))).await;
                             continue;
                         }
                     };
@@ -498,11 +510,11 @@ impl DecisionClient {
                     // Honour Retry-After, capped so one throttled call cannot
                     // hold a case past the validator's case deadline.
                     let wait = retry_after.unwrap_or(1 + attempt).min(MAX_RETRY_AFTER_SECS);
-                    tokio::time::sleep(Duration::from_secs(wait)).await;
+                    backoff(attempt, Duration::from_secs(wait)).await;
                 }
                 Err(err) => {
                     last_err = Some(anyhow::anyhow!("decision lane unreachable: {err}"));
-                    tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
+                    backoff(attempt, Duration::from_millis(500 * (attempt + 1))).await;
                 }
             }
         }
@@ -709,6 +721,21 @@ mod tests {
         assert!(answers.answers.is_empty());
         let (calls, _, _, failures) = usage.snapshot();
         assert_eq!((calls, failures), (0, 1));
+    }
+
+    #[tokio::test]
+    async fn retry_exhaustion_returns_without_a_final_wait() {
+        // Nothing listens: three unreachable attempts back off 0.5 s and 1 s
+        // between them and return right after the third, not 1.5 s later.
+        let client = DecisionClient::new(reqwest::Client::new(), "http://127.0.0.1:9", "m", None);
+        let usage = DecisionUsage::default();
+        let started = std::time::Instant::now();
+        let result = client
+            .ask_one("case-1", &json!({}), &[Question::noul("q", "x")], &usage)
+            .await;
+        assert!(result.is_err());
+        let elapsed = started.elapsed();
+        assert!(elapsed < Duration::from_millis(2_500), "{elapsed:?}");
     }
 
     #[test]

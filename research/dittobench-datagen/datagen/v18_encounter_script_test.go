@@ -195,7 +195,14 @@ func (s *encounterScript) triage() {
 		s.reply = fmt.Sprintf("Incident %s is already tracked as %s.", id, scriptRef.FindString(items))
 		return
 	}
-	s.call(write, map[string]any{"title": "Outage " + id})
+	// The generated write parameter is the item title the grader reads.
+	field := "title"
+	for _, required := range enc.Required {
+		if required.Tool == write && required.Field != "" {
+			field = required.Field
+		}
+	}
+	s.call(write, map[string]any{field: "Outage " + id})
 	s.reply = fmt.Sprintf("Filed incident %s.", id)
 }
 
