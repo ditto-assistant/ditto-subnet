@@ -294,6 +294,7 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 					return false
 				},
 				RefusalNote: env.budget.refusalNote,
+				Exhausted:   env.budget.isExhausted,
 			})
 			if err != nil {
 				return duelingSliceResult{}, fmt.Errorf("column %s: %w", id, err)
