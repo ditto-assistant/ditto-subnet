@@ -13,19 +13,27 @@ from __future__ import annotations
 import pytest
 
 from ditto.api_models.queue_policy_settings import (
+    DEFAULT_FLIP_DEADLINE_HOURS,
+    DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE,
     DEFAULT_FRESH_SUBMISSION_SLOTS,
     DEFAULT_LANE_CYCLE_SIZE,
     DEFAULT_OWNER_CONCURRENT_SUBMISSIONS,
     DEFAULT_PREV_GEN_CARRYOVER_AGENTS,
     MAX_COHORT_SIZE,
+    MAX_FLIP_AGENTS,
+    MAX_FLIP_DEADLINE_HOURS,
     MAX_OWNER_CONCURRENT_SUBMISSIONS,
     MAX_PREV_GEN_CARRYOVER_AGENTS,
     MIN_COHORT_SIZE,
+    MIN_FLIP_AGENTS,
+    MIN_FLIP_DEADLINE_HOURS,
     MIN_OWNER_CONCURRENT_SUBMISSIONS,
+    FlipRuleSettings,
     PrevGenCarryoverSettings,
     QueuePolicySettings,
     rollout_locked_change,
 )
+from ditto.db.queries import benchmark_rollout as rollout_queries
 from ditto.db.queries.benchmark_rollout import (
     DEFAULT_RESCORE_COHORT_SIZE,
     MAX_PERSISTED_RESCORE_COHORT_SIZE,
@@ -53,6 +61,22 @@ class TestQueuePolicyBoundsMatchQueueConstants:
         )
         assert DEFAULT_OWNER_CONCURRENT_SUBMISSIONS == (
             OWNER_CONCURRENT_SUBMISSION_LIMIT_DEFAULT
+        )
+
+    def test_flip_rule_bounds_match_rollout_constants_and_check_constraints(
+        self,
+    ) -> None:
+        assert MIN_FLIP_AGENTS == rollout_queries.MIN_FLIP_RULE_AGENTS
+        assert MAX_FLIP_AGENTS == rollout_queries.MAX_FLIP_RULE_AGENTS
+        assert MAX_FLIP_AGENTS == rollout_queries.MIN_DESIRED_AUTHORITY_AGENTS
+        assert MIN_FLIP_DEADLINE_HOURS == rollout_queries.MIN_FLIP_DEADLINE_HOURS
+        assert MAX_FLIP_DEADLINE_HOURS == rollout_queries.MAX_FLIP_DEADLINE_HOURS
+        assert (
+            DEFAULT_FLIP_DEADLINE_HOURS == rollout_queries.DEFAULT_FLIP_DEADLINE_HOURS
+        )
+        assert (
+            DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE
+            == rollout_queries.DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE
         )
 
     def test_owner_ceiling_ships_relaxed_but_conservative(self) -> None:
@@ -246,3 +270,55 @@ class TestRolloutLockedChange:
             prev_gen_carryover=PrevGenCarryoverSettings(enabled=True)
         )
         assert rollout_locked_change(current, proposed) == ()
+
+
+class TestFlipRuleSettings:
+    def test_ships_disabled_with_the_documented_proposal_as_values(self) -> None:
+        rule = QueuePolicySettings().flip_rule
+        assert rule.enabled is False
+        assert (
+            rule.min_agents_to_flip,
+            rule.flip_deadline_hours,
+            rule.min_agents_at_deadline,
+        ) == (5, 36, 3)
+
+    def test_a_stored_revision_without_the_block_reads_as_disabled(self) -> None:
+        """Every revision written before the rule existed parses unchanged."""
+        stored = QueuePolicySettings().model_dump(mode="json")
+        del stored["flip_rule"]
+        assert QueuePolicySettings.model_validate(stored).flip_rule.enabled is False
+
+    @pytest.mark.parametrize("agents", [0, 1, 2, 6, 25])
+    def test_family_counts_outside_three_to_five_are_rejected(
+        self, agents: int
+    ) -> None:
+        with pytest.raises(ValueError):
+            FlipRuleSettings(min_agents_to_flip=agents)
+        with pytest.raises(ValueError):
+            FlipRuleSettings(min_agents_at_deadline=agents)
+
+    @pytest.mark.parametrize("hours", [-1, 0, 169, 10_000])
+    def test_deadline_outside_one_hour_to_one_week_is_rejected(
+        self, hours: int
+    ) -> None:
+        with pytest.raises(ValueError):
+            FlipRuleSettings(flip_deadline_hours=hours)
+
+    def test_the_deadline_floor_may_not_exceed_the_immediate_threshold(self) -> None:
+        with pytest.raises(ValueError, match="cannot exceed min_agents_to_flip"):
+            FlipRuleSettings(min_agents_to_flip=3, min_agents_at_deadline=4)
+        FlipRuleSettings(min_agents_to_flip=4, min_agents_at_deadline=4)
+
+    def test_it_is_next_rollout_policy_not_rollout_locked(self) -> None:
+        """Editing it mid-rollout is safe: an open rollout froze its own copy."""
+        assert "flip_rule" not in rollout_locked_change(
+            QueuePolicySettings(),
+            QueuePolicySettings(flip_rule=FlipRuleSettings(enabled=True)),
+        )
+        assert (
+            rollout_locked_change(
+                QueuePolicySettings(),
+                QueuePolicySettings(flip_rule=FlipRuleSettings(enabled=True)),
+            )
+            == ()
+        )

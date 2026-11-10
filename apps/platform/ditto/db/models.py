@@ -5759,6 +5759,38 @@ class BenchmarkRollout(Base):
     ``MIN_DESIRED_AUTHORITY_AGENTS``. This column is the tunable half, and the
     constant remains its floor.
     """
+    flip_rule_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    """Whether this rollout may flip on the operator flip rule at all.
+
+    Frozen from ``queue_policy_settings_revisions.settings.flip_rule`` at START,
+    like ``rescore_cohort_target``: an operator revision never re-gates a
+    rollout already in flight. ``False`` (every row that predates the rule, and
+    the shipped default) keeps the original authority switch byte for byte: the
+    priority cohort at quorum AND ``MIN_DESIRED_AUTHORITY_AGENTS`` ranked owner
+    families. The three columns below are inert while this is ``False``.
+    """
+    flip_min_agents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default=text("5")
+    )
+    """Immediate threshold: ranked owner families that flip the ledger at once.
+
+    Still requires the priority cohort at quorum. Five (the default) is the
+    original rule; a lower value only relaxes the family count.
+    """
+    flip_deadline_hours: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=36, server_default=text("36")
+    )
+    """Hours after ``created_at`` at which the deadline branch opens."""
+    flip_min_agents_at_deadline: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default=text("3")
+    )
+    """Ranked owner families that flip the ledger once the deadline has passed.
+
+    The deadline branch does NOT wait for the priority cohort: a cohort member
+    that can never score is exactly the stall the deadline exists to break.
+    """
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
@@ -5806,6 +5838,23 @@ class BenchmarkRollout(Base):
             # make backfilling a legacy 11-25-member rollout order-dependent.
             "priority_cohort_target BETWEEN 5 AND 25",
             name="benchmark_rollout_bounded_priority_target",
+        ),
+        CheckConstraint(
+            # Mirrors FlipRuleSettings. The floor is the scoring quorum: below
+            # three families the board has no champion plus tail to speak of,
+            # and a lone-miner flip is only safe with the (not yet built) burn.
+            # The ceiling is the KOTH emission set, the original hard floor.
+            "flip_min_agents BETWEEN 3 AND 5",
+            name="benchmark_rollout_bounded_flip_min_agents",
+        ),
+        CheckConstraint(
+            "flip_min_agents_at_deadline BETWEEN 3 AND 5 "
+            "AND flip_min_agents_at_deadline <= flip_min_agents",
+            name="benchmark_rollout_bounded_flip_deadline_agents",
+        ),
+        CheckConstraint(
+            "flip_deadline_hours BETWEEN 1 AND 168",
+            name="benchmark_rollout_bounded_flip_deadline_hours",
         ),
         CheckConstraint(
             # 'superseded' is terminal: an operator abandoned the rollout before

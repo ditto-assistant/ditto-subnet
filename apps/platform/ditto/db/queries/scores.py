@@ -1537,6 +1537,7 @@ async def ranked_quorum_agent_ids(
     bench_version: int,
     agent_ids: set[UUID] | None = None,
     require_v9_semantic_pass: bool = False,
+    apply_season_window: bool = True,
 ) -> set[UUID]:
     """Eligible agent IDs holding a complete, RANKED quorum at ``bench_version``.
 
@@ -1544,6 +1545,11 @@ async def ranked_quorum_agent_ids(
     linked emission-owner families. Rollout activation uses it to prove that
     every frozen member completed a rankable full benchmark even when a legacy
     snapshot contains two members from one family.
+
+    ``apply_season_window=False`` ignores the dueling-season window and counts
+    every row ever written at ``bench_version``. It exists only so telemetry can
+    report how many quorums have *expired* from the window; no authority
+    decision may pass it.
     """
     ranked_score = _is_ranked()
     if require_v9_semantic_pass:
@@ -1572,7 +1578,9 @@ async def ranked_quorum_agent_ids(
     ).where(
         Score.bench_version == bench_version,
         # Bench v16+: only the season window's rows make a quorum.
-        await _score_season_scope(session, (bench_version,)),
+        await _score_season_scope(session, (bench_version,))
+        if apply_season_window
+        else true(),
     )
     if agent_ids is not None:
         if not agent_ids:
@@ -1648,6 +1656,7 @@ async def count_ranked_quorum_agents(
     bench_version: int,
     agent_ids: set[UUID] | None = None,
     require_v9_semantic_pass: bool = False,
+    apply_season_window: bool = True,
 ) -> int:
     """How many owner families hold a complete, RANKED quorum at ``bench_version``.
 
@@ -1676,6 +1685,7 @@ async def count_ranked_quorum_agents(
         bench_version=bench_version,
         agent_ids=agent_ids,
         require_v9_semantic_pass=require_v9_semantic_pass,
+        apply_season_window=apply_season_window,
     )
     if not ranked_ids:
         return 0

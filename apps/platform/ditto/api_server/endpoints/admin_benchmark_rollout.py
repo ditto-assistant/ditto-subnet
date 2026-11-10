@@ -1150,6 +1150,7 @@ async def start_rollout(
     queue_policy = await resolve_queue_policy_settings(session)
     rescore_cohort_target = queue_policy.rescore_cohort_size
     priority_cohort_target = queue_policy.priority_cohort_size
+    flip_rule = queue_policy.flip_rule
     members = await historical_rescore_cohort(
         session, source_version=from_version, limit=rescore_cohort_target
     )
@@ -1203,6 +1204,10 @@ async def start_rollout(
             desired_version=target,
             rescore_cohort_target=rescore_cohort_target,
             priority_cohort_target=priority_cohort_target,
+            flip_rule_enabled=flip_rule.enabled,
+            flip_min_agents=flip_rule.min_agents_to_flip,
+            flip_deadline_hours=flip_rule.flip_deadline_hours,
+            flip_min_agents_at_deadline=flip_rule.min_agents_at_deadline,
             audit_context={
                 "origin": "admin",
                 "actor": payload.actor,
@@ -1215,6 +1220,7 @@ async def start_rollout(
                 # the row is later inspected without its policy history.
                 "rescore_cohort_target": rescore_cohort_target,
                 "priority_cohort_target": priority_cohort_target,
+                "flip_rule": flip_rule.model_dump(mode="json"),
             },
         )
     except RolloutConflictError as exc:

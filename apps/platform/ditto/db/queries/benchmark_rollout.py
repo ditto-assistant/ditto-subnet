@@ -143,6 +143,22 @@ DESIRED_AUTHORITY_EARNED_EVENT = "desired_authority_earned"
 # from it here is a cycle; ``test_min_desired_authority_matches_koth_recipients``
 # asserts the equality, so resizing the tail without resizing this fails CI.
 MIN_DESIRED_AUTHORITY_AGENTS = 5
+# Operator flip rule (``FlipRuleSettings``): bounds mirrored by the
+# ``benchmark_rollout_bounded_flip_*`` CHECKs and by
+# ``ditto.api_models.queue_policy_settings``; ``test_queue_policy_bounds_match_
+# queue_constants`` asserts the three agree. The family count can only be
+# RELAXED from the original five, and never below the scoring quorum.
+MIN_FLIP_RULE_AGENTS = 3
+MAX_FLIP_RULE_AGENTS = MIN_DESIRED_AUTHORITY_AGENTS
+MIN_FLIP_DEADLINE_HOURS = 1
+MAX_FLIP_DEADLINE_HOURS = 168
+DEFAULT_FLIP_DEADLINE_HOURS = 36
+DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE = 3
+# ``flip_path`` recorded on the ``desired_authority_earned`` audit event when the
+# rule is enabled. The first is the original switch (priority cohort at quorum
+# plus the immediate family count); the second is the deadline branch.
+FLIP_PATH_PRIORITY_QUORUM = "priority_cohort_quorum"
+FLIP_PATH_DEADLINE = "deadline"
 # Frozen membership is append-only. These statuses drop a member from ranking
 # and from remaining rollout work, but they must not deadlock the transition
 # or yank desired-version authority backward. ATH holds stay off this set:
@@ -691,6 +707,27 @@ async def append_rollout_member(
     return True
 
 
+def _immediate_flip_agents(rollout: BenchmarkRollout) -> int:
+    """Ranked owner families the immediate branch needs for THIS rollout.
+
+    The original :data:`MIN_DESIRED_AUTHORITY_AGENTS` unless the rollout froze an
+    enabled flip rule at start, in which case the (never larger) frozen value.
+    """
+    if rollout.flip_rule_enabled:
+        return int(rollout.flip_min_agents)
+    return MIN_DESIRED_AUTHORITY_AGENTS
+
+
+def flip_deadline_at(rollout: BenchmarkRollout) -> datetime | None:
+    """When the frozen deadline branch opens, or ``None`` with the rule off."""
+    if not rollout.flip_rule_enabled:
+        return None
+    started = rollout.created_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    return started + timedelta(hours=int(rollout.flip_deadline_hours))
+
+
 async def _live_desired_authority_ready(
     session: AsyncSession, rollout: BenchmarkRollout
 ) -> bool:
@@ -702,6 +739,12 @@ async def _live_desired_authority_ready(
     priority prefix and a full desired emission set. Once that flip is
     recorded, :func:`desired_authority_earned` is the sticky source and
     later holds or rejects cannot roll authority back.
+
+    Deliberately clock-free. ``active_bench_version`` calls this on every read,
+    and a time-dependent answer would let two readers disagree for the second
+    around a deadline. The flip rule's deadline branch therefore lives only in
+    :func:`maybe_record_desired_authority` (a write path), which seals the flip
+    durably so every later reader sees one answer.
     """
     from ditto.db.queries.scores import count_ranked_quorum_agents
 
@@ -716,7 +759,32 @@ async def _live_desired_authority_ready(
         bench_version=rollout.desired_version,
         require_v9_semantic_pass=rollout.desired_version == 9,
     )
-    return ready >= MIN_DESIRED_AUTHORITY_AGENTS
+    return ready >= _immediate_flip_agents(rollout)
+
+
+async def _deadline_authority_ready(
+    session: AsyncSession, rollout: BenchmarkRollout, *, now: datetime
+) -> bool:
+    """The flip rule's deadline branch: enough LIVE families once time is up.
+
+    Only for a rollout that froze an enabled rule. It does not wait for the
+    priority cohort -- a cohort member that cannot score is the stall this
+    branch exists to end -- but it counts exactly what the ledger will serve:
+    ranked quorums inside the current-or-previous dueling season window. A
+    quorum that has already expired cannot be on the board it would flip to, so
+    it must not count toward the floor.
+    """
+    deadline = flip_deadline_at(rollout)
+    if deadline is None or now < deadline:
+        return False
+    from ditto.db.queries.scores import count_ranked_quorum_agents
+
+    ranked = await count_ranked_quorum_agents(
+        session,
+        bench_version=rollout.desired_version,
+        require_v9_semantic_pass=rollout.desired_version == 9,
+    )
+    return ranked >= int(rollout.flip_min_agents_at_deadline)
 
 
 async def desired_authority_earned(
@@ -775,11 +843,21 @@ async def maybe_record_desired_authority(
     ``active_bench_version`` back to the previous era. Read-only sessions
     that never commit still see desired authority from the live predicate
     until the next write seals it.
+
+    With an enabled flip rule the deadline branch is evaluated here too, after
+    the original predicate. It runs after every accepted score and from
+    authenticated idle validator polls (``refresh_rolling_qualification``,
+    throttled to once per 30 s per API process), so the flip is sealed by the
+    first write that sees the floor met -- a quorum cannot lapse out of the
+    two-season window unobserved for longer than one refresh interval.
     """
     if await desired_authority_earned(session, rollout):
         return True
+    flip_path = FLIP_PATH_PRIORITY_QUORUM
     if not await _live_desired_authority_ready(session, rollout):
-        return False
+        if not await _deadline_authority_ready(session, rollout, now=now):
+            return False
+        flip_path = FLIP_PATH_DEADLINE
     from ditto.db.queries.scores import count_ranked_quorum_agents
 
     ranked = await count_ranked_quorum_agents(
@@ -787,17 +865,25 @@ async def maybe_record_desired_authority(
         bench_version=rollout.desired_version,
         require_v9_semantic_pass=rollout.desired_version == 9,
     )
-    await _audit(
-        session,
-        rollout,
-        DESIRED_AUTHORITY_EARNED_EVENT,
-        {
-            "bench_version": rollout.desired_version,
-            "ranked_quorum_agents": ranked,
-            "min_ranked_quorum_agents": MIN_DESIRED_AUTHORITY_AGENTS,
-        },
-        now=now,
-    )
+    payload: dict[str, Any] = {
+        "bench_version": rollout.desired_version,
+        "ranked_quorum_agents": ranked,
+        "min_ranked_quorum_agents": MIN_DESIRED_AUTHORITY_AGENTS,
+    }
+    if rollout.flip_rule_enabled:
+        # Only a rollout that froze the rule carries its provenance; a rollout
+        # without one writes the same payload it always did.
+        deadline = flip_deadline_at(rollout)
+        payload.update(
+            {
+                "flip_path": flip_path,
+                "flip_min_agents": int(rollout.flip_min_agents),
+                "flip_deadline_hours": int(rollout.flip_deadline_hours),
+                "flip_min_agents_at_deadline": int(rollout.flip_min_agents_at_deadline),
+                "flip_deadline_at": deadline.isoformat() if deadline else None,
+            }
+        )
+    await _audit(session, rollout, DESIRED_AUTHORITY_EARNED_EVENT, payload, now=now)
     await session.flush()
     return True
 
@@ -1236,6 +1322,10 @@ async def create_rollout_snapshot(
     desired_version: int = CANARY_BENCH_VERSION,
     rescore_cohort_target: int = DEFAULT_RESCORE_COHORT_SIZE,
     priority_cohort_target: int = PRIORITY_COHORT_SIZE,
+    flip_rule_enabled: bool = False,
+    flip_min_agents: int = MIN_DESIRED_AUTHORITY_AGENTS,
+    flip_deadline_hours: int = DEFAULT_FLIP_DEADLINE_HOURS,
+    flip_min_agents_at_deadline: int = DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE,
     audit_context: dict[str, Any] | None = None,
 ) -> BenchmarkRollout:
     """Freeze a bounded prior-era cohort and target dataset pins, idempotently.
@@ -1245,9 +1335,28 @@ async def create_rollout_snapshot(
     never rewritten, so a later policy revision cannot resize or re-gate this
     rollout and a historical rollout can always be explained by the shape it was
     actually built to.
+
+    The ``flip_*`` arguments are the operator flip rule at the moment of the
+    start, frozen the same way. The defaults describe a DISABLED rule, which
+    leaves the original authority switch untouched.
     """
     if desired_version <= from_version:
         raise ValueError("a benchmark rollout must move the version forward")
+    if not MIN_FLIP_RULE_AGENTS <= flip_min_agents <= MAX_FLIP_RULE_AGENTS:
+        raise ValueError(
+            f"rollout flip_min_agents must be between {MIN_FLIP_RULE_AGENTS} "
+            f"and {MAX_FLIP_RULE_AGENTS}"
+        )
+    if not (MIN_FLIP_RULE_AGENTS <= flip_min_agents_at_deadline <= flip_min_agents):
+        raise ValueError(
+            "rollout flip_min_agents_at_deadline must be between "
+            f"{MIN_FLIP_RULE_AGENTS} and flip_min_agents ({flip_min_agents})"
+        )
+    if not MIN_FLIP_DEADLINE_HOURS <= flip_deadline_hours <= MAX_FLIP_DEADLINE_HOURS:
+        raise ValueError(
+            f"rollout flip_deadline_hours must be between {MIN_FLIP_DEADLINE_HOURS} "
+            f"and {MAX_FLIP_DEADLINE_HOURS}"
+        )
     if (
         not PRIORITY_COHORT_SIZE
         <= rescore_cohort_target
@@ -1321,6 +1430,10 @@ async def create_rollout_snapshot(
         cohort_size=len(members),
         rescore_cohort_target=rescore_cohort_target,
         priority_cohort_target=priority_cohort_target,
+        flip_rule_enabled=flip_rule_enabled,
+        flip_min_agents=flip_min_agents,
+        flip_deadline_hours=flip_deadline_hours,
+        flip_min_agents_at_deadline=flip_min_agents_at_deadline,
         created_at=now,
     )
     session.add(rollout)
@@ -2674,6 +2787,7 @@ def bench_promotion_requirement(
     emission_version: int,
     rollout_version: int,
     priority_cohort_size: int,
+    flip_rule: dict[str, Any] | None = None,
 ) -> str:
     """The remaining condition for emission authority to move, in one sentence.
 
@@ -2691,17 +2805,95 @@ def bench_promotion_requirement(
     During the Bench 13 rollout, scoring on v13 while v12 still paid was read
     as a stalled rollout; this is the answer to "what is it waiting for".
     """
-    return (
+    immediate = (
+        int(flip_rule["min_agents_to_flip"])
+        if flip_rule is not None and flip_rule.get("enabled")
+        else MIN_DESIRED_AUTHORITY_AGENTS
+    )
+    sentence = (
         f"Bench v{rollout_version} scoring is in progress; Bench "
         f"v{emission_version} still controls emissions. Emission authority "
         f"moves to v{rollout_version} only once the first {priority_cohort_size} "
         "inherited priority-cohort positions each hold a complete "
         f"{SCORING_QUORUM}-score v{rollout_version} quorum (permanently "
         "ineligible members are skipped) and at least "
-        f"{MIN_DESIRED_AUTHORITY_AGENTS} agents hold a complete ranked "
+        f"{immediate} agents hold a complete ranked "
         f"v{rollout_version} quorum, the champion plus the full participation "
         "tail. The whole ledger then flips at once."
     )
+    if flip_rule is not None and flip_rule.get("enabled"):
+        sentence += (
+            f" A deadline also applies: {flip_rule['flip_deadline_hours']} hours "
+            f"after the rollout started (at {flip_rule['deadline_at']}), the "
+            f"ledger flips as soon as {flip_rule['min_agents_at_deadline']} "
+            "agents hold a complete ranked quorum, without waiting for the "
+            "priority cohort."
+        )
+    return sentence
+
+
+async def flip_rule_telemetry(
+    session: AsyncSession,
+    rollout: BenchmarkRollout,
+    *,
+    now: datetime,
+    ranked_quorum_agents: int,
+    priority_complete: bool,
+) -> dict[str, Any]:
+    """What this rollout froze for the flip rule, and where it stands against it.
+
+    ``ranked_quorum_agents`` counts quorums inside the two-season window, which
+    is what a flip would put on the board. ``expired_quorum_agents`` is the
+    difference to the same count taken over every season: owner families that
+    reached a ranked quorum on the desired version and have since aged out of the
+    window. It is the direct answer to "did the quorum I was waiting for expire".
+    """
+    from ditto.db.queries.scores import count_ranked_quorum_agents
+
+    deadline = flip_deadline_at(rollout)
+    # Both extra reads below run only for a rollout that froze an enabled rule,
+    # so the public rollout endpoint issues the same statements as before while
+    # the rule is off (its statement budget is a tested ceiling).
+    earned = (
+        await desired_authority_earned(session, rollout)
+        if rollout.flip_rule_enabled
+        else None
+    )
+    # The all-season count scans every score row at the desired version.
+    all_time = (
+        await count_ranked_quorum_agents(
+            session,
+            bench_version=rollout.desired_version,
+            require_v9_semantic_pass=rollout.desired_version == 9,
+            apply_season_window=False,
+        )
+        if rollout.flip_rule_enabled
+        else None
+    )
+    deadline_elapsed = deadline is not None and now >= deadline
+    return {
+        "enabled": bool(rollout.flip_rule_enabled),
+        "min_agents_to_flip": int(rollout.flip_min_agents),
+        "flip_deadline_hours": int(rollout.flip_deadline_hours),
+        "min_agents_at_deadline": int(rollout.flip_min_agents_at_deadline),
+        "deadline_at": deadline.isoformat() if deadline is not None else None,
+        "deadline_elapsed": deadline_elapsed,
+        "authority_earned": earned,
+        "priority_complete": priority_complete,
+        "ranked_quorum_agents": ranked_quorum_agents,
+        "expired_quorum_agents": (
+            max(all_time - ranked_quorum_agents, 0) if all_time is not None else None
+        ),
+        # What the next write would do, so an operator can see the rule is
+        # about to fire (or why it is not) without re-deriving it.
+        "immediate_ready": priority_complete
+        and ranked_quorum_agents >= _immediate_flip_agents(rollout),
+        "deadline_ready": bool(
+            rollout.flip_rule_enabled
+            and deadline_elapsed
+            and ranked_quorum_agents >= int(rollout.flip_min_agents_at_deadline)
+        ),
+    }
 
 
 async def rollout_state(
@@ -2788,6 +2980,7 @@ async def rollout_state(
             # Nothing is being collected, so nothing is waiting to promote.
             "promotion_pending": False,
             "promotion_requirement": None,
+            "flip_rule": None,
             "members": [],
         }
     count_rows = (
@@ -2861,6 +3054,13 @@ async def rollout_state(
         rollout.status in ("collecting", "blocked_ineligible")
         and rollout.desired_version > active_version
     )
+    flip_rule_state = await flip_rule_telemetry(
+        session,
+        rollout,
+        now=now,
+        ranked_quorum_agents=ranked_quorum_agents,
+        priority_complete=priority_complete,
+    )
     return {
         "active_version": active_version,
         "desired_version": rollout.desired_version,
@@ -2902,10 +3102,12 @@ async def rollout_state(
                 emission_version=active_version,
                 rollout_version=rollout.desired_version,
                 priority_cohort_size=priority_target,
+                flip_rule=flip_rule_state,
             )
             if promotion_pending
             else None
         ),
+        "flip_rule": flip_rule_state,
         "members": [
             {
                 "agent_id": str(member.agent_id),

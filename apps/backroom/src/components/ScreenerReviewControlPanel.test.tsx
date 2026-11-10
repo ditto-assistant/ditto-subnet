@@ -139,6 +139,12 @@ const queueSettings = {
     require_cohort_complete: true,
     require_desired_era_drained: true,
   },
+  flip_rule: {
+    enabled: false,
+    min_agents_to_flip: 5,
+    flip_deadline_hours: 36,
+    min_agents_at_deadline: 3,
+  },
   lineage_reference_mode: 'same_owner_version' as const,
 }
 
@@ -155,6 +161,7 @@ const queuePolicy: QueuePolicySettingsControl = {
     open_rollout_desired_version: null,
     open_rollout_rescore_cohort_target: null,
     open_rollout_priority_cohort_target: null,
+    open_rollout_flip_rule: null,
     open_rollout_overrides_setting: false,
     rollout_locked_fields: [],
     rollout_is_open: false,

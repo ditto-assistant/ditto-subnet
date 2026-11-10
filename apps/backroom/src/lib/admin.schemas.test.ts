@@ -3010,6 +3010,12 @@ describe('queue policy settings schemas', () => {
       require_cohort_complete: true,
       require_desired_era_drained: true,
     },
+    flip_rule: {
+      enabled: false,
+      min_agents_to_flip: 5,
+      flip_deadline_hours: 36,
+      min_agents_at_deadline: 3,
+    },
     lineage_reference_mode: 'same_owner_version',
   }
 
@@ -3126,6 +3132,7 @@ describe('queue policy settings schemas', () => {
   it('declares exactly the platform-owned policy field set', () => {
     expect(Object.keys(queuePolicySettingsSchema.parse({})).sort()).toEqual([
       'deferred_source_review',
+      'flip_rule',
       'fresh_submission_slots',
       'lane_cycle_size',
       'lineage_reference_mode',
@@ -3185,6 +3192,38 @@ describe('queue policy settings schemas', () => {
     ).toThrow()
 
     expect(queuePolicySettingsWriteSchema.parse(settings)).toEqual(settings)
+  })
+
+  it('requires the flip rule on write and keeps it inside the platform bounds', () => {
+    const { flip_rule: _flip, ...missingFlip } = settings
+    expect(() => queuePolicySettingsWriteSchema.parse(missingFlip)).toThrow()
+    // A read without the block (an older platform) is the shipped, disabled rule.
+    expect(queuePolicySettingsSchema.parse(missingFlip).flip_rule).toEqual({
+      enabled: false,
+      min_agents_to_flip: 5,
+      flip_deadline_hours: 36,
+      min_agents_at_deadline: 3,
+    })
+    // The block is stored whole too.
+    expect(() =>
+      queuePolicySettingsWriteSchema.parse({
+        ...settings,
+        flip_rule: { ...settings.flip_rule, flip_deadline_hours: undefined },
+      }),
+    ).toThrow()
+    for (const flip_rule of [
+      { ...settings.flip_rule, min_agents_to_flip: 6 },
+      { ...settings.flip_rule, min_agents_to_flip: 2 },
+      { ...settings.flip_rule, min_agents_at_deadline: 2 },
+      { ...settings.flip_rule, flip_deadline_hours: 0 },
+      { ...settings.flip_rule, flip_deadline_hours: 169 },
+      // A deadline floor stricter than the immediate threshold.
+      { ...settings.flip_rule, min_agents_to_flip: 3, min_agents_at_deadline: 4 },
+    ]) {
+      expect(() => queuePolicySettingsWriteSchema.parse({ ...settings, flip_rule })).toThrow()
+    }
+    const enabled = { enabled: true, min_agents_to_flip: 5, flip_deadline_hours: 36, min_agents_at_deadline: 3 }
+    expect(queuePolicySettingsWriteSchema.parse({ ...settings, flip_rule: enabled }).flip_rule).toEqual(enabled)
   })
 
   it('keeps the owner concurrency limit inside the platform range', () => {

@@ -19,12 +19,13 @@ what makes a historical revision reconstructable. But the *fields* are consumed
 at three different moments, and confusing them is how a queue change becomes an
 incident:
 
-``NEXT ROLLOUT`` -- :attr:`~QueuePolicySettings.rescore_cohort_size` and
-    :attr:`~QueuePolicySettings.priority_cohort_size`. Read exactly once, when
+``NEXT ROLLOUT`` -- :attr:`~QueuePolicySettings.rescore_cohort_size`,
+    :attr:`~QueuePolicySettings.priority_cohort_size` and
+    :attr:`~QueuePolicySettings.flip_rule`. Read exactly once, when
     an operator starts a rollout, then frozen onto the rollout row
     (``BenchmarkRollout.rescore_cohort_target`` /
-    ``.priority_cohort_target``). Editing them never touches an in-flight
-    rollout. Safe to write at any time.
+    ``.priority_cohort_target`` / ``.flip_*``). Editing them never touches an
+    in-flight rollout. Safe to write at any time.
 
 ``LIVE, ROLLOUT-LOCKED`` -- :attr:`~QueuePolicySettings.lane_cycle_size` and
     :attr:`~QueuePolicySettings.fresh_submission_slots`, listed in
@@ -73,6 +74,25 @@ DEFAULT_RESCORE_COHORT_SIZE = 10
 # Mirrors ``PRIORITY_COHORT_SIZE`` as a *default*. The constant survives as the
 # floor and as the KOTH top-five; this setting is only the rollout gate.
 DEFAULT_PRIORITY_COHORT_SIZE = 5
+
+# ---------------------------------------------------------------------------
+# Flip-rule bounds
+# ---------------------------------------------------------------------------
+# Mirrors the ``benchmark_rollout_bounded_flip_*`` CHECK constraints and
+# ``ditto.db.queries.benchmark_rollout``. The floor is the scoring quorum: a
+# board of fewer than three owner families is a lone-miner board, which is only
+# safe once the burn of unfilled rank shares exists (it does not yet). The
+# ceiling is ``MIN_DESIRED_AUTHORITY_AGENTS``, the original hard floor, so the
+# rule can only ever RELAX the family count, never demand more than today does.
+MIN_FLIP_AGENTS = 3
+MAX_FLIP_AGENTS = 5
+DEFAULT_FLIP_MIN_AGENTS = 5
+DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE = 3
+# One hour to one week. Under an hour the deadline is a race with the first
+# scores; over a week a stall is not a stall any more.
+MIN_FLIP_DEADLINE_HOURS = 1
+MAX_FLIP_DEADLINE_HOURS = 168
+DEFAULT_FLIP_DEADLINE_HOURS = 36
 
 # ---------------------------------------------------------------------------
 # Lane bounds
@@ -535,6 +555,79 @@ class SimilarityBudgetSettings(BaseModel):
     """
 
 
+class FlipRuleSettings(BaseModel):
+    """When a benchmark rollout may take ledger authority with a thin board.
+
+    Without this rule the ledger flips to the new bench version only when the
+    frozen priority cohort holds a 3/3 quorum AND five ranked owner families do.
+    If fewer agents get there the old board is paid indefinitely; a champion who
+    stops resubmitting profits from delay. This rule bounds the wait.
+
+    Ships DISABLED, and a disabled rule is byte-identical to the original
+    switch. Like the cohort sizes it is NEXT-ROLLOUT policy: read once when a
+    rollout starts and frozen onto the rollout row, so a revision never moves
+    the finish line of a transition already in flight.
+
+    When enabled, the rollout flips on the first of:
+
+    * the original condition, with the family count lowered to
+      :attr:`min_agents_to_flip` (priority cohort at quorum AND at least that
+      many ranked owner families -- the default 5 is the original rule);
+    * **the deadline**: :attr:`flip_deadline_hours` after the rollout started, at
+      least :attr:`min_agents_at_deadline` ranked owner families hold a complete
+      quorum. The deadline branch does not wait for the priority cohort, because
+      a cohort member that can never score is the stall it exists to break.
+
+    A "ranked family" is exactly what
+    :func:`~ditto.db.queries.scores.count_ranked_quorum_agents` counts: an owner
+    root with a 3-score median row that ran the full benchmark with a positive
+    composite, inside the current-or-previous dueling season window.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    enabled: bool = False
+    """Master switch. ``False`` keeps the original authority switch exactly."""
+
+    min_agents_to_flip: Annotated[
+        int, Field(ge=MIN_FLIP_AGENTS, le=MAX_FLIP_AGENTS)
+    ] = DEFAULT_FLIP_MIN_AGENTS
+    """Ranked owner families that flip the ledger immediately (3..5).
+
+    The priority cohort must still be at quorum. ``5`` is today's rule; lowering
+    it only relaxes the family count.
+    """
+
+    flip_deadline_hours: Annotated[
+        int, Field(ge=MIN_FLIP_DEADLINE_HOURS, le=MAX_FLIP_DEADLINE_HOURS)
+    ] = DEFAULT_FLIP_DEADLINE_HOURS
+    """Hours after rollout start at which the deadline branch opens (1..168).
+
+    A score only counts for the current and previous dueling season, so a quorum
+    row lives roughly two seasons. The deadline is evaluated on every validator
+    poll after it passes and the first poll that sees the floor met seals the
+    flip durably; see ``docs/bench-bump-readmission.md`` for what that implies
+    for a cohort-less rollout.
+    """
+
+    min_agents_at_deadline: Annotated[
+        int, Field(ge=MIN_FLIP_AGENTS, le=MAX_FLIP_AGENTS)
+    ] = DEFAULT_FLIP_MIN_AGENTS_AT_DEADLINE
+    """Ranked owner families that flip the ledger once the deadline has passed
+    (3..5, at most :attr:`min_agents_to_flip`)."""
+
+    @model_validator(mode="after")
+    def _check_coherent(self) -> FlipRuleSettings:
+        if self.min_agents_at_deadline > self.min_agents_to_flip:
+            raise ValueError(
+                f"min_agents_at_deadline ({self.min_agents_at_deadline}) cannot "
+                f"exceed min_agents_to_flip ({self.min_agents_to_flip}): the "
+                "deadline is a fallback and must never be stricter than the "
+                "immediate condition"
+            )
+        return self
+
+
 LineageReferenceMode = Literal["same_owner_version", "same_owner", "released_base"]
 
 
@@ -570,6 +663,10 @@ class QueuePolicySettings(BaseModel):
     Frozen onto the rollout row at start, so raising it never re-gates a
     transition already in flight.
     """
+
+    flip_rule: FlipRuleSettings = FlipRuleSettings()
+    """Optional bound on how long a thin board can hold the old version's
+    emissions. Ships disabled; frozen onto the rollout row at start."""
 
     # -- LIVE, ROLLOUT-LOCKED ---------------------------------------------
 
@@ -785,6 +882,8 @@ class EffectiveQueuePolicySettings(BaseModel):
     """The rescore size that rollout froze at start. Immune to later revisions."""
     open_rollout_priority_cohort_target: int | None = None
     """The priority size that rollout froze at start. Immune to later revisions."""
+    open_rollout_flip_rule: FlipRuleSettings | None = None
+    """The flip rule that rollout froze at start. Immune to later revisions."""
     open_rollout_overrides_setting: bool = False
     """True when an open rollout froze a cohort size other than the configured
     one, so the operator can see the new value only applies to the next
@@ -843,6 +942,12 @@ class AdminQueuePolicySettingsRequest(BaseModel):
             raise ValueError(
                 f"similarity_budget is stored whole too; missing {similarity_missing}"
             )
+        flip_missing = sorted(
+            set(FlipRuleSettings.model_fields)
+            - self.settings.flip_rule.model_fields_set
+        )
+        if flip_missing:
+            raise ValueError(f"flip_rule is stored whole too; missing {flip_missing}")
         deferred_missing = sorted(
             set(DeferredSourceReviewSettings.model_fields)
             - self.settings.deferred_source_review.model_fields_set

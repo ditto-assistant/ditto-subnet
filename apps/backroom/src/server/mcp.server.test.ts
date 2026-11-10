@@ -4942,6 +4942,12 @@ describe('Backroom MCP tools', () => {
         require_cohort_complete: true,
         require_desired_era_drained: true,
       },
+      flip_rule: {
+        enabled: false,
+        min_agents_to_flip: 5,
+        flip_deadline_hours: 36,
+        min_agents_at_deadline: 3,
+      },
       lineage_reference_mode: 'same_owner_version',
     }
     const control = {
@@ -5047,6 +5053,12 @@ describe('Backroom MCP tools', () => {
             dedupe_scope: 'coldkey',
             require_cohort_complete: true,
             require_desired_era_drained: true,
+          },
+          flip_rule: {
+            enabled: false,
+            min_agents_to_flip: 5,
+            flip_deadline_hours: 36,
+            min_agents_at_deadline: 3,
           },
           lineage_reference_mode: 'same_owner_version',
         },
