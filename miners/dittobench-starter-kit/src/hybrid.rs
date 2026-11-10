@@ -987,9 +987,11 @@ pub async fn run_case(
     for name in &safe_harbor {
         offer(name, &mut offered);
     }
-    // Memory search is always one schema away; saving only when told a fact.
+    // Memory search is always one schema away; saving when told a fact, or
+    // when no route is known (no decision lane, or pass 1 failed) and the
+    // request may be one.
     offer("search_memories", &mut offered);
-    if plan.route == "remember" {
+    if plan.route == "remember" || plan.route.is_empty() {
         offer("save_memory", &mut offered);
     }
 
