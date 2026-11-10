@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 _PACKAGE_ROOT = (__package__ or "ditto_screener").split(".")[0]
 
 
+# Exit status of a worker that stopped because it stayed idle. The on-demand
+# host's unit lists it in RestartPreventExitStatus= so systemd leaves the
+# worker down and the idle-shutdown check can power the host off.
+IDLE_EXIT_STATUS = 85
+
+
 def _install_signal_handlers(
     loop: asyncio.AbstractEventLoop, stop: asyncio.Event
 ) -> None:
@@ -116,12 +122,12 @@ async def _amain() -> int:
         if readiness is not None and not config.require_rootless_docker:
             readiness.set_ready()
         try:
-            await worker.run_forever(stop)
+            idle = await worker.run_forever(stop)
         finally:
             if readiness is not None:
                 readiness.stop()
     logger.info("screener worker stopped")
-    return 0
+    return IDLE_EXIT_STATUS if idle else 0
 
 
 def _make_readiness_server() -> ReadinessServer | None:

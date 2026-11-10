@@ -2431,6 +2431,227 @@ class TestFederatedScreenerNodes:
 # --- Queue -----------------------------------------------------------------
 
 
+class TestDormantNodeReauth:
+    """An on-demand node rotates the bearer it held when it powered off."""
+
+    _NODE_ID = "subnet-screener-3"
+    _TOKEN = "dormant-aws-node-token-at-least-32-characters"
+
+    async def _seed(
+        self,
+        app: FastAPI,
+        maker: async_sessionmaker[AsyncSession],
+        *,
+        provider: str,
+        expired_for: timedelta,
+        status: str = "active",
+        max_dormancy_seconds: int = 30 * 24 * 60 * 60,
+    ) -> bittensor.Keypair:
+        _install_db(app, maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+                node_reauth_max_dormancy_seconds=max_dormancy_seconds,
+            ),
+        )
+        keypair = bittensor.Keypair.create_from_uri("//DormantNode")
+        await _seed_screener_node(
+            maker,
+            node_id=self._NODE_ID,
+            hotkey=keypair.ss58_address,
+            token=self._TOKEN,
+            screening_concurrency=1,
+        )
+        async with maker() as session, session.begin():
+            node = await session.get(ScreenerNode, self._NODE_ID)
+            assert node is not None
+            node.provider = provider
+            node.status = status
+            node.token_expires_at = datetime.now(UTC) - expired_for
+        return keypair
+
+    async def _refresh(
+        self,
+        client: httpx.AsyncClient,
+        keypair: bittensor.Keypair,
+        *,
+        refresh_id: UUID,
+        token: str | None = None,
+    ) -> httpx.Response:
+        timestamp = int(datetime.now(UTC).timestamp())
+        message = (
+            "ditto-screener-node-refresh:v1:"
+            f"{self._NODE_ID}:{keypair.ss58_address}:{timestamp}:{refresh_id}"
+        ).encode()
+        return await client.post(
+            "/api/v1/screener/nodes/refresh",
+            headers={
+                "Authorization": f"Bearer {token or self._TOKEN}",
+                "X-Screener-Hotkey": keypair.ss58_address,
+            },
+            json={
+                "node_id": self._NODE_ID,
+                "screener_hotkey": keypair.ss58_address,
+                "timestamp": timestamp,
+                "signature": keypair.sign(message).hex(),
+                "refresh_id": str(refresh_id),
+            },
+        )
+
+    async def test_woken_aws_node_rotates_its_expired_bearer(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        keypair = await self._seed(
+            app, session_maker, provider="aws", expired_for=timedelta(days=3)
+        )
+
+        refresh_id = uuid4()
+        response = await self._refresh(client, keypair, refresh_id=refresh_id)
+
+        assert response.status_code == 200, response.text
+        rotated = response.json()["api_token"]
+        assert rotated != self._TOKEN
+        assert datetime.fromisoformat(response.json()["expires_at"]) > datetime.now(UTC)
+        # The superseded bearer cannot start a second dormant rotation.
+        other = await self._refresh(client, keypair, refresh_id=uuid4())
+        assert other.status_code == 401
+        # A lost response replays to the same authority.
+        replay = await self._refresh(client, keypair, refresh_id=refresh_id)
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["api_token"] == rotated
+
+    async def test_stop_during_rotation_recovers_with_the_same_request(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        keypair = await self._seed(
+            app, session_maker, provider="aws", expired_for=timedelta(hours=1)
+        )
+        async with session_maker() as session, session.begin():
+            node = await session.get(ScreenerNode, self._NODE_ID)
+            assert node is not None
+            node.token_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+        refresh_id = uuid4()
+        first = await self._refresh(client, keypair, refresh_id=refresh_id)
+        assert first.status_code == 200, first.text
+        # The node powered off before storing the response; both bearers and
+        # the rotation grace lapse while it sleeps.
+        async with session_maker() as session, session.begin():
+            node = await session.get(ScreenerNode, self._NODE_ID)
+            assert node is not None
+            node.token_expires_at = datetime.now(UTC) - timedelta(days=1)
+            node.previous_token_expires_at = datetime.now(UTC) - timedelta(days=1)
+
+        recovered = await self._refresh(client, keypair, refresh_id=refresh_id)
+
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["api_token"] == first.json()["api_token"]
+        assert datetime.fromisoformat(recovered.json()["expires_at"]) > datetime.now(
+            UTC
+        )
+        # That response can be lost too: the node still holds only the old
+        # bearer, and a retry of the same request must still succeed.
+        retried = await self._refresh(client, keypair, refresh_id=refresh_id)
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["api_token"] == first.json()["api_token"]
+
+    async def test_waking_with_the_rotated_bearer_retires_the_old_one(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        keypair = await self._seed(
+            app, session_maker, provider="aws", expired_for=timedelta(hours=1)
+        )
+        async with session_maker() as session, session.begin():
+            node = await session.get(ScreenerNode, self._NODE_ID)
+            assert node is not None
+            node.token_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+        refresh_id = uuid4()
+        first = await self._refresh(client, keypair, refresh_id=refresh_id)
+        assert first.status_code == 200, first.text
+        rotated = first.json()["api_token"]
+        # The node stored the rotated bearer, then slept past its expiry with
+        # the same refresh id still pending.
+        async with session_maker() as session, session.begin():
+            node = await session.get(ScreenerNode, self._NODE_ID)
+            assert node is not None
+            node.token_expires_at = datetime.now(UTC) - timedelta(days=1)
+
+        woke = await self._refresh(
+            client, keypair, refresh_id=refresh_id, token=rotated
+        )
+
+        assert woke.status_code == 200, woke.text
+        # The retired bearer is not re-armed for that request.
+        stale = await self._refresh(client, keypair, refresh_id=refresh_id)
+        assert stale.status_code == 401
+
+    @pytest.mark.parametrize(
+        ("provider", "status", "expired_for", "max_dormancy_seconds"),
+        [
+            ("hetzner", "active", timedelta(hours=1), 30 * 24 * 60 * 60),
+            ("aws", "revoked", timedelta(hours=1), 30 * 24 * 60 * 60),
+            ("aws", "quarantined", timedelta(hours=1), 30 * 24 * 60 * 60),
+            ("aws", "active", timedelta(days=31), 30 * 24 * 60 * 60),
+            ("aws", "active", timedelta(seconds=30), 0),
+        ],
+    )
+    async def test_dormant_rotation_is_bounded(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        provider: str,
+        status: str,
+        expired_for: timedelta,
+        max_dormancy_seconds: int,
+    ) -> None:
+        keypair = await self._seed(
+            app,
+            session_maker,
+            provider=provider,
+            status=status,
+            expired_for=expired_for,
+            max_dormancy_seconds=max_dormancy_seconds,
+        )
+
+        response = await self._refresh(client, keypair, refresh_id=uuid4())
+
+        assert response.status_code == 401
+
+    async def test_dormant_rotation_needs_the_node_bearer_and_hotkey(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        keypair = await self._seed(
+            app, session_maker, provider="aws", expired_for=timedelta(hours=1)
+        )
+
+        wrong_bearer = await self._refresh(
+            client,
+            keypair,
+            refresh_id=uuid4(),
+            token="some-other-bearer-at-least-32-characters-long",
+        )
+        stranger = await self._refresh(
+            client, bittensor.Keypair.create_from_uri("//Stranger"), refresh_id=uuid4()
+        )
+
+        assert wrong_bearer.status_code == 401
+        assert stranger.status_code == 401
+
+
 class TestShadowReview:
     async def test_attempt_owned_observation_is_idempotent_and_non_authoritative(
         self,
