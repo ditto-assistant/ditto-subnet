@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.468.3 (2026-11-10)
+
+### Bug Fixes
+
+- **platform**: Stop unreleased-copy holds on re-spelled released code and a stale public corpus
+  ([#3469](https://github.com/ditto-assistant/ditto-subnet/pull/3469),
+  [`ddf9f30`](https://github.com/ditto-assistant/ditto-subnet/commit/ddf9f3023dcc3c807bfd91cfebcad5381a4b4c60))
+
+
 ## v0.468.2 (2026-11-09)
 
 ### Bug Fixes
