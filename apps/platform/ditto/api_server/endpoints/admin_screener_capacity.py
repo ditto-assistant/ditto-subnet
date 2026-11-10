@@ -222,7 +222,7 @@ def _build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
         dockerfile_path=row.dockerfile_path,
         destination=row.destination,
         status=cast(TrustedImageBuildStatus, row.status),
-        provider=cast(Literal["targon", "gcp", "hetzner"] | None, row.provider),
+        provider=cast(Literal["targon", "gcp", "hetzner", "aws"] | None, row.provider),
         provider_resource_id=row.provider_resource_id,
         image_digest=row.image_digest,
         error_code=row.error_code,
@@ -1068,7 +1068,7 @@ async def screener_capacity(
                         lane="build",
                         status=row.status,
                         provider=cast(
-                            Literal["targon", "gcp", "hetzner"] | None,
+                            Literal["targon", "gcp", "hetzner", "aws"] | None,
                             row.provider,
                         ),
                         node_id=row.node_id,
@@ -1085,7 +1085,9 @@ async def screener_capacity(
                         lane="runtime",
                         status=row.runtime_status,
                         provider=(
-                            cast(Literal["targon", "gcp", "hetzner"], row.provider)
+                            cast(
+                                Literal["targon", "gcp", "hetzner", "aws"], row.provider
+                            )
                             if row.runtime_status != "skipped"
                             else None
                         ),
@@ -1104,7 +1106,7 @@ async def screener_capacity(
                         lane="source_review",
                         status=row.status,
                         provider=cast(
-                            Literal["targon", "gcp", "hetzner"] | None,
+                            Literal["targon", "gcp", "hetzner", "aws"] | None,
                             row.provider,
                         ),
                         node_id=row.node_id,

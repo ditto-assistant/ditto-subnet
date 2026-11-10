@@ -67,6 +67,67 @@ The first post-cutover `gcp-platform` plan must show removal of the legacy
 repository principals except for a time-bounded rollback, with the removal in
 the same change plan.
 
+## AWS roots
+
+AWS roots (today only `aws-generator-scorer`) use the same `infra-plan` and
+`infra-apply` environments. GCP auth still seals and fetches the saved plan in
+`gs://ditto-app-dev-tfstate/ci-plans/`; the plan and apply jobs then assume
+`ditto-subnet-infra-plan` or `ditto-subnet-infra-apply` in account
+`339713011188` through GitHub OIDC. The trust policies accept only the exact
+`repo:ditto-assistant/ditto-subnet:environment:infra-plan` and
+`...:environment:infra-apply` subjects. There are no AWS access keys and no new
+environment secrets: the role ARNs are literal in the workflow. AWS roots get
+none of the Platform, Cloudflare, fleet or hotkey inputs.
+
+The state bucket, OIDC provider and both roles are created once by an account
+administrator, never by the workflow. Use an SSO AdministratorAccess session,
+not the root user:
+
+```bash
+infra/terraform/stacks/aws-bootstrap/create-state-bucket.sh          # prints the commands
+infra/terraform/stacks/aws-bootstrap/create-state-bucket.sh --apply  # runs them
+terraform -chdir=infra/terraform/stacks/aws-bootstrap init
+terraform -chdir=infra/terraform/stacks/aws-bootstrap plan -out=bootstrap.tfplan
+terraform -chdir=infra/terraform/stacks/aws-bootstrap apply bootstrap.tfplan
+```
+
+The plan should import the five bucket resources and create the bucket
+lifecycle and TLS-only policy, the OIDC provider, and the two roles with their
+inline policies. The plan role reads state, takes the lock and reads
+the scorer's resources. The apply role can also write that state object, make
+region-scoped EC2 network/instance changes on resources carrying the
+`aws-generator-scorer` `stack` tag, read the `ditto-generator-scorer` role and
+instance profile and pass that role to EC2 only, and manage only the scorer's
+SSM transfer bucket. Widen it in this root, reviewed, when a new AWS root is
+added.
+
+### Generator scorer identity
+
+`aws-bootstrap` (`generator-scorer-identity.tf`), not the CI-applied
+`aws-generator-scorer` root, owns the `ditto-generator-scorer` instance role
+(EC2 trust, only `AmazonSSMManagedInstanceCore` attached) and its instance
+profile. GCP federation hands the scorer's Platform bearer to every session of
+that role name, so the CI apply role is explicitly denied every IAM write on
+the role and profile (create, delete, update, retrust, tag, policy and
+permissions-boundary changes, instance-profile membership); it cannot replace
+the role with one it trusts. The security groups it can change are only the
+ones it created with the stack tag: it can tag a security group only in the
+call that creates it.
+
+Create the identity before the first `aws-generator-scorer` apply, with an SSO
+administrator session:
+
+```bash
+terraform -chdir=infra/terraform/stacks/aws-bootstrap plan -out=bootstrap.tfplan \
+  -var enable_generator_scorer_identity=true
+terraform -chdir=infra/terraform/stacks/aws-bootstrap apply bootstrap.tfplan
+```
+
+Expect only the role, its SSM policy attachment and the instance profile. Keep
+the value in every later bootstrap plan (or the identity is destroyed). The
+scorer root reads the profile by name and fails its plan unless the profile
+wraps `ditto-generator-scorer`.
+
 ## `preview`
 
 - deployment branches must include pull-request refs from this repository

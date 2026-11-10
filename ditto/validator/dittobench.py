@@ -32,6 +32,8 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgressStage,
 )
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_FRONTIER_ORACLE_DATASET_MODE,
+    GENERATOR_FRONTIER_ORACLE_FEATURE,
     GENERATOR_ROUND_BENCH_FEATURE_PREFIX,
     GENERATOR_ROUND_BENCH_VERSIONS,
     GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX,
@@ -96,7 +98,18 @@ logger = logging.getLogger(__name__)
 
 # Dataset modes /v2/score accepts with private bytes: the Platform-private
 # benchmark artifact and a generator-competition round dataset.
-_PRIVATE_DATASET_MODES = frozenset({"platform-private-v1", "generator-round-v1"})
+_PRIVATE_DATASET_MODES = frozenset(
+    {
+        "platform-private-v1",
+        "generator-round-v1",
+        GENERATOR_FRONTIER_ORACLE_DATASET_MODE,
+    }
+)
+# Private modes that carry a generator-round dataset: a panel run or a
+# frontier oracle run on the round's unsolved cases.
+_ROUND_DATASET_MODES = frozenset(
+    {"generator-round-v1", GENERATOR_FRONTIER_ORACLE_DATASET_MODE}
+)
 # The scorer runs a screened image without the source tarball. Advertised
 # upward so Platform stops handing this validator miner source.
 SOURCE_FREE_SCREENED_IMAGE_FEATURE = "screened-image-source-free-v1"
@@ -1540,6 +1553,10 @@ class DittobenchClient:
                     and "platform-private-v1" in payload["features"]
                 ),
                 generator_rounds=generator_rounds,
+                generator_frontier_oracle=(
+                    generator_rounds
+                    and GENERATOR_FRONTIER_ORACLE_FEATURE in payload["features"]
+                ),
                 source_free_screened_images=source_free_screened_images,
                 generator_round_max_cases=(
                     scorer_generator_round_max_cases(payload.get("features"))
@@ -1780,9 +1797,14 @@ class DittobenchClient:
         bench_version: int = 13,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
         progress_callback: ProgressCallback | None = None,
+        oracle_case_ids: list[str] | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
         """Run a generator-round dataset against one screened image at the
         round's frozen ``bench_version`` (Platform's job carries it).
+
+        With ``oracle_case_ids`` this is a frontier oracle run
+        (``generator-frontier-oracle-v1``): only those cases, each answered
+        from its bounded oracle context.
 
         Returns the scorer run id and the raw per-case results (case ids are
         ``column/case``; faults carry the ``generator_round_fault`` category).
@@ -1794,8 +1816,13 @@ class DittobenchClient:
             tarball_sha256=tarball_sha256,
             seed=seed,
             dataset_sha256=dataset_sha256,
-            private_dataset_mode="generator-round-v1",
+            private_dataset_mode=(
+                GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+                if oracle_case_ids is not None
+                else "generator-round-v1"
+            ),
             private_dataset_bytes=dataset_bytes,
+            oracle_case_ids=oracle_case_ids,
             run_size="full",
             bench_version=bench_version,
             screened_image_url=screened_image_url,
@@ -1867,8 +1894,13 @@ class DittobenchClient:
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
         dueling_slice: DuelingSlice | None = None,
+        oracle_case_ids: list[str] | None = None,
     ) -> str:
         del ticket_deadline  # Manual retry policy forbids admission replay.
+        if (oracle_case_ids is not None) != (
+            private_dataset_mode == GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+        ):
+            raise DittobenchError("oracle cases require the frontier oracle mode")
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         body: dict[str, object] = {"run_size": run_size or self._config.run_size}
@@ -1953,7 +1985,7 @@ class DittobenchClient:
             # runs at any round contract (the pack grading policies) it froze.
             allowed_versions = (
                 GENERATOR_ROUND_BENCH_VERSIONS
-                if private_dataset_mode == "generator-round-v1"
+                if private_dataset_mode in _ROUND_DATASET_MODES
                 else (13,)
             )
             if (
@@ -1969,6 +2001,8 @@ class DittobenchClient:
             body["private_dataset_bytes"] = base64.b64encode(
                 private_dataset_bytes
             ).decode("ascii")
+            if oracle_case_ids is not None:
+                body["oracle_case_ids"] = list(oracle_case_ids)
         # A canonical bench >= 16 run carries its season slice (spec 7.5); a
         # generator round at a dueling version is a private pack dataset and
         # never does. Below v16 the fields are never sent.

@@ -229,6 +229,29 @@ class GeneratorCompetitionSettings(BaseModel):
     column scores, and the skip keeps it inside ``window_days``. On by
     default, and a revision written before this field existed reads as on."""
 
+    frontier_weight: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
+    """Share of full credit a frontier case earns: a case no two independent
+    panel owners solved that the frontier oracle answered and no failed audit
+    voided. Zero turns frontier scoring off. Takes effect only with
+    ``frontier_oracle_agent_id`` set. A revision written before this field
+    existed reads as 1.0."""
+    frontier_oracle_agent_id: Annotated[UUID | None, Field(strict=False)] = None
+    """The subnet-run reference agent that runs as the frontier oracle on a
+    scored round's unsolved cases, each from only its bounded
+    ``challenge.OracleContext``. Unset (the default) runs no oracle, so no
+    case is ever attested and frontier scoring stays inert."""
+    frontier_audit_cases: Annotated[int, Field(ge=0, le=16)] = 3
+    """Oracle-attested cases per column an operator audits, drawn with
+    ``challenge.FrontierAuditSample`` from the secret round seed. One invalid
+    case voids the column's frontier credit for the round. Zero applies
+    attestations without an audit."""
+    frontier_audit_grace_hours: Annotated[int, Field(ge=1, le=336)] = 24
+    """Hours an audit may stay unruled before the round's attestations are
+    applied anyway: operator silence never withholds frontier credit."""
+    frontier_oracle_timeout_hours: Annotated[int, Field(ge=1, le=168)] = 12
+    """Hours a scored round waits for its oracle run before it settles with
+    no attestations."""
+
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
         if self.min_solver_owners > self.min_panel:
@@ -266,6 +289,25 @@ class GeneratorCompetitionSettings(BaseModel):
             "champion_bonus": self.champion_bonus,
             "target_cases": self.cases_per_seed,
         }
+
+    @property
+    def frontier_enabled(self) -> bool:
+        """Frontier scoring runs: a positive weight and an oracle agent."""
+        return self.frontier_weight > 0 and self.frontier_oracle_agent_id is not None
+
+    def measurement_params(self) -> dict[str, float | int | str]:
+        """Everything this policy changes about what a round measures: the
+        score params, plus the frontier policy while frontier scoring runs.
+        With frontier off this is exactly ``score_params()``, so a policy
+        that predates frontier scoring keeps its unchanged-round signature."""
+        params: dict[str, float | int | str] = dict(self.score_params())
+        if self.frontier_enabled:
+            params["frontier_weight"] = self.frontier_weight
+            params["frontier_oracle_agent_id"] = str(self.frontier_oracle_agent_id)
+            params["frontier_audit_cases"] = self.frontier_audit_cases
+            params["frontier_audit_grace_hours"] = self.frontier_audit_grace_hours
+            params["frontier_oracle_timeout_hours"] = self.frontier_oracle_timeout_hours
+        return params
 
 
 class GeneratorSettingsRevision(GeneratorModel):

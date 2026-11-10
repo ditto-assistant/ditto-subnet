@@ -19,12 +19,20 @@ Goals:
 - Pay for generators whose cases are **valid**, **solvable**, and
   **discriminating** (some strong agents solve them and others do not) on seeds
   nobody sees in advance.
+- Also pay for **frontier** cases: valid cases no current agent solves. An
+  agent solving a case proves it is valid, but every agent failing it does not
+  prove it is broken. Frontier cases are proven valid by a second witness (see
+  "Frontier cases").
 - Keep evaluation cheap: generation is CPU-only, with no model, so running a
   generator costs seconds of CPU. The only expensive part is running agents
   on its cases, and that runs on validators through the same ticket and
   inference path the agent competition already pays for.
 - Make every rule a generator is judged on reproducible locally and
-  deterministic (no LLM judge, no clock).
+  deterministic (no LLM judge, no clock). The frontier oracle is the one model
+  in the loop. It answers questions like any agent and is graded by the
+  production grader; it never judges. Its replies are recorded with the
+  digest of the context they answered, so a round's score stays reproducible
+  from its stored inputs.
 - Resist the obvious exploits:
   - unanswerable or ambiguous "gotcha" cases
   - answers baked into a colluding agent
@@ -450,11 +458,14 @@ and with an unfaulted result. Over those agents:
 solvable       ⇔ solved (score ≥ 0.5) by ≥ min_solver_owners distinct owners
 trivial        ⇔ solvable ∧ solved by every eligible agent
 discriminating ⇔ solvable ∧ ¬trivial
+frontier       ⇔ ¬solvable ∧ attested valid ∧ frontier_weight > 0
+unsolved       ⇔ ¬solvable ∧ ¬frontier
 credit         = (1 − mean score) × (1 + champion_bonus · [champion failed])
+                 × (frontier_weight if frontier, else 1)
 ```
 
 For one column's pack, with `n` cases, `dup` duplicate cases and `u` unsolved
-cases:
+cases (frontier cases are not unsolved):
 
 ```
 column score = Σ credit / ((1 + champion_bonus) · max(n, cases_per_seed)) × (1 − u / (n − dup))²
@@ -486,6 +497,7 @@ The shipped parameters are:
 | `challenger_columns` | 1 |
 | `privacy_window_rounds` | 6 |
 | `min_round_validators` | 3 (validators able to run a newer bench version before rounds switch to it) |
+| `frontier_weight` | contract default 0 (off); Platform operator default 1.0 once the oracle lane is live (see "Frontier cases") |
 
 ### Round size and timing
 
@@ -557,6 +569,184 @@ Panel members are summed in `agent_id` order and cases in column then case
 order, so float results are identical across implementations.
 `challenge/testdata/score_vectors.json`, `run_vectors.json` and
 `round_vectors.json` hold golden vectors.
+
+## Frontier cases
+
+### The gap
+
+Until frontier scoring, the only accepted proof that a case is valid was two
+independent panel owners solving it. The implication runs one way: solved ⇒
+valid, but unsolved ⇏ invalid. A generator whose valid cases beat every current
+agent scored exactly 0, and the squared unsolved penalty took the rest of its
+column with it. So the competition paid for cases just past the current panel
+and nothing further, which is the opposite of what a counterbalance to agent
+overfitting should do.
+
+### The contract (`challenge.ScoreCases`, shipped)
+
+`ScoreInput.FrontierCases` (and `RoundInput.FrontierCases`, with round case
+ids) lists cases an independent witness attested as valid, each as its case id
+**and fingerprint**. An attestation therefore matches only the exact case
+content it was earned on: a different case that reuses the id in another seed
+or column never inherits it. A qualification run (`ScoreRun`) carries
+attestations per seed (`SeedPanel.FrontierCases`), because a fingerprint covers
+a case's question and answer but not its memory haystack: the same question in
+another seed's pack sits on different memory, so it is a different case to
+attest. A round needs no such split, since a round case id names its column. A listed case that the panel leaves unsolved
+scores `frontier`:
+
+- credit `(1 − mean) × (1 + champion_bonus·[champion failed]) × frontier_weight`
+  (a case every agent fails, so it always carries the champion bonus);
+- it never counts toward `u`, so the squared unsolved penalty does not apply;
+- a listed case the panel solved is scored as before: attestation never
+  downgrades a discriminating or trivial verdict.
+
+`frontier_weight` is in `[0, 1]`. Zero, the contract default, turns frontier
+scoring off and keeps every score byte-identical to the original contract (the
+pre-frontier golden vectors are unchanged). At 1.0 a column whose every case is
+attested frontier scores 1.0, the same ceiling as a fully discriminating
+column. Frontier never touches agent standings: pairwise comparisons read panel
+scores only (`TestScoreRoundFrontier`).
+
+Scoring stays a pure function of `(cases, panel results, attestations,
+params)`. Frontier status only rewrites `unsolved` verdicts, and every input it
+needs (mean score, champion failure) is already on the stored verdict. So
+Platform scores a round without attestations, as before, and applies them later
+as a post-pass over the stored verdicts. The post-pass is pinned to
+`ScoreCases` by `challenge/testdata/frontier_vectors.json` (unattested score,
+attestations and params → the score `ScoreCases` gives with the attestations).
+The scorer needs no change, and an older scorer can never silently drop
+attestations.
+
+### Witness 1: the frontier oracle (`challenge.OracleContext`)
+
+A subnet-run reference solver answers each unsolved case from a small,
+deterministic context, graded by the production grader at the pack's declared
+policy. Passing (score ≥ `solve_threshold`) attests the case.
+
+The context is **not** the user's whole visible memory: a pack may seed 2,000
+pairs of up to 4,000 characters each, which does not fit any prompt. It is
+also **not** the cited evidence alone: the generator writes the answer key, so a
+case citing a decoy or a superseded fact as its evidence, with a gold answer to
+match, would be "answered" by repeating the planted fact. `OracleContext`
+therefore builds, per case:
+
+1. every evidence pair the case cites (at most 8);
+2. the visible pairs (same user, seeded at or before `run_after_wave`) that
+   state a declared `distractor_answers`, `forbidden_answer`, or `dump_guard`
+   value: the competitors the generator itself declares;
+3. the visible pairs ranked highest by BM25 against the question and evidence
+   text, until `OracleCompetitorPairs` (24) competitors are chosen;
+4. all in chronological order with timestamps, and no pair id, session id, or
+   evidence marker.
+
+So a context holds at most `OracleMaxPairs` (32) pairs however large the
+haystack is, and the oracle still has to choose the right fact among the
+closest competitors. A pass is a uniqueness witness, not a grounding check
+(validation already proves the gold appears in the cited text).
+`ContextSHA256` commits to the exact context, and `VerifyOracleContext`
+re-derives it from the pack and hashes the supplied context itself (a context
+with altered memories or question is refused even if it carries the canonical
+digest), so every attestation can be reproduced from the revealed round.
+
+The oracle is not a panel member. It never counts toward `solvers`, the mean,
+or `min_solver_owners`, and it is not an agent miners compete with. It only
+moves a case from `unsolved` to `frontier`.
+
+### Witness 2: the sampled operator audit (`challenge.FrontierAuditSample`)
+
+The oracle can be wrong in one direction that matters: a case it passes that is
+still not a fair memory question. The examples are a contradicting fact worded
+too differently to rank in its 24 competitors, or text that only breaks miner
+harnesses (for example a prompt injection planted in memory). For each column
+with oracle-attested cases, Platform picks `frontier_audit_cases` of them with
+
+```
+sha256("dittobench-frontier-audit/v1" ‖ 0 ‖ round_seed ‖ 0 ‖ column_id ‖ 0 ‖ case_id)
+```
+
+lowest first. The round seed is secret until the round reveals, so the miner
+cannot tell which cases will be read, and commit-reveal stops Platform grinding
+the choice. Operators review the sample in Backroom: each case's question,
+gold answer and declared competitors, its cited evidence, the panel's and the
+oracle's scores, and the user's full visible memory with a text search to look
+for a contradicting fact (`get_generator_frontier_audit`).
+
+- **All sampled cases valid:** every oracle attestation on the column stands.
+- **Any sampled case invalid:** every frontier attestation on that column is
+  void for the round (the cases fall back to `unsolved`, with the squared
+  penalty), and the ruling is recorded against the submission. Repeated
+  invalid audits are grounds for rejecting the generator, like a copy.
+
+The penalty makes gaming the oracle a losing bet. A column that mixes k broken
+cases into n attested ones is caught with probability
+`1 − C(n−k, s)/C(n, s)` for a sample of s, and loses all its frontier credit
+when caught, not just the broken cases' share.
+
+### Who the oracle is
+
+The oracle is a subnet-run reference **harness**, named by the Platform
+setting `frontier_oracle_agent_id`: a screened agent image like any other, run
+by validators on a Platform-issued ticket with ticket inference. Only its
+memory changes. `challenge.OraclePack(pack, case_ids)` derives a pack with one
+memory graph per candidate case, seeded with that case's `OracleContext` and
+nothing else, keeping each case's question, gold answer and grading policy. All
+graphs are seeded before any case runs, so cases run concurrently. The oracle
+is then graded by the production grader exactly as a panel agent would be.
+Reusing the harness path means the oracle needs no new inference credential,
+sandbox, or grader. A stronger oracle is an operator choice of a different
+reference agent, not a contract change.
+
+### Lifecycle (Platform)
+
+The contract above ships first and is inert until Platform applies
+attestations. The lane that produces them:
+
+1. **Score.** The round closes and scores exactly as before: its `unsolved`
+   cases are the frontier candidates.
+2. **Oracle.** If `frontier_weight > 0`, an oracle agent is configured and
+   any column has unsolved cases, Platform leases one oracle job for the
+   round's candidates (dataset mode `generator-frontier-oracle-v1`, the
+   candidate round case ids) to a validator that advertises the mode. The
+   validator posts signed per-case scores. Only unsolved cases are sent, so
+   the cost tracks how hard the round was, not its size. A case the oracle
+   passes is attested; a faulted case is not.
+3. **Audit.** For each column with attested cases, Platform draws
+   `FrontierAuditSample(round_seed, column, attested, frontier_audit_cases)`
+   into a Backroom audit. With `frontier_audit_cases = 0` there is no audit.
+4. **Apply.** When every audit is ruled, or `frontier_audit_grace_hours` pass
+   with audits unruled, Platform applies the post-pass. Columns whose audit
+   failed get no attestations. The rewritten verdicts, column score and
+   generator `round_score` replace the unattested ones, and the pre-frontier
+   column scores stay on the round for audit. Until then the round pays its
+   unattested score, so frontier credit never reaches the ledger before its
+   audit, and operator silence never withholds it forever.
+
+The oracle job and the audit window run after scoring and never hold a round
+open. A round whose oracle job does not complete within
+`frontier_oracle_timeout_hours` settles with no attestations.
+
+Dueling seasons read the same verdicts. A frontier case is not unsolved, so it
+does not count against a column's `u / (n − dup) ≤ 0.20` eligibility. That is
+intended: frontier cases are the ones the agent benchmark most needs, and they
+reach the verdicts only after their audit settles.
+
+Operator surface (Platform admin API, Backroom MCP): the round's frontier view
+(`GET .../rounds/{round}/frontier`: candidates, oracle results, attestations,
+audits, applied credit, pre-frontier column scores), the audit queue
+(`GET .../frontier/audits`), an audit's cases
+(`GET .../rounds/{round}/frontier/audits/{column}?q=`), the ruling
+(`POST` there, confirmation `RULE FRONTIER AUDIT {round} {column} VALID|INVALID`,
+recorded as an operator action), and a forced settle
+(`POST .../rounds/{round}/frontier/settle`, confirmation
+`SETTLE GENERATOR FRONTIER {round}`). Public round views carry each column's
+`frontier` count and the round's `frontier_state`.
+
+New settings (Platform, revisioned): `frontier_weight` (operator default 1.0),
+`frontier_oracle_agent_id` (unset: no oracle, frontier off),
+`frontier_audit_cases` (default 3), `frontier_audit_grace_hours` (default 24),
+`frontier_oracle_timeout_hours` (default 12). `skip_unchanged_rounds` compares
+`frontier_weight` with the other score parameters.
 
 ## Copies
 

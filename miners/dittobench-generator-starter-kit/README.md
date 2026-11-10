@@ -68,6 +68,16 @@ The full design is in
    - **Trivial** cases (everyone solves) earn nothing.
    - **Unsolved** cases earn nothing and also cut your column's credit by a
      squared factor.
+   - **Frontier** cases are ones no agent solves but a subnet-run oracle
+     answers correctly from a short context: your cited evidence, the pairs
+     holding your declared distractors, and the closest competing memories,
+     with nothing marking which is which. They earn full credit (times the
+     operator's `frontier_weight`) and do not count as unsolved. A few
+     frontier cases per column are secretly audited by operators, and one
+     invalid case voids the column's frontier credit for that round. Frontier
+     scoring is in the contract and turns on once the oracle lane is live; see
+     `research/dittobench-datagen/docs/generator-competition.md`, "Frontier
+     cases".
    - **Duplicate** cases earn nothing. A case an earlier round already scored
      belongs to that round.
    - Cases the champion fails earn a 1.5× bonus.
@@ -315,9 +325,15 @@ The four starter families are:
   validator rejects the case.
 - **Never be ambiguous.** Two cases must not ask the same question about the
   same memory, and a question must have exactly one right answer given the
-  whole haystack. The validator catches identical questions. Only the panel
-  catches subtler ambiguity, as cases no two owners solve, and those cost you
-  the squared penalty.
+  whole haystack. The validator catches identical questions. Subtler
+  ambiguity shows up as cases no two owners solve and the oracle cannot
+  answer either, and those cost you the squared penalty.
+- **Go past the panel, not past the evidence.** A case every agent fails
+  still pays if it is valid. Make it hard through retrieval and resolution
+  (supersession, joins, interference), keep the cited evidence complete, and
+  declare your real competitors in `distractor_answers` so the oracle sees
+  them. `challenge.OracleContext(pack, caseID)` shows you exactly what the
+  oracle will read.
 - **Fill a wide space.** A family that can only produce a few distinct cases
   repeats itself across seeds and rounds, and repeats are duplicates.
 - **Measure, then keep what splits.** Rehearse against agents, read the

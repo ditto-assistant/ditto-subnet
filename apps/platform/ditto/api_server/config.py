@@ -100,6 +100,10 @@ class ScreenerAuthConfig:
     node_token_ttl_seconds: int = 6 * 60 * 60
     """Lifetime of a rotating per-node bearer token."""
 
+    node_reauth_max_dormancy_seconds: int = 30 * 24 * 60 * 60
+    """How long an on-demand node may sleep past its bearer expiry and still
+    rotate with that bearer plus a fresh hotkey signature; ``0`` disables it."""
+
     controller_lease_seconds: int = 180
     """Fencing lease renewed by the single normal capacity writer."""
 
@@ -548,9 +552,15 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         screener_controller_lease_seconds = int(
             os.environ.get("SCREENER_CONTROLLER_LEASE_SECONDS", "180")
         )
+        screener_node_reauth_max_dormancy_seconds = int(
+            os.environ.get(
+                "SCREENER_NODE_REAUTH_MAX_DORMANCY_SECONDS", str(30 * 24 * 60 * 60)
+            )
+        )
     except ValueError as error:
         raise ApiServerConfigError(
-            "screener bootstrap, node token, and controller lease TTLs must be integers"
+            "screener bootstrap, node token, controller lease, and node reauth "
+            "durations must be integers"
         ) from error
     try:
         screener_capacity_event_retention_days = int(
@@ -876,6 +886,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             controller_api_token=screener_controller_api_token,
             bootstrap_ttl_seconds=screener_bootstrap_ttl_seconds,
             node_token_ttl_seconds=screener_node_token_ttl_seconds,
+            node_reauth_max_dormancy_seconds=screener_node_reauth_max_dormancy_seconds,
             controller_lease_seconds=screener_controller_lease_seconds,
             capacity_event_retention_days=screener_capacity_event_retention_days,
         ),
@@ -1048,6 +1059,10 @@ def check_config(config: ApiServerConfig) -> None:
     if not 900 <= auth.node_token_ttl_seconds <= 86_400:
         raise ApiServerConfigError(
             "SCREENER_NODE_TOKEN_TTL_SECONDS must be between 900 and 86400"
+        )
+    if not 0 <= auth.node_reauth_max_dormancy_seconds <= 90 * 24 * 60 * 60:
+        raise ApiServerConfigError(
+            "SCREENER_NODE_REAUTH_MAX_DORMANCY_SECONDS must be between 0 and 7776000"
         )
     if not 60 <= auth.controller_lease_seconds <= 900:
         raise ApiServerConfigError(

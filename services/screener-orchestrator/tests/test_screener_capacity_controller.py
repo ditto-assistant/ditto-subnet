@@ -20,6 +20,8 @@ from screener_capacity.controller import (
     ProviderCounts,
     ProviderRouting,
     Settings,
+    _parse_provider_routing,
+    _routing_to_state,
     _write_state,
     build_parser,
     desired_slots,
@@ -151,6 +153,88 @@ def _overflow_routing(*, enabled: bool = True) -> ProviderRouting:
         build_provider_priority=("hetzner", "gcp"),
         overflow=OverflowPolicy(enabled, "subnet-screener-1", 3, 12, 6),
     )
+
+
+def _aws_routing(*, enabled: bool = True) -> ProviderRouting:
+    return ProviderRouting(
+        revision=1,
+        runtime_provider_priority=("aws", "gcp"),
+        source_review_provider_priority=("aws", "gcp"),
+        build_provider_priority=("aws", "gcp"),
+        overflow=OverflowPolicy(enabled, "subnet-screener-3", 3, 12, 6),
+    )
+
+
+class AwsPrimaryRoutingTests(unittest.TestCase):
+    def test_aws_first_routing_parses_and_names_the_primary(self) -> None:
+        routing = _parse_provider_routing(_routing_to_state(_aws_routing()))
+        self.assertEqual(routing.primary_provider, "aws")
+        self.assertEqual(_overflow_routing().primary_provider, "hetzner")
+
+    def test_mixed_primary_lanes_have_no_primary(self) -> None:
+        routing = replace(_aws_routing(), build_provider_priority=("hetzner", "gcp"))
+        self.assertIsNone(routing.primary_provider)
+        target, reason = gce_overflow_target(
+            demand=Demand(runnable=40, active=0, desired=6),
+            routing=routing,
+            primary_node={"status": "active", "ready": False, "admission_open": True},
+            jobs_per_slot=6,
+            global_cap=6,
+        )
+        self.assertEqual((target, reason), (0, "GCE_OVERFLOW_DISABLED"))
+
+    def test_aws_primary_reason_codes_name_the_provider(self) -> None:
+        open_primary = {"status": "active", "admission_open": True}
+        cases = [
+            (
+                Demand(runnable=7, active=0, desired=2),
+                {**open_primary, "ready": False, "screening_concurrency": 1},
+                (2, "AWS_PRIMARY_UNAVAILABLE"),
+            ),
+            (
+                Demand(runnable=5, active=1, desired=2),
+                {**open_primary, "ready": True, "screening_concurrency": 1},
+                (0, "AWS_PRIMARY_HANDLING_BASE_LOAD"),
+            ),
+            (
+                Demand(runnable=30, active=1, desired=6),
+                {**open_primary, "ready": True, "screening_concurrency": 1},
+                (3, "AWS_BACKLOG_OVERFLOW"),
+            ),
+            (
+                Demand(runnable=30, active=0, desired=6),
+                {
+                    "status": "active",
+                    "ready": True,
+                    "admission_open": False,
+                    "screening_concurrency": 0,
+                },
+                (0, "AWS_PRIMARY_ADMISSION_CLOSED"),
+            ),
+            (
+                Demand(runnable=30, active=0, desired=6),
+                None,
+                (0, "AWS_PRIMARY_UNKNOWN"),
+            ),
+        ]
+        for demand, primary, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(
+                    gce_overflow_target(
+                        demand=demand,
+                        routing=_aws_routing(),
+                        primary_node=primary,
+                        jobs_per_slot=6,
+                        global_cap=6,
+                    ),
+                    expected,
+                )
+
+    def test_unknown_provider_is_still_rejected(self) -> None:
+        state = _routing_to_state(_aws_routing())
+        state["settings"]["build_provider_priority"] = ["azure", "gcp"]
+        with self.assertRaises(ControllerError):
+            _parse_provider_routing(state)
 
 
 class CapacityDecisionTests(unittest.TestCase):

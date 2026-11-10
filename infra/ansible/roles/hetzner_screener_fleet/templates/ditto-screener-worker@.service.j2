@@ -46,6 +46,10 @@ Environment=SCREENER_CONVERSATION_SPOOL_DIR={{ screener_fleet_state_dir }}/worke
 ExecStart={{ screener_fleet_active_worker_venv }}/bin/{{ 'ditto-screener-replay' if screener_fleet_replay_worker_enabled else 'ditto-screener' }}
 Restart=always
 RestartSec=10
+# Status 85 is an opt-in idle exit (SCREENER_IDLE_EXIT_SECONDS): a clean,
+# deliberate stop that systemd must not undo. Every other exit still restarts.
+SuccessExitStatus=85
+RestartPreventExitStatus=85
 TimeoutStopSec=70min
 KillSignal=SIGTERM
 NoNewPrivileges=true
