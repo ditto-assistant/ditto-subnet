@@ -293,6 +293,11 @@ func CatalogForSeed(benchVersion int, seed int64) []protocol.ToolDefinition {
 	if benchVersion < protocol.BenchVersionV13 {
 		return CatalogForVersion(benchVersion)
 	}
+	if benchVersion >= protocol.BenchVersionV18 {
+		// v18: the v16 surface plus the production-sized bulk toolkits
+		// (catalog/v18.go).
+		return v18SeededCatalog(seed, benchVersion)
+	}
 	if benchVersion >= protocol.BenchVersionV16 {
 		// v16: the same production-scale surface with connectors that no
 		// longer self-identify, every linked and named app fully offered.

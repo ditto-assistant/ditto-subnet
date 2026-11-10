@@ -60,6 +60,9 @@ func generatorRoundBenchFeatures() []string {
 	versions := challenge.SupportedGradingBenchVersions()
 	out := make([]string, 0, len(versions))
 	for _, v := range versions {
+		if !generatorRoundCatalogReady(v) {
+			continue
+		}
 		out = append(out, fmt.Sprintf("%s%d", generatorRoundBenchFeaturePrefix, v))
 	}
 	return out
@@ -69,7 +72,14 @@ func generatorRoundBenchFeatures() []string {
 // round at v runs packs graded at any supported policy through v, and v itself
 // must be a supported policy so the round's newest columns can use it.
 func runsGeneratorRoundAt(v int) bool {
-	return challenge.SupportsGradingBenchVersion(v)
+	return challenge.SupportsGradingBenchVersion(v) && generatorRoundCatalogReady(v)
+}
+
+// generatorRoundCatalogReady is the capability rule supportedBenchVersions
+// applies: a v18+ round needs the pinned catalog snapshot, so a build without
+// it neither advertises nor admits one.
+func generatorRoundCatalogReady(v int) bool {
+	return v < protocol.BenchVersionV18 || catalog.V18SnapshotReady() == nil
 }
 
 func validateGeneratorRoundRequest(req submitRequest, enabled bool) error {
@@ -261,7 +271,13 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 	// observed tool_endpoint. A harness built for the scored path rejects a
 	// /run without them. Each case's fixture is registered just before its
 	// /run, under the opaque ID the harness sees.
-	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
+	tools, err := catalog.CatalogForSeedChecked(req.BenchVersion, seed)
+	if err != nil {
+		// The catalog is scorer-owned: a retryable infrastructure failure,
+		// never the miner's.
+		s.store.FailWith(runID, "tool catalog unavailable: "+err.Error(), toolEndpointInfrastructureFailure())
+		return
+	}
 	toolSrv := toolexec.NewServer()
 	toolEndpoint, stopToolSrv, err := s.startToolServerForSession(
 		toolSrv, handle.SourceIP, req.BenchVersion, sessionID, concurrency,
