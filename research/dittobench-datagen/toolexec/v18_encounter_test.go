@@ -136,6 +136,10 @@ func TestEncounterArgTextKeepsFalseAndNull(t *testing.T) {
 	if !protocol.EncounterArgsMatch([]byte(`{"archived":false,"note":null}`), []string{"false", "null"}) {
 		t.Fatal("false/null arguments not matched")
 	}
+	// Undecodable arguments carry no values, so a key cannot stand in for one.
+	if protocol.EncounterArgsMatch([]byte(`{"INC-2041": "x"`), []string{"INC-2041"}) {
+		t.Fatal("a key in malformed arguments matched as a value")
+	}
 }
 
 // The first matching rule decides; a matching Page rule's Error fails the

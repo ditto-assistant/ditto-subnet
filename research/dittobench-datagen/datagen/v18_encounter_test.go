@@ -165,9 +165,11 @@ func TestV18EncountersAreSolvableAndDiscriminate(t *testing.T) {
 					}
 				}
 			}
+			// One server for the whole trajectory, so stateful rules (a job
+			// still running on its first poll) see the calls before them.
+			srv := toolexec.NewServer()
+			srv.Register(tc.ID, fixture)
 			for _, call := range encounterOracle(tc) {
-				srv := toolexec.NewServer()
-				srv.Register(tc.ID, fixture)
 				res := serveOnce(t, srv, tc.ID, call)
 				if res.Error != "" && !strings.Contains(res.Error, "archived") {
 					t.Fatalf("seed %d %s: required %s refused: %s", seed, tc.ID, call.Name, res.Error)
