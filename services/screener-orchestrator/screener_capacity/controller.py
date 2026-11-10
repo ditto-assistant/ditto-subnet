@@ -21,15 +21,22 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
+from screener_capacity.aws import AwsError, EC2Primary
+
 ProviderName = Literal["hetzner", "aws", "targon", "gcp"]
 # Providers whose enrolled node can be the primary in front of GCE overflow.
 PRIMARY_PROVIDERS: tuple[ProviderName, ...] = ("hetzner", "aws")
+
+
+# How the controller sees an on-demand primary that is not ready: None (no
+# on-demand primary, or its state is unknown), "waking", or "asleep".
+PrimarySleep = Literal["waking", "asleep"] | None
 
 
 class ControllerError(RuntimeError):
@@ -131,8 +138,13 @@ def gce_overflow_target(
     primary_node: dict[str, Any] | None,
     jobs_per_slot: int,
     global_cap: int,
+    primary_sleep: PrimarySleep = None,
 ) -> tuple[int, str]:
     """Choose GCE only for an explicit GCP route, outage, or queue overflow.
+
+    An on-demand primary that is not ready is not an outage while it is
+    ``"waking"`` (started within its grace) or ``"asleep"`` (confirmed stopped
+    with nothing runnable): GCE then covers only backlog above the threshold.
 
     A primary whose admission is
     known to be closed (``admission_open`` false, or ``screening_concurrency ==
@@ -184,13 +196,17 @@ def gce_overflow_target(
     cap = min(global_cap, policy.max_instances)
     if cap == 0:
         return 0, "GCE_OVERFLOW_CAPPED_AT_ZERO"
-    if not primary_ready:
+    if not primary_ready and primary_sleep == "asleep" and demand.runnable == 0:
+        return 0, f"{label}_PRIMARY_ASLEEP"
+    if not primary_ready and primary_sleep != "waking":
         return min(cap, demand.desired), f"{label}_PRIMARY_UNAVAILABLE"
     threshold = max(
         policy.min_backlog,
         screening_concurrency * policy.backlog_multiplier,
     )
     if demand.runnable <= threshold:
+        if not primary_ready:
+            return 0, f"{label}_PRIMARY_WAKING"
         return 0, f"{label}_PRIMARY_HANDLING_BASE_LOAD"
     overflow_jobs = demand.runnable - threshold
     return (
@@ -763,6 +779,15 @@ class Settings:
     # Consecutive passes that keep the GCE target while a Platform routing or
     # node-inventory read fails, so a Platform deploy cannot flap the MIG.
     inventory_failure_hold_passes: int = 4
+    # The on-demand AWS primary, started keylessly when work waits for it.
+    # Unset keeps the controller GCE-only, as for a Hetzner primary.
+    aws_primary_instance_id: str | None = None
+    aws_region: str = "us-east-1"
+    aws_primary_role_arn: str | None = None
+    aws_web_identity_audience: str = "ditto-screener-capacity"
+    # How long a started primary may take to heartbeat ready before its
+    # backlog is treated as an outage and overflows to GCE.
+    primary_wake_grace_seconds: int = 600
 
 
 def _snapshot(
@@ -910,7 +935,175 @@ def _plan_gce_scale_in(
     return [], "per_instance_claim_fence_unavailable"
 
 
-def reconcile(settings: Settings) -> dict[str, Any]:
+def _aws_primary_configured(settings: Settings) -> bool:
+    return bool(settings.aws_primary_instance_id and settings.aws_primary_role_arn)
+
+
+def _on_demand_primary(settings: Settings) -> EC2Primary:
+    """Build the EC2 client; raises AwsError for an invalid configuration."""
+    return EC2Primary(
+        region=settings.aws_region,
+        instance_id=settings.aws_primary_instance_id or "",
+        role_arn=settings.aws_primary_role_arn or "",
+        audience=settings.aws_web_identity_audience,
+    )
+
+
+def _parse_state_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+@dataclass(frozen=True)
+class WakePlan:
+    """What one pass decided about an on-demand primary.
+
+    ``state`` is persisted with the pass's other state only after the fenced
+    renew that delivers ``events`` succeeds, so a dry run or a failed renew
+    never records a wake or failure that was not reported.
+    """
+
+    sleep: PrimarySleep = None
+    events: tuple[dict[str, Any], ...] = ()
+    state: dict[str, Any] = field(default_factory=dict)
+
+
+def _wake_on_demand_primary(
+    *,
+    settings: Settings,
+    platform: PlatformControl,
+    aws_clients: dict[str, EC2Primary],
+    primary_node: dict[str, Any] | None,
+    demand: Demand,
+    state: dict[str, Any],
+    now: datetime,
+) -> WakePlan:
+    """Start a stopped on-demand primary when work waits for it.
+
+    Only an active primary whose admission is known to be open, and whose
+    Platform resource is the configured instance, is ever woken, so an operator
+    closure or an unknown primary still fails closed. The start is fenced by
+    the controller lease; without one (the first pass) it waits for the next
+    pass. One wake gets one grace period from its first start: a primary still
+    not ready after it is an outage until the queue drains. A failed AWS read or
+    start is an outage too, reported once per distinct failure.
+    """
+    instance_id = settings.aws_primary_instance_id or ""
+    primary = primary_node or {}
+    started_at = _parse_state_time(state.get("primary_wake_started_at"))
+    stopping_since = _parse_state_time(state.get("primary_stopping_since"))
+    last_failure = state.get("primary_wake_failure")
+    cleared = {
+        "primary_wake_started_at": None,
+        "primary_stopping_since": None,
+        "primary_wake_failure": None,
+    }
+
+    def failed(detail: str) -> WakePlan:
+        event = {
+            "event_type": "primary_wake_failed",
+            "provider": "aws",
+            "detail": detail,
+        }
+        return WakePlan(
+            events=() if detail == last_failure else (event,),
+            state={"primary_wake_failure": detail},
+        )
+
+    if primary.get("ready") is True:
+        return WakePlan(state=cleared)
+    if primary.get("status") != "active" or primary.get("admission_open") is not True:
+        return WakePlan()
+    if primary.get("provider_resource_id") != instance_id:
+        # Never start an instance Platform does not route as the primary.
+        return failed(
+            f"primary {primary.get('node_id')} is resource "
+            f"{primary.get('provider_resource_id')}, not configured {instance_id}"
+        )
+    ec2 = aws_clients.get("ec2")
+    if ec2 is None:
+        try:
+            ec2 = aws_clients["ec2"] = _on_demand_primary(settings)
+        except AwsError as error:
+            return failed(f"configuration: {error}")
+    try:
+        status = ec2.status()
+    except AwsError as error:
+        return failed(f"describe {instance_id}: {error}")
+    grace = settings.primary_wake_grace_seconds
+    if status.state in ("pending", "running"):
+        since = started_at or status.launched_at
+        # A running instance ends any stop cycle, even one whose start plan a
+        # crash never persisted, so a later stop gets its own full bound.
+        if since is not None and (now - since).total_seconds() < grace:
+            return WakePlan(
+                "waking",
+                state={"primary_wake_failure": None, "primary_stopping_since": None},
+            )
+        # Running past its grace without a ready heartbeat is an outage.
+        return WakePlan(state={"primary_stopping_since": None})
+    if status.state not in ("stopping", "stopped"):
+        return WakePlan()
+    if demand.runnable == 0:
+        return WakePlan("asleep", state=cleared)
+    if started_at is not None and (now - started_at).total_seconds() >= grace:
+        # This wake already had its grace; do not restart it into a new one.
+        return WakePlan()
+    if status.state == "stopping":
+        # It is powering off after an idle exit; start it once it has stopped.
+        # The wake grace starts only at a real start, so a slow stop cannot use
+        # it up. Waiting for the stop has its own bound of the same length, so
+        # a stuck stop still fails over to GCE.
+        since = stopping_since or now
+        if (now - since).total_seconds() >= grace:
+            return WakePlan()
+        if stopping_since is None and not settings.dry_run:
+            # An observation, not an event: record it now, so a renew that
+            # keeps failing cannot restart the bound every pass.
+            state["primary_stopping_since"] = since.isoformat()
+            _write_state(settings.state_file, state)
+        return WakePlan("waking", state={"primary_stopping_since": since.isoformat()})
+    first_wake = {
+        "primary_wake_started_at": (started_at or now).isoformat(),
+        "primary_stopping_since": None,
+    }
+    if settings.dry_run:
+        return WakePlan("waking")
+    try:
+        platform.fence(epoch=settings.epoch)
+    except ControllerError:
+        # No lease yet, or another writer: never start unfenced.
+        return WakePlan("waking")
+    try:
+        ec2.start()
+    except AwsError as error:
+        return failed(f"start {instance_id}: {error}")
+    return WakePlan(
+        "waking",
+        (
+            {
+                "event_type": "primary_wake_requested",
+                "provider": "aws",
+                "detail": (
+                    f"started {instance_id} for {demand.runnable} runnable "
+                    f"submission(s); grace {grace}s"
+                ),
+            },
+        ),
+        {**first_wake, "primary_wake_failure": None},
+    )
+
+
+def reconcile(
+    settings: Settings, *, aws_clients: dict[str, EC2Primary] | None = None
+) -> dict[str, Any]:
+    """Run one pass. ``aws_clients`` keeps the EC2 client, and its cached
+    temporary credentials, across passes of one controller process."""
     token = _read_secret_file(settings.platform_token_file)
     platform = PlatformControl(
         base_url=settings.platform_url,
@@ -996,6 +1189,24 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     provider_success_at = datetime.now(UTC).isoformat()
 
     primary_node = node_states.get(provider_routing.overflow.primary_node_id or "")
+    wake = WakePlan()
+    if (
+        _aws_primary_configured(settings)
+        and provider_routing_available
+        and node_states_available
+        and not holding
+        and provider_routing.primary_provider == "aws"
+    ):
+        wake = _wake_on_demand_primary(
+            settings=settings,
+            platform=platform,
+            aws_clients=aws_clients if aws_clients is not None else {},
+            primary_node=primary_node,
+            demand=demand,
+            state=state,
+            now=datetime.now(UTC),
+        )
+    primary_sleep = wake.sleep
     if provider_routing_available:
         target, reason = gce_overflow_target(
             demand=demand,
@@ -1003,6 +1214,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
             primary_node=primary_node,
             jobs_per_slot=settings.jobs_per_slot,
             global_cap=settings.global_cap,
+            primary_sleep=primary_sleep,
         )
     else:
         # A cached revision can retain claim compatibility, but cannot
@@ -1039,7 +1251,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         == (current_target, target)
         else None
     )
-    events: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = list(wake.events)
     if target != current_target and continuing_deferral is None:
         # A decision, sent before any mutation: a deferred scale-in that later
         # goes ahead does not send it again.
@@ -1113,6 +1325,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     state = _load_state(settings.state_file)
     state["inventory_failures"] = inventory_failures
     state["last_fallback_reason"] = reason
+    state.update(wake.state)
     state["gce_scale_in_deferral"] = (
         (
             continuing_deferral
@@ -1253,6 +1466,11 @@ def _settings(args: argparse.Namespace) -> Settings:
         lock_file=Path(args.lock_file),
         dry_run=args.dry_run,
         inventory_failure_hold_passes=args.inventory_failure_hold_passes,
+        aws_primary_instance_id=args.aws_primary_instance_id,
+        aws_region=args.aws_region,
+        aws_primary_role_arn=args.aws_primary_role_arn,
+        aws_web_identity_audience=args.aws_web_identity_audience,
+        primary_wake_grace_seconds=args.primary_wake_grace_seconds,
     )
 
 
@@ -1281,6 +1499,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gce-region", required=True)
     parser.add_argument("--gce-mig", required=True)
     parser.add_argument("--gce-impersonate-service-account")
+    # The on-demand AWS primary. Both the instance and the role are required
+    # to wake it; omitting either keeps the controller GCE-only.
+    parser.add_argument("--aws-primary-instance-id")
+    parser.add_argument("--aws-region", default="us-east-1")
+    parser.add_argument("--aws-primary-role-arn")
+    parser.add_argument(
+        "--aws-web-identity-audience", default="ditto-screener-capacity"
+    )
+    parser.add_argument(
+        "--primary-wake-grace-seconds", type=_non_negative_int, default=600
+    )
     parser.add_argument("--lock-file", default="/run/lock/ditto-screener-capacity.lock")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
@@ -1313,9 +1542,12 @@ def main() -> int:
         except BlockingIOError:
             print("capacity controller already running", file=sys.stderr)
             return 75
+        # One EC2 client for the process keeps its temporary AWS credentials
+        # until they near expiry instead of re-federating every pass.
+        aws_clients: dict[str, EC2Primary] = {}
         while True:
             try:
-                result = reconcile(settings)
+                result = reconcile(settings, aws_clients=aws_clients)
                 print(json.dumps(result, sort_keys=True))
             except ControllerError as error:
                 print(str(error), file=sys.stderr)
