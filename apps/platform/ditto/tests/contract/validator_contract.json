@@ -8412,6 +8412,10 @@
             ],
             "default": null
           },
+          "generator_frontier_oracle": {
+            "default": false,
+            "type": "boolean"
+          },
           "generator_round_bench_versions": {
             "anyOf": [
               {

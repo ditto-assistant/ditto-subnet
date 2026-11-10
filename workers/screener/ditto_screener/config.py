@@ -217,6 +217,10 @@ class ScreenerConfig:
     l2_audit_retention_days: int
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
+    idle_exit_seconds: float | None = None
+    """Exit with ``IDLE_EXIT_STATUS`` after this long without screening work, so
+    an on-demand host can power itself off. Checked only between sweeps, when no
+    claim is in flight. ``None`` (the default) keeps polling forever."""
     l2_always_escalate: bool = False
     scorer_capabilities_url: str | None = None
     expected_scorer_revision: str | None = None
@@ -400,6 +404,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             str(20 * 1024 * 1024),
         ),
         poll_seconds=_parse_float("SCREENER_POLL_SECONDS", "30"),
+        idle_exit_seconds=_parse_optional_float("SCREENER_IDLE_EXIT_SECONDS"),
         queue_limit=_parse_int("SCREENER_QUEUE_LIMIT", "20"),
         http_timeout_seconds=_parse_float("SCREENER_HTTP_TIMEOUT_SECONDS", "60"),
         policy_manifest_file=os.environ.get("SCREENER_POLICY_MANIFEST_FILE") or None,
@@ -527,6 +532,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if not config.source_review_api_key_file:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_API_KEY_FILE is required by screening policy v8"
+        )
+    if config.idle_exit_seconds is not None and not (
+        60 <= config.idle_exit_seconds <= 86_400
+    ):
+        raise ScreenerConfigError(
+            "SCREENER_IDLE_EXIT_SECONDS must be between 60 and 86400"
         )
     if not 1 <= config.source_review_max_steps <= 240:
         raise ScreenerConfigError(

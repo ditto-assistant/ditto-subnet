@@ -5594,7 +5594,7 @@ class PublicSubmissionImageBuild(BaseModel):
         "canceled",
         "consumed",
     ]
-    provider: Literal["targon", "gcp", "hetzner"] | None = None
+    provider: Literal["targon", "gcp", "hetzner", "aws"] | None = None
     attempt_count: Annotated[int, Field(ge=0, le=3)]
     output_sha256: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
     output_size_bytes: Annotated[int | None, Field(ge=1, le=4294967296)] = None
@@ -5670,7 +5670,7 @@ class PublicScreenerHeartbeat(BaseModel):
     screener_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Screener's public hotkey.")
     ]
-    provider: Literal["gcp", "targon", "hetzner", "home", "test"] | None = None
+    provider: Literal["gcp", "targon", "hetzner", "aws", "home", "test"] | None = None
     node_status: Literal["active", "draining", "quarantined", "revoked"] | None = None
     capacity: Annotated[int, Field(ge=1, le=16)] = 1
     software_version: str

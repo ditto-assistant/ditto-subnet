@@ -1976,6 +1976,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/frontier/audits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Frontier Audits
+         * @description The frontier audit queue: sampled oracle-attested cases awaiting an
+         *     operator ruling, oldest round first. ``include_ruled`` also lists ruled
+         *     audits of rounds that have not settled yet.
+         */
+        get: operations["admin_frontier_audits_api_v1_admin_generator_competition_frontier_audits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/probe": {
         parameters: {
             query?: never;
@@ -2180,6 +2202,79 @@ export interface paths {
         get: operations["admin_round_dataset_api_v1_admin_generator_competition_rounds__round_index__dataset_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/frontier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Round Frontier
+         * @description A scored round's frontier lane: candidates, the oracle run, the
+         *     attestations, each column's audit, and the credit applied.
+         */
+        get: operations["admin_round_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/frontier/audits/{column_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Frontier Audit Detail
+         * @description One column's audit sample as the generator wrote it: question, gold
+         *     and declared competitors, cited evidence, the panel's and the oracle's
+         *     outcomes, and the user's visible memory (filtered by ``q``) to look for a
+         *     contradicting fact.
+         */
+        get: operations["admin_frontier_audit_detail_api_v1_admin_generator_competition_rounds__round_index__frontier_audits__column_id__get"];
+        put?: never;
+        /**
+         * Admin Rule Frontier Audit
+         * @description Rule one column's frontier audit. ``valid`` keeps every oracle
+         *     attestation on the column; an invalid ruling names the sampled cases that
+         *     are not fair memory questions and voids all of the column's frontier
+         *     credit for the round. The round settles once every audit is ruled.
+         */
+        post: operations["admin_rule_frontier_audit_api_v1_admin_generator_competition_rounds__round_index__frontier_audits__column_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/rounds/{round_index}/frontier/settle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Settle Frontier
+         * @description Settle a round's frontier lane now, without waiting for its audits or
+         *     the oracle: attestations of columns whose audit did not fail apply (none
+         *     while the oracle has not reported).
+         */
+        post: operations["admin_settle_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_settle_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9120,6 +9215,9 @@ export interface paths {
         /**
          * Refresh Screener Node
          * @description Rotate a node bearer while it still owns valid signed authority.
+         *
+         *     An on-demand (AWS) node may also rotate an expired bearer after a bounded
+         *     dormancy; every other node must rotate before expiry or re-enroll.
          */
         post: operations["refresh_screener_node_api_v1_screener_nodes_refresh_post"];
         delete?: never;
@@ -12856,6 +12954,7 @@ export interface components {
             commitment_publishers_target: number;
             /** Dataset Bytes */
             dataset_bytes: number | null;
+            frontier?: components["schemas"]["GeneratorFrontierView"] | null;
             /** Generation */
             generation: {
                 [key: string]: unknown;
@@ -25025,6 +25124,28 @@ export interface components {
              */
             epochs_per_round: number;
             /**
+             * Frontier Audit Cases
+             * @default 3
+             */
+            frontier_audit_cases: number;
+            /**
+             * Frontier Audit Grace Hours
+             * @default 24
+             */
+            frontier_audit_grace_hours: number;
+            /** Frontier Oracle Agent Id */
+            frontier_oracle_agent_id?: string | null;
+            /**
+             * Frontier Oracle Timeout Hours
+             * @default 12
+             */
+            frontier_oracle_timeout_hours: number;
+            /**
+             * Frontier Weight
+             * @default 1
+             */
+            frontier_weight: number;
+            /**
              * Lease Ttl Seconds
              * @default 7200
              */
@@ -25117,6 +25238,244 @@ export interface components {
              * @default 7
              */
             window_days: number;
+        };
+        /** GeneratorFrontierAuditDetail */
+        GeneratorFrontierAuditDetail: {
+            audit: components["schemas"]["GeneratorFrontierAuditView"];
+            /** Cases */
+            cases: components["schemas"]["GeneratorFrontierCaseView"][];
+        };
+        /** GeneratorFrontierAuditListResponse */
+        GeneratorFrontierAuditListResponse: {
+            /** Audits */
+            audits: components["schemas"]["GeneratorFrontierAuditView"][];
+            /** Count */
+            count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Returned */
+            returned: number;
+        };
+        /**
+         * GeneratorFrontierAuditRuling
+         * @description An operator's ruling on one frontier audit sample.
+         */
+        GeneratorFrontierAuditRuling: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Invalid Case Ids */
+            invalid_case_ids?: string[];
+            /** Reason */
+            reason: string;
+            /** Valid */
+            valid: boolean;
+        };
+        /**
+         * GeneratorFrontierAuditView
+         * @description One column's sampled operator audit of its oracle-attested cases.
+         */
+        GeneratorFrontierAuditView: {
+            /** Actor */
+            actor?: string | null;
+            /** Attested Cases */
+            attested_cases: number;
+            /** Audit Deadline */
+            audit_deadline?: string | null;
+            /** Column Id */
+            column_id: string;
+            /** Invalid Case Ids */
+            invalid_case_ids?: string[];
+            /** Miner Hotkey */
+            miner_hotkey: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Round Index */
+            round_index: number;
+            /** Ruled At */
+            ruled_at?: string | null;
+            /** Sample */
+            sample: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "passed" | "failed";
+            /** Submission Id */
+            submission_id: string | null;
+        };
+        /**
+         * GeneratorFrontierCaseView
+         * @description One audited case as the generator wrote it, with its evidence, the
+         *     panel's and the oracle's outcomes, and the user's visible memory.
+         */
+        GeneratorFrontierCaseView: {
+            /** Accept Any */
+            accept_any?: string[];
+            /** Answer Items */
+            answer_items?: string[];
+            /** Answer Kind */
+            answer_kind?: string | null;
+            /** Case Id */
+            case_id: string;
+            /** Distractor Answers */
+            distractor_answers?: string[];
+            /** Dump Guard */
+            dump_guard?: string[];
+            /** Evidence */
+            evidence: components["schemas"]["GeneratorFrontierMemoryPair"][];
+            /** Expected Answer */
+            expected_answer: string;
+            /** Forbidden Answer */
+            forbidden_answer?: string | null;
+            /** Memory Matches */
+            memory_matches: components["schemas"]["GeneratorFrontierMemoryPair"][];
+            /**
+             * Memory Truncated
+             * @default false
+             */
+            memory_truncated: boolean;
+            /** Oracle Fault */
+            oracle_fault?: boolean | null;
+            /** Oracle Score */
+            oracle_score?: number | null;
+            /** Panel Mean Score */
+            panel_mean_score?: number | null;
+            /** Panel Size */
+            panel_size?: number | null;
+            /** Panel Solvers */
+            panel_solvers?: number | null;
+            /** Question */
+            question: string;
+            /**
+             * Run After Wave
+             * @default 0
+             */
+            run_after_wave: number;
+            /**
+             * User Id
+             * @default
+             */
+            user_id: string;
+            /** Visible Pairs */
+            visible_pairs: number;
+        };
+        /** GeneratorFrontierMemoryPair */
+        GeneratorFrontierMemoryPair: {
+            /** Pair Id */
+            pair_id: string;
+            /** Prompt */
+            prompt: string;
+            /** Response */
+            response: string;
+            /** Timestamp */
+            timestamp: string;
+            /** Wave */
+            wave: number;
+        };
+        /**
+         * GeneratorFrontierOracleView
+         * @description The oracle run's outcome on a round's frontier candidates.
+         */
+        GeneratorFrontierOracleView: {
+            /** Failed */
+            failed: number;
+            /** Faulted */
+            faulted: number;
+            /** Passed */
+            passed: number;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Results */
+            results: {
+                [key: string]: unknown;
+            }[];
+            /** Run Id */
+            run_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * GeneratorFrontierSettleRequest
+         * @description Settle a round's frontier lane now, applying what has survived.
+         */
+        GeneratorFrontierSettleRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * GeneratorFrontierView
+         * @description A scored round's frontier lane: candidates, oracle, audits, outcome.
+         */
+        GeneratorFrontierView: {
+            /** Applied */
+            applied?: {
+                [key: string]: string[];
+            } | null;
+            /** Attested */
+            attested: {
+                [key: string]: string[];
+            };
+            /** Audit Cases */
+            audit_cases: number;
+            /** Audits */
+            audits: components["schemas"]["GeneratorFrontierAuditView"][];
+            /** Base Column Scores */
+            base_column_scores?: {
+                [key: string]: number;
+            } | null;
+            /** Candidates */
+            candidates: string[];
+            /** Column Scores */
+            column_scores: {
+                [key: string]: number;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Frontier Weight */
+            frontier_weight: number;
+            oracle: components["schemas"]["GeneratorFrontierOracleView"] | null;
+            /**
+             * Oracle Agent Id
+             * Format: uuid
+             */
+            oracle_agent_id: string;
+            /** Oracle Attempts */
+            oracle_attempts: number;
+            /** Oracle Deadline */
+            oracle_deadline: string | null;
+            /** Round Index */
+            round_index: number;
+            /** Settle Reason */
+            settle_reason?: string | null;
+            /** Settled At */
+            settled_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "oracle_pending" | "audit_pending" | "settled";
         };
         /** GeneratorLedgerEntry */
         GeneratorLedgerEntry: {
@@ -25419,6 +25778,10 @@ export interface components {
             discriminating?: number | null;
             /** Duplicate */
             duplicate?: number | null;
+            /** Frontier */
+            frontier?: number | null;
+            /** Frontier State */
+            frontier_state?: string | null;
             /** Generated */
             generated?: boolean | null;
             /** Grading Bench Version */
@@ -25707,10 +26070,12 @@ export interface components {
         };
         /**
          * GeneratorRoundJobResponse
-         * @description One leased round panel run.
+         * @description One leased round panel run, or one frontier oracle run.
          *
          *     ``seed`` is a positive placeholder the scorer requires on ``/v2/score``;
-         *     the round dataset, not the seed, determines every case.
+         *     the round dataset, not the seed, determines every case. An oracle run
+         *     (``dataset_mode`` ``generator-frontier-oracle-v1``) answers only
+         *     ``oracle_case_ids``, and its results must name exactly those cases.
          */
         GeneratorRoundJobResponse: {
             /**
@@ -25729,9 +26094,9 @@ export interface components {
             /**
              * Dataset Mode
              * @default generator-round-v1
-             * @constant
+             * @enum {string}
              */
-            dataset_mode: "generator-round-v1";
+            dataset_mode: "generator-round-v1" | "generator-frontier-oracle-v1";
             /** Dataset Sha256 */
             dataset_sha256: string;
             /**
@@ -25744,6 +26109,8 @@ export interface components {
             miner_hotkey: string;
             /** Minimum Screening Policy Version */
             minimum_screening_policy_version?: number | null;
+            /** Oracle Case Ids */
+            oracle_case_ids?: string[] | null;
             /**
              * Requires Screened Image
              * @default true
@@ -26400,6 +26767,11 @@ export interface components {
             discriminating: number;
             /** Duplicate */
             duplicate: number;
+            /**
+             * Frontier
+             * @default 0
+             */
+            frontier: number;
             /** Grading Bench Version */
             grading_bench_version?: number | null;
             /** Panel Size */
@@ -35419,7 +35791,7 @@ export interface components {
             /** Protocol Version */
             protocol_version: number;
             /** Provider */
-            provider?: ("gcp" | "targon" | "hetzner" | "home" | "test") | null;
+            provider?: ("gcp" | "targon" | "hetzner" | "aws" | "home" | "test") | null;
             /**
              * Reported At
              * Format: date-time
@@ -35767,7 +36139,7 @@ export interface components {
             /** Output Size Bytes */
             output_size_bytes?: number | null;
             /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
+            provider?: ("targon" | "gcp" | "hetzner" | "aws") | null;
             /** Started At */
             started_at?: string | null;
             /**
@@ -38878,6 +39250,11 @@ export interface components {
             deterministic_v13_datasets: boolean;
             /** Dueling Slice Bench Versions */
             dueling_slice_bench_versions?: number[] | null;
+            /**
+             * Generator Frontier Oracle
+             * @default false
+             */
+            generator_frontier_oracle: boolean;
             /** Generator Round Bench Versions */
             generator_round_bench_versions?: number[] | null;
             /** Generator Round Max Cases */
@@ -39418,7 +39795,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /** Reason */
@@ -39438,7 +39815,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
         };
@@ -39466,7 +39843,7 @@ export interface components {
             /** Node Id */
             node_id?: string | null;
             /** Provider */
-            provider?: ("gcp" | "targon" | "hetzner" | "home" | "test") | null;
+            provider?: ("gcp" | "targon" | "hetzner" | "aws" | "home" | "test") | null;
         };
         /** ScreenerCapacityEventView */
         ScreenerCapacityEventView: {
@@ -39489,7 +39866,7 @@ export interface components {
             /** Node Id */
             node_id?: string | null;
             /** Provider */
-            provider?: ("gcp" | "targon" | "hetzner" | "home" | "test") | null;
+            provider?: ("gcp" | "targon" | "hetzner" | "aws" | "home" | "test") | null;
         };
         /** ScreenerCapacitySnapshotRequest */
         ScreenerCapacitySnapshotRequest: {
@@ -39675,7 +40052,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /** Ready */
@@ -39998,7 +40375,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /**
@@ -40094,7 +40471,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /**
@@ -40288,7 +40665,7 @@ export interface components {
             /** Node Id */
             node_id?: string | null;
             /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
+            provider?: ("targon" | "gcp" | "hetzner" | "aws") | null;
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /** Status */
@@ -40310,7 +40687,7 @@ export interface components {
              *       "gcp"
              *     ]
              */
-            build_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            build_provider_priority: ("hetzner" | "aws" | "targon" | "gcp")[];
             /**
              * Gce Overflow Backlog Multiplier
              * @default 3
@@ -40339,14 +40716,14 @@ export interface components {
              *       "gcp"
              *     ]
              */
-            runtime_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            runtime_provider_priority: ("hetzner" | "aws" | "targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
              *       "gcp"
              *     ]
              */
-            source_review_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            source_review_provider_priority: ("hetzner" | "aws" | "targon" | "gcp")[];
         };
         /** ScreenerProviderSettingsControl */
         ScreenerProviderSettingsControl: {
@@ -43705,7 +44082,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "targon" | "gcp" | "hetzner";
+            provider: "targon" | "gcp" | "hetzner" | "aws";
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /**
@@ -43754,7 +44131,7 @@ export interface components {
             /** Lease Expires At */
             lease_expires_at?: string | null;
             /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
+            provider?: ("targon" | "gcp" | "hetzner" | "aws") | null;
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /** Reason */
@@ -51214,6 +51591,41 @@ export interface operations {
             };
         };
     };
+    admin_frontier_audits_api_v1_admin_generator_competition_frontier_audits_get: {
+        parameters: {
+            query?: {
+                include_ruled?: boolean;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierAuditListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_probe_api_v1_admin_generator_competition_probe_get: {
         parameters: {
             query?: never;
@@ -51531,6 +51943,150 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GeneratorRoundDatasetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_round_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_frontier_audit_detail_api_v1_admin_generator_competition_rounds__round_index__frontier_audits__column_id__get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+                column_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierAuditDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_rule_frontier_audit_api_v1_admin_generator_competition_rounds__round_index__frontier_audits__column_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+                column_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierAuditRuling"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_settle_frontier_api_v1_admin_generator_competition_rounds__round_index__frontier_settle_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                round_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorFrontierSettleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorFrontierView"];
                 };
             };
             /** @description Validation Error */
