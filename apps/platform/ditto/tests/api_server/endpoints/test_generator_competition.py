@@ -94,6 +94,11 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "rounds_per_season": 1,
         "dueling_shadow_bench_version": None,
         "skip_unchanged_rounds": True,
+        "frontier_weight": 1.0,
+        "frontier_oracle_agent_id": None,
+        "frontier_audit_cases": 3,
+        "frontier_audit_grace_hours": 24,
+        "frontier_oracle_timeout_hours": 12,
     }
     base.update(overrides)
     return base

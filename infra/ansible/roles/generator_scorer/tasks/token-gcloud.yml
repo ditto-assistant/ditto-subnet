@@ -1,0 +1,9 @@
+---
+# GCE: the VM's attached service account reads the secret directly.
+- name: Read the Platform bearer through the attached identity
+  ansible.builtin.command: >-
+    gcloud secrets versions access latest
+    --secret={{ generator_scorer_token_secret }} --project={{ generator_scorer_gcp_project }}
+  register: generator_scorer_token_read
+  changed_when: false
+  no_log: true

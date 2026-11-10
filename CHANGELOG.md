@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.468.4 (2026-11-10)
+
+### Bug Fixes
+
+- **deps**: Bump grpc 1.83.1 to 1.83.2 for CVE-2026-84445
+  ([`7762bf3`](https://github.com/ditto-assistant/ditto-subnet/commit/7762bf384532e9acb2bffd37058932595593f54b))
+
+
 ## v0.468.3 (2026-11-10)
 
 ### Bug Fixes

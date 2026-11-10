@@ -252,6 +252,13 @@ class ScorerBenchmarkCapability(BaseModel):
     # The scorer accepts ``generator-round-v1`` round datasets. Absent unless
     # true, so validators without it sign exactly the bytes they always did.
     generator_rounds: bool = Field(default=False, exclude_if=lambda value: not value)
+    # The scorer runs the ``generator-frontier-oracle-v1`` mode (the frontier
+    # oracle on a round's unsolved cases). Absent unless true, so validators
+    # without it sign exactly the bytes they always did; Platform leases an
+    # oracle job only to a validator that forwards it.
+    generator_frontier_oracle: bool = Field(
+        default=False, exclude_if=lambda value: not value
+    )
     # The largest round column (cases per pack) the scorer runs, read from its
     # ``generator-round-max-cases-<n>`` feature and capped at what this
     # validator accepts. Absent unless advertised, so validators without it sign
@@ -291,6 +298,8 @@ class ScorerBenchmarkCapability(BaseModel):
     @model_validator(mode="after")
     def support_matches_verified_identity(self) -> ScorerBenchmarkCapability:
         versions = self.supported_bench_versions
+        if self.generator_frontier_oracle and not self.generator_rounds:
+            raise ValueError("the frontier oracle mode requires the round mode")
         if self.generator_round_bench_versions is not None and (
             not self.generator_rounds
             or not set(self.generator_round_bench_versions) <= set(versions)
