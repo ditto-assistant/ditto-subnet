@@ -870,12 +870,14 @@ fn legacy_call(name: &str, args: Value) -> ChatChunk {
 #[tokio::test]
 async fn a_wrap_up_that_emits_calls_still_executes_and_records_them() {
     let catalog = catalog();
+    // A wrap-up that returns calls with no text gets one last no-tools call
+    // for the reply; a call that one returns is not executed.
     for (label, wrap_up, want_text) in [
-        ("list", call("search_web", json!({"query": "b"})), ""),
+        ("list", call("search_web", json!({"query": "b"})), "Done."),
         (
             "legacy",
             legacy_call("search_web", json!({"query": "c"})),
-            "",
+            "Done.",
         ),
         (
             "mixed",
@@ -888,7 +890,14 @@ async fn a_wrap_up_that_emits_calls_still_executes_and_records_them() {
         ),
     ] {
         let executed = Arc::new(Mutex::new(Vec::new()));
-        let model = ScriptedModel::new(vec![call("search_web", json!({"query": "a"})), wrap_up]);
+        let replies = if want_text == "Done." { 3 } else { 2 };
+        let mut script = vec![call("search_web", json!({"query": "a"})), wrap_up];
+        if replies == 3 {
+            let mut last = call("search_web", json!({"query": "e"}));
+            last.text = "Done.".into();
+            script.push(last);
+        }
+        let model = ScriptedModel::new(script);
         let cfg = HybridConfig {
             max_hops: 1,
             ..HybridConfig::default()
@@ -903,13 +912,15 @@ async fn a_wrap_up_that_emits_calls_still_executes_and_records_them() {
         );
         assert_eq!(out.tool_calls.len(), 2, "{label}: both calls recorded");
         assert_eq!(out.tool_calls[1].hop, 1, "{label}");
-        assert_eq!(out.chat_calls, 2, "{label}: the budget is not exceeded");
+        assert_eq!(out.chat_calls, replies, "{label}");
         assert_eq!(out.final_text, want_text, "{label}");
-        assert_eq!(
-            model.calls.lock().unwrap().len(),
-            2,
-            "{label}: no third model call"
-        );
+        assert_eq!(model.calls.lock().unwrap().len() as i64, replies, "{label}");
+        if replies == 3 {
+            assert!(
+                model.calls.lock().unwrap()[2].1.is_empty(),
+                "{label}: the reply call offers no tools"
+            );
+        }
     }
 }
 

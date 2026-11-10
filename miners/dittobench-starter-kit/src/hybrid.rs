@@ -1129,9 +1129,10 @@ pub async fn run_case(
             messages.push(text_message("assistant", chunk.text));
         } else {
             // No tools were offered, but a provider may still return a call.
-            // Every model-emitted call is executed and recorded; the budget
-            // is spent, so no further model call follows and the reply is
-            // whatever text came with the calls.
+            // Every model-emitted call is executed and recorded. The reply is
+            // the text that came with the calls; when there was none, one
+            // last no-tools call writes it, and any call that returns is not
+            // executed, so the case never ends without a reply.
             outcome.final_text = chunk.text.clone();
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
@@ -1154,6 +1155,21 @@ pub async fn run_case(
                 &mut offered,
             )
             .await;
+            if outcome.final_text.trim().is_empty() {
+                let chunk = model
+                    .next(&messages, &[])
+                    .await
+                    .map_err(|err| anyhow::anyhow!("hybrid chat call: {err}"))?;
+                outcome.chat_calls += 1;
+                if let Some(cost) = &chunk.cost {
+                    outcome.prompt_tokens += cost.usage.input_tokens;
+                    outcome.output_tokens += cost.usage.output_tokens;
+                    outcome.max_prompt_tokens =
+                        outcome.max_prompt_tokens.max(cost.usage.input_tokens);
+                }
+                outcome.final_text = chunk.text.clone();
+                messages.push(text_message("assistant", chunk.text));
+            }
         }
     }
     all_offered.extend(offered.iter().cloned());
