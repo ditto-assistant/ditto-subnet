@@ -57,7 +57,15 @@ async fn jev_handler(State(stub): State<JevStub>, Json(body): Json<Value>) -> Js
                 let rest = 0.1 / (names.len().max(2) - 1) as f64;
                 let probs: serde_json::Map<String, Value> = names
                     .iter()
-                    .map(|n| ((*n).clone(), json!(if **n == pick { 0.9 } else { rest })))
+                    .map(|n| {
+                        // A sole option carries all the probability.
+                        let p = match (**n == pick, names.len()) {
+                            (true, 1) => 1.0,
+                            (true, _) => 0.9,
+                            _ => rest,
+                        };
+                        ((*n).clone(), json!(p))
+                    })
                     .collect();
                 answers.insert(
                     id.clone(),
