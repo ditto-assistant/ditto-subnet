@@ -336,13 +336,14 @@ def test_idle_exit_is_rendered_only_when_enabled() -> None:
     idle_env = "SCREENER_IDLE_EXIT_SECONDS={{ screener_fleet_idle_exit_seconds | int }}"
     assert idle_env in _block(env, IDLE_IF)
     assert env.count("SCREENER_IDLE_EXIT_SECONDS") == 1
-    block = _block(worker, IDLE_IF)
-    assert "RestartPreventExitStatus=85" in block
-    assert "SuccessExitStatus=85" in block
+    # Every shipped unit leaves an idle exit (85) down, unconditionally; status
+    # 85 only occurs when the opt-in env above is rendered.
+    lines = worker.splitlines()
+    assert "RestartPreventExitStatus=85" in lines
+    assert "SuccessExitStatus=85" in lines
     assert worker.count("RestartPreventExitStatus") == 1
     # The release updater depends on Restart=always for every other exit.
-    assert "\nRestart=always\n" in worker
-    assert "Restart=always" not in block
+    assert "Restart=always" in lines
 
     fleet = _task("Assert immutable screener fleet inputs")["ansible.builtin.assert"]
     idle = next(item for item in fleet["that"] if "idle_exit_seconds" in item)
