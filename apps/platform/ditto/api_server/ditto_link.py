@@ -358,9 +358,16 @@ class DittoLinkClient:
             )
             checked.raise_for_status()
             result = checked.json()
+            if not isinstance(result, dict):
+                raise ValueError("connection response is not an object")
             if result.get("sub") != identity.user_id or result.get("ready") is not True:
                 raise ValueError("connection account mismatch or missing connection")
-            github = next(r for r in result["requirements"] if r["app"] == "github")
+            requirements = result.get("requirements")
+            if not isinstance(requirements, list) or not all(
+                isinstance(requirement, dict) for requirement in requirements
+            ):
+                raise ValueError("connection requirements are malformed")
+            github = next(r for r in requirements if r.get("app") == "github")
             provider_id = github["identity"]["id"]
             login = github["identity"]["login"]
             if (

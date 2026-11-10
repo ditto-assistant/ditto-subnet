@@ -7,11 +7,12 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import bittensor
+import httpx
 import pytest
 from fastapi import HTTPException, Request
 
 from ditto.api_models.contributor_identity import GithubLinkRequest
-from ditto.api_server.ditto_link import DittoLinkClient
+from ditto.api_server.ditto_link import DittoLinkClient, DittoLinkRejected
 from ditto.api_server.endpoints.miner_github_link import confirm
 from ditto.chain.models import BlockInfo
 from ditto.tests.api_server.endpoints.test_miner_ditto_link import (
@@ -25,6 +26,43 @@ from ditto.tests.api_server.endpoints.test_miner_ditto_link import (
 from ditto.tests.api_server.endpoints.test_miner_github_link import signed_link
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        None,
+        [],
+        "invalid",
+        7,
+        {"sub": "ditto-user-1", "ready": True, "requirements": None},
+        {"sub": "ditto-user-1", "ready": True, "requirements": {}},
+        {"sub": "ditto-user-1", "ready": True, "requirements": [None]},
+        {
+            "sub": "ditto-user-1",
+            "ready": True,
+            "requirements": [{"app": "github", "identity": None}],
+        },
+    ],
+)
+async def test_malformed_connections_are_rejected_as_a_link_failure(document):
+    provider = FakeProvider()
+    provider.nonce_for_code["malformed-code"] = "nonce"
+    delegate = provider.transport()
+
+    def handle(request):
+        if request.url.path == "/oauth/connections":
+            return httpx.Response(200, json=document)
+        return delegate.handle_request(request)
+
+    service = DittoLinkClient(_config(), transport=httpx.MockTransport(handle))
+    try:
+        with pytest.raises(DittoLinkRejected, match="Connect GitHub"):
+            await service.exchange_code(
+                code="malformed-code", code_verifier="verifier", nonce="nonce"
+            )
+    finally:
+        await service.aclose()
 
 
 async def test_both_disabled_gates_block_proofs_before_database_access():

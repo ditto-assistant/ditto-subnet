@@ -14,6 +14,8 @@ Subcommands:
 - ``link-ditto unlink``   revoke the link (the Ditto account keeps its own data)
 
 Exit codes: 0 linked / shown / revoked; 1 not signed in, refused, or timed out.
+A saved Ditto link returns 0 even if its optional GitHub proof is incomplete;
+the warning gives a retry command and existing signed proofs stay in place.
 """
 
 from __future__ import annotations
@@ -22,9 +24,11 @@ import argparse
 import contextlib
 import json
 import os
+import shlex
 import sys
 import time
 import webbrowser
+from uuid import UUID
 
 from ditto.api_models.miner_ditto_link import (
     MinerDittoLinkStartRequest,
@@ -156,6 +160,81 @@ def _confirm_pairing(*, hotkey: str, who: str, skip: bool) -> bool:
     return answer in ("y", "yes")
 
 
+def _proof_incomplete(args: argparse.Namespace) -> None:
+    retry = ["ditto", "--network", args.network, "link-ditto"]
+    for option, value in (
+        ("--wallet.name", args.coldkey_name),
+        ("--wallet.hotkey", args.hotkey_name),
+        ("--expect-github-id", args.expect_github_id),
+    ):
+        if value is not None:
+            retry.extend((option, str(value)))
+    print(
+        "Your Ditto account is linked. The GitHub miner proof is incomplete; "
+        "existing signed proofs are retained. Retry the connection with: "
+        + shlex.join(retry),
+        file=sys.stderr,
+    )
+
+
+def _finish_github_proof(
+    client: ApiClient,
+    args: argparse.Namespace,
+    *,
+    token: str,
+    hotkey: str,
+    attempt_id: UUID,
+) -> None:
+    """A proof failure must not undo or misreport the saved Ditto link."""
+    from ditto.miner_cli.commands import link_github
+
+    try:
+        proof = client.get_github_link_attempt(token=token, attempt_id=attempt_id)
+        existing = client.get_github_link(token=token).link
+        if existing is not None and (
+            existing.github_user_id,
+            existing.github_login,
+        ) == (proof.github_user_id, proof.github_login):
+            print("Your matching signed GitHub proof is retained.", file=sys.stderr)
+            return
+        if proof.github_user_id is not None:
+            assigned = client.get_github_account_link(
+                token=token, github_user_id=proof.github_user_id
+            ).link
+            if assigned is not None and assigned.hotkey != hotkey:
+                print(
+                    "Ditto is linked for Router attribution. Your GitHub "
+                    f"bounty identity remains on {assigned.hotkey}; "
+                    "its existing proof is retained.",
+                    file=sys.stderr,
+                )
+                return
+        if proof.status in ("failed", "expired"):
+            _proof_incomplete(args)
+            return
+        result = link_github.run(
+            argparse.Namespace(
+                network=args.network,
+                github_command="link",
+                ditto_attempt=attempt_id,
+                coldkey_name=args.coldkey_name,
+                hotkey_name=args.hotkey_name,
+                key_kind="hotkey",
+                no_browser=True,
+                wait=600,
+                yes=args.yes,
+                expect_github_id=args.expect_github_id,
+                json=bool(args.json),
+            )
+        )
+    except (LoginRequiredError, ApiResponseError):
+        _proof_incomplete(args)
+        return
+    if result != 0:
+        # The proof can expire between this command's read and the signer's read.
+        _proof_incomplete(args)
+
+
 def run(args: argparse.Namespace) -> int:
     command = getattr(args, "link_command", "link") or "link"
     found = _session_token(args)
@@ -224,51 +303,13 @@ def run(args: argparse.Namespace) -> int:
                     )
                 if attempt.status == "linked":
                     _print_link(attempt.link, as_json=as_json)
-                    # The GitHub identity came from the same Ditto consent.
-                    # Keep the exact existing signed proof and uniqueness guard.
-                    from ditto.miner_cli.commands import link_github
-
                     if attempt.github_proof_attempt_id is not None:
-                        proof = client.get_github_link_attempt(
-                            token=token, attempt_id=attempt.github_proof_attempt_id
-                        )
-                        existing = client.get_github_link(token=token).link
-                        if existing is not None and (
-                            existing.github_user_id,
-                            existing.github_login,
-                        ) == (proof.github_user_id, proof.github_login):
-                            print(
-                                "Your matching signed GitHub proof is retained.",
-                                file=sys.stderr,
-                            )
-                            return 0
-                        if proof.github_user_id is not None:
-                            assigned = client.get_github_account_link(
-                                token=token, github_user_id=proof.github_user_id
-                            ).link
-                            if assigned is not None and assigned.hotkey != hotkey:
-                                print(
-                                    "Ditto is linked for Router attribution. "
-                                    "Your GitHub "
-                                    f"bounty identity remains on {assigned.hotkey}; "
-                                    "its existing proof is retained.",
-                                    file=sys.stderr,
-                                )
-                                return 0
-                        return link_github.run(
-                            argparse.Namespace(
-                                network=args.network,
-                                github_command="link",
-                                ditto_attempt=attempt.github_proof_attempt_id,
-                                coldkey_name=args.coldkey_name,
-                                hotkey_name=args.hotkey_name,
-                                key_kind="hotkey",
-                                no_browser=True,
-                                wait=600,
-                                yes=args.yes,
-                                expect_github_id=args.expect_github_id,
-                                json=as_json,
-                            )
+                        _finish_github_proof(
+                            client,
+                            args,
+                            token=token,
+                            hotkey=hotkey,
+                            attempt_id=attempt.github_proof_attempt_id,
                         )
                     return 0
                 if attempt.status in ("failed", "expired"):
