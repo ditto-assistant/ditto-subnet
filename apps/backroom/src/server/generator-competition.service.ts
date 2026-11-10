@@ -33,6 +33,13 @@ import {
   rescoreGeneratorInputSchema,
   rotateGeneratorProbeInputSchema,
   setGeneratorSettingsInputSchema,
+  generatorFrontierAuditDetailSchema,
+  generatorFrontierAuditInputSchema,
+  generatorFrontierAuditListSchema,
+  generatorFrontierSchema,
+  listGeneratorFrontierAuditsInputSchema,
+  ruleGeneratorFrontierAuditInputSchema,
+  settleGeneratorFrontierInputSchema,
   GENERATOR_SETTINGS_SCOPE,
 } from '../lib/generator-competition.schemas'
 import { PlatformAdminError, platformAdminRequest } from './ditto.server'
@@ -397,6 +404,103 @@ export async function registerDefaultGenerator(rawInput: unknown, actor: string)
           actor,
           confirmation: input.confirmation,
         },
+      }),
+    ),
+  )
+}
+
+// --- frontier cases ----------------------------------------------------------
+
+type FrontierWriteKind = 'rule' | 'settle'
+
+// Keep Platform's refusal text and name what was not applied. A 409 is a
+// state conflict (already ruled or settled, no open audit, a case outside the
+// sample, a wrong confirmation): re-read the lane. A 422 is the request
+// itself (a short reason, malformed case ids): correct it; re-reading fixes
+// nothing.
+export function frontierRefusal(kind: FrontierWriteKind, cause: unknown) {
+  if (!(cause instanceof PlatformAdminError)) return null
+  if (cause.status !== 409 && cause.status !== 422) return null
+  const nothing =
+    kind === 'rule' ? 'Nothing was ruled' : 'Nothing was settled'
+  const recovery =
+    cause.status === 422
+      ? kind === 'rule'
+        ? 'correct the refused fields (a reason of at least 8 characters, invalidCaseIds a list of round case ids) and resubmit.'
+        : 'correct the refused fields (a reason of at least 8 characters) and resubmit.'
+      : kind === 'rule'
+        ? 're-read get_generator_round_frontier and get_generator_frontier_audit: the audit may already be ruled or the round settled, and an invalid ruling may name only cases from the sample; resubmit with the exact confirmation they imply.'
+        : 're-read get_generator_round_frontier: the round may already be settled or have no frontier lane.'
+  return new Error(`${cause.message}. ${nothing}: ${recovery}`)
+}
+
+async function frontierWrite<T>(
+  kind: FrontierWriteKind,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation()
+  } catch (cause) {
+    throw frontierRefusal(kind, cause) ?? cause
+  }
+}
+
+export async function listGeneratorFrontierAudits(rawInput: unknown) {
+  const { includeRuled, limit, offset } = listGeneratorFrontierAuditsInputSchema.parse(rawInput)
+  return generatorFrontierAuditListSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/frontier/audits?include_ruled=${includeRuled}&limit=${limit}&offset=${offset}`,
+    ),
+  )
+}
+
+export async function fetchGeneratorRoundFrontier(rawInput: unknown) {
+  const { roundIndex } = generatorRoundIndexInputSchema.parse(rawInput)
+  return generatorFrontierSchema.parse(
+    await platformAdminRequest(`${BASE}/rounds/${roundIndex}/frontier`),
+  )
+}
+
+export async function fetchGeneratorFrontierAudit(rawInput: unknown) {
+  const { roundIndex, columnId, q } = generatorFrontierAuditInputSchema.parse(rawInput)
+  const query = q ? `?q=${encodeURIComponent(q)}` : ''
+  return generatorFrontierAuditDetailSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/rounds/${roundIndex}/frontier/audits/${encodeURIComponent(columnId)}${query}`,
+    ),
+  )
+}
+
+export async function ruleGeneratorFrontierAudit(rawInput: unknown, actor: string) {
+  const input = ruleGeneratorFrontierAuditInputSchema.parse(rawInput)
+  return frontierWrite('rule', async () =>
+    generatorFrontierSchema.parse(
+      await platformAdminRequest(
+        `${BASE}/rounds/${input.roundIndex}/frontier/audits/${encodeURIComponent(input.columnId)}`,
+        {
+          method: 'POST',
+          actor,
+          body: {
+            valid: input.valid,
+            invalid_case_ids: input.invalidCaseIds,
+            reason: input.reason,
+            actor,
+            confirmation: input.confirmation,
+          },
+        },
+      ),
+    ),
+  )
+}
+
+export async function settleGeneratorRoundFrontier(rawInput: unknown, actor: string) {
+  const input = settleGeneratorFrontierInputSchema.parse(rawInput)
+  return frontierWrite('settle', async () =>
+    generatorFrontierSchema.parse(
+      await platformAdminRequest(`${BASE}/rounds/${input.roundIndex}/frontier/settle`, {
+        method: 'POST',
+        actor,
+        body: { reason: input.reason, actor, confirmation: input.confirmation },
       }),
     ),
   )

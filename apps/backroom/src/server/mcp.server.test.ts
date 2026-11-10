@@ -571,6 +571,11 @@ describe('Backroom MCP tools', () => {
         'close_generator_round',
         'republish_generator_round_commitment',
         'release_generator_round_lease',
+        'list_generator_frontier_audits',
+        'get_generator_round_frontier',
+        'get_generator_frontier_audit',
+        'rule_generator_frontier_audit',
+        'settle_generator_round_frontier',
         'register_default_generator',
         'create_default_generator_upload',
         'get_ath_review',
@@ -999,6 +1004,8 @@ describe('Backroom MCP tools', () => {
     // summary, detail in tool help) measures 233,483 bytes; keep about 0.5 KB.
     // Allow the guarded dueling season republish and reject-reason amendment
     // controls, with about 0.5 KB of headroom for the combined catalog.
+    // The five generator frontier tools (one-line summaries, detail in tool
+    // help) add 3,197 bytes; the catalog measures 235,662, under this bound.
     expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(236_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
@@ -1059,6 +1066,8 @@ describe('Backroom MCP tools', () => {
       // The three one-line dueling-season summaries measure 29,233; keep
       // about 200 chars.
       // The combined catalog's descriptions measure 29,531 characters.
+      // With the five one-line generator frontier summaries (401 chars) the
+      // catalog measures 29,457, still under this bound.
       29_600,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)

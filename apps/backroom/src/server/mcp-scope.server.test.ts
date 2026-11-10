@@ -41,6 +41,24 @@ describe('MCP scope challenges', () => {
     }
   })
 
+  it('challenges a frontier audit read for the artifact scope', async () => {
+    // Sampled cases, gold answers and visible memory are private benchmark
+    // content, like get_generator_round_dataset.
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+        params: { name: 'get_generator_frontier_audit', arguments: { roundIndex: 7, columnId: 'c1' } } }),
+    })
+    expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
+    // The queue and lane views hold no case content and stay plain reads.
+    for (const name of ['list_generator_frontier_audits', 'get_generator_round_frontier']) {
+      const read = new Request('https://backroom.dittobench.ai/mcp', {
+        method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+          params: { name, arguments: { roundIndex: 7 } } }),
+      })
+      expect(await requiredScopesForRequest(read)).toEqual([])
+    }
+  })
+
   it('does not challenge read tools', async () => {
     const request = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',

@@ -70,6 +70,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'close_generator_round',
   'republish_generator_round_commitment',
   'release_generator_round_lease',
+  'rule_generator_frontier_audit',
+  'settle_generator_round_frontier',
   'register_default_generator',
   'create_default_generator_upload',
   'record_treasury_settings',
@@ -177,6 +179,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // A closed round's dataset is every column's generated cases: private
   // benchmark content, gated like other private artifacts.
   ['get_generator_round_dataset', BACKROOM_ARTIFACT_SCOPE],
+  // A frontier audit serves sampled cases, gold answers and the user's
+  // visible memory from a scored round's private dataset.
+  ['get_generator_frontier_audit', BACKROOM_ARTIFACT_SCOPE],
   ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_verification_readiness', BACKROOM_ARTIFACT_SCOPE],
