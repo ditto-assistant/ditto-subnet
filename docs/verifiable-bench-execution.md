@@ -357,15 +357,23 @@ it is also signed by `owner_coldkey`. That is the payment-time owner that
 today's payment verifier checks.
 
 If hotkey ownership changes after issuance, neither the new owner nor the
-former owner can produce a valid anchor with that token:
-- the new owner's extrinsic is ignored;
-- the former owner's extrinsic fails check 2.
+former owner can produce a valid anchor with that token. The two cases end
+differently:
 
-The token then lapses at expiry under the authorization accounting below.
-Any transfer in an ignored extrinsic still executes and is not refunded. To
-avoid this, the miner CLI must refuse to submit unless the signing key equals
-the token's `owner_coldkey` *and* that key still owns the hotkey. After an
-ownership change, the miner requests a new token.
+- **The former owner (`owner_coldkey`) submits.** That extrinsic is the
+  first `C` candidate, and it fails check 2 because the key no longer owns
+  the hotkey. The token is **burned immediately**. A transfer batched in it
+  is not refunded.
+- **Only the new owner submits.** Its extrinsics are signed by a foreign key
+  and ignored, so the token has no candidate. It **lapses and is burned at
+  `expires_block`**. Any transfer in those ignored extrinsics executes and is
+  not refunded.
+
+Either way, a credit reserved by that token is **forfeited**, per the
+authorization accounting below. A new token needs a *new* authorization: a
+fresh payment, or a different credit. To avoid this loss, the miner CLI must
+refuse to submit unless the signing key equals the token's `owner_coldkey`
+*and* that key still owns the hotkey.
 
 The extrinsic takes one of two shapes:
 
