@@ -281,7 +281,9 @@ func EncounterArgText(raw json.RawMessage) string {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if err := decoder.Decode(&v); err != nil {
-		return string(raw)
+		// Undecodable arguments carry no values: matching the raw text would
+		// let a JSON key, never an argument value, satisfy a call.
+		return ""
 	}
 	var parts []string
 	var walk func(any)
