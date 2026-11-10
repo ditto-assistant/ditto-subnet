@@ -634,9 +634,13 @@ describe("Ditto account link", () => {
     expect(new Headers(start?.init?.headers).get("authorization")).toBe("Bearer ditto_ms_abc");
   });
 
-  it.each([false, true])(
-    "clears the retained proof only after successful unlink (initial failure: %s)",
-    async (failFirstUnlink) => {
+  it.each([
+    { failFirstUnlink: false, proofStatus: "accepted" },
+    { failFirstUnlink: true, proofStatus: "accepted" },
+    { failFirstUnlink: false, proofStatus: "expired" },
+  ])(
+    "restores only live proof hints and clears on successful unlink: %j",
+    async ({ failFirstUnlink, proofStatus }) => {
       await signIn();
       history.replaceState(null, "", "/#/reviews?ditto=confirm&attempt=att-1");
       syncFromLocation();
@@ -648,6 +652,8 @@ describe("Ditto account link", () => {
         vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = String(input);
           if (url.endsWith("/me")) return Response.json(me);
+          if (url.endsWith("/me/github-link/attempts/proof-1"))
+            return Response.json({ status: proofStatus });
           if (url.endsWith("/me/ditto-link/attempts/att-1/confirm") && init?.method === "POST") {
             confirms.push(new Headers(init.headers).get("authorization") || "");
             linked = {
@@ -709,6 +715,19 @@ describe("Ditto account link", () => {
       expect(confirms).toEqual(["Bearer ditto_ms_abc"]);
       expect(location.hash).not.toContain("attempt=");
       expect(document.body.textContent).toContain("--ditto-attempt proof-1");
+      expect([...memory.values()].some((value) => value.includes("proof-1"))).toBe(true);
+      cleanup();
+      render(() => <ReviewsPage />);
+      await waitFor(() =>
+        expect([...memory.values()].some((value) => value.includes("proof-1"))).toBe(
+          proofStatus === "accepted",
+        ),
+      );
+      if (proofStatus === "accepted") {
+        await waitFor(() => expect(document.body.textContent).toContain("--ditto-attempt proof-1"));
+      } else {
+        expect(document.body.textContent).not.toContain("--ditto-attempt proof-1");
+      }
       const unlink = Array.from(document.querySelectorAll("button")).find((b) =>
         b.textContent?.includes("Unlink Ditto account"),
       );
@@ -722,6 +741,7 @@ describe("Ditto account link", () => {
         expect(document.body.textContent).toContain("Ditto account unlinked.");
         expect(document.body.textContent).toContain("Connect Ditto");
         expect(document.body.textContent).not.toContain("--ditto-attempt proof-1");
+        expect([...memory.values()].some((value) => value.includes("proof-1"))).toBe(false);
       });
     },
   );

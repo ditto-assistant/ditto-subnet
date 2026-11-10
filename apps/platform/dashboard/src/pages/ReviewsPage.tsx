@@ -583,6 +583,70 @@ function AccountPanel(): JSX.Element {
   const [dittoNotice, setDittoNotice] = createSignal(readDittoResult());
   const [dittoBusy, setDittoBusy] = createSignal(false);
   const [dittoAttempt, setDittoAttempt] = createSignal<DittoLinkAttempt | null>(null);
+  const proofHintKey = () =>
+    "ditto.miner.ditto-proof.v1:" + API_BASE + ":" + (minerSession()?.hotkey ?? "");
+
+  function clearProofHint(key = proofHintKey()): void {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Storage is optional; the server remains the source of truth.
+    }
+  }
+
+  function retainProofHint(attempt: DittoLinkAttempt): void {
+    const subject = attempt.link?.ditto_user_id ?? attempt.ditto_user_id;
+    if (attempt.status !== "linked" || !attempt.github_proof_attempt_id || !subject) return;
+    try {
+      localStorage.setItem(
+        proofHintKey(),
+        JSON.stringify({ attemptId: attempt.github_proof_attempt_id, subject }),
+      );
+    } catch {
+      // A blocked browser store must not turn a saved pairing into a failure.
+    }
+  }
+
+  async function restoreProofHint(link: DittoLinkView, key: string): Promise<void> {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      let record: { attemptId?: unknown; subject?: unknown } | null;
+      try {
+        record = JSON.parse(raw);
+      } catch {
+        clearProofHint(key);
+        return;
+      }
+      if (
+        !record ||
+        record.subject !== link.ditto_user_id ||
+        typeof record.attemptId !== "string"
+      ) {
+        clearProofHint(key);
+        return;
+      }
+      // An attempt ID is a recovery hint, never authorization. Revalidate it
+      // with the current hotkey session, including its server-side expiry.
+      const proof = await authJSON<{ status: string }>(
+        "/me/github-link/attempts/" + encodeURIComponent(record.attemptId),
+        { headers: sessionAuthHeader() },
+      );
+      if (key !== proofHintKey() || dittoLink()?.link?.ditto_user_id !== link.ditto_user_id) return;
+      if (proof.status !== "accepted" && proof.status !== "linked") {
+        clearProofHint(key);
+        return;
+      }
+      setDittoAttempt({
+        attempt_id: record.attemptId,
+        status: "linked",
+        github_proof_attempt_id: record.attemptId,
+      });
+    } catch {
+      // Keep the non-authoritative hint when the service is unavailable.
+      // A later visit can retry; no command is shown without verification.
+    }
+  }
 
   createEffect(() => {
     void loadMe();
@@ -600,6 +664,7 @@ function AccountPanel(): JSX.Element {
         { headers: sessionAuthHeader() },
       );
       setDittoAttempt(attempt);
+      retainProofHint(attempt);
       if (attempt.status === "identity_verified") {
         setDittoNotice({
           ok: true,
@@ -636,6 +701,7 @@ function AccountPanel(): JSX.Element {
         { method: "POST", headers: sessionAuthHeader() },
       );
       setDittoAttempt(confirmed.github_proof_attempt_id ? confirmed : null);
+      retainProofHint(confirmed);
       setDittoNotice({ ok: confirmed.status === "linked", text: "Ditto account linked." });
       await loadDittoLink();
     } catch (err) {
@@ -651,10 +717,19 @@ function AccountPanel(): JSX.Element {
   }
 
   async function loadDittoLink(): Promise<void> {
+    const key = proofHintKey();
     try {
-      setDittoLink(
-        await authJSON<DittoLinkStatus>("/me/ditto-link", { headers: sessionAuthHeader() }),
-      );
+      const status = await authJSON<DittoLinkStatus>("/me/ditto-link", {
+        headers: sessionAuthHeader(),
+      });
+      if (key !== proofHintKey()) return;
+      setDittoLink(status);
+      if (!status.link) {
+        clearProofHint(key);
+        if (dittoAttempt()?.status === "linked") setDittoAttempt(null);
+      } else if (!dittoAttempt() && !dittoNotice()?.attempt) {
+        await restoreProofHint(status.link, key);
+      }
     } catch {
       // An older Platform has no link endpoint; the card simply stays hidden.
       setDittoLink(null);
@@ -681,12 +756,14 @@ function AccountPanel(): JSX.Element {
   }
 
   async function unlinkDitto(): Promise<void> {
+    const proofKey = proofHintKey();
     setDittoBusy(true);
     setDittoNotice(null);
     setError("");
     try {
       await authJSON<unknown>("/me/ditto-link", { method: "DELETE", headers: sessionAuthHeader() });
       setDittoAttempt(null);
+      clearProofHint(proofKey);
       setSaved("Ditto account unlinked.");
       await loadDittoLink();
     } catch (err) {
