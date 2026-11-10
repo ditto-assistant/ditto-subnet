@@ -2,6 +2,61 @@
 
 <!-- version list -->
 
+## v0.469.0 (2026-11-10)
+
+### Bug Fixes
+
+- **backroom**: Say visible_pairs is a count in the frontier audit tool
+  ([#3472](https://github.com/ditto-assistant/ditto-subnet/pull/3472),
+  [`4f41f22`](https://github.com/ditto-assistant/ditto-subnet/commit/4f41f2293e17decedaec307ec8a59b9717b70e34))
+
+### Features
+
+- **backroom**: Drive generator frontier audits from Backroom MCP
+  ([#3467](https://github.com/ditto-assistant/ditto-subnet/pull/3467),
+  [`90c9bd4`](https://github.com/ditto-assistant/ditto-subnet/commit/90c9bd4b48df64a2d17e7048d5c4b53344dbf358))
+
+- **catalog**: Build the v18 tool menu from a pinned production catalog snapshot
+  ([#3420](https://github.com/ditto-assistant/ditto-subnet/pull/3420),
+  [`dba0232`](https://github.com/ditto-assistant/ditto-subnet/commit/dba0232b6f285012c08b4326b004306bb3456e9b))
+
+- **dashboard**: Show frontier cases on the generator round board
+  ([#3468](https://github.com/ditto-assistant/ditto-subnet/pull/3468),
+  [`2068e83`](https://github.com/ditto-assistant/ditto-subnet/commit/2068e83b5527e97633ba64cdb256f3fd219a1c55))
+
+- **datagen**: Score oracle-attested frontier cases in the generator contract
+  ([#3462](https://github.com/ditto-assistant/ditto-subnet/pull/3462),
+  [`b800118`](https://github.com/ditto-assistant/ditto-subnet/commit/b800118417e441f97f8e8d477228b0c092fb7688))
+
+- **infra**: Lay inert AWS groundwork for the generator scorer
+  ([#3147](https://github.com/ditto-assistant/ditto-subnet/pull/3147),
+  [`f43fc4e`](https://github.com/ditto-assistant/ditto-subnet/commit/f43fc4ea00bf4948339de604fa79ef182f1c3d91))
+
+- **infra**: Self-configuring on-demand AWS screener node
+  ([#3463](https://github.com/ditto-assistant/ditto-subnet/pull/3463),
+  [`7f2ab73`](https://github.com/ditto-assistant/ditto-subnet/commit/7f2ab73adac28c67b8ef50e78fcb79d5915d157b))
+
+- **platform**: Attest frontier cases with the oracle and sampled audits
+  ([#3466](https://github.com/ditto-assistant/ditto-subnet/pull/3466),
+  [`b4b7477`](https://github.com/ditto-assistant/ditto-subnet/commit/b4b74777200ee791e10a534d0162eef48c7caf2c))
+
+- **screener**: Allow an on-demand AWS primary in front of GCE overflow
+  ([#3458](https://github.com/ditto-assistant/ditto-subnet/pull/3458),
+  [`215c31c`](https://github.com/ditto-assistant/ditto-subnet/commit/215c31c6b30cad90ce611b9deb0a72e2cf00dc59))
+
+- **screener**: Let an on-demand node sleep past its bearer and idle out
+  ([#3459](https://github.com/ditto-assistant/ditto-subnet/pull/3459),
+  [`4bd75c6`](https://github.com/ditto-assistant/ditto-subnet/commit/4bd75c603b2e91cda3450d0a0628dc77b2bdcb5c))
+
+- **screener-capacity**: Wake a stopped on-demand AWS primary
+  ([#3460](https://github.com/ditto-assistant/ditto-subnet/pull/3460),
+  [`9de4fbb`](https://github.com/ditto-assistant/ditto-subnet/commit/9de4fbb156fce25ceee9860284b6629aaa7c8019))
+
+- **validator**: Run the frontier oracle on a round's unsolved cases
+  ([#3464](https://github.com/ditto-assistant/ditto-subnet/pull/3464),
+  [`fc71bba`](https://github.com/ditto-assistant/ditto-subnet/commit/fc71bbac601b124a5e44ab2983b5b8348a7cf958))
+
+
 ## v0.468.4 (2026-11-10)
 
 ### Bug Fixes
