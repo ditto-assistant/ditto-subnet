@@ -19,6 +19,9 @@ import {
   reviewEvidenceNotes,
   reviewEvidenceText,
   scoreFloorAttribution,
+  SEASON_WAIT_LABEL,
+  seasonOpensText,
+  seasonWaitSentence,
   validationDetail,
   validationProgress,
 } from "./status";
@@ -561,5 +564,73 @@ describe("a submission that cannot finish scoring", () => {
     expect(
       validationDetail(held as unknown as Parameters<typeof validationDetail>[0]),
     ).not.toContain("cannot finish");
+  });
+});
+
+// ── Dueling-season wait (bench v16+) ────────────────────────────────────────
+describe("a submission waiting for the next dueling season", () => {
+  const NOW = new Date("2026-11-10T22:14:00Z");
+  const wait = {
+    reason: "dueling_season_closed" as const,
+    bench_version: 18,
+    next_season_opens_at: "2026-11-11T00:45:00Z",
+    next_round_epoch: 44,
+  };
+
+  it("reads as waiting for the next season, not for validators", () => {
+    expect(activityStage("waiting_validator", { scoring_wait: wait })).toEqual([
+      SEASON_WAIT_LABEL,
+      "progress",
+    ]);
+    expect(activityStage("below_score_floor", { scoring_wait: wait })[0]).toBe(SEASON_WAIT_LABEL);
+    expect(activityStage("waiting_validator", { scoring_wait: null })[0]).toBe(
+      "Waiting for validators",
+    );
+    // Only the waiting lanes: a finished row ignores a stale wait.
+    expect(activityStage("scored", { scoring_wait: wait })[0]).toBe("Scored");
+  });
+
+  it("a terminal failure still outranks the season wait", () => {
+    expect(
+      activityStage("waiting_validator", {
+        scoring_wait: wait,
+        retry_disposition: "terminal_artifact_failure",
+      })[0],
+    ).toBe("Cannot finish scoring");
+  });
+
+  it("names the bench and the approximate opening time in UTC", () => {
+    expect(
+      validationDetail(
+        { status: "waiting_validator", score_count: 1, quorum: 3, scoring_wait: wait },
+        NOW,
+      ),
+    ).toBe(
+      "1 of 3 scores received. No dueling season is open for bench 18. Scoring resumes when " +
+        "the next season opens, about 00:45 UTC (in 2h 31m).",
+    );
+  });
+
+  it("falls back to the round boundary without an estimate", () => {
+    expect(seasonWaitSentence(17, null, NOW, false)).toBe(
+      "No dueling season is scheduled for bench 17 right now. Scoring resumes when a bench 17 season opens.",
+    );
+    expect(seasonWaitSentence(18, null, NOW)).toBe(
+      "No dueling season is open for bench 18. Scoring resumes when the next season opens, " +
+        "at the next generator-round boundary.",
+    );
+    // A past estimate is stale, not "any moment now".
+    expect(seasonWaitSentence(18, "2026-11-10T21:00:00Z", NOW)).toContain(
+      "at the next generator-round boundary",
+    );
+  });
+
+  it("formats the opening time in UTC, naming the date a day or more ahead", () => {
+    expect(seasonOpensText("2026-11-10T22:40:00Z", NOW)).toBe("about 22:40 UTC (in 26m)");
+    expect(seasonOpensText("2026-11-11T00:45:00Z", NOW)).toBe("about 00:45 UTC (in 2h 31m)");
+    expect(seasonOpensText("2026-11-12T03:00:00Z", NOW)).toBe(
+      "about 2026-11-12 03:00 UTC (in 1d 4h)",
+    );
+    expect(seasonOpensText("not a date", NOW)).toBe("");
   });
 });

@@ -295,6 +295,8 @@ class ChainPosition:
     last_epoch_block_hash: str
     tempo: int
     block: int
+    next_epoch_block: int | None = None
+    """First block after ``block`` at which the chain steps the epoch."""
 
 
 @dataclass
@@ -2810,6 +2812,7 @@ class GeneratorRoundLoop:
             last_epoch_block_hash=block_hash,
             tempo=schedule.tempo,
             block=schedule.block,
+            next_epoch_block=schedule.next_epoch_block,
         )
 
     async def _settle_frontier(self, now: datetime) -> list[str]:
@@ -2859,6 +2862,7 @@ class GeneratorRoundLoop:
                 next_round_epoch=clock.next_round_epoch,
                 tempo=position.tempo,
                 block=position.block,
+                next_epoch_block=position.next_epoch_block,
                 observed_at=now,
             )
             async with self._session_maker() as session, session.begin():

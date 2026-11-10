@@ -87,6 +87,8 @@ class GeneratorRoundSchedule(RoundModel):
     next_round_epoch: int | None = None
     tempo: int | None = None
     block: int | None = None
+    next_epoch_block: int | None = None
+    """First block after ``block`` at which the chain steps the epoch."""
     observed_at: datetime | None = None
     last_error: str | None = None
 

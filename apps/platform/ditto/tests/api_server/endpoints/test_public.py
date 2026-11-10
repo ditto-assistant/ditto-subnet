@@ -6196,6 +6196,7 @@ class TestPublicActivity:
             "review_conclusion": None,
             "preserved_composite": None,
             "active_benchmarks": [],
+            "scoring_wait": None,
         }
         assert "artifact_release" not in body
         assert "screening_attempts" not in body
@@ -6291,8 +6292,9 @@ class TestPublicActivity:
         # Includes one bounded query for the independent live LongMem lane
         # and one for live handle-claim reservations plus attested owner roots
         # so operations badges classify family children correctly.
-        # Plus one bounded miner-avatar lookup for the page's hotkeys.
-        assert len(statements) <= 37
+        # Plus one bounded miner-avatar lookup for the page's hotkeys, and
+        # one open-rollout read for the dueling-season gate on waiting rows.
+        assert len(statements) <= 38
         body = response.json()
         assert body["active_bench_version"] == _ERA
         assert body["desired_bench_version"] == _NEXT_ERA
@@ -6595,6 +6597,7 @@ class TestPublicActivity:
             "retry_disposition",
             "terminal_failure_code",
             "hold_failure_code",
+            "scoring_wait",
             "screening_policy_version",
             "required_screening_policy_version",
             "screening_attempt_id",
@@ -10100,8 +10103,9 @@ class TestPublicActivity:
         # that a currently available validator can actually consume, plus
         # one live handle-claim reservation read and one attested-owner fold
         # so family children keep a reserved handle.
-        # Plus one bounded miner-avatar lookup for the page's hotkeys.
-        assert len(statements) <= 21
+        # Plus one bounded miner-avatar lookup for the page's hotkeys, and
+        # one open-rollout read for the dueling-season gate on waiting rows.
+        assert len(statements) <= 22
         assert body["count"] == 1
         assert body["total"] == 2
         assert body["total_pages"] == 2
