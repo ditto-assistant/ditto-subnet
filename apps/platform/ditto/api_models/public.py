@@ -910,6 +910,63 @@ class PublicRewardEligibility(BaseModel):
     ] = None
 
 
+class PublicSeasonExpiry(BaseModel):
+    """Why a bench v16+ row is shown although its scores left the live window.
+
+    Scores count for the dueling season they were taken in and the one after
+    (``current`` plus the provisional ``previous``); older ones expire from the
+    authoritative ledger by design, so the platform never pays to re-score the
+    board on every rotation. This label keeps such an agent visible instead of
+    dropping it, without re-scoring it and without changing any pin or weight.
+    """
+
+    state: Annotated[
+        Literal["pinned_carry", "expired"],
+        Field(
+            description=(
+                "``pinned_carry``: the agent is in the epoch pin validators "
+                "fold right now, so it keeps its pinned rank and official "
+                "composite until the next pin, which is built from the live "
+                "window and will not include it. ``expired``: the last valid "
+                "quorum, shown unranked for reference only."
+            )
+        ),
+    ]
+    score_dueling_season_ids: Annotated[
+        list[UUID],
+        Field(
+            description="Distinct dueling seasons the accepted scores were taken in."
+        ),
+    ]
+    window_dueling_season_ids: Annotated[
+        list[UUID],
+        Field(
+            description=(
+                "The live window: the current season, then the provisional "
+                "previous one. Only scores from these seasons rank or pay."
+            )
+        ),
+    ]
+    in_window_score_count: Annotated[
+        int, Field(ge=0, description="Accepted scores inside the live window.")
+    ]
+    last_valid_composite: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description="Median of the expired quorum, as stored. Never re-scored.",
+        ),
+    ]
+    pinned_epoch_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="``pinned_carry`` only: the pin that still carries it.",
+        ),
+    ] = None
+
+
 class PublicLeaderboardEntry(BaseModel):
     """One miner's best score, aggregate-only, for public display.
 
@@ -1104,6 +1161,18 @@ class PublicLeaderboardEntry(BaseModel):
                 "separate from ``rank`` and from champion status. Absent on a "
                 "historical board and on a platform with the gate switched off "
                 "and nothing to report."
+            ),
+        ),
+    ] = None
+    season_expiry: Annotated[
+        PublicSeasonExpiry | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Bench v16+ live board only: set when this row's scores have "
+                "expired from the two-season window. Absent on every row whose "
+                "quorum is still in the window."
             ),
         ),
     ] = None

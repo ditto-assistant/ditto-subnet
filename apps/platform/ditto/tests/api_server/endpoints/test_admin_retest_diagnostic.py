@@ -27,6 +27,8 @@ from ditto.api_server.endpoints.validator import _KothLaneSnapshot
 from ditto.api_server.koth import KothEntry, continual_composite
 from ditto.chain import ChainClient
 from ditto.db.queries.confirmation_score_voids import VoidRerunDebt
+from ditto.db.queries.dueling_season_expiry import SeasonCoverage, SeasonScore
+from ditto.db.queries.dueling_season_window import DuelingSeasonWindow
 from ditto.db.queries.retest_sample_inference import RetestSampleInference
 
 pytestmark = pytest.mark.asyncio
@@ -260,6 +262,13 @@ def _install(
     monkeypatch.setattr(admin_leaderboard, "_void_rerun_debts", _debts)
     monkeypatch.setattr(
         admin_leaderboard, "read_provider_circuit", AsyncMock(return_value=circuit)
+    )
+    # Bench v13 sits below the dueling floor: no season coverage, no pin read.
+    monkeypatch.setattr(
+        admin_leaderboard, "season_coverage", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(
+        admin_leaderboard, "_in_current_pin", AsyncMock(return_value=None)
     )
 
 
@@ -637,3 +646,79 @@ async def test_closed_provider_gate_blocks_every_route_in_the_projection(
     assert claim.decision == "provider_outage"
     assert _decide(provider_gate_closed=True) == "provider_outage"
     assert _decide(lane_enabled=False, provider_gate_closed=True) == "lane_disabled"
+
+
+_EXPIRED = UUID("04956b03-dd1d-418d-acab-39abf30628af")
+_SEASON_EXPIRED = UUID("87a46084-1664-4dbe-bc56-6fb8d3f57200")
+_SEASON_PREVIOUS = UUID("5b1c5a3e-0d0e-4a52-9a0c-3d1b8f0c2a10")
+_SEASON_CURRENT = UUID("428a8bc5-b002-4af4-91e4-964cb83128f4")
+
+
+def _expired_coverage() -> SeasonCoverage:
+    """logan v15 at 10:47 ET: a 3/3 quorum, all of it from season 26101."""
+    return SeasonCoverage(
+        agent_id=_EXPIRED,
+        bench_version=17,
+        window=DuelingSeasonWindow(
+            bench_version=17, current=_SEASON_CURRENT, previous=_SEASON_PREVIOUS
+        ),
+        scores=tuple(
+            SeasonScore(
+                validator_hotkey=f"5Val{index}",
+                dueling_season_id=_SEASON_EXPIRED,
+                composite=composite,
+                n=350,
+            )
+            for index, composite in enumerate((0.95, 0.960714, 0.97), start=1)
+        ),
+        opened_seasons=(_SEASON_CURRENT, _SEASON_PREVIOUS, _SEASON_EXPIRED),
+    )
+
+
+@pytest.mark.parametrize(
+    ("coverage", "in_pin", "reason"),
+    [
+        (_expired_coverage(), True, "expired_dueling_season"),
+        (None, None, "not_current_finalized_ledger"),
+    ],
+)
+async def test_an_expired_season_quorum_is_named_not_reported_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    coverage: SeasonCoverage | None,
+    in_pin: bool | None,
+    reason: str,
+) -> None:
+    """SN-466: an agent absent from the ledger because its quorum aged out of
+    the two-season window says so, with the seasons on both sides."""
+    _install(monkeypatch, snapshot=_snapshot(challenger=False), catchup=frozenset())
+    monkeypatch.setattr(
+        admin_leaderboard,
+        "season_coverage",
+        AsyncMock(return_value={} if coverage is None else {_EXPIRED: coverage}),
+    )
+    monkeypatch.setattr(
+        admin_leaderboard, "_in_current_pin", AsyncMock(return_value=in_pin)
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _EXPIRED,
+    )
+
+    assert result.admission_reason == reason
+    assert not result.ledger_eligible
+    assert result.official_composite is None
+    assert result.in_current_pin is in_pin
+    if coverage is None:
+        assert result.score_dueling_season_ids == []
+        assert result.window_dueling_season_ids == []
+        assert result.in_window_score_count is None
+        assert result.last_valid_composite is None
+        return
+    assert result.score_dueling_season_ids == [_SEASON_EXPIRED]
+    assert result.window_dueling_season_ids == [_SEASON_CURRENT, _SEASON_PREVIOUS]
+    assert result.in_window_score_count == 0
+    assert result.last_valid_composite == pytest.approx(0.960714)

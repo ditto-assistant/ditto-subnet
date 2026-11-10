@@ -4183,7 +4183,16 @@ describe('production score reads', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
-    expect(result).toEqual(retestDiagnosticPayload)
+    // A platform that predates the season-expiry fields still parses: they
+    // default to empty/null rather than failing the read.
+    expect(result).toEqual({
+      ...retestDiagnosticPayload,
+      score_dueling_season_ids: [],
+      window_dueling_season_ids: [],
+      in_window_score_count: null,
+      last_valid_composite: null,
+      in_current_pin: null,
+    })
     expect(result.raw_confirmation_seeds).toEqual(['9223372036854775001'])
     // Suppressed by its owner's deeper evidence while outscoring the cutoff it
     // sits behind: a structural exclusion, not a score it failed to reach.
@@ -4196,6 +4205,36 @@ describe('production score reads', () => {
       `https://platform-api.heyditto.ai/api/v1/admin/agents/${provisionalAgentId}/continual-retest-diagnostic`,
       expect.anything(),
     )
+  })
+
+  it('reads an expired dueling season as its own admission reason', async () => {
+    // SN-466: logan v15 after season 26103 opened. The quorum aged out of the
+    // two-season window by design; the read names the seasons on both sides.
+    const payload = {
+      ...retestDiagnosticPayload,
+      canonical_composite: null,
+      official_composite: null,
+      in_retest_cohort: false,
+      is_same_owner_challenger: false,
+      admission_reason: 'expired_dueling_season',
+      ledger_eligible: false,
+      score_dueling_season_ids: ['87a46084-1664-4dbe-bc56-6fb8d3f57200'],
+      window_dueling_season_ids: [
+        '428a8bc5-b002-4af4-91e4-964cb83128f4',
+        '5b1c5a3e-0d0e-4a52-9a0c-3d1b8f0c2a10',
+      ],
+      in_window_score_count: 0,
+      last_valid_composite: 0.960714,
+      in_current_pin: true,
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(payload)))
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result.admission_reason).toBe('expired_dueling_season')
+    expect(result.score_dueling_season_ids).toEqual(['87a46084-1664-4dbe-bc56-6fb8d3f57200'])
+    expect(result.in_window_score_count).toBe(0)
+    expect(result.last_valid_composite).toBe(0.960714)
+    expect(result.in_current_pin).toBe(true)
   })
 
   it('reads void re-run debt on an agent outside the cohort', async () => {

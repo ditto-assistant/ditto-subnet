@@ -13,6 +13,11 @@ comparability"):
   ledger, the queue floors and rollout completion. They stay in the database
   for audit and Backroom.
 
+The window is deliberate cost control: rotations never pay to re-score the
+whole board. Expired rows are not re-admitted anywhere the window is read;
+the public board only labels them (``PublicSeasonExpiry``, read from
+:mod:`ditto.db.queries.dueling_season_expiry`) instead of dropping them.
+
 The two-season window is what ranking, the validator ledger, queue order and
 rollout completion read. Seed *planning* reads the current season alone, so a
 rotation starts a fresh confirmation family on its own reign anchor instead of

@@ -11602,7 +11602,7 @@ export interface components {
              * Admission Reason
              * @enum {string}
              */
-            admission_reason: "in_cohort" | "same_owner_challenger" | "owner_suppressed" | "outside_cohort" | "not_current_finalized_ledger";
+            admission_reason: "in_cohort" | "same_owner_challenger" | "owner_suppressed" | "outside_cohort" | "expired_dueling_season" | "not_current_finalized_ledger";
             /**
              * Agent Id
              * Format: uuid
@@ -11671,14 +11671,20 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** In Current Pin */
+            in_current_pin?: boolean | null;
             /** In Emission Set */
             in_emission_set: boolean;
             /** In Raw Wave */
             in_raw_wave: boolean;
             /** In Retest Cohort */
             in_retest_cohort: boolean;
+            /** In Window Score Count */
+            in_window_score_count?: number | null;
             /** Is Same Owner Challenger */
             is_same_owner_challenger: boolean;
+            /** Last Valid Composite */
+            last_valid_composite?: number | null;
             /** Latest Confirmation Composite */
             latest_confirmation_composite?: number | null;
             /** Latest Confirmation Recorded At */
@@ -11731,6 +11737,11 @@ export interface components {
              * @default []
              */
             retest_samples: components["schemas"]["RetestSampleInference"][];
+            /**
+             * Score Dueling Season Ids
+             * @default []
+             */
+            score_dueling_season_ids: string[];
             /** Seed Anchor Block */
             seed_anchor_block: number | null;
             /** Seed Anchor Champion Id */
@@ -11752,6 +11763,11 @@ export interface components {
              * @enum {string}
              */
             wave_membership: "strict" | "participants" | "per_agent";
+            /**
+             * Window Dueling Season Ids
+             * @default []
+             */
+            window_dueling_season_ids: string[];
         };
         /** AdminContinualRetestSettingsRequest */
         AdminContinualRetestSettingsRequest: {
@@ -34890,6 +34906,8 @@ export interface components {
              * @default 3
              */
             score_quorum: number;
+            /** @description Bench v16+ live board only: set when this row's scores have expired from the two-season window. Absent on every row whose quorum is still in the window. */
+            season_expiry?: components["schemas"]["PublicSeasonExpiry"] | null;
             /**
              * Settled Composite
              * @description The agent's finalized median on the settled (active) benchmark version. Only populated in authoritative mode while a rollout is collecting the next version; null when there is no open rollout or the agent never reached quorum on the active version. This is the comparable baseline the dashboard ranks by mid-rollout, even for agents whose headline composite already flipped to the desired version.
@@ -36048,6 +36066,49 @@ export interface components {
             stage: "l1" | "l2" | "l3";
             /** Summary */
             summary: string;
+        };
+        /**
+         * PublicSeasonExpiry
+         * @description Why a bench v16+ row is shown although its scores left the live window.
+         *
+         *     Scores count for the dueling season they were taken in and the one after
+         *     (``current`` plus the provisional ``previous``); older ones expire from the
+         *     authoritative ledger by design, so the platform never pays to re-score the
+         *     board on every rotation. This label keeps such an agent visible instead of
+         *     dropping it, without re-scoring it and without changing any pin or weight.
+         */
+        PublicSeasonExpiry: {
+            /**
+             * In Window Score Count
+             * @description Accepted scores inside the live window.
+             */
+            in_window_score_count: number;
+            /**
+             * Last Valid Composite
+             * @description Median of the expired quorum, as stored. Never re-scored.
+             */
+            last_valid_composite: number;
+            /**
+             * Pinned Epoch Index
+             * @description ``pinned_carry`` only: the pin that still carries it.
+             */
+            pinned_epoch_index?: number | null;
+            /**
+             * Score Dueling Season Ids
+             * @description Distinct dueling seasons the accepted scores were taken in.
+             */
+            score_dueling_season_ids: string[];
+            /**
+             * State
+             * @description ``pinned_carry``: the agent is in the epoch pin validators fold right now, so it keeps its pinned rank and official composite until the next pin, which is built from the live window and will not include it. ``expired``: the last valid quorum, shown unranked for reference only.
+             * @enum {string}
+             */
+            state: "pinned_carry" | "expired";
+            /**
+             * Window Dueling Season Ids
+             * @description The live window: the current season, then the provisional previous one. Only scores from these seasons rank or pay.
+             */
+            window_dueling_season_ids: string[];
         };
         /** PublicServiceBucket */
         PublicServiceBucket: {

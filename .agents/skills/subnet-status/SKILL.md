@@ -70,6 +70,13 @@ Add `--json` for the raw snapshot to script against.
   - `banned`: rejected by board review. The reason on the agent is
     miner-visible.
   - `rejected` or `quarantined`: stopped by screening.
+- **Scores expire with their dueling season (bench v16+).** A score counts
+  for the season it was taken in and the next one, then leaves the ranking.
+  This is deliberate: no agent is re-scored when a season rotates. An expired
+  row stays on the board with `season_expiry` set. `pinned_carry` means the
+  current epoch pin still pays it, and it keeps its pinned rank until the next
+  pin. `expired` means it is listed unranked with its last valid score. It
+  ranks again only once it has new scores from the current or previous season.
 - **The payout curve and the split are operator settings.** They can change
   between epochs. Re-run this before relying on a number. Changes to the
   curve take effect only once every validator runs the protocol that reads it.

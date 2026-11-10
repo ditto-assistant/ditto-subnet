@@ -204,10 +204,28 @@ class AdminContinualRetestDiagnostic(BaseModel):
         "same_owner_challenger",
         "owner_suppressed",
         "outside_cohort",
+        "expired_dueling_season",
         "not_current_finalized_ledger",
     ]
+    """``expired_dueling_season``: a scored bench v16+ agent whose accepted
+    quorum is entirely or partly from seasons that left the two-season window
+    (``score_dueling_season_ids`` vs ``window_dueling_season_ids``). The
+    expiry is deliberate cost control; only scores taken in the window count
+    again. ``not_current_finalized_ledger`` is any other absence."""
     ledger_eligible: bool = False
     """Whether this generation is in the current finalized eligible ledger."""
+    score_dueling_season_ids: list[UUID] = []
+    """Bench v16+: distinct seasons this agent's accepted scores were taken in."""
+    window_dueling_season_ids: list[UUID] = []
+    """Bench v16+: the live window, current season first, then the previous."""
+    in_window_score_count: int | None = None
+    """Bench v16+: accepted scores inside the live window (``None`` below)."""
+    last_valid_composite: float | None = None
+    """``expired_dueling_season`` only: the expired quorum's stored median."""
+    in_current_pin: bool | None = None
+    """Whether the epoch pin validators fold now lists this agent; ``None`` in
+    live mode or before the first pin. A pinned agent keeps its emissions and
+    its labelled board row until the next pin, which is built from the window."""
     canonical_sample_count: int = 0
     completed_wave_depth: int = 0
     official_sample_count: int = 0

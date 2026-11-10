@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.continual_retest_diagnostic import (
@@ -80,6 +81,8 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     not_voided,
 )
+from ditto.db.queries.dueling_season_expiry import season_coverage
+from ditto.db.queries.ledger_epochs import latest_pin
 from ditto.db.queries.provider_outages import (
     provider_gate_closed,
     provider_outage_active,
@@ -144,6 +147,7 @@ _AdmissionReason = Literal[
     "same_owner_challenger",
     "owner_suppressed",
     "outside_cohort",
+    "expired_dueling_season",
     "not_current_finalized_ledger",
 ]
 _RepresentativeSelection = Literal[
@@ -582,6 +586,35 @@ async def _claimability(
     )
 
 
+async def _in_current_pin(
+    request: Request,
+    session: AsyncSession,
+    agent_id: UUID,
+    settings: ContinualRetestSettings,
+    *,
+    bench_version: int,
+) -> bool | None:
+    """Whether the epoch pin validators fold now lists ``agent_id``.
+
+    ``None`` in live mode, before the first pin, when it cannot be read, or
+    when the newest pin was frozen under another bench version (its entries
+    say nothing about the active one).
+    """
+    if settings.ledger_pin_mode != "epoch":
+        return None
+    try:
+        pin = await latest_pin(session, netuid=request.app.state.config.chain.netuid)
+    except SQLAlchemyError:
+        logger.warning("ledger pin read failed for the retest diagnostic")
+        return None
+    if pin is None or pin.bench_version != bench_version:
+        return None
+    return any(
+        isinstance(item, dict) and item.get("agent_id") == str(agent_id)
+        for item in pin.entries or []
+    )
+
+
 @router.get(
     "/agents/{agent_id}/continual-retest-diagnostic",
     response_model=AdminContinualRetestDiagnostic,
@@ -765,6 +798,20 @@ async def continual_retest_diagnostic(
     cohort_ids = {member.agent_id for member in cohort}
     in_cohort = agent_id in cohort_ids
     challenger = agent_id in challenger_ids
+    # Bench v16+: where the accepted scores sit against the two-season window.
+    # A scored agent whose quorum expired with its season is not "missing from
+    # the ledger" for an unknown reason; say so, with the seasons involved.
+    coverage = (
+        await season_coverage(session, bench_version=version, agent_ids=[agent_id])
+    ).get(agent_id)
+    season_expired = (
+        agent_id not in snapshot.official_scores
+        and coverage is not None
+        and coverage.expired
+    )
+    in_current_pin = await _in_current_pin(
+        request, session, agent_id, settings, bench_version=version
+    )
     reason: _AdmissionReason = (
         "same_owner_challenger"
         if challenger
@@ -774,6 +821,8 @@ async def continual_retest_diagnostic(
         if owner and representative_id != agent_id
         else "outside_cohort"
         if agent_id in snapshot.official_scores
+        else "expired_dueling_season"
+        if season_expired
         else "not_current_finalized_ledger"
     )
     # The cutoff an operator is shown has to be the cutoff the lane applied, so
@@ -839,6 +888,27 @@ async def continual_retest_diagnostic(
         seed_anchor_pinned=anchor.pinned if anchor is not None else None,
         admission_reason=reason,
         ledger_eligible=agent_id in snapshot.official_scores,
+        score_dueling_season_ids=(
+            list(coverage.score_dueling_season_ids) if coverage is not None else []
+        ),
+        window_dueling_season_ids=(
+            [
+                season
+                for season in (coverage.window.current, coverage.window.previous)
+                if season is not None
+            ]
+            if coverage is not None
+            else []
+        ),
+        in_window_score_count=(
+            coverage.in_window_count if coverage is not None else None
+        ),
+        last_valid_composite=(
+            coverage.median.composite
+            if season_expired and coverage is not None and coverage.median is not None
+            else None
+        ),
+        in_current_pin=in_current_pin,
         canonical_sample_count=(
             len(entry.quorum_composites or ()) if entry is not None else 0
         ),
