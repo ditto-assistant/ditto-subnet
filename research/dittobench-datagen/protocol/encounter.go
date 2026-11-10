@@ -88,6 +88,13 @@ type EncounterCall struct {
 	// incident does not become the right one by quoting the right ID in some
 	// other field. A call without the field carries none of the values.
 	Field string
+	// Names, when set, is the value the call must name first: of Among (the
+	// values that compete for the scoped text, Names included), the one whose
+	// first bounded match comes earliest. A filing titled "INC-7 outage
+	// (active: INC-2)" names INC-7, so quoting the right ID after the wrong
+	// one, in the title or anywhere else, does not file the right one.
+	Names string
+	Among []string
 	// Why is the documented reason (reported in the grader notes).
 	Why string
 }
@@ -134,7 +141,22 @@ func (c EncounterCall) Matches(name string, args json.RawMessage) bool {
 			return false
 		}
 	}
+	if c.Names != "" && encounterLeader(text, c.Among) != c.Names {
+		return false
+	}
 	return true
+}
+
+// encounterLeader is the value of values whose first bounded match comes
+// earliest in text, or "" when none appears.
+func encounterLeader(text string, values []string) string {
+	leader, best := "", -1
+	for _, value := range values {
+		if at := encounterIndex(text, value); at >= 0 && (best < 0 || at < best) {
+			leader, best = value, at
+		}
+	}
+	return leader
 }
 
 // encounterFieldText is the flattened text of one top-level argument, or ""
@@ -185,10 +207,16 @@ func NormalizeEncounterText(s string) string {
 // whole URL: "https://x.com/pricing" does not match inside
 // "https://x.com/pricing/notice-7" (an optional trailing slash is allowed).
 func EncounterContains(text, value string) bool {
+	return encounterIndex(text, value) >= 0
+}
+
+// encounterIndex is the offset, in the normalized text, of value's first
+// bounded match (EncounterContains), or -1.
+func encounterIndex(text, value string) int {
 	hay := NormalizeEncounterText(text)
 	want := NormalizeEncounterText(strings.TrimSpace(value))
 	if want == "" {
-		return false
+		return -1
 	}
 	isURL := strings.Contains(want, "://")
 	if isURL {
@@ -197,7 +225,7 @@ func EncounterContains(text, value string) bool {
 	for from := 0; ; {
 		at := strings.Index(hay[from:], want)
 		if at < 0 {
-			return false
+			return -1
 		}
 		start, end := from+at, from+at+len(want)
 		if isURL && end < len(hay) && hay[end] == '/' {
@@ -205,7 +233,7 @@ func EncounterContains(text, value string) bool {
 		}
 		bounded := !encounterAlnumBefore(hay, start) && !encounterAlnumAfter(hay, end)
 		if bounded && (!isURL || !encounterURLContinues(hay, end)) {
-			return true
+			return start
 		}
 		from = start + 1
 	}
