@@ -829,6 +829,25 @@ fn legacy_call(name: &str, args: Value) -> ChatChunk {
 }
 
 #[tokio::test]
+async fn an_empty_reply_gets_one_more_call() {
+    let catalog = catalog();
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let model = ScriptedModel::new(vec![text(""), text("Done.")]);
+    let out = run_case(
+        &model,
+        None,
+        &HybridConfig::default(),
+        case(&catalog, &executed),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.final_text, "Done.");
+    assert_eq!(out.chat_calls, 2);
+    let calls = model.calls.lock().unwrap();
+    assert!(calls[1].1.is_empty(), "the reply call offers no tools");
+}
+
+#[tokio::test]
 async fn a_wrap_up_that_emits_calls_still_executes_and_records_them() {
     let catalog = catalog();
     // A wrap-up that returns calls with no text gets one last no-tools call
