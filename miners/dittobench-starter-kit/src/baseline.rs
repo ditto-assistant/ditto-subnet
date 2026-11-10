@@ -1299,8 +1299,12 @@ impl Baseline {
         // Executable tools: catalog tools through the validator endpoint,
         // memory tools against the local store.
         let mut executable: HashMap<String, Arc<dyn Tool>> = HashMap::new();
+        // As on the classic path: with include_memory_tools the harness
+        // serves its real memory tools in place of the wire's; without it the
+        // wire's memory tools stay and are what the planner offers.
+        let real_memory = self.include_memory_tools;
         for d in &req.tools {
-            if !MEMORY_TOOL_NAMES.contains(&d.name.as_str()) {
+            if !(real_memory && MEMORY_TOOL_NAMES.contains(&d.name.as_str())) {
                 executable.insert(
                     d.name.clone(),
                     Arc::new(WireTool::from_wire(d, exec_ctx.clone())) as Arc<dyn Tool>,
@@ -1308,11 +1312,20 @@ impl Baseline {
             }
         }
         let mut memory_tools = Vec::new();
-        for tool in ditto_harness::memory::memory_tools(Arc::clone(&self.store), &user_id, "") {
-            let tool: Arc<dyn Tool> = Arc::from(tool);
-            let name = tool.definition().name;
-            memory_tools.push(name.clone());
-            executable.insert(name, tool);
+        if real_memory {
+            for tool in ditto_harness::memory::memory_tools(Arc::clone(&self.store), &user_id, "") {
+                let tool: Arc<dyn Tool> = Arc::from(tool);
+                let name = tool.definition().name;
+                memory_tools.push(name.clone());
+                executable.insert(name, tool);
+            }
+        } else {
+            memory_tools.extend(
+                req.tools
+                    .iter()
+                    .filter(|d| MEMORY_TOOL_NAMES.contains(&d.name.as_str()))
+                    .map(|d| d.name.clone()),
+            );
         }
 
         // A small candidate pool; Jev decides which few reach the prompt.
