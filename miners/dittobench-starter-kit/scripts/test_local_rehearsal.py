@@ -2349,6 +2349,115 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertIn("per 350 cases:       $0.2362", text)
         self.assertIn("informational", COST.format_estimate(estimate, 15))
 
+    def test_meter_fronts_the_decision_lane_and_prices_its_input(self) -> None:
+        import http.server
+        import threading
+
+        seen: list[dict[str, str]] = []
+
+        class Upstream(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_: object) -> None:
+                return
+
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                seen.append({"path": self.path, "auth": self.headers.get("Authorization", "")})
+                if self.path.startswith("/v1/systemone"):
+                    status = 200 if len(seen) == 1 else 429
+                    body = json.dumps(
+                        {"model": "jev-1.14.0", "answers": {},
+                         "usage": {"input_tokens": 12_000, "output_tokens": 7}}
+                    ).encode()
+                else:
+                    status = 200
+                    body = json.dumps(
+                        {"choices": [{"message": {"content": "ok"}}],
+                         "usage": {"prompt_tokens": 1000, "completion_tokens": 50}}
+                    ).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        try:
+            meter = COST.CostMeter(
+                f"http://127.0.0.1:{upstream.server_address[1]}/v1",
+                "sk-local",
+                COST.OPENROUTER_DECISIONS_PATH,
+            ).start()
+            try:
+                env = COST.route_harness_through(meter, {"OPENROUTER_API_KEY": "sk-local"})
+                self.assertEqual(env["DITTOBENCH_DECISIONS_URL"], meter.base_url + "/decisions")
+                kept = COST.route_harness_through(
+                    meter, {"DITTOBENCH_DECISIONS_URL": "http://elsewhere/decisions"}
+                )
+                self.assertEqual(kept["DITTOBENCH_DECISIONS_URL"], "http://elsewhere/decisions")
+                for _ in range(2):
+                    request = LOCAL.urllib.request.Request(
+                        env["DITTOBENCH_DECISIONS_URL"],
+                        data=b'{"state":"x","questions":{}}',
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    try:
+                        LOCAL.urllib.request.urlopen(request, timeout=10).close()
+                    except LOCAL.urllib.error.HTTPError as exc:
+                        self.assertEqual(exc.code, 429)
+                        exc.close()
+                request = LOCAL.urllib.request.Request(
+                    env["DITTOBENCH_INFERENCE_BASE_URL"] + "/chat/completions",
+                    data=b"{}",
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                LOCAL.urllib.request.urlopen(request, timeout=10).close()
+            finally:
+                meter.stop()
+        finally:
+            upstream.shutdown()
+            upstream.server_close()
+        self.assertEqual(
+            [s["path"] for s in seen],
+            ["/v1/systemone", "/v1/systemone", "/v1/chat/completions"],
+        )
+        self.assertTrue(all(s["auth"] == "Bearer sk-local" for s in seen))
+        estimate = COST.estimate(meter, {"n": 1}, 18)
+        assert estimate is not None
+        # A metered decision call that answered an error is still priced.
+        self.assertEqual(estimate["decision_calls"], 2)
+        self.assertEqual(estimate["decision_input_tokens"], 24_000)
+        # 1000 x 70 + 50 x 150 + 24000 x 42 = 1,085,500 nano-USD.
+        self.assertEqual(estimate["cost_nano_usd"], 1_085_500)
+        self.assertIn("decision_input:      24000", COST.format_estimate(estimate, 18))
+        self.assertEqual(estimate["usage_missing"], 0)
+        # A decision answer without complete usage is surfaced, not priced as 0.
+        for usage in (None, {}, {"input_tokens": 5}, {"input_tokens": "5", "output_tokens": 1}):
+            meter.record_decision(usage)
+        missing = COST.estimate(meter, {"n": 1}, 18)
+        assert missing is not None
+        self.assertEqual(missing["decision_calls"], 6)
+        self.assertEqual(missing["usage_missing"], 4)
+        self.assertEqual(missing["decision_input_tokens"], 24_000)
+        self.assertIn("4 call(s) returned no usage", COST.format_estimate(missing, 18))
+        # A meter with no decision upstream (Ollama) refuses the route.
+        ollama = COST.meter_for_environment({"DITTOBENCH_PROVIDER": "ollama"})
+        assert ollama is not None
+        self.assertIsNone(ollama.decisions_path)
+        # Only the platform broker serves decisions beside chat; Chutes does not.
+        chutes = COST.meter_for_environment(
+            {"DITTOBENCH_PROVIDER": "chutes", "CHUTES_BASE_URL": "http://127.0.0.1:9/v1"}
+        )
+        assert chutes is not None
+        self.assertIsNone(chutes.decisions_path)
+        platform = COST.meter_for_environment(
+            {"DITTOBENCH_PROVIDER": "platform", "DITTOBENCH_INFERENCE_BASE_URL": "http://127.0.0.1:9/v1"}
+        )
+        assert platform is not None
+        self.assertEqual(platform.decisions_path, COST.PLATFORM_DECISIONS_PATH)
+
     def test_scorer_block_wins_and_unmeterable_providers_say_so(self) -> None:
         scored = {"result": "priced", "cases": 350, "cost_nano_usd": 1_816_989_710,
                   "normalized_cost_nano_usd": 1_816_989_710, "factor_bps": 6733}

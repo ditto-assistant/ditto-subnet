@@ -5,16 +5,21 @@ locked public per-token rates and multiplies the composite by a steep factor
 of the cost per case (services/dittobench-api/PROTOCOL.md, "Bench v16 priced
 inference cost factor"). A local rehearsal talks to the miner's own provider,
 so the scorer cannot see that spend. This module puts a small metering proxy
-in front of the harness's chat provider, counts the provider-reported
-``usage`` of every completion, and applies the same published rule.
+in front of the harness's chat provider (and, on OpenRouter or a platform
+broker, the decision lane), counts the provider-reported ``usage`` of every
+completion and decision call, and applies the same published rule.
 
 The rule here is a copy of ``ditto_screening_protocol.priced_cost`` (itself
 the Python mirror of ``scoregates/priced_cost.go``); ``test_local_rehearsal``
 checks it against the shared vectors
 (``internal/scoregates/testdata/priced_cost_vectors.json``) so the three never
-drift. Locally only chat is metered: embeddings stay on the local Ollama
-embedder and the decision lane does not exist, so the estimate omits them
-(about $0.001 of a v15 run).
+drift. Embeddings stay on the local Ollama embedder and are not metered (about
+$0.001 of a v15 run). The meter also serves ``POST .../decisions``, the shape
+of the validator's ``DITTOBENCH_DECISIONS_URL``: it forwards to OpenRouter's
+System One route (``/systemone``, model ``typesafe/jev-1.14``) or to a platform
+broker's ``/decisions``, keylessly for the harness, and prices decision input
+tokens at the locked rate. ``route_harness_through`` exports that URL unless
+the environment already names one.
 """
 
 from __future__ import annotations
@@ -69,6 +74,10 @@ def run_budget_nano_usd(bench_version: int, cases: int) -> int | None:
     return -(-per_run * cases // NORMALIZATION_CASES)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# OpenRouter serves TypeSafe System One here; a platform broker serves it as
+# ``/decisions`` beside chat.
+OPENROUTER_DECISIONS_PATH = "/systemone"
+PLATFORM_DECISIONS_PATH = "/decisions"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 _BODY_LIMIT = 32 << 20
 
@@ -149,6 +158,9 @@ class MeterTotals:
     usage_missing: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    decision_calls: int = 0
+    decision_input_tokens: int = 0
+    decision_output_tokens: int = 0
 
 
 def _usage_from_body(body: bytes, content_type: str) -> dict[str, Any] | None:
@@ -188,9 +200,16 @@ class CostMeter:
     ``POST .../chat/completions`` and ``GET .../models`` are forwarded.
     """
 
-    def __init__(self, upstream_base_url: str, api_key: str | None) -> None:
+    def __init__(
+        self,
+        upstream_base_url: str,
+        api_key: str | None,
+        decisions_path: str | None = None,
+    ) -> None:
         self.upstream = upstream_base_url.rstrip("/")
         self._api_key = api_key
+        # Upstream path for ``POST .../decisions``; None refuses the route.
+        self.decisions_path = decisions_path
         self._token = secrets.token_urlsafe(24)
         self.totals = MeterTotals()
         self._lock = threading.Lock()
@@ -214,6 +233,12 @@ class CostMeter:
                 suffix = f"?{query}" if separator else ""
                 if self.command == "POST" and path == "/chat/completions":
                     return path + suffix
+                if (
+                    self.command == "POST"
+                    and path == "/decisions"
+                    and meter.decisions_path is not None
+                ):
+                    return meter.decisions_path + suffix
                 if self.command == "GET" and path == "/models":
                     return path + suffix
                 return None
@@ -292,7 +317,11 @@ class CostMeter:
                     )
                     self._reply(502, message.encode(), "application/json")
                     return
-                if body is not None and 200 <= status < 300:
+                if body is not None and route.startswith(str(meter.decisions_path)):
+                    # A metered decision call is priced from its usage even
+                    # when it answers an error (PROTOCOL.md, priced cost).
+                    meter.record_decision(_usage_from_body(payload, content_type))
+                elif body is not None and 200 <= status < 300:
                     meter.record(_usage_from_body(payload, content_type))
                 self._reply(status, payload, content_type)
 
@@ -315,6 +344,24 @@ class CostMeter:
                 return
             self.totals.prompt_tokens += max(prompt, 0)
             self.totals.completion_tokens += max(completion, 0)
+
+    def record_decision(self, usage: dict[str, Any] | None) -> None:
+        with self._lock:
+            self.totals.decision_calls += 1
+            input_tokens = usage.get("input_tokens") if usage else None
+            output_tokens = usage.get("output_tokens") if usage else None
+            if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+                self.totals.usage_missing += 1
+                return
+            self.totals.decision_input_tokens += max(input_tokens, 0)
+            self.totals.decision_output_tokens += max(output_tokens, 0)
+
+    @property
+    def decisions_url(self) -> str | None:
+        """The keyless decision-lane URL the harness should use, if served."""
+        if self.decisions_path is None:
+            return None
+        return self.base_url + "/decisions"
 
     def start(self) -> CostMeter:
         """Bind the loopback port and serve; nothing is bound before this."""
@@ -347,10 +394,14 @@ def meter_for_environment(env: dict[str, str]) -> CostMeter | None:
         key = env.get("OPENROUTER_API_KEY", "").strip()
         if not key:
             return None
-        return CostMeter(OPENROUTER_BASE_URL, key)
+        return CostMeter(OPENROUTER_BASE_URL, key, OPENROUTER_DECISIONS_PATH)
     if provider in ("platform", "chutes"):
         base = env.get("DITTOBENCH_INFERENCE_BASE_URL") or env.get("CHUTES_BASE_URL")
-        return CostMeter(base, None) if base else None
+        if not base:
+            return None
+        # Only the platform broker serves the decision lane beside chat.
+        decisions_path = PLATFORM_DECISIONS_PATH if provider == "platform" else None
+        return CostMeter(base, None, decisions_path)
     return None
 
 
@@ -360,6 +411,8 @@ def route_harness_through(meter: CostMeter, env: dict[str, str]) -> dict[str, st
     routed["DITTOBENCH_PROVIDER"] = "platform"
     routed["DITTOBENCH_INFERENCE_BASE_URL"] = meter.base_url
     routed.pop("OPENROUTER_API_KEY", None)
+    if meter.decisions_url and not (routed.get("DITTOBENCH_DECISIONS_URL") or "").strip():
+        routed["DITTOBENCH_DECISIONS_URL"] = meter.decisions_url
     return routed
 
 
@@ -387,6 +440,9 @@ def estimate(
             usage_missing=meter.totals.usage_missing,
             prompt_tokens=meter.totals.prompt_tokens,
             completion_tokens=meter.totals.completion_tokens,
+            decision_calls=meter.totals.decision_calls,
+            decision_input_tokens=meter.totals.decision_input_tokens,
+            decision_output_tokens=meter.totals.decision_output_tokens,
         )
     out: dict[str, Any] = {
         "source": "local_meter",
@@ -395,6 +451,9 @@ def estimate(
         "usage_missing": totals.usage_missing,
         "prompt_tokens": totals.prompt_tokens,
         "completion_tokens": totals.completion_tokens,
+        "decision_calls": totals.decision_calls,
+        "decision_input_tokens": totals.decision_input_tokens,
+        "decision_output_tokens": totals.decision_output_tokens,
     }
     out.update(
         priced_cost(
@@ -402,6 +461,8 @@ def estimate(
             bench_version=bench_version,
             prompt_tokens=totals.prompt_tokens,
             completion_tokens=totals.completion_tokens,
+            decision_input_tokens=totals.decision_input_tokens,
+            decision_output_tokens=totals.decision_output_tokens,
         )
     )
     # The scorer's own budget verdict wins even when it did not price the run.
@@ -474,6 +535,8 @@ def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str
         f"cases:               {estimate_.get('cases', 0)}",
         f"prompt_tokens:       {estimate_.get('prompt_tokens', 0)}",
         f"completion_tokens:   {estimate_.get('completion_tokens', 0)}",
+        f"decision_calls:      {estimate_.get('decision_calls', 0)}",
+        f"decision_input:      {estimate_.get('decision_input_tokens', 0)}",
         f"estimated cost:      ${cost:.4f} this run",
         f"per 350 cases:       ${normalized:.4f} (reference ${reference_usd:.2f})",
         f"cost factor:         {factor:.4f}"
@@ -501,7 +564,7 @@ def format_estimate(estimate_: dict[str, Any] | None, bench_version: int) -> str
             lines.append(f"run budget:          ${budget_usd:.4f} (bench 18+): not reached")
     if estimate_.get("usage_missing"):
         lines.append(
-            f"warning: {estimate_['usage_missing']} completion(s) returned no usage; "
+            f"warning: {estimate_['usage_missing']} call(s) returned no usage; "
             "the estimate is a lower bound"
         )
     lines += [
