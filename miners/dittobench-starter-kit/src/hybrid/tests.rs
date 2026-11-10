@@ -721,19 +721,29 @@ async fn a_missing_route_falls_back_despite_a_high_no_change() {
     let catalog = catalog();
     let executed = Arc::new(Mutex::new(Vec::new()));
     let model = ScriptedModel::new(vec![text("ok")]);
-    let out = run_case(
-        &model,
-        Some(&client),
-        &HybridConfig::default(),
-        case(&catalog, &executed),
-    )
-    .await
-    .unwrap();
+    let mut c = case(&catalog, &executed);
+    c.executable.insert(
+        "save_memory".into(),
+        Arc::new(RecordingTool {
+            def: ToolDefinition {
+                name: "save_memory".into(),
+                ..ToolDefinition::default()
+            },
+            seen: Arc::clone(&executed),
+        }),
+    );
+    let out = run_case(&model, Some(&client), &HybridConfig::default(), c)
+        .await
+        .unwrap();
     assert_eq!(out.route, "");
     assert!(!out.menu_asked, "no route never reads the menu");
     let calls = model.calls.lock().unwrap();
     assert!(!user_prompt(&calls[0].0).contains("No action seems to be needed"));
     assert!(calls[0].1.contains(&"calendar_create_event".to_string()));
+    assert!(
+        calls[0].1.contains(&"save_memory".to_string()),
+        "an unknown route can still save a fact"
+    );
 }
 
 #[test]
