@@ -53,7 +53,7 @@ var (
 	scriptDate    = regexp.MustCompile(`(January|February|March|April|May|June|July|August|September|October|November|December) (\d+)`)
 	scriptBy      = regexp.MustCompile(`(?:approved by|signed off by|awaiting approval from|by) ([A-Z][a-z]+ [A-Z][a-z]+)`)
 	scriptJob     = regexp.MustCompile(`job-\d{5}`)
-	scriptEmail   = regexp.MustCompile(`[a-z.]+@[a-z]+\.com`)
+	scriptEmail   = regexp.MustCompile(`[a-z0-9.]+@[a-z0-9-]+\.com`)
 	scriptInvoice = regexp.MustCompile(`INV-\d{4}`)
 	scriptRef     = regexp.MustCompile(`\b[A-Z]{3}-\d{3}\b`)
 )
@@ -154,6 +154,10 @@ func (s *encounterScript) handoff() {
 		memory += pair.Prompt + "\n"
 	}
 	emails := scriptEmail.FindAllString(memory, -1)
+	if len(emails) == 0 {
+		s.reply = "I could not find the billing contact."
+		return
+	}
 	to := emails[len(emails)-1]
 	record := s.call(enc.Required[0].Tool, map[string]any{"query": "invoice"})
 	money, invoice := scriptMoney.FindStringSubmatch(record), scriptInvoice.FindString(record)
