@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.472.0 (2026-11-10)
+
+### Documentation
+
+- **starter-kit**: Point the live bench and rehearsal fallback at v18
+  ([#3478](https://github.com/ditto-assistant/ditto-subnet/pull/3478),
+  [`f9756f2`](https://github.com/ditto-assistant/ditto-subnet/commit/f9756f200972c5cdb9ebdf68dbed6da62fe38a22))
+
+### Features
+
+- **platform,dashboard**: Show why a waiting submission is not scoring yet
+  ([#3479](https://github.com/ditto-assistant/ditto-subnet/pull/3479),
+  [`69533d9`](https://github.com/ditto-assistant/ditto-subnet/commit/69533d94d47a4ed5d023c7a7ac2289b5e3122d43))
+
+
 ## v0.471.0 (2026-11-10)
 
 ### Features
