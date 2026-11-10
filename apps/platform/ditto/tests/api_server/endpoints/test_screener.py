@@ -2562,6 +2562,39 @@ class TestDormantNodeReauth:
         assert retried.status_code == 200, retried.text
         assert retried.json()["api_token"] == first.json()["api_token"]
 
+    async def test_waking_with_the_rotated_bearer_retires_the_old_one(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        keypair = await self._seed(
+            app, session_maker, provider="aws", expired_for=timedelta(hours=1)
+        )
+        async with session_maker() as session, session.begin():
+            node = await session.get(ScreenerNode, self._NODE_ID)
+            assert node is not None
+            node.token_expires_at = datetime.now(UTC) + timedelta(minutes=5)
+        refresh_id = uuid4()
+        first = await self._refresh(client, keypair, refresh_id=refresh_id)
+        assert first.status_code == 200, first.text
+        rotated = first.json()["api_token"]
+        # The node stored the rotated bearer, then slept past its expiry with
+        # the same refresh id still pending.
+        async with session_maker() as session, session.begin():
+            node = await session.get(ScreenerNode, self._NODE_ID)
+            assert node is not None
+            node.token_expires_at = datetime.now(UTC) - timedelta(days=1)
+
+        woke = await self._refresh(
+            client, keypair, refresh_id=refresh_id, token=rotated
+        )
+
+        assert woke.status_code == 200, woke.text
+        # The retired bearer is not re-armed for that request.
+        stale = await self._refresh(client, keypair, refresh_id=refresh_id)
+        assert stale.status_code == 401
+
     @pytest.mark.parametrize(
         ("provider", "status", "expired_for", "max_dormancy_seconds"),
         [
