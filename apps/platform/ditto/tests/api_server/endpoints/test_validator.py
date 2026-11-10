@@ -6542,6 +6542,61 @@ class TestFailJob:
             # operator can reinstate the withdrawal like any other.
             assert agent.status == AgentStatus.EVALUATING
 
+    async def test_sweep_recovers_after_close_out_hook_fails(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server.terminal_failure_sweep import TerminalFailureSweeper
+
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._seed_failed_sibling_tickets(
+            session_maker, agent_id, ["inference_allowance_exhausted"] * 2
+        )
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        broken_hook = AsyncMock(side_effect=RuntimeError("transient close-out failure"))
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.validator.withdraw_terminal_artifact_failure",
+            broken_hook,
+        )
+        response = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                failure_detail="inference_allowance_exhausted",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        broken_hook.assert_awaited_once()
+        assert await self._withdrawals(session_maker, agent_id) == []
+        async with session_maker() as session:
+            tickets = list(
+                (
+                    await session.scalars(
+                        select(ValidatorTicket).where(
+                            ValidatorTicket.agent_id == agent_id
+                        )
+                    )
+                ).all()
+            )
+            assert len(tickets) == 3
+            assert all(ticket.status == TicketStatus.EXPIRED for ticket in tickets)
+            assert all(
+                ticket.failure_detail == "inference_allowance_exhausted"
+                for ticket in tickets
+            )
+        sweeper = TerminalFailureSweeper(session_maker=session_maker)
+        assert await sweeper.sweep() == 1
+        [withdrawal] = await self._withdrawals(session_maker, agent_id)
+        assert withdrawal.terminal_failure_code == "inference_allowance_exhausted"
+        assert await sweeper.sweep() == 0
+
     async def test_quorum_still_reachable_is_not_closed_out(
         self,
         app: FastAPI,
