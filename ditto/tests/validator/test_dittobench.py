@@ -518,6 +518,43 @@ async def test_scorer_round_column_size_is_forwarded(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "features,oracle",
+    [
+        (["generator-round-v1"], False),
+        (["generator-round-v1", "generator-frontier-oracle-v1"], True),
+        # The oracle runs a round dataset, so it needs the round mode.
+        (["generator-frontier-oracle-v1"], False),
+    ],
+)
+async def test_scorer_frontier_oracle_mode_is_forwarded(features, oracle) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "0.22.0",
+                "source_revision": _REVISION,
+                "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
+                "full_run_capacity": 2,
+                "features": features,
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.generator_frontier_oracle is oracle
+    # Absent from the signed bytes unless advertised.
+    assert ("generator_frontier_oracle" in observed.model_dump(mode="json")) is oracle
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "features,advertised,round_versions",
     [
         # A scorer that predates the feature: Platform assumes v13-only rounds.

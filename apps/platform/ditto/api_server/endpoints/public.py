@@ -5919,7 +5919,7 @@ async def screeners(
                 instance_id=row.instance_id,
                 screener_hotkey=row.screener_hotkey,
                 provider=cast(
-                    Literal["gcp", "targon", "hetzner", "home", "test"],
+                    Literal["gcp", "targon", "hetzner", "aws", "home", "test"],
                     enrolled_node.provider if enrolled_node is not None else "gcp",
                 ),
                 node_status=cast(
@@ -7465,7 +7465,9 @@ async def _public_submission_build_snapshot(
                 agent_name=agent_name,
                 agent_version=agent_version,
                 status=cast(Any, row.status),
-                provider=cast(Literal["targon", "gcp", "hetzner"] | None, row.provider),
+                provider=cast(
+                    Literal["targon", "gcp", "hetzner", "aws"] | None, row.provider
+                ),
                 attempt_count=row.attempt_count,
                 output_sha256=row.output_sha256,
                 output_size_bytes=row.output_size_bytes,

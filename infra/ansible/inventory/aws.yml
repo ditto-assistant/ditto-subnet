@@ -1,0 +1,47 @@
+---
+# Dynamic inventory from EC2, filtered to managed=terraform, mirroring
+# inventory/gcp.yml: the same env/role tags become the same env_*/role_*
+# groups, so a host converges with the same playbook and group_vars whichever
+# provider it runs on.
+#
+# AWS hosts have no SSH ingress. Ansible reaches them through SSM Session
+# Manager (amazon.aws.aws_ssm), addressing the instance ID and staging module
+# files in the instance's tagged transfer bucket. These connection settings
+# are composed per host, so they outrank the IAP ProxyCommand in
+# group_vars/role_*.yml (host vars beat group vars).
+#
+# Requires, on the controller: an AWS session for account 339713011188 (for
+# example `aws sso login`), boto3/botocore, and the session-manager-plugin.
+#
+# Usage:
+#   ansible-inventory -i infra/ansible/inventory/aws.yml --graph
+#   ansible-playbook  -i infra/ansible/inventory/aws.yml infra/ansible/playbooks/aws-generator-scorer.yml
+
+plugin: amazon.aws.aws_ec2
+# Every region infra/terraform/stacks/aws-* places instances in.
+regions:
+  - us-east-1
+
+filters:
+  tag:managed: terraform
+  instance-state-name: running
+
+# inventory_hostname = the Name tag, matching the GCE instance-name convention.
+hostnames:
+  - tag:Name
+
+keyed_groups:
+  - key: tags.env
+    prefix: env
+    separator: "_"
+  - key: tags.role
+    prefix: role
+    separator: "_"
+
+compose:
+  ansible_host: instance_id
+  ansible_connection: "'amazon.aws.aws_ssm'"
+  ansible_aws_ssm_region: placement.region
+  ansible_aws_ssm_bucket_name: tags['ansible-ssm-bucket']
+  # The scorer reads its GCP-held bearer through the federated instance role.
+  generator_scorer_token_source: "'aws-wif'"

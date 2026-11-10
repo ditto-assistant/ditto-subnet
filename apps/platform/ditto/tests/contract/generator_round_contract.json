@@ -576,8 +576,11 @@
         "type": "integer"
       },
       "dataset_mode": {
-        "const": "generator-round-v1",
         "default": "generator-round-v1",
+        "enum": [
+          "generator-round-v1",
+          "generator-frontier-oracle-v1"
+        ],
         "type": "string"
       },
       "dataset_sha256": {
@@ -606,6 +609,24 @@
         "anyOf": [
           {
             "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "oracle_case_ids": {
+        "anyOf": [
+          {
+            "items": {
+              "maxLength": 72,
+              "minLength": 3,
+              "type": "string"
+            },
+            "maxItems": 640,
+            "minItems": 1,
+            "type": "array"
           },
           {
             "type": "null"
