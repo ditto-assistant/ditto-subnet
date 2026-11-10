@@ -1,0 +1,18 @@
+---
+# Replays inventory/aws.yml's keyed_groups and compose over the instance above;
+# tests/aws-inventory.yml fails if the two drift apart.
+plugin: ansible.builtin.constructed
+strict: true
+keyed_groups:
+  - key: tags.env
+    prefix: env
+    separator: "_"
+  - key: tags.role
+    prefix: role
+    separator: "_"
+compose:
+  ansible_host: instance_id
+  ansible_connection: "'amazon.aws.aws_ssm'"
+  ansible_aws_ssm_region: placement.region
+  ansible_aws_ssm_bucket_name: tags['ansible-ssm-bucket']
+  generator_scorer_token_source: "'aws-wif'"
