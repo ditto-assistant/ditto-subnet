@@ -132,6 +132,7 @@ from ditto.api_models import (
     PublicScreeningReviewEvidence,
     PublicScreeningReviewFinding,
     PublicScreeningReviewLocation,
+    PublicSeasonExpiry,
     PublicSubmissionFamily,
     PublicSubmissionFamilyMember,
     PublicSubmissionImageBuild,
@@ -298,6 +299,7 @@ from ditto.api_server.koth import (
     KothEntry,
     bounded_efficiency_adjusted_quality,
     champion_defense,
+    continual_composite,
     crown_standings,
     duel_seed_records,
     dueling_seed_records,
@@ -401,6 +403,10 @@ from ditto.db.queries.confirmation_scores import (
     duel_history_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import prev_generation_agent_ids
+from ditto.db.queries.dueling_season_expiry import (
+    SeasonCoverage,
+    expired_season_ledger_rows,
+)
 from ditto.db.queries.emission_eligibility import (
     AgentReviewPosture,
     load_review_postures,
@@ -2626,6 +2632,7 @@ def _public_entry(
     router_shadow_by_hotkey: Mapping[str, float] | None = None,
     router_shadow_queued: bool = False,
     reward_eligibility: Any | None = None,
+    season_expiry: PublicSeasonExpiry | None = None,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -2732,6 +2739,7 @@ def _public_entry(
             else None
         ),
         reward_eligibility=_public_reward_eligibility(reward_eligibility),
+        season_expiry=season_expiry,
         composite=r.composite,
         official_composite=(
             official_composite if official_composite is not None else r.composite
@@ -3552,6 +3560,177 @@ def _displayed_efficiency_factors(
     }
 
 
+_EXPIRED_BOARD_ROWS = 10
+"""Most ``expired`` reference rows the live board appends (display only)."""
+
+
+@dataclass(frozen=True)
+class _SeasonExpiryRow:
+    """One board row kept visible after its scores left the season window."""
+
+    row: LedgerRow
+    expiry: PublicSeasonExpiry
+    score_count: int
+    official_composite: float | None = None
+    """``pinned_carry`` only: the official composite the current pin folds."""
+
+
+def _season_expiry_label(
+    coverage: SeasonCoverage,
+    *,
+    state: Literal["pinned_carry", "expired"],
+    pinned_epoch_index: int | None = None,
+) -> PublicSeasonExpiry:
+    median = coverage.median
+    window = coverage.window
+    return PublicSeasonExpiry(
+        state=state,
+        score_dueling_season_ids=list(coverage.score_dueling_season_ids),
+        window_dueling_season_ids=[
+            season for season in (window.current, window.previous) if season
+        ],
+        in_window_score_count=coverage.in_window_count,
+        last_valid_composite=median.composite if median is not None else 0.0,
+        pinned_epoch_index=pinned_epoch_index,
+    )
+
+
+async def _season_expiry_rows(
+    session: AsyncSession,
+    *,
+    bench_version: int | None,
+    pin: LedgerEpochSnapshot | None,
+    finalized_ids: set[UUID],
+    shown_ids: set[UUID],
+    finalized_owners: set[str],
+    provisional_owners: set[str],
+) -> tuple[list[_SeasonExpiryRow], list[_SeasonExpiryRow]]:
+    """Bench v16+ rows the live window dropped, as ``(pinned, expired)``.
+
+    The two-season window is a deliberate cost control: expired scores are
+    never re-scored here and never re-enter a pin or the weight fold. This
+    only stops the board from deleting them silently.
+
+    * ``pinned``: scored agents in the pin validators fold *now* whose quorum
+      expired after that pin was taken (a season opened mid-pin). They keep a
+      ranked row with the pin's own official composite until the next pin,
+      which is built from the live window and will not carry them.
+    * ``expired``: other scored agents whose last valid quorum expired, best
+      first, unranked, capped at :data:`_EXPIRED_BOARD_ROWS`.
+
+    An owner already finalized on the board is never shown twice; a pinned
+    carry replaces its own owner's provisional row (the caller drops it), and
+    an ``expired`` row never shadows a provisional one. A held, banned or
+    shadow agent is never carried (only ``scored`` agents have coverage).
+    """
+    if bench_version is None or not is_dueling_bench_version(bench_version):
+        return [], []
+    pinned_entries: dict[UUID, LedgerEntry] = {}
+    if pin is not None and pin.bench_version == bench_version:
+        for item in pin.entries or []:
+            try:
+                entry = LedgerEntry.model_validate(item)
+            except ValidationError:
+                continue
+            pinned_entries[entry.agent_id] = entry
+    pinned_official = (
+        {
+            fold.agent_id: continual_composite(fold)
+            for fold in koth_entries_from_ledger(list(pinned_entries.values()))
+        }
+        if pinned_entries
+        else {}
+    )
+    carry_ids = [
+        agent_id for agent_id in pinned_entries if agent_id not in finalized_ids
+    ]
+    carry_candidates = (
+        await expired_season_ledger_rows(
+            session, bench_version=bench_version, agent_ids=carry_ids
+        )
+        if carry_ids
+        else []
+    )
+    expired_candidates = [
+        candidate
+        for candidate in await expired_season_ledger_rows(
+            session,
+            bench_version=bench_version,
+            # Headroom for rows the owner and shown-agent filters drop.
+            limit=4 * _EXPIRED_BOARD_ROWS + len(carry_candidates),
+        )
+        if candidate[0].agent_id not in shown_ids
+    ]
+    candidates = carry_candidates + expired_candidates
+    if not candidates:
+        return [], []
+    roots = await attested_emission_owner_roots(
+        session,
+        [
+            (
+                row.miner_hotkey,
+                emission_owner(
+                    miner_hotkey=row.miner_hotkey, miner_coldkey=row.miner_coldkey
+                ),
+            )
+            for row, _coverage in candidates
+        ],
+    )
+    taken = set(finalized_owners)
+    pinned: list[_SeasonExpiryRow] = []
+    carry_by_official = sorted(
+        zip(roots[: len(carry_candidates)], carry_candidates, strict=True),
+        key=lambda item: (
+            -pinned_official.get(item[1][0].agent_id, item[1][0].composite),
+            str(item[1][0].agent_id),
+        ),
+    )
+    for owner, (row, coverage) in carry_by_official:
+        if owner in taken:
+            continue
+        taken.add(owner)
+        entry = pinned_entries[row.agent_id]
+        pinned.append(
+            _SeasonExpiryRow(
+                # The pin's own bytes: validators fold exactly this row until
+                # the next pin, so it is still emission-eligible for now.
+                row=replace(
+                    row,
+                    composite=entry.composite,
+                    n=entry.n,
+                    eligible=True,
+                    emission_owner_root=owner,
+                ),
+                expiry=_season_expiry_label(
+                    coverage,
+                    state="pinned_carry",
+                    pinned_epoch_index=pin.epoch_index if pin is not None else None,
+                ),
+                score_count=len(coverage.scores),
+                official_composite=pinned_official.get(row.agent_id, entry.composite),
+            )
+        )
+    pinned_ids = {item.row.agent_id for item in pinned}
+    taken |= provisional_owners
+    expired: list[_SeasonExpiryRow] = []
+    for owner, (row, coverage) in zip(
+        roots[len(carry_candidates) :], expired_candidates, strict=True
+    ):
+        if len(expired) >= _EXPIRED_BOARD_ROWS:
+            break
+        if row.agent_id in pinned_ids or owner in taken:
+            continue
+        taken.add(owner)
+        expired.append(
+            _SeasonExpiryRow(
+                row=replace(row, emission_owner_root=owner),
+                expiry=_season_expiry_label(coverage, state="expired"),
+                score_count=len(coverage.scores),
+            )
+        )
+    return pinned, expired
+
+
 async def build_public_leaderboard(
     request: Request,
     response: Response,
@@ -4088,8 +4267,43 @@ async def build_public_leaderboard(
     ):
         if owner not in finalized_owners:
             provisional_by_owner.setdefault(owner, candidate)
-    provisional_rows = list(provisional_by_owner.values())
-    rows = finalized_rows + [row for row, _count in provisional_rows]
+    # The pin validators fold now; ``None`` in live mode, before the first
+    # pin, and on a historical board.
+    ledger_pin, eligibility_pin = (
+        await _current_ledger_pin(request, session, continual_settings)
+        if bench_version is None
+        else (None, None)
+    )
+    # Bench v16+ season expiry (SN-466). The window drops a quorum the moment
+    # its season expires -- by design, so rotations never pay to re-score the
+    # board. Keep such agents visible, labelled, without re-scoring them and
+    # without adding them to the emissions projection below, which is the
+    # next pin's and stays season-scoped.
+    pinned_carry, expired_rows = (
+        await _season_expiry_rows(
+            session,
+            bench_version=active_version,
+            pin=eligibility_pin,
+            finalized_ids={row.agent_id for row in finalized_generations},
+            shown_ids={row.agent_id for row in finalized_generations}
+            | {row.agent_id for row, _count in provisional_by_owner.values()},
+            finalized_owners=finalized_owners,
+            provisional_owners=set(provisional_by_owner),
+        )
+        if bench_version is None
+        else ([], [])
+    )
+    carried_owners = {item.row.emission_owner_root for item in pinned_carry}
+    provisional_rows = [
+        candidate
+        for owner, candidate in provisional_by_owner.items()
+        if owner not in carried_owners
+    ]
+    rows = (
+        finalized_rows
+        + [row for row, _count in provisional_rows]
+        + [item.row for item in (*pinned_carry, *expired_rows)]
+    )
     v9_confirmations = await v9_confirmation_public_projections(
         session,
         agent_ids=[
@@ -4248,11 +4462,6 @@ async def build_public_leaderboard(
     # publish the score AND say whether it is earning. Only the emissions
     # projection drops anything, and only while the gate is enforcing, so the
     # visible board keeps a withheld artifact's score, rank and history.
-    ledger_pin, eligibility_pin = (
-        await _current_ledger_pin(request, session, continual_settings)
-        if bench_version is None
-        else (None, None)
-    )
     reward_eligibility = await _resolve_reward_eligibility(
         request,
         session,
@@ -4488,6 +4697,66 @@ async def build_public_leaderboard(
                 reward_eligibility=reward_eligibility.get(row.agent_id),
             )
         )
+
+    def season_entry(item: _SeasonExpiryRow, rank: int) -> PublicLeaderboardEntry:
+        stored_name, stored_version = agent_metadata[item.row.agent_id]
+        display_name, name_handle = _public_named(
+            stored_name,
+            item.row.emission_owner_root,
+            handle_claims,
+            strike=strike_colliding_names,
+        )
+        carried = item.expiry.state == "pinned_carry"
+        return _public_entry(
+            rank,
+            item.row,
+            display_name,
+            stored_version,
+            name_handle=name_handle,
+            avatar_url=avatar_urls.get(item.row.miner_hotkey),
+            finalized=carried,
+            score_count=item.score_count,
+            registered=(
+                item.row.miner_hotkey in registered_uids
+                if registered_uids is not None
+                else None
+            ),
+            miner_uid=(
+                registered_uids.get(item.row.miner_hotkey)
+                if registered_uids is not None
+                else None
+            ),
+            official_composite=item.official_composite,
+            average_run_cost_microusd=run_costs.get(
+                (item.row.agent_id, item.row.bench_version), (None, 0)
+            )[0],
+            inference_run_count=run_costs.get(
+                (item.row.agent_id, item.row.bench_version), (None, 0)
+            )[1],
+            reward_eligibility=(
+                reward_eligibility.get(item.row.agent_id) if carried else None
+            ),
+            season_expiry=item.expiry,
+        )
+
+    # A pinned carry keeps its place among the finalized rows by the official
+    # composite the current pin folds (ties go to the live row).
+    for item in pinned_carry:
+        official = item.official_composite or item.row.composite
+        position = next(
+            (
+                index
+                for index, entry in enumerate(entries)
+                if entry.official_composite < official
+            ),
+            len(entries),
+        )
+        entries.insert(position, season_entry(item, position + 1))
+    if pinned_carry:
+        entries = [
+            entry.model_copy(update={"rank": rank})
+            for rank, entry in enumerate(entries, start=1)
+        ]
     for row, count in provisional_rows:
         settled, rolling, rolling_count = rollout_states.get(
             row.agent_id, (None, None, None)
@@ -4535,6 +4804,11 @@ async def build_public_leaderboard(
                 reward_eligibility=reward_eligibility.get(row.agent_id),
             )
         )
+    # Expired reference rows trail everything, unranked.
+    entries.extend(
+        season_entry(item, len(entries) + 1).model_copy(update={"rank": None})
+        for item in expired_rows
+    )
     return PublicLeaderboardResponse(
         generated_at=now,
         count=len(entries),

@@ -9322,9 +9322,16 @@ export const continualRetestDiagnosticSchema = z.object({
   seed_anchor_pinned: z.boolean().nullable(),
   admission_reason: z.enum([
     'in_cohort', 'same_owner_challenger', 'owner_suppressed',
-    'outside_cohort', 'not_current_finalized_ledger',
+    'outside_cohort', 'expired_dueling_season', 'not_current_finalized_ledger',
   ]),
   ledger_eligible: z.boolean().default(false),
+  // Bench v16+: the agent's score seasons against the live two-season window.
+  // expired_dueling_season means the quorum aged out by design (no re-score).
+  score_dueling_season_ids: z.array(z.string().uuid()).default([]),
+  window_dueling_season_ids: z.array(z.string().uuid()).default([]),
+  in_window_score_count: z.number().int().nonnegative().nullable().default(null),
+  last_valid_composite: z.number().min(0).max(1).nullable().default(null),
+  in_current_pin: z.boolean().nullable().default(null),
   canonical_sample_count: z.number().int().nonnegative().default(0),
   completed_wave_depth: z.number().int().nonnegative().default(0),
   official_sample_count: z.number().int().nonnegative().default(0),

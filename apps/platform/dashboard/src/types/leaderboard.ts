@@ -395,6 +395,8 @@ export interface LeaderboardEntry {
   registered?: boolean | null;
   emission_eligible?: boolean;
   reward_eligibility?: RewardEligibility | null;
+  /** Bench v16+: set when this row's scores expired from the two-season window. */
+  season_expiry?: SeasonExpiry | null;
   miner_uid?: number | null;
   score_count?: number;
   score_quorum?: number;
@@ -420,6 +422,21 @@ export interface LeaderboardEntry {
   _emission?: EmissionRecipient | null;
   /** Client-side annotation from the chain weights snapshot. */
   _chainWeight?: ChainWeightInfo | null;
+}
+
+/**
+ * Why a bench v16+ row is still on the board although its scores left the
+ * live two-season window. Expiry is deliberate cost control: nothing is
+ * re-scored. ``pinned_carry`` rows keep the rank and composite of the pin
+ * validators fold until the next pin; ``expired`` rows are unranked reference.
+ */
+export interface SeasonExpiry {
+  state: "pinned_carry" | "expired";
+  score_dueling_season_ids: string[];
+  window_dueling_season_ids: string[];
+  in_window_score_count: number;
+  last_valid_composite: number;
+  pinned_epoch_index?: number | null;
 }
 
 export type V9GateResult =
