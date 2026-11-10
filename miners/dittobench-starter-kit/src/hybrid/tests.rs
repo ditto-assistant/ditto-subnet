@@ -322,6 +322,19 @@ fn candidates_cover_the_general_value_shapes() {
     // the opener a candidate.
     let api = extract_candidates(&["The API server crashed"], 40);
     assert!(!api.iter().any(|c| c.starts_with("The")), "{api:?}");
+    let wiki = extract_candidates(
+        &["See https://en.wikipedia.org/wiki/Rust_(programming_language)."],
+        40,
+    );
+    assert!(
+        wiki.contains(&"https://en.wikipedia.org/wiki/Rust_(programming_language)".to_string()),
+        "{wiki:?}"
+    );
+    let wrapped = extract_candidates(&["(see https://x.com/a)"], 40);
+    assert!(
+        wrapped.contains(&"https://x.com/a".to_string()),
+        "{wrapped:?}"
+    );
     let invoice = extract_candidates(&["Invoice INV-2041 is due"], 40);
     assert!(!invoice.iter().any(|c| c == "Invoice"), "{invoice:?}");
 }
