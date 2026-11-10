@@ -22652,6 +22652,20 @@ export interface components {
              */
             min_dethrone_confirmations: number;
         };
+        /** DaniLabsBindingSnapshot */
+        DaniLabsBindingSnapshot: {
+            /** Deadline */
+            deadline?: string | null;
+            /** Key Present */
+            key_present: boolean;
+            /** Router Competition */
+            router_competition: boolean;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "unset_or_invalid" | "canary" | "fleet";
+        };
         /** DatabaseBackupManifest */
         DatabaseBackupManifest: {
             /** Alembic Version */
@@ -37819,6 +37833,7 @@ export interface components {
             };
             /** Checked Out Revision */
             checked_out_revision?: string | null;
+            danilabs_binding?: components["schemas"]["DaniLabsBindingSnapshot"] | null;
             /** Error */
             error?: string | null;
             /** Process Started At */

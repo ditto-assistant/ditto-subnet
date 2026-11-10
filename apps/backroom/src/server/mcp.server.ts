@@ -3703,7 +3703,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get hosted inference runtime metrics',
       description:
-        'Read the current hosted chat and embedding load plus 1, 5, 15, and 60 minute calls, tokens, latency, failures, timeouts, concurrency peaks, live concurrency AND request-per-minute admission limits, exact relay revisions, and per-process capacity-decline counters. Compare peak_*_concurrency_60m to per_*_limit AND to per_*_rpm_limit. A ticket glued to per_ticket_rpm_limit with idle concurrency is a rate-limit failure, not a full lane. This is the first tool to call before changing a concurrency or RPM setting.',
+        'Read the current hosted chat and embedding load plus 1, 5, 15, and 60 minute calls, tokens, latency, failures, timeouts, concurrency peaks, live concurrency AND request-per-minute admission limits, exact relay revisions, and per-process capacity-decline counters. Each relay may report danilabs_binding: loaded key presence, scope, deadline, and whether the Router competition lane takes precedence; null means unknown, including older relays. This is process configuration, not credential validity, actual route selection, provider readiness, or the live routing percentage. No key or fingerprint is returned. Compare peak_*_concurrency_60m to per_*_limit AND to per_*_rpm_limit. A ticket glued to per_ticket_rpm_limit with idle concurrency is a rate-limit failure, not a full lane. This is the first tool to call before changing a concurrency or RPM setting.',
       inputSchema: {
         costWindowHours: z.number().int().min(1).max(744).optional()
           .describe('Optional grant lifetime costs; not an invoice.'),

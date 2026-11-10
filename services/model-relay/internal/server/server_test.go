@@ -65,6 +65,50 @@ func TestMetricsEndpointShape(t *testing.T) {
 	}
 }
 
+func TestMetricsExposeOnlyLoadedDaniLabsBindingMetadata(t *testing.T) {
+	cfg := testConfig()
+	cfg.Inference.DaniLabsAPIKey = "secret-that-must-not-be-exposed"
+	cfg.Inference.DaniLabsTrialScope = "canary"
+	cfg.Inference.DaniLabsTrialUntil = "2026-11-11T16:00:00Z"
+	cfg.DittoRouter.Enabled = true
+	cfg.DittoRouter.APIKey = "router-secret-that-must-not-be-exposed"
+	cfg.DittoRouter.Lanes = []string{config.DittoRouterLaneCompetition}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := server.New(cfg, logger, nil, nil, "deadbeef").Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	h.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{
+		"ditto_danilabs_binding_key_present 1\n",
+		"ditto_danilabs_binding_scope 1\n",
+		"ditto_danilabs_binding_router_competition 1\n",
+		"ditto_danilabs_binding_deadline_seconds 1.7944128e+09\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing metric %q", want)
+		}
+	}
+	if strings.Contains(body, cfg.Inference.DaniLabsAPIKey) || strings.Contains(body, cfg.DittoRouter.APIKey) {
+		t.Fatal("metrics exposed credential")
+	}
+	cfg.DittoRouter.APIKey = ""
+	withoutRouterKey := httptest.NewRecorder()
+	server.New(cfg, logger, nil, nil, "deadbeef").Handler().ServeHTTP(withoutRouterKey, req)
+	if !strings.Contains(withoutRouterKey.Body.String(), "ditto_danilabs_binding_router_competition 0\n") {
+		t.Fatal("router without a key must not report an active competition lane")
+	}
+	remote := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+	h.ServeHTTP(remote, req)
+	if strings.Contains(remote.Body.String(), "ditto_danilabs_binding_") {
+		t.Fatal("remote caller received private binding metadata")
+	}
+}
+
 func TestInferenceRoutesAbsentUntilRegistered(t *testing.T) {
 	h := newTestServer()
 	for _, path := range []string{

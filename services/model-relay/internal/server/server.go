@@ -14,8 +14,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/ditto-assistant/model-relay/internal/chain"
 	"github.com/ditto-assistant/model-relay/internal/config"
@@ -127,7 +125,7 @@ func (s *Server) Handler() http.Handler {
 		methodByPath[path] = method
 	}
 	register(http.MethodGet, "/health", http.HandlerFunc(s.handleHealth))
-	register(http.MethodGet, "/metrics", promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}))
+	register(http.MethodGet, "/metrics", s.metricsHandler())
 	s.registerInferenceRoutes(register)
 	s.registerUploadRoutes(register)
 	mux.Handle("/", envelopeFallback(methodByPath))

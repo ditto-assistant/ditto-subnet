@@ -5229,6 +5229,11 @@ describe('Backroom MCP tools', () => {
             revision_drift: false,
             process_started_at: '2026-08-15T15:41:56Z',
             capacity_declines: {},
+            danilabs_binding: {
+              key_present: true,
+              router_competition: false,
+              scope: 'canary',
+            },
           },
         ],
       }),
@@ -5246,6 +5251,9 @@ describe('Backroom MCP tools', () => {
       settings_revision: 14,
       lanes: [{ request_kind: 'chat', peak_global_concurrency_60m: 11 }],
       windows: [{ calls_per_second: 1.55, latency_p95_ms: 9995 }],
+      relays: [{ danilabs_binding: {
+        key_present: true, router_competition: false, scope: 'canary',
+      } }],
     })
     // Ordinary runtime reads never acquire the additional ledger scan.
     expect(fetchMock).toHaveBeenCalledTimes(1)
