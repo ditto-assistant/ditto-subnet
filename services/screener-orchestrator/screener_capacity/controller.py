@@ -1062,6 +1062,11 @@ def _wake_on_demand_primary(
         since = stopping_since or now
         if (now - since).total_seconds() >= grace:
             return WakePlan()
+        if stopping_since is None and not settings.dry_run:
+            # An observation, not an event: record it now, so a renew that
+            # keeps failing cannot restart the bound every pass.
+            state["primary_stopping_since"] = since.isoformat()
+            _write_state(settings.state_file, state)
         return WakePlan("waking", state={"primary_stopping_since": since.isoformat()})
     first_wake = {
         "primary_wake_started_at": (started_at or now).isoformat(),

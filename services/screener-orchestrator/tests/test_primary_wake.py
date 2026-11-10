@@ -427,6 +427,29 @@ class ReconcileWakeTests(unittest.TestCase):
                 state = json.loads(settings.state_file.read_text())
                 self.assertIsNone(state["primary_stopping_since"])
 
+    def test_the_stop_bound_survives_a_failed_renew(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings = _settings(Path(tmp))
+            platform = _Platform(runnable=3, primary=_primary())
+
+            def lost_lease(snapshot: dict[str, Any]) -> dict[str, Any]:
+                raise ControllerError("controller lease is held by another writer")
+
+            platform.renew = lost_lease  # type: ignore[method-assign]
+            with self.assertRaises(ControllerError):
+                _run(settings, platform, _EC2("stopping", platform.operations))
+
+            first = json.loads(settings.state_file.read_text())[
+                "primary_stopping_since"
+            ]
+            with self.assertRaises(ControllerError):
+                _run(settings, platform, _EC2("stopping", platform.operations))
+            # The second failed pass kept the first observation.
+            self.assertEqual(
+                json.loads(settings.state_file.read_text())["primary_stopping_since"],
+                first,
+            )
+
     def test_a_stuck_stop_fails_over_to_gce(self) -> None:
         with TemporaryDirectory() as tmp:
             settings = _settings(Path(tmp))
