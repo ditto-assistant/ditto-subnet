@@ -773,6 +773,10 @@ type submitRequest struct {
 	// they are never copied into harness requests, public artifacts, or logs.
 	PrivateDatasetMode  string `json:"private_dataset_mode,omitempty"`
 	PrivateDatasetBytes []byte `json:"private_dataset_bytes,omitempty"`
+	// OracleCaseIDs are the round case ids (column/case) a
+	// generator-frontier-oracle-v1 run answers; required in that mode and
+	// refused in every other.
+	OracleCaseIDs []string `json:"oracle_case_ids,omitempty"`
 	// Bench >= 16 (dueling) generator slice, dueling-slice-v1. A canonical run
 	// at a dueling version must carry all four; any other request must carry
 	// none (validateDuelingSliceRequest). The bytes are base64 on this trusted
@@ -1094,7 +1098,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	version, msg := requestedPracticeBenchVersion(req.BenchVersion)
-	if req.PrivateDatasetMode != "" || len(req.PrivateDatasetBytes) != 0 {
+	if req.PrivateDatasetMode != "" || len(req.PrivateDatasetBytes) != 0 || len(req.OracleCaseIDs) != 0 {
 		writeError(w, http.StatusBadRequest, "private datasets are not accepted on practice")
 		return
 	}
@@ -1414,7 +1418,7 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 		return
 	}
 	cases := prof.Tools + prof.Mem
-	if req.PrivateDatasetMode == generatorRoundMode {
+	if isGeneratorRoundMode(req.PrivateDatasetMode) {
 		// A round run's size is its dataset's, set once the job decodes it.
 		cases = 0
 	}
@@ -1426,7 +1430,7 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.registerRunCancel(runID, cancel)
-	if req.PrivateDatasetMode == generatorRoundMode {
+	if isGeneratorRoundMode(req.PrivateDatasetMode) {
 		go s.runGeneratorRoundJob(runCtx, runID, req, seed)
 	} else {
 		go s.runSizeJob(runCtx, runID, req, prof, seed)

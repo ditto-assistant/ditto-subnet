@@ -32,6 +32,18 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ditto.api_models.inference import InferenceGrantOffer
 
 GENERATOR_ROUND_DATASET_MODE: Literal["generator-round-v1"] = "generator-round-v1"
+# The frontier oracle job: a subnet-run reference harness answers a scored
+# round's unsolved cases (``oracle_case_ids``), each from only its bounded
+# ``challenge.OracleContext``. dittobench-api advertises the mode under the
+# same name; the validator forwards it as ``generator_frontier_oracle``, and
+# Platform leases an oracle job only to a validator that does.
+GENERATOR_FRONTIER_ORACLE_DATASET_MODE: Literal["generator-frontier-oracle-v1"] = (
+    "generator-frontier-oracle-v1"
+)
+GENERATOR_FRONTIER_ORACLE_FEATURE = GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+GeneratorRoundDatasetMode = Literal[
+    "generator-round-v1", "generator-frontier-oracle-v1"
+]
 GENERATOR_ROUND_JOB_DOMAIN = "validator-generator-round-job:v1"
 GENERATOR_ROUND_SCORE_DOMAIN = "validator-generator-round-score-v1"
 GENERATOR_ROUND_FAIL_DOMAIN = "validator-generator-round-fail-v1"
@@ -133,10 +145,12 @@ class GeneratorRoundJobRequest(_Timed):
 
 
 class GeneratorRoundJobResponse(_Model):
-    """One leased round panel run.
+    """One leased round panel run, or one frontier oracle run.
 
     ``seed`` is a positive placeholder the scorer requires on ``/v2/score``;
-    the round dataset, not the seed, determines every case.
+    the round dataset, not the seed, determines every case. An oracle run
+    (``dataset_mode`` ``generator-frontier-oracle-v1``) answers only
+    ``oracle_case_ids``, and its results must name exactly those cases.
     """
 
     round_index: Annotated[int, Field(ge=0)]
@@ -147,7 +161,7 @@ class GeneratorRoundJobResponse(_Model):
     deadline: datetime
     bench_version: int
     dataset_sha256: Annotated[str, Field(pattern=_SHA256)]
-    dataset_mode: Literal["generator-round-v1"] = GENERATOR_ROUND_DATASET_MODE
+    dataset_mode: GeneratorRoundDatasetMode = GENERATOR_ROUND_DATASET_MODE
     seed: Annotated[int, Field(ge=1)]
     run_size: str = "full"
     case_count: Annotated[int, Field(ge=1, le=MAX_ROUND_CASES)]
@@ -156,6 +170,27 @@ class GeneratorRoundJobResponse(_Model):
     benchmark_runtime: dict | None = None
     """Mirrors ``BenchmarkRuntimeSettings`` (forwarded verbatim to the scorer)."""
     inference: InferenceGrantOffer | None = None
+    oracle_case_ids: (
+        Annotated[
+            list[Annotated[str, Field(min_length=3, max_length=72)]],
+            Field(min_length=1, max_length=MAX_ROUND_CASES),
+        ]
+        | None
+    ) = None
+    """Round case ids (``column/case``) an oracle run answers; required for
+    the oracle mode and refused for a panel run."""
+
+    @model_validator(mode="after")
+    def _oracle_cases(self) -> GeneratorRoundJobResponse:
+        oracle = self.dataset_mode == GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+        if oracle != (self.oracle_case_ids is not None):
+            raise ValueError("oracle_case_ids are required exactly for an oracle run")
+        if self.oracle_case_ids is not None and (
+            len(set(self.oracle_case_ids)) != len(self.oracle_case_ids)
+            or self.case_count != len(self.oracle_case_ids)
+        ):
+            raise ValueError("oracle_case_ids must be distinct and match case_count")
+        return self
 
 
 class GeneratorRoundCaseResult(_Model):

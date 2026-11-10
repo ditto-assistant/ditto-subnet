@@ -21,7 +21,7 @@ func (s *server) datasetFeatures() []string {
 		features = append(features, privateDatasetMode)
 	}
 	if s.allowGeneratorRounds {
-		features = append(features, generatorRoundMode, generatorRoundMaxCasesFeature())
+		features = append(features, generatorRoundMode, generatorFrontierOracleMode, generatorRoundMaxCasesFeature())
 		features = append(features, generatorRoundBenchFeatures()...)
 	}
 	if s.allowDuelingSlices {
@@ -45,11 +45,14 @@ func (s *server) privateBodyBytes() int {
 }
 
 func validatePrivateDatasetRequest(req submitRequest, enabled, roundsEnabled bool) error {
+	if isGeneratorRoundMode(req.PrivateDatasetMode) {
+		return validateGeneratorRoundRequest(req, roundsEnabled)
+	}
+	if len(req.OracleCaseIDs) != 0 {
+		return errors.New("oracle_case_ids are only valid in " + generatorFrontierOracleMode)
+	}
 	if req.PrivateDatasetMode == "" && len(req.PrivateDatasetBytes) == 0 {
 		return nil // Existing public contracts are unchanged.
-	}
-	if req.PrivateDatasetMode == generatorRoundMode {
-		return validateGeneratorRoundRequest(req, roundsEnabled)
 	}
 	if !enabled || req.PrivateDatasetMode != privateDatasetMode || req.BenchVersion != 13 {
 		return errors.New("private dataset mode unavailable")
