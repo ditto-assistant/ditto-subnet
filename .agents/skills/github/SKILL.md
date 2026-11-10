@@ -110,7 +110,7 @@ Exit codes: `2` not in a stack; `3` conflict; `4` API failure; `5` invalid argum
 
 ## Merge a stack
 
-Only after the user separately authorizes the merge. `gh stack` has no merge command, and a GitHub-linked stack rejects both `gh pr merge` and the synchronous REST merge. Use the async endpoint:
+`gh stack` has no merge command, and a GitHub-linked stack rejects both `gh pr merge` and the synchronous REST merge. Use the async endpoint:
 
 ```bash
 gh api -X PUT repos/ditto-assistant/ditto-subnet/pulls/<number>/merge-async \
