@@ -3395,6 +3395,12 @@ export const inferenceRuntimeMetricsSchema = z.object({
       revision_drift: z.boolean().nullable().optional(),
       process_started_at: z.string().nullable().optional(),
       capacity_declines: z.record(z.string(), z.number().int().nonnegative()).default({}),
+      danilabs_binding: z.object({
+        key_present: z.boolean(),
+        router_competition: z.boolean(),
+        scope: z.enum(['unset_or_invalid', 'canary', 'fleet']),
+        deadline: z.string().nullable().optional(),
+      }).nullable().optional(),
       error: z.string().nullable().optional(),
     }),
   ),
