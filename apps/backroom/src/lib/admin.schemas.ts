@@ -748,9 +748,9 @@ export const screenerFanoutShadowResponseSchema = z.object({
   has_more: z.boolean(),
 })
 
-const screenerProviderSchema = z.enum(['gcp', 'targon', 'hetzner', 'home', 'test'])
-const capacityProviderSchema = z.enum(['hetzner', 'targon', 'gcp'])
-const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(3).superRefine((value, context) => {
+const screenerProviderSchema = z.enum(['gcp', 'targon', 'hetzner', 'aws', 'home', 'test'])
+const capacityProviderSchema = z.enum(['hetzner', 'aws', 'targon', 'gcp'])
+const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(4).superRefine((value, context) => {
   if (new Set(value).size !== value.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Provider priorities must be unique.' })
   }
@@ -1073,7 +1073,7 @@ export const trustedImageBuildSchema = z.object({
     'fallback_required',
     'canceled',
   ]),
-  provider: z.enum(['hetzner', 'targon', 'gcp']).nullable(),
+  provider: z.enum(['hetzner', 'aws', 'targon', 'gcp']).nullable(),
   provider_resource_id: z.string().nullable(),
   image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
   error_code: z.string().nullable(),
@@ -1109,7 +1109,7 @@ export const screenerCapacityViewSchema = z.object({
     job_id: z.string().uuid(),
     lane: z.enum(['build', 'runtime', 'source_review']),
     status: z.string().min(1),
-    provider: z.enum(['hetzner', 'targon', 'gcp']).nullable(),
+    provider: z.enum(['hetzner', 'aws', 'targon', 'gcp']).nullable(),
     node_id: z.string().nullable().default(null),
     provider_resource_id: z.string().nullable(),
     image_reference: z.string().nullable(),

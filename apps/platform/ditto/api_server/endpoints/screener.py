@@ -891,7 +891,7 @@ def _trusted_build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
         dockerfile_path=row.dockerfile_path,
         destination=row.destination,
         status=cast(TrustedImageBuildStatus, row.status),
-        provider=cast(Literal["targon", "gcp", "hetzner"] | None, row.provider),
+        provider=cast(Literal["targon", "gcp", "hetzner", "aws"] | None, row.provider),
         provider_resource_id=row.provider_resource_id,
         image_digest=row.image_digest,
         error_code=row.error_code,

@@ -8,7 +8,10 @@ from typing import Literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.screener_node_settings import ScreenerNodeChannelSettings
-from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
+from ditto.api_models.screener_provider_settings import (
+    PRIMARY_SCREENER_PROVIDERS,
+    ScreenerProviderSettings,
+)
 from ditto.db.models import ScreenerCapacitySnapshot, ScreenerNode
 from ditto.db.queries.screener_node_settings import (
     latest_screener_node_channel_settings,
@@ -40,8 +43,9 @@ async def screener_gcp_fallback_allowed(
 ) -> bool:
     """Never let a controller outage bypass the current operator stop.
 
-    Explicit GCP-first routing selects GCE after admission is open. Hetzner
-    overflow and retired-provider routing also require a known, open primary;
+    Explicit GCP-first routing selects GCE after admission is open. Primary
+    (Hetzner or AWS) overflow and retired-provider routing also require a
+    known, open primary;
     readiness and heartbeat loss are host failures, not admission closures.
     Read current settings rather than a potentially stale controller snapshot.
     """
@@ -54,7 +58,7 @@ async def screener_gcp_fallback_allowed(
     # retired Targon first. Keep both gates aligned for mixed lane ordering.
     if (
         not any(lane[0] in ("gcp", "targon") for lane in lanes)
-        and any(lane[0] == "hetzner" for lane in lanes)
+        and any(lane[0] in PRIMARY_SCREENER_PROVIDERS for lane in lanes)
         and (
             not settings.gce_overflow_enabled
             or settings.gce_overflow_max_instances == 0
@@ -67,7 +71,12 @@ async def screener_gcp_fallback_allowed(
     if (
         primary is None
         or primary.environment != environment
-        or primary.provider != "hetzner"
+        or primary.provider not in PRIMARY_SCREENER_PROVIDERS
+        # A primary-first route only falls back for the node it names first.
+        or (
+            not any(lane[0] in ("gcp", "targon") for lane in lanes)
+            and any(lane[0] != primary.provider for lane in lanes)
+        )
     ):
         return False
     revision = await latest_screener_node_channel_settings(
