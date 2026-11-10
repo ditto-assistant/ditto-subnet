@@ -336,7 +336,19 @@ one **evaluation authorization**:
 
 Platform appends an issuance leaf to the attempt log. It commits to
 `SHA-256(admission_token)`, the hotkey, the `artifact_sha256`, the
-authorization, and the issuance and expiry blocks.
+authorization, the issuance and expiry blocks, and `owner_coldkey`: the
+coldkey that owns `miner_hotkey` at `issued_block`. Validators check that
+ownership on chain.
+
+**The signer scope is `owner_coldkey`.** Only extrinsics signed by
+`owner_coldkey` can be commitments for this token.
+- An extrinsic carrying `C` but signed by any other key is ignored entirely.
+  It is not a candidate, cannot be the anchor, and cannot burn the token.
+- Platform knows the token, so a signer-agnostic rule would let it
+  front-run the miner with its own `remark(C)` and burn the miner's token.
+- "Wrong signer" below therefore means that `owner_coldkey` no longer owned
+  `miner_hotkey` at the candidate's own block, for example after a hotkey
+  swap between issuance and the anchor.
 
 The miner then submits **one** extrinsic, signed by the coldkey that owns
 `miner_hotkey` at the anchor block. On the paid path the payment is in that
@@ -364,8 +376,9 @@ authorization until the token is either *consumed* by a valid anchor or
   expiry. A transfer inside such an extrinsic is still paid and is neither
   refunded nor credited.
 - **The first `C`-carrying extrinsic is the token's only anchor candidate.**
-  "First" means first by `(block, index)` among this signer's extrinsics
-  carrying *this token's* `C`, across check 4's whole fixed window from
+  "First" means first by `(block, index)` among the extrinsics that are
+  signed by the leaf's `owner_coldkey` and carry *this token's* `C`, across
+  check 4's whole fixed window from
   `anchor_block − W`. That window includes blocks before the logged
   `issued_block`.
   - Since `C` contains the token, an honest `C` extrinsic cannot precede the
@@ -378,8 +391,10 @@ authorization until the token is either *consumed* by a valid anchor or
   Whatever its outcome, the first candidate counts:
   - if it passes every check, it is the anchor and consumes the
     authorization;
-  - if it fails any anchor check (failed dispatch, wrong signer, short
-    payment, expired token), the token is **burned**: no later extrinsic
+  - if it fails any anchor check, the token is **burned**. The failing
+    checks are: failed dispatch; `owner_coldkey` no longer owning
+    `miner_hotkey` at that block; a short payment; an expired token; or a
+    position before the logged `issued_block`. Once burned, no later extrinsic
     carrying `C` can anchor, a paid transfer inside it is not refunded, and a
     reserved credit is forfeited.
 
@@ -440,7 +455,8 @@ but is no longer a seed input.
 
 1. The anchor block is finalized and its hash equals `anchor_block_hash`.
 2. The extrinsic at `anchor_extrinsic_index` succeeded. It was signed by the
-   coldkey that owned `miner_hotkey` **at the anchor block**.
+   issuance leaf's `owner_coldkey`, and that coldkey still owned
+   `miner_hotkey` **at the anchor block**.
    - Paid path: the payment is in this extrinsic, so this is the same
      ownership rule Platform's payment verifier applies today.
    - Credit path: there is no payment in the anchor. The statement names the
@@ -466,12 +482,13 @@ but is no longer a seed input.
      extrinsic's call data contains the remark `C`, **whether or not it
      dispatched successfully**. Failed extrinsics count, so a failed first
      attempt burns the token instead of quietly leaving room for a second
-     one. No extrinsic from the same signer, other than the anchor itself,
-     may carry the same `C` at a position `p` with
+     one. No extrinsic signed by the leaf's `owner_coldkey`, other than the
+     anchor itself, may carry the same `C` at a position `p` with
      `(anchor_block − W, 0) ≤ p < (anchor_block, anchor_extrinsic_index)`.
      The scan covers blocks `anchor_block − W` through `anchor_block`
      **inclusive**. Within the anchor block it covers only indices below
-     `anchor_extrinsic_index`.
+     `anchor_extrinsic_index`. Extrinsics signed by any other key are not
+     scanned, so a foreign `remark(C)` cannot grief-burn the token.
    - Without that last rule, a miner could put the same `C` in two
      extrinsics of one block. The seed includes `anchor_extrinsic_index`, and
      check 5 scopes uniqueness to the anchor itself, so the miner could then
@@ -662,7 +679,7 @@ no force override, exactly like protocols 20, 27, 29 and 34.
 
 ### 6.2 Commitments
 
-**Admission-token issuance leaf**: `{schema, miner_hotkey, artifact_sha256, SHA-256(admission_token), authorization (paid | credit:<block_hash>:<extrinsic_index>), issued_block, expires_block}`,
+**Admission-token issuance leaf**: `{schema, miner_hotkey, owner_coldkey, artifact_sha256, SHA-256(admission_token), authorization (paid | credit:<block_hash>:<extrinsic_index>), issued_block, expires_block}`,
 where `expires_block − issued_block ≤ W` (`token_validity_blocks` in the
 verifier policy). This leaf is appended when `/upload/check` issues the token.
 It lands in the same append-only log, and so in the same anchored epoch roots,
@@ -828,9 +845,10 @@ For each new statement (cached by digest):
    below map onto §4.5 checks 1–6; "Token" and "First match" together form
    check 4.
    - **Block:** finalized, and its hash matches the statement.
-   - **Signer:** the extrinsic succeeded and was signed by the coldkey that
-     owned `miner_hotkey` at the anchor block. On the credit path, the
-     credited payment must also check out.
+   - **Signer:** the extrinsic succeeded and was signed by the leaf's
+     `owner_coldkey`. That key owned `miner_hotkey` at `issued_block` and still
+     owns it at the anchor block. On the credit path, the credited payment
+     must also check out.
    - **Remark:** it equals `C` for this `artifact_sha256` and admission token.
      On the paid path, the batched transfer pays the quote.
    - **Token:** the issuance leaf is proven against an anchored root, with
@@ -920,7 +938,7 @@ replicate.
 | Committed RunStatement fails verification (receipt fails, dataset hash does not regenerate, a field disagrees with the policy or the log) | Not counted; replicate **quarantined**; no later attempt counts without an owner-reviewed dispute; a rejected RunStatement can never be relabelled as a failure |
 | Terminal leaf disagrees with its K-signed record (e.g. a signed RunStatement relabelled as `infra_failure`) | Rejected; replicate flagged; treated as evidence of operator tampering, not as an infra fault |
 | Repeated aborts for one agent | Visible pattern; policy threshold to flag for review (open question) |
-| On-chain anchor defect **for this token**: the first extrinsic carrying this token's `C` failed to dispatch, had the wrong signer or a short payment, or came after token expiry; or the cited anchor carries this token's `C` but is not that first extrinsic. An anchor whose remark belongs to a *different* token is a statement-level defect (row below) and does not burn this token | Statement rejected and the **token is burned** (§4.5 authorization accounting). A paid transfer is not refunded and a reserved credit is forfeited. A new attempt needs a new token and authorization. Backroom shows it as a miner fault, not an infra retry. If the first `C` extrinsic precedes the logged `issued_block`, the replicate is also flagged as issuance-collusion evidence |
+| On-chain anchor defect **for this token**. The first extrinsic signed by the leaf's `owner_coldkey` that carries this token's `C` failed to dispatch, had a short payment, came after token expiry, preceded the logged `issued_block`, or was signed when `owner_coldkey` no longer owned `miner_hotkey`. Or the cited anchor carries this token's `C` but is not that first extrinsic. `C` extrinsics signed by other keys are ignored and never burn the token. An anchor whose remark belongs to a *different* token is a statement-level defect (row below) and does not burn this token | Statement rejected and the **token is burned** (§4.5 authorization accounting). A paid transfer is not refunded and a reserved credit is forfeited. A new attempt needs a new token and authorization. Backroom shows it as a miner fault, not an infra retry. If the first `C` extrinsic precedes the logged `issued_block`, the replicate is also flagged as issuance-collusion evidence |
 | Extrinsic with a missing or non-`C` remark | Not a commitment for the token: consumes nothing, and the token stays open until a `C`-carrying extrinsic or expiry. Any transfer in it is not refunded |
 | Statement-level defect: `delta_s ≠` pinned `Δ`, `authorization` ≠ leaf, the anchor or spend identity cited by another ticket, a cited anchor whose remark belongs to a different token, or `Δ < Δ_min` in the policy | Operator fault. Statement rejected and replicate **quarantined** for owner review. This ticket's own token and its valid anchor, if any, are not burned |
 | Anchored artifact never uploaded, or uploaded bytes do not hash to `artifact_sha256` | Logged as forfeited; the authorization is spent and does not return as a credit |
@@ -1009,7 +1027,7 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 17 | Crown-decision audits | Beacon-sampled audit selection; paired CRN comparison; Backroom surface | 14 | M |
 | 18 | Dispute workflow | Quarantine and re-prove tools; owner-gated witness access | 15 | M |
 | 19 | Article and X draft (after the Phase 1 numbers) | Per the feature-article convention; owner Peyton | 6 | S |
-| 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged with `expires_block ≤ issued_block + W`. A shared Go/Python anchor-check library covers all six §4.5 checks, including the anchored issuance inclusion proof and the fixed-window first-match scan by `(block, index)` from `anchor − W` through the anchor block's lower indices, with negative vectors: post-dated issuance; an unanchored leaf; an earlier commitment in an earlier block; an earlier commitment at a lower index in the anchor block; a token expired at the anchor; `delta_s` ≠ the pinned Δ; a credit authorization in two issuance leaves; one anchor cited by two tickets. Also a positive vector where three replicates and an authorized retry share one anchor. The forfeited-anchor path is logged and never re-credits | 10, 11 | M |
+| 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged with `expires_block ≤ issued_block + W`. A shared Go/Python anchor-check library covers all six §4.5 checks, including the anchored issuance inclusion proof and the fixed-window first-match scan by `(block, index)` from `anchor − W` through the anchor block's lower indices, with negative vectors: post-dated issuance; an unanchored leaf; an earlier commitment in an earlier block; an earlier commitment at a lower index in the anchor block; a token expired at the anchor; `delta_s` ≠ the pinned Δ; a credit authorization in two issuance leaves; one anchor cited by two tickets; a first `C` extrinsic before the logged `issued_block` (burns and flags); `owner_coldkey` no longer owning the hotkey at the candidate block. Also positive vectors: a foreign-signed `remark(C)` ahead of the real anchor is ignored and does not burn the token; three replicates and an authorized retry sharing one anchor. The forfeited-anchor path is logged and never re-credits | 10, 11 | M |
 
 ---
 
