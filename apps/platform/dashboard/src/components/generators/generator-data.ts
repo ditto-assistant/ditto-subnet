@@ -119,6 +119,13 @@ export interface GeneratorRoundColumn extends GeneratorIdentity {
   trivial: number;
   unsolved: number;
   duplicate: number;
+  /** Cases too few agent owners solved that the frontier oracle answered and no failed
+   * audit voided: they earn credit instead of counting as unsolved. Absent on
+   * an older Platform; 0 until the round's frontier lane settles. */
+  frontier?: number | null;
+  /** The round's frontier lane: oracle_pending, audit_pending or settled;
+   * null when the round has none. */
+  frontier_state?: string | null;
   /** The pack grading policy this column's pack declared (13 when it declared
    * none); absent on an older Platform or before generation. */
   grading_bench_version?: number | null;
@@ -152,6 +159,7 @@ export interface GeneratorCaseCounts {
   trivial: number;
   unsolved: number;
   duplicate: number;
+  frontier?: number | null;
 }
 
 export interface GeneratorRunSummary {
@@ -311,7 +319,13 @@ export function nextRoundEta(
 
 /** Cases one column produced: every case lands in exactly one bucket. */
 export function columnCases(column: GeneratorRoundColumn): number {
-  return column.discriminating + column.trivial + column.unsolved + column.duplicate;
+  return (
+    column.discriminating +
+    column.trivial +
+    column.unsolved +
+    column.duplicate +
+    (column.frontier ?? 0)
+  );
 }
 
 /** The newest round with scored results (the one whose detail to show). */

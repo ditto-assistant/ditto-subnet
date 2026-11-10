@@ -9,12 +9,16 @@
   --split-generator: #1f9b82;
   --split-gamma: #cd9130;
   --split-burn: #9a9ca4;
+  /* Frontier cases: no agent solved them, but the frontier oracle and a
+     sampled audit showed them valid. A blue apart from the split hues. */
+  --case-frontier: #3b6fc4;
 }
 [data-ditto-mode="dark"] {
   --split-agent: #a758a1;
   --split-generator: #33a891;
   --split-gamma: #c48225;
   --split-burn: #5d6069;
+  --case-frontier: #6b98e3;
 }
 
 .generators-page {
@@ -298,6 +302,9 @@
 }
 .gen-case.duplicate {
   background: var(--split-agent);
+}
+.gen-case.frontier {
+  background: var(--case-frontier);
 }
 
 @media (max-width: 600px) {

@@ -4,6 +4,7 @@ import { loadFixture } from "../../test-fixtures";
 import type { GeneratorRoundDetail } from "../generators/generator-data";
 import {
   BEAT_MS,
+  FLIGHT_TOP_MARGIN,
   agentMood,
   arenaLayout,
   catchPoint,
@@ -46,6 +47,16 @@ function withDefault(): GeneratorRoundDetail {
     unsolved: 0,
     duplicate: 3,
   });
+  return detail;
+}
+
+/** withDefault() after its round settled frontier credit: four of the
+ * column with the most unsolved cases became frontier cases. */
+function withFrontier(): GeneratorRoundDetail {
+  const detail = withDefault();
+  const column = [...detail.columns].sort((a, b) => b.unsolved - a.unsolved)[0]!;
+  column.unsolved -= 4;
+  column.frontier = 4;
   return detail;
 }
 
@@ -97,6 +108,7 @@ describe("round → arena script", () => {
       discriminating: 49,
       trivial: 87,
       unsolved: 24,
+      frontier: 0,
       duplicate: 0,
       cases: 160,
     });
@@ -126,7 +138,7 @@ describe("round → arena script", () => {
   });
 
   it("maps every outcome to its catch and bonk rule", () => {
-    const script = buildRoundScript(withDefault(), () => null, { maxThrows: 192 });
+    const script = buildRoundScript(withFrontier(), () => null, { maxThrows: 192 });
     expect(new Set(script.throws.map((t) => t.outcome))).toEqual(new Set(OUTCOMES));
     for (const shot of script.throws) {
       if (shot.outcome === "trivial") {
@@ -136,6 +148,12 @@ describe("round → arena script", () => {
       } else if (shot.outcome === "unsolved") {
         expect(shot.catchers).toHaveLength(0);
         expect(shot.missers).toHaveLength(1);
+        expect(shot.prop).toBe("knot");
+      } else if (shot.outcome === "frontier") {
+        // Fewer than two owners solved it and per-case results are not
+        // public: a frontier throw names no agent, caught or missed.
+        expect(shot.catchers).toHaveLength(0);
+        expect(shot.missers).toHaveLength(0);
         expect(shot.prop).toBe("knot");
       } else if (shot.outcome === "duplicate") {
         expect(shot.catchers).toHaveLength(0);
@@ -166,6 +184,57 @@ describe("round → arena script", () => {
     expect(summary).toContain("Generator round 25967: 5 generators produced 160 cases");
     expect(summary).toContain("49 separated the agents");
     expect(summary).toContain("Per-agent results on individual cases are not public");
+  });
+
+  it("keeps frontier cases apart from unsolved ones", () => {
+    const plain = buildRoundScript(withDefault()).totals;
+    const settled = buildRoundScript(withFrontier());
+    // Settling moves cases from unsolved to frontier; neither is merged away.
+    expect(settled.totals.frontier).toBe(4);
+    expect(settled.totals.unsolved).toBe(plain.unsolved - 4);
+    expect(settled.totals.cases).toBe(plain.cases);
+    const summary = roundSummary(settled);
+    expect(summary).toContain(`${plain.unsolved - 4} no agent solved`);
+    expect(summary).toContain(
+      "4 frontier cases that got past the panel but the frontier oracle answered",
+    );
+    expect(roundSummary(buildRoundScript(withDefault()))).not.toContain("frontier");
+  });
+
+  it("never names an agent or claims an individual audit for a frontier case", () => {
+    const script = buildRoundScript(withFrontier(), () => null, { maxThrows: 192 });
+    const frontier = script.throws.filter((t) => t.outcome === "frontier");
+    expect(frontier.length).toBeGreaterThan(0);
+    const agentNames = script.agents.map((agent) => agent.name);
+    for (const shot of frontier) {
+      expect(shot.catchers).toEqual([]);
+      expect(shot.missers).toEqual([]);
+      for (const name of agentNames) expect(shot.caption).not.toContain(name);
+      // Audits are sampled per column; the copy claims none of this case.
+      expect(shot.caption).not.toMatch(/found it fair|audit found/);
+      expect(shot.caption).toContain("no audit of its column ruled it out");
+    }
+    // In flight it passes over the panel and lands on nobody's head.
+    const layout = arenaLayout("wide", script.generators.length, script.agents.length);
+    const flight = flightFor(layout, frontier[0]!);
+    const heads = script.agents.map((_, i) => headPoint(layout, i));
+    for (const head of heads) expect(flight.to).not.toEqual(head);
+    expect(flight.to.y).toBeLessThan(Math.min(...heads.map((p) => p.y)));
+    // The arc stays on stage in both layouts (it peaks over the panel).
+    for (const kind of ["wide", "tall"] as const) {
+      const stage = arenaLayout(kind, script.generators.length, script.agents.length);
+      for (const shot of frontier) {
+        const arc = flightFor(stage, shot);
+        for (const peak of arc.peaks) {
+          expect(peak).toBeGreaterThanOrEqual(FLIGHT_TOP_MARGIN);
+          expect(peak).toBeLessThanOrEqual(stage.height);
+        }
+      }
+    }
+    // No agent reacts as if it missed (or caught) it.
+    for (let i = 0; i < script.agents.length; i++) {
+      expect(agentMood(frontier[0]!, i, "rest")).toBe("idle");
+    }
   });
 
   it("skips uncounted columns and survives an empty round", () => {
