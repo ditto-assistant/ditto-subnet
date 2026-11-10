@@ -111,6 +111,7 @@ from ditto.db.models import (
     ScreeningQuarantine,
     SubmissionImageBuild,
     ValidatorHeartbeat,
+    ValidatorQueueWithdrawal,
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
@@ -9291,6 +9292,16 @@ class TestPublicActivity:
         assert held["hold_failure_code"] == "provider_outage_parked"
         assert terminal["retry_disposition"] == "terminal_artifact_failure"
         assert terminal["terminal_failure_code"] == "inference_request_rejected"
+        # Not yet withdrawn (a row stranded before the platform wrote close-outs),
+        # but the per-submission page still must not say it is waiting.
+        terminal_pipeline = (
+            await client.get(f"/api/v1/public/agent/{terminal_id}/pipeline")
+        ).json()
+        assert terminal_pipeline["status"] == "scoring_failed"
+        assert (
+            terminal_pipeline["validator_retry"]["disposition"]
+            == "terminal_artifact_failure"
+        )
 
         # The per-submission page must agree with the feed for the same agent,
         # and it publishes the no-fault outage code rather than staying silent.
@@ -9301,6 +9312,127 @@ class TestPublicActivity:
         assert {
             attempt["failure_code"] for attempt in pipeline["validation_attempts"]
         } == {"provider_outage_parked"}
+
+    async def test_a_terminal_close_out_reads_scoring_failed_everywhere(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A withdrawal that names the agent's own failure is not "waiting".
+
+        kgmin1105 (2026-11-08) spent its whole inference allowance on four
+        validators and the submission page kept saying "No validator is
+        assigned yet. Waiting for 3 validators." Once the platform records the
+        close-out, the activity feed, its status counts and the pipeline page
+        all report ``scoring_failed`` with the code the miner has to fix.
+        """
+        now = datetime.now(UTC)
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="spent",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        plain_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_B,
+                status=AgentStatus.EVALUATING,
+                name="withdrawn",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        async with session_maker() as session, session.begin():
+            for index in range(3):
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=_fake_validator_hotkey(index),
+                        status=TicketStatus.EXPIRED,
+                        issued_at=now - timedelta(hours=3),
+                        deadline=now - timedelta(hours=2, minutes=index),
+                        bench_version=_ERA,
+                        attempt_count=2,
+                        manual_retry_grants=0,
+                        failure_reason="scoring_error",
+                        failure_detail="inference_allowance_exhausted",
+                        failed_at=now - timedelta(hours=2, minutes=index),
+                        retry_after=now - timedelta(hours=1),
+                    )
+                )
+            for withdrawn_id, code in (
+                (agent_id, "inference_allowance_exhausted"),
+                (plain_id, None),
+            ):
+                session.add(
+                    ValidatorQueueWithdrawal(
+                        withdrawal_id=uuid4(),
+                        agent_id=withdrawn_id,
+                        bench_version=_ERA,
+                        actor="platform:terminal-artifact-failure",
+                        reason="test close-out of this submission",
+                        expected_snapshot="test",
+                        score_count=0,
+                        ticket_snapshot=[],
+                        terminal_failure_code=code,
+                        created_at=now,
+                    )
+                )
+        _install_db(app, session_maker)
+
+        activity = (await client.get("/api/v1/public/activity")).json()
+        by_id = {entry["agent_id"]: entry for entry in activity["entries"]}
+        spent = by_id[str(agent_id)]
+        assert spent["status"] == "scoring_failed"
+        profile = await client.get(f"/api/v1/public/miners/{_MINER_A}")
+        assert profile.status_code == 200, profile.text
+        submission = next(
+            row
+            for row in profile.json()["submissions"]
+            if row["agent_id"] == str(agent_id)
+        )
+        assert submission["status"] == "scoring_failed"
+
+        assert spent["retry_disposition"] == "terminal_artifact_failure"
+        assert spent["terminal_failure_code"] == "inference_allowance_exhausted"
+        # A withdrawal without a code stays the neutral historical label.
+        assert by_id[str(plain_id)]["status"] == "not_queued"
+        assert by_id[str(plain_id)]["terminal_failure_code"] is None
+        assert activity["status_counts"].get("scoring_failed") == 1
+        assert activity["status_counts"].get("waiting_validator", 0) == 0
+
+        filtered = (
+            await client.get(
+                "/api/v1/public/activity", params={"status": "scoring_failed"}
+            )
+        ).json()
+        assert [entry["agent_id"] for entry in filtered["entries"]] == [str(agent_id)]
+
+        pipeline = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        ).json()
+        assert pipeline["status"] == "scoring_failed"
+        assert pipeline["validator_retry"] == {
+            "state": "exhausted",
+            "disposition": "terminal_artifact_failure",
+            "terminal_failure_code": "inference_allowance_exhausted",
+            "hold_failure_code": None,
+            "retry_after": None,
+        }
+
+        # Historical profile entries keep their own scoring era when the
+        # active board moves on; an unrelated withdrawal stays unaffected.
+        await _activate_era(session_maker, _NEXT_ERA)
+        old_profile = await client.get(f"/api/v1/public/miners/{_MINER_A}")
+        assert old_profile.status_code == 200, old_profile.text
+        assert old_profile.json()["submissions"][0]["status"] == "scoring_failed"
+        unrelated = await client.get(f"/api/v1/public/miners/{_MINER_B}")
+        assert unrelated.status_code == 200, unrelated.text
+        assert unrelated.json()["submissions"][0]["status"] != "scoring_failed"
 
     async def test_an_unnamed_parked_cause_never_blames_the_submission(
         self,

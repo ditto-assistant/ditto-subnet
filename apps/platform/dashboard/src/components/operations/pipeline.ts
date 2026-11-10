@@ -4,6 +4,7 @@
 // argument and stay pure.
 import type { FleetEntry, FleetReport } from "../../types/fleet";
 import type { BenchmarkProgress, PipelineEntry } from "../../types/pipeline";
+import { TERMINAL_FAILURE_CAUSES } from "../pipeline/status";
 
 /** Ops-feed fields beyond the shared wire type (the feed superset carries
  * the queue gate the shared PipelineEntry does not declare). */
@@ -109,20 +110,9 @@ export interface ParkedReading {
   tone: "hold" | "terminal";
 }
 
-/** Plain language for each allowlisted agent-attributable code.
- *
- * Only codes the API is willing to publish appear here. An unknown code keeps
- * the terminal sentence without inventing a cause for it. */
-const TERMINAL_CAUSES: Record<string, string> = {
-  inference_allowance_exhausted:
-    "The agent used its whole inference allowance before finishing its run.",
-  inference_request_rejected:
-    "The platform rejected the agent's inference requests, so no run could complete.",
-  model_inference_required:
-    "The agent answered without the model inference the benchmark requires.",
-  harness_oom:
-    "The harness exceeded its published sandbox memory cap while the validator host had memory to spare.",
-};
+/** Plain language for each allowlisted agent-attributable code (shared with
+ * the submission page so the two surfaces cannot word it differently). */
+const TERMINAL_CAUSES = TERMINAL_FAILURE_CAUSES;
 
 /** Codes that name a failure Ditto owns, with the sentence that explains it.
  *

@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import re
 import statistics
 from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import replace
@@ -129,6 +130,7 @@ from ditto.db.models import (
     TranscriptMirrorSettingsRevision,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
+    ValidatorQueueWithdrawal,
     ValidatorRequestNonce,
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
@@ -6452,6 +6454,204 @@ class TestFailJob:
             "/api/v1/validator/job/fail", headers=_AUTH_HEADER, json=stale
         )
         assert resp.status_code == 409
+
+    async def _seed_failed_sibling_tickets(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        agent_id: UUID,
+        details: list[str],
+    ) -> None:
+        """Expired, budget-spent canonical tickets on other validators."""
+        now = datetime.now(UTC)
+        async with maker() as s, s.begin():
+            for index, detail in enumerate(details):
+                s.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=f"5Sibling{index:040d}",
+                        status=TicketStatus.EXPIRED,
+                        issued_at=now - timedelta(hours=2, minutes=index),
+                        deadline=now - timedelta(hours=1, minutes=index),
+                        bench_version=_BENCH_VERSION,
+                        attempt_count=1,
+                        manual_retry_grants=0,
+                        infra_retry_grants=0,
+                        failure_reason="scoring_error",
+                        failure_detail=detail,
+                        failed_at=now - timedelta(hours=1, minutes=index),
+                        retry_after=now - timedelta(hours=1, minutes=index),
+                    )
+                )
+
+    async def _withdrawals(
+        self, maker: async_sessionmaker[AsyncSession], agent_id: UUID
+    ) -> list[ValidatorQueueWithdrawal]:
+        async with maker() as s:
+            return list(
+                (
+                    await s.scalars(
+                        select(ValidatorQueueWithdrawal).where(
+                            ValidatorQueueWithdrawal.agent_id == agent_id
+                        )
+                    )
+                ).all()
+            )
+
+    async def test_quorum_lost_to_the_agents_own_allowance_closes_it_out(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # kgmin1105 (2026-11-08): four validators each ran the artifact and
+        # each run spent its whole inference allowance. The row stayed
+        # "waiting for validators" and every fresh validator could still burn a
+        # first-assignment run on it. The third agent-attributable failure now
+        # writes the terminal withdrawal that stops that.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._seed_failed_sibling_tickets(
+            session_maker, agent_id, ["inference_allowance_exhausted"] * 2
+        )
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                failure_detail="inference_allowance_exhausted",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        [withdrawal] = await self._withdrawals(session_maker, agent_id)
+        assert withdrawal.actor == "platform:terminal-artifact-failure"
+        assert withdrawal.terminal_failure_code == "inference_allowance_exhausted"
+        assert withdrawal.bench_version == _BENCH_VERSION
+        assert withdrawal.reinstated_at is None
+        assert withdrawal.evicted_validator_hotkeys is None
+        assert len(withdrawal.ticket_snapshot) == 3
+        # Backroom parses expected_snapshot as a 64-hex digest on every row.
+        assert re.fullmatch(r"[0-9a-f]{64}", withdrawal.expected_snapshot)
+        async with session_maker() as s:
+            agent = await s.get(Agent, agent_id)
+            assert agent is not None
+            # Not a verdict on the miner: the lifecycle row is untouched and an
+            # operator can reinstate the withdrawal like any other.
+            assert agent.status == AgentStatus.EVALUATING
+
+    async def test_sweep_recovers_after_close_out_hook_fails(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server.terminal_failure_sweep import TerminalFailureSweeper
+
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._seed_failed_sibling_tickets(
+            session_maker, agent_id, ["inference_allowance_exhausted"] * 2
+        )
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        broken_hook = AsyncMock(side_effect=RuntimeError("transient close-out failure"))
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.validator.withdraw_terminal_artifact_failure",
+            broken_hook,
+        )
+        response = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                failure_detail="inference_allowance_exhausted",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        broken_hook.assert_awaited_once()
+        assert await self._withdrawals(session_maker, agent_id) == []
+        async with session_maker() as session:
+            tickets = list(
+                (
+                    await session.scalars(
+                        select(ValidatorTicket).where(
+                            ValidatorTicket.agent_id == agent_id
+                        )
+                    )
+                ).all()
+            )
+            assert len(tickets) == 3
+            assert all(ticket.status == TicketStatus.EXPIRED for ticket in tickets)
+            assert all(
+                ticket.failure_detail == "inference_allowance_exhausted"
+                for ticket in tickets
+            )
+        sweeper = TerminalFailureSweeper(session_maker=session_maker)
+        assert await sweeper.sweep() == 1
+        [withdrawal] = await self._withdrawals(session_maker, agent_id)
+        assert withdrawal.terminal_failure_code == "inference_allowance_exhausted"
+        assert await sweeper.sweep() == 0
+
+    async def test_quorum_still_reachable_is_not_closed_out(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._seed_failed_sibling_tickets(
+            session_maker, agent_id, ["inference_allowance_exhausted"]
+        )
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                failure_detail="inference_allowance_exhausted",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        assert await self._withdrawals(session_maker, agent_id) == []
+
+    async def test_a_mixed_or_infrastructure_cause_is_never_closed_out(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # Fail-closed: one slot that died on infrastructure keeps the row on
+        # the operator retry path instead of blaming the artifact.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._seed_failed_sibling_tickets(
+            session_maker,
+            agent_id,
+            ["inference_allowance_exhausted", "inference_allowance_exhausted"],
+        )
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="infrastructure",
+                failure_detail="model_relay_unavailable",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        assert await self._withdrawals(session_maker, agent_id) == []
 
 
 class TestSubmitScore:

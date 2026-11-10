@@ -16713,6 +16713,8 @@ export interface components {
             reinstated_at?: string | null;
             /** Score Count */
             score_count: number;
+            /** Terminal Failure Code */
+            terminal_failure_code?: string | null;
             /**
              * Withdrawal Id
              * Format: uuid

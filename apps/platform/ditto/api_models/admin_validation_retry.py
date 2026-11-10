@@ -119,6 +119,14 @@ class AdminValidationQueueWithdrawal(BaseModel):
     score_count: int
     evicted_validator_hotkeys: list[str] | None = None
     """``None`` for an ordinary withdrawal; the revoked leases for an eviction."""
+    terminal_failure_code: str | None = None
+    """The agent-attributable code that made quorum unreachable, if any.
+
+    Set when every remaining quorum slot failed on the same named agent code,
+    whether the platform wrote the withdrawal itself (``actor`` is
+    ``platform:terminal-artifact-failure``) or an operator did. Public surfaces
+    report such a submission as ``scoring_failed``.
+    """
     created_at: datetime
     reinstated_at: datetime | None = None
     """When this removal was reversed, or ``None`` while it is still in force.

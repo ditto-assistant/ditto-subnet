@@ -38,6 +38,7 @@ describe("status vocabulary (row 10)", () => {
       "below_score_floor",
       "not_queued",
       "retired",
+      "scoring_failed",
       "under_review",
       "rejected",
       "scored",
@@ -66,6 +67,7 @@ describe("status vocabulary (row 10)", () => {
     expect(activityStage("below_score_floor")).toEqual(["Low-priority completion", "warn"]);
     expect(activityStage("not_queued")).toEqual(["Historical · not queued", ""]);
     expect(activityStage("retired")).toEqual(["Retired · earlier benchmark", ""]);
+    expect(activityStage("scoring_failed")).toEqual(["Cannot finish scoring", "bad"]);
     // Source review runs before scoring; only a row Platform deferred until a
     // score qualified names the deferred branch.
     expect(activityStage("under_review")).toEqual(["Under review", "warn"]);
@@ -481,5 +483,83 @@ describe("admissionLaneLine (#1215)", () => {
     expect(admissionLaneLine({ state: "running", lane: null })).toBe("");
     expect(admissionLaneLine({ state: "running", lane: "verdict" })).toBe("");
     expect(admissionLaneLine({ state: "queued", lane: "build" })).toBe("");
+  });
+});
+
+// ── Terminal scoring failure (#3442) ────────────────────────────────────────
+describe("a submission that cannot finish scoring", () => {
+  // kgmin1105: four validators each spent the whole inference allowance. The
+  // page said "0 of 3 scores received. No validator is assigned yet. Waiting
+  // for 3 validators." Nothing was ever going to be assigned.
+  const attempts = Array.from({ length: 4 }, (_, index) => ({
+    validator_hotkey: "validator-" + index,
+    status: "expired",
+    bench_version: 17,
+    failure_code: "inference_allowance_exhausted",
+  }));
+
+  it("names the cause instead of waiting, once closed out", () => {
+    const entry = {
+      status: "scoring_failed",
+      score_count: 0,
+      quorum: 3,
+      active_bench_version: 17,
+      validation_attempts: attempts,
+      validator_retry: {
+        state: "exhausted",
+        disposition: "terminal_artifact_failure",
+        terminal_failure_code: "inference_allowance_exhausted",
+      },
+    } as unknown as Parameters<typeof validationDetail>[0];
+    const detail = validationDetail(entry);
+    expect(detail).toContain("cannot finish scoring");
+    expect(detail).toContain("used its whole inference allowance");
+    expect(detail).toContain("submit a new version");
+    expect(detail).not.toContain("Waiting for");
+    expect(detail).not.toContain("No validator is assigned yet");
+    expect(validationProgress(entry)).toBe("0 of 3 · cannot finish");
+  });
+
+  it("reads the same for a row stranded before close-outs existed", () => {
+    const board = {
+      status: "waiting_validator",
+      score_count: 0,
+      quorum: 3,
+      retry_disposition: "terminal_artifact_failure",
+      terminal_failure_code: "inference_allowance_exhausted",
+    };
+    expect(activityStage(board.status, board)).toEqual(["Cannot finish scoring", "bad"]);
+    const detail = validationDetail(board as unknown as Parameters<typeof validationDetail>[0]);
+    expect(detail).toContain("used its whole inference allowance");
+    expect(detail).not.toContain("Waiting for");
+  });
+
+  it("wins over the low-priority lane copy for a below-floor row", () => {
+    const belowFloor = {
+      status: "below_score_floor",
+      score_count: 2,
+      quorum: 3,
+      score_floor: 0.5,
+      provisional_scores: [{ composite: 0.2 }, { composite: 0.3 }],
+      retry_disposition: "terminal_artifact_failure",
+      terminal_failure_code: "inference_allowance_exhausted",
+    } as unknown as Parameters<typeof validationDetail>[0];
+    expect(validationProgress(belowFloor)).toBe("2 of 3 · cannot finish");
+    const detail = validationDetail(belowFloor);
+    expect(detail).toContain("cannot finish scoring");
+    expect(detail).not.toContain("queued");
+  });
+
+  it("keeps an operator hold on the waiting copy, never blaming the artifact", () => {
+    const held = {
+      status: "waiting_validator",
+      score_count: 0,
+      quorum: 3,
+      retry_disposition: "operator_hold",
+    };
+    expect(activityStage(held.status, held)).toEqual(["Waiting for validators", "progress"]);
+    expect(
+      validationDetail(held as unknown as Parameters<typeof validationDetail>[0]),
+    ).not.toContain("cannot finish");
   });
 });
