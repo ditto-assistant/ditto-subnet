@@ -250,7 +250,28 @@ func executeDuelingSlice(ctx context.Context, slice *duelingSlice, env duelingSl
 			GradingBenchVersion: col.Column.GradingBenchVersion, Substituted: col.Column.Substituted,
 		}
 		wanted := include[id]
-		if len(wanted) > 0 {
+		if len(wanted) > 0 && env.budget.isExhausted() {
+			// A cancelled run takes the cancellation path, as Execute would.
+			if err := ctx.Err(); err != nil {
+				return duelingSliceResult{}, err
+			}
+			// Bench v18: the budget is already spent, so every case would be
+			// refused at admission; refuse them here instead of seeding the
+			// column's waves, which would only spend embeddings past it.
+			note := env.budget.refusalNote()
+			for _, c := range col.Pack.Cases {
+				if !wanted[c.ID] {
+					continue
+				}
+				env.budget.refuse("slice")
+				agg.N++
+				agg.BudgetExhausted++
+				result.rows = append(result.rows, budgetExhaustedCase(challenge.RoundCaseID(id, c.ID), challenge.SliceCaseCategory, protocol.KindMemory, note))
+			}
+			if env.progress != nil {
+				env.progress(len(result.rows))
+			}
+		} else if len(wanted) > 0 {
 			outcomes, err := challengerun.Execute(ctx, env.harnessURL, col.Pack, challengerun.Options{
 				Concurrency: env.concurrency,
 				// The agent runs at the run's bench version; each case is graded at

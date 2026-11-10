@@ -134,6 +134,7 @@ var (
 	v18SnapshotErr    = errors.New("v18 catalog snapshot not loaded")
 	v18SnapshotOnce   sync.Once
 	v18Index          map[string]string
+	v18FirstParty     map[string]bool
 )
 
 // LoadV18Snapshot verifies raw against want and decodes it.
@@ -181,12 +182,15 @@ func useV18Snapshot(snap *V18Snapshot) {
 			}
 		}
 	}
+	firstParty := map[string]bool{}
 	for _, tool := range snap.FirstParty {
 		if !reserved[tool.Name] {
 			index[tool.Name] = "Ditto"
+			firstParty[tool.Name] = true
 		}
 	}
 	v18Index = index
+	v18FirstParty = firstParty
 }
 
 // V18SnapshotReady verifies and decodes the embedded snapshot once and
@@ -447,6 +451,18 @@ func IsV18ProductionTool(name string) (appName string, ok bool) {
 	defer v18SnapshotMu.RUnlock()
 	appName, ok = v18Index[name]
 	return appName, ok
+}
+
+// IsV18FirstPartyTool reports whether name is a refused first-party snapshot
+// tool. Ditto is not a linkable app, so the mock refuses these as unavailable
+// in the benchmark workspace rather than with the connector template.
+func IsV18FirstPartyTool(name string) bool {
+	if V18SnapshotReady() != nil {
+		return false
+	}
+	v18SnapshotMu.RLock()
+	defer v18SnapshotMu.RUnlock()
+	return v18FirstParty[name]
 }
 
 // IsConnectorToolForVersionChecked is IsConnectorToolForVersion that reports

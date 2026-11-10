@@ -81,7 +81,7 @@ func TestV18SnapshotRefusalSkipsFixtureDecoys(t *testing.T) {
 	if slug == "" {
 		t.Fatal("seed offers no refusable v18 snapshot tool")
 	}
-	if got := callV16(f, slug, nil); !strings.Contains(got.Error, "not connected") {
+	if got := callV16(f, slug, nil); got.Error == "" || got.Result != "" {
 		t.Fatalf("a plain snapshot tool must be refused: %+v", got)
 	}
 	// Re-key the bearer decoy under the snapshot slug to simulate a collision.
@@ -91,5 +91,34 @@ func TestV18SnapshotRefusalSkipsFixtureDecoys(t *testing.T) {
 	f.bearer = slug
 	if got := callV16(f, slug, nil); got.Error != "" || !strings.Contains(got.Result, f.NeedleValue()) {
 		t.Fatalf("colliding decoy bearer must serve the needle: %+v", got)
+	}
+}
+
+// A refused first-party snapshot tool is "not available" in the benchmark
+// workspace; a refused toolkit tool keeps the connector template. Ditto is
+// not a linkable app, so telling the harness to link it would be unusable.
+func TestV18FirstPartySnapshotRefusal(t *testing.T) {
+	const seed = int64(42)
+	firstParty, toolkit := "", ""
+	for _, def := range catalog.V18ProductionToolsForSeed(seed, protocol.BenchVersionV18) {
+		app, ok := catalog.IsV18ProductionTool(def.Name)
+		switch {
+		case !ok:
+		case catalog.IsV18FirstPartyTool(def.Name):
+			firstParty = def.Name
+		case app != "Ditto":
+			toolkit = def.Name
+		}
+	}
+	if firstParty == "" || toolkit == "" {
+		t.Fatalf("seed menu lacks a refused first-party (%q) or toolkit (%q) tool", firstParty, toolkit)
+	}
+	f := BuildFixtureForVersion(seed, webCase("cweb"), protocol.BenchVersionV18)
+	got := callV16(f, firstParty, nil)
+	if !strings.Contains(got.Error, "not available in this benchmark workspace") || strings.Contains(got.Error, "Settings") {
+		t.Fatalf("first-party %s refusal: %+v", firstParty, got)
+	}
+	if got := callV16(f, toolkit, nil); !strings.Contains(got.Error, "not connected") || !strings.Contains(got.Error, "in Settings") {
+		t.Fatalf("toolkit %s refusal: %+v", toolkit, got)
 	}
 }
