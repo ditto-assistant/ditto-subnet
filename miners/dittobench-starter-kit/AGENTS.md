@@ -25,10 +25,12 @@ served-path defect; fix it, never tune it away. The rehearsal refuses a
 `/v1/capabilities` `supported_bench_versions`); 14 needs a scorer that
 advertises it.
 
-Bench 17 (the dueling bench) is the live scoring contract. `uv run ditto
+Bench 18 (the accuracy contract on the dueling bench) is the live scoring
+contract: a 1,400 to 2,000-tool menu, multi-call tool encounters and a $1.00 per
+350-case run budget, with the kit serving the Jev hybrid for an oversized menu. `uv run ditto
 practice` at 16+ builds a local generator slice from the public default
 generator only (miner generator columns stay private until their source is
 released, so on-chain column means will differ) and prints the composite,
 per-column means and the priced cost factor; `--no-slice` scores the datagen
-half alone. v17 prices a full run against a $0.50 reference with a 0.3 floor,
+half alone. v18 prices a full run against a $0.50 reference with a 0.3 floor,
 so cost per run matters as much as accuracy.

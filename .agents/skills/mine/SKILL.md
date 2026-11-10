@@ -29,8 +29,10 @@ The numbers below drift. For the live scoring bench, emission split, payout
 curve, champion, next epoch, and your own agents' status, run `$subnet-status`
 (`python3 .agents/skills/subnet-status/scripts/subnet_status.py --hotkey <ss58>`).
 
-Live scoring is **bench 17** (dueling, priced-cost-v2: $0.50 reference per
-350 cases, 0.3 floor), `run_size=full`, observed tools, locked
+Live scoring is **bench 18** (the accuracy contract on the dueling bench: a
+production-sized menu of 1,400 to 2,000 tools, multi-call tool encounters graded
+on the outcome, and a $1.00 per 350-case run budget; priced-cost-v2 unchanged,
+$0.50 reference per 350 cases, 0.3 floor), `run_size=full`, observed tools, locked
 `openai/gpt-oss-20b`. Without `--bench-version`, `uv run ditto practice` reads
 the live scoring version (`active_version`) from the public rollout endpoint
 (`https://dittobench.ai/api/v1/public/bench/rollout`) at run time, so the
@@ -40,6 +42,12 @@ fallback (also used when `DITTOBENCH_PUBLIC_ROLLOUT_URL=off`); bump it with
 each activation. A live version newer than the checkout's `MAX_BENCH_VERSION`
 fails loudly: update ditto-subnet. The wire `bench_version` a harness receives
 stays 9 in every contract.
+
+Bench 18's rollout opened on 2026-11-10. A whole v18 menu (about 100k to 200k
+tokens) does not fit the locked model's context, so a harness that forwards it
+scores 0: retrieve or defer tools. The stock kit serves the Jev hybrid for any
+menu over 64k estimated tokens (`src/hybrid.rs`); unrun cases past the run
+budget score 0 with `budget_exhausted`.
 
 Bench 15 activated on 2026-11-03. It keeps v14's grader and the v13 gates
 (shadow, replayed locally with `--gates`, below) and adds a ~235-tool catalog
