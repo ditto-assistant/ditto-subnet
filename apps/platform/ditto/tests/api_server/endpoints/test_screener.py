@@ -2556,6 +2556,11 @@ class TestDormantNodeReauth:
         assert datetime.fromisoformat(recovered.json()["expires_at"]) > datetime.now(
             UTC
         )
+        # That response can be lost too: the node still holds only the old
+        # bearer, and a retry of the same request must still succeed.
+        retried = await self._refresh(client, keypair, refresh_id=refresh_id)
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["api_token"] == first.json()["api_token"]
 
     @pytest.mark.parametrize(
         ("provider", "status", "expired_for", "max_dormancy_seconds"),

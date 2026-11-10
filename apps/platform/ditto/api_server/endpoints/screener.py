@@ -1279,9 +1279,13 @@ async def refresh_screener_node(
                 raise ScreenerAuthError("refresh request identity is inconsistent")
             if dormant:
                 # The derived bearer is retry-stable; only its lifetime renews.
+                # Keep the bearer the node woke with usable for this same
+                # request, as an ordinary rotation does, so a lost response
+                # can be retried instead of forcing re-enrollment.
                 node.token_expires_at = expires_at
-                node.previous_token_hash = None
-                node.previous_token_expires_at = None
+                node.previous_token_expires_at = now + timedelta(
+                    seconds=_NODE_TOKEN_ROTATION_GRACE_SECONDS
+                )
                 node.rotated_at = now
             else:
                 expires_at = node.token_expires_at
