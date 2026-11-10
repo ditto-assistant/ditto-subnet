@@ -35,6 +35,7 @@ from ditto.api_models.miner_ditto_link import (
     MinerDittoLinkView,
 )
 from ditto.miner_cli.api_client import ApiClient
+from ditto.miner_cli.commands.link_github import _github_user_id
 from ditto.miner_cli.errors import ApiResponseError, LoginRequiredError
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.preferences import load_miner_session
@@ -90,7 +91,7 @@ def add_subparser(
     )
     parser.add_argument(
         "--expect-github-id",
-        type=int,
+        type=_github_user_id,
         help="Expected numeric GitHub id; required with --yes for the signed proof.",
     )
     parser.add_argument(

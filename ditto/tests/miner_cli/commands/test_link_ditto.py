@@ -7,12 +7,15 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
+
 from ditto.api_models.miner_ditto_link import (
     MinerDittoLinkAttemptResponse,
     MinerDittoLinkResponse,
     MinerDittoLinkStartResponse,
     MinerDittoLinkView,
 )
+from ditto.miner_cli.__main__ import _build_parser
 from ditto.miner_cli.commands.link_ditto import run
 from ditto.miner_cli.errors import LoginRequiredError
 
@@ -81,6 +84,20 @@ def test_link_requires_a_saved_session(capsys) -> None:
     ):
         assert run(_args()) == 1
     assert "not signed in" in capsys.readouterr().err
+
+
+def test_expected_github_id_uses_the_signed_proof_validator() -> None:
+    parser = _build_parser()
+    for value in (1, 2**53 - 1):
+        assert (
+            parser.parse_args(
+                ["link-ditto", "--expect-github-id", str(value)]
+            ).expect_github_id
+            == value
+        )
+    for value in ("0", "-1", "octocat", str(2**53)):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["link-ditto", "--expect-github-id", value])
 
 
 def test_interactive_json_keeps_confirmation_prompt_on_stderr(capsys) -> None:
