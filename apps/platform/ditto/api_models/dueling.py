@@ -282,6 +282,39 @@ class DuelingSeasonView(DuelingModel):
     """Validators elected to publish right now (full views only)."""
 
 
+class DuelingRotationSpend(DuelingModel):
+    """Rotation re-test leases started and their metered inference cost."""
+
+    runs: int = 0
+    """Leases started (one per validator re-score attempt)."""
+    priced_runs: int = 0
+    """Leases with an inference grant; the rest ended before any call."""
+    cost_usd: float = 0.0
+    """The grants' metered chat, embedding and decision cost: what the relay
+    booked, including runs that failed. Never an estimate."""
+
+
+class DuelingSeasonSpendView(DuelingModel):
+    season_id: UUID
+    season_index: int
+    opening: DuelingRotationSpend
+    """The re-tests the season queued for its opening cohort."""
+    catchup: DuelingRotationSpend
+    """The season-boundary catch-up re-tests it queued (``detail.catchup``)."""
+
+
+class DuelingRotationSpendView(DuelingModel):
+    """Opening rotation and catch-up spend side by side, so the catch-up's
+    incremental cost reads directly."""
+
+    last_24h_opening: DuelingRotationSpend
+    """Opening rotation leases started in the last 24 hours: dollars/day."""
+    last_24h_catchup: DuelingRotationSpend
+    """Catch-up leases started in the last 24 hours: dollars/day."""
+    seasons: list[DuelingSeasonSpendView] = Field(default_factory=list)
+    """The open season and the recent ones, newest first."""
+
+
 class AdminDuelingSeasonsResponse(DuelingModel):
     target: DuelingTargetView
     current: list[DuelingSeasonView]
@@ -295,6 +328,8 @@ class AdminDuelingSeasonsResponse(DuelingModel):
     them, so this should stay 0; any such row never ranks or pays."""
     confirmation_scores_without_dueling: int = 0
     """The same for bench v16+ continual-retest seed records."""
+    rotation_spend: DuelingRotationSpendView | None = None
+    """What season rotation re-tests really cost, opening and catch-up."""
 
 
 class DuelingSliceView(DuelingModel):

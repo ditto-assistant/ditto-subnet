@@ -94,6 +94,8 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "rounds_per_season": 1,
         "dueling_shadow_bench_version": None,
         "skip_unchanged_rounds": True,
+        "season_catchup_enabled": True,
+        "season_catchup_max_agents": 5,
         "frontier_weight": 1.0,
         "frontier_oracle_agent_id": None,
         "frontier_audit_cases": 3,

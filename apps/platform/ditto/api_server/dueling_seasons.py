@@ -30,7 +30,10 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
    score on the new set, and the champion's confirmation family re-anchors
    per ``(champion, bench_version, season)``. Scores of the season before
    stay provisional for one season, then expire from the authoritative
-   ledger (:mod:`ditto.db.queries.dueling_season_window`).
+   ledger (:mod:`ditto.db.queries.dueling_season_window`). Then a paid or
+   public top-five agent with no score in the season that just closed gets
+   one catch-up re-test on the new set (:func:`queue_catchup_retests`), so a
+   mid-season scorer does not expire unscored.
 4. **Close.** At ``closes_at_round`` (or on an audited rotation), or as soon
    as its bench version is neither active nor rolling out. Disabling dueling
    commits no new season but lets the open one finish. With
@@ -569,6 +572,11 @@ async def _open(
     if isinstance(fallback, str):
         _void(season, fallback)
         return f"void ({fallback})"
+    # Read before the season opens: opening advances the score window, and
+    # the agents a catch-up exists for drop out of the board with it.
+    catchup_candidates = await _catchup_candidates(
+        session, season, settings=resolved.settings
+    )
     block, block_hash = anchor
     season.anchor_block = block
     season.anchor_block_hash = block_hash.lower()
@@ -586,10 +594,19 @@ async def _open(
     }
     await session.flush()
     rotation = await queue_rotation_retests(session, season, now=now)
+    catchup = await queue_catchup_retests(
+        session,
+        season,
+        candidates=catchup_candidates,
+        settings=resolved.settings,
+        now=now,
+    )
+    await _log_rotation_spend(session, season, rotation=rotation, catchup=catchup)
     miners = sum(1 for column in columns if not column["public_default"])
     return (
         f"open ({miners} miner column(s)); "
-        f"{rotation.get('queued', 0)} rotation re-test(s) queued"
+        f"{rotation.get('queued', 0)} rotation re-test(s) queued; "
+        f"{catchup.get('queued', 0)} catch-up re-test(s) queued"
     )
 
 
@@ -672,6 +689,214 @@ async def queue_rotation_retests(
         )
     season.detail = {**(season.detail or {}), "rotation": rotation}
     return rotation
+
+
+CATCHUP_KEY = "catchup"
+"""``DuelingSeason.detail`` key: the season-boundary catch-up it queued."""
+
+
+@dataclass(frozen=True)
+class CatchupCandidates:
+    """Who the board held when the previous season closed, and who of them
+    had no score in it. Read before the window advances."""
+
+    closed_season_id: UUID | None
+    board: tuple[UUID, ...]
+    """Paid set (folded emission set), then the public top five, deduped."""
+    missing: tuple[UUID, ...]
+    """``board`` members with no accepted score in the closed season, in
+    board order."""
+    error: str | None = None
+
+
+async def _catchup_candidates(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    settings: GeneratorCompetitionSettings,
+) -> CatchupCandidates:
+    """The season-boundary catch-up candidates for ``season`` (not yet open).
+
+    An agent scored after a season's opening cohort was picked holds scores
+    only in that season. They count one more season as provisional, then
+    expire at the next open, and nothing re-scores it on the way: it was not
+    in either opening cohort. Every paid or public top-five agent with no
+    score in the season that just closed is in that state, so it is read
+    here, while those scores still count. Never raises: a failed read is
+    recorded and queues nothing.
+    """
+    from ditto.db.queries.dueling_season_window import dueling_season_window
+
+    if season.shadow or not settings.season_catchup_enabled:
+        return CatchupCandidates(closed_season_id=None, board=(), missing=())
+    try:
+        async with session.begin_nested():
+            window = await dueling_season_window(session, season.bench_version)
+            closed = window.current if window is not None else None
+            if closed is None:
+                return CatchupCandidates(closed_season_id=None, board=(), missing=())
+            from ditto.api_server.continual_retest_settings import settings_from_row
+            from ditto.api_server.endpoints.validator import _current_retest_cohort
+            from ditto.db.models import Score
+            from ditto.db.queries.continual_retest_settings import (
+                latest_continual_retest_settings_revision,
+            )
+
+            retest_settings = settings_from_row(
+                await latest_continual_retest_settings_revision(session)
+            )
+            emission, wave, _cohort, _challengers = await _current_retest_cohort(
+                session,
+                canonical_version=season.bench_version,
+                settings=retest_settings,
+            )
+            board = tuple(
+                dict.fromkeys(
+                    [*(m.agent_id for m in emission), *(m.agent_id for m in wave)]
+                )
+            )
+            current = set(
+                await session.scalars(
+                    select(Score.agent_id).where(
+                        Score.agent_id.in_(board or (UUID(int=0),)),
+                        Score.bench_version == season.bench_version,
+                        Score.dueling_season_id == closed,
+                    )
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 - recorded, never blocks the open
+        logger.exception("dueling season %s: catch-up read failed", season.id)
+        return CatchupCandidates(
+            closed_season_id=None,
+            board=(),
+            missing=(),
+            error=f"{type(exc).__name__}: {exc}"[:500],
+        )
+    return CatchupCandidates(
+        closed_season_id=closed,
+        board=board,
+        missing=tuple(agent_id for agent_id in board if agent_id not in current),
+    )
+
+
+async def queue_catchup_retests(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    candidates: CatchupCandidates,
+    settings: GeneratorCompetitionSettings,
+    now: datetime,
+) -> dict[str, Any]:
+    """Queue one rotation re-test for each catch-up candidate, once.
+
+    Runs after :func:`queue_rotation_retests`: anyone the opening cohort
+    already re-scores is skipped, the rest (at most
+    ``season_catchup_max_agents``, board order) queue behind the cohort with
+    the same mechanics: the new set, the season's rotation seed, idempotent
+    per ``(season, agent, validator)``. Nothing else ever queues a catch-up,
+    so an agent gets at most one per season. Recorded on the season
+    (``detail.catchup``); caller commits.
+    """
+    from ditto.db.queries.score_retests import queue_dueling_rotation_retests
+
+    record: dict[str, Any] = {
+        "queued_at": now.isoformat(),
+        "enabled": settings.season_catchup_enabled,
+        "max_agents": settings.season_catchup_max_agents,
+    }
+    if season.shadow:
+        record["skipped"] = "shadow season"
+    elif not settings.season_catchup_enabled:
+        record["skipped"] = "season_catchup_enabled is off"
+    elif candidates.error is not None:
+        record["error"] = candidates.error
+    elif candidates.closed_season_id is None:
+        record["skipped"] = "no earlier season opened"
+    if set(record) & {"skipped", "error"}:
+        season.detail = {**(season.detail or {}), CATCHUP_KEY: record}
+        return record
+    rotation = (season.detail or {}).get("rotation") or {}
+    in_cohort = {str(member.get("agent_id")) for member in rotation.get("cohort", ())}
+    owed = [a for a in candidates.missing if str(a) not in in_cohort]
+    cap = settings.season_catchup_max_agents
+    agents, capped = owed[:cap], owed[cap:]
+    record.update(
+        closed_season_id=str(candidates.closed_season_id),
+        board=[str(agent_id) for agent_id in candidates.board],
+        in_opening_cohort=[str(a) for a in candidates.missing if str(a) in in_cohort],
+        agents=[str(agent_id) for agent_id in agents],
+        capped=[str(agent_id) for agent_id in capped],
+    )
+    if agents:
+        try:
+            async with session.begin_nested():
+                counts = await queue_dueling_rotation_retests(
+                    session,
+                    season_id=season.id,
+                    bench_version=season.bench_version,
+                    cohort=agents,
+                    now=now,
+                    catch_up=True,
+                    first_rank=len(rotation.get("cohort", ())),
+                )
+        except Exception as exc:  # noqa: BLE001 - recorded, never blocks the open
+            logger.exception("dueling season %s: catch-up re-tests failed", season.id)
+            record["error"] = f"{type(exc).__name__}: {exc}"[:500]
+        else:
+            record.update(counts)
+    season.detail = {**(season.detail or {}), CATCHUP_KEY: record}
+    return record
+
+
+async def _log_rotation_spend(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    rotation: dict[str, Any],
+    catchup: dict[str, Any],
+) -> None:
+    """One log line per season open: what it queued, and what the closed
+    season's opening rotation and catch-up re-tests really cost."""
+    from ditto.db.queries.dueling_rotation_spend import (
+        rotation_spend_by_season,
+        rotation_spend_since,
+    )
+    from ditto.db.queries.dueling_season_window import dueling_season_window
+
+    try:
+        async with session.begin_nested():
+            window = await dueling_season_window(session, season.bench_version)
+            closed = window.previous if window is not None else None
+            spent = (
+                None
+                if closed is None
+                else (await rotation_spend_by_season(session, [closed])).get(closed)
+            )
+            day = await rotation_spend_since(
+                session, (season.opened_at or datetime.now(UTC)) - timedelta(days=1)
+            )
+    except Exception:  # noqa: BLE001 - a log line never blocks the open
+        logger.exception("dueling season %s: rotation spend read failed", season.id)
+        return
+    logger.info(
+        "dueling season %s v%s opened: %s rotation and %s catch-up re-test(s) "
+        "queued (catch-up agents %s, capped %s); closed season %s spent "
+        "opening %s run(s) $%.4f, catch-up %s run(s) $%.4f; last 24h opening "
+        "$%.4f/day, catch-up $%.4f/day",
+        season.season_index,
+        season.bench_version,
+        rotation.get("queued", 0),
+        catchup.get("queued", 0),
+        len(catchup.get("agents", ())),
+        len(catchup.get("capped", ())),
+        closed,
+        spent.opening.runs if spent else 0,
+        spent.opening.cost_usd if spent else 0.0,
+        spent.catchup.runs if spent else 0,
+        spent.catchup.cost_usd if spent else 0.0,
+        day.opening.cost_usd,
+        day.catchup.cost_usd,
+    )
 
 
 IDLE_EXTENSIONS_KEY = "idle_extensions"
