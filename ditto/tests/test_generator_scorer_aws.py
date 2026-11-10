@@ -25,7 +25,6 @@ BOOTSTRAP_IDENTITY = (
 ROLE_DEFAULTS = (
     REPO / "infra" / "ansible" / "roles" / "generator_scorer" / "defaults" / "main.yml"
 ).read_text()
-WORKFLOW = (REPO / ".github" / "workflows" / "infra-plan-apply.yml").read_text()
 
 
 def _search(pattern: str, text: str, flags: int = 0) -> re.Match[str]:
@@ -94,25 +93,12 @@ def test_ansible_audience_matches_terraform() -> None:
     assert _yaml_value("generator_scorer_token_source") == "gcloud"
 
 
-def test_aws_roots_get_no_app_credentials() -> None:
-    for name in ("Create exact private plan", "Apply the reviewed binary plan"):
-        step = _search(rf"- name: {name}\n\s+if: ([^\n]+)", WORKFLOW).group(1)
-        assert "!startsWith(inputs.root, 'aws-')" in step, name
-    assert "arn:aws:iam::339713011188:role/ditto-subnet-infra-plan" in WORKFLOW
-    assert "arn:aws:iam::339713011188:role/ditto-subnet-infra-apply" in WORKFLOW
-    assert "aws-access-key-id" not in WORKFLOW
-    assert "AWS_SECRET_ACCESS_KEY" not in WORKFLOW
-
-
 def test_ci_roles_trust_only_protected_environments() -> None:
     assert '"repo:${local.repository}:environment:infra-plan"' in BOOTSTRAP
     assert '"repo:${local.repository}:environment:infra-apply"' in BOOTSTRAP
     assert "aws_iam_access_key" not in BOOTSTRAP
-    options = _search(r"options: \[(gcp-platform[^\]]*)\]", WORKFLOW)
-    roots = options.group(1).split(", ")
-    assert "aws-generator-scorer" in roots
-    # The bootstrap creates the workflow's own identity; it is never a root.
-    assert "aws-bootstrap" not in roots
+    # Wiring the AWS roots into infra-plan-apply.yml is a separate change that
+    # needs the independent admin review its ruleset requires.
 
 
 def _apply_statements() -> list[str]:

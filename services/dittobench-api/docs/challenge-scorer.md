@@ -382,7 +382,9 @@ keeps scoring until step 7.
    exactly the pool, its `aws-ec2` provider, and one secret IAM member. The pool
    admin grant already exists while X.509 federation is on. Reject any other
    change.
-4. **Protected plan/apply, `root=aws-generator-scorer`.** Expect only creates:
+4. **Protected plan/apply, `root=aws-generator-scorer`.** The root becomes
+   selectable once the AWS roots are wired into `infra-plan-apply.yml`, a
+   separate change that needs the workflow's independent admin review. Expect only creates:
    the VPC and its subnet, gateway, routes, egress-only security group and its
    two rules, the transfer bucket and its settings, and one `t3.medium`. No IAM
    resource appears: the root reads the bootstrap profile and fails the plan
