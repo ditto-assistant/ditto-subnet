@@ -5765,7 +5765,7 @@ CREATE TABLE public.screener_capacity_events (
     detail text NOT NULL,
     controller_epoch text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT ck_screener_capacity_events_screener_capacity_events_pr_1b0c CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['gcp'::text, 'targon'::text, 'hetzner'::text, 'home'::text, 'test'::text]))))
+    CONSTRAINT ck_screener_capacity_events_screener_capacity_events_pr_1b0c CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['gcp'::text, 'targon'::text, 'hetzner'::text, 'aws'::text, 'home'::text, 'test'::text]))))
 );
 
 
@@ -5949,7 +5949,7 @@ CREATE TABLE public.screener_node_bootstrap_grants (
     consumed_at timestamp with time zone,
     registration_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT ck_screener_node_bootstrap_grants_screener_node_bootstr_17ce CHECK ((provider = ANY (ARRAY['gcp'::text, 'targon'::text, 'hetzner'::text, 'home'::text, 'test'::text]))),
+    CONSTRAINT ck_screener_node_bootstrap_grants_screener_node_bootstr_17ce CHECK ((provider = ANY (ARRAY['gcp'::text, 'targon'::text, 'hetzner'::text, 'aws'::text, 'home'::text, 'test'::text]))),
     CONSTRAINT ck_screener_node_bootstrap_grants_screener_node_bootstr_1f2d CHECK ((length(token_hash) = 64)),
     CONSTRAINT ck_screener_node_bootstrap_grants_screener_node_bootstr_3f9c CHECK (((length(node_id) >= 1) AND (length(node_id) <= 63))),
     CONSTRAINT ck_screener_node_bootstrap_grants_screener_node_bootstr_e547 CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
@@ -6025,7 +6025,7 @@ CREATE TABLE public.screener_nodes (
     CONSTRAINT ck_screener_nodes_screener_nodes_image_reference_check CHECK (((image_reference IS NULL) OR (image_reference ~ '^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_screener_nodes_screener_nodes_node_id_length_check CHECK (((length(node_id) >= 1) AND (length(node_id) <= 63))),
     CONSTRAINT ck_screener_nodes_screener_nodes_previous_token_hash_check CHECK (((previous_token_hash IS NULL) OR (length(previous_token_hash) = 64))),
-    CONSTRAINT ck_screener_nodes_screener_nodes_provider_check CHECK ((provider = ANY (ARRAY['gcp'::text, 'targon'::text, 'hetzner'::text, 'home'::text, 'test'::text]))),
+    CONSTRAINT ck_screener_nodes_screener_nodes_provider_check CHECK ((provider = ANY (ARRAY['gcp'::text, 'targon'::text, 'hetzner'::text, 'aws'::text, 'home'::text, 'test'::text]))),
     CONSTRAINT ck_screener_nodes_screener_nodes_replay_capacity_check CHECK (((verification_replay_capacity >= 0) AND (verification_replay_capacity <= 4))),
     CONSTRAINT ck_screener_nodes_screener_nodes_status_check CHECK ((status = ANY (ARRAY['active'::text, 'draining'::text, 'quarantined'::text, 'revoked'::text]))),
     CONSTRAINT ck_screener_nodes_screener_nodes_token_hash_check CHECK ((length(token_hash) = 64))
@@ -6835,7 +6835,7 @@ CREATE TABLE public.submission_image_builds (
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_270a CHECK (((output_size_bytes IS NULL) OR ((output_size_bytes >= 1) AND (output_size_bytes <= '4294967296'::bigint)))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_4205 CHECK (((output_sha256 IS NULL) OR (output_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_64a7 CHECK (((output_image_id IS NULL) OR (output_image_id ~ '^sha256:[0-9a-f]{64}$'::text))),
-    CONSTRAINT ck_submission_image_builds_submission_image_builds_prov_dba8 CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text])))),
+    CONSTRAINT ck_submission_image_builds_submission_image_builds_prov_dba8 CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text, 'aws'::text])))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_runt_165c CHECK ((runtime_status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'skipped'::text]))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_runt_7180 CHECK (((runtime_image_reference IS NULL) OR (runtime_image_reference ~ '^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'canceled'::text, 'consumed'::text]))),
@@ -6940,7 +6940,7 @@ CREATE TABLE public.submission_source_reviews (
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__43cb CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'canceled'::text, 'consumed'::text]))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__4bdc CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__8b37 CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__f22b CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text])))),
+    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__f22b CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text, 'aws'::text])))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__fa74 CHECK (((attempt_count >= 0) AND (attempt_count <= 3)))
 );
 
@@ -7338,7 +7338,7 @@ CREATE TABLE public.trusted_image_builds (
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_component_check CHECK ((component = 'screener'::text)),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_digest_check CHECK (((image_digest IS NULL) OR (image_digest ~ '^sha256:[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_environment_check CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
-    CONSTRAINT ck_trusted_image_builds_trusted_image_builds_provider_check CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text])))),
+    CONSTRAINT ck_trusted_image_builds_trusted_image_builds_provider_check CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text, 'aws'::text])))),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_source_sha_check CHECK ((source_sha ~ '^[0-9a-f]{40}$'::text)),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'fallback_required'::text, 'canceled'::text])))
 );

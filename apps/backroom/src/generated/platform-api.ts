@@ -35417,7 +35417,7 @@ export interface components {
             /** Protocol Version */
             protocol_version: number;
             /** Provider */
-            provider?: ("gcp" | "targon" | "hetzner" | "home" | "test") | null;
+            provider?: ("gcp" | "targon" | "hetzner" | "aws" | "home" | "test") | null;
             /**
              * Reported At
              * Format: date-time
@@ -35765,7 +35765,7 @@ export interface components {
             /** Output Size Bytes */
             output_size_bytes?: number | null;
             /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
+            provider?: ("targon" | "gcp" | "hetzner" | "aws") | null;
             /** Started At */
             started_at?: string | null;
             /**
@@ -39356,7 +39356,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /** Reason */
@@ -39376,7 +39376,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
         };
@@ -39404,7 +39404,7 @@ export interface components {
             /** Node Id */
             node_id?: string | null;
             /** Provider */
-            provider?: ("gcp" | "targon" | "hetzner" | "home" | "test") | null;
+            provider?: ("gcp" | "targon" | "hetzner" | "aws" | "home" | "test") | null;
         };
         /** ScreenerCapacityEventView */
         ScreenerCapacityEventView: {
@@ -39427,7 +39427,7 @@ export interface components {
             /** Node Id */
             node_id?: string | null;
             /** Provider */
-            provider?: ("gcp" | "targon" | "hetzner" | "home" | "test") | null;
+            provider?: ("gcp" | "targon" | "hetzner" | "aws" | "home" | "test") | null;
         };
         /** ScreenerCapacitySnapshotRequest */
         ScreenerCapacitySnapshotRequest: {
@@ -39613,7 +39613,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /** Ready */
@@ -39936,7 +39936,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /**
@@ -40032,7 +40032,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            provider: "gcp" | "targon" | "hetzner" | "aws" | "home" | "test";
             /** Provider Resource Id */
             provider_resource_id: string;
             /**
@@ -40226,7 +40226,7 @@ export interface components {
             /** Node Id */
             node_id?: string | null;
             /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
+            provider?: ("targon" | "gcp" | "hetzner" | "aws") | null;
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /** Status */
@@ -40248,7 +40248,7 @@ export interface components {
              *       "gcp"
              *     ]
              */
-            build_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            build_provider_priority: ("hetzner" | "aws" | "targon" | "gcp")[];
             /**
              * Gce Overflow Backlog Multiplier
              * @default 3
@@ -40277,14 +40277,14 @@ export interface components {
              *       "gcp"
              *     ]
              */
-            runtime_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            runtime_provider_priority: ("hetzner" | "aws" | "targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
              *       "gcp"
              *     ]
              */
-            source_review_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            source_review_provider_priority: ("hetzner" | "aws" | "targon" | "gcp")[];
         };
         /** ScreenerProviderSettingsControl */
         ScreenerProviderSettingsControl: {
@@ -43643,7 +43643,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "targon" | "gcp" | "hetzner";
+            provider: "targon" | "gcp" | "hetzner" | "aws";
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /**
@@ -43692,7 +43692,7 @@ export interface components {
             /** Lease Expires At */
             lease_expires_at?: string | null;
             /** Provider */
-            provider?: ("targon" | "gcp" | "hetzner") | null;
+            provider?: ("targon" | "gcp" | "hetzner" | "aws") | null;
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /** Reason */

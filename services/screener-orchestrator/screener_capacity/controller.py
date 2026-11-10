@@ -1,9 +1,10 @@
 """Fenced GCE outage and backlog-overflow capacity reconciler.
 
-The audited Hetzner node handles normal screening. GCE stays at zero until that
-node is unavailable or unclaimed demand exceeds its configured backlog
-multiple. A GCE worker claims new work and never retries a terminal Hetzner
-lane. Retired nested-Docker Targon workers are never recreated here.
+The audited primary node (fixed-cost Hetzner or on-demand AWS EC2) handles
+normal screening. GCE stays at zero until that node is unavailable or unclaimed
+demand exceeds its configured backlog multiple. A GCE worker claims new work and
+never retries a terminal primary lane. Retired nested-Docker Targon workers are
+never recreated here.
 """
 
 from __future__ import annotations
@@ -25,6 +26,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
+
+ProviderName = Literal["hetzner", "aws", "targon", "gcp"]
+# Providers whose enrolled node can be the primary in front of GCE overflow.
+PRIMARY_PROVIDERS: tuple[ProviderName, ...] = ("hetzner", "aws")
 
 
 class ControllerError(RuntimeError):
@@ -61,9 +66,9 @@ class OverflowPolicy:
 @dataclass(frozen=True)
 class ProviderRouting:
     revision: int
-    runtime_provider_priority: tuple[Literal["hetzner", "targon", "gcp"], ...]
-    source_review_provider_priority: tuple[Literal["hetzner", "targon", "gcp"], ...]
-    build_provider_priority: tuple[Literal["hetzner", "targon", "gcp"], ...]
+    runtime_provider_priority: tuple[ProviderName, ...]
+    source_review_provider_priority: tuple[ProviderName, ...]
+    build_provider_priority: tuple[ProviderName, ...]
     overflow: OverflowPolicy = OverflowPolicy(
         enabled=False,
         primary_node_id=None,
@@ -84,15 +89,20 @@ class ProviderRouting:
         )
 
     @property
-    def hetzner_first(self) -> bool:
-        return all(
-            priority and priority[0] == "hetzner"
+    def primary_provider(self) -> ProviderName | None:
+        """The primary provider every lane names first, if they agree on one."""
+        first = {
+            priority[0] if priority else None
             for priority in (
                 self.build_provider_priority,
                 self.runtime_provider_priority,
                 self.source_review_provider_priority,
             )
-        )
+        }
+        if len(first) != 1:
+            return None
+        (provider,) = first
+        return provider if provider in PRIMARY_PROVIDERS else None
 
 
 @dataclass(frozen=True)
@@ -138,6 +148,9 @@ def gce_overflow_target(
     if jobs_per_slot < 1 or global_cap < 0:
         raise ValueError("capacity inputs are out of range")
     primary = primary_node or {}
+    # Reason codes name the primary's provider: HETZNER_* for the fixed-cost
+    # host, AWS_* for the on-demand EC2 host.
+    label = (routing.primary_provider or "hetzner").upper()
     primary_ready = primary.get("status") == "active" and primary.get("ready") is True
     screening_concurrency = int(primary.get("screening_concurrency", 0))
     admission_open = primary.get("admission_open")
@@ -149,9 +162,9 @@ def gce_overflow_target(
     ):
         # A known operator closure holds through any host health change, so a
         # failed heartbeat cannot reopen screening through GCE.
-        return 0, "HETZNER_PRIMARY_ADMISSION_CLOSED"
+        return 0, f"{label}_PRIMARY_ADMISSION_CLOSED"
     if admission_open is None:
-        return 0, "HETZNER_PRIMARY_UNKNOWN"
+        return 0, f"{label}_PRIMARY_UNKNOWN"
     if routing.gcp_first:
         return min(global_cap, demand.desired), "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
     if any(
@@ -166,23 +179,23 @@ def gce_overflow_target(
         # but only behind the same operator stop: never for an unknown primary.
         return min(global_cap, demand.desired), "RETIRED_PROVIDER_ROUTING"
     policy = routing.overflow
-    if not routing.hetzner_first or not policy.enabled:
+    if routing.primary_provider is None or not policy.enabled:
         return 0, "GCE_OVERFLOW_DISABLED"
     cap = min(global_cap, policy.max_instances)
     if cap == 0:
         return 0, "GCE_OVERFLOW_CAPPED_AT_ZERO"
     if not primary_ready:
-        return min(cap, demand.desired), "HETZNER_PRIMARY_UNAVAILABLE"
+        return min(cap, demand.desired), f"{label}_PRIMARY_UNAVAILABLE"
     threshold = max(
         policy.min_backlog,
         screening_concurrency * policy.backlog_multiplier,
     )
     if demand.runnable <= threshold:
-        return 0, "HETZNER_PRIMARY_HANDLING_BASE_LOAD"
+        return 0, f"{label}_PRIMARY_HANDLING_BASE_LOAD"
     overflow_jobs = demand.runnable - threshold
     return (
         min(cap, math.ceil(overflow_jobs / jobs_per_slot)),
-        "HETZNER_BACKLOG_OVERFLOW",
+        f"{label}_BACKLOG_OVERFLOW",
     )
 
 
@@ -264,22 +277,20 @@ def _parse_provider_routing(body: object) -> ProviderRouting:
     if not isinstance(revision, int) or revision < 0 or not isinstance(values, dict):
         raise ControllerError("Platform provider settings response is invalid")
 
-    def priority(
-        field: str,
-    ) -> tuple[Literal["hetzner", "targon", "gcp"], ...]:
+    def priority(field: str) -> tuple[ProviderName, ...]:
         raw = values.get(field)
         if (
             not isinstance(raw, list)
             or not raw
             or not all(
-                isinstance(item, str) and item in {"hetzner", "targon", "gcp"}
+                isinstance(item, str) and item in {"hetzner", "aws", "targon", "gcp"}
                 for item in raw
             )
             or len(raw) != len(set(raw))
             or "gcp" not in raw
         ):
             raise ControllerError("Platform provider priority is invalid")
-        return cast(tuple[Literal["hetzner", "targon", "gcp"], ...], tuple(raw))
+        return cast(tuple[ProviderName, ...], tuple(raw))
 
     try:
         overflow = OverflowPolicy(
@@ -839,7 +850,7 @@ def _plan_gce_scale_in(
 
     Runs after the fenced renew. A GCE worker may have claimed since the first
     inventory read, so leases are read again here. At zero a ready,
-    Hetzner-primary route's renew withdraws overflow claims only until its
+    primary-first route's renew withdraws overflow claims only until its
     watchdog lease expires. A GCP-first route or an unready snapshot cannot
     fence them even temporarily. Both zero and partial scale-in therefore
     wait for a claim fence that outlives the physical GCE mutation.
@@ -1065,7 +1076,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         events.append(
             {
                 "event_type": "fallback_reason_changed",
-                "provider": "hetzner",
+                "provider": provider_routing.primary_provider or "hetzner",
                 "detail": f"{last_reason} -> {reason}",
             }
         )
@@ -1156,7 +1167,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 claims_fenced_at_zero=(
                     starting_provider_ready
                     and any(
-                        priority[0] == "hetzner"
+                        priority[0] in PRIMARY_PROVIDERS
                         for priority in (
                             provider_routing.build_provider_priority,
                             provider_routing.runtime_provider_priority,
