@@ -5,7 +5,11 @@ name the same identities in four places. These checks fail when one drifts.
 """
 
 import re
+import subprocess
 from pathlib import Path
+
+import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 TF = REPO / "infra" / "terraform"
@@ -244,3 +248,29 @@ def test_apply_role_cannot_write_the_federated_scorer_identity() -> None:
     assert 'resource "aws_iam_' not in AWS_MAIN
     assert 'data "aws_iam_instance_profile" "scorer"' in AWS_MAIN
     assert "self.role_name == local.scorer_role_name" in AWS_MAIN
+
+
+def test_gcloud_probe_runs_in_check_mode() -> None:
+    tasks = yaml.safe_load(
+        (
+            REPO / "infra/ansible/roles/generator_scorer/tasks/token-aws-wif.yml"
+        ).read_text()
+    )
+    probe = next(
+        task for task in tasks if task["name"] == "Check for the Google Cloud CLI"
+    )
+    # The install guard reads its rc, which a skipped check-mode task lacks.
+    assert probe["check_mode"] is False
+    assert probe["failed_when"] is False
+
+
+@pytest.mark.parametrize("arguments", [["--aply"], ["--apply", "extra"], ["apply"]])
+def test_state_bucket_script_rejects_unknown_arguments(arguments: list[str]) -> None:
+    script = REPO / "infra/terraform/stacks/aws-bootstrap/create-state-bucket.sh"
+    # Only rejected argument lists are run here, so no AWS command executes.
+    result = subprocess.run(
+        ["bash", str(script), *arguments], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 2
+    assert "usage:" in result.stderr
+    assert result.stdout == ""

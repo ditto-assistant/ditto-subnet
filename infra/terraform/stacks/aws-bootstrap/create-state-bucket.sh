@@ -14,10 +14,21 @@ ACCOUNT_ID=339713011188
 REGION=us-east-1
 BUCKET="ditto-subnet-tfstate-${ACCOUNT_ID}"
 
+# No argument prints the commands (dry run); exactly --apply runs them. Any
+# other argument is a usage error, so a typo can never look like success.
 apply=false
-if [ "${1:-}" = "--apply" ]; then
-  apply=true
+if [ "$#" -gt 1 ]; then
+  echo "usage: $0 [--apply]" >&2
+  exit 2
 fi
+case "${1:-}" in
+  "") ;;
+  --apply) apply=true ;;
+  *)
+    echo "usage: $0 [--apply]" >&2
+    exit 2
+    ;;
+esac
 
 run() {
   if $apply; then

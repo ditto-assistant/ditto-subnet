@@ -19,6 +19,8 @@
   register: generator_scorer_gcloud_check
   changed_when: false
   failed_when: false
+  # Read-only probe: run it in --check too, so the install guard has an rc.
+  check_mode: false
 
 - name: Install the Google Cloud CLI
   when: generator_scorer_gcloud_check.rc != 0
