@@ -455,3 +455,123 @@ def test_ports_of_released_python_and_same_owner_namespaces_do_not_flag() -> Non
     assert refined.matches[0].probable_same_owner
     # The same namespace named after the *source* excuses nothing.
     assert refine_released(raw, acme_items, frozenset(), owner_names=["porter"]).flagged
+
+
+def test_one_string_spelled_two_ways_normalizes_alike() -> None:
+    from ditto.api_server.distinctive_content import file_items
+
+    def texts(source: str, constants: dict[str, str] | None = None) -> set[str]:
+        return {i.text for i in file_items("app/kinds.py", source.encode(), constants)}
+
+    raw = (
+        'CALENDAR = re.compile(r"\\b(block out|slot in|pencil in)\\b'
+        '[^.]{0,40}\\bfor me\\b")\n'
+    )
+    escaped = (
+        "ALMANAC = re.compile(\n"
+        '    "\\\\b(block out|slot "\n'
+        '    "in|pencil in)\\\\b[^.]{0,40}\\\\bfor me\\\\b"\n'
+        ")\n"
+    )
+    assert texts(raw) == texts(escaped)
+    assert "block out slot in pencil in for me" in texts(raw)
+
+    # f-string code is code: a renamed variable must not read as prose, and a
+    # bare constant still resolves.
+    def line(var: str) -> str:
+        return (
+            f'line = f"{{index}}. {{{var}.name}} '
+            f'{{json.dumps({var}.args, ensure_ascii=False)}} done"\n'
+        )
+
+    assert texts(line("receipt")) == texts(line("voucher"))
+    assert not any("dumps" in t for t in texts(line("voucher")))
+    constant = 'NOTE = f"Record {BLOCKED} until the owner signs off."\n'
+    resolved = texts(constant, {"BLOCKED": "blocked before execution"})
+    assert "record blocked before execution until the owner signs off" in resolved
+
+
+def test_renamed_port_of_released_agent_from_another_owner_does_not_flag() -> None:
+    """A port that renames a released agent's code and respells its regexes.
+
+    Owner A ports the released agent (raw-string regexes, plain names) to
+    escaped-string regexes and synonym names; owner B uploads A's port. The
+    regex text and f-string code are released content in another spelling;
+    what B shares with A beyond that is A's renames.
+    """
+    from ditto.api_server.unreleased_copy import refine_released, released_shingles
+
+    words = [
+        "block out|slot in|book|pencil in",
+        "search your tools|search your tool registry|which of your tools",
+        "for the whole app|make the app dark|switch the app over",
+        "kick off|start run|trigger|launch the saved workflow",
+        "in parallel|simultaneously|side by side|concurrently",
+        "latest news|fresh headlines|what are people saying",
+    ] * 4
+    released = "".join(
+        f'KIND_{i} = re.compile(r"\\b({w})\\b[^.]{{0,40}}\\bfor me {i}\\b")\n'
+        f'NOTE_{i} = f"{{index}}. {{receipt.name}} {{json.dumps(receipt.args)}} '
+        f'for case number {i} today"\n'
+        for i, w in enumerate(words)
+    )
+    port = "".join(
+        f'GENRE_{i} = _regexp(\n    "\\\\b({w})\\\\b[^.]{{0,40}}"\n'
+        f'    "\\\\bfor me {i}\\\\b"\n)\n'
+        f'MEMO_{i} = f"{{index}}. {{voucher.name}} '
+        f"{{json.dumps(voucher.args, ensure_ascii=False)}} "
+        f'for case number {i} today"\n'
+        for i, w in enumerate(words)
+    )
+    base, base_items = _agent(
+        _tar({"app/kinds.py": released}), "owner-base", 0, released=1
+    )
+    first, _ = _agent(_tar({"agentd/genres.py": port}), "owner-first", 2)
+    second, second_items = _agent(_tar({"agentd/genres.py": port}), "owner-second", 3)
+    signal = evaluate(second, [base, first, second], threshold=40)
+    refined = refine_released(
+        signal, second_items, released_shingles(base_items.values())
+    )
+    assert not refined.flagged
+    assert all(
+        sum(n for k, n in m.shared_by_kind.items() if k not in {"ident", "short"}) == 0
+        for m in refined.matches
+    )
+
+
+def test_public_corpus_resolves_kit_constants_across_files(tmp_path) -> None:
+    """A kit constant interpolated in another file is public once resolved."""
+    import importlib.util
+    import subprocess
+    from pathlib import Path
+
+    from ditto.api_server import distinctive_content as dc
+
+    script = Path(__file__).parents[3] / "scripts" / "build_public_items.py"
+    spec = importlib.util.spec_from_file_location("build_public_items", script)
+    assert spec is not None and spec.loader is not None
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+
+    kit = {
+        "app/notes.py": 'BLOCKED = "blocked before execution by the kit"\n',
+        "app/lane.py": (
+            "from app.notes import BLOCKED\n"
+            'NOTE = f"Record {BLOCKED} until the owner signs it off today."\n'
+        ),
+    }
+    for path, text in kit.items():
+        target = tmp_path / "miners" / "kit" / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "kit"], check=True)
+
+    public = builder.collect(tmp_path, ("miners",), dc)
+    shipped = extract_items(_tar(kit))
+    assert shipped is not None
+    resolved = "record blocked before execution by the kit until the owner signs it off"
+    assert any(resolved in item.text for item in shipped.items.values())
+    assert set(shipped.items) <= public

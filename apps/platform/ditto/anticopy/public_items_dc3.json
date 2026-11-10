@@ -1,6 +1,6 @@
 {
-  "version": "dc2",
-  "items": 313537,
+  "version": "dc3",
+  "items": 317546,
   "sources": [
     {
       "repo": "ditto-assistant/ditto-subnet",
@@ -8,14 +8,14 @@
         "miners",
         "research/dittobench-datagen"
       ],
-      "head": "fe1bec1b40928144083bf7f23022eaa5330d64df"
+      "head": "ef3a1d766a99603541218786f34877a0bc8d0b50"
     },
     {
       "repo": "ditto-assistant/ditto-harness",
       "paths": [
         "."
       ],
-      "head": "f63422f459df2c9e181f389ec89b0b900293b4d5"
+      "head": "fc051dcf428ee67367b330592676f0e2aec52047"
     },
     {
       "repo": "ditto-assistant/dittobench-starter-kit",
@@ -29,7 +29,7 @@
       "paths": [
         "."
       ],
-      "head": "36ad1b5f0d15beb252eeca222dde1660aa22dba9"
+      "head": "c168a2593abe8e2da1b72dd5f38493f1e86dc39e"
     },
     {
       "tree": "cpython-3.12.13-macos-aarch64-none/lib/python3.12"
