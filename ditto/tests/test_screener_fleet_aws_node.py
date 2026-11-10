@@ -848,9 +848,16 @@ def test_full_render_hetzner_defaults_are_unchanged() -> None:
     rendered = _render_role(HETZNER)
 
     assert "SCREENER_NODE_PROVIDER=hetzner\n" in rendered["fleet.env"]
+    # Idle exit stays opt-in: Hetzner never sets it, so status 85 never occurs
+    # there, even though every worker unit now leaves an idle exit down.
     assert "SCREENER_IDLE_EXIT_SECONDS" not in rendered["fleet.env"]
-    assert "RestartPreventExitStatus" not in rendered["ditto-screener-worker@.service"]
-    assert "SuccessExitStatus" not in rendered["ditto-screener-worker@.service"]
+    worker = rendered["ditto-screener-worker@.service"].splitlines()
+    assert "RestartPreventExitStatus=85" in worker
+    assert "SuccessExitStatus=85" in worker
+    assert "Restart=always" in worker
+    # The template-only comment leaves no blank line between the commands.
+    restart = worker.index("Restart=always")
+    assert worker[restart - 1].startswith("ExecStart=")
     assert "OnBootSec=10min\n" in rendered["ditto-screener-fleet-auto-update.timer"]
     assert (
         "RandomizedDelaySec=3min\n"
