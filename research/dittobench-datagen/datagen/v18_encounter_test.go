@@ -263,7 +263,7 @@ func serveOnce(t *testing.T, srv *toolexec.Server, caseID string, call protocol.
 // vector (gen.TestV18KnownVector) hashes only what reaches the artifact, and
 // an encounter's mock world and grading sets are grader-only, so they get
 // their own pin. Changing either is a new bench version.
-const v18EncounterVector = "4fecf422ea825891667e869fa75e1c1d5d923dc8c96ae12d540d1b8013377edd"
+const v18EncounterVector = "f37ad38b141a26fd25af49b0edb7a791425bb36261c7fca48df398e15841fae8"
 
 func TestV18EncounterVector(t *testing.T) {
 	type pinned struct {

@@ -57,7 +57,15 @@ async fn jev_handler(State(stub): State<JevStub>, Json(body): Json<Value>) -> Js
                 let rest = 0.1 / (names.len().max(2) - 1) as f64;
                 let probs: serde_json::Map<String, Value> = names
                     .iter()
-                    .map(|n| ((*n).clone(), json!(if **n == pick { 0.9 } else { rest })))
+                    .map(|n| {
+                        // A sole option carries all the probability.
+                        let p = match (**n == pick, names.len()) {
+                            (true, 1) => 1.0,
+                            (true, _) => 0.9,
+                            _ => rest,
+                        };
+                        ((*n).clone(), json!(p))
+                    })
                     .collect();
                 answers.insert(
                     id.clone(),
@@ -311,6 +319,10 @@ fn an_oversized_menu_takes_the_hybrid_at_wire_version_9() {
     assert!(!enabled_from(None, 9, menu_tokens(&v17)));
     assert!(enabled_from(None, 9, menu_tokens(&v18)));
     assert!(!enabled_from(Some("0"), 9, menu_tokens(&v18)));
+    // The cheap bound never exceeds the full estimate, and already decides v18.
+    assert!(text_tokens_lower_bound(&v17) <= menu_tokens(&v17));
+    assert!(text_tokens_lower_bound(&v18) <= menu_tokens(&v18));
+    assert!(text_tokens_lower_bound(&v18) > CLASSIC_MENU_TOKEN_LIMIT);
 }
 
 #[test]
