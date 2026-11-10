@@ -95,10 +95,38 @@ The plan should import the five bucket resources and create the bucket
 lifecycle and TLS-only policy, the OIDC provider, and the two roles with their
 inline policies. The plan role reads state, takes the lock and reads
 the scorer's resources. The apply role can also write that state object, make
-region-scoped EC2 network/instance changes, manage only the
-`ditto-generator-scorer` role and instance profile (attaching only
-`AmazonSSMManagedInstanceCore`), and manage only the scorer's SSM transfer
-bucket. Widen it in this root, reviewed, when a new AWS root is added.
+region-scoped EC2 network/instance changes on resources carrying the
+`aws-generator-scorer` `stack` tag, read the `ditto-generator-scorer` role and
+instance profile and pass that role to EC2 only, and manage only the scorer's
+SSM transfer bucket. Widen it in this root, reviewed, when a new AWS root is
+added.
+
+### Generator scorer identity
+
+`aws-bootstrap` (`generator-scorer-identity.tf`), not the CI-applied
+`aws-generator-scorer` root, owns the `ditto-generator-scorer` instance role
+(EC2 trust, only `AmazonSSMManagedInstanceCore` attached) and its instance
+profile. GCP federation hands the scorer's Platform bearer to every session of
+that role name, so the CI apply role is explicitly denied every IAM write on
+the role and profile (create, delete, update, retrust, tag, policy and
+permissions-boundary changes, instance-profile membership); it cannot replace
+the role with one it trusts. The security groups it can change are only the
+ones it created with the stack tag: it can tag a security group only in the
+call that creates it.
+
+Create the identity before the first `aws-generator-scorer` apply, with an SSO
+administrator session:
+
+```bash
+terraform -chdir=infra/terraform/stacks/aws-bootstrap plan -out=bootstrap.tfplan \
+  -var enable_generator_scorer_identity=true
+terraform -chdir=infra/terraform/stacks/aws-bootstrap apply bootstrap.tfplan
+```
+
+Expect only the role, its SSM policy attachment and the instance profile. Keep
+the value in every later bootstrap plan (or the identity is destroyed). The
+scorer root reads the profile by name and fails its plan unless the profile
+wraps `ditto-generator-scorer`.
 
 ## `preview`
 

@@ -10,7 +10,7 @@ output "generator_scorer_private_ip" {
 
 output "generator_scorer_role_name" {
   description = "Instance role federated into GCP. gcp-platform's generator_scorer_aws_role_name must equal it."
-  value       = var.enable_generator_scorer ? aws_iam_role.scorer[0].name : ""
+  value       = var.enable_generator_scorer ? data.aws_iam_instance_profile.scorer[0].role_name : ""
 }
 
 output "generator_scorer_aws_account_id" {

@@ -353,30 +353,42 @@ Why these choices:
 An account administrator runs the commands in
 [`infra/docs/ci-bootstrap.md`](../../../infra/docs/ci-bootstrap.md#aws-roots)
 once. They create the S3 state bucket, the GitHub OIDC provider, and the plan
-and apply roles that `infra-plan-apply.yml` assumes. Nothing else is created
-out of band.
+and apply roles that `infra-plan-apply.yml` assumes. The same administrator
+root also creates the scorer's `ditto-generator-scorer` instance role and
+profile when `enable_generator_scorer_identity = true` (cutover step 2), so the
+CI apply role, which GCP federation would otherwise let mint the bearer's
+identity, can only read and pass it. Nothing else is created out of band.
 
 ### Cutover runbook
 
-Merging the Terraform creates nothing. `enable_generator_scorer` (AWS root) and
+Merging the Terraform creates nothing. `enable_generator_scorer_identity`
+(aws-bootstrap), `enable_generator_scorer` (AWS root) and
 `generator_scorer_aws_account_id` (gcp-platform) default to off. The GCE VM
-keeps scoring until step 6.
+keeps scoring until step 7.
 
 1. **Enable both sides in one PR.** In
    `infra/terraform/stacks/gcp-platform/prod.auto.tfvars` set
    `generator_scorer_aws_account_id = "339713011188"`. Add
    `infra/terraform/stacks/aws-generator-scorer/prod.auto.tfvars` with
    `enable_generator_scorer = true`.
-2. **Protected plan/apply, `root=gcp-platform`.** The saved plan should create
+2. **Bootstrap the instance identity.** An SSO administrator re-applies
+   `aws-bootstrap` with `-var enable_generator_scorer_identity=true`
+   ([`ci-bootstrap.md`](../../../infra/docs/ci-bootstrap.md#generator-scorer-identity)).
+   Expect only the `ditto-generator-scorer` role, its
+   `AmazonSSMManagedInstanceCore` attachment, the instance profile, and any
+   pending in-place update to the two CI role policies. Keep the value in
+   every later bootstrap plan.
+3. **Protected plan/apply, `root=gcp-platform`.** The saved plan should create
    exactly the pool, its `aws-ec2` provider, and one secret IAM member. The pool
    admin grant already exists while X.509 federation is on. Reject any other
    change.
-3. **Protected plan/apply, `root=aws-generator-scorer`.** Expect only creates:
-   the VPC and its subnet, gateway, routes and groups, the role, the instance
-   profile and SSM attachment, the transfer bucket and its settings, and one
-   `t3.medium`. Wait for the instance to appear as an SSM managed node
-   (`aws ssm describe-instance-information`).
-4. **Converge.** From a controller with an AWS session for the account,
+4. **Protected plan/apply, `root=aws-generator-scorer`.** Expect only creates:
+   the VPC and its subnet, gateway, routes, egress-only security group and its
+   two rules, the transfer bucket and its settings, and one `t3.medium`. No IAM
+   resource appears: the root reads the bootstrap profile and fails the plan
+   unless it wraps `ditto-generator-scorer`. Wait for the instance to appear as
+   an SSM managed node (`aws ssm describe-instance-information`).
+5. **Converge.** From a controller with an AWS session for the account,
    `boto3`/`botocore`, the `session-manager-plugin`, and
    `ansible-galaxy collection install -r infra/ansible/requirements.yml`:
 
@@ -389,7 +401,7 @@ keeps scoring until step 6.
 
    Use the commit the GCE host runs, so both hosts score identically. The
    converge fails closed if the federated read returns no usable bearer.
-5. **Verify a qualification run on AWS.** Both scorers now poll with the same
+6. **Verify a qualification run on AWS.** Both scorers now poll with the same
    bearer. Platform leases each item to one of them, so running both is safe.
    On the AWS host (`aws ssm start-session --target <instance-id>`), watch
    `journalctl -u ditto-generator-scorer -f` until it leases and posts a
@@ -398,11 +410,11 @@ keeps scoring until step 6.
    `get_generator_run`: finished, determinism check passed, and the same
    qualified/rejected outcome as the GCE host's last run of that source (a
    re-qualification draws fresh seeds, so compare outcomes, not bytes).
-6. **Stop the GCE unit.** On `ditto-generator-scorer-prod`, run
+7. **Stop the GCE unit.** On `ditto-generator-scorer-prod`, run
    `sudo systemctl disable --now ditto-generator-scorer`. Watch the AWS journal
    through at least one more qualification and, if one is open, one round
    lease.
-7. **Retire the GCE VM in two protected phases.** The compute module keeps
+8. **Retire the GCE VM in two protected phases.** The compute module keeps
    `prevent_destroy`, so a flag flip alone cannot delete it.
    1. Set `generator_scorer_gce_deletion_protection = false`. The saved plan
       must contain only that in-place update.
@@ -412,7 +424,7 @@ keeps scoring until step 6.
       `targets` naming those addresses and confirm the plan contains only
       their deletion.
 
-Rollback before step 7: `sudo systemctl enable --now ditto-generator-scorer`
+Rollback before step 8: `sudo systemctl enable --now ditto-generator-scorer`
 on the GCE VM, then stop the AWS unit or set `enable_generator_scorer = false`.
 Disabling the AWS root destroys the instance only after its
 `deletion_protection` is set false in a reviewed plan.

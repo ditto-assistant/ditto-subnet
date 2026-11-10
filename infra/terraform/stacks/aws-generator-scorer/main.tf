@@ -5,7 +5,7 @@
 # EC2 through modules/compute/aws so the Ansible role is unchanged. It executes
 # untrusted miner Go code in a networkless Docker sandbox, so it gets its own
 # VPC, no ingress at all, and an identity that can do nothing in AWS beyond
-# registering with SSM. Its one secret, the Platform bearer, stays in GCP
+# registering with SSM. That identity is created in aws-bootstrap, not here. Its one secret, the Platform bearer, stays in GCP
 # Secret Manager and is read through Workload Identity Federation from this
 # instance role (gcp-platform/generator-scorer.tf, generator_scorer_aws_*).
 #
@@ -36,13 +36,12 @@ resource "aws_vpc" "scorer" {
   tags                 = { Name = "${local.scorer_name}-vpc" }
 }
 
-# Strip the VPC's default security group so nothing can attach to it by
-# accident and inherit its allow-all-from-self rule.
-resource "aws_default_security_group" "scorer" {
-  count  = local.scorer_count
-  vpc_id = aws_vpc.scorer[0].id
-  tags   = { Name = "${local.scorer_name}-default-closed" }
-}
+# The VPC's AWS-created default security group is left as AWS made it
+# (allow all from itself, all egress) and untouched by Terraform: managing it
+# would mean tagging an existing group into the apply role's scope, and any
+# grant that allows that would reach every group in the region. Residual:
+# nothing attaches to it. The only instance in this VPC uses its own
+# egress-only group (module firewall_id), and the VPC holds no other ENIs.
 
 resource "aws_internet_gateway" "scorer" {
   count  = local.scorer_count
@@ -98,38 +97,21 @@ resource "aws_vpc_security_group_egress_rule" "scorer" {
 
 # --- identity ---------------------------------------------------------------
 
-data "aws_iam_policy_document" "scorer_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
+# The instance role and profile are created by an administrator in
+# aws-bootstrap (generator-scorer-identity.tf), never by this CI-applied root:
+# GCP federation trusts every session of the role name, so the identity that
+# applies this root must not be able to create, delete or retrust it. This
+# root only reads the profile and checks that it wraps the federated role.
+data "aws_iam_instance_profile" "scorer" {
+  count = local.scorer_count
+  name  = var.instance_profile_name
+
+  lifecycle {
+    postcondition {
+      condition     = self.role_name == local.scorer_role_name
+      error_message = "The scorer instance profile must wrap the ${local.scorer_role_name} role that GCP federation trusts. Apply aws-bootstrap with enable_generator_scorer_identity = true first."
     }
   }
-}
-
-# The instance role carries only SSM registration. It needs no S3 grant for
-# Ansible: the aws_ssm connection moves files through presigned URLs minted by
-# the operator's own session. In GCP it maps to a principal set that can read
-# exactly generator-scorer-token-prod.
-resource "aws_iam_role" "scorer" {
-  count                = local.scorer_count
-  name                 = local.scorer_role_name
-  description          = "Generator competition scorer host: SSM registration; federated to GCP for its one bearer."
-  assume_role_policy   = data.aws_iam_policy_document.scorer_assume.json
-  max_session_duration = 3600
-}
-
-resource "aws_iam_role_policy_attachment" "scorer_ssm" {
-  count      = local.scorer_count
-  role       = aws_iam_role.scorer[0].name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "scorer" {
-  count = local.scorer_count
-  name  = local.scorer_role_name
-  role  = aws_iam_role.scorer[0].name
 }
 
 # --- Ansible SSM transfer bucket ---------------------------------------------
@@ -229,7 +211,7 @@ module "generator_scorer" {
   assign_public_ip = true
   boot_disk_gb     = var.boot_disk_gb
 
-  instance_profile_name = aws_iam_instance_profile.scorer[0].name
+  instance_profile_name = data.aws_iam_instance_profile.scorer[0].name
   cpu_credits           = var.cpu_credits
   deletion_protection   = var.deletion_protection
 

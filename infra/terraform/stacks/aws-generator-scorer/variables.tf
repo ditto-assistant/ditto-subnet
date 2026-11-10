@@ -11,9 +11,15 @@ variable "region" {
 }
 
 variable "enable_generator_scorer" {
-  description = "Create the scorer's VPC, identity, SSM transfer bucket and instance. Off by default so merging this root creates nothing."
+  description = "Create the scorer's VPC, SSM transfer bucket and instance. Off by default so merging this root creates nothing. aws-bootstrap must already have created the instance identity."
   type        = bool
   default     = false
+}
+
+variable "instance_profile_name" {
+  description = "Instance profile created by aws-bootstrap (generator-scorer-identity.tf). This root only reads it; it must wrap the ditto-generator-scorer role."
+  type        = string
+  default     = "ditto-generator-scorer"
 }
 
 variable "availability_zone" {

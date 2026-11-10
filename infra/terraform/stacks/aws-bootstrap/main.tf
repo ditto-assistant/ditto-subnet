@@ -4,8 +4,10 @@
 # Owns the Terraform state bucket (imported after create-state-bucket.sh), the
 # GitHub Actions OIDC provider, and two roles that infra-plan-apply.yml
 # assumes: a plan role (read state, refresh managed resources, take the lock)
-# and an apply role (scoped mutation of the aws-generator-scorer root). There
-# are no long-lived AWS keys. Apply locally as an SSO administrator; this root
+# and an apply role (scoped mutation of the aws-generator-scorer root). It
+# also owns the generator scorer's instance identity
+# (generator-scorer-identity.tf), so no CI root can choose which role GCP
+# trusts with the scorer's bearer. There are no long-lived AWS keys. Apply locally as an SSO administrator; this root
 # is deliberately not selectable in the workflow, since it creates the
 # identity that authorizes the workflow itself.
 ###############################################################################
@@ -374,75 +376,41 @@ data "aws_iam_policy_document" "apply" {
       values   = ["136693071363", "099720109477"]
     }
   }
-  # The primary interface RunInstances creates is untagged, so it cannot be
-  # tag-scoped. Residual: a launch may name an existing untagged ENI; the new
-  # instance must still be scorer-tagged.
+  # The primary interface RunInstances creates is untagged when IAM evaluates
+  # the launch, so this grant cannot carry a stack-tag condition, and an
+  # aws:ResourceTag...IfExists condition would match every untagged ENI in the
+  # region anyway. Residual: a launch request may name an existing, unattached
+  # ENI anywhere in us-east-1 as the new instance's interface (bringing that
+  # ENI's subnet and security groups). That instance must still be created
+  # with the stack tag, from a Debian or Canonical image, with at most the
+  # scorer role, and becomes a tagged resource this role can terminate. This
+  # grant reaches no ENI API other than RunInstances, so it cannot modify,
+  # detach or delete an ENI. The scorer root never names an existing ENI.
   statement {
     sid       = "LaunchNetworkInterface"
     actions   = ["ec2:RunInstances"]
     resources = ["${local.ec2_arn}:network-interface/*"]
   }
 
-  # A new security group's default allow-all egress rule and the VPC default
-  # group's rules are created by AWS untagged; Terraform revokes them. The
-  # revoke call also authorizes the group itself, which must carry the stack
-  # tag (MutateTaggedScorerResources), so this does not reach other groups
-  # except through the TagScorerDefaultSecurityGroup residual below.
+  # A new security group's default allow-all egress rule is created by AWS
+  # untagged; Terraform revokes it. Revoke also authorizes the group itself,
+  # which must carry the stack tag (MutateTaggedScorerResources). The role can
+  # put that tag on a security group only while creating it (TagOnCreate);
+  # nothing lets it tag an existing group into scope, so these revokes reach
+  # only groups this role created. No grant here covers ingress.
   statement {
     sid       = "RevokeUntaggedDefaultRules"
     actions   = ["ec2:RevokeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress"]
     resources = ["${local.ec2_arn}:security-group-rule/*"]
   }
 
-  # aws_default_security_group tags the VPC's AWS-created default group before
-  # stripping its rules, so that one existing, untagged group must be taggable.
-  # Residual: this lets the role tag any security group in the region into
-  # scope, after which it can revoke its rules, add egress, or delete it. It
-  # still cannot add ingress anywhere or touch any other resource type.
-  statement {
-    sid       = "TagScorerDefaultSecurityGroup"
-    actions   = ["ec2:CreateTags"]
-    resources = ["${local.ec2_arn}:security-group/*"]
-    condition {
-      test     = "StringEquals"
-      variable = "aws:RequestTag/stack"
-      values   = [local.scorer_stack_tag]
-    }
-  }
-
-  # The scorer role's trust policy is a static ec2.amazonaws.com principal.
-  # GCP federation trusts every session of this role name, so a writable trust
-  # policy would let this role grant itself the scorer's Platform bearer.
-  statement {
-    sid = "ManageScorerIdentity"
-    actions = [
-      "iam:CreateRole", "iam:DeleteRole", "iam:UpdateRole", "iam:UpdateRoleDescription",
-      "iam:TagRole", "iam:UntagRole",
-      "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile",
-      "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
-      "iam:TagInstanceProfile", "iam:UntagInstanceProfile",
-    ]
-    resources = local.scorer_iam
-  }
-  statement {
-    sid       = "NeverRetrustScorerRole"
-    effect    = "Deny"
-    actions   = ["iam:UpdateAssumeRolePolicy"]
-    resources = ["arn:aws:iam::${local.account_id}:role/${local.scorer_role_name}"]
-  }
-
-  # The scorer role may carry exactly one managed policy, and no inline policy.
-  statement {
-    sid       = "AttachOnlySsmCore"
-    actions   = ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]
-    resources = ["arn:aws:iam::${local.account_id}:role/${local.scorer_role_name}"]
-    condition {
-      test     = "ArnEquals"
-      variable = "iam:PolicyARN"
-      values   = ["arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"]
-    }
-  }
-
+  # The scorer identity is created by this root as an administrator
+  # (generator-scorer-identity.tf). GCP federation trusts every session of
+  # this role name, so CI must not be able to choose its trust policy, either
+  # by rewriting it or by deleting and recreating the role. The apply role
+  # only reads the role and profile (ReadScorerIdentity) and passes the role
+  # to EC2; every IAM write on either is denied explicitly, so a later
+  # widening elsewhere in this policy cannot restore one.
   statement {
     sid       = "PassScorerRoleToEc2"
     actions   = ["iam:PassRole"]
@@ -452,6 +420,20 @@ data "aws_iam_policy_document" "apply" {
       variable = "iam:PassedToService"
       values   = ["ec2.amazonaws.com"]
     }
+  }
+  statement {
+    sid    = "NeverWriteScorerIdentity"
+    effect = "Deny"
+    actions = [
+      "iam:CreateRole", "iam:DeleteRole", "iam:UpdateRole", "iam:UpdateRoleDescription",
+      "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:UntagRole",
+      "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+      "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
+      "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile",
+      "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
+      "iam:TagInstanceProfile", "iam:UntagInstanceProfile",
+    ]
+    resources = local.scorer_iam
   }
 
   statement {
