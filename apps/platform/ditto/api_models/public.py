@@ -3681,6 +3681,96 @@ _REVIEW_CONCLUSION_DESCRIPTION = (
 )
 
 
+class PublicScoringWait(BaseModel):
+    """Why a submission that is owed scores is not being scored right now.
+
+    Set only on a row waiting for validators, and only when the hold is not
+    the fleet's: from bench v16 every scored run needs a generator slice from
+    an open dueling season, so while none is open validators turn the work
+    away and the row waits for the next season instead.
+    """
+
+    reason: Annotated[
+        Literal["dueling_season_closed"],
+        Field(
+            description=(
+                "'dueling_season_closed': no dueling season is open for the "
+                "bench version the queue scores at. Scoring resumes when the "
+                "next season opens at a generator-round boundary."
+            )
+        ),
+    ]
+    bench_version: Annotated[
+        int, Field(ge=1, description="The bench version waiting for a season.")
+    ]
+    next_season_opens_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "Approximate UTC time the next season opens: the start of the "
+                "round boundary it is due at, from the last observed chain "
+                "position and the nominal block time. Null when that cannot "
+                "be estimated; the season still opens at a round boundary."
+            ),
+        ),
+    ] = None
+    next_round_epoch: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=("Subnet epoch of that round boundary, or null when unknown."),
+        ),
+    ] = None
+
+
+class PublicDuelingSeasonState(BaseModel):
+    """Whether the bench version the queue scores at has an open season."""
+
+    open: Annotated[
+        bool,
+        Field(
+            description=(
+                "True while a dueling season is open for bench_version. While "
+                "false, validators cannot score bench_version and waiting "
+                "submissions resume when the next season opens."
+            )
+        ),
+    ]
+    bench_version: Annotated[
+        int,
+        Field(
+            ge=1,
+            description=(
+                "The bench version the queue scores at: the rollout's desired "
+                "version while a rollout is open, else the active version."
+            ),
+        ),
+    ]
+    next_opens_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "Approximate UTC time the next season opens, or null when open "
+                "or when it cannot be estimated."
+            ),
+        ),
+    ] = None
+    next_round_epoch: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Subnet epoch of the round boundary the next season opens at, "
+                "or null when open or unknown."
+            ),
+        ),
+    ] = None
+
+
 class PublicActivityEntry(BaseModel):
     """One submission's safe, public lifecycle state."""
 
@@ -4006,6 +4096,18 @@ class PublicActivityEntry(BaseModel):
                 "ordinary case and means the cause is mixed, unnamed or stale: "
                 "the row is unattributed rather than proven to be a fleet "
                 "failure, and must not be described as one."
+            ),
+        ),
+    ] = None
+    scoring_wait: Annotated[
+        PublicScoringWait | None,
+        Field(
+            default=None,
+            description=(
+                "Why this waiting submission is not being scored right now when "
+                "the hold is not the validator fleet's, e.g. no dueling season "
+                "is open. Null when nothing beyond the queue holds it, and on "
+                "every row that is not waiting for validators."
             ),
         ),
     ] = None
@@ -4729,6 +4831,10 @@ class PublicAgentSummary(BaseModel):
         float | None, Field(default=None, ge=0.0, le=1.0)
     ] = None
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
+    scoring_wait: PublicScoringWait | None = Field(
+        default=None,
+        description="Same as the activity row's scoring_wait.",
+    )
 
 
 class PublicValidatorRetry(BaseModel):
@@ -6045,3 +6151,11 @@ class PublicBenchRolloutResponse(BaseModel):
     )
     members: list[PublicBenchRolloutMember] = Field(default_factory=list)
     qualification_blockers: list[dict[str, str]] = Field(default_factory=list)
+    dueling_season: PublicDuelingSeasonState | None = Field(
+        default=None,
+        description=(
+            "Whether a dueling season is open for the bench version the queue "
+            "scores at, and roughly when the next one opens if not. From bench "
+            "v16 every scored run needs one. Null below bench v16."
+        ),
+    )

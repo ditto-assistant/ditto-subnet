@@ -1998,6 +1998,7 @@ class TestOperatorControls:
                 last_epoch_block=8560,
                 tempo=360,
                 block=8565,
+                next_epoch_block=8920,
             )
         )
         chain.get_finalized_block_hash = AsyncMock(return_value=_BLOCK)
@@ -2006,6 +2007,7 @@ class TestOperatorControls:
         assert "round 6: committed" in tick["actions"]
         assert tick["schedule"]["current_round"] == 5
         assert tick["schedule"]["next_round_epoch"] == 24
+        assert tick["schedule"]["next_epoch_block"] == 8920
         # Platform never publishes the commitment itself: it waits for elected
         # validators, and the loop has no publication step any more.
         async with session_maker() as session:

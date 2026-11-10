@@ -710,6 +710,16 @@ export interface RolloutMember {
   score_count?: number;
 }
 
+/** `dueling_season` on /public/bench/rollout: whether the bench version the
+ * queue scores at has an open dueling season. Null below bench v16. */
+export interface DuelingSeasonState {
+  open: boolean;
+  bench_version: number;
+  /** Approximate UTC time the next season opens; null when open or unknown. */
+  next_opens_at?: string | null;
+  next_round_epoch?: number | null;
+}
+
 export interface RolloutState {
   active_version?: number | null;
   desired_version?: number | null;
@@ -732,6 +742,7 @@ export interface RolloutState {
   qualification_blockers?: string[];
   qualification_converged?: boolean;
   canary_capable_validator_count?: number | null;
+  dueling_season?: DuelingSeasonState | null;
 }
 
 // ── Chain weights (/public/weights) ──────────────────────────

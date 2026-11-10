@@ -191,7 +191,9 @@ from ditto.api_models.public import (
     PublicCrownKing,
     PublicCrownRules,
     PublicDeferredReviewTrigger,
+    PublicDuelingSeasonState,
     PublicReviewConclusion,
+    PublicScoringWait,
     PublicScreeningInvariantAssessment,
     PublicScreeningReviewNote,
     ScorerLiveness,
@@ -252,6 +254,11 @@ from ditto.api_server.deferred_source_review import (
     verified_review_notes,
 )
 from ditto.api_server.dueling_breakdown import public_dueling_breakdown
+from ditto.api_server.dueling_season_gate import (
+    DuelingSeasonGate,
+    dueling_season_gate,
+    round_schedule,
+)
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
     ensure_current_efficiency_state,
@@ -6575,6 +6582,49 @@ def _public_activity_status(
     return status.value
 
 
+_SCORING_WAIT_STATUSES = frozenset({"waiting_validator", "below_score_floor"})
+
+
+def _public_scoring_wait(gate: DuelingSeasonGate | None) -> PublicScoringWait | None:
+    """What holds every waiting row beyond the queue, or None."""
+    if gate is None or gate.open:
+        return None
+    return PublicScoringWait(
+        reason="dueling_season_closed",
+        bench_version=gate.bench_version,
+        next_season_opens_at=gate.next_opens_at,
+        next_round_epoch=gate.next_round_epoch,
+    )
+
+
+def _public_dueling_season(
+    gate: DuelingSeasonGate | None,
+) -> PublicDuelingSeasonState | None:
+    if gate is None:
+        return None
+    return PublicDuelingSeasonState(
+        open=gate.open,
+        bench_version=gate.bench_version,
+        next_opens_at=gate.next_opens_at,
+        next_round_epoch=gate.next_round_epoch,
+    )
+
+
+async def _request_season_gate(
+    request: Request,
+    session: AsyncSession,
+    *,
+    now: datetime,
+    active_version: int | None = None,
+) -> DuelingSeasonGate | None:
+    return await dueling_season_gate(
+        session,
+        schedule=round_schedule(request.app.state),
+        now=now,
+        active_version=active_version,
+    )
+
+
 def _waiting_validator_agent_ids(
     rows: list[Any],
     *,
@@ -6771,8 +6821,13 @@ def _public_activity_response(
     strike_colliding_names: bool = True,
     avatar_urls: dict[str, str] | None = None,
     miner_uids: dict[str, int] | None = None,
+    scoring_wait: PublicScoringWait | None = None,
 ) -> PublicActivityResponse:
-    """Project activity from the same validated work set used by fleet health."""
+    """Project activity from the same validated work set used by fleet health.
+
+    ``scoring_wait`` holds every waiting row (one gate for the whole queue),
+    so it is attached to the waiting lanes only.
+    """
     claims = handle_claims or {}
     roots = owner_roots or {}
     uids = miner_uids or {}
@@ -7076,6 +7131,9 @@ def _public_activity_response(
                     if row_status in ("waiting_validator", "below_score_floor")
                     and row.agent.agent_id in retry_by_agent
                     else None
+                ),
+                scoring_wait=(
+                    scoring_wait if row_status in _SCORING_WAIT_STATUSES else None
                 ),
                 screening_policy_version=row.agent.screening_policy_version,
                 required_screening_policy_version=lease_screening_policy_floor(),
@@ -7693,6 +7751,11 @@ async def activity(
         strike_colliding_names=True,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
         miner_uids=registered_uids,
+        scoring_wait=_public_scoring_wait(
+            await _request_season_gate(
+                request, session, now=now, active_version=active_version
+            )
+        ),
     )
 
 
@@ -7965,6 +8028,11 @@ async def operations(
         strike_colliding_names=False,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
         miner_uids=registered_uids,
+        scoring_wait=_public_scoring_wait(
+            await _request_season_gate(
+                request, session, now=now, active_version=active_version
+            )
+        ),
     )
     validator_snapshot = _validator_heartbeats_response(
         rows=heartbeat_rows,
@@ -8374,6 +8442,15 @@ async def agent_summary(
             )
             for work in active_work
         ],
+        scoring_wait=(
+            _public_scoring_wait(
+                await _request_season_gate(
+                    request, session, now=now, active_version=active_version
+                )
+            )
+            if status in _SCORING_WAIT_STATUSES
+            else None
+        ),
     )
 
 
@@ -9808,7 +9885,7 @@ async def bench_glossary(response: Response) -> PublicBenchGlossaryResponse:
 
 @router.get("/bench/rollout")
 async def benchmark_rollout_state(
-    response: Response, session: SessionDep, generator: GeneratorDep
+    request: Request, response: Response, session: SessionDep, generator: GeneratorDep
 ) -> PublicBenchRolloutResponse:
     """Expose desired/active versions and the frozen cohort's exact progress.
 
@@ -9822,5 +9899,13 @@ async def benchmark_rollout_state(
     state = await rollout_state(session)
     state["qualification_blockers"] = await rolling_qualification_blockers(
         session, generator_run_size=generator.run_size
+    )
+    state["dueling_season"] = _public_dueling_season(
+        await _request_season_gate(
+            request,
+            session,
+            now=datetime.now(UTC),
+            active_version=int(state["active_version"]),
+        )
     )
     return PublicBenchRolloutResponse.model_validate(state)

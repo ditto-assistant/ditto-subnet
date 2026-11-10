@@ -25,6 +25,17 @@ export type ReviewConclusion =
   | "budget_exhausted"
   | "adverse_signal";
 
+/** Why a waiting submission is not being scored right now when the hold is
+ * not the validator fleet's (`scoring_wait` on activity rows and the agent
+ * summary). From bench v16 every scored run needs an open dueling season. */
+export interface ScoringWait {
+  reason: "dueling_season_closed";
+  bench_version: number;
+  /** Approximate UTC time the next season opens; null when unknown. */
+  next_season_opens_at?: string | null;
+  next_round_epoch?: number | null;
+}
+
 export interface ActivityEntry {
   agent_id?: string;
   name?: string | null;
@@ -59,6 +70,8 @@ export interface ActivityEntry {
   artifact_sha256?: string | null;
   screening_policy_version?: number | null;
   required_screening_policy_version?: number | null;
+  /** Set only on waiting rows held by something beyond the queue. */
+  scoring_wait?: ScoringWait | null;
 }
 
 interface ActivityPayloadBase<E> {

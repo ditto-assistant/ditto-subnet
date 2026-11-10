@@ -26327,6 +26327,8 @@ export interface components {
             last_error?: string | null;
             /** Mode */
             mode: string;
+            /** Next Epoch Block */
+            next_epoch_block?: number | null;
             /** Next Round Epoch */
             next_round_epoch?: number | null;
             /** Observed At */
@@ -31916,6 +31918,8 @@ export interface components {
              * @description Independent validator scores recorded so far.
              */
             score_count: number;
+            /** @description Why this waiting submission is not being scored right now when the hold is not the validator fleet's, e.g. no dueling season is open. Null when nothing beyond the queue holds it, and on every row that is not waiting for validators. */
+            scoring_wait?: components["schemas"]["PublicScoringWait"] | null;
             /**
              * Screening Attempt Id
              * @description Active screening lease, if any.
@@ -32193,6 +32197,8 @@ export interface components {
             score_composite?: number | null;
             /** Score Count */
             score_count: number;
+            /** @description Same as the activity row's scoring_wait. */
+            scoring_wait?: components["schemas"]["PublicScoringWait"] | null;
             /** Screening Reason */
             screening_reason?: string | null;
             /**
@@ -32730,6 +32736,8 @@ export interface components {
              * @description The bench_version being rolled out (equal to active when idle).
              */
             desired_version: number;
+            /** @description Whether a dueling season is open for the bench version the queue scores at, and roughly when the next one opens if not. From bench v16 every scored run needs one. Null below bench v16. */
+            dueling_season?: components["schemas"]["PublicDuelingSeasonState"] | null;
             /** Members */
             members?: components["schemas"]["PublicBenchRolloutMember"][];
             /**
@@ -33817,6 +33825,32 @@ export interface components {
         PublicDuelingSeasonList: {
             /** Seasons */
             seasons: components["schemas"]["PublicDuelingSeason"][];
+        };
+        /**
+         * PublicDuelingSeasonState
+         * @description Whether the bench version the queue scores at has an open season.
+         */
+        PublicDuelingSeasonState: {
+            /**
+             * Bench Version
+             * @description The bench version the queue scores at: the rollout's desired version while a rollout is open, else the active version.
+             */
+            bench_version: number;
+            /**
+             * Next Opens At
+             * @description Approximate UTC time the next season opens, or null when open or when it cannot be estimated.
+             */
+            next_opens_at?: string | null;
+            /**
+             * Next Round Epoch
+             * @description Subnet epoch of the round boundary the next season opens at, or null when open or unknown.
+             */
+            next_round_epoch?: number | null;
+            /**
+             * Open
+             * @description True while a dueling season is open for bench_version. While false, validators cannot score bench_version and waiting submissions resume when the next season opens.
+             */
+            open: boolean;
         };
         /**
          * PublicDuelingSlice
@@ -35824,6 +35858,38 @@ export interface components {
              * @description Second (audit) judge model id, if any.
              */
             judge_audit?: string | null;
+        };
+        /**
+         * PublicScoringWait
+         * @description Why a submission that is owed scores is not being scored right now.
+         *
+         *     Set only on a row waiting for validators, and only when the hold is not
+         *     the fleet's: from bench v16 every scored run needs a generator slice from
+         *     an open dueling season, so while none is open validators turn the work
+         *     away and the row waits for the next season instead.
+         */
+        PublicScoringWait: {
+            /**
+             * Bench Version
+             * @description The bench version waiting for a season.
+             */
+            bench_version: number;
+            /**
+             * Next Round Epoch
+             * @description Subnet epoch of that round boundary, or null when unknown.
+             */
+            next_round_epoch?: number | null;
+            /**
+             * Next Season Opens At
+             * @description Approximate UTC time the next season opens: the start of the round boundary it is due at, from the last observed chain position and the nominal block time. Null when that cannot be estimated; the season still opens at a round boundary.
+             */
+            next_season_opens_at?: string | null;
+            /**
+             * Reason
+             * @description 'dueling_season_closed': no dueling season is open for the bench version the queue scores at. Scoring resumes when the next season opens at a generator-round boundary.
+             * @constant
+             */
+            reason: "dueling_season_closed";
         };
         /**
          * PublicScreenerHeartbeat

@@ -1418,3 +1418,20 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Dueling-season pause (bench v16+): shown on the submissions and pipeline
+   pages while no season is open, so waiting rows read as waiting for the
+   next season rather than for validators. */
+.season-notice {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  color: var(--text-dim);
+  background: color-mix(in oklab, var(--warn) 9%, transparent);
+  border: 1px solid color-mix(in oklab, var(--warn) 34%, transparent);
+  border-radius: 9px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.season-notice strong {
+  color: var(--warn);
+}
