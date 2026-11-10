@@ -437,7 +437,18 @@ pub fn extract_candidates(texts: &[&str], limit: usize) -> Vec<String> {
             let token = raw.trim_matches(EDGE_PUNCT);
             let lower = token.to_ascii_lowercase();
             if lower.starts_with("http://") || lower.starts_with("https://") {
-                push(token.trim_end_matches(['.', ',']).to_string(), &mut out);
+                // Trailing punctuation goes, but a closing parenthesis the URL
+                // itself opened stays (".../Rust_(programming_language)").
+                let mut url = raw.trim_start_matches(EDGE_PUNCT);
+                while let Some(last) = url.chars().last() {
+                    let opened =
+                        last == ')' && url.matches(')').count() <= url.matches('(').count();
+                    if opened || !(EDGE_PUNCT.contains(&last) || last == '.') {
+                        break;
+                    }
+                    url = &url[..url.len() - last.len_utf8()];
+                }
+                push(url.to_string(), &mut out);
                 flush_caps(&mut caps, &mut out, &mut push);
                 continue;
             }
@@ -954,7 +965,10 @@ pub async fn run_case(
         }
     };
     let jev_top: Vec<String> = if plan.ranked_tools.is_empty() {
-        // No decision lane (or it failed): fall back to code-only selection.
+        // No decision lane, a failed one, or a menu pass where Jev rejected
+        // every tool although its own route was act: fall back to code-only
+        // selection, so an action request is never left without candidates.
+        // The model still decides whether to call any of them.
         v13::semantic_top_k(case.user_input, &non_memory, cfg.offer_k + 5)
     } else {
         plan.top_tools.clone()
