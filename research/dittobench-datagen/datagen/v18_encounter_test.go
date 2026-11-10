@@ -87,13 +87,22 @@ func TestV18EncountersAreAbsentBelowV18(t *testing.T) {
 func encounterOracle(tc protocol.ToolCase) []protocol.ObservedToolCall {
 	var calls []protocol.ObservedToolCall
 	for _, required := range tc.Encounter.Required {
-		values := append([]string(nil), required.Contains...)
-		if len(required.AnyContains) > 0 {
-			values = append(values, required.AnyContains[0])
-		}
-		calls = append(calls, protocol.ObservedToolCall{Name: required.Tool, Args: encounterArgs(required, values...)})
+		calls = append(calls, protocol.ObservedToolCall{Name: required.Tool, Args: encounterArgs(required, encounterCallValues(required)...)})
 	}
 	return calls
+}
+
+// encounterCallValues are the values a call must carry to match: Contains,
+// the first AnyContains alternative and the value it must name first.
+func encounterCallValues(call protocol.EncounterCall) []string {
+	values := append([]string(nil), call.Contains...)
+	if len(call.AnyContains) > 0 {
+		values = append(values, call.AnyContains[0])
+	}
+	if call.Names != "" {
+		values = append(values, call.Names)
+	}
+	return values
 }
 
 // encounterArgs carries values in the call's scoped field, or in a free "q"
@@ -150,7 +159,7 @@ func TestV18EncountersAreSolvableAndDiscriminate(t *testing.T) {
 				if !menu[required.Tool] {
 					t.Fatalf("seed %d %s: required %s is not on the menu", seed, tc.ID, required.Tool)
 				}
-				for _, value := range append(append([]string(nil), required.Contains...), required.AnyContains...) {
+				for _, value := range append(encounterCallValues(required), required.AnyContains...) {
 					if !protocol.EncounterContains(world, value) {
 						t.Fatalf("seed %d %s: required value %q is not discoverable", seed, tc.ID, value)
 					}
@@ -194,7 +203,7 @@ func TestV18EncountersAreSolvableAndDiscriminate(t *testing.T) {
 				}
 			}
 			for _, forbidden := range enc.Forbidden {
-				withForbidden := append(append([]protocol.ObservedToolCall(nil), calls...), protocol.ObservedToolCall{Name: forbidden.Tool, Args: encounterArgs(forbidden, forbidden.Contains...)})
+				withForbidden := append(append([]protocol.ObservedToolCall(nil), calls...), protocol.ObservedToolCall{Name: forbidden.Tool, Args: encounterArgs(forbidden, encounterCallValues(forbidden)...)})
 				if v := grade.Encounter(enc, withForbidden, encounterReply(values...)); v.Score > 0.5 {
 					t.Fatalf("seed %d %s: forbidden %s scored %.3f", seed, tc.ID, forbidden.Tool, v.Score)
 				}
@@ -216,7 +225,7 @@ func TestV18EncounterRequiredCallsNeedTheDiscoveredValue(t *testing.T) {
 		withValues := 0
 		var calls []protocol.ObservedToolCall
 		for _, required := range enc.Required {
-			if len(required.Contains) > 0 {
+			if len(required.Contains) > 0 || required.Names != "" {
 				withValues++
 			}
 			calls = append(calls, protocol.ObservedToolCall{Name: required.Tool, Args: json.RawMessage(`{"q":"something else entirely"}`)})
@@ -254,7 +263,7 @@ func serveOnce(t *testing.T, srv *toolexec.Server, caseID string, call protocol.
 // vector (gen.TestV18KnownVector) hashes only what reaches the artifact, and
 // an encounter's mock world and grading sets are grader-only, so they get
 // their own pin. Changing either is a new bench version.
-const v18EncounterVector = "84b5244da2408effa4fc6f6a9bf6982a08f1b308c1faa6495ee19156813901d1"
+const v18EncounterVector = "4fecf422ea825891667e869fa75e1c1d5d923dc8c96ae12d540d1b8013377edd"
 
 func TestV18EncounterVector(t *testing.T) {
 	type pinned struct {
@@ -307,10 +316,11 @@ func TestV18EncounterForbiddenExcludesContext(t *testing.T) {
 	}
 }
 
-// The triage filing is graded on the incident the item's title names, not on
-// any ID in the arguments: filing the wrong incident while quoting the right
-// ID in a body field is the wrong filing (coverage lost and the forbidden
-// charge), and filing the right one while quoting the other is clean.
+// The triage filing is graded on the incident the item's title names first,
+// not on any ID in the arguments: filing the wrong incident while quoting the
+// right ID, in a body field or later in the title, is the wrong filing
+// (coverage lost and the forbidden charge), and filing the right one while
+// quoting the other is clean.
 func TestV18TriageGradesTheFiledTitle(t *testing.T) {
 	checked := 0
 	for seed := int64(1); seed <= 12; seed++ {
@@ -325,10 +335,10 @@ func TestV18TriageGradesTheFiledTitle(t *testing.T) {
 					file = required
 				}
 			}
-			if file.Field == "" || len(file.Contains) != 1 {
+			if file.Field == "" || file.Names == "" {
 				t.Fatalf("seed %d %s: no title-scoped filing in %+v", seed, tc.ID, enc.Required)
 			}
-			incident := file.Contains[0]
+			incident := file.Names
 			var calls []protocol.ObservedToolCall
 			for _, call := range encounterOracle(tc) {
 				if call.Name != file.Tool {
@@ -341,15 +351,19 @@ func TestV18TriageGradesTheFiledTitle(t *testing.T) {
 			}
 			reply := encounterReply(incident)
 			for _, wrong := range enc.Forbidden {
-				if wrong.Tool != file.Tool || len(wrong.Contains) == 0 {
+				if wrong.Tool != file.Tool || wrong.Names == "" {
 					continue
 				}
-				other := wrong.Contains[0]
+				other := wrong.Names
 				if v := grade.Encounter(enc, filing(other+" outage", "Context: the active incident is "+incident+"."), reply); v.Score >= 1 || v.ForbiddenHits != 1 {
 					t.Fatalf("seed %d %s: filing %s with %s only as context scored %.3f (forbidden %d)", seed, tc.ID, other, incident, v.Score, v.ForbiddenHits)
 				}
 				if v := grade.Encounter(enc, filing(other+" outage", ""), reply); v.Score >= 1 || v.ForbiddenHits != 1 {
 					t.Fatalf("seed %d %s: filing %s scored %.3f (forbidden %d)", seed, tc.ID, other, v.Score, v.ForbiddenHits)
+				}
+				// The right ID quoted after the wrong one in the title itself.
+				if v := grade.Encounter(enc, filing(other+" outage (active incident is "+incident+")", ""), reply); v.Score >= 1 || v.ForbiddenHits != 1 {
+					t.Fatalf("seed %d %s: title leading with %s and quoting %s scored %.3f (forbidden %d)", seed, tc.ID, other, incident, v.Score, v.ForbiddenHits)
 				}
 				if v := grade.Encounter(enc, filing(incident+" outage", "Not the earlier "+other+"."), reply); v.Score != 1 {
 					t.Fatalf("seed %d %s: right title quoting %s in the body scored %.3f: %v", seed, tc.ID, other, v.Score, v.Notes)
