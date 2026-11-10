@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - miners/dittobench-starter-kit/**
+      - miners/**
+      - research/dittobench-datagen/**
   schedule:
     - cron: "17 8 * * *"
   workflow_dispatch:
@@ -41,6 +42,12 @@ jobs:
       - name: Regenerate the stock-kit file digest set
         run: python3 scripts/build_kit_file_digests.py
 
+      # The unreleased-copy signal subtracts this public corpus before it
+      # compares two owners' agents. A kit file it has not seen (a new script,
+      # a changed prompt) makes every two agents that ship it look like copies.
+      - name: Merge new public items into the unreleased-copy corpus
+        run: python3 scripts/build_public_items.py --repo ../.. --merge
+
       - name: Open or refresh reference update PR
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,6 +60,8 @@ jobs:
             ditto/anticopy/reference_line_v2.bin
             ditto/anticopy/reference_manifest_v2.json
             ditto/anticopy/kit_file_digests_v1.json
+            ditto/anticopy/public_items_*.bin.gz
+            ditto/anticopy/public_items_*.json
           )
           if git diff --quiet -- "${outputs[@]}"; then
             echo "Anti-copy reference already matches the in-tree starter kit."
