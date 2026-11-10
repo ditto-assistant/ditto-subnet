@@ -797,6 +797,16 @@ def scorer_environment(tmp: Path, broker_port: int) -> dict[str, str]:
     return environment
 
 
+def rehearsal_case_concurrency(api_env: dict[str, str]) -> int:
+    """Cases the local scorer overlaps on one harness.
+
+    The scorer, not the harness, drives the overlap, so read it from the scorer
+    environment: ``scorer_environment`` defaults it to the published envelope,
+    and the harness environment carries it only when the caller exported it.
+    """
+    return int(api_env["DITTOBENCH_V8_CASE_CONCURRENCY"])
+
+
 def runtime_envelope() -> dict[str, int]:
     """Memory cap, CPUs and case concurrency from the published envelope."""
     try:
@@ -1452,7 +1462,7 @@ def run(args: argparse.Namespace) -> int:
                 cpu_note = pin_harness_cpus(harness.pid, envelope["cpus"])
                 if cpu_note:
                     print(cpu_note, flush=True)
-                concurrency = int(harness_env["DITTOBENCH_V8_CASE_CONCURRENCY"])
+                concurrency = rehearsal_case_concurrency(api_env)
                 if concurrency < envelope["case_concurrency"]:
                     print(
                         f"warning: case concurrency {concurrency} is below the "

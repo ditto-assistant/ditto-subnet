@@ -156,7 +156,7 @@ when you build.
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `src/baseline.rs`             | The agent you optimize. Wires DB + embedder + model + MLP predictor + reranker + harness.               |
 | `src/reranker.rs`             | ONNX cross-encoder reranker, the production rerank stage, 1:1.                                             |
-| `src/hybrid.rs`, `src/jev.rs` | Opt-in reference path (`DITTOBENCH_JEV_HYBRID=1`): the decision lane picks, the chat model writes.        |
+| `src/hybrid.rs`, `src/jev.rs` | Reference path, the default from bench 18 (`DITTOBENCH_JEV_HYBRID=0` opts out): the decision lane picks, the chat model writes. |
 | `src/seed.rs`                 | Loads the bundled LongMemEval seed user into the vector DB.                                                 |
 | `src/protocol.rs`             | The validator HTTP wire contract (see `PROTOCOL.md`).                                                       |
 | `src/catalog.rs`              | The Ditto tool catalog presented per case.                                                                  |
@@ -664,14 +664,27 @@ drop it in. To run the exact production stack, use Vertex `text-embedding-005`
 
 - the production `model.bin`.
 
-## Reference: Jev decides, the chat model writes (opt-in)
+## Reference: Jev decides, the chat model writes (default from bench 18)
 
 `src/hybrid.rs` is a second served path that uses the scored decision lane
 (`DITTOBENCH_DECISIONS_URL`, TypeSafe Jev System One) for every *decision* and
-the locked chat model only for *strings*. It is off by default: without
-`DITTOBENCH_JEV_HYBRID=1` the default path above is unchanged. It is a worked
-example, not a required library; the competition stays language- and
-architecture-agnostic.
+the locked chat model only for *strings*. With `DITTOBENCH_JEV_HYBRID` unset it
+serves any request whose tool menu is over 64k estimated tokens (scored runs
+send `bench_version: 9` whatever the contract, so in live scoring the v18 menu
+size is the switch) and every bench 18+ request in local rehearsal. Anything
+else takes the classic path above unchanged (so bench 17 scoring of an
+unmodified kit does not move).
+`DITTOBENCH_JEV_HYBRID=1` forces it on for every bench and `0` forces the
+classic path everywhere. `serve` prints which path each bench takes at startup.
+It is a worked example, not a required library; the competition stays
+language- and architecture-agnostic.
+
+Why it is the default at v18: the classic path scores **0** there. A seed's
+1,454-tool menu is 152,270 tokens of tool input, gpt-oss-20b's context is
+131,072, and every chat call is refused with a 400 before a token is billed.
+If you opt out with `DITTOBENCH_JEV_HYBRID=0` at v18, also set
+`DITTOBENCH_PRELOAD_TOP_K` (32 measured 0.093 at factor 0.50) or trim the menu
+your own way.
 
 Why it pays at v18. A v18 seed offers about 1,450 tools, which is about 156k
 tokens of tool JSON. That is more than gpt-oss-20b's 131k context, so a harness that
@@ -704,12 +717,12 @@ Knobs (environment):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DITTOBENCH_JEV_HYBRID` | unset | `1` turns the path on. |
+| `DITTOBENCH_JEV_HYBRID` | unset | Unset: on for a tool menu over 64k estimated tokens (v18) or a bench 18+ request, off otherwise. `1` forces it on for every request, `0` forces the classic path. |
 | `DITTOBENCH_JEV_MENU` | `full` | `grouped` asks about toolkits (name prefixes) first, then only the tools of the top 5 toolkits. It reads about a fifth of the decision tokens, at some recall risk. |
 | `DITTOBENCH_JEV_OFFER_K` | `3` | Tools Jev hands the chat model, before the safe-harbor top-3. |
 | `DITTOBENCH_JEV_NOTES` | `8` | Most memory notes in a prompt. |
 | `DITTOBENCH_JEV_DESC_CHARS` | `80` | Description characters Jev reads per tool. |
-| `DITTOBENCH_DECISIONS_URL` | validator-set | Set by the sandbox on bench 15+. Without it the path falls back to code-only (semantic top-k) selection. |
+| `DITTOBENCH_DECISIONS_URL` | validator-set | Set by the sandbox on bench 15+ (the route answers 404 on confirmation and ablation sessions). Without it, or when a call fails, the path falls back to code-only (semantic top-k) selection. |
 | `DITTOBENCH_DECISIONS_API_KEY`, `DITTOBENCH_DECISIONS_MODEL` | unset, `typesafe/jev-1.14` | Only for pointing the client at a provider directly. The canonical broker signs the call and forces its own pinned model. |
 | `DITTOBENCH_JEV_USAGE_LOG` | unset | JSONL with per-case chat and decision tokens, largest prompt and tools offered. |
 
@@ -719,7 +732,7 @@ System One route as a keyless `DITTOBENCH_DECISIONS_URL` and prices decision
 input tokens. The estimate it prints is then the whole priced cost:
 
 ```bash
-DITTOBENCH_JEV_HYBRID=1 uv run ditto practice --bench-version 18 --run-size medium
+uv run ditto practice --bench-version 18 --run-size medium   # the hybrid is the v18 default
 ```
 
 Measured on bench v18 (seed 42, full, 350 cases; details in
@@ -727,9 +740,9 @@ Measured on bench v18 (seed 42, full, 350 cases; details in
 
 | Path | composite | priced cost / 350 cases | factor |
 | --- | ---: | ---: | ---: |
-| default, unmodified | 0.000 (the menu exceeds the 131k context) | $0.00 | 1.00 |
-| default, `DITTOBENCH_PRELOAD_TOP_K=32` | 0.093 | $0.856 | 0.50 |
-| hybrid, `full` menu | 0.263 | $0.270 | 1.00 |
+| classic path (`DITTOBENCH_JEV_HYBRID=0`) | 0.000 (the menu exceeds the 131k context) | $0.00 | 1.00 |
+| classic path, `DITTOBENCH_PRELOAD_TOP_K=32` | 0.093 | $0.856 | 0.50 |
+| hybrid, `full` menu (the v18 default) | 0.263 | $0.270 | 1.00 |
 | hybrid, `grouped` menu | 0.268 | $0.197 | 1.00 |
 
 ## Changing the retrieval algorithm
@@ -841,7 +854,7 @@ produces a container serving that protocol on :8080.
 > locked decision model (TypeSafe Jev) choice or score questions, for example
 > which tools to offer the chat model. Use it however you like; it is metered
 > like chat. *Reference: Jev decides, the chat model writes* below is one
-> worked example (opt-in). This kit accepts `bench_version` 15 on `/run`.
+> worked example (the kit default from bench 18). This kit accepts `bench_version` 15 on `/run`.
 >
 > **Bench v16 (shipped, shadow only, not live)** is the dueling bench: a
 > canonical run becomes a 175-case datagen half (the v15 surface at a smaller

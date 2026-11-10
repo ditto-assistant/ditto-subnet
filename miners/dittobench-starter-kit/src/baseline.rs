@@ -1094,10 +1094,12 @@ impl Baseline {
             })
         });
 
-        // Opt-in reference path (`DITTOBENCH_JEV_HYBRID=1`, see `hybrid.rs`):
-        // the decision lane picks tools, notes and argument values and the
-        // chat model only writes. Unset, nothing below changes.
-        if crate::hybrid::enabled() {
+        // Reference path (`hybrid.rs`): the decision lane picks tools, notes
+        // and argument values and the chat model only writes. It is the
+        // default for a menu too large for the chat model's context (v18:
+        // scored runs still send wire bench_version 9, so the menu decides)
+        // and from bench 18 locally; `DITTOBENCH_JEV_HYBRID=0` keeps this path.
+        if crate::hybrid::enabled(req.bench_version, &req.tools) {
             return self.run_hybrid(req, user_id, exec_ctx, started).await;
         }
 
