@@ -69,9 +69,14 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _blobs(repo: Path, paths: tuple[str, ...]) -> dict[str, str]:
-    """``blob sha -> one path`` for every blob ever reachable under ``paths``."""
+    """``blob sha -> one path`` for every blob ever reachable under ``paths``.
+
+    Only ``HEAD``'s history is public: an unmerged branch is not a published
+    kit, and reading every ref made the bundle depend on which branches the
+    building checkout happened to fetch.
+    """
     out: dict[str, str] = {}
-    log = _git(repo, "log", "--all", "--format=", "--raw", "--no-abbrev", "--", *paths)
+    log = _git(repo, "log", "HEAD", "--format=", "--raw", "--no-abbrev", "--", *paths)
     for line in log.splitlines():
         if not line.startswith(":"):
             continue
