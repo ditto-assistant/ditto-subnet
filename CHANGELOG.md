@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v0.470.0 (2026-11-10)
+
+### Bug Fixes
+
+- **datagen,scorer**: Close the deferred v18 review mediums
+  ([#3457](https://github.com/ditto-assistant/ditto-subnet/pull/3457),
+  [`c4acf17`](https://github.com/ditto-assistant/ditto-subnet/commit/c4acf17b61719afe802d7633ef608bc7d96d2fd3))
+
+- **platform**: Keep season-expired agents visible on the live board (SN-466)
+  ([#3474](https://github.com/ditto-assistant/ditto-subnet/pull/3474),
+  [`6c946ca`](https://github.com/ditto-assistant/ditto-subnet/commit/6c946caae14cf270818ae37c5238ff506fa3949e))
+
+- **platform**: Land anti-copy corpus refreshes and read only published kit history
+  ([#3473](https://github.com/ditto-assistant/ditto-subnet/pull/3473),
+  [`ec7278d`](https://github.com/ditto-assistant/ditto-subnet/commit/ec7278db6f22f215ab6da8067b489e51639c238f))
+
+- **starter-kit**: Jev hybrid by default from bench 18; fix rehearsal KeyError
+  ([#3437](https://github.com/ditto-assistant/ditto-subnet/pull/3437),
+  [`d3b4557`](https://github.com/ditto-assistant/ditto-subnet/commit/d3b455711143bfa213458d22bf890d9640c88c80))
+
+### Features
+
+- **datagen**: Bench v18 multi-call tool encounters graded on the outcome
+  ([#3430](https://github.com/ditto-assistant/ditto-subnet/pull/3430),
+  [`15c5ea6`](https://github.com/ditto-assistant/ditto-subnet/commit/15c5ea6493c40a4d08e45a5f5e9a7a34f85c92bc))
+
+- **platform**: Close out and report terminal artifact scoring failures
+  ([#3447](https://github.com/ditto-assistant/ditto-subnet/pull/3447),
+  [`dbafdbe`](https://github.com/ditto-assistant/ditto-subnet/commit/dbafdbe0c6d4839b5ee9ea8ce067c375fba236c6))
+
+- **scorer**: Stop a bench v18 run at its priced-cost budget
+  ([#3421](https://github.com/ditto-assistant/ditto-subnet/pull/3421),
+  [`d0c20a7`](https://github.com/ditto-assistant/ditto-subnet/commit/d0c20a70f16a946e9610df0937fb34274bb4568a))
+
+- **starter-kit**: Opt-in Jev hybrid reference path (Jev decides, gpt-oss writes)
+  ([#3432](https://github.com/ditto-assistant/ditto-subnet/pull/3432),
+  [`5af9eb5`](https://github.com/ditto-assistant/ditto-subnet/commit/5af9eb52b6c6ea33ca16aab5f3d2a38c7ab57348))
+
+
 ## v0.469.0 (2026-11-10)
 
 ### Bug Fixes
