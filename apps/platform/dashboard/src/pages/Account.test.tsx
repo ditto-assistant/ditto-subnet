@@ -638,6 +638,8 @@ describe("Ditto account link", () => {
     { failFirstUnlink: false, proofStatus: "accepted" },
     { failFirstUnlink: true, proofStatus: "accepted" },
     { failFirstUnlink: false, proofStatus: "expired" },
+    { failFirstUnlink: false, proofStatus: "missing" },
+    { failFirstUnlink: false, proofStatus: "gone" },
   ])(
     "restores only live proof hints and clears on successful unlink: %j",
     async ({ failFirstUnlink, proofStatus }) => {
@@ -653,7 +655,10 @@ describe("Ditto account link", () => {
           const url = String(input);
           if (url.endsWith("/me")) return Response.json(me);
           if (url.endsWith("/me/github-link/attempts/proof-1"))
-            return Response.json({ status: proofStatus });
+            return Response.json(
+              { status: proofStatus },
+              { status: proofStatus === "missing" ? 404 : proofStatus === "gone" ? 410 : 200 },
+            );
           if (url.endsWith("/me/ditto-link/attempts/att-1/confirm") && init?.method === "POST") {
             confirms.push(new Headers(init.headers).get("authorization") || "");
             linked = {

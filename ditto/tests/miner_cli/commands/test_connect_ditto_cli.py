@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from ditto.api_models.miner_ditto_link import MinerDittoLinkAttemptResponse
+from ditto.miner_cli.__main__ import _build_parser
 from ditto.miner_cli.commands.link_ditto import run
 from ditto.miner_cli.errors import TransientApiError
 from ditto.tests.miner_cli.commands.test_link_ditto import (
@@ -107,7 +108,19 @@ def test_json_link_has_one_result_when_optional_proof_runs_or_is_unavailable(
 
 
 @pytest.mark.parametrize("status", ["failed", "expired", "accepted"])
-def test_ditto_success_survives_an_incomplete_or_racing_proof(status, capsys):
+@pytest.mark.parametrize("cli_default_network", [False, True])
+def test_ditto_success_survives_an_incomplete_or_racing_proof(
+    status, cli_default_network, capsys, monkeypatch
+):
+    monkeypatch.delenv("DITTO_NETWORK", raising=False)
+    args = (
+        _build_parser().parse_args(
+            ["link-ditto", "--no-browser", "--yes", "--expect-github-id", "123"]
+        )
+        if cli_default_network
+        else _args(yes=True, expect_github_id=123)
+    )
+    assert args.network == ("finney" if cli_default_network else "local")
     attempt_id = uuid4()
     client = _client(attempt_id, statuses=[_authenticated(attempt_id)])
     client.confirm_ditto_link.return_value = MinerDittoLinkAttemptResponse(
@@ -129,7 +142,7 @@ def test_ditto_success_survives_an_incomplete_or_racing_proof(status, capsys):
         patch("ditto.miner_cli.commands.link_ditto.ApiClient", return_value=client),
         patch("ditto.miner_cli.commands.link_github.run", return_value=1) as sign,
     ):
-        assert run(_args(yes=True, expect_github_id=123)) == 0
+        assert run(args) == 0
     if status == "accepted":
         sign.assert_called_once()
         assert sign.call_args.args[0].expect_github_id == 123
@@ -138,7 +151,7 @@ def test_ditto_success_survives_an_incomplete_or_racing_proof(status, capsys):
     err = capsys.readouterr().err
     assert "Your Ditto account is linked" in err
     assert "GitHub miner proof is incomplete" in err
-    assert "ditto --network local link-ditto" in err
+    assert f"ditto --network {args.network} link-ditto" in err
     assert "--expect-github-id 123" in err
     assert "--yes" not in err
     client.start_github_link.assert_not_called()

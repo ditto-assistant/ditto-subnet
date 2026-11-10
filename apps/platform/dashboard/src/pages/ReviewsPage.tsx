@@ -6,7 +6,7 @@ import { HandleBadge } from "../components/ui/HandleBadge";
 import { MinerAvatar } from "../components/ui/MinerAvatar";
 import { API_BASE } from "../lib/config";
 import { SubmissionDownload } from "../components/account/SubmissionDownload";
-import { authJSON, postJSON } from "../lib/api";
+import { authJSON, HTTPError, postJSON } from "../lib/api";
 import { copyText } from "../lib/copy";
 import { dashboardHref, fullEntityHref, spaHref, spaQuery } from "../lib/router";
 import {
@@ -642,7 +642,10 @@ function AccountPanel(): JSX.Element {
         status: "linked",
         github_proof_attempt_id: record.attemptId,
       });
-    } catch {
+    } catch (err) {
+      if (err instanceof HTTPError && (err.status === 404 || err.status === 410)) {
+        clearProofHint(key);
+      }
       // Keep the non-authoritative hint when the service is unavailable.
       // A later visit can retry; no command is shown without verification.
     }
