@@ -106,6 +106,31 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	if r := challenge.Validate(p); !r.Valid {
 		return nil, fmt.Errorf("challenge pack is invalid (%d issues)", len(r.Issues))
 	}
+	return execute(ctx, harnessURL, p, opts)
+}
+
+// ExecuteOracle runs the frontier oracle on a validated source pack: it
+// derives challenge.OraclePack for caseIDs (one memory graph per case, seeded
+// with only that case's challenge.OracleContext) and executes it exactly like
+// Execute, graded at the source pack's declared policy. The derived pack is a
+// trusted derivation of a valid pack, so it is executed without re-running
+// pack validation (it holds one user and wave per case by design). Outcomes
+// are in caseIDs order and carry the source pack's case ids.
+func ExecuteOracle(ctx context.Context, harnessURL string, source challenge.Pack, caseIDs []string, opts Options) ([]CaseOutcome, error) {
+	if r := challenge.Validate(source); !r.Valid {
+		return nil, fmt.Errorf("challenge pack is invalid (%d issues)", len(r.Issues))
+	}
+	if opts.Include != nil {
+		return nil, errors.New("oracle execution selects cases by caseIDs, not Include")
+	}
+	oracle, _, err := challenge.OraclePack(source, caseIDs)
+	if err != nil {
+		return nil, fmt.Errorf("oracle pack: %w", err)
+	}
+	return execute(ctx, harnessURL, oracle, opts)
+}
+
+func execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Options) ([]CaseOutcome, error) {
 	nonce := opts.Nonce
 	if len(nonce) == 0 {
 		nonce = make([]byte, 32)

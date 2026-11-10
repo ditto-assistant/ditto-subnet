@@ -41,6 +41,7 @@ from ditto.api_models.confirmation_progress import (
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_FRONTIER_ORACLE_DATASET_MODE,
     GENERATOR_ROUND_BENCH_VERSIONS,
     LEGACY_SCORER_ROUND_BENCH_VERSIONS,
     GeneratorRoundCaseResult,
@@ -1056,6 +1057,7 @@ class ValidatorWorker:
         self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
         self._scorer_runs_generator_rounds = False
+        self._scorer_runs_frontier_oracle = False
         self._scorer_round_bench_versions = LEGACY_SCORER_ROUND_BENCH_VERSIONS
         # Re-zeroed at the top of every sweep; seeded here so a hand-back from
         # outside a sweep (a drain, or a test driving the method directly)
@@ -2075,6 +2077,10 @@ class ValidatorWorker:
             self._scorer_runs_generator_rounds = bool(
                 scorer_benchmarks.status == "fresh_verified"
                 and scorer_benchmarks.generator_rounds
+            )
+            self._scorer_runs_frontier_oracle = bool(
+                self._scorer_runs_generator_rounds
+                and scorer_benchmarks.generator_frontier_oracle
             )
             self._scorer_round_bench_versions = (
                 scorer_benchmarks.generator_round_bench_versions
@@ -3845,6 +3851,10 @@ class ValidatorWorker:
             or not _runs_generator_round_version(
                 job.bench_version, self._scorer_round_bench_versions
             )
+            or (
+                job.dataset_mode == GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+                and not self._scorer_runs_frontier_oracle
+            )
         ):
             await self._platform.fail_generator_round_job(
                 job, reason="infrastructure", detail="round_job_not_executable"
@@ -3903,6 +3913,13 @@ class ValidatorWorker:
                 )
                 for case in per_case
             ]
+            if job.oracle_case_ids is not None and sorted(
+                r.case_id for r in results
+            ) != sorted(job.oracle_case_ids):
+                # The scorer must answer exactly the oracle's cases; anything
+                # else (an older scorer running the whole dataset) is refused
+                # here rather than posted as an attestation.
+                raise DittobenchError("oracle run results do not match the job")
             accepted = await self._platform.submit_generator_round_score(
                 job, run_id=run_id, results=results
             )
@@ -3992,6 +4009,7 @@ class ValidatorWorker:
                 # 15-minute early-stage grace as a stalled benchmark. The scorer
                 # reports ``running`` with per-column case counts like any run.
                 progress_callback=self._on_dittobench_progress,
+                oracle_case_ids=job.oracle_case_ids,
             )
         finally:
             if broker is not None:
