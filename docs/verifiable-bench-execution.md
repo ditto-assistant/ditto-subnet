@@ -355,15 +355,28 @@ the miner CLI and the payment verifier, which today accepts only a bare
 `transfer_keep_alive`.
 
 **Authorization accounting.** A token's issuance leaf reserves its
-authorization until one of two things happens: the first matching *valid*
-anchor consumes it, or the token expires. If the token expires with no valid
-anchor, the authorization is forfeited.
+authorization until the token is either *consumed* by a valid anchor or
+*burned*. A burned token's authorization is forfeited.
 
-- A missing or wrong remark fails check 3. It does not consume the
-  authorization as an anchor. On the paid path, though, the transfer in that
-  extrinsic was still paid and is neither refunded nor credited.
-- On the credit path, a reserved credit with no valid anchor before expiry is
-  forfeited and cannot be reused.
+- **Extrinsics whose remark is not `C`.** These are not commitments for this
+  token at all, whether the remark is missing or simply different. They
+  consume nothing, and the token stays open until a `C`-carrying extrinsic or
+  expiry. A transfer inside such an extrinsic is still paid and is neither
+  refunded nor credited.
+- **The first `C`-carrying extrinsic is the token's only anchor candidate.**
+  "First" is by `(block, index)` (check 4). It counts whatever its outcome:
+  - if it passes every check, it is the anchor and consumes the
+    authorization;
+  - if it fails any anchor check (failed dispatch, wrong signer, short
+    payment, expired token), the token is **burned**: no later extrinsic
+    carrying `C` can anchor, a paid transfer inside it is not refunded, and a
+    reserved credit is forfeited.
+
+  A miner therefore cannot get a second chance at the same token by sending
+  a corrected extrinsic. They need a new token and a new authorization.
+- **Expiry.** A token that reaches `expires_block` with no `C`-carrying
+  extrinsic is also burned. Its reserved credit is forfeited and cannot be
+  reused.
 - Credits exist only for payments made **before** this anchor scheme. A
   payment inside an anchor extrinsic never becomes a credit (see "Anchors are
   final" below), so the paid and credit spend identities in check 5 never
@@ -438,9 +451,13 @@ but is no longer a seed input.
      `issued_block ≤ anchor_block ≤ expires_block ≤ issued_block + W`. The
      token must still be valid at the anchor, and no token may live longer
      than `W`.
-   - Order extrinsics by position `(block, index)`. No extrinsic from the
-     same signer, other than the anchor itself, may carry the same `C` at a
-     position `p` with `(anchor_block − W, 0) ≤ p < (anchor_block, anchor_extrinsic_index)`.
+   - Order extrinsics by position `(block, index)`. "Carry `C`" means the
+     extrinsic's call data contains the remark `C`, **whether or not it
+     dispatched successfully**. Failed extrinsics count, so a failed first
+     attempt burns the token instead of quietly leaving room for a second
+     one. No extrinsic from the same signer, other than the anchor itself,
+     may carry the same `C` at a position `p` with
+     `(anchor_block − W, 0) ≤ p < (anchor_block, anchor_extrinsic_index)`.
      The scan covers blocks `anchor_block − W` through `anchor_block`
      **inclusive**. Within the anchor block it covers only indices below
      `anchor_extrinsic_index`.
@@ -621,8 +638,12 @@ into every epoch pin:
 - `token_validity_blocks` (`W`): the maximum admission-token lifetime. It is
   also the width of the fixed first-match scan window (§4.5 check 4).
 - `canary_rate` and `signoff_quorum`.
-- `max_retries`: the per-replicate budget of retries after a failure or a
-  Platform `aborted` (§6.2). Every use is public in the log.
+- `max_retries`: the per-replicate number of retry slots. The initial
+  attempt `a = 1` is free, and each attempt `a ≥ 2` uses one slot, whether the
+  attempt before it failed or was aborted (§6.2). Every use is public in the
+  log.
+- `reveal_grace_blocks`: how long after `deadline_block` a committed record
+  may still be revealed before the replicate is marked suppressed.
 
 A policy change takes effect at an epoch pin. It is gated on every
 recently-live weight-setting validator advertising the verifier protocol, with
@@ -638,9 +659,37 @@ as attempt and terminal leaves. The token itself is revealed only in the
 statement, after the upload has consumed it.
 
 **Attempt log leaf** (canonical JSON, SHA-256):
-`{schema, ticket_id, agent_id, image_digest, bench_version, replicate j, attempt a, reason (initial | authorized_retry:<backroom audit id>), registered_at, R}`.
+`{schema, ticket_id, agent_id, image_digest, bench_version, replicate j, attempt a, reason (initial | authorized_retry:<backroom audit id>), registered_at, deadline_block, R}`.
 The leaf is appended **before** the runner may start. The runner refuses to
 start without a log receipt containing the leaf hash.
+
+**Attempts and retry slots.** Attempts are numbered from `a = 1`, which is
+the initial attempt and uses no retry slot. Every attempt with `a ≥ 2` uses
+exactly one of the policy-pinned `max_retries` slots, however the previous
+attempt ended: runtime-signed failure or `aborted`. So a replicate has at most
+`1 + max_retries` attempts, and an abort carries no extra charge. Each
+`a ≥ 2` needs an `authorized_retry` reason.
+
+**One authoritative deadline, serialized writes.** `deadline_block` in the
+attempt leaf is the single deadline for that attempt's terminal commitment.
+The log is one append-only sequence, and every leaf is stamped with the chain
+block at append. The log service applies two rules as an atomic
+compare-and-append on the attempt key `(ticket_id, j, a)`:
+
+- A terminal commitment is accepted only if it is stamped
+  `≤ deadline_block` **and** no `aborted` leaf for that attempt is already in
+  the log.
+- An `aborted` leaf is accepted only if it is stamped `> deadline_block`
+  **and** no terminal commitment for that attempt is already in the log.
+
+Exactly one of the two can ever be written, and validators re-check both rules
+from log order and stamps.
+
+A runner whose commitment is refused as late gets a rejection instead of a
+receipt and never releases its record. The attempt is then `aborted`.
+Platform assigns the stamps, so it could stamp an honest commitment late. That
+is equivalent to a blind abort, because the record was never released, and it
+consumes a retry slot publicly like any other abort.
 
 **Terminal records come only from the attested runtime.** For each attempt,
 the runner emits exactly one terminal record, signed by its attested key `K`:
@@ -665,14 +714,22 @@ an attempt finish or to kill it is made **without seeing its result**.
 - For every outcome except `aborted`, `outcome` must equal the K-signed
   record's outcome, and `record_digest` must equal the hash in the
   terminal-commitment leaf.
-- `aborted` is the only outcome Platform writes. It is valid only when the
-  attempt has **no** terminal-commitment leaf by its deadline: the runner
-  vanished or was stopped before it committed. Each `aborted` is public and
-  counts against the policy-pinned per-replicate retry budget
-  (`max_retries`, §6.1).
-- If a terminal commitment exists but its record is not revealed by the
-  deadline, the replicate is marked **suppressed**. Validators then refuse to
-  count any later attempt for that `(anchor, j)`.
+- `aborted` is the only outcome Platform writes. It is valid only under the
+  serialized rule above: stamped after `deadline_block`, with no terminal
+  commitment for the attempt earlier in the log. That covers a runner that
+  vanished, was stopped, or committed too late. Each `aborted` is public.
+  A retry after it is the next attempt and uses one retry slot, like a retry
+  after any failure.
+- If a terminal commitment exists but its record is not revealed by
+  `deadline_block` + the policy's `reveal_grace_blocks`, the replicate is
+  marked **suppressed**. Validators then refuse to count any later attempt
+  for that `(anchor, j)`.
+- A committed, revealed RunStatement that fails verification (§6.5 steps
+  1–6) is not counted. Examples: a receipt that fails, a dataset hash that
+  does not regenerate, a field that disagrees with the policy or the log.
+  The replicate is **quarantined**, so no later attempt counts automatically,
+  and only an owner-reviewed dispute resolves it. A *missing* receipt is
+  different: the statement stays pending until it is re-proved (§6.7).
 
 **RunStatement v1** (canonical JSON, SHA-256 = `statement_digest`), signed by
 runtime key `K`:
@@ -802,7 +859,13 @@ For each new statement (cached by digest):
    - **Suppression blocks the replicate.** A commitment whose record was never
      revealed marks the replicate suppressed, and no later attempt counts.
    - **Budget and authorization.** Retries after failures or aborts stay
-     within `max_retries`, and each has an authorized retry leaf.
+     within `max_retries`, so `a ≤ 1 + max_retries`, and each has an
+     authorized retry leaf. Commitment and abort for an attempt obey the
+     serialized deadline rule (§6.2), checked from log order and stamps.
+   - **Unverifiable scored statements quarantine.** A committed RunStatement
+     that fails steps 1–6 is not counted, and the replicate is quarantined:
+     no later attempt counts without an owner-reviewed dispute. A missing
+     receipt only leaves the statement pending.
    - **Which attempt counts.** The first attempt with a verified `scored`
      outcome is the one counted.
 8. Sign `VerifiedStatement{statement_digest, verdict, verifier_policy_digest, validator_hotkey}`
@@ -839,11 +902,15 @@ replicate.
 | Receipt missing or prover failed | Entry not yet eligible; re-prove (deterministic; no new attempt) |
 | Receipt invalid | Escalate: either `scorecore` and program id diverged (a release bug) or someone tampered. Quarantine the entry; Backroom shows it |
 | Attestation invalid (unknown PCRs, all-zero debug PCRs, expired key) | Statement rejected; attempt treated as an infra failure; a retry needs a Backroom-authorized retry leaf (existing no-automatic-retry policy) and reuses the seed |
-| Dangling attempt (registered, no terminal commitment by deadline) | Platform writes an `aborted` leaf; it counts as an attempt and against `max_retries`; a retry needs authorization; the dashboard shows aborted attempts per agent |
-| Terminal commitment exists but the record was never revealed | Replicate marked **suppressed**; no later attempt for that `(anchor, j)` counts; public, and resolvable only through an owner-reviewed dispute |
+| Dangling attempt (registered, no terminal commitment by `deadline_block`) | Platform writes an `aborted` leaf through the serialized compare-and-append; a retry is the next attempt, uses one retry slot and needs authorization; the dashboard shows aborted attempts per agent |
+| Runner commits just as the deadline passes | The log's atomic rule admits exactly one of commitment or `aborted`. A refused late commitment gets no receipt, the record is never released, and the attempt is `aborted` |
+| Terminal commitment exists but the record was never revealed within `reveal_grace_blocks` | Replicate marked **suppressed**; no later attempt for that `(anchor, j)` counts; public, and resolvable only through an owner-reviewed dispute |
+| Committed RunStatement fails verification (receipt fails, dataset hash does not regenerate, a field disagrees with the policy or the log) | Not counted; replicate **quarantined**; no later attempt counts without an owner-reviewed dispute; a rejected RunStatement can never be relabelled as a failure |
 | Terminal leaf disagrees with its K-signed record (e.g. a signed RunStatement relabelled as `infra_failure`) | Rejected; replicate flagged; treated as evidence of operator tampering, not as an infra fault |
 | Repeated aborts for one agent | Visible pattern; policy threshold to flag for review (open question) |
-| Anchor check fails: wrong signer, missing or wrong remark, earlier matching commitment, token expired at the anchor, anchor or authorization reused by another ticket, `delta_s ≠` pinned `Δ`, or `Δ < Δ_min` | Statement rejected; the agent cannot be scored on that anchor. Backroom shows it as an operator or miner fault, not an infra retry. A malformed anchor still consumed its authorization (anchors are final), so a new attempt needs a new authorization: a fresh payment or a different credit |
+| On-chain anchor defect: the first `C`-carrying extrinsic failed to dispatch, had the wrong signer or a short payment, or came after token expiry; or the cited anchor is not that first extrinsic | Statement rejected and the **token is burned** (§4.5 authorization accounting). A paid transfer is not refunded and a reserved credit is forfeited. A new attempt needs a new token and authorization. Backroom shows it as a miner fault, not an infra retry |
+| Extrinsic with a missing or non-`C` remark | Not a commitment for the token: consumes nothing, and the token stays open until a `C`-carrying extrinsic or expiry. Any transfer in it is not refunded |
+| Statement-level defect on a sound anchor: `delta_s ≠` pinned `Δ`, `authorization` ≠ leaf, the anchor or spend identity cited by another ticket, or `Δ < Δ_min` in the policy | Operator fault. Statement rejected and replicate **quarantined** for owner review; the on-chain anchor stays this ticket's anchor |
 | Anchored artifact never uploaded, or uploaded bytes do not hash to `artifact_sha256` | Logged as forfeited; the authorization is spent and does not return as a credit |
 | drand unavailable at `R` | Wait (drand rounds are recoverable later); no fallback to an operator-chosen seed. The current CSPRNG fallback is not carried forward |
 | Chain anchoring failed | Roots queue. Statements stay pending, and entries finalize only once every referenced leaf (issuance, attempt, terminal) is in an anchored root |
@@ -925,7 +992,7 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 12 | Attestable AMI hosted runner | Reproducible image (scorer + sandbox-docker + broker); reference PCRs published by release; AWS Terraform module through protected plan/apply | 1 | L |
 | 13 | Runtime key, RunStatement v1 and FailureStatement | Key generated in the runner and bound by the NitroTPM document. Statement and failure schemas, both signed by `K`; failure class decided by runtime code. The runner commits `SHA-256(record)` to the log and waits for the receipt before releasing any terminal record. Test: Platform cannot obtain the record before the commitment exists | 2, 10, 12 | M |
 | 14 | Hosted shadow lane | Platform issues hosted replicates beside validator runs, `shadow_only`; distribution comparison report per agent | 9–13 | L |
-| 15 | Validator verify-and-sign (shadow) | New heartbeat protocol; the full §6.5 check including step 7's attempt policy; signoff submission; forced-invalid canaries. Negative vectors: a signed RunStatement relabelled as a failure; `aborted` after a terminal commitment; a committed record never revealed; a retry beyond `max_retries`; a terminal leaf whose digest does not match its commitment | 6, 7, 13 | M |
+| 15 | Validator verify-and-sign (shadow) | New heartbeat protocol; the full §6.5 check including step 7's attempt policy; signoff submission; forced-invalid canaries. Negative vectors: a signed RunStatement relabelled as a failure; `aborted` after a terminal commitment; a commitment stamped after `deadline_block`; both a commitment and an `aborted` for one attempt; a committed record never revealed; attempt `a > 1 + max_retries`; a terminal leaf whose digest does not match its commitment; a committed RunStatement whose dataset hash does not regenerate (must quarantine). Positive vector: an abort at `a = 1` followed by a scored `a = 2` with `max_retries = 1` | 6, 7, 13 | M |
 | 16 | Activation policy and ledger `proof_ref` | Deterministic exclusion rule; `fleet_ready`, no force; rollback path tested | 14, 15 | M |
 | 17 | Crown-decision audits | Beacon-sampled audit selection; paired CRN comparison; Backroom surface | 14 | M |
 | 18 | Dispute workflow | Quarantine and re-prove tools; owner-gated witness access | 15 | M |
