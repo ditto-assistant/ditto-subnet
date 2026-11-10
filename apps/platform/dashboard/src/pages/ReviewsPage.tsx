@@ -686,6 +686,7 @@ function AccountPanel(): JSX.Element {
     setError("");
     try {
       await authJSON<unknown>("/me/ditto-link", { method: "DELETE", headers: sessionAuthHeader() });
+      setDittoAttempt(null);
       setSaved("Ditto account unlinked.");
       await loadDittoLink();
     } catch (err) {

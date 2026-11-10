@@ -140,10 +140,12 @@ def _print_link(link: MinerDittoLinkView | None, *, as_json: bool) -> None:
     )
 
 
-def _confirm_pairing(*, hotkey: str, who: str, skip: bool) -> bool:
+def _confirm_pairing(
+    *, hotkey: str, who: str, skip: bool, as_json: bool = False
+) -> bool:
     """Ask before writing the link. ``--yes`` skips the question; a non-TTY
     without ``--yes`` refuses, because silence must never mean consent."""
-    print(f"Ditto signed in as {who}.")
+    print(f"Ditto signed in as {who}.", file=sys.stderr if as_json else sys.stdout)
     if skip:
         return True
     if not sys.stdin.isatty():
@@ -212,21 +214,22 @@ def _finish_github_proof(
         if proof.status in ("failed", "expired"):
             _proof_incomplete(args)
             return
-        result = link_github.run(
-            argparse.Namespace(
-                network=args.network,
-                github_command="link",
-                ditto_attempt=attempt_id,
-                coldkey_name=args.coldkey_name,
-                hotkey_name=args.hotkey_name,
-                key_kind="hotkey",
-                no_browser=True,
-                wait=600,
-                yes=args.yes,
-                expect_github_id=args.expect_github_id,
-                json=bool(args.json),
+        with contextlib.redirect_stdout(sys.stderr if args.json else sys.stdout):
+            result = link_github.run(
+                argparse.Namespace(
+                    network=args.network,
+                    github_command="link",
+                    ditto_attempt=attempt_id,
+                    coldkey_name=args.coldkey_name,
+                    hotkey_name=args.hotkey_name,
+                    key_kind="hotkey",
+                    no_browser=True,
+                    wait=600,
+                    yes=args.yes,
+                    expect_github_id=args.expect_github_id,
+                    json=False,
+                )
             )
-        )
     except (LoginRequiredError, ApiResponseError):
         _proof_incomplete(args)
         return
@@ -261,8 +264,9 @@ def run(args: argparse.Namespace) -> int:
             started = client.start_ditto_link(
                 token=token, body=MinerDittoLinkStartRequest(client="cli")
             )
-            print(f"Sign in with Ditto to link {hotkey}:")
-            print(started.authorize_url)
+            output = sys.stderr if as_json else sys.stdout
+            print(f"Sign in with Ditto to link {hotkey}:", file=output)
+            print(started.authorize_url, file=output)
             if not args.no_browser:
                 # A headless box has no browser; the printed URL is the fallback.
                 with contextlib.suppress(Exception):
@@ -280,7 +284,8 @@ def run(args: argparse.Namespace) -> int:
                     # THIS hotkey on the page Ditto sent them to.
                     print(
                         "Ditto verified the sign-in. In the browser, approve linking "
-                        f"hotkey {hotkey} to your Ditto account, then return here."
+                        f"hotkey {hotkey} to your Ditto account, then return here.",
+                        file=output,
                     )
                     told_accept = True
                 if attempt.status == "authenticated":
@@ -292,7 +297,9 @@ def run(args: argparse.Namespace) -> int:
                         or attempt.ditto_user_id
                         or "unknown account"
                     )
-                    if not _confirm_pairing(hotkey=hotkey, who=who, skip=args.yes):
+                    if not _confirm_pairing(
+                        hotkey=hotkey, who=who, skip=args.yes, as_json=as_json
+                    ):
                         print(
                             "not linked (the sign-in expires on its own)",
                             file=sys.stderr,

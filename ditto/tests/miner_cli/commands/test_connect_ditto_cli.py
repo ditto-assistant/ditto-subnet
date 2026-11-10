@@ -1,5 +1,6 @@
 """One Ditto OAuth connection, existing miner proof semantics."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
@@ -8,6 +9,7 @@ import pytest
 
 from ditto.api_models.miner_ditto_link import MinerDittoLinkAttemptResponse
 from ditto.miner_cli.commands.link_ditto import run
+from ditto.miner_cli.errors import TransientApiError
 from ditto.tests.miner_cli.commands.test_link_ditto import (
     HOTKEY,
     SESSION,
@@ -54,6 +56,50 @@ def test_connect_ditto_retains_proofs_and_only_signs_when_needed(existing):
     else:
         sign.assert_not_called()
     client.start_github_link.assert_not_called()
+
+
+@pytest.mark.parametrize("transient", [False, True])
+def test_json_link_has_one_result_when_optional_proof_runs_or_is_unavailable(
+    transient, capsys
+):
+    attempt_id = uuid4()
+    client = _client(attempt_id, statuses=[_authenticated(attempt_id)])
+    client.confirm_ditto_link.return_value = MinerDittoLinkAttemptResponse(
+        attempt_id=attempt_id,
+        status="linked",
+        link=_view(),
+        github_proof_attempt_id=attempt_id,
+    )
+    client.get_github_link_attempt.return_value = SimpleNamespace(
+        github_user_id=123, github_login="miner", status="accepted"
+    )
+    if transient:
+        client.get_github_link_attempt.side_effect = TransientApiError("try again")
+    client.get_github_link.return_value.link = None
+    client.get_github_account_link.return_value.link = None
+
+    def finish(args):
+        assert args.json is False
+        print("GitHub proof linked")
+        return 0
+
+    with (
+        patch(
+            "ditto.miner_cli.commands.link_ditto.load_miner_session",
+            return_value=SESSION,
+        ),
+        patch("ditto.miner_cli.commands.link_ditto.ApiClient", return_value=client),
+        patch("ditto.miner_cli.commands.link_github.run", side_effect=finish) as sign,
+    ):
+        assert run(_args(json=True, yes=True, expect_github_id=123)) == 0
+    output = capsys.readouterr()
+    assert json.loads(output.out)["ditto_user_id"] == "ditto-user-1"
+    if transient:
+        sign.assert_not_called()
+        assert "GitHub miner proof is incomplete" in output.err
+    else:
+        sign.assert_called_once()
+        assert "GitHub proof linked" in output.err
 
 
 @pytest.mark.parametrize("status", ["failed", "expired", "accepted"])
