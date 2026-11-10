@@ -11,6 +11,7 @@ import {
 import { PlatformAdminError } from './ditto.server'
 import { frontierRefusal } from './generator-competition.service'
 import {
+  generatorFrontierAuditListSchema,
   generatorCompetitionSettingsSchema,
   generatorRunDetailSchema,
 } from '../lib/generator-competition.schemas'
@@ -864,6 +865,14 @@ describe('generator competition MCP tools', () => {
     } finally {
       await client.close()
       await server.close()
+    }
+  })
+
+  it('rejects impossible frontier audit paging from Platform', () => {
+    const page = { audits: [], count: 0, returned: 0, limit: 50, offset: 0, has_more: false }
+    expect(generatorFrontierAuditListSchema.parse(page)).toMatchObject(page)
+    for (const bad of [{ count: -1 }, { limit: 0 }, { limit: -5 }, { returned: -1 }, { offset: -1 }]) {
+      expect(() => generatorFrontierAuditListSchema.parse({ ...page, ...bad })).toThrow()
     }
   })
 

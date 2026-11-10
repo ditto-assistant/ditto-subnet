@@ -831,9 +831,10 @@ export const generatorFrontierSchema = z.object({
 // them; optional so an older Platform still parses.
 export const generatorFrontierAuditListSchema = z.object({
   audits: z.array(generatorFrontierAuditSchema),
-  count: z.number().int(),
+  count: z.number().int().nonnegative(),
   returned: z.number().int().nonnegative().optional(),
-  limit: z.number().int().optional(),
+  // The request bound (listGeneratorFrontierAuditsInputSchema): 1..200.
+  limit: z.number().int().positive().optional(),
   offset: z.number().int().nonnegative().optional(),
   has_more: z.boolean().optional(),
 })
