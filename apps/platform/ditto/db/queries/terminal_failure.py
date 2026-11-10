@@ -28,7 +28,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
@@ -236,24 +236,65 @@ async def withdraw_terminal_artifact_failure(
     return withdrawal
 
 
+def _resolved_scoring_bench_version(canonical_version: int) -> ColumnElement[int]:
+    """SQL twin of resolve_bench_version, correlated to Agent.
+
+    Finished generator-round tickets can retain canonical scoring history,
+    but do not select the work era. With no scoring work, fall back to the
+    newest score, then the canonical version, exactly like the locked decider.
+    """
+    work = aliased(ValidatorTicket)
+    work_version = (
+        select(work.bench_version)
+        .where(
+            work.agent_id == Agent.agent_id,
+            work.status.in_((TicketStatus.ISSUED, TicketStatus.EXPIRED)),
+            work.purpose.not_in(
+                (TicketPurpose.BENCHMARK_CANARY, TicketPurpose.GENERATOR_ROUND)
+            ),
+        )
+        .order_by(work.issued_at.desc(), work.bench_version.desc())
+        .limit(1)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    latest_score = aliased(Score)
+    score_version = (
+        select(latest_score.bench_version)
+        .where(latest_score.agent_id == Agent.agent_id)
+        .order_by(latest_score.generated_at.desc())
+        .limit(1)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    return func.coalesce(work_version, score_version, canonical_version)
+
+
 async def terminal_failure_codes(
     session: AsyncSession,
     *,
     agent_ids: Iterable[UUID],
-    bench_version: int,
+    bench_version: int | None = None,
 ) -> dict[UUID, str]:
-    """In-force terminal withdrawal codes for ``agent_ids`` in one era."""
+    """In-force codes in one explicit era, or each agent's resolved scoring era."""
     ids = list(agent_ids)
     if not ids:
         return {}
+    version = (
+        bench_version
+        if bench_version is not None
+        else _resolved_scoring_bench_version(await active_bench_version(session))
+    )
     rows = (
         await session.execute(
             select(
                 ValidatorQueueWithdrawal.agent_id,
                 ValidatorQueueWithdrawal.terminal_failure_code,
-            ).where(
+            )
+            .join(Agent, Agent.agent_id == ValidatorQueueWithdrawal.agent_id)
+            .where(
                 ValidatorQueueWithdrawal.agent_id.in_(ids),
-                ValidatorQueueWithdrawal.bench_version == bench_version,
+                ValidatorQueueWithdrawal.bench_version == version,
                 ValidatorQueueWithdrawal.terminal_failure_code.is_not(None),
                 removal_in_force(),
             )
@@ -306,22 +347,8 @@ async def terminal_close_out_candidates(
         .correlate(Agent, ValidatorTicket)
         .scalar_subquery()
     )
-    # Match resolve_bench_version: candidates necessarily have work tickets,
-    # so the most recently issued scoring work determines the era.
-    work = aliased(ValidatorTicket)
-    resolved_version = (
-        select(work.bench_version)
-        .where(
-            work.agent_id == Agent.agent_id,
-            work.status.in_((TicketStatus.ISSUED, TicketStatus.EXPIRED)),
-            work.purpose.not_in(
-                (TicketPurpose.BENCHMARK_CANARY, TicketPurpose.GENERATOR_ROUND)
-            ),
-        )
-        .order_by(work.issued_at.desc(), work.bench_version.desc())
-        .limit(1)
-        .correlate(Agent)
-        .scalar_subquery()
+    resolved_version = _resolved_scoring_bench_version(
+        await active_bench_version(session)
     )
     statement = (
         # DISTINCT runs after the per-version GROUP BY and before LIMIT, so an

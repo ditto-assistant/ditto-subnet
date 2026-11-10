@@ -9424,6 +9424,16 @@ class TestPublicActivity:
             "retry_after": None,
         }
 
+        # Historical profile entries keep their own scoring era when the
+        # active board moves on; an unrelated withdrawal stays unaffected.
+        await _activate_era(session_maker, _NEXT_ERA)
+        old_profile = await client.get(f"/api/v1/public/miners/{_MINER_A}")
+        assert old_profile.status_code == 200, old_profile.text
+        assert old_profile.json()["submissions"][0]["status"] == "scoring_failed"
+        unrelated = await client.get(f"/api/v1/public/miners/{_MINER_B}")
+        assert unrelated.status_code == 200, unrelated.text
+        assert unrelated.json()["submissions"][0]["status"] != "scoring_failed"
+
     async def test_an_unnamed_parked_cause_never_blames_the_submission(
         self,
         app: FastAPI,

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import Agent, ValidatorQueueWithdrawal, ValidatorTicket
+from ditto.db.queries.scores import upsert_score
 from ditto.db.queries.terminal_failure import (
     TERMINAL_ARTIFACT_FAILURE_ACTOR,
     sweep_terminal_artifact_failures,
@@ -324,3 +327,52 @@ async def test_retryable_and_old_era_evidence_do_not_starve_current_candidates(
         assert await terminal_close_out_candidates(session, limit=1) == [qualifying]
     assert await sweep_terminal_artifact_failures(session_maker, limit=1) == 1
     assert await sweep_terminal_artifact_failures(session_maker, limit=1) == 0
+
+
+@pytest.mark.parametrize("with_score", [False, True])
+async def test_generator_history_uses_score_or_canonical_era_fallback(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    with_score: bool,
+) -> None:
+    agent_id = await _seed(
+        session_maker,
+        name="round-history",
+        details=["inference_allowance_exhausted"] * 3,
+    )
+    # A score must win over a different canonical era; otherwise canonical
+    # is the fallback used by both candidate selection and the locked decider.
+    monkeypatch.setattr(
+        "ditto.db.queries.terminal_failure.active_bench_version",
+        AsyncMock(return_value=_VERSION + 1 if with_score else _VERSION),
+    )
+    async with session_maker() as session, session.begin():
+        tickets = list(
+            (
+                await session.scalars(
+                    select(ValidatorTicket).where(ValidatorTicket.agent_id == agent_id)
+                )
+            ).all()
+        )
+        for ticket in tickets:
+            ticket.purpose = TicketPurpose.GENERATOR_ROUND
+        if with_score:
+            await upsert_score(
+                session,
+                agent_id=agent_id,
+                validator_hotkey="scored-validator",
+                run_id="scored-run",
+                seed=42,
+                composite=0.5,
+                tool_mean=0.5,
+                memory_mean=0.5,
+                median_ms=500,
+                n=20,
+                generated_at=_NOW,
+                bench_version=_VERSION,
+            )
+    async with session_maker() as session:
+        assert await terminal_close_out_candidates(session, limit=1) == [agent_id]
+    assert await sweep_terminal_artifact_failures(session_maker) == 1
+    [withdrawal] = await _withdrawals(session_maker, agent_id)
+    assert withdrawal.bench_version == _VERSION

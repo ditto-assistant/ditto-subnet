@@ -5735,7 +5735,6 @@ async def public_miner_profile(
     terminal_codes = await terminal_failure_codes(
         session,
         agent_ids=[agent.agent_id for agent in agents],
-        bench_version=await active_bench_version(session),
     )
     retired_ids = await retired_agent_ids(
         session, agent_ids={agent.agent_id for agent in agents}
