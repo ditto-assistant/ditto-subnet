@@ -2207,6 +2207,13 @@ class PricedCostEstimateTest(unittest.TestCase):
         self.assertIn("stopped admitting cases", unknown)
         self.assertNotIn("case None", unknown)
         self.assertNotIn("budget_nano_usd", COST._with_budget({"cases": 350, "cost_nano_usd": 1}, 17))
+        # A scorer-priced run with no budget verdict was not budgeted: its
+        # cost alone never implies a cutoff.
+        priced = COST._with_budget(
+            {"source": "scorer", "cases": 350, "cost_nano_usd": 2_000_000_000}, 18)
+        self.assertNotIn("budget_exhausted", priced)
+        self.assertNotIn("stopped admitting cases", COST.format_estimate(
+            {"normalized_cost_nano_usd": 2_000_000_000, "factor_bps": 3000, **priced}, 18))
 
     def test_rule_matches_the_shared_go_vectors(self) -> None:
         vectors = json.loads(PRICED_COST_VECTORS.read_text(encoding="utf-8"))
