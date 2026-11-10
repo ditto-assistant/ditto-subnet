@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.471.0 (2026-11-10)
+
+### Features
+
+- **platform**: Catch up mid-season scorers at the season boundary (SN-467)
+  ([#3475](https://github.com/ditto-assistant/ditto-subnet/pull/3475),
+  [`be9553a`](https://github.com/ditto-assistant/ditto-subnet/commit/be9553a608c234391f231dca8abac97e90c90089))
+
+
 ## v0.470.0 (2026-11-10)
 
 ### Bug Fixes
