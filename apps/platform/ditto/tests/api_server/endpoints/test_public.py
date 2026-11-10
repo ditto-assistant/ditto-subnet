@@ -9388,6 +9388,15 @@ class TestPublicActivity:
         by_id = {entry["agent_id"]: entry for entry in activity["entries"]}
         spent = by_id[str(agent_id)]
         assert spent["status"] == "scoring_failed"
+        profile = await client.get(f"/api/v1/public/miners/{_MINER_A}")
+        assert profile.status_code == 200, profile.text
+        submission = next(
+            row
+            for row in profile.json()["submissions"]
+            if row["agent_id"] == str(agent_id)
+        )
+        assert submission["status"] == "scoring_failed"
+
         assert spent["retry_disposition"] == "terminal_artifact_failure"
         assert spent["terminal_failure_code"] == "inference_allowance_exhausted"
         # A withdrawal without a code stays the neutral historical label.

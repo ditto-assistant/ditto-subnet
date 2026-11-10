@@ -5732,6 +5732,14 @@ async def public_miner_profile(
         )
     )[0]
     avatar_url = public_avatar_path(hotkey) if avatar else None
+    terminal_codes = await terminal_failure_codes(
+        session,
+        agent_ids=[agent.agent_id for agent in agents],
+        bench_version=await active_bench_version(session),
+    )
+    retired_ids = await retired_agent_ids(
+        session, agent_ids={agent.agent_id for agent in agents}
+    )
     submissions = []
     for agent in agents:
         display, name_handle = _public_named(
@@ -5742,7 +5750,17 @@ async def public_miner_profile(
                 agent_id=agent.agent_id,
                 name=display,
                 version=agent.version,
-                status=_public_agent_status(str(agent.status)),
+                status=(
+                    "retired"
+                    if agent.agent_id in retired_ids
+                    and agent.status
+                    in (AgentStatus.EVALUATING, AgentStatus.SCREENING_PASSED)
+                    else "scoring_failed"
+                    if agent.status
+                    in (AgentStatus.EVALUATING, AgentStatus.SCREENING_PASSED)
+                    and agent.agent_id in terminal_codes
+                    else _public_agent_status(str(agent.status))
+                ),
                 created_at=agent.created_at,
                 avatar_url=avatar_url,
                 name_handle=name_handle,

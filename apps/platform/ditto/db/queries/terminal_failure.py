@@ -28,11 +28,12 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import (
     Agent,
     Score,
@@ -41,7 +42,7 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version
-from ditto.db.queries.queue_removal import load_queue_removal, removal_in_force
+from ditto.db.queries.queue_removal import removal_in_force
 from ditto.db.queries.retry_state import (
     AGENT_ATTRIBUTABLE_FAILURE_DETAIL_VALUES,
     dominant_agent_failure_detail,
@@ -50,7 +51,7 @@ from ditto.db.queries.retry_state import (
     withdrawal_gate,
 )
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.db.queries.tickets import scoring_retry_ticket
+from ditto.db.queries.tickets import retry_budget_spent, scoring_retry_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -174,9 +175,21 @@ async def withdraw_terminal_artifact_failure(
     )
     if not allowed:
         return None
+    # An operator's reversal of a terminal close-out is an explicit override
+    # for this era; unchanged failure evidence must not undo that decision.
     if (
-        await load_queue_removal(
-            session, agent_id=agent_id, bench_version=bench_version, for_update=True
+        await session.scalar(
+            select(ValidatorQueueWithdrawal.withdrawal_id)
+            .where(
+                ValidatorQueueWithdrawal.agent_id == agent_id,
+                ValidatorQueueWithdrawal.bench_version == bench_version,
+                or_(
+                    removal_in_force(),
+                    ValidatorQueueWithdrawal.terminal_failure_code.is_not(None),
+                ),
+            )
+            .limit(1)
+            .with_for_update()
         )
         is not None
     ):
@@ -276,7 +289,10 @@ async def terminal_close_out_candidates(
         .where(
             ValidatorQueueWithdrawal.agent_id == Agent.agent_id,
             ValidatorQueueWithdrawal.bench_version == ValidatorTicket.bench_version,
-            removal_in_force(),
+            or_(
+                removal_in_force(),
+                ValidatorQueueWithdrawal.terminal_failure_code.is_not(None),
+            ),
         )
         .correlate(Agent, ValidatorTicket)
         .exists()
@@ -290,6 +306,23 @@ async def terminal_close_out_candidates(
         .correlate(Agent, ValidatorTicket)
         .scalar_subquery()
     )
+    # Match resolve_bench_version: candidates necessarily have work tickets,
+    # so the most recently issued scoring work determines the era.
+    work = aliased(ValidatorTicket)
+    resolved_version = (
+        select(work.bench_version)
+        .where(
+            work.agent_id == Agent.agent_id,
+            work.status.in_((TicketStatus.ISSUED, TicketStatus.EXPIRED)),
+            work.purpose.not_in(
+                (TicketPurpose.BENCHMARK_CANARY, TicketPurpose.GENERATOR_ROUND)
+            ),
+        )
+        .order_by(work.issued_at.desc(), work.bench_version.desc())
+        .limit(1)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
     statement = (
         # DISTINCT runs after the per-version GROUP BY and before LIMIT, so an
         # agent qualifying in two versions takes one slot, not two.
@@ -299,6 +332,8 @@ async def terminal_close_out_candidates(
         .where(
             Agent.status == AgentStatus.EVALUATING,
             ValidatorTicket.status == TicketStatus.EXPIRED,
+            ValidatorTicket.bench_version == resolved_version,
+            retry_budget_spent(),
             ValidatorTicket.failure_detail.in_(
                 sorted(AGENT_ATTRIBUTABLE_FAILURE_DETAIL_VALUES)
             ),

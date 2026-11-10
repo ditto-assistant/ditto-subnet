@@ -16,6 +16,7 @@ from ditto.db.queries.terminal_failure import (
     TERMINAL_ARTIFACT_FAILURE_ACTOR,
     sweep_terminal_artifact_failures,
     terminal_close_out_candidates,
+    withdraw_terminal_artifact_failure,
 )
 
 _VERSION = 7
@@ -248,3 +249,78 @@ async def test_an_agent_failing_in_two_versions_takes_one_candidate_slot(
     )
     async with session_maker() as session:
         assert await terminal_close_out_candidates(session, limit=2) == [older, newer]
+
+
+async def test_reinstatement_is_an_override_for_automatic_close_out(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed(
+        session_maker, name="reinstated", details=["inference_allowance_exhausted"] * 3
+    )
+    assert await sweep_terminal_artifact_failures(session_maker) == 1
+    async with session_maker() as session, session.begin():
+        withdrawal = await session.scalar(
+            select(ValidatorQueueWithdrawal).where(
+                ValidatorQueueWithdrawal.agent_id == agent_id
+            )
+        )
+        assert withdrawal is not None
+        withdrawal.reinstated_at = _NOW
+    async with session_maker() as session, session.begin():
+        assert await terminal_close_out_candidates(session, limit=1) == []
+        assert (
+            await withdraw_terminal_artifact_failure(
+                session, agent_id=agent_id, now=_NOW
+            )
+            is None
+        )
+    assert await sweep_terminal_artifact_failures(session_maker) == 0
+    assert len(await _withdrawals(session_maker, agent_id)) == 1
+
+
+async def test_retryable_and_old_era_evidence_do_not_starve_current_candidates(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    retryable = await _seed(
+        session_maker, name="retryable", details=["inference_allowance_exhausted"] * 3
+    )
+    old_era = await _seed(
+        session_maker, name="old-era", details=["inference_allowance_exhausted"] * 3
+    )
+    async with session_maker() as session, session.begin():
+        for agent_id in (retryable, old_era):
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.created_at = _NOW - timedelta(days=2)
+        tickets = list(
+            (
+                await session.scalars(
+                    select(ValidatorTicket).where(ValidatorTicket.agent_id == retryable)
+                )
+            ).all()
+        )
+        for ticket in tickets:
+            ticket.manual_retry_grants = 1
+        session.add(
+            ValidatorTicket(
+                agent_id=old_era,
+                validator_hotkey="new-era-validator",
+                status=TicketStatus.EXPIRED,
+                issued_at=_NOW - timedelta(minutes=10),
+                deadline=_NOW - timedelta(minutes=5),
+                bench_version=_VERSION + 1,
+                attempt_count=1,
+                manual_retry_grants=0,
+                infra_retry_grants=0,
+                failure_reason="scoring_error",
+                failure_detail="inference_allowance_exhausted",
+                failed_at=_NOW - timedelta(minutes=5),
+            )
+        )
+    qualifying = await _seed(
+        session_maker, name="current-era", details=["inference_allowance_exhausted"] * 3
+    )
+    async with session_maker() as session:
+        assert await terminal_close_out_candidates(session, limit=1) == [qualifying]
+    assert await sweep_terminal_artifact_failures(session_maker, limit=1) == 1
+    assert await sweep_terminal_artifact_failures(session_maker, limit=1) == 0
