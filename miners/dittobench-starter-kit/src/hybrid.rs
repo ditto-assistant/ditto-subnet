@@ -1108,12 +1108,19 @@ pub async fn run_case(
         }
         all_offered.extend(offered.iter().cloned());
     }
-    if outcome.final_text.is_empty() && messages.last().is_some_and(|m| m.role == "tool") {
-        // The hop budget ran out right after tool results: one short call
-        // with no tools writes the reply from them.
+    if outcome.final_text.trim().is_empty() {
+        // No reply yet: the hop budget ran out right after tool results, or
+        // the model answered with nothing. One short call with no tools
+        // writes the reply.
+        let after_tools = messages.last().is_some_and(|m| m.role == "tool");
         messages.push(text_message(
             "user",
-            "Reply to the user now with the result of the tool calls above.".to_string(),
+            if after_tools {
+                "Reply to the user now with the result of the tool calls above."
+            } else {
+                "Reply to the user now."
+            }
+            .to_string(),
         ));
         let chunk = model
             .next(&messages, &[])

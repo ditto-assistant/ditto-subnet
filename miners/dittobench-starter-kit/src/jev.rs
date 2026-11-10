@@ -47,6 +47,17 @@ pub const MAX_RETRY_AFTER_SECS: u64 = 30;
 /// Headroom kept under each limit, because [`estimate_tokens`] is an estimate.
 const LIMIT_HEADROOM: f64 = 0.85;
 
+/// Seconds a `Retry-After` value asks for: delta-seconds, or an HTTP-date
+/// (RFC 2822 form) counted from now; a date already past waits 0.
+fn retry_after_secs(value: &str) -> Option<u64> {
+    let value = value.trim();
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(secs);
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    Some((at.timestamp() - chrono::Utc::now().timestamp()).max(0) as u64)
+}
+
 /// Conservative token estimate for JSON text: about 3 ASCII characters per
 /// token, rounded up, plus one token per non-ASCII byte. Real tokenizers
 /// average closer to 4 characters on English and never emit more tokens than
@@ -457,7 +468,7 @@ impl DecisionClient {
                         .headers()
                         .get("retry-after")
                         .and_then(|v| v.to_str().ok())
-                        .and_then(|v| v.trim().parse::<u64>().ok());
+                        .and_then(retry_after_secs);
                     let text = resp.text().await.unwrap_or_default();
                     let parsed: Value = match serde_json::from_str(&text) {
                         Ok(parsed) => parsed,
@@ -736,6 +747,16 @@ mod tests {
         assert!(result.is_err());
         let elapsed = started.elapsed();
         assert!(elapsed < Duration::from_millis(2_500), "{elapsed:?}");
+    }
+
+    #[test]
+    fn retry_after_reads_seconds_and_http_dates() {
+        assert_eq!(retry_after_secs(" 7 "), Some(7));
+        let soon = (chrono::Utc::now() + chrono::Duration::seconds(20)).to_rfc2822();
+        let secs = retry_after_secs(&soon).unwrap();
+        assert!((18..=20).contains(&secs), "{secs}");
+        assert_eq!(retry_after_secs("Sun, 06 Nov 1994 08:49:37 GMT"), Some(0));
+        assert_eq!(retry_after_secs("soon"), None);
     }
 
     #[test]
