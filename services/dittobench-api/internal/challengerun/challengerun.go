@@ -79,6 +79,10 @@ type Options struct {
 	// RefusalNote, when set, is the note a refused case carries (the
 	// specific reason: a spent budget or a lost cost meter).
 	RefusalNote func() string
+	// Exhausted, when set, reports that Admit refuses every later case: a
+	// wave is then not seeded (it would only spend embeddings), and its cases
+	// still dispatch so they come back BudgetExhausted.
+	Exhausted func() bool
 }
 
 // CaseOutcome is one graded case: the panel result the scorer submits plus the
@@ -156,6 +160,9 @@ func execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	}
 	err := runner.RunStagedWaves(ctx, waves, buckets,
 		func(ctx context.Context, _ int, wave protocol.SeedRequest) error {
+			if opts.Exhausted != nil && opts.Exhausted() {
+				return nil
+			}
 			_, err := runner.SeedForVersion(ctx, harnessURL, wave, opts.BenchVersion)
 			return err
 		},

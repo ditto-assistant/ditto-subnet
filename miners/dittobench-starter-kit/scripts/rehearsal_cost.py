@@ -432,6 +432,10 @@ def _with_budget(estimate_: dict[str, Any], bench_version: int) -> dict[str, Any
             int(admitted) if exhausted and admitted is not None else None
         )
         return estimate_
+    # A scorer-priced run without a budget verdict was not budgeted (no
+    # broker session), so no cutoff is inferred from its cost.
+    if estimate_.get("source") == "scorer":
+        return estimate_
     budget = run_budget_nano_usd(bench_version, cases)
     if budget is None:
         return estimate_
