@@ -39,7 +39,7 @@ punctuation, quoting and case removed. It yields:
 `ident`; a cue tuple in Python and the same `&[&str]` in Rust give the same
 `short` and `seq` items. Keys are 64-bit hashes with the kind in the low three
 bits. Each artifact's sorted key set, minus the packaged public corpus
-(`ditto/anticopy/public_items_dc1.bin.gz`, built by
+(`ditto/anticopy/public_items_dc3.bin.gz`, built by
 `scripts/build_public_items.py` from every starter kit, ditto-harness and the
 datagen vocabulary and templates across their histories), is one row of
 `agent_distinctive_items`. No paths or text are stored; evidence is
@@ -91,6 +91,28 @@ What changed from dc1/uc1, each from a reviewed false positive:
   with the code, so it excuses nothing. The owner's names are every name its
   hotkeys have used, including later uploads (signal ``uc3``): an operator's
   first line can predate the agent its namespace is named after.
+
+What changed in dc3 (2026-11-10), each from a held false positive:
+
+- **One string, one spelling.** A non-raw literal's escaped backslash is
+  decoded, so `"\\b(book|pencil in)\\b"` and `r"\b(book|pencil in)\b"`
+  normalize alike. Before, the escaped spelling left a stray `b` in every
+  regex word list, so a port that re-spelled a released agent's regexes missed
+  both the exact and the fuzzy released match (XXX v3 `d882ff81`, held at 141
+  against an unreleased renamed port of released dan0l v41; 67.5 with dc3,
+  all of it renamed identifiers).
+- **f-string code is code.** A Python f-string field other than a bare
+  constant (`{json.dumps(receipt.args, ensure_ascii=False)}`) is blanked; a
+  renamed variable inside one used to read as prose at full weight.
+- **The corpus follows the monorepo.** `platform-refresh-anti-copy.yml` runs
+  `build_public_items.py --merge` on every `miners/**` or datagen change. The
+  dc2 bundle was frozen at 2026-11-01, so the later
+  `scripts/local-rehearsal.py` made two agents shipping the current starter
+  kit score 236 against each other (`04017d97`).
+
+An `ITEMS_VERSION` bump re-indexes every artifact before the sentinel
+evaluates anything new (24 per back-to-back tick); signals already recorded
+under `uc3` are not re-scored, so no ruled agent is held again.
 
 Threshold: **100** (the switch-on revision). Locally the smallest copy scores
 114 and the largest non-copy pair 39.8. At full scale (every candidate since

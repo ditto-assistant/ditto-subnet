@@ -23,6 +23,17 @@ pinning the exact revisions, both committed under ``ditto/anticopy`` so upload
 processing never needs network access. Released agents are *not* in this
 bundle: they are subtracted at comparison time from the live index, as of the
 candidate's upload.
+
+A full build needs the installed library trees and is done by hand when
+``ITEMS_VERSION`` changes. Between full builds, ``--merge`` adds the current
+monorepo's public items to the committed bundle (keys only ever grow), so a new
+starter-kit file is public as soon as it merges::
+
+    python3 scripts/build_public_items.py --repo ../.. --merge
+
+``platform-refresh-anti-copy.yml`` runs that on every starter-kit change; a
+public file missing from the bundle makes every two agents that ship it look
+like copies of each other.
 """
 
 from __future__ import annotations
@@ -36,6 +47,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 OUTPUT = Path(__file__).parents[1] / "ditto" / "anticopy"
 MODULE = Path(__file__).parents[1] / "ditto" / "api_server" / "distinctive_content.py"
@@ -108,6 +120,51 @@ def collect(repo: Path, paths: tuple[str, ...], dc: ModuleType) -> set[int]:
             if len(raw) > dc._MAX_ITEM_FILE_BYTES or dc._skipped_path(path):
                 continue
             keys.update(item.key for item in dc.file_items(path, raw))
+            # An artifact resolves ``{NAME}`` constants before normalizing
+            # (:func:`extract_items`); a kit file's resolved items are public too.
+            constants = dc.file_constants(path, raw)
+            if constants:
+                keys.update(item.key for item in dc.file_items(path, raw, constants))
+    keys |= _collect_head_trees(repo, paths, dc)
+    return keys
+
+
+def _artifact_root(path: str, paths: tuple[str, ...]) -> str:
+    """The directory a miner ships as one artifact: ``miners/<kit>`` or a path."""
+    if path.startswith("miners/"):
+        return "/".join(path.split("/")[:2])
+    return next((p for p in paths if p != "." and path.startswith(p + "/")), "")
+
+
+def _collect_head_trees(repo: Path, paths: tuple[str, ...], dc: ModuleType) -> set[int]:
+    """Items of each current kit tree resolved as one artifact.
+
+    :func:`extract_items` resolves a constant defined in one file wherever the
+    artifact interpolates it. History blobs have no single tree to read
+    constants from, so the current tree of each kit is resolved artifact-wide.
+    """
+    files: dict[str, list[tuple[str, str]]] = {}
+    for path_line in _git(repo, "ls-tree", "-r", "HEAD", "--", *paths).splitlines():
+        meta, _, path = path_line.partition("\t")
+        fields = meta.split()
+        if len(fields) >= 3 and fields[1] == "blob" and not dc._skipped_path(path):
+            files.setdefault(_artifact_root(path, paths), []).append((path, fields[2]))
+    keys: set[int] = set()
+    for root, members in files.items():
+        contents = _read_blobs(repo, [sha for _, sha in members])
+        entries = sorted(
+            (path.removeprefix(root + "/") if root else path, contents.get(sha, b""))
+            for path, sha in members
+        )
+        entries = [
+            (p, raw) for p, raw in entries if len(raw) <= dc._MAX_ITEM_FILE_BYTES
+        ]
+        constants: dict[str, str] = {}
+        for path, raw in entries:
+            for name, value in dc.file_constants(path, raw).items():
+                constants.setdefault(name, value)
+        for path, raw in entries:
+            keys.update(item.key for item in dc.file_items(path, raw, constants))
     return keys
 
 
@@ -300,16 +357,23 @@ def main() -> None:
         default=[],
         help="compiled library whose printable strings are public messages",
     )
+    parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="add the monorepo's items to the committed bundle instead of rebuilding",
+    )
     args = parser.parse_args()
     dc = _load()
     keys = collect(args.repo, REPO_PATHS, dc)
-    sources = [
-        {
-            "repo": "ditto-assistant/ditto-subnet",
-            "paths": list(REPO_PATHS),
-            "head": _git(args.repo, "rev-parse", "HEAD").strip(),
-        }
-    ]
+    monorepo: dict[str, Any] = {
+        "repo": "ditto-assistant/ditto-subnet",
+        "paths": list(REPO_PATHS),
+        "head": _git(args.repo, "rev-parse", "HEAD").strip(),
+    }
+    if args.merge:
+        merge(dc, keys, monorepo)
+        return
+    sources: list[dict[str, Any]] = [monorepo]
     for extra in args.extra_repo:
         keys |= collect(extra, (".",), dc)
         origin = _git(extra, "remote", "get-url", "origin").strip()
@@ -328,6 +392,32 @@ def main() -> None:
     for binary in args.binary_strings:
         keys |= collect_binary_strings(binary, dc)
         sources.append({"binary": _public_label(binary)})
+    write(dc, keys, sources)
+
+
+def merge(dc: ModuleType, keys: set[int], monorepo: dict[str, Any]) -> None:
+    """Union ``keys`` into the committed bundle; every other source is kept."""
+    bundle = OUTPUT / dc.PUBLIC_CORPUS_BUNDLE
+    data = gzip.decompress(bundle.read_bytes())
+    committed = {
+        int.from_bytes(data[i : i + 8], "big", signed=True)
+        for i in range(0, len(data), 8)
+    }
+    if keys <= committed:
+        # Leave the file alone: another zlib would rewrite identical keys.
+        print(f"{bundle.name} already holds every monorepo item")
+        return
+    keys |= committed
+    manifest_path = OUTPUT / f"public_items_{dc.ITEMS_VERSION}.json"
+    manifest = json.loads(manifest_path.read_text())
+    sources = [
+        monorepo if source.get("repo") == monorepo["repo"] else source
+        for source in manifest["sources"]
+    ]
+    write(dc, keys, sources)
+
+
+def write(dc: ModuleType, keys: set[int], sources: list[dict[str, Any]]) -> None:
     payload = b"".join(k.to_bytes(8, "big", signed=True) for k in sorted(keys))
     (OUTPUT / dc.PUBLIC_CORPUS_BUNDLE).write_bytes(gzip.compress(payload, mtime=0))
     manifest = {"version": dc.ITEMS_VERSION, "items": len(keys), "sources": sources}
