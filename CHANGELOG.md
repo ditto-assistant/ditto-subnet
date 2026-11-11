@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.473.3 (2026-11-11)
+
+### Bug Fixes
+
+- **platform**: Confirm metagraph-cache misses on chain before 1101
+  ([#3492](https://github.com/ditto-assistant/ditto-subnet/pull/3492),
+  [`df9644c`](https://github.com/ditto-assistant/ditto-subnet/commit/df9644ccbde8dff3c289214c7b6d7c62cb961909))
+
+- **rollout**: Skip a priority member whose own failure exhausted its quorum
+  ([#3490](https://github.com/ditto-assistant/ditto-subnet/pull/3490),
+  [`1bd8879`](https://github.com/ditto-assistant/ditto-subnet/commit/1bd88795190ae5a5bff902040d1026eb6465e39f))
+
+
 ## v0.473.2 (2026-11-11)
 
 ### Bug Fixes
