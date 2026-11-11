@@ -712,6 +712,41 @@ def _phase_error_code(error: HTTPException) -> str:
     }.get(detail, "provider_unavailable")
 
 
+_PROVIDER_CONTEXT_LENGTH_EXCEEDED_CODE = "provider_context_length_exceeded"
+
+
+def _provider_context_length_exceeded(status_code: int, decoded: object) -> bool:
+    """Mirror providerContextLengthExceeded for a provider HTTP 400.
+
+    The input alone is longer than the model's context window: every provider
+    refuses the same harness bytes, so the request is the harness's, not the
+    route's. A window overflowed only by the requested completion is not.
+    """
+    if status_code != 400 or not isinstance(decoded, dict):
+        return False
+    error = decoded.get("error")
+    if not isinstance(error, dict):
+        return False
+    code = error.get("code")
+    if not isinstance(code, int) or isinstance(code, bool) or code != 400:
+        return False
+    metadata = error.get("metadata")
+    texts = [error.get("message")]
+    if isinstance(metadata, dict):
+        texts.append(metadata.get("raw"))
+    for text in texts:
+        if not isinstance(text, str):
+            continue
+        message = text.lower()
+        if (
+            "maximum context length" in message
+            and "in the completion" not in message
+            and "in the output" not in message
+        ):
+            return True
+    return False
+
+
 async def _complete_chat_with_recovery(
     client: httpx.AsyncClient,
     config: InferenceProxyConfig,
@@ -779,6 +814,10 @@ async def _complete_chat_with_recovery(
             decoded = None
         router_attempts += _openrouter_attempt_count(decoded)
         last_provider = _openrouter_last_attempted_provider(decoded) or last_provider
+        if _provider_context_length_exceeded(response.status_code, decoded):
+            last_timed_out = False
+            last_code = _PROVIDER_CONTEXT_LENGTH_EXCEEDED_CODE
+            continue
         if response.status_code >= 400:
             last_timed_out = response.status_code in {408, 504}
             last_code = f"upstream_http_{response.status_code}"
@@ -2067,6 +2106,13 @@ async def proxy_chat_completions(
         timed_out = error.timed_out
         upstream_provider = error.upstream_provider
         route_observable = error.route_observable
+        if terminal_error_code == _PROVIDER_CONTEXT_LENGTH_EXCEEDED_CODE:
+            # Brokers charge a 413 from this route to the harness
+            # (inference_request_rejected:request_too_large), as on the relay.
+            raise HTTPException(
+                status_code=413,
+                detail="request exceeds the model's maximum context length",
+            ) from error
         detail = (
             "inference provider timed out"
             if timed_out

@@ -846,6 +846,9 @@ func TestContextLengthExceededRequiresExactProviderRejection(t *testing.T) {
 		body   string
 	}{
 		"other 400":            {400, `{"error":{"code":400,"message":"Provider returned error","metadata":{"raw":"'tools' : maximum number of items is 128"}}}`},
+		"completion overflow":  {400, `{"error":{"code":400,"message":"This model's maximum context length is 8192 tokens. However, you requested 20000 tokens (2000 in the messages, 18000 in the completion)."}}`},
+		"openrouter output":    {400, `{"error":{"code":400,"message":"This endpoint's maximum context length is 131072 tokens. However, you requested about 140000 tokens (120000 of text input, 20000 in the output)."}}`},
+		"200 non-400 envelope": {200, `{"error":{"code":502,"message":"maximum context length"}}`},
 		"outer status not 400": {502, contextLengthExceededBody},
 		"inner code not 400":   {400, `{"error":{"code":502,"message":"maximum context length"}}`},
 		"code not a number":    {400, `{"error":{"code":"400","message":"maximum context length"}}`},

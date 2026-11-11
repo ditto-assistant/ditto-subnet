@@ -91,6 +91,13 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 	if result.bodyOverLimit {
 		return nil, exhausted("response_too_large", result.attempts, false)
 	}
+	decoded, _ := decodeJSONNumbers(result.body)
+	decodedMap, ok := decoded.(map[string]any)
+	if ok && providerContextLengthExceeded(result.status, decodedMap) {
+		failure := exhausted(providerContextLengthExceededCode, result.attempts, false)
+		failure.routeObservable = false
+		return nil, failure
+	}
 	if result.status >= 400 {
 		// 402 is the Router refusing to bill the on-behalf-of user (no live
 		// credits:spend grant or an exhausted daily budget). It is reported as
@@ -102,8 +109,6 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 		}
 		return nil, exhausted(code, result.attempts, result.status == 408 || result.status == 504)
 	}
-	decoded, _ := decodeJSONNumbers(result.body)
-	decodedMap, ok := decoded.(map[string]any)
 	if !ok {
 		return nil, exhausted("invalid_provider_response", result.attempts, false)
 	}

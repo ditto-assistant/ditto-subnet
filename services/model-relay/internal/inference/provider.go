@@ -1145,10 +1145,16 @@ func minerRecoverableProviderError(request, response map[string]any) bool {
 // providerContextLengthExceeded recognizes a provider refusing the request
 // because its input alone is longer than the model's context window. That is a
 // property of the harness-authored bytes, and every provider serving the model
-// refuses it identically, so a retry replays the same rejection. Anything else
-// a provider rejects with 400 stays on the generic provider-failure path.
+// refuses it identically, so a retry replays the same rejection. It arrives as
+// an HTTP 400, or as an HTTP 200 body-level envelope carrying code 400.
+// Anything else a provider rejects, including a window overflowed only once
+// the requested completion is added, stays on the generic provider-failure path.
 func providerContextLengthExceeded(status int, response map[string]any) bool {
-	if status != http.StatusBadRequest {
+	if status == http.StatusOK {
+		if code, _, ok := providerErrorEnvelope(response); !ok || code != http.StatusBadRequest {
+			return false
+		}
+	} else if status != http.StatusBadRequest {
 		return false
 	}
 	errorPayload, ok := response["error"].(map[string]any)
@@ -1167,8 +1173,16 @@ func providerContextLengthExceeded(status int, response map[string]any) bool {
 		texts = append(texts, metadata["raw"])
 	}
 	for _, text := range texts {
-		if message, ok := text.(string); ok &&
-			strings.Contains(strings.ToLower(message), "maximum context length") {
+		message, ok := text.(string)
+		if !ok {
+			continue
+		}
+		message = strings.ToLower(message)
+		// "N in the messages, M in the completion" (and OpenRouter's "in the
+		// output") means the input may fit and only max_tokens overflowed.
+		if strings.Contains(message, "maximum context length") &&
+			!strings.Contains(message, "in the completion") &&
+			!strings.Contains(message, "in the output") {
 			return true
 		}
 	}
