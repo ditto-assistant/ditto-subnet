@@ -44,5 +44,6 @@ jobs:
         run: |
           uv run ruff format --check .
           uv run ruff check .
-          uv run mypy src
+          uv run mypy src scripts/prove.py
+          uv run python -m query_adapter_pilot.fixtures --check testdata/workloads
           uv run pytest -q
