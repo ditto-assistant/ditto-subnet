@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.473.1 (2026-11-11)
+
+### Bug Fixes
+
+- Avoid double compression of relay metrics
+  ([#3481](https://github.com/ditto-assistant/ditto-subnet/pull/3481),
+  [`2cffe2b`](https://github.com/ditto-assistant/ditto-subnet/commit/2cffe2bbf128d07be2d5ec90e40a241c6bc53ac6))
+
+
 ## v0.473.0 (2026-11-11)
 
 ### Chores
