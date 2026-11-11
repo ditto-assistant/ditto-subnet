@@ -111,3 +111,36 @@ def test_workload_parses_replays_and_divergence() -> None:
     raw["users"][0]["user_ref"] = "real-user"  # type: ignore[index]
     with pytest.raises(ContractError):
         Workload.from_json(raw)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda w: w.update(users=5),
+        lambda w: w["users"][0].update(adapters={"version": 1}),
+        lambda w: w["users"][0].update(provision="1"),
+        lambda w: w.update(requests={"user_ref": "syn-u1"}),
+        lambda w: w["requests"][0].update(user_ref=["syn-u1"]),
+        lambda w: w["users"][0]["adapters"][0].update(alpha=0.0),
+        lambda w: w["users"][0]["adapters"][0].update(alpha=1.5),
+    ],
+)
+def test_workload_rejects_malformed_fields_as_contract_errors(mutate: object) -> None:
+    raw: dict[str, object] = {
+        "contract": CONTRACT_VERSION,
+        "kind": "synthetic-workload",
+        "name": "unit",
+        "users": [
+            {
+                "user_ref": "syn-u1",
+                "adapters": [{"version": 1, "seed": 11}],
+                "provision": [1],
+                "authorized_version": 1,
+            }
+        ],
+        "requests": [{"user_ref": "syn-u1", "query_seed": 1}],
+    }
+    Workload.from_json(json.loads(json.dumps(raw)))
+    mutate(raw)  # type: ignore[operator]
+    with pytest.raises(ContractError):
+        Workload.from_json(raw)
