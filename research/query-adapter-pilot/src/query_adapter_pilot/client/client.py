@@ -10,11 +10,15 @@ dishonest miner can cost latency but never quality.
 Sampling is the trade-off: with ``verify_rate < 1`` an unsampled request is
 accepted on shape, echo and norm alone, so a plausible-but-wrong unit vector
 is accepted for it. ``verify_rate=1.0`` (the default) verifies every request.
+Sampling is keyed on a per-run client secret the miner never sees, so a miner
+that knows the request id still cannot predict which requests go unverified.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Final
@@ -51,10 +55,16 @@ FALLBACKS: Final = ("local", "identity")
 MIN_PROVISION_TIMEOUT_S: Final = 5.0
 
 
-def should_verify(request_id: str, verify_rate: float) -> bool:
-    """Deterministic verification sampling keyed by request id, so a replay is
-    sampled exactly like its original."""
-    return int(hashlib.sha256(request_id.encode()).hexdigest()[:8], 16) / 2**32 < verify_rate
+MIN_VERIFY_SECRET_BYTES: Final = 16
+
+
+def should_verify(request_id: str, verify_rate: float, *, secret: bytes) -> bool:
+    """Verification sampling: ``HMAC-SHA256(secret, request_id)`` against
+    ``verify_rate``. Deterministic per ``(secret, request_id)``, so a replay is
+    sampled exactly like its original within a run, but unpredictable to a
+    miner, which sees the request id and never the secret."""
+    mac = hmac.new(secret, request_id.encode(), hashlib.sha256).digest()
+    return int.from_bytes(mac[:4], "big") / 2**32 < verify_rate
 
 
 @dataclass(frozen=True)
@@ -127,7 +137,11 @@ class PilotClient:
         timeout_s: float = 0.25,
         verify_rate: float = 1.0,
         fallback: str = "local",
+        verify_secret: bytes | None = None,
     ) -> None:
+        """``verify_secret`` keys verification sampling. It defaults to fresh
+        ``secrets.token_bytes(32)`` per client (per run); inject a fixed value
+        only for deterministic tests. It is never sent or reported."""
         if fallback not in FALLBACKS:
             raise ValueError(f"fallback must be one of {FALLBACKS}, got {fallback!r}")
         if not 0.0 <= verify_rate <= 1.0:
@@ -143,8 +157,17 @@ class PilotClient:
         self.timeout_s = timeout_s
         self.verify_rate = verify_rate
         self.fallback = fallback
+        if verify_secret is None:
+            verify_secret = secrets.token_bytes(32)
+        if not isinstance(verify_secret, bytes) or len(verify_secret) < MIN_VERIFY_SECRET_BYTES:
+            raise ValueError(f"verify_secret must be at least {MIN_VERIFY_SECRET_BYTES} bytes")
+        self._verify_secret = verify_secret
         self.ledger = UsageLedger()
         self._authorizer: Authorizer | None = None
+
+    def should_verify(self, request_id: str) -> bool:
+        """This run's keyed sampling decision for ``request_id``."""
+        return should_verify(request_id, self.verify_rate, secret=self._verify_secret)
 
     # ─── Setup ───────────────────────────────────────────────────────────────
 
@@ -297,7 +320,7 @@ class PilotClient:
         except ContractError as exc:
             return _Attempt(Outcome.REJECTED_INVALID, detail=exc.message, **meta)
 
-        if not should_verify(request_id, self.verify_rate):
+        if not self.should_verify(request_id):
             return _Attempt(Outcome.OK, vector=resp.vector, **meta)
         cos, max_abs = reference.parity(resp.vector, reference.apply(grant.weights, query))
         if not (cos >= PARITY_MIN_COSINE and max_abs <= PARITY_MAX_ABS and np.isfinite(cos)):

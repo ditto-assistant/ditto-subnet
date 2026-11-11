@@ -3,6 +3,9 @@ fallback, authorization, scoped ids and usage dedupe."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -10,7 +13,7 @@ import numpy as np
 import pytest
 from test_client_fake_miner import TOKEN, FakeMiner, closed_port_url, user, workload_json
 
-from query_adapter_pilot import reference
+from query_adapter_pilot import pilot, reference
 from query_adapter_pilot.client import PilotClient, RequestResult, should_verify, tenant_alias
 from query_adapter_pilot.contract import (
     PARITY_MAX_ABS,
@@ -267,13 +270,55 @@ def test_verify_rate_zero_still_rejects_invalid(miner: FakeMiner) -> None:
     assert r.outcome == Outcome.REJECTED_INVALID
 
 
-def test_verification_sampling_is_deterministic() -> None:
+SECRET = b"fixed-test-secret-0123456789abcd"
+
+
+def _unkeyed(request_id: str, verify_rate: float) -> bool:
+    """The old sampling: what a miner that knows only the request id computes."""
+    return int(hashlib.sha256(request_id.encode()).hexdigest()[:8], 16) / 2**32 < verify_rate
+
+
+def test_verification_sampling_is_deterministic_per_secret() -> None:
     ids = [f"qa1.run1.syn-abc.{i}" for i in range(2000)]
-    assert all(should_verify(i, 1.0) for i in ids)
-    assert not any(should_verify(i, 0.0) for i in ids)
-    half = [should_verify(i, 0.5) for i in ids]
-    assert half == [should_verify(i, 0.5) for i in ids]
+    assert all(should_verify(i, 1.0, secret=SECRET) for i in ids)
+    assert not any(should_verify(i, 0.0, secret=SECRET) for i in ids)
+    half = [should_verify(i, 0.5, secret=SECRET) for i in ids]
+    assert half == [should_verify(i, 0.5, secret=SECRET) for i in ids]
     assert 0.4 < sum(half) / len(ids) < 0.6
+    other = [should_verify(i, 0.5, secret=b"another-secret-of-32-bytes-xxxxx") for i in ids]
+    assert other != half
+
+
+def test_miner_cannot_predict_sampling_from_request_id() -> None:
+    """Keyed sampling disagrees with the unkeyed hash a miner could compute."""
+    ids = [f"qa1.run1.syn-abc.{i}" for i in range(2000)]
+    keyed = [should_verify(i, 0.5, secret=SECRET) for i in ids]
+    unkeyed = [_unkeyed(i, 0.5) for i in ids]
+    disagree = sum(k != u for k, u in zip(keyed, unkeyed, strict=True))
+    assert 0.4 < disagree / len(ids) < 0.6  # no better than a coin flip
+
+
+def test_client_secret_is_per_run_and_never_sent(miner: FakeMiner) -> None:
+    wl = _workload(
+        [user("syn-alice")], [{"user_ref": "syn-alice", "query_seed": s} for s in range(40)]
+    )
+    client = _client(miner.url, verify_rate=0.5, verify_secret=SECRET)
+    results = _run(client, wl)
+    for r in results:
+        assert r.verified == should_verify(r.request_id, 0.5, secret=SECRET)
+        assert client.should_verify(r.request_id) == r.verified
+    assert {r.verified for r in results} == {True, False}
+    wire = "".join(miner.seen_bodies)
+    for form in (SECRET.hex(), SECRET.decode(), base64.b64encode(SECRET).decode()):
+        assert form not in wire
+    report = json.dumps(pilot.run_pilot(_client(miner.url, verify_secret=SECRET), wl))
+    for form in (SECRET.hex(), SECRET.decode(), base64.b64encode(SECRET).decode()):
+        assert form not in report
+    with pytest.raises(ValueError):
+        _client(miner.url, verify_secret=b"short")
+    a, b = _client(miner.url, verify_rate=0.5), _client(miner.url, verify_rate=0.5)
+    ids = [f"qa1.run1.syn-abc.{i}" for i in range(200)]
+    assert [a.should_verify(i) for i in ids] != [b.should_verify(i) for i in ids]
 
 
 def test_request_ids_scoped_per_run_tenant_index_and_stable_across_replay() -> None:
