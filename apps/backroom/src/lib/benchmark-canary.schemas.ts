@@ -39,7 +39,7 @@ const bps = z.number().int().min(0).max(10_000)
 const canaryRunBudgetSchema = z.object({
   contract_id: z.literal('run-budget-v1'),
   budget_nano_usd: count,
-  budget_usd: z.number().finite().nonnegative(),
+  budget_usd: z.number().finite().nonnegative().nullish(),
   cases: count,
   exhausted: z.boolean(),
   admitted_cases: count,
@@ -48,7 +48,7 @@ const canaryRunBudgetSchema = z.object({
   unrun_memory_cases: count,
   unrun_slice_cases: count,
   spent_nano_usd_at_cutoff: count,
-  reason: z.enum(['run_budget_exhausted', 'run_budget_meter_lost']).optional(),
+  reason: z.enum(['run_budget_exhausted', 'run_budget_meter_lost']).nullish(),
 })
 
 // Bench v16+ `details.priced_cost`: numbers only (token counts, nano-USD

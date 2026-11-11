@@ -118,5 +118,8 @@ describe('benchmark canary boundary', () => {
     expect(wrap({ ...budget, reason: 'private free text' }).result?.details).toBeUndefined()
     expect(wrap({ ...budget, exhausted: 'yes' }).result?.details).toBeUndefined()
     expect(wrap({ ...budget, exhausted: false, reason: undefined }).result?.details?.run_budget?.exhausted).toBe(false)
+    expect(wrap({ ...budget, reason: null, budget_usd: null }).result?.details?.run_budget)
+      .toMatchObject({ reason: null, budget_usd: null, unrun_cases: 304 })
+    expect(wrap({ ...budget, budget_usd: undefined }).result?.details?.run_budget?.unrun_cases).toBe(304)
   })
 })
