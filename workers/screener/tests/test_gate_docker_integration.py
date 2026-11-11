@@ -763,3 +763,129 @@ async def test_current_starter_kit_passes_real_default_v7_luna_review(
         )
 
     assert result.passed, result.detail
+
+
+def _catalog_forwarding_harness(forward: int | None) -> bytes:
+    """A harness that hands the model ``forward`` of the offered tools.
+
+    ``None`` copies the whole catalog into the chat request, the DITTO-2564
+    shape that every provider refuses once the catalog is full size.
+    """
+    server = textwrap.dedent(
+        f"""
+        import json
+        import os
+        import urllib.request
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        FORWARD = {forward!r}
+        BASE = os.environ["DITTOBENCH_INFERENCE_BASE_URL"].rstrip("/")
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def send_json(self, status, payload):
+                body = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                self.send_json(200 if self.path == "/health" else 404, {{}})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                request = json.loads(self.rfile.read(length))
+                if self.path == "/seed":
+                    self.send_json(
+                        200,
+                        {{"pairs": len(request["pairs"]), "subjects": 0, "links": 0}},
+                    )
+                    return
+                tools = request["tools"]
+                if FORWARD is not None:
+                    tools = tools[:FORWARD]
+                body = json.dumps({{
+                    "model": os.environ["DITTOBENCH_MODEL"],
+                    "messages": [
+                        {{"role": "system", "content": request["system_prompt"]}},
+                        {{"role": "user", "content": request["user_input"]}},
+                    ],
+                    "tools": [{{"type": "function", "function": t}} for t in tools],
+                }}).encode()
+                chat = urllib.request.Request(
+                    BASE + "/chat/completions",
+                    data=body,
+                    headers={{"Content-Type": "application/json"}},
+                )
+                reply = json.loads(urllib.request.urlopen(chat, timeout=30).read())
+                self.send_json(200, {{
+                    "final_text": reply["choices"][0]["message"]["content"],
+                    "tool_calls": [],
+                }})
+
+        ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+        """
+    ).encode()
+    dockerfile = (
+        b"FROM python:3.12-alpine@sha256:"
+        b"b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d\n"
+        b"WORKDIR /app\n"
+        b"COPY server.py /app/server.py\n"
+        b"USER 65532:65532\n"
+        b'ENTRYPOINT ["python", "/app/server.py"]\n'
+    )
+    return _tar_gz({"Dockerfile": dockerfile, "server.py": server})
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("forward", "outcome"),
+    [(8, ScreeningOutcome.PASS), (None, ScreeningOutcome.DETERMINISTIC_REJECT)],
+)
+async def test_tool_catalog_probe_measures_the_forwarded_request_in_docker(
+    make_config: Any, forward: int | None, outcome: ScreeningOutcome
+) -> None:
+    """The ~1 MiB /run body reaches the harness and the gateway measures it."""
+    tarball = _catalog_forwarding_harness(forward)
+
+    def artifact(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=tarball)
+
+    config: ScreenerConfig = make_config(
+        build_timeout_seconds=600.0,
+        run_timeout_seconds=60.0,
+        max_tarball_bytes=20 * 1024 * 1024,
+        tool_catalog_probe_mode="enforce",
+        tool_catalog_probe_timeout_seconds=60.0,
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(artifact))
+    gate = BuildGate(
+        config,
+        client,
+        policy=PolicyEngine(CORE_ONLY_MANIFEST),
+        journal=ReviewJournal(None),
+    )
+    async with client:
+        result = await gate.screen(
+            agent_id=uuid4(),
+            attempt_id=uuid4(),
+            bench_version=18,
+            miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url="https://artifact.test/catalog.tar.gz",
+            build_only=True,
+        )
+
+    assert result.outcome == outcome, (result.detail, result.evidence)
+    if forward is None:
+        assert result.reason_code == "tool-catalog-context-overflow"
+        assert "2000 tool definitions" in result.detail
+    else:
+        size = next(
+            item for item in result.evidence if item.code == "tool-catalog-request-size"
+        )
+        assert f"{forward} tools" in size.summary

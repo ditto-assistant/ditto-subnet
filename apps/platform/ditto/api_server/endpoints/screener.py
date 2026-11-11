@@ -285,6 +285,7 @@ from ditto_screening_protocol.reason_codes import (
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
     SOURCE_REVIEW_CONFIRMED_VIOLATION,
     STATIC_MALICIOUS_SOURCE,
+    TOOL_CATALOG_CONTEXT_OVERFLOW,
     WORKER_CLAIM_NOT_STARTED,
 )
 
@@ -5123,6 +5124,21 @@ _SEED_PROBE_PUBLIC_REASONS: Final[dict[str, str]] = {
 }
 
 
+# Tool-catalog probe rejections. From bench v18 a scored case offers up to
+# the contract's maximum tool catalog; a harness that copies all of it into
+# each model request overflows the scoring model's context window on every
+# such case (DITTO-2564). The guidance names the limit, not the probe payload.
+_TOOL_CATALOG_PROBE_PUBLIC_REASONS: Final[dict[str, str]] = {
+    TOOL_CATALOG_CONTEXT_OVERFLOW: (
+        "Given a full-size benchmark tool catalog, the application sent a model "
+        "request longer than the scoring model's 131,072-token context window. "
+        "Scored cases can offer thousands of tools; send the model only the "
+        "tools a turn needs (search or defer the rest) instead of the whole "
+        "catalog."
+    ),
+}
+
+
 _STATIC_CATEGORY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}")
 _STATIC_LOCATION_RE = re.compile(
     r"[A-Za-z0-9_.][A-Za-z0-9_./ -]{0,159}(?::[0-9]{1,10})?"
@@ -5176,6 +5192,8 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
     """
     if reason_code is not None and reason_code in _SEED_PROBE_PUBLIC_REASONS:
         return _SEED_PROBE_PUBLIC_REASONS[reason_code]
+    if reason_code is not None and reason_code in _TOOL_CATALOG_PROBE_PUBLIC_REASONS:
+        return _TOOL_CATALOG_PROBE_PUBLIC_REASONS[reason_code]
     if reason_code == "exact-cross-miner-duplicate":
         return "Artifact is an exact duplicate of another miner submission"
     if reason_code == STATIC_MALICIOUS_SOURCE:

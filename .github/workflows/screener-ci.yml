@@ -13,6 +13,8 @@ on:
       # vectors, so a Go change that moves them must rerun the mirror.
       - research/dittobench-datagen/challenge/testdata/season_vectors.json
       - research/dittobench-datagen/challenge/testdata/dueling_composite_vectors.json
+      # The tool-catalog probe's contract is pinned to the Go catalog sizes.
+      - research/dittobench-datagen/catalog/v18.go
       - .github/workflows/screener-ci.yml
 
 permissions:

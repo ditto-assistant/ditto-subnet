@@ -128,6 +128,22 @@ class ScreenerConfig:
     seed_probe_timeout_seconds: float
     """Deadline for the single post-health ``/seed`` probe."""
 
+    tool_catalog_probe_mode: str
+    """How the full-size tool-catalog probe participates: ``off``, ``shadow``,
+    or ``enforce``.
+
+    For a submission screened at bench v18 or later, one scorer-shaped ``/run``
+    offers a catalog of the contract's maximum size and the isolated fake
+    gateway measures the model requests the harness forwards. A harness that
+    copies the whole catalog into each request overflows the scoring model's
+    context window on every scored case with a large catalog (DITTO-2564).
+    ``shadow`` records the measurement and any overflow as evidence without
+    changing the outcome; ``enforce`` rejects an overflow with
+    ``tool-catalog-context-overflow``."""
+
+    tool_catalog_probe_timeout_seconds: float
+    """Deadline for the single tool-catalog ``/run``."""
+
     v13_runtime_receipts_mode: str
     """``off`` (default) or ``shadow`` for bounded, non-decisive v13 probes.
 
@@ -387,6 +403,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         ),
         seed_probe_timeout_seconds=_parse_float(
             "SCREENER_SEED_PROBE_TIMEOUT_SECONDS", "60"
+        ),
+        # Additive rollout, like the seed probe: an operator promotes it to
+        # ``enforce`` once the shadow record shows no false overflow.
+        tool_catalog_probe_mode=_parse_choice(
+            "SCREENER_TOOL_CATALOG_PROBE_MODE", "shadow", ("off", "shadow", "enforce")
+        ),
+        tool_catalog_probe_timeout_seconds=_parse_float(
+            "SCREENER_TOOL_CATALOG_PROBE_TIMEOUT_SECONDS", "60"
         ),
         v13_runtime_receipts_mode=_parse_choice(
             "SCREENER_V13_RUNTIME_RECEIPTS_MODE", "off", ("off", "shadow")
