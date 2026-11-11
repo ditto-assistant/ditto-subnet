@@ -95,4 +95,34 @@ describe('benchmark canary boundary', () => {
       ?.v9_base?.score_gates?.model_use).toBeNull()
     expect(gates({ rollout_mode: 'enforce' }, { token_efficiency: { multiplier: 1.5 } })?.token_efficiency).toBeNull()
   })
+  it('exposes aggregate run budget exhaustion without exposing raw case details', () => {
+    const base = { canary_id: id, agent_id: id, bench_version: 18, validator_hotkey: '5'.repeat(48),
+      slot_id: 'slot-0', artifact_sha256: 'a'.repeat(64), screened_image_sha256: 'b'.repeat(64),
+      dataset_sha256: 'c'.repeat(64), seed: '1', run_size: 'full', actor: 'staff', reason: 'Diagnostic',
+      issued_at: 'now', deadline: 'later', status: 'completed', finished_at: 'now',
+      failure_detail: null, authoritative: false }
+    const budget = { contract_id: 'run-budget-v1', budget_nano_usd: 1_000_000_000, budget_usd: 1,
+      cases: 350, exhausted: true, admitted_cases: 46, unrun_cases: 304, unrun_tool_cases: 4,
+      unrun_memory_cases: 125, unrun_slice_cases: 175, spent_nano_usd_at_cutoff: 1_015_309_800,
+      reason: 'run_budget_exhausted', private_detail: 'private budget detail' }
+    const wrap = (run_budget: unknown) => benchmarkCanarySchema.parse({ ...base, result: {
+      run_id: 'r', bench_version: 18, composite: .039, tool_mean: .52, memory_mean: 0,
+      n: 350, generated_at: 'now', details: { run_budget, transcript: 'private transcript' },
+      per_case: [{ notes: ['private case content'] }],
+    } })
+    const result = wrap(budget)
+    expect(result.result?.details?.run_budget).toMatchObject({ exhausted: true,
+      admitted_cases: 46, unrun_memory_cases: 125, unrun_slice_cases: 175,
+      reason: 'run_budget_exhausted' })
+    expect(JSON.stringify(result)).not.toContain('private')
+    expect(wrap({ ...budget, reason: 'private free text' }).result?.details).toBeUndefined()
+    expect(wrap({ ...budget, exhausted: 'yes' }).result?.details).toBeUndefined()
+    expect(wrap({ ...budget, exhausted: false, reason: undefined }).result?.details?.run_budget?.exhausted).toBe(false)
+    expect(wrap({ ...budget, reason: null, budget_usd: null }).result?.details?.run_budget)
+      .toMatchObject({ reason: null, budget_usd: null, unrun_cases: 304 })
+    expect(wrap({ ...budget, budget_usd: undefined }).result?.details?.run_budget?.unrun_cases).toBe(304)
+    expect(wrap({ ...budget, contract_id: null }).result?.details?.run_budget?.unrun_cases).toBe(304)
+    expect(wrap({ ...budget, contract_id: undefined }).result?.details?.run_budget?.unrun_cases).toBe(304)
+    expect(wrap({ ...budget, contract_id: 'unknown-contract' }).result?.details).toBeUndefined()
+  })
 })

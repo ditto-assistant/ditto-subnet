@@ -35,6 +35,22 @@ export const cancelBenchmarkCanaryInputSchema = getBenchmarkCanaryInputSchema.ex
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 const bps = z.number().int().min(0).max(10_000)
 
+// Bench v18's admission budget is aggregate evidence, not the raw case report.
+const canaryRunBudgetSchema = z.object({
+  contract_id: z.literal('run-budget-v1').nullish(),
+  budget_nano_usd: count,
+  budget_usd: z.number().finite().nonnegative().nullish(),
+  cases: count,
+  exhausted: z.boolean(),
+  admitted_cases: count,
+  unrun_cases: count,
+  unrun_tool_cases: count,
+  unrun_memory_cases: count,
+  unrun_slice_cases: count,
+  spent_nano_usd_at_cutoff: count,
+  reason: z.enum(['run_budget_exhausted', 'run_budget_meter_lost']).nullish(),
+})
+
 // Bench v16+ `details.priced_cost`: numbers only (token counts, nano-USD
 // costs, ratio and factor), so a canary can be checked against the published
 // priced-cost rule without the raw report. Strict picks: no other key passes.
@@ -146,10 +162,12 @@ export const benchmarkCanarySchema = z.object({
     details: z.object({
       priced_cost: canaryPricedCostSchema.nullish().catch(null),
       dueling: canaryDuelingSchema.nullish().catch(null),
+      run_budget: canaryRunBudgetSchema.nullish().catch(null),
     }).and(canaryGateFactorsSchema).nullish().catch(null).transform((d) => {
-      if (!d || !(d.priced_cost || d.dueling)) return undefined
-      const { priced_cost, dueling, ...gates } = d
-      return { priced_cost: priced_cost ?? null, dueling: dueling ?? null, gate_factors: gates }
+      if (!d || !(d.priced_cost || d.dueling || d.run_budget)) return undefined
+      const { priced_cost, dueling, run_budget, ...gates } = d
+      return { priced_cost: priced_cost ?? null, dueling: dueling ?? null,
+        run_budget: run_budget ?? null, gate_factors: gates }
     }),
   }).nullable(),
 })
