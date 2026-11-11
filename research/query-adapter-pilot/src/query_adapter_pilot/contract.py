@@ -127,8 +127,9 @@ class Source:
 
     MINER: Final = "miner"
     FALLBACK_LOCAL: Final = "fallback_local"  # Ditto recomputed with its own weights
-    FALLBACK_IDENTITY: Final = "fallback_identity"  # tier 0: raw normalized query
-    NONE: Final = "none"  # request refused before any vector (unauthorized)
+    # Tier 0: the raw normalized query. Also the vector Ditto uses when it
+    # refuses an unauthorized user before any miner call.
+    FALLBACK_IDENTITY: Final = "fallback_identity"
 
 
 class ContractError(ValueError):
