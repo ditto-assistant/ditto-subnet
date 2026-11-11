@@ -5656,6 +5656,7 @@ async def test_member_retry_counts_only_in_season_scores(
         from ditto.api_server.endpoints.admin_validation_retry import (
             get_validation_retry,
         )
+        from ditto.db.queries.retry_state import classify_agent_retry_states
 
         detail = await get_validation_retry(agent_id, None, session)  # type: ignore[arg-type]
         assert detail.score_count == 2
@@ -5663,3 +5664,16 @@ async def test_member_retry_counts_only_in_season_scores(
         assert [
             t.validator_hotkey for t in detail.tickets if t.status == "expired"
         ] == ["validator-2"]
+
+        # Only settled members are season-scoped, identically on both paths.
+        agent.status = AgentStatus.EVALUATING
+        await session.flush()
+        evaluating = await get_validation_retry(agent_id, None, session)  # type: ignore[arg-type]
+        states = await classify_agent_retry_states(
+            session, agents=[agent], now=datetime.now(UTC)
+        )
+        # Both paths count all 3 and agree the quorum is already reached.
+        assert evaluating.score_count == 3
+        assert evaluating.recovery_allowed is False
+        assert evaluating.blocking_reason == "submission already reached scoring quorum"
+        assert agent_id not in states

@@ -502,10 +502,14 @@ async def _load(
         )
     )
     scores = [score for score in all_scores if score.bench_version == bench_version]
-    if await is_open_rollout_qualification(
+    if agent.status in (
+        AgentStatus.SCORED,
+        AgentStatus.LIVE,
+    ) and await is_open_rollout_qualification(
         session, agent_id=agent_id, bench_version=bench_version
     ):
-        # The same season-scoped quorum the rollout barrier counts.
+        # The same season-scoped quorum the rollout barrier counts, for the
+        # same settled members ``classify_agent_retry_states`` scopes.
         window = await dueling_season_window(session, bench_version)
         scores = rollout_quorum_scores(
             scores, comparable=window.comparable if window is not None else None
