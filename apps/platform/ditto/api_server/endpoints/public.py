@@ -445,6 +445,7 @@ from ditto.db.queries.queue_order import (
     QueuePreviewEntry,
     preview_queue_order,
 )
+from ditto.db.queries.queue_removal import removed_agent_ids
 from ditto.db.queries.retirement import retired_agent_ids
 from ditto.db.queries.retry_state import (
     AgentRetryState,
@@ -6853,13 +6854,17 @@ def _public_activity_response(
     avatar_urls: dict[str, str] | None = None,
     miner_uids: dict[str, int] | None = None,
     scoring_waits: dict[UUID, PublicScoringWait] | None = None,
+    queue_withdrawn_agent_ids: set[UUID] | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health.
 
     ``scoring_waits`` holds each waiting row's season hold, keyed by agent id;
-    it is attached to the waiting lanes only.
+    it is attached to the waiting lanes only. ``queue_withdrawn_agent_ids``
+    names the rows an in-force operator removal keeps out of the active queue;
+    it marks ``not_queued`` rows only.
     """
     waits = scoring_waits or {}
+    withdrawn = queue_withdrawn_agent_ids or set()
     claims = handle_claims or {}
     roots = owner_roots or {}
     uids = miner_uids or {}
@@ -7119,6 +7124,9 @@ def _public_activity_response(
                 previous_generation=(
                     _queue_gate(queue_preview, row.agent.agent_id)
                     == "previous_generation"
+                ),
+                queue_withdrawn=(
+                    row_status == "not_queued" and row.agent.agent_id in withdrawn
                 ),
                 quorum=SCORING_QUORUM,
                 retry_state=(
@@ -7767,6 +7775,15 @@ async def activity(
                 agent_id
                 for agent_id, row_status in statuses.items()
                 if row_status == "scoring_failed"
+            ],
+            bench_version=active_version,
+        ),
+        queue_withdrawn_agent_ids=await removed_agent_ids(
+            session,
+            agent_ids=[
+                agent_id
+                for agent_id, row_status in statuses.items()
+                if row_status == "not_queued"
             ],
             bench_version=active_version,
         ),
@@ -8497,6 +8514,14 @@ async def agent_summary(
                 active_version=active_version,
             )
         ).get(row.agent.agent_id),
+        queue_withdrawn=(
+            status == "not_queued"
+            and bool(
+                await removed_agent_ids(
+                    session, agent_ids=[agent_id], bench_version=active_version
+                )
+            )
+        ),
     )
 
 

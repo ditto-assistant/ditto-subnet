@@ -25,8 +25,8 @@ import type { PipelineEntry } from "../../types/pipeline";
 /** Ranked board entry (rank assigned client-side, null when unranked). */
 type RankedEntry = LeaderboardEntry & { rank?: number | null };
 
-function stageLabel(status: string | undefined): string {
-  return activityStage(status)[0];
+function stageLabel(entry: PipelineEntry): string {
+  return activityStage(entry.status, entry)[0];
 }
 
 function searchText(value: unknown): string {
@@ -102,7 +102,7 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
       const key = String(entry.agent_id || entry.name || "");
       if (!key || seen[key]) return;
       seen[key] = true;
-      const stage = stageLabel(entry.status);
+      const stage = stageLabel(entry);
       const preserved = (entry as { preserved_composite?: number | null }).preserved_composite;
       const display = publicDisplayName(entry.name, entry.name_handle);
       items.push({

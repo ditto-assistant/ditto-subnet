@@ -339,3 +339,27 @@ async def agent_is_admitted(
     return agent_id in await admitted_agent_ids(
         session, bench_version=bench_version, agent_ids=[agent_id]
     )
+
+
+async def agent_is_era_admitted(
+    session: AsyncSession, *, bench_version: int, agent_id: UUID
+) -> bool:
+    """Whether one exact agent clears the era boundary, ignoring queue removals.
+
+    :func:`agent_is_admitted` is this AND no in-force queue removal. A reader
+    that names *which* gate refused a submission needs this half on its own: an
+    operator's removal of a current-era arrival does not make it historical.
+    """
+
+    rollout = await admission_rollout_for_active_version(
+        session, bench_version=bench_version
+    )
+    if rollout is None:
+        return True
+    admitted = await session.scalar(
+        select(Agent.agent_id).where(
+            Agent.agent_id == agent_id,
+            benchmark_admission_predicate(rollout=rollout, bench_version=bench_version),
+        )
+    )
+    return admitted is not None

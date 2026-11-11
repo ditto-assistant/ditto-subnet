@@ -41,10 +41,10 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import Agent, BenchmarkDataset, Score
+from ditto.db.models import Agent, BenchmarkDataset, Score, ValidatorQueueWithdrawal
 from ditto.db.queries.benchmark_admission import (
     activated_rollout_for_version,
-    agent_is_admitted,
+    agent_is_era_admitted,
 )
 from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
@@ -52,6 +52,7 @@ from ditto.db.queries.benchmark_rollout import (
     arrival_bench_version,
     open_rollout,
 )
+from ditto.db.queries.queue_removal import is_eviction, load_queue_removal
 from ditto.db.queries.scores import SCORING_QUORUM
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -69,6 +70,20 @@ _SCREENED_IMAGE_FIELDS = (
     "screened_image_upload_id",
     "screened_image_verified_at",
 )
+
+
+def _queue_removal_reason(removal: ValidatorQueueWithdrawal, bench_version: int) -> str:
+    """Name the removal keeping a submission out of one era's queue, and why."""
+    if removal.terminal_failure_code is not None:
+        kind = f"a terminal-failure close-out ({removal.terminal_failure_code})"
+    elif is_eviction(removal):
+        kind = "an operator eviction"
+    else:
+        kind = "an operator withdrawal"
+    return (
+        f"removed from the v{bench_version} validator queue by {kind} at "
+        f"{removal.created_at.isoformat(timespec='seconds')}: {removal.reason}"
+    )
 
 
 @router.get(
@@ -141,8 +156,15 @@ async def scoring_readiness(
             )
         )
     )
-    benchmark_admitted = await agent_is_admitted(
+    # The lease path requires both gates ``agent_is_admitted`` combines: the era
+    # boundary and no in-force queue removal. Read them apart so each refusal
+    # is named. Reporting an operator's removal of a current-era arrival as a
+    # "historical submission" sent SN-470 hunting for an admission bug.
+    era_admitted = await agent_is_era_admitted(
         session, bench_version=scoring_version, agent_id=agent_id
+    )
+    queue_removal = await load_queue_removal(
+        session, agent_id=agent_id, bench_version=scoring_version
     )
 
     blocking: list[str] = []
@@ -187,7 +209,9 @@ async def scoring_readiness(
             f"no v{scoring_version} benchmark dataset has been generated "
             "for this agent yet"
         )
-    if not benchmark_admitted:
+    if queue_removal is not None:
+        blocking.append(_queue_removal_reason(queue_removal, scoring_version))
+    if not era_admitted:
         blocking.append(
             f"historical submission is not admitted to the v{scoring_version} "
             "validator queue"

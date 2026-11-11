@@ -122,6 +122,23 @@ export interface TerminalFailureFields {
   } | null;
 }
 
+/** The stage label for a submission an operator withdrew from the queue. */
+export const QUEUE_WITHDRAWN_LABEL = "Withdrawn · not queued";
+
+/** The field that names an operator withdrawal, from either payload. */
+export interface QueueWithdrawalFields {
+  queue_withdrawn?: boolean | null;
+}
+
+/** Whether an operator withdrawal, not the era boundary, keeps a `not_queued`
+ * row out of the active benchmark queue. */
+export function isQueueWithdrawn(
+  status: string | null | undefined,
+  entry?: QueueWithdrawalFields | null,
+): boolean {
+  return status === "not_queued" && entry?.queue_withdrawn === true;
+}
+
 // ── Dueling-season wait (bench v16+) ────────────────────────────────────────
 
 /** The chip a waiting row reads while no dueling season is open. */
@@ -204,20 +221,22 @@ export function seasonWaitSentence(
 /**
  * Stage pill per status (activityStage 6832–6850). Terminal states for a
  * closed benchmark generation (#462) read as history, not failure:
- * not_queued/retired are neutral, never "bad". #623 renamed the screening
- * stages to the mechanical-admission vocabulary: screening builds a verified
- * image. Source review runs in full before scoring; a held row reads "Under
+ * not_queued/retired are neutral, never "bad". A not_queued row an operator
+ * withdrew names the withdrawal, not "Historical" (SN-470). #623 renamed the
+ * screening stages to the mechanical-admission vocabulary: screening builds a
+ * verified image. Source review runs in full before scoring; a held row reads "Under
  * review", and only a row Platform actually deferred until a score qualified
  * (it carries deferred_review_triggers) reads "Deferred source review".
  */
 export function activityStage(
   status: string | null | undefined,
-  entry?: DeferredReviewFields & TerminalFailureFields & ScoringWaitFields,
+  entry?: DeferredReviewFields & TerminalFailureFields & ScoringWaitFields & QueueWithdrawalFields,
 ): ChipState {
   if (isTerminalScoringFailure(status, entry)) return [SCORING_FAILED_LABEL, "bad"];
   // Validators turn the work away until a season opens, so "waiting for
   // validators" would name the wrong thing.
   if (seasonWait(status, entry)) return [SEASON_WAIT_LABEL, "progress"];
+  if (isQueueWithdrawn(status, entry)) return [QUEUE_WITHDRAWN_LABEL, ""];
   const stages: Record<string, ChipState> = {
     uploaded: ["Waiting for admission", "progress"],
     waiting_screening: ["Waiting for admission", "progress"],
@@ -449,6 +468,7 @@ export function validationProgress(e: ActivityStatusEntry): string {
   // verdict is not queued for anything.
   if (isTerminalScoringFailure(e.status, e)) return count + " of " + quorum + " · cannot finish";
   if (e.status === "below_score_floor") return count + " of " + quorum + " · queued last";
+  if (isQueueWithdrawn(e.status, e)) return count + " of " + quorum + " · withdrawn";
   if (e.status === "not_queued") return "Not in active benchmark queue";
   if (e.status === "retired") return count + " of " + quorum + " · benchmark closed";
   const hasStarted =
@@ -570,6 +590,17 @@ export function validationDetail(e: ActivityStatusEntry, now: Date = new Date())
       ". " +
       scoreFloorAttribution(e) +
       " The third score is still queued at low priority so this benchmark record reaches 3 of 3."
+    );
+  }
+  if (isQueueWithdrawn(e.status, e)) {
+    const kept =
+      count > 0
+        ? "the submission and its " + count + " accepted score" + (count === 1 ? "" : "s")
+        : "the submission and its screening record";
+    return (
+      "An operator withdrew this submission from the active benchmark queue, so validators will not score it while the withdrawal stands. This is not a rejection: " +
+      kept +
+      " stay on file."
     );
   }
   if (e.status === "not_queued") {
