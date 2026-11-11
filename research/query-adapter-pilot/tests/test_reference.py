@@ -7,7 +7,13 @@ from pathlib import Path
 
 import numpy as np
 
-from query_adapter_pilot.contract import DIM, PARITY_MAX_ABS, PARITY_MIN_COSINE, decode_f32
+from query_adapter_pilot.contract import (
+    DIM,
+    OUTPUT_NORM_TOLERANCE,
+    PARITY_MAX_ABS,
+    PARITY_MIN_COSINE,
+    decode_f32,
+)
 from query_adapter_pilot.reference import (
     apply,
     identity,
@@ -46,4 +52,19 @@ def test_generators_are_deterministic() -> None:
     assert synthetic_adapter(3).digest() == synthetic_adapter(3).digest()
     assert synthetic_adapter(3).digest() != synthetic_adapter(4).digest()
     assert np.array_equal(synthetic_query(5), synthetic_query(5))
-    assert np.array_equal(identity(synthetic_query(5)), synthetic_query(5))
+    assert not np.array_equal(synthetic_query(5), synthetic_query(6))
+
+
+def test_identity_fallback_keeps_direction_within_contract_tolerance() -> None:
+    # The tier-0 fallback re-normalizes an already unit query. float32 L2 norms
+    # differ by BLAS/platform in the last ulp (seen on Linux x86 CI), so this is
+    # not bitwise. The contract only promises unit norm and the same direction
+    # within the parity bound Ditto uses to accept any vector.
+    for seed in range(8):
+        q = synthetic_query(seed)
+        out = identity(q)
+        assert out.dtype == np.float32 and out.shape == (DIM,)
+        assert abs(float(np.linalg.norm(out.astype(np.float64))) - 1.0) <= OUTPUT_NORM_TOLERANCE
+        cos, max_abs = parity(out, q)
+        assert cos >= PARITY_MIN_COSINE
+        assert max_abs <= PARITY_MAX_ABS
