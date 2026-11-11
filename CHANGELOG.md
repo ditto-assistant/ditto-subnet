@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.473.0 (2026-11-11)
+
+### Chores
+
+- Refresh starter-kit anti-copy reference
+  ([#3476](https://github.com/ditto-assistant/ditto-subnet/pull/3476),
+  [`9a3c27a`](https://github.com/ditto-assistant/ditto-subnet/commit/9a3c27a3a0cfb0c8ee99ff6c55dfdcd7d831ce4a))
+
+- Remove user auth requirement for merge
+  ([#3480](https://github.com/ditto-assistant/ditto-subnet/pull/3480),
+  [`0189689`](https://github.com/ditto-assistant/ditto-subnet/commit/01896890273474eeca3601790a7b34ca0ed867d6))
+
+### Features
+
+- **inference**: Expose DaniLabs relay binding state
+  ([#3477](https://github.com/ditto-assistant/ditto-subnet/pull/3477),
+  [`9a69275`](https://github.com/ditto-assistant/ditto-subnet/commit/9a69275c7b7924b0104ec3e6c8c78a6b288c3463))
+
+
 ## v0.472.0 (2026-11-10)
 
 ### Documentation
