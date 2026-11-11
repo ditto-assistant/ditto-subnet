@@ -82,7 +82,10 @@ def _decode(raw: bytes) -> Any:
         return None
     try:
         return json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
+        # ValueError covers bad JSON and bad UTF-8; RecursionError is a deeply
+        # nested body under the size cap. Either way the body is unparseable,
+        # so the client rejects it and falls back instead of aborting the run.
         return None
 
 

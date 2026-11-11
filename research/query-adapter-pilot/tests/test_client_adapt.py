@@ -119,6 +119,17 @@ def test_invalid_output_rejected_and_never_used(miner: FakeMiner, mode: str) -> 
     assert client.ledger.accepted_units == 0
 
 
+def test_deeply_nested_body_is_invalid_and_falls_back(miner: FakeMiner) -> None:
+    """A recursion bomb under the size cap must not abort the run."""
+    miner.mode = "deep_json"
+    wl = _one_user()
+    client = _client(miner.url)
+    (r,) = _run(client, wl)
+    assert (r.outcome, r.source) == (Outcome.REJECTED_INVALID, Source.FALLBACK_LOCAL)
+    np.testing.assert_array_equal(r.vector, _expected(wl, "syn-alice", 7))
+    assert client.ledger.accepted_units == 0
+
+
 def test_unavailable_miner_falls_back() -> None:
     wl = _one_user()
     client = _client(closed_port_url())

@@ -206,7 +206,15 @@ def test_default_run_ids_are_random_and_valid() -> None:
 
 @pytest.mark.parametrize(
     "case",
-    ["non_loopback", "missing_token", "empty_token", "bad_workload", "missing_workload", "run_id"],
+    [
+        "non_loopback",
+        "missing_token",
+        "empty_token",
+        "bad_workload",
+        "deep_workload",
+        "missing_workload",
+        "run_id",
+    ],
 )
 def test_usage_errors_exit_2(
     files: dict[str, Path], case: str, capsys: pytest.CaptureFixture[str]
@@ -221,12 +229,23 @@ def test_usage_errors_exit_2(
         files["token"].write_text("\n")
     elif case == "bad_workload":
         files["workload"].write_text(json.dumps({**MIXED_WORKLOAD, "kind": "nope"}))
+    elif case == "deep_workload":
+        files["workload"].write_text("[" * 100_000 + "]" * 100_000)
     elif case == "missing_workload":
         files["workload"].unlink()
     elif case == "run_id":
         extra = ["--run-id", "Has.Dots"]
     assert pilot.main(_args(files, url, *extra)) == 2
     assert "error" in capsys.readouterr().err
+    assert not files["out"].exists()
+
+
+def test_invalid_utf8_token_file_exits_2(
+    files: dict[str, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    files["token"].write_bytes(b"\xff\xfe\x80not-utf8")
+    assert pilot.main(_args(files, "http://127.0.0.1:9")) == 2
+    assert "token file" in capsys.readouterr().err
     assert not files["out"].exists()
 
 
