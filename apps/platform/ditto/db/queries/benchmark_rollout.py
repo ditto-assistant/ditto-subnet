@@ -6,7 +6,7 @@ import json
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
@@ -1781,15 +1781,31 @@ async def agent_attributable_exhausted_members(
     ids = set(agent_ids)
     if not ids:
         return set()
+    # ``active_bench_version`` reaches this on every call while the barrier
+    # is open, so it reads plain columns, never ORM rows: no log tail or
+    # per-case score breakdown is fetched, and no partial ticket or score
+    # lands in a session the caller may go on to lease or write from. The
+    # rows carry exactly the attributes the retry-state predicates read.
     tickets: dict[UUID, list[ValidatorTicket]] = {agent_id: [] for agent_id in ids}
-    for ticket in await session.scalars(
-        select(ValidatorTicket).where(
+    for ticket in await session.execute(
+        select(
+            ValidatorTicket.agent_id,
+            ValidatorTicket.validator_hotkey,
+            ValidatorTicket.status,
+            ValidatorTicket.purpose,
+            ValidatorTicket.provider_outage_epoch,
+            ValidatorTicket.attempt_count,
+            ValidatorTicket.manual_retry_grants,
+            ValidatorTicket.failure_detail,
+            ValidatorTicket.failed_at,
+            ValidatorTicket.issued_at,
+        ).where(
             ValidatorTicket.agent_id.in_(ids),
             ValidatorTicket.bench_version == rollout.desired_version,
             scoring_retry_ticket(),
         )
     ):
-        tickets[ticket.agent_id].append(ticket)
+        tickets[ticket.agent_id].append(cast("ValidatorTicket", ticket))
     # Members still working, or with no agent-caused failure at all, cannot
     # qualify; skip the score read for them (the common, healthy case).
     candidates = {
@@ -1807,15 +1823,15 @@ async def agent_attributable_exhausted_members(
     if not candidates:
         return set()
     scores: dict[UUID, list[Score]] = {agent_id: [] for agent_id in candidates}
-    for score in await session.scalars(
-        select(Score).where(
+    for score in await session.execute(
+        select(Score.agent_id, Score.validator_hotkey).where(
             Score.agent_id.in_(candidates),
             Score.bench_version == rollout.desired_version,
             # The barrier's own season-scoped count, so ``needed`` matches it.
             await _desired_season_scope(session, rollout),
         )
     ):
-        scores[score.agent_id].append(score)
+        scores[score.agent_id].append(cast("Score", score))
     return {
         agent_id
         for agent_id in candidates
