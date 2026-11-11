@@ -1,0 +1,43 @@
+{
+  "contract": "query-adapter/v1",
+  "kind": "synthetic-workload",
+  "name": "happy",
+  "synthetic": true,
+  "users": [
+    {"user_ref": "syn-happy-u00", "adapters": [{"version": 1, "seed": 110001}], "provision": [1], "authorized_version": 1},
+    {"user_ref": "syn-happy-u01", "adapters": [{"version": 1, "seed": 110011}], "provision": [1], "authorized_version": 1},
+    {"user_ref": "syn-happy-u02", "adapters": [{"version": 1, "seed": 110021}], "provision": [1], "authorized_version": 1}
+  ],
+  "requests": [
+    {"user_ref": "syn-happy-u00", "query_seed": 510000},
+    {"user_ref": "syn-happy-u01", "query_seed": 510001},
+    {"user_ref": "syn-happy-u02", "query_seed": 510002},
+    {"user_ref": "syn-happy-u00", "query_seed": 510003},
+    {"user_ref": "syn-happy-u01", "query_seed": 510004},
+    {"user_ref": "syn-happy-u02", "query_seed": 510005},
+    {"user_ref": "syn-happy-u00", "query_seed": 510006},
+    {"user_ref": "syn-happy-u01", "query_seed": 510007},
+    {"user_ref": "syn-happy-u02", "query_seed": 510008},
+    {"user_ref": "syn-happy-u00", "query_seed": 510009},
+    {"user_ref": "syn-happy-u01", "query_seed": 510010},
+    {"user_ref": "syn-happy-u02", "query_seed": 510011},
+    {"user_ref": "syn-happy-u00", "query_seed": 510012},
+    {"user_ref": "syn-happy-u01", "query_seed": 510013},
+    {"user_ref": "syn-happy-u02", "query_seed": 510014},
+    {"user_ref": "syn-happy-u00", "query_seed": 510015},
+    {"user_ref": "syn-happy-u01", "query_seed": 510016},
+    {"user_ref": "syn-happy-u02", "query_seed": 510017},
+    {"user_ref": "syn-happy-u00", "query_seed": 510018},
+    {"user_ref": "syn-happy-u01", "query_seed": 510019},
+    {"user_ref": "syn-happy-u02", "query_seed": 510020},
+    {"user_ref": "syn-happy-u00", "query_seed": 510021},
+    {"user_ref": "syn-happy-u01", "query_seed": 510022},
+    {"user_ref": "syn-happy-u02", "query_seed": 510023},
+    {"user_ref": "syn-happy-u00", "query_seed": 510024},
+    {"user_ref": "syn-happy-u01", "query_seed": 510025},
+    {"user_ref": "syn-happy-u02", "query_seed": 510026},
+    {"user_ref": "syn-happy-u00", "query_seed": 510027},
+    {"user_ref": "syn-happy-u01", "query_seed": 510028},
+    {"user_ref": "syn-happy-u02", "query_seed": 510029}
+  ]
+}

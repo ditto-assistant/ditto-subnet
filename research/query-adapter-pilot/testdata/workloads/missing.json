@@ -1,0 +1,15 @@
+{
+  "contract": "query-adapter/v1",
+  "kind": "synthetic-workload",
+  "name": "missing",
+  "synthetic": true,
+  "users": [
+    {"user_ref": "syn-missing-u00", "adapters": [{"version": 1, "seed": 140001}, {"version": 2, "seed": 140002}], "provision": [1], "authorized_version": 2}
+  ],
+  "requests": [
+    {"user_ref": "syn-missing-u00", "query_seed": 540000},
+    {"user_ref": "syn-missing-u00", "query_seed": 540001},
+    {"user_ref": "syn-missing-u00", "query_seed": 540002},
+    {"user_ref": "syn-missing-u00", "query_seed": 540003}
+  ]
+}

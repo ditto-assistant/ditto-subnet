@@ -1,0 +1,15 @@
+{
+  "contract": "query-adapter/v1",
+  "kind": "synthetic-workload",
+  "name": "stale",
+  "synthetic": true,
+  "users": [
+    {"user_ref": "syn-stale-u00", "adapters": [{"version": 1, "seed": 130001}, {"version": 2, "seed": 130002}], "provision": [1, 2], "authorized_version": 1}
+  ],
+  "requests": [
+    {"user_ref": "syn-stale-u00", "query_seed": 530000},
+    {"user_ref": "syn-stale-u00", "query_seed": 530001},
+    {"user_ref": "syn-stale-u00", "query_seed": 530002},
+    {"user_ref": "syn-stale-u00", "query_seed": 530003}
+  ]
+}

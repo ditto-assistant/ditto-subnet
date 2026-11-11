@@ -1,0 +1,22 @@
+{
+  "contract": "query-adapter/v1",
+  "kind": "synthetic-workload",
+  "name": "replay",
+  "synthetic": true,
+  "users": [
+    {"user_ref": "syn-replay-u00", "adapters": [{"version": 1, "seed": 160001}], "provision": [1], "authorized_version": 1},
+    {"user_ref": "syn-replay-u01", "adapters": [{"version": 1, "seed": 160011}], "provision": [1], "authorized_version": 1}
+  ],
+  "requests": [
+    {"user_ref": "syn-replay-u00", "query_seed": 560000},
+    {"user_ref": "syn-replay-u01", "query_seed": 560001},
+    {"user_ref": "syn-replay-u00", "query_seed": 560002},
+    {"replay_of": 0},
+    {"user_ref": "syn-replay-u01", "query_seed": 560004},
+    {"user_ref": "syn-replay-u00", "query_seed": 560005},
+    {"replay_of": 2},
+    {"replay_of": 4},
+    {"user_ref": "syn-replay-u01", "query_seed": 560008},
+    {"replay_of": 8}
+  ]
+}
