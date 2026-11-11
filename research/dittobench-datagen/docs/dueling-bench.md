@@ -396,7 +396,14 @@ Agents scored against different generator sets are not comparable, so the
   queues one rotation re-score on the new set for every member with no score
   in the season that just closed and not already in the opening cohort, in
   board order, behind the cohort. It is recorded on the season as
-  `detail.catchup`. The admin seasons read reports `rotation_spend`: metered
+  `detail.catchup`. A shadow season of an open rollout's desired version
+  reads its board from that version's ranked quorum instead (agents with a
+  ranked 3/3 quorum in the season window, best median first, one per owner
+  family; `detail.catchup.source = rollout_ranked_quorum`). Its opening
+  cohort is the rollout's frozen members, so without this a new submission
+  that reached a desired-version quorum would expire at the next open and
+  drop out of the activation count (`MIN_DESIRED_AUTHORITY_AGENTS`). A
+  canary-only shadow season (no rollout at its version) has no catch-up. The admin seasons read reports `rotation_spend`: metered
   grant cost of rotation leases, opening and catch-up apart, per season and
   over the last 24 hours (`db/queries/dueling_rotation_spend.py`).
 - A ban or copy ruling against a pinned generator mid-season triggers an early
