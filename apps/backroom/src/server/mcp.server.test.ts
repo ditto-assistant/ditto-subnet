@@ -752,6 +752,7 @@ describe('Backroom MCP tools', () => {
         'get_leaderboard',
         'get_ledger_epoch_snapshots',
         'get_miner_owner_footprint',
+        'get_upload_payment_proof',
         'get_score_history',
         'get_scored_policy_rescreen',
         'get_screened_image_rebuild',
@@ -1007,7 +1008,9 @@ describe('Backroom MCP tools', () => {
     // controls, with about 0.5 KB of headroom for the combined catalog.
     // The five generator frontier tools (one-line summaries, detail in tool
     // help) add 3,197 bytes; the catalog measures 235,662, under this bound.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(236_500)
+    // The upload payment proof read (block hash and index, one-line summary,
+    // detail in tool help) measures 236,751 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(237_250)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1750,7 +1753,7 @@ describe('Backroom MCP tools', () => {
     const catalog = await client.listTools()
     for (const tool of [
       'get_treasury_ledger_readiness', 'get_continual_retest_diagnostic',
-      'get_validator_slot_settings', 'get_miner_owner_footprint',
+      'get_validator_slot_settings', 'get_miner_owner_footprint', 'get_upload_payment_proof',
       'get_inference_concurrency_settings', 'get_score_history',
       'list_stuck_submissions', 'get_confirmation_bundle_settings',
       'search_screening_source', 'read_screening_source_file',
@@ -3630,6 +3633,49 @@ describe('Backroom MCP tools', () => {
     )
     await client.close()
     await server.close()
+  })
+
+  it('reads what Platform recorded for one upload payment proof (SN-455)', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const blockHash = `0x${'ab'.repeat(32)}`
+    const payload = {
+      block_hash: blockHash, extrinsic_index: 12, state: 'reusable_credit',
+      miner_hotkey: '5MinerHotkey', miner_coldkey: '5PaymentColdkey', amount_rao: 100_000_000,
+      dest_address: '5UploadFeeAddress', block_timestamp: '2026-11-06T09:38:36Z',
+      recorded_at: '2026-11-06T09:52:00Z',
+      agent: {
+        agent_id: '11111111-1111-4111-8111-111111111111', agent_name: 'agent', agent_version: 33,
+        agent_status: 'scored', artifact_sha256: 'c'.repeat(64), submitted_at: '2026-11-06T01:49:48Z',
+      },
+      generator_submission_id: null, recovery_expires_at: '2026-11-07T09:38:36Z',
+      recovery_expired: true, generated_at: '2026-11-11T22:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_upload_payment_proof',
+        arguments: { blockHash: blockHash.toUpperCase().replace('0X', '0x'), extrinsicIndex: 12 },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        state: 'reusable_credit', recovery_expired: true,
+        agent: { agent_id: payload.agent.agent_id },
+      })
+      expect(fetchMock).toHaveBeenCalledWith(
+        `https://platform-api.heyditto.ai/api/v1/admin/upload-payments/${blockHash}/12`,
+        expect.any(Object),
+      )
+      const malformed = await client.callTool({
+        name: 'get_upload_payment_proof', arguments: { blockHash: '0x1234', extrinsicIndex: 12 },
+      })
+      expect(malformed.isError).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('reads how far the metagraph snapshot trails the chain (SN-463)', async () => {

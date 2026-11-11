@@ -113,6 +113,7 @@ from ditto.api_server.endpoints import (
     admin_treasury_receipts_router,
     admin_treasury_settings_router,
     admin_unreleased_copy_router,
+    admin_upload_payments_router,
     admin_v13_private_generation_router,
     admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
@@ -873,6 +874,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_ath_rulings_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
     app.include_router(admin_unreleased_copy_router, prefix="/api/v1")
+    app.include_router(admin_upload_payments_router, prefix="/api/v1")
     app.include_router(admin_competition_improvement_router, prefix="/api/v1")
     app.include_router(admin_screening_review_cost_router, prefix="/api/v1")
     app.include_router(admin_confirmation_seed_anchors_router, prefix="/api/v1")

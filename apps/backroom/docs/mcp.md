@@ -736,6 +736,18 @@ false makes uploads free, null leaves it to the generator
 (the Backroom panel does this). An upload must pay its competition's fee
 exactly, and one transfer funds one upload across both lanes.
 
+## Upload payment proofs
+
+When a miner reports a 3201, 3207 or 3208 after paying, call
+`get_upload_payment_proof` with the block hash and extrinsic index the CLI
+printed. It reads Platform's payment records only and answers in one `state`:
+`funded_agent` (the upload it paid for), `reusable_credit` (left by a
+byte-identical upload; spendable by the same hotkey until
+`recovery_expires_at`), `funded_generator`, or `unrecorded` (no upload consumed
+it). A funded proof is spent: do not grant a second credit for it. The tool
+never re-reads the chain, so check an unrecorded proof's block, signer,
+destination, amount and `ExtrinsicSuccess` on chain before advising a retry.
+
 ## Per-owner submission cooldown overrides
 
 The global cooldown (`get_submission_cooldown`) is one interval per payment
