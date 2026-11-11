@@ -72,6 +72,9 @@ class MinerConfig:
             raise ValueError("port must be in [0, 65535]")
         if not isinstance(self.token, str) or not self.token:
             raise ValueError("a non-empty pilot token is required")
+        if not self.token.isascii():
+            # Header values arrive latin-1 decoded, so a non-ASCII token could never match.
+            raise ValueError("the pilot token must be ASCII")
         if self.cache_capacity < 1:
             raise ValueError("cache_capacity must be >= 1")
         if self.max_tenants < 1:
@@ -172,9 +175,11 @@ class _Handler(BaseHTTPRequestHandler):
         if self.headers.get("Transfer-Encoding") is not None:
             raise _HttpError(ErrorCode.INVALID_REQUEST, "chunked bodies are not supported")
         length = self.headers.get("Content-Length")
-        if length is None or not length.strip().isdigit():
+        value = "" if length is None else length.strip()
+        # str.isdigit() alone accepts non-ASCII digits such as "²" that int() rejects.
+        if not (value.isascii() and value.isdigit()):
             raise _HttpError(ErrorCode.INVALID_REQUEST, "a valid Content-Length is required")
-        n = int(length.strip())
+        n = int(value)
         if n > limit:
             raise _HttpError(ErrorCode.TOO_LARGE, f"body is {n} bytes, limit is {limit}")
         data = self.rfile.read(n)
