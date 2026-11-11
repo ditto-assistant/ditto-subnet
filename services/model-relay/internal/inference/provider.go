@@ -59,8 +59,12 @@ const (
 	pplxEmbedResponseModel = "pplx-embed-v1-0.6b"
 
 	providerGenerationInvalidCode = "provider_generation_invalid"
-	minerRecoverableFailureHeader = "X-Ditto-Inference-Failure-Class"
-	minerRecoverableGeneration    = "miner_recoverable_generation"
+	// providerContextLengthExceededCode is the terminal code for a request whose
+	// input exceeds the model's context window. The chat route answers it with
+	// 413, which the scorer broker charges to the harness.
+	providerContextLengthExceededCode = "provider_context_length_exceeded"
+	minerRecoverableFailureHeader     = "X-Ditto-Inference-Failure-Class"
+	minerRecoverableGeneration        = "miner_recoverable_generation"
 )
 
 func isProviderRetryStatus(status int) bool {
@@ -1138,6 +1142,39 @@ func minerRecoverableProviderError(request, response map[string]any) bool {
 	return false
 }
 
+// providerContextLengthExceeded recognizes a provider refusing the request
+// because its input alone is longer than the model's context window. That is a
+// property of the harness-authored bytes, and every provider serving the model
+// refuses it identically, so a retry replays the same rejection. Anything else
+// a provider rejects with 400 stays on the generic provider-failure path.
+func providerContextLengthExceeded(status int, response map[string]any) bool {
+	if status != http.StatusBadRequest {
+		return false
+	}
+	errorPayload, ok := response["error"].(map[string]any)
+	if !ok {
+		return false
+	}
+	codeNumber, ok := isIntLiteral(errorPayload["code"])
+	if !ok {
+		return false
+	}
+	if code, err := codeNumber.Int64(); err != nil || code != http.StatusBadRequest {
+		return false
+	}
+	texts := []any{errorPayload["message"]}
+	if metadata, ok := errorPayload["metadata"].(map[string]any); ok {
+		texts = append(texts, metadata["raw"])
+	}
+	for _, text := range texts {
+		if message, ok := text.(string); ok &&
+			strings.Contains(strings.ToLower(message), "maximum context length") {
+			return true
+		}
+	}
+	return false
+}
+
 func requestDeclaresTool(request map[string]any, name string) bool {
 	tools, _ := request["tools"].([]any)
 	for _, rawTool := range tools {
@@ -1471,6 +1508,13 @@ phaseLoop:
 				// private recovery class for the miner even when OpenRouter carries
 				// the envelope with an outer HTTP 502 instead of HTTP 200.
 				lastCode = providerGenerationInvalidCode
+				trace.errorCode = lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
+			}
+			if decodedMapOK && providerContextLengthExceeded(result.status, decodedMap) {
+				lastTimedOut = false
+				lastCode = providerContextLengthExceededCode
 				trace.errorCode = lastCode
 				traced = append(traced, trace)
 				continue phaseLoop

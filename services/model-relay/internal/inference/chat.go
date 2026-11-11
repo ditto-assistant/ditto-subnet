@@ -459,6 +459,15 @@ func chatProviderFailure(exhausted *chatProviderExhausted) *httpError {
 	if exhausted.timedOut {
 		return httpErrorf(504, "inference provider timed out")
 	}
+	if exhausted.terminalErrorCode == providerContextLengthExceededCode {
+		// The harness sent more input than the model's context window holds.
+		// A 502 here made the scorer file it as provider infrastructure and
+		// re-lease the same oversized request indefinitely. Every deployed
+		// broker classifies a 413 from this route as the harness's own request
+		// (inference_request_rejected:request_too_large) and forwards the
+		// message, so the miner learns which limit it crossed.
+		return httpErrorf(413, "request exceeds the model's maximum context length")
+	}
 	failure := httpErrorf(502, "inference provider unavailable")
 	if exhausted.terminalErrorCode == providerGenerationInvalidCode {
 		// Keep the public failure contract unchanged. The authenticated scorer

@@ -110,7 +110,10 @@ render as a failure in the public submission drawer.
 
 `failure_code` is the allowlisted machine cause. Agent-attributable codes
 (`inference_allowance_exhausted`, `inference_request_rejected`,
-`model_inference_required`) are terminal. Infrastructure relay causes
+`model_inference_required`) are terminal. A request whose input exceeds the
+model's context window is one of them: providers refuse it with 400 on every
+attempt, and the relay answers the broker with 413, which validators store as
+`inference_request_rejected:request_too_large`. Infrastructure relay causes
 (`inference_lane_saturated`, `provider_recovery_exhausted`,
 `grant_decline_evidence_mismatch`, `budget_evidence_absent`) stay no-fault —
 the pipeline still marks them deferred — but they must be published so the
