@@ -285,13 +285,17 @@ class FakeRegistrationSubstrate:
         self,
         *,
         block: int,
-        age_seconds: float = 12.0,
+        age_seconds: float | None = 12.0,
         keys: list[tuple[int, str]] | None = None,
-        owners: dict[str, str] | None = None,
+        owners: dict[str, str | None] | None = None,
+        omit_unowned: bool = False,
         error: Exception | None = None,
     ) -> None:
         self.block = block
-        self.timestamp_ms = int((NOW - age_seconds) * 1000)
+        # None models a timestamp read that fails.
+        self.timestamp_ms = (
+            None if age_seconds is None else int((NOW - age_seconds) * 1000)
+        )
         self.keys = (
             keys if keys is not None else [(0, VALIDATOR_HOTKEY), (UID, NEW_HOTKEY)]
         )
@@ -300,6 +304,7 @@ class FakeRegistrationSubstrate:
             if owners is not None
             else {VALIDATOR_HOTKEY: VALIDATOR_COLDKEY, NEW_HOTKEY: NEW_COLDKEY}
         )
+        self.omit_unowned = omit_unowned
         self.error = error
         self.reads: list[str] = []
 
@@ -323,6 +328,8 @@ class FakeRegistrationSubstrate:
     ) -> int:
         assert (module, storage_function) == ("Timestamp", "Now")
         assert block_hash == f"0x{self.block:064x}"
+        if self.timestamp_ms is None:
+            raise RuntimeError("Timestamp.Now decode failed")
         return self.timestamp_ms
 
     async def query_map(
@@ -355,8 +362,13 @@ class FakeRegistrationSubstrate:
     ) -> list[tuple[FakeStorageKey, str | None]]:
         assert block_hash == f"0x{self.block:064x}"
         self.reads.append("Owner")
-        # Results come back keyed by storage key, in no promised order.
-        return [(key, self.owners.get(key.hotkey)) for key in reversed(storage_keys)]
+        # Results come back keyed by storage key, in no promised order; a
+        # provider may answer an absent entry with None or leave it out.
+        return [
+            (key, self.owners.get(key.hotkey))
+            for key in reversed(storage_keys)
+            if not (self.omit_unowned and self.owners.get(key.hotkey) is None)
+        ]
 
 
 PAID_URL = "wss://paid.example/ws"
@@ -474,6 +486,60 @@ class TestReadChainRegistrations:
 
         assert called == ["paid", "archive"]
         assert chain.lookup(NEW_HOTKEY) is not None
+
+    @pytest.mark.parametrize("omit_unowned", [False, True])
+    async def test_missing_owner_is_a_failed_read_not_an_empty_coldkey(
+        self, provider_client: ChainClient, omit_unowned: bool
+    ) -> None:
+        # An empty coldkey would merge unrelated miners in owner-keyed policy.
+        partial = FakeRegistrationSubstrate(
+            block=REGISTERED_AT + 300,
+            owners={VALIDATOR_HOTKEY: VALIDATOR_COLDKEY, NEW_HOTKEY: None},
+            omit_unowned=omit_unowned,
+        )
+        complete = FakeRegistrationSubstrate(block=REGISTERED_AT + 299)
+        called = install_providers(provider_client, paid=partial, archive=complete)
+
+        chain = await provider_client.read_chain_registrations(NETUID)
+
+        assert called == ["paid", "archive"]
+        assert chain.provider == "archive.example"
+        new_occupant = chain.lookup(NEW_HOTKEY)
+        assert new_occupant is not None and new_occupant.coldkey == NEW_COLDKEY
+
+    async def test_unknown_block_time_cannot_prove_a_provider_current(
+        self, provider_client: ChainClient
+    ) -> None:
+        stuck = FakeRegistrationSubstrate(
+            block=SNAPSHOT_BLOCK,
+            age_seconds=None,
+            keys=[(0, VALIDATOR_HOTKEY), (UID, OLD_HOTKEY)],
+            owners={VALIDATOR_HOTKEY: VALIDATOR_COLDKEY, OLD_HOTKEY: "5OldCk"},
+        )
+        current = FakeRegistrationSubstrate(block=REGISTERED_AT + 300)
+        called = install_providers(provider_client, paid=stuck, archive=current)
+
+        chain = await provider_client.read_chain_registrations(NETUID)
+
+        assert called == ["paid", "archive"]
+        assert chain.lookup(NEW_HOTKEY) is not None
+
+    async def test_unknown_block_time_is_kept_when_nothing_is_current(
+        self, provider_client: ChainClient
+    ) -> None:
+        called = install_providers(
+            provider_client,
+            paid=FakeRegistrationSubstrate(block=REGISTERED_AT + 40, age_seconds=None),
+            archive=FakeRegistrationSubstrate(
+                block=REGISTERED_AT + 30, age_seconds=600
+            ),
+            entrypoint=FakeRegistrationSubstrate(block=1, error=OSError("429")),
+        )
+
+        chain = await provider_client.read_chain_registrations(NETUID)
+
+        assert called == ["paid", "archive", "entrypoint"]
+        assert chain.block == REGISTERED_AT + 40
 
     async def test_every_provider_failing_is_a_connection_error_without_secrets(
         self, provider_client: ChainClient

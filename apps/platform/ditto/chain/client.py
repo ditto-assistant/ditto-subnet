@@ -600,8 +600,9 @@ class ChainClient:
         One ``Keys`` map and one batched ``Owner`` read at a single finalized
         block hash, on a new connection to each provider in the epoch
         schedule's order. A provider whose finalized block is more than two
-        minutes old is itself behind and is passed over; when every provider
-        that answered is behind, the newest answer is returned.
+        minutes old, or whose block time cannot be read, is not shown current
+        and is passed over; when no provider that answered is current, the
+        newest answer is returned.
 
         Raises:
             ChainConnectionError: When no provider returned a registration map.
@@ -628,15 +629,23 @@ class ChainClient:
                 )
                 continue
             age = chain.head_age_seconds(self._wall_clock())
-            if age is None or age <= _CHAIN_HEAD_MAX_AGE_SECONDS:
+            if age is not None and age <= _CHAIN_HEAD_MAX_AGE_SECONDS:
                 return chain
-            logger.warning(
-                "chain registration read provider=%s is behind: finalized "
-                "block %s is %.0fs old",
-                provider,
-                chain.block,
-                age,
-            )
+            if age is None:
+                logger.warning(
+                    "chain registration read provider=%s gave no block time; "
+                    "finalized block %s cannot be shown current",
+                    provider,
+                    chain.block,
+                )
+            else:
+                logger.warning(
+                    "chain registration read provider=%s is behind: finalized "
+                    "block %s is %.0fs old",
+                    provider,
+                    chain.block,
+                    age,
+                )
             if behind is None or chain.block > behind.block:
                 behind = chain
         if behind is not None:
@@ -692,6 +701,14 @@ class ChainClient:
                     storage_keys, block_hash=block_hash
                 )
             }
+        # Every registered hotkey has an owner. A missing one is a partial
+        # read, and an empty coldkey would merge unrelated owners downstream.
+        missing = sum(1 for key in storage_keys if not owners.get(key.to_hex()))
+        if missing:
+            raise ChainConnectionError(
+                f"owner read missing {missing} of {len(hotkeys)} hotkeys for "
+                f"netuid={netuid} at block {block}"
+            )
         return ChainRegistrations(
             netuid=netuid,
             block=block,
@@ -700,7 +717,7 @@ class ChainClient:
             observed_at=datetime.now(UTC),
             registrations=tuple(
                 ChainRegistration(
-                    uid=uid, hotkey=hotkey, coldkey=str(owners.get(key.to_hex()) or "")
+                    uid=uid, hotkey=hotkey, coldkey=str(owners[key.to_hex()])
                 )
                 for (uid, hotkey), key in zip(hotkeys, storage_keys, strict=True)
             ),
