@@ -1,0 +1,48 @@
+name: Query adapter pilot CI
+
+# Synthetic-only pilot: a numpy-only package, a loopback reference miner, and
+# its proof. No secrets, network services, or images.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - research/query-adapter-pilot/**
+      - .github/workflows/query-adapter-pilot-ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: query-adapter-pilot-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: research/query-adapter-pilot
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install locked dependencies
+        run: uv sync --locked --group dev --python 3.12
+
+      - name: Verify format, lint, types, and tests
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy src
+          uv run pytest -q
