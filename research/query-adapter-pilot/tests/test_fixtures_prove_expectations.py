@@ -43,7 +43,11 @@ def _load_prove() -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["qa_prove"] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop("qa_prove", None)  # never leave a half-initialized module
+        raise
     return module
 
 

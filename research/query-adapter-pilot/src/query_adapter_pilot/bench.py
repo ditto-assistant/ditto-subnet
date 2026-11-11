@@ -82,6 +82,14 @@ class BenchConfig:
     concurrency: int = 4
     timeout_s: float = 10.0
 
+    def validate(self) -> None:
+        """Raise ValueError for a config no run could use. ``main`` calls this
+        before measuring, so only real config problems become usage errors."""
+        if min(self.requests, self.tenants, self.cache_capacity, self.concurrency) < 1:
+            raise ValueError("requests, tenants, cache_capacity, concurrency must be >= 1")
+        if not self.timeout_s > 0:
+            raise ValueError("timeout_s must be > 0")
+
 
 @dataclass
 class Sample:
@@ -136,16 +144,38 @@ def phase_stats(
 
 
 def _timed(
-    jobs: Sequence[tuple[int, int]], fn: Callable[[int, int], Sample], concurrency: int
+    jobs: Sequence[tuple[int, int]],
+    fn: Callable[[int, int], Sample],
+    concurrency: int,
+    prime: Callable[[], object] | None = None,
 ) -> tuple[list[Sample], int, int]:
-    """Run ``fn(tenant, query)`` over ``jobs``; return samples, wall ns, CPU ns."""
-    cpu0, wall0 = time.process_time_ns(), time.perf_counter_ns()
+    """Run ``fn(tenant, query)`` over ``jobs``; return samples, wall ns, CPU ns.
+
+    ``prime`` runs once on every worker thread (e.g. to open its thread-local
+    connection) BEFORE timing starts, inside the same executor that then runs
+    the measured jobs, so no measured request pays thread start-up or a TCP
+    connect. A barrier holds each priming task until all are running, which
+    guarantees one priming call per distinct worker thread."""
     if concurrency <= 1:
+        if prime is not None:
+            prime()
+        cpu0, wall0 = time.process_time_ns(), time.perf_counter_ns()
         samples = [fn(t, q) for t, q in jobs]
-    else:
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            samples = list(pool.map(lambda job: fn(*job), jobs))
-    return samples, time.perf_counter_ns() - wall0, time.process_time_ns() - cpu0
+        return samples, time.perf_counter_ns() - wall0, time.process_time_ns() - cpu0
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        barrier = threading.Barrier(concurrency, timeout=30)
+
+        def warm_worker() -> None:
+            if prime is not None:
+                prime()
+            barrier.wait()
+
+        for future in [pool.submit(warm_worker) for _ in range(concurrency)]:
+            future.result()
+        cpu0, wall0 = time.process_time_ns(), time.perf_counter_ns()
+        samples = list(pool.map(lambda job: fn(*job), jobs))
+        wall, cpu = time.perf_counter_ns() - wall0, time.process_time_ns() - cpu0
+    return samples, wall, cpu
 
 
 @dataclass
@@ -210,7 +240,8 @@ def bench_local(cfg: BenchConfig, fleet: Fleet) -> dict[str, Any]:
         ("cold", cold, 1),
         ("warm_concurrent", warm, cfg.concurrency),
     ):
-        samples, wall, cpu = _timed(jobs, fn, conc)
+        # worker threads are started before timing (no-op prime)
+        samples, wall, cpu = _timed(jobs, fn, conc, prime=lambda: None)
         out[name] = phase_stats(samples, wall, cpu, conc) | {
             "min_reference_cos": min_parity(fleet, samples)
         }
@@ -282,7 +313,13 @@ def _adapt(client: LoopbackClient, fleet: Fleet, t: int, q: int) -> tuple[Sample
         with contextlib.suppress(ValueError, KeyError, TypeError):
             code = str(json.loads(raw)["error"]["code"])
         return Sample(time.perf_counter_ns() - t0, error=code), len(body), len(raw)
-    resp = AdaptResponse.from_wire(json.loads(raw))
+    try:
+        resp = AdaptResponse.from_wire(json.loads(raw))
+    except (ValueError, TypeError, RecursionError) as exc:
+        # JSONDecodeError, UnicodeDecodeError and ContractError are ValueErrors.
+        # A malformed 200 is a measured failure, not a reason to abort the run.
+        sample = Sample(time.perf_counter_ns() - t0, error=f"BAD_RESPONSE:{type(exc).__name__}")
+        return sample, len(body), len(raw)
     elapsed = time.perf_counter_ns() - t0
     error = None if resp.request_id == rid and resp.ref == ref else "ECHO_MISMATCH"
     sample = Sample(elapsed, resp.compute_us, resp.cache, resp.vector, t, q, error)
@@ -339,6 +376,11 @@ def bench_miner(cfg: BenchConfig, fleet: Fleet, miner: Any) -> dict[str, Any]:
             record_wire_sizes(sizes, sample, req_bytes, resp_bytes)
             return sample
 
+        def open_connection() -> None:
+            """Open this thread's keep-alive connection with a health call,
+            which touches no adapter cache and no adapt counter."""
+            client.call("GET", ROUTE_HEALTH, None)
+
         hot = list(range(max(1, min(cfg.tenants, cfg.cache_capacity // 2 or 1))))
         for t in hot:  # prime the hot set so the warm phase measures hits
             adapt(t, 0)
@@ -348,7 +390,9 @@ def bench_miner(cfg: BenchConfig, fleet: Fleet, miner: Any) -> dict[str, Any]:
             ("cold", everyone, 1),
             ("multi_tenant", everyone, cfg.concurrency),
         ):
-            samples, wall, cpu = _timed(round_robin(cfg.requests, tenants), adapt, conc)
+            samples, wall, cpu = _timed(
+                round_robin(cfg.requests, tenants), adapt, conc, prime=open_connection
+            )
             out[name] = phase_stats(samples, wall, cpu, conc) | {
                 "tenants": len(tenants),
                 "min_reference_cos": min_parity(fleet, samples),
@@ -389,8 +433,7 @@ def machine() -> dict[str, Any]:
 
 
 def run(cfg: BenchConfig, local_only: bool = False, miner: Any = None) -> dict[str, Any]:
-    if cfg.requests < 1 or cfg.tenants < 1 or cfg.cache_capacity < 1 or cfg.concurrency < 1:
-        raise ValueError("requests, tenants, cache_capacity, concurrency must be >= 1")
+    cfg.validate()
     fleet = Fleet.build(cfg.tenants, cfg.requests)
     inputs = serving_inputs(fleet)
     doc: dict[str, Any] = {
@@ -458,12 +501,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     cfg = BenchConfig(args.requests, args.tenants, args.cache_capacity, args.concurrency)
     try:
+        cfg.validate()
+    except ValueError as exc:
+        parser.error(str(exc))
+    # Runtime errors (including ValueError subclasses such as JSONDecodeError)
+    # propagate as failures with a traceback; they are not usage errors.
+    try:
         doc = run(cfg, local_only=args.local_only)
     except ModuleNotFoundError as exc:
         print(f"miner slice unavailable ({exc}); rerun with --local-only", file=sys.stderr)
         return 2
-    except ValueError as exc:
-        parser.error(str(exc))
     if args.json:
         with open(args.json, "w") as f:
             json.dump(doc, f, indent=2)
