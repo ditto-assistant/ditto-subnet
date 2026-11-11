@@ -102,6 +102,61 @@ def test_garbage_miner_does_not_abort_the_run() -> None:
     assert doc["serving_inputs"]["adapt_request_wire_bytes"] is None  # no good round trip
 
 
+SMALL = ["--requests", "4", "--tenants", "2", "--cache-capacity", "1", "--concurrency", "2"]
+
+
+def test_all_error_phase_reports_errors_not_parity(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No successful vector means no cosine at all; that must surface as a
+    miner-error failure, never as a parity failure."""
+    monkeypatch.setattr(bench, "load_miner", _garbage_miner_module)
+    assert bench.main(SMALL) == 1
+    err = capsys.readouterr().err
+    assert "miner request errors" in err
+    assert "parity" not in err
+
+
+def test_priming_adapt_error_fails_the_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed warm-set priming adapt (a miss hiding inside "warm") must make
+    the run exit nonzero even when every measured request succeeds."""
+    pytest.importorskip("query_adapter_pilot.miner")
+    real_adapt = bench._adapt
+    calls = {"n": 0}
+
+    def first_call_fails(*args: Any) -> tuple[bench.Sample, int, int]:
+        calls["n"] += 1
+        if calls["n"] == 1:  # the first adapt of a run is the priming one
+            return bench.Sample(1, error="TimeoutError"), 10, 0
+        return real_adapt(*args)
+
+    monkeypatch.setattr(bench, "_adapt", first_call_fails)
+    assert bench.main(SMALL) == 1
+    assert "miner request errors" in capsys.readouterr().err
+
+
+def test_raising_prime_surfaces_its_own_exception_promptly() -> None:
+    lock = threading.Lock()
+    calls = {"n": 0}
+
+    class PrimeFailed(Exception):
+        pass
+
+    def prime() -> None:
+        with lock:
+            calls["n"] += 1
+            first = calls["n"] == 1
+        if first:
+            raise PrimeFailed("connect refused while priming")
+
+    started = time.monotonic()
+    with pytest.raises(PrimeFailed, match="while priming"):
+        bench._timed(bench.round_robin(6, [0]), lambda _t, _q: bench.Sample(1), 3, prime=prime)
+    assert time.monotonic() - started < 5.0  # not the 30 s barrier timeout
+
+
 def test_usage_errors_only_for_bad_config(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit) as usage:
         bench.main(["--local-only", "--requests", "0"])

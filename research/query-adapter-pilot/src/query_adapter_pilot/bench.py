@@ -167,11 +167,22 @@ def _timed(
 
         def warm_worker() -> None:
             if prime is not None:
-                prime()
+                try:
+                    prime()
+                except BaseException:
+                    barrier.abort()  # release the other workers now, not after 30 s
+                    raise
             barrier.wait()
 
-        for future in [pool.submit(warm_worker) for _ in range(concurrency)]:
-            future.result()
+        futures = [pool.submit(warm_worker) for _ in range(concurrency)]
+        failures = [exc for exc in (f.exception() for f in futures) if exc is not None]
+        if failures:
+            # Re-raise the priming error itself, not the BrokenBarrierError it
+            # caused in the workers that were waiting.
+            raise next(
+                (e for e in failures if not isinstance(e, threading.BrokenBarrierError)),
+                failures[0],
+            )
         cpu0, wall0 = time.process_time_ns(), time.perf_counter_ns()
         samples = list(pool.map(lambda job: fn(*job), jobs))
         wall, cpu = time.perf_counter_ns() - wall0, time.process_time_ns() - cpu0
@@ -382,8 +393,14 @@ def bench_miner(cfg: BenchConfig, fleet: Fleet, miner: Any) -> dict[str, Any]:
             client.call("GET", ROUTE_HEALTH, None)
 
         hot = list(range(max(1, min(cfg.tenants, cfg.cache_capacity // 2 or 1))))
-        for t in hot:  # prime the hot set so the warm phase measures hits
-            adapt(t, 0)
+        # Prime the hot set so the warm phase measures hits. A priming failure
+        # would leave a miss inside "warm", so it is counted as a miner error
+        # (main() then exits nonzero) instead of being discarded.
+        primed = [adapt(t, 0) for t in hot]
+        out["priming"] = {
+            "requests": len(primed),
+            "errors": dict(Counter(f"tenant {s.tenant}: {s.error}" for s in primed if s.error)),
+        }
         everyone = list(range(cfg.tenants))
         for name, tenants, conc in (
             ("warm", hot, 1),
@@ -522,7 +539,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         for stats in (doc.get(side) or {}).values()
         if isinstance(stats, dict) and "min_reference_cos" in stats
     ]
-    if any(w is None or w < PARITY_MIN_COSINE for w in worst):
+    # Only a real cosine below the bar is a parity failure. A phase with no
+    # successful vector (min_reference_cos None) is an error case and is
+    # reported by the error count below.
+    if any(w is not None and w < PARITY_MIN_COSINE for w in worst):
         print("parity below threshold in a measured phase", file=sys.stderr)
         return 1
     errors = sum(
