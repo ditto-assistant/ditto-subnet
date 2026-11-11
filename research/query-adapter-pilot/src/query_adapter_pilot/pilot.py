@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import secrets
 import sys
@@ -138,8 +139,8 @@ def _configure(args: argparse.Namespace) -> tuple[PilotClient, Workload]:
     run_id = args.run_id if args.run_id is not None else new_run_id()
     if not RUN_ID_RE.fullmatch(run_id):
         raise UsageError(f"--run-id {run_id!r} must match {RUN_ID_RE.pattern}")
-    if not args.timeout_ms > 0:
-        raise UsageError("--timeout-ms must be positive")
+    if not (math.isfinite(args.timeout_ms) and args.timeout_ms > 0):
+        raise UsageError(f"--timeout-ms must be finite and positive, got {args.timeout_ms}")
     try:
         client = PilotClient(
             args.miner_url,

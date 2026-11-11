@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import secrets
 import time
 from dataclasses import dataclass
@@ -146,8 +147,8 @@ class PilotClient:
             raise ValueError(f"fallback must be one of {FALLBACKS}, got {fallback!r}")
         if not 0.0 <= verify_rate <= 1.0:
             raise ValueError(f"verify_rate must be in [0, 1], got {verify_rate}")
-        if not timeout_s > 0.0:
-            raise ValueError(f"timeout_s must be positive, got {timeout_s}")
+        if not (math.isfinite(timeout_s) and timeout_s > 0.0):
+            raise ValueError(f"timeout_s must be finite and positive, got {timeout_s}")
         self.transport = Transport(miner_url, token)
         self.miner_url = self.transport.base_url
         # Validates the run segment of every request id up front.
