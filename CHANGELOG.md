@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.474.0 (2026-11-11)
+
+### Bug Fixes
+
+- **platform**: Count only in-season scores in a rollout member's retry gate
+  ([#3495](https://github.com/ditto-assistant/ditto-subnet/pull/3495),
+  [`63b0551`](https://github.com/ditto-assistant/ditto-subnet/commit/63b05515c7486017c6fe698a3b324bb3a89228df))
+
+- **platform**: Run the season-boundary catch-up for a rollout's shadow season
+  ([#3497](https://github.com/ditto-assistant/ditto-subnet/pull/3497),
+  [`1a792ce`](https://github.com/ditto-assistant/ditto-subnet/commit/1a792ce07cc8b639638e64292a86af6c3aad55e5))
+
+### Features
+
+- **platform,backroom**: Look up what an upload payment proof funded
+  ([#3496](https://github.com/ditto-assistant/ditto-subnet/pull/3496),
+  [`a9c3eb4`](https://github.com/ditto-assistant/ditto-subnet/commit/a9c3eb43ccb5171bade22f7ded9dcb66ab9aa5f6))
+
+- **screener**: Probe whether a full tool catalog fits the model context
+  ([#3491](https://github.com/ditto-assistant/ditto-subnet/pull/3491),
+  [`4ce2557`](https://github.com/ditto-assistant/ditto-subnet/commit/4ce255792d12ed6a5887ed55d508d68823ef4936))
+
+
 ## v0.473.4 (2026-11-11)
 
 ### Bug Fixes
