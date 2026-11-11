@@ -103,9 +103,10 @@ It prints one row per scenario:
 scenario  outcomes  sources  accepted  dupes  min_cos  p50/p95 ms
 ```
 
-It exits non-zero if any expectation fails and lists each failure. For every
-scenario the out dir holds `report.json`, `health.json`, `client.log`, and
-`miner.log`. Never write these into the source tree.
+It exits non-zero if any expectation fails and lists each failure. Every
+scenario writes `report.json` and `client.log` to its out dir. Scenarios that
+launch a miner also write `health.json` and `miner.log`; `unavailable` launches
+no miner, so it writes neither. Never write these into the source tree.
 
 ### Negative-case matrix
 
