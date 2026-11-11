@@ -18,7 +18,10 @@ Flow for one agent:
    with one bounded ``POST /seed`` wave (``SCREENER_SEED_PROBE_MODE``:
    ``shadow`` records the signal, ``enforce`` makes it a contract failure,
    ``off`` skips it). The probe is served by the same isolated fake gateway, so
-   it costs no provider call.
+   it costs no provider call. From bench v18 one ``POST /run`` then offers a
+   full-size tool catalog and the gateway measures what the harness forwards
+   (``SCREENER_TOOL_CATALOG_PROBE_MODE``, same three modes): a model request
+   that cannot fit the scoring model's context window fails in ``enforce``.
 5. **Private policy.** The default v8 manifest performs bounded Luna source
    review after health. A rotating
    private manifest may use timing, random-control, fingerprint, and behavioral
@@ -54,6 +57,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import secrets
 import shutil
@@ -72,6 +76,7 @@ from uuid import UUID
 
 import httpx
 
+from ditto_screener import tool_catalog_probe
 from ditto_screener.adjudicator import build_adjudicator
 from ditto_screener.errors import ScreenedImageUploadUnavailable
 from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL, tool_capability
@@ -508,6 +513,8 @@ class _AuditRuntime:
     provider: Literal["platform", "chutes"] = _PRIMARY_HARNESS_PROVIDER
     seed_probe: _SeedProbe | None = None
     """Shadow-mode ``/seed`` observation; ``None`` when the probe is off."""
+    tool_catalog_probe: tool_catalog_probe.ProbeVerdict | None = None
+    """Shadow-mode tool-catalog observation; ``None`` when it did not run."""
     tool_route: str = ""
     tool_key: bytes = b""
 
@@ -805,6 +812,29 @@ def _with_seed_probe_evidence(
     return replace(decision, evidence=(*decision.evidence[:keep], *records))
 
 
+def _with_tool_catalog_probe_evidence(
+    decision: ScreeningDecision, probe: tool_catalog_probe.ProbeVerdict | None
+) -> ScreeningDecision:
+    """Record the tool-catalog measurement without changing the outcome.
+
+    The measurement is recorded for passing images too: how far the fleet's
+    harnesses sit from the context window is what decides when ``enforce``
+    is safe, and rejections alone cannot show it.
+    """
+    if probe is None:
+        return decision
+    records = []
+    if not probe.passed:
+        records.append(PolicyEvidence("stable-core", probe.code, probe.detail[:240]))
+    records.append(
+        PolicyEvidence(
+            "stable-core", tool_catalog_probe.OBSERVATION_CODE, probe.observation
+        )
+    )
+    keep = max(0, _MAX_EVIDENCE - len(records))
+    return replace(decision, evidence=(*decision.evidence[:keep], *records))
+
+
 def _gateway_call_count(path: str) -> int:
     """Count bounded call markers written by one isolated fake gateway."""
     try:
@@ -844,14 +874,22 @@ def _prepare_gateway_state() -> tuple[str, str]:
         fd = os.open(state_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         os.chmod(state_file, 0o622)
-        events_file = Path(state_dir) / "semantic-events"
-        fd = os.open(events_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(fd)
-        os.chmod(events_file, 0o622)
+        for name in ("semantic-events", _GATEWAY_REQUEST_LOG):
+            appendable = Path(state_dir) / name
+            fd = os.open(appendable, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+            os.chmod(appendable, 0o622)
     except Exception:
         shutil.rmtree(state_dir, ignore_errors=True)
         raise
     return state_dir, state_file
+
+
+# The gateway appends one measurement per forwarded model request here; the
+# worker reads the lines the tool-catalog probe added.
+_GATEWAY_REQUEST_LOG = "model-requests"
+_TOOL_CATALOG_RUN_FILE = "tool-catalog-run.json"
+_MAX_REQUEST_LOG_BYTES = 64 * 1024
 
 
 def _set_semantic_probe(state_file: str, probe: Mapping[str, object]) -> bool:
@@ -1965,6 +2003,7 @@ class BuildGate:
                 gateway_container=gateway_container,
                 network=network,
                 gateway_state_dir=gateway_state_dir,
+                bench_version=bench_version,
                 progress=report,
             )
             health_elapsed_ms = round(
@@ -1990,7 +2029,10 @@ class BuildGate:
                     summary="screening runtime infrastructure failed"
                     if serve_result.retryable
                     else (
-                        "container did not satisfy the seeding contract"
+                        "harness model request does not fit the scoring "
+                        "model's context window"
+                        if serve_result.code == tool_catalog_probe.CONTEXT_OVERFLOW_CODE
+                        else "container did not satisfy the seeding contract"
                         if serve_result.code
                         else "container did not satisfy the health contract"
                     ),
@@ -2137,6 +2179,9 @@ class BuildGate:
                 )
             # Shadow mode observes only: the seeding signal is recorded as
             # evidence beside the outcome the policy already reached.
+            decision = _with_tool_catalog_probe_evidence(
+                decision, active_audit_runtime.tool_catalog_probe
+            )
             decision = _with_seed_probe_evidence(
                 decision, active_audit_runtime.seed_probe
             )
@@ -3430,6 +3475,7 @@ class BuildGate:
         gateway_container: str,
         network: str,
         gateway_state_dir: str,
+        bench_version: int,
         progress: Callable[[ScreenerProgressStage], None] | None = None,
     ) -> tuple[_StageResult, _AuditRuntime | None]:
         """Run the image and await health against the isolated fake gateway."""
@@ -3497,8 +3543,35 @@ class BuildGate:
                     ),
                     None,
                 )
-        # Production v6 intentionally stops here. No synthetic POST /run is
-        # issued unless a private policy selector explicitly chooses an audit.
+        # A v18+ scored case offers up to the contract's maximum catalog. One
+        # discarded /run at that size shows whether the harness's model request
+        # still fits the scoring model's context window (DITTO-2564).
+        catalog_probe: tool_catalog_probe.ProbeVerdict | None = None
+        if self._config.tool_catalog_probe_mode != "off" and (
+            tool_catalog_probe.applies_to(bench_version)
+        ):
+            catalog_probe = await self._probe_tool_catalog(
+                harness_base,
+                probe_container=gateway_container,
+                gateway_state_dir=gateway_state_dir,
+                bench_version=bench_version,
+                tool_route=tool_route,
+                tool_key=tool_key,
+                timeout=min(
+                    self._config.tool_catalog_probe_timeout_seconds,
+                    self._config.run_timeout_seconds,
+                ),
+            )
+            if (
+                not catalog_probe.passed
+                and self._config.tool_catalog_probe_mode == "enforce"
+            ):
+                return (
+                    _StageResult(False, catalog_probe.detail, code=catalog_probe.code),
+                    None,
+                )
+        # Production v6 intentionally stops here. No other synthetic POST /run
+        # is issued unless a private policy selector explicitly chooses an audit.
         return (
             _StageResult(True, ""),
             _AuditRuntime(
@@ -3507,6 +3580,7 @@ class BuildGate:
                 oracle_answer=oracle_answer,
                 gateway_state_file=str(Path(gateway_state_dir) / "model-called"),
                 seed_probe=seed_probe,
+                tool_catalog_probe=catalog_probe,
                 tool_route=tool_route,
                 tool_key=tool_key,
             ),
@@ -3702,6 +3776,8 @@ class BuildGate:
                 "-e",
                 "DITTO_FAKE_GATEWAY_SEMANTIC_EVENTS=/state/semantic-events",
                 "-e",
+                f"DITTO_FAKE_GATEWAY_REQUEST_LOG=/state/{_GATEWAY_REQUEST_LOG}",
+                "-e",
                 "DITTO_FAKE_GATEWAY_TLS_CERT=/state/leaf.crt",
                 "-e",
                 "DITTO_FAKE_GATEWAY_TLS_KEY=/state/leaf.key",
@@ -3838,6 +3914,68 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             False,
             "seed-unreachable",
             f"{seed_path} returned no response within {timeout:.0f}s ({tail}).",
+        )
+
+    async def _probe_tool_catalog(
+        self,
+        harness_base: str,
+        *,
+        probe_container: str,
+        gateway_state_dir: str,
+        bench_version: int,
+        tool_route: str,
+        tool_key: bytes,
+        timeout: float,
+    ) -> tool_catalog_probe.ProbeVerdict:
+        """Offer a full-size catalog once and measure what reaches the model.
+
+        The request is a scored tool case's envelope with a freshly drawn
+        catalog, so nothing in it marks the screen. Its body is about 1 MiB,
+        past what one ``docker exec`` argument may carry, so it is staged in
+        the gateway's state directory and read there. The verdict comes from
+        the gateway's measurements alone; a failed ``/run`` proves nothing
+        about the request size and passes.
+        """
+        rng = random.SystemRandom()
+        request = _with_tool_endpoint(
+            tool_catalog_probe.run_request(
+                rng,
+                tool_catalog_probe.full_size_catalog(rng),
+                bench_version=bench_version,
+            ),
+            tool_route=tool_route,
+            tool_key=tool_key,
+        )
+        state = Path(gateway_state_dir)
+        log_path = state / _GATEWAY_REQUEST_LOG
+        run_file = state / _TOOL_CATALOG_RUN_FILE
+        try:
+            offset = log_path.stat().st_size
+            run_file.write_bytes(json.dumps(request).encode())
+            os.chmod(run_file, 0o644)
+        except OSError as error:
+            return tool_catalog_probe.ProbeVerdict(
+                True, "tool-catalog-ok", "", f"probe not staged: {error}"[:240]
+            )
+        try:
+            code, out = await self._request_from_sidecar(
+                probe_container,
+                f"{harness_base}/run",
+                payload_file=f"/state/{_TOOL_CATALOG_RUN_FILE}",
+                timeout=timeout,
+            )
+        finally:
+            with contextlib.suppress(OSError):
+                run_file.unlink()
+        run_note = "" if code == 0 else f"/run failed: {_log_tail(out)[:80]}"
+        try:
+            with log_path.open("rb") as log:
+                log.seek(offset)
+                raw = log.read(_MAX_REQUEST_LOG_BYTES)
+        except OSError:
+            raw = b""
+        return tool_catalog_probe.judge(
+            tool_catalog_probe.parse_request_log(raw), run_note=run_note
         )
 
     def _seed_detail_with_usage(self, probe: _SeedProbe) -> str:
@@ -4594,13 +4732,22 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         url: str,
         *,
         payload: Mapping[str, object] | None = None,
+        payload_file: str | None = None,
         timeout: float,
     ) -> tuple[int, str]:
-        """Make an HTTP request from inside the isolated Docker network."""
+        """Make an HTTP request from inside the isolated Docker network.
+
+        ``payload_file`` names a JSON body already staged in the sidecar's
+        filesystem, for a body too large to pass as a process argument.
+        """
         encoded = ""
         method = "GET"
         if payload is not None:
             encoded = base64.b64encode(json.dumps(payload).encode()).decode()
+            method = "POST"
+        elif payload_file is not None:
+            # ``@`` is outside the base64 alphabet, so it cannot be misread.
+            encoded = f"@{payload_file}"
             method = "POST"
         script = f"""\
 import base64
@@ -4609,7 +4756,11 @@ import urllib.error
 import urllib.request
 
 url, method, data, timeout_raw = sys.argv[1:5]
-body = base64.b64decode(data) if data else None
+if data.startswith("@"):
+    with open(data[1:], "rb") as staged:
+        body = staged.read()
+else:
+    body = base64.b64decode(data) if data else None
 request = urllib.request.Request(
     url, data=body, method=method, headers={{"Content-Type": "application/json"}}
 )

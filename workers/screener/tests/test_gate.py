@@ -25,6 +25,7 @@ import pytest
 from ditto_screener import gate as gate_module
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import ScreenedImageUploadUnavailable
+from ditto_screener.fake_gateway import measure_model_request
 from ditto_screener.gate import (
     _MAX_ARCHIVE_MEMBERS,
     _MAX_SCREENED_IMAGE_BYTES,
@@ -4120,6 +4121,180 @@ def test_seed_evidence_never_exceeds_the_decision_bound() -> None:
     codes = [item.code for item in result.evidence]
     assert codes[-2:] == ["seed-memory-cap", "seed-envelope-usage"]
     assert result.reason_code == "health-ok"
+
+
+def _catalog_probe_run(
+    calls: list[list[str]], *, forward: int | None, run_exit: int = 0
+) -> Callable[..., Any]:
+    """`_ok_run` whose harness forwards ``forward`` of the offered tools.
+
+    It reads the staged ``/run`` body from the gateway state directory and
+    appends what the real sidecar gateway would measure for the chat request
+    the harness makes. ``forward=None`` forwards the whole catalog.
+    """
+    ok = _ok_run(calls)
+    state: dict[str, Path] = {}
+
+    async def run(
+        args: list[str], *, stdin: Any = None, **kwargs: Any
+    ) -> tuple[int, str]:
+        if args[0] == "run":
+            for index, arg in enumerate(args[:-1]):
+                if arg == "-v" and args[index + 1].endswith(":/state"):
+                    state["dir"] = Path(args[index + 1].rsplit(":", 1)[0])
+        if args[0] == "exec" and "http://harness:8080/run" in args:
+            calls.append(args)
+            staged = args[args.index("http://harness:8080/run") + 2]
+            assert staged == "@/state/tool-catalog-run.json"
+            request = json.loads((state["dir"] / "tool-catalog-run.json").read_bytes())
+            tools = request["tools"] if forward is None else request["tools"][:forward]
+            body = json.dumps(
+                {
+                    "model": "openai/gpt-oss-20b",
+                    "messages": [
+                        {"role": "system", "content": request["system_prompt"]},
+                        {"role": "user", "content": request["user_input"]},
+                    ],
+                    "tools": [{"type": "function", "function": t} for t in tools],
+                }
+            ).encode()
+            with (state["dir"] / "model-requests").open("ab") as log:
+                log.write(json.dumps(measure_model_request(body)).encode() + b"\n")
+            if run_exit:
+                return run_exit, "HTTP 500: boom"
+            return 0, '{"answer": "ok", "tool_calls": []}'
+        return await ok(args, stdin=stdin, **kwargs)
+
+    return run
+
+
+async def _screen_v18(gate: BuildGate, tarball: bytes):  # type: ignore[no-untyped-def]
+    async with gate._client:
+        return await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=18,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+        )
+
+
+def _catalog_runs(calls: list[list[str]]) -> list[list[str]]:
+    return [call for call in calls if "http://harness:8080/run" in call]
+
+
+async def test_tool_catalog_probe_passes_a_harness_that_selects_tools(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode="enforce"),
+        _catalog_probe_run(calls, forward=8),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert len(_catalog_runs(calls)) == 1
+    # The ~1 MiB body travels as a staged file, never as a process argument
+    # (Linux caps one argument at 128 KiB).
+    assert all(len(arg) < 128 * 1024 for arg in _catalog_runs(calls)[0])
+    codes = [item.code for item in result.evidence]
+    assert "tool-catalog-context-overflow" not in codes
+    size = next(i for i in result.evidence if i.code == "tool-catalog-request-size")
+    assert "8 tools" in size.summary
+    assert "Groq" not in size.summary
+
+
+async def test_tool_catalog_probe_enforce_rejects_a_context_overflow(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode="enforce"),
+        _catalog_probe_run(calls, forward=None),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.reason_code == "tool-catalog-context-overflow"
+    assert "131072-token context window" in result.detail
+    assert "2000 tool definitions" in result.detail
+    assert (
+        reason_code_class("tool-catalog-context-overflow")
+        == ReasonCodeClass.AGENT_FAULT
+    )
+
+
+async def test_tool_catalog_probe_shadow_records_an_overflow_without_failing(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(),  # shadow is the default
+        _catalog_probe_run(calls, forward=None),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert result.reason_code != "tool-catalog-context-overflow"
+    codes = [item.code for item in result.evidence]
+    assert "tool-catalog-context-overflow" in codes
+    size = next(i for i in result.evidence if i.code == "tool-catalog-request-size")
+    assert "2000 tools" in size.summary and "Groq" in size.summary
+
+
+async def test_tool_catalog_probe_passes_when_the_run_fails(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    # A failed /run says nothing certain about the request size. The probe
+    # still judges only what the gateway measured.
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode="enforce"),
+        _catalog_probe_run(calls, forward=0, run_exit=22),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.PASS
+    size = next(i for i in result.evidence if i.code == "tool-catalog-request-size")
+    assert "/run failed" in size.summary
+
+
+@pytest.mark.parametrize(
+    ("mode", "bench_version"), [("off", 18), ("enforce", 17), ("shadow", 12)]
+)
+async def test_tool_catalog_probe_skips_when_off_or_before_v18(
+    make_config: Callable[..., ScreenerConfig], mode: str, bench_version: int
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode=mode),
+        _catalog_probe_run(calls, forward=None),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=bench_version,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert not _catalog_runs(calls)
+    assert not any(i.code.startswith("tool-catalog-") for i in result.evidence)
 
 
 def test_screening_locks_the_same_persistence_paths_as_scoring() -> None:

@@ -138,6 +138,11 @@ VERIFICATION_INCOMPLETE_UNREVIEWABLE: Final = "verification-incomplete-unreviewa
 """Historical platform verification rejection, retained for existing records.
 Repeated inconclusive, infrastructure, and provider failures now stay parked for
 manual review or retry; they do not produce this policy reason code."""
+TOOL_CATALOG_CONTEXT_OVERFLOW: Final = "tool-catalog-context-overflow"
+"""Handed a full-size benchmark tool catalog, the harness forwarded a model
+request whose provable token lower bound exceeds the locked scoring model's
+context window. Every provider refuses that request on every scored case that
+serves such a catalog, so the miner owns it."""
 V2_COMPLETE_STATIC_REVIEWS: Final = 2
 """Historical threshold retained for compatibility; no longer a rejection rule."""
 
@@ -237,6 +242,9 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode("seed-http-error", _A, _WORKER),
     ScreeningReasonCode("seed-oversized-response", _A, _WORKER),
     ScreeningReasonCode("seed-unreachable", _A, _WORKER),
+    # Tool-catalog probe rejection: the forwarded model request cannot fit the
+    # scoring model's context window once the catalog is full size.
+    ScreeningReasonCode(TOOL_CATALOG_CONTEXT_OVERFLOW, _A, _WORKER),
     # --- POLICY: held without a fault finding.
     ScreeningReasonCode(SOURCE_REVIEW_INCONCLUSIVE, _POLICY, _WORKER),
     # Platform's exhaustion hold after repeated inconclusive attempts.
@@ -312,3 +320,10 @@ SEED_PROBE_REASON_CODES: Final[tuple[str, ...]] = tuple(
     if code.startswith("seed-")
 )
 """Seeding-probe rejections, each with its own public guidance in Platform."""
+
+TOOL_CATALOG_PROBE_REASON_CODES: Final[tuple[str, ...]] = tuple(
+    code
+    for code in reason_codes(ReasonCodeClass.AGENT_FAULT)
+    if code.startswith("tool-catalog-")
+)
+"""Tool-catalog probe rejections, each with its own public guidance in Platform."""

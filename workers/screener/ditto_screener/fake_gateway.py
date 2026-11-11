@@ -16,6 +16,7 @@ import hmac
 import json
 import os
 import random
+import re
 import secrets
 import ssl
 import time
@@ -47,7 +48,10 @@ _EMBED_ROUTES = frozenset(
 )
 
 _MAX_HEADER_BYTES = 64 * 1024
-_MAX_BODY_BYTES = 1024 * 1024
+# A harness that forwards a full-size benchmark tool catalog sends a chat body
+# of about 1 MiB (the v18 maximum is 2,000 tools). The tool-catalog probe has
+# to read that body to measure it, so the cap sits well above it.
+_MAX_BODY_BYTES = 4 * 1024 * 1024
 _EMBED_DIMENSIONS = 768
 LOCKED_HARNESS_MODEL = "qwen/qwen3-32b"
 # Fallback echoed only when a caller omits the ``model`` field. It is a common,
@@ -55,6 +59,94 @@ LOCKED_HARNESS_MODEL = "qwen/qwen3-32b"
 _DEFAULT_ECHO_MODEL = "gpt-4o-mini"
 _SEMANTIC_TOOL_EMISSIONS: dict[str, int] = {}
 _SEMANTIC_TOOL_EXECUTED: set[str] = set()
+
+
+# A provable lower bound on gpt-oss prompt tokens, with no vocabulary.
+#
+# gpt-oss tokenizes with o200k (o200k_harmony adds only special tokens). Its
+# pre-tokenizer splits text into chunks and BPE encodes each chunk separately,
+# so every chunk costs at least one token. A chunk holding an ASCII letter is a
+# letter chunk: an optional leading non-letter, non-digit character, then only
+# letters and marks, then optionally a contraction suffix ('s, 't, 're, 've,
+# 'm, 'll, 'd). Its interior therefore never holds an ASCII digit, space or
+# punctuation other than the apostrophe. Count the maximal runs of ASCII
+# letters, apostrophes and non-ASCII characters that hold an ASCII letter: two
+# such runs are split by an ASCII character no letter chunk carries inside it,
+# so each run's first ASCII letter lies in a different chunk. The run count is
+# at most the chunk count, which is at most the token count.
+_LOWER_BOUND_RUN = re.compile(r"[A-Za-z'\u0080-\U0010ffff]+")
+_ASCII_LETTER = re.compile(r"[A-Za-z]")
+
+
+def token_lower_bound(text: str) -> int:
+    """At most the number of o200k tokens ``text`` encodes to."""
+    return sum(
+        1
+        for match in _LOWER_BOUND_RUN.finditer(text)
+        if _ASCII_LETTER.search(match.group())
+    )
+
+
+def measure_model_request(body: bytes) -> dict[str, int]:
+    """Size one forwarded model request: bytes, tools, and a token floor.
+
+    The floor counts only text every gpt-oss provider must render into the
+    prompt: each tool's name, description, and parameter names and their
+    descriptions, and every message's content. JSON keys and schema syntax
+    are left out because a renderer may drop or reshape them (the harmony
+    format turns a schema into a TypeScript type). Each counted string is
+    separated from the next by whitespace, punctuation or a special token in
+    the rendered prompt, so the per-string floors add up.
+    """
+    measurement = {"bytes": len(body), "tools": 0, "token_lower_bound": 0}
+    try:
+        request = json.loads(body)
+    except (ValueError, UnicodeError):
+        return measurement
+    if not isinstance(request, dict):
+        return measurement
+    texts: list[str] = []
+    tools = request.get("tools")
+    if isinstance(tools, list):
+        measurement["tools"] = len(tools)
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            # Chat Completions nests the definition under ``function``; the
+            # Responses API keeps it flat.
+            function = tool.get("function")
+            texts.extend(_tool_texts(function if isinstance(function, dict) else tool))
+    for key in ("messages", "input"):
+        items = request.get(key)
+        if isinstance(items, str):
+            texts.append(items)
+        elif isinstance(items, list):
+            texts.extend(
+                _content_text(item.get("content"))
+                for item in items
+                if isinstance(item, dict)
+            )
+    instructions = request.get("instructions")
+    if isinstance(instructions, str):
+        texts.append(instructions)
+    measurement["token_lower_bound"] = sum(token_lower_bound(text) for text in texts)
+    return measurement
+
+
+def _tool_texts(spec: dict[str, object]) -> list[str]:
+    texts = [
+        value
+        for value in (spec.get("name"), spec.get("description"))
+        if isinstance(value, str)
+    ]
+    parameters = spec.get("parameters")
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    if isinstance(properties, dict):
+        for name, schema in properties.items():
+            texts.append(name)
+            if isinstance(schema, dict) and isinstance(schema.get("description"), str):
+                texts.append(schema["description"])
+    return texts
 
 
 def tool_capability(key: bytes, case_id: str, user_id: str) -> str:
@@ -109,6 +201,7 @@ class FakeModelGateway:
         tool_key: bytes | None = None,
         semantic_config_file: str | None = None,
         semantic_events_file: str | None = None,
+        request_log_file: str | None = None,
     ) -> None:
         self.response_text = response_text or secrets.token_hex(16)
         self._oracle_answer = oracle_answer
@@ -125,6 +218,7 @@ class FakeModelGateway:
         self._tool_key = tool_key
         self._semantic_config_file = semantic_config_file
         self._semantic_events_file = semantic_events_file
+        self._request_log_file = request_log_file
         low, high = latency_range
         if low < 0 or high < low:
             raise ValueError("latency_range must be a non-negative (low, high) pair")
@@ -154,6 +248,25 @@ class FakeModelGateway:
             fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
             try:
                 os.write(fd, b"1\n")
+            finally:
+                os.close(fd)
+
+    def _record_model_request(self, body: bytes, *, readable: bool) -> None:
+        """Append one bounded measurement of a forwarded model request.
+
+        The worker reads these after the tool-catalog probe. A body the
+        gateway could not read is recorded as unmeasured, never as small.
+        """
+        if self._request_log_file is None:
+            return
+        record = measure_model_request(body) if readable else {"measured": False}
+        line = json.dumps(record, separators=(",", ":")).encode() + b"\n"
+        with contextlib.suppress(OSError):
+            fd = os.open(
+                self._request_log_file, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600
+            )
+            try:
+                os.write(fd, line)
             finally:
                 os.close(fd)
 
@@ -390,6 +503,7 @@ class FakeModelGateway:
             # Drain a well-formed body when possible, but do not turn a body
             # framing quirk into a permanent miner rejection.
             body = b""
+            body_readable = True
             try:
                 body = await self._read_request_body(reader, headers)
             except (
@@ -398,6 +512,7 @@ class FakeModelGateway:
                 asyncio.IncompleteReadError,
                 asyncio.LimitOverrunError,
             ) as error:
+                body_readable = False
                 print(
                     f"fake gateway ignored request-body framing error: {error}",
                     flush=True,
@@ -409,6 +524,7 @@ class FakeModelGateway:
                 and path in _CHAT_ROUTES
             ):
                 self._record_model_call()
+                self._record_model_request(body, readable=body_readable)
                 self._observe_semantic_context(body)
                 await self._simulate_latency()
                 message = self._chat_message(body)
@@ -436,6 +552,7 @@ class FakeModelGateway:
                 self._surface == "all" and method == "POST" and path in _RESPONSE_ROUTES
             ):
                 self._record_model_call()
+                self._record_model_request(body, readable=body_readable)
                 self._observe_semantic_context(body)
                 await self._simulate_latency()
                 content = self._response_content(body)
@@ -673,24 +790,10 @@ def _user_prompt_text(body: bytes) -> str:
         return ""
     if not isinstance(request, dict):
         return ""
-
-    def content_text(content: object) -> str:
-        if isinstance(content, str):
-            return content
-        if not isinstance(content, list):
-            return ""
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict) and isinstance(part.get("text"), str):
-                parts.append(part["text"])
-        return " ".join(parts)
-
     messages = request.get("messages")
     if isinstance(messages, list):
         return " ".join(
-            content_text(item.get("content"))
+            _content_text(item.get("content"))
             for item in messages
             if isinstance(item, dict) and item.get("role") == "user"
         )
@@ -699,11 +802,26 @@ def _user_prompt_text(body: bytes) -> str:
         return response_input
     if isinstance(response_input, list):
         return " ".join(
-            content_text(item.get("content"))
+            _content_text(item.get("content"))
             for item in response_input
             if isinstance(item, dict) and item.get("role") == "user"
         )
     return ""
+
+
+def _content_text(content: object) -> str:
+    """Join a message's text parts; non-text parts contribute nothing."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append(part)
+        elif isinstance(part, dict) and isinstance(part.get("text"), str):
+            parts.append(part["text"])
+    return " ".join(parts)
 
 
 def _sidecar_latency_range() -> tuple[float, float]:
@@ -740,6 +858,7 @@ async def _serve_sidecar() -> None:
     state_file = os.environ.get("DITTO_FAKE_GATEWAY_STATE_FILE")
     semantic_config_file = os.environ.get("DITTO_FAKE_GATEWAY_SEMANTIC_CONFIG")
     semantic_events_file = os.environ.get("DITTO_FAKE_GATEWAY_SEMANTIC_EVENTS")
+    request_log_file = os.environ.get("DITTO_FAKE_GATEWAY_REQUEST_LOG")
     latency = _sidecar_latency_range()
     chat_gateway = FakeModelGateway(
         response_text=response_text,
@@ -751,6 +870,7 @@ async def _serve_sidecar() -> None:
         surface="model",
         semantic_config_file=semantic_config_file,
         semantic_events_file=semantic_events_file,
+        request_log_file=request_log_file,
     )
     embed_gateway = FakeModelGateway(
         response_text=response_text,
@@ -783,6 +903,7 @@ async def _serve_sidecar() -> None:
             ssl_context=tls_context,
             semantic_config_file=semantic_config_file,
             semantic_events_file=semantic_events_file,
+            request_log_file=request_log_file,
         )
         if tls_context is not None
         else None

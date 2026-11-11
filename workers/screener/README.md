@@ -219,6 +219,31 @@ Required values are supplied through the production host's protected
   screened image, passing ones included -- how close the fleet runs to the caps
   cannot be read from rejections alone. An image without a shell reports
   nothing and screening is unchanged.
+- `SCREENER_TOOL_CATALOG_PROBE_MODE`: `shadow` (default), `enforce`, or
+  `off`. For a submission screened at bench v18 or later, after the seed probe,
+  one scorer-shaped `POST /run` offers a freshly drawn catalog of the
+  contract's maximum size (2,000 toolkit tools, pinned to
+  `catalog.MaxCatalogTools` in `ditto_screener/data/tool-catalog-probe-v18.json`
+  and checked by tests on both the Go and Python side). The isolated fake
+  gateway measures every model request the harness forwards: its byte size,
+  tool count, and a provable lower bound on its gpt-oss (o200k) prompt tokens
+  that counts only names, descriptions and message text, one token per word.
+  A request whose bound exceeds the 131,072-token context window of
+  `openai/gpt-oss-20b` is the DITTO-2564 failure: every provider refuses it on
+  each scored case with a large catalog. `shadow` records it as
+  `tool-catalog-context-overflow` evidence beside the existing outcome;
+  `enforce` makes it a deterministic rejection with that reason code. Every
+  probed screen also records `tool-catalog-request-size` (largest request's
+  tools, token bound and bytes, plus a note when it carries more than the 128
+  tools Groq accepts; the scored route falls back past Groq, so that never
+  fails). A failed `/run` or an unmeasurable body passes.
+  `SCREENER_TOOL_CATALOG_PROBE_TIMEOUT_SECONDS` (default `60`) bounds the run.
+  To enforce, add `SCREENER_TOOL_CATALOG_PROBE_MODE=enforce` to
+  `infra/ansible/roles/screener_worker/templates/screener.env.j2` in a reviewed
+  change and roll the screener fleet (the rendered `screener.env` is
+  overwritten on each apply, so a hand edit does not last). Do it once the
+  shadow `tool-catalog-context-overflow` records name only harnesses that also
+  fail scored v18 runs with `inference_request_rejected:request_too_large`.
 - `SCREENER_V13_RUNTIME_RECEIPTS_MODE`: `off` (default) or `shadow`. The shadow
   mode sends bounded `/run` and `/seed` requests through the isolated smoke
   network and records digest-only, exact-attempt observations for V13 runtime

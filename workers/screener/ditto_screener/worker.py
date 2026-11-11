@@ -117,6 +117,12 @@ CLAIM_NOT_STARTED_REASON_CODE = WORKER_CLAIM_NOT_STARTED
 # headroom and never changes the typed outcome, so it must not become the
 # public reason or a private-failure cause.
 _SEED_ENVELOPE_OBSERVATION = "seed-envelope-usage"
+# Likewise the tool-catalog probe's request-size record on every probed screen.
+_PROBE_OBSERVATIONS = frozenset(
+    {_SEED_ENVELOPE_OBSERVATION, "tool-catalog-request-size"}
+)
+# Shadow probe failures sit beside an outcome they did not decide.
+_SHADOW_PROBE_PREFIXES = ("seed-", "tool-catalog-")
 _PRIVATE_BUILD_FAILURE_CODES = frozenset(
     {"docker-build", "docker-build-infrastructure", "docker-build-timeout"}
 )
@@ -135,9 +141,9 @@ def _verdict_reason_code(
 ) -> str | None:
     """Infer a reason for legacy decisions without an explicit deciding code.
 
-    Seed observations are appended last so they survive the evidence cap.
-    Treating that tail as the reason relabels a quarantine or pass as a seed
-    failure. Seed probes decide only deterministic rejections; successful
+    Seed and tool-catalog observations are appended last so they survive the
+    evidence cap. Treating that tail as the reason relabels a quarantine or
+    pass as a probe failure. The probes decide only deterministic rejections; successful
     oracle observations cannot explain a quarantine or inconclusive outcome.
     """
     if outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
@@ -146,9 +152,9 @@ def _verdict_reason_code(
         return None
     shadow_seed = outcome != ScreenResultOutcome.DETERMINISTIC_REJECT
     for item in reversed(evidence):
-        if item.code == _SEED_ENVELOPE_OBSERVATION:
+        if item.code in _PROBE_OBSERVATIONS:
             continue
-        if shadow_seed and item.code.startswith("seed-"):
+        if shadow_seed and item.code.startswith(_SHADOW_PROBE_PREFIXES):
             continue
         if outcome in {
             ScreenResultOutcome.QUARANTINE,

@@ -1,0 +1,13 @@
+{
+  "bench_version": 18,
+  "max_catalog_tools": 2000,
+  "toolkit_tool_parameters": {
+    "type": "object",
+    "properties": {
+      "input": {
+        "type": "string",
+        "description": "optional request for the tool"
+      }
+    }
+  }
+}

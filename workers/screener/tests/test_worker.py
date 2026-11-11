@@ -1349,6 +1349,39 @@ def test_legacy_reason_ignores_shadow_seed_for_every_non_rejection(
 
 
 @pytest.mark.parametrize(
+    ("outcome", "reason"),
+    [
+        (ScreenResultOutcome.PASS, "health-ok"),
+        (ScreenResultOutcome.QUARANTINE, "source-finding-held"),
+    ],
+)
+def test_legacy_reason_ignores_shadow_tool_catalog_records(
+    outcome: ScreenResultOutcome, reason: str
+) -> None:
+    evidence = (
+        PolicyEvidence("review", reason, "deciding result"),
+        PolicyEvidence(
+            "stable-core", "tool-catalog-context-overflow", "shadow overflow"
+        ),
+        PolicyEvidence("stable-core", "tool-catalog-request-size", "2000 tools"),
+    )
+    assert _verdict_reason_code(outcome, evidence) == reason
+    # The size record is never a reason, even on a rejection.
+    assert (
+        _verdict_reason_code(
+            ScreenResultOutcome.DETERMINISTIC_REJECT,
+            (
+                PolicyEvidence(
+                    "stable-core", "tool-catalog-context-overflow", "overflow"
+                ),
+                PolicyEvidence("stable-core", "tool-catalog-request-size", "size"),
+            ),
+        )
+        == "tool-catalog-context-overflow"
+    )
+
+
+@pytest.mark.parametrize(
     "outcome", [ScreenResultOutcome.INCONCLUSIVE, ScreenResultOutcome.QUARANTINE]
 )
 def test_legacy_reason_ignores_trailing_successful_challenge_observations(

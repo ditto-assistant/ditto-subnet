@@ -31,6 +31,7 @@ from ditto_screening_protocol.reason_codes import (
     PROVIDER_BACKOFF_REASON_CODES,
     SCREENING_REASON_CODES,
     SEED_PROBE_REASON_CODES,
+    TOOL_CATALOG_PROBE_REASON_CODES,
     VERIFICATION_INCOMPLETE_UNREVIEWABLE,
     ReasonCodeClass,
     ReasonCodeProducer,
@@ -141,6 +142,12 @@ def test_agent_fault_code_has_code_specific_public_guidance(code: str) -> None:
 
 def test_seed_probe_public_reasons_cover_exactly_the_registered_codes() -> None:
     assert set(screener._SEED_PROBE_PUBLIC_REASONS) == set(SEED_PROBE_REASON_CODES)
+
+
+def test_tool_catalog_public_reasons_cover_exactly_the_registered_codes() -> None:
+    assert set(screener._TOOL_CATALOG_PROBE_PUBLIC_REASONS) == set(
+        TOOL_CATALOG_PROBE_REASON_CODES
+    )
 
 
 def test_model_timeout_parked_codes_are_registered_source_review_codes() -> None:
