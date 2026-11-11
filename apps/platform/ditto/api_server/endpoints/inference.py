@@ -50,6 +50,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -715,17 +716,29 @@ def _phase_error_code(error: HTTPException) -> str:
 _PROVIDER_CONTEXT_LENGTH_EXCEEDED_CODE = "provider_context_length_exceeded"
 
 
+_SPLIT_CONTEXT_OVERFLOW = re.compile(
+    r"maximum context length is (\d+) tokens\b.*\((\d+) in the messages, "
+    r"\d+ in the completion\)"
+)
+
+
 def _provider_context_length_exceeded(status_code: int, decoded: object) -> bool:
-    """Mirror providerContextLengthExceeded for a provider HTTP 400.
+    """Mirror providerContextLengthExceeded for a provider rejection.
 
     The input alone is longer than the model's context window: every provider
     refuses the same harness bytes, so the request is the harness's, not the
-    route's. A window overflowed only by the requested completion is not.
+    route's. A window overflowed only by the requested completion is not. The
+    rejection arrives as an HTTP 400 or an HTTP 200 envelope carrying code 400.
     """
-    if status_code != 400 or not isinstance(decoded, dict):
+    if status_code not in (200, 400) or not isinstance(decoded, dict):
         return False
     error = decoded.get("error")
     if not isinstance(error, dict):
+        return False
+    if status_code == 200 and (
+        not set(decoded) <= {"error", "id"}
+        or not set(error) <= {"code", "message", "metadata"}
+    ):
         return False
     code = error.get("code")
     if not isinstance(code, int) or isinstance(code, bool) or code != 400:
@@ -738,11 +751,12 @@ def _provider_context_length_exceeded(status_code: int, decoded: object) -> bool
         if not isinstance(text, str):
             continue
         message = text.lower()
-        if (
-            "maximum context length" in message
-            and "in the completion" not in message
-            and "in the output" not in message
-        ):
+        if "maximum context length" not in message:
+            continue
+        if "in the completion" not in message and "in the output" not in message:
+            return True
+        match = _SPLIT_CONTEXT_OVERFLOW.search(message)
+        if match is not None and int(match.group(2)) > int(match.group(1)):
             return True
     return False
 

@@ -841,6 +841,11 @@ func TestContextLengthExceededRequiresExactProviderRejection(t *testing.T) {
 	)) {
 		t.Fatal("OpenRouter's own context-window message not recognized")
 	}
+	if !providerContextLengthExceeded(http.StatusBadRequest, decode(
+		`{"error":{"code":400,"message":"This model's maximum context length is 32768 tokens. However, you requested 38000 tokens (33000 in the messages, 5000 in the completion)."}}`,
+	)) {
+		t.Fatal("a split count whose input alone exceeds the limit was not recognized")
+	}
 	for name, testCase := range map[string]struct {
 		status int
 		body   string

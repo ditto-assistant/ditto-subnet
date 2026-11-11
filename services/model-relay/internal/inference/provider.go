@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -1178,16 +1179,30 @@ func providerContextLengthExceeded(status int, response map[string]any) bool {
 			continue
 		}
 		message = strings.ToLower(message)
-		// "N in the messages, M in the completion" (and OpenRouter's "in the
-		// output") means the input may fit and only max_tokens overflowed.
-		if strings.Contains(message, "maximum context length") &&
-			!strings.Contains(message, "in the completion") &&
-			!strings.Contains(message, "in the output") {
+		if !strings.Contains(message, "maximum context length") {
+			continue
+		}
+		// A completion/output split means max_tokens counted toward the
+		// overflow. It is the input's fault only when the reported input count
+		// alone is over the reported limit.
+		if !strings.Contains(message, "in the completion") && !strings.Contains(message, "in the output") {
 			return true
+		}
+		if match := splitContextOverflow.FindStringSubmatch(message); match != nil {
+			limit, limitErr := strconv.ParseInt(match[1], 10, 64)
+			input, inputErr := strconv.ParseInt(match[2], 10, 64)
+			if limitErr == nil && inputErr == nil && input > limit {
+				return true
+			}
 		}
 	}
 	return false
 }
+
+// splitContextOverflow reads the OpenAI-style wording "maximum context length
+// is L tokens. ... (I in the messages, C in the completion)".
+var splitContextOverflow = regexp.MustCompile(
+	`maximum context length is (\d+) tokens\b.*\((\d+) in the messages, \d+ in the completion\)`)
 
 func requestDeclaresTool(request map[string]any, name string) bool {
 	tools, _ := request["tools"].([]any)

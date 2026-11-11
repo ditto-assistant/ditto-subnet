@@ -893,9 +893,20 @@ def _context_overflow_error(raw: str) -> dict[str, Any]:
     }
 
 
-def test_context_length_overflow_requires_an_input_only_provider_400() -> None:
+def test_context_length_overflow_requires_an_input_only_provider_rejection() -> None:
     assert _provider_context_length_exceeded(
         400, _context_overflow_error(_CONTEXT_OVERFLOW_RAW)
+    )
+    assert _provider_context_length_exceeded(
+        200, {"error": {"code": 400, "message": _CONTEXT_OVERFLOW_RAW}}
+    )
+    assert _provider_context_length_exceeded(
+        400,
+        _context_overflow_error(
+            "This model's maximum context length is 32768 tokens. However, you "
+            "requested 38000 tokens (33000 in the messages, 5000 in the "
+            "completion)."
+        ),
     )
     for status_code, decoded in (
         (502, _context_overflow_error(_CONTEXT_OVERFLOW_RAW)),
@@ -910,6 +921,14 @@ def test_context_length_overflow_requires_an_input_only_provider_400() -> None:
         ),
         (400, {"error": {"code": "400", "message": _CONTEXT_OVERFLOW_RAW}}),
         (400, {"message": _CONTEXT_OVERFLOW_RAW}),
+        (200, {"error": {"code": 502, "message": _CONTEXT_OVERFLOW_RAW}}),
+        (
+            200,
+            {
+                "model": "openai/gpt-oss-20b",
+                "error": {"code": 400, "message": _CONTEXT_OVERFLOW_RAW},
+            },
+        ),
     ):
         assert not _provider_context_length_exceeded(status_code, decoded)
 
