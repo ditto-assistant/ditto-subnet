@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -59,8 +60,12 @@ const (
 	pplxEmbedResponseModel = "pplx-embed-v1-0.6b"
 
 	providerGenerationInvalidCode = "provider_generation_invalid"
-	minerRecoverableFailureHeader = "X-Ditto-Inference-Failure-Class"
-	minerRecoverableGeneration    = "miner_recoverable_generation"
+	// providerContextLengthExceededCode is the terminal code for a request whose
+	// input exceeds the model's context window. The chat route answers it with
+	// 413, which the scorer broker charges to the harness.
+	providerContextLengthExceededCode = "provider_context_length_exceeded"
+	minerRecoverableFailureHeader     = "X-Ditto-Inference-Failure-Class"
+	minerRecoverableGeneration        = "miner_recoverable_generation"
 )
 
 func isProviderRetryStatus(status int) bool {
@@ -1138,6 +1143,92 @@ func minerRecoverableProviderError(request, response map[string]any) bool {
 	return false
 }
 
+// providerContextLengthExceeded recognizes a provider refusing the request
+// because its input alone is longer than the model's context window. That is a
+// property of the harness-authored bytes, and every provider serving the model
+// refuses it identically, so a retry replays the same rejection. It arrives as
+// an HTTP 400, or as an HTTP 200 body-level envelope carrying code 400.
+// Anything else a provider rejects, including a window overflowed only once
+// the requested completion is added, stays on the generic provider-failure path.
+func providerContextLengthExceeded(status int, response map[string]any) bool {
+	if status == http.StatusOK {
+		if code, _, ok := providerErrorEnvelope(response); !ok || code != http.StatusBadRequest {
+			return false
+		}
+	} else if status != http.StatusBadRequest {
+		return false
+	}
+	errorPayload, ok := response["error"].(map[string]any)
+	if !ok {
+		return false
+	}
+	codeNumber, ok := isIntLiteral(errorPayload["code"])
+	if !ok {
+		return false
+	}
+	if code, err := codeNumber.Int64(); err != nil || code != http.StatusBadRequest {
+		return false
+	}
+	texts := []any{errorPayload["message"]}
+	if metadata, ok := errorPayload["metadata"].(map[string]any); ok {
+		texts = append(texts, metadata["raw"])
+	}
+	for _, text := range texts {
+		message, ok := text.(string)
+		if !ok {
+			continue
+		}
+		message = strings.ToLower(message)
+		if !strings.Contains(message, "maximum context length") {
+			continue
+		}
+		// A completion/output split means max_tokens counted toward the
+		// overflow. It is the input's fault only when the reported input count
+		// alone is over the reported limit.
+		if !strings.Contains(message, "in the completion") && !strings.Contains(message, "in the output") {
+			return true
+		}
+		if limit, input, ok := splitContextCounts(message); ok && input > limit {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	contextLimitPattern = regexp.MustCompile(`maximum context length is (\d+) tokens\b`)
+	splitCountsPattern  = regexp.MustCompile(`\(([^()]*\b(?:in the completion|in the output)[^()]*)\)`)
+	inputCountPattern   = regexp.MustCompile(`(\d+) (?:in the messages|of [a-z ]*input)\b`)
+)
+
+// splitContextCounts reads the stated limit and the input tokens from a split
+// count: OpenAI's "(I in the messages, C in the completion)" or OpenRouter's
+// "(T of text input, U of tool input, O in the output)". Input is every count
+// that is not the completion/output.
+func splitContextCounts(message string) (limit, input int64, ok bool) {
+	limitMatch := contextLimitPattern.FindStringSubmatch(message)
+	splitMatch := splitCountsPattern.FindStringSubmatch(message)
+	if limitMatch == nil || splitMatch == nil {
+		return 0, 0, false
+	}
+	limit, err := strconv.ParseInt(limitMatch[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	counts := inputCountPattern.FindAllStringSubmatch(splitMatch[1], -1)
+	if len(counts) == 0 {
+		return 0, 0, false
+	}
+	for _, count := range counts {
+		value, err := strconv.ParseInt(count[1], 10, 64)
+		if err != nil || value > math.MaxInt64-input {
+			return 0, 0, false
+		}
+		input += value
+	}
+	return limit, input, true
+}
+
 func requestDeclaresTool(request map[string]any, name string) bool {
 	tools, _ := request["tools"].([]any)
 	for _, rawTool := range tools {
@@ -1471,6 +1562,13 @@ phaseLoop:
 				// private recovery class for the miner even when OpenRouter carries
 				// the envelope with an outer HTTP 502 instead of HTTP 200.
 				lastCode = providerGenerationInvalidCode
+				trace.errorCode = lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
+			}
+			if decodedMapOK && providerContextLengthExceeded(result.status, decodedMap) {
+				lastTimedOut = false
+				lastCode = providerContextLengthExceededCode
 				trace.errorCode = lastCode
 				traced = append(traced, trace)
 				continue phaseLoop

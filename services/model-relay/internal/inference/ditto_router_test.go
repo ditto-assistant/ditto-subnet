@@ -87,6 +87,44 @@ func TestCompleteChatViaDittoRouterReportsPaymentRequiredDistinctly(t *testing.T
 	}
 }
 
+func TestCompleteChatViaDittoRouterClassifiesContextOverflow(t *testing.T) {
+	overflow := `{"error":{"code":400,"message":"Input length (145769) exceeds model's maximum context length (131072)."}}`
+	for name, testCase := range map[string]struct {
+		status int
+		body   string
+		code   string
+	}{
+		"http 400":           {http.StatusBadRequest, overflow, providerContextLengthExceededCode},
+		"200 envelope":       {http.StatusOK, overflow, providerContextLengthExceededCode},
+		"unrelated 400":      {http.StatusBadRequest, `{"error":{"code":400,"message":"invalid request"}}`, "upstream_http_400"},
+		"unrelated envelope": {http.StatusOK, `{"error":{"code":502,"message":"maximum context length"}}`, "provider_unavailable"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(testCase.status)
+				_, _ = w.Write([]byte(testCase.body))
+			}))
+			defer srv.Close()
+			cfg, router := dittoRouterTestConfig(srv.URL)
+			_, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
+				map[string]any{"model": "m"}, "m", "u", func(context.Context, time.Duration) {})
+			if exhausted == nil || exhausted.terminalErrorCode != testCase.code {
+				t.Fatalf("exhausted: %+v", exhausted)
+			}
+			want := http.StatusBadGateway
+			if testCase.code == providerContextLengthExceededCode {
+				want = http.StatusRequestEntityTooLarge
+				if exhausted.routeObservable {
+					t.Fatalf("an oversized request must not mark the route: %+v", exhausted)
+				}
+			}
+			if got := chatProviderFailure(exhausted).status; got != want {
+				t.Fatalf("public status=%d want %d", got, want)
+			}
+		})
+	}
+}
+
 func TestCompleteChatViaDittoRouterRejectsAResponseWithoutUsage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"model":"m","choices":[]}`))

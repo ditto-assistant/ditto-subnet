@@ -48,6 +48,7 @@ from ditto.api_server.endpoints.inference import (
     _perplexity_embedding_response,
     _post_embedding_provider,
     _post_provider_with_retry,
+    _provider_context_length_exceeded,
     _provider_is_backpressure,
     _provider_preferences,
     _provider_rejection_is_route_observable,
@@ -875,6 +876,126 @@ async def test_invalid_fast_response_parks_without_recovery_dispatch() -> None:
     assert raised.value.terminal_error_code == "provider_identity_mismatch"
     assert raised.value.fallback_phase == 0
     assert raised.value.upstream_attempts == 1
+
+
+_CONTEXT_OVERFLOW_RAW = (
+    "Input length (145769) exceeds model's maximum context length (131072)."
+)
+
+
+def _context_overflow_error(raw: str) -> dict[str, Any]:
+    return {
+        "error": {
+            "message": "Provider returned error",
+            "code": 400,
+            "metadata": {"raw": raw, "provider_name": "Amazon Bedrock"},
+        }
+    }
+
+
+def test_context_length_overflow_requires_an_input_only_provider_rejection() -> None:
+    assert _provider_context_length_exceeded(
+        400, _context_overflow_error(_CONTEXT_OVERFLOW_RAW)
+    )
+    assert _provider_context_length_exceeded(
+        200, {"error": {"code": 400, "message": _CONTEXT_OVERFLOW_RAW}}
+    )
+    assert _provider_context_length_exceeded(
+        400,
+        _context_overflow_error(
+            "This model's maximum context length is 32768 tokens. However, you "
+            "requested 38000 tokens (33000 in the messages, 5000 in the "
+            "completion)."
+        ),
+    )
+    for message in (
+        "This endpoint's maximum context length is 32768 tokens. However, you "
+        "requested about 38000 tokens (33000 in the messages, 5000 in the output).",
+        "This endpoint's maximum context length is 131072 tokens. However, you "
+        "requested about 160000 tokens (100000 of text input, 40000 of tool "
+        "input, 20000 in the output).",
+    ):
+        assert _provider_context_length_exceeded(
+            400, {"error": {"code": 400, "message": message}}
+        )
+    for status_code, decoded in (
+        (502, _context_overflow_error(_CONTEXT_OVERFLOW_RAW)),
+        (400, _context_overflow_error("'tools' : maximum number of items is 128")),
+        (
+            400,
+            _context_overflow_error(
+                "This model's maximum context length is 8192 tokens. However, you "
+                "requested 20000 tokens (2000 in the messages, 18000 in the "
+                "completion)."
+            ),
+        ),
+        (400, {"error": {"code": "400", "message": _CONTEXT_OVERFLOW_RAW}}),
+        (400, {"message": _CONTEXT_OVERFLOW_RAW}),
+        (200, {"error": {"code": 502, "message": _CONTEXT_OVERFLOW_RAW}}),
+        (200, {"id": "", "error": {"code": 400, "message": _CONTEXT_OVERFLOW_RAW}}),
+        (
+            200,
+            {
+                "error": {
+                    "code": 400,
+                    "message": _CONTEXT_OVERFLOW_RAW,
+                    "metadata": "raw",
+                }
+            },
+        ),
+        (
+            400,
+            {
+                "error": {
+                    "code": 400,
+                    "message": "This endpoint's maximum context length is 131072 "
+                    "tokens. However, you requested about 140000 tokens (120000 "
+                    "of text input, 20000 in the output).",
+                }
+            },
+        ),
+        (
+            200,
+            {
+                "model": "openai/gpt-oss-20b",
+                "error": {"code": 400, "message": _CONTEXT_OVERFLOW_RAW},
+            },
+        ),
+    ):
+        assert not _provider_context_length_exceeded(status_code, decoded)
+
+
+@pytest.mark.asyncio
+async def test_context_length_overflow_is_single_shot_with_its_own_code() -> None:
+    requests: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            400, request=request, json=_context_overflow_error(_CONTEXT_OVERFLOW_RAW)
+        )
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(_ChatProviderExhausted) as raised:
+            await _complete_chat_with_recovery(
+                client,
+                _recovery_config(),
+                payload={"model": "openai/gpt-oss-20b", "messages": []},
+                model="openai/gpt-oss-20b",
+                expected_provider="openrouter",
+                expected_quantization=None,
+                expected_prompt_price=None,
+                expected_completion_price=None,
+                sleep=no_sleep,
+            )
+
+    assert len(requests) == 1
+    assert raised.value.terminal_error_code == "provider_context_length_exceeded"
+    assert not raised.value.timed_out
+    assert not raised.value.route_observable
 
 
 def test_openrouter_headers_attribute_chat_and_embedding_traffic() -> None:
