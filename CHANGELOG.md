@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.473.4 (2026-11-11)
+
+### Bug Fixes
+
+- **platform**: Name operator queue withdrawals instead of historical
+  ([#3493](https://github.com/ditto-assistant/ditto-subnet/pull/3493),
+  [`e333bae`](https://github.com/ditto-assistant/ditto-subnet/commit/e333baead3511cba466f6f427fed075b84ea592a))
+
+- **rollout**: Read only plain columns in the attributable-exhaustion barrier check
+  ([#3494](https://github.com/ditto-assistant/ditto-subnet/pull/3494),
+  [`40099ab`](https://github.com/ditto-assistant/ditto-subnet/commit/40099ab3de0acf921ea80c79abed9cf17a539aea))
+
+
 ## v0.473.3 (2026-11-11)
 
 ### Bug Fixes
