@@ -5541,3 +5541,125 @@ async def test_agent_attributable_exhaustion_releases_the_priority_barrier(
         if resolved:
             ledger = await list_eligible_ledger(session)
             assert member_id not in {row.agent_id for row in ledger if row.eligible}
+
+
+def _add_season(
+    session: AsyncSession, *, bench_version: int, season_index: int, status: str
+) -> UUID:
+    from ditto.db.models import DuelingSeason
+    from ditto_screening_protocol.dueling import season_commitment, season_seed
+
+    secret = b"\x02" * 32
+    block_hash = "0x" + "7c" * 32
+    season_id = uuid4()
+    session.add(
+        DuelingSeason(
+            id=season_id,
+            bench_version=bench_version,
+            season_index=season_index,
+            shadow=True,
+            status=status,
+            commitment=season_commitment(season_index, secret),
+            secret=secret,
+            committed_at=datetime.now(UTC),
+            rounds_per_season=4,
+            anchor_block=1,
+            anchor_block_hash=block_hash,
+            season_seed=season_seed(season_index, secret, block_hash),
+            columns=[],
+            closes_at_round=season_index + 4,
+            detail={},
+        )
+    )
+    return season_id
+
+
+async def test_member_retry_counts_only_in_season_scores(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Live DITTO-2564 shape: an expired season's score is not quorum.
+
+    The member's third score expired at a season boundary and its re-test then
+    failed on infrastructure. The barrier counts 2 of 3; the retry gate used to
+    count 3 of 3 and refused the recovery as "already reached scoring quorum",
+    leaving no tool that could restore the slot.
+    """
+    from ditto.screener_policy_state import effective_screening_policy_version
+
+    now = datetime.now(UTC)
+    async with _seeded_session(
+        session_maker,
+        lambda s: _seed_desired_quorum_cohort(
+            s, now, desired_version=_NEWEST_SHIPPED_BENCH_VERSION
+        ),
+    ) as (session, (agent_ids, rollout)):
+        if not is_dueling_bench_version(rollout.desired_version):
+            pytest.skip("season scope applies from the dueling floor")
+        expired, previous, current = (
+            _add_season(
+                session,
+                bench_version=rollout.desired_version,
+                season_index=index,
+                status=status,
+            )
+            for index, status in ((1, "closed"), (2, "closed"), (3, "open"))
+        )
+        await session.flush()
+        agent_id = agent_ids[0]
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.SCORED
+        agent.screening_policy_version = effective_screening_policy_version()
+        for score in await session.scalars(
+            select(Score).where(
+                Score.agent_id == agent_id,
+                Score.bench_version == rollout.desired_version,
+            )
+        ):
+            score.dueling_season_id = {
+                "validator-0": current,
+                "validator-1": previous,
+                "validator-2": expired,
+            }[score.validator_hotkey]
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                bench_version=rollout.desired_version,
+                validator_hotkey="validator-2",
+                status=TicketStatus.EXPIRED,
+                purpose=TicketPurpose.CANONICAL_QUORUM,
+                purpose_revision=2,
+                issued_at=now - timedelta(minutes=10),
+                deadline=now,
+                attempt_count=MAX_ATTEMPTS_PER_VERSION,
+                manual_retry_grants=0,
+                infra_retry_grants=0,
+                failure_reason="infrastructure",
+                failed_at=now,
+                failure_detail="PlatformInfrastructureError: inference exchange",
+            )
+        )
+        await session.flush()
+
+        assert not await rollout_cohort_score_complete(
+            session, rollout=rollout, cohort_size=rollout.priority_cohort_target
+        )
+        diagnostics = {
+            row["agent_id"]: row for row in await rollout_retry_diagnostics(session)
+        }
+        row = diagnostics[str(agent_id)]
+        assert row["score_count"] == 2
+        assert row["state"] == "exhausted"
+        assert row["recovery_allowed"] is True
+        assert row["blocks_activation"] is True
+        # The Backroom retry route reads the same season-scoped quorum.
+        from ditto.api_server.endpoints.admin_validation_retry import (
+            get_validation_retry,
+        )
+
+        detail = await get_validation_retry(agent_id, None, session)  # type: ignore[arg-type]
+        assert detail.score_count == 2
+        assert detail.recovery_allowed is True
+        assert [
+            t.validator_hotkey for t in detail.tickets if t.status == "expired"
+        ] == ["validator-2"]

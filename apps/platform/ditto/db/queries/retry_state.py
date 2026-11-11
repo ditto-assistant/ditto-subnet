@@ -36,6 +36,7 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
+from ditto.db.queries.dueling_season_window import dueling_season_window
 from ditto.db.queries.provider_outages import provider_outage_active
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
@@ -369,6 +370,23 @@ def retry_disposition(
     if dominant_agent_failure_detail(scores=scores, tickets=tickets) is None:
         return "operator_hold"
     return "terminal_artifact_failure"
+
+
+def rollout_quorum_scores(
+    scores: list[Score], *, comparable: frozenset[UUID] | None
+) -> list[Score]:
+    """A rollout member's desired-version scores that still count as quorum.
+
+    At bench v16+ the rollout barrier (``rollout_cohort_score_complete``)
+    counts only the dueling window's seasons: an expired season's score is
+    audit history, not quorum. Counting it here too made a member whose
+    season-boundary re-test failed on infrastructure unrecoverable -- the
+    gate saw a full quorum the barrier did not. ``None`` (below the dueling
+    floor) keeps every score.
+    """
+    if comparable is None:
+        return scores
+    return [score for score in scores if score.dueling_season_id in comparable]
 
 
 def recovery_gate(
@@ -748,6 +766,10 @@ async def classify_agent_retry_states(
                 )
             )
         )
+    rollout_comparable: frozenset[UUID] | None = None
+    if rollout is not None and rollout_member_ids:
+        window = await dueling_season_window(session, rollout.desired_version)
+        rollout_comparable = window.comparable if window is not None else None
     agent_by_id = {
         agent.agent_id: agent
         for agent in agents
@@ -837,17 +859,20 @@ async def classify_agent_retry_states(
             continue
         v_scores = [s for s in all_scores if s.bench_version == bench_version]
         v_tickets = [t for t in all_tickets if t.bench_version == bench_version]
+        rollout_qualification = (
+            rollout is not None
+            and bench_version == rollout.desired_version
+            and agent_id in rollout_member_ids
+        )
+        if rollout_qualification:
+            v_scores = rollout_quorum_scores(v_scores, comparable=rollout_comparable)
         automatic, allowed, reason, _ = recovery_gate(
             agent=agent,
             scores=v_scores,
             tickets=v_tickets,
             now=now,
             bench_version=bench_version,
-            rollout_qualification=(
-                rollout is not None
-                and bench_version == rollout.desired_version
-                and agent_id in rollout_member_ids
-            ),
+            rollout_qualification=rollout_qualification,
             work_available_hotkeys=available_hotkeys,
         )
         state = classify_retry_state(

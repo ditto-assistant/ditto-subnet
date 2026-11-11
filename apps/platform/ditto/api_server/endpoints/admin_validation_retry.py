@@ -95,6 +95,7 @@ from ditto.db.queries.benchmark_rollout import (
     heartbeat_supports_version,
     open_rollout,
 )
+from ditto.db.queries.dueling_season_window import dueling_season_window
 from ditto.db.queries.lease_liveness import (
     ACTION_OPERATOR_EVICTED,
     expire_issued_tickets,
@@ -123,6 +124,7 @@ from ditto.db.queries.retry_state import (
     recovery_gate,
     reinstatement_gate,
     resolve_bench_version,
+    rollout_quorum_scores,
     withdrawal_gate,
     work_available_validator_hotkeys,
 )
@@ -500,6 +502,14 @@ async def _load(
         )
     )
     scores = [score for score in all_scores if score.bench_version == bench_version]
+    if await is_open_rollout_qualification(
+        session, agent_id=agent_id, bench_version=bench_version
+    ):
+        # The same season-scoped quorum the rollout barrier counts.
+        window = await dueling_season_window(session, bench_version)
+        scores = rollout_quorum_scores(
+            scores, comparable=window.comparable if window is not None else None
+        )
     tickets = [
         ticket for ticket in all_tickets if ticket.bench_version == bench_version
     ]
