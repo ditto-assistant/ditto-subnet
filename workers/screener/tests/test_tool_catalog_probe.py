@@ -267,6 +267,21 @@ def test_judge_fails_only_past_the_context_window() -> None:
     assert "Groq" in over.observation and "Groq" in at_limit.observation
 
 
+def test_judge_notes_the_groq_cap_for_any_measured_request() -> None:
+    # The highest-floor request is not necessarily the one with the most tools.
+    verdict = judge(
+        [
+            {"bytes": 40_000, "tools": 200, "token_lower_bound": 4_000},
+            {"bytes": 90_000, "tools": 20, "token_lower_bound": 9_000},
+        ],
+        run_note="",
+    )
+
+    assert verdict.passed
+    assert verdict.observation.startswith("highest-floor request has 20 tools")
+    assert "a request exceeds Groq's 128-tool cap" in verdict.observation
+
+
 @pytest.mark.parametrize(
     "records",
     [

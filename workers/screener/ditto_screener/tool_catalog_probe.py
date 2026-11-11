@@ -299,9 +299,14 @@ def judge(records: Iterable[Mapping[str, object]], *, run_note: str) -> ProbeVer
     if not measured:
         return ProbeVerdict(True, "tool-catalog-ok", "", "; ".join(parts)[:240])
     floor, tools, size = max(measured)
-    largest = f"largest has {tools} tools, >= {floor} tokens, {size} bytes"
-    if tools > PROVIDER_TOOL_CAP:
-        largest += f" (over Groq's {PROVIDER_TOOL_CAP}-tool cap; route falls back)"
+    largest = (
+        f"highest-floor request has {tools} tools, >= {floor} tokens, {size} bytes"
+    )
+    if any(request_tools > PROVIDER_TOOL_CAP for _, request_tools, _ in measured):
+        largest += (
+            f" (a request exceeds Groq's {PROVIDER_TOOL_CAP}-tool cap;"
+            " route falls back)"
+        )
     observation = "; ".join([largest, *parts])[:240]
     if floor <= SCORING_CONTEXT_TOKENS:
         return ProbeVerdict(True, "tool-catalog-ok", "", observation)

@@ -1270,6 +1270,32 @@ async def test_local_build_failure_forwards_signed_private_miner_feedback(
     _signed_request(verdict)
 
 
+async def test_tool_catalog_rejection_forwards_private_miner_feedback(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    gate = _FakeGate(
+        core_decision(
+            ScreeningOutcome.DETERMINISTIC_REJECT,
+            code="tool-catalog-context-overflow",
+            summary="harness request exceeds the scoring model context",
+            detail=(
+                "the harness forwarded 2000 tool definitions, at least 140035 "
+                "tokens; the scoring model accepts 131072"
+            ),
+        )
+    )
+    worker = _worker(make_config(), platform, gate)
+
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+
+    verdict = platform.verdicts[0]
+    assert verdict["reason_code"] == "tool-catalog-context-overflow"
+    assert verdict["private_failure_detail"] is not None
+    assert "2000 tool definitions" in verdict["private_failure_detail"]
+    _signed_request(verdict)
+
+
 async def test_seed_probe_rejection_forwards_private_miner_feedback(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

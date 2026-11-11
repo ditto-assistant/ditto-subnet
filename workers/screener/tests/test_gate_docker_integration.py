@@ -805,7 +805,9 @@ def _catalog_forwarding_harness(forward: int | None) -> bytes:
                         {{"pairs": len(request["pairs"]), "subjects": 0, "links": 0}},
                     )
                     return
-                tools = request["tools"] if FORWARD is None else request["tools"][:FORWARD]
+                tools = request["tools"]
+                if FORWARD is not None:
+                    tools = tools[:FORWARD]
                 body = json.dumps({{
                     "model": os.environ["DITTOBENCH_MODEL"],
                     "messages": [
@@ -850,7 +852,7 @@ async def test_tool_catalog_probe_measures_the_forwarded_request_in_docker(
     """The ~1 MiB /run body reaches the harness and the gateway measures it."""
     tarball = _catalog_forwarding_harness(forward)
 
-    def artifact(request: httpx.Request) -> httpx.Response:
+    def artifact(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=tarball)
 
     config: ScreenerConfig = make_config(

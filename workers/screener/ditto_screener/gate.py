@@ -778,20 +778,18 @@ def _mib(value: int) -> str:
     return f"{value / (1024 * 1024):.0f} MiB"
 
 
-def _with_seed_probe_evidence(
-    decision: ScreeningDecision, probe: _SeedProbe | None
-) -> ScreeningDecision:
-    """Record the ``/seed`` observation without changing the outcome.
+def _seed_probe_records(probe: _SeedProbe | None) -> list[PolicyEvidence]:
+    """The ``/seed`` observation as additive evidence records.
 
-    Two additive records. The failure class is what shadow mode exists for:
-    operators can see how many images would fail the seeding contract, and on
-    which class, before any deployment promotes the probe to ``enforce``. The
+    Two records. The failure class is what shadow mode exists for: operators
+    can see how many images would fail the seeding contract, and on which
+    class, before any deployment promotes the probe to ``enforce``. The
     envelope sample is recorded for passing images too, because the question a
     cap raises -- whether the fleet's images are anywhere near it -- cannot be
     answered from rejections alone.
     """
     if probe is None:
-        return decision
+        return []
     records = []
     if not probe.passed:
         records.append(PolicyEvidence("stable-core", probe.code, probe.detail[:240]))
@@ -802,27 +800,20 @@ def _with_seed_probe_evidence(
         records.append(
             PolicyEvidence("stable-core", "seed-envelope-usage", summary[:240])
         )
-    if not records:
-        return decision
-    # ScreeningDecision rejects more than _MAX_EVIDENCE records, so reserve the
-    # room these take instead of assuming one free slot: a saturated decision
-    # plus a failure class plus an envelope sample would otherwise raise before
-    # the worker could submit any verdict at all.
-    keep = max(0, _MAX_EVIDENCE - len(records))
-    return replace(decision, evidence=(*decision.evidence[:keep], *records))
+    return records
 
 
-def _with_tool_catalog_probe_evidence(
-    decision: ScreeningDecision, probe: tool_catalog_probe.ProbeVerdict | None
-) -> ScreeningDecision:
-    """Record the tool-catalog measurement without changing the outcome.
+def _tool_catalog_probe_records(
+    probe: tool_catalog_probe.ProbeVerdict | None,
+) -> list[PolicyEvidence]:
+    """The tool-catalog measurement as additive evidence records.
 
     The measurement is recorded for passing images too: how far the fleet's
     harnesses sit from the context window is what decides when ``enforce``
     is safe, and rejections alone cannot show it.
     """
     if probe is None:
-        return decision
+        return []
     records = []
     if not probe.passed:
         records.append(PolicyEvidence("stable-core", probe.code, probe.detail[:240]))
@@ -831,8 +822,32 @@ def _with_tool_catalog_probe_evidence(
             "stable-core", tool_catalog_probe.OBSERVATION_CODE, probe.observation
         )
     )
-    keep = max(0, _MAX_EVIDENCE - len(records))
-    return replace(decision, evidence=(*decision.evidence[:keep], *records))
+    return records
+
+
+def _with_probe_evidence(
+    decision: ScreeningDecision, records: Sequence[PolicyEvidence]
+) -> ScreeningDecision:
+    """Append probe records without changing the outcome, capping once.
+
+    ScreeningDecision rejects more than _MAX_EVIDENCE records, so reserve the
+    room every probe's records take in a single cut instead of assuming one
+    free slot: a saturated decision plus failure classes plus measurements
+    would otherwise raise before the worker could submit any verdict at all,
+    and capping per probe would let a later probe evict an earlier one's.
+    """
+    if not records:
+        return decision
+    tail = tuple(records)[-_MAX_EVIDENCE:]
+    keep = max(0, _MAX_EVIDENCE - len(tail))
+    return replace(decision, evidence=(*decision.evidence[:keep], *tail))
+
+
+def _with_seed_probe_evidence(
+    decision: ScreeningDecision, probe: _SeedProbe | None
+) -> ScreeningDecision:
+    """Record the ``/seed`` observation without changing the outcome."""
+    return _with_probe_evidence(decision, _seed_probe_records(probe))
 
 
 def _gateway_call_count(path: str) -> int:
@@ -2179,11 +2194,14 @@ class BuildGate:
                 )
             # Shadow mode observes only: the seeding signal is recorded as
             # evidence beside the outcome the policy already reached.
-            decision = _with_tool_catalog_probe_evidence(
-                decision, active_audit_runtime.tool_catalog_probe
-            )
-            decision = _with_seed_probe_evidence(
-                decision, active_audit_runtime.seed_probe
+            decision = _with_probe_evidence(
+                decision,
+                [
+                    *_tool_catalog_probe_records(
+                        active_audit_runtime.tool_catalog_probe
+                    ),
+                    *_seed_probe_records(active_audit_runtime.seed_probe),
+                ],
             )
             self._journal.record(context=context, decision=decision)
             held_source_review = is_held_source_review(decision)

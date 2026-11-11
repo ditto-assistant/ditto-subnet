@@ -261,7 +261,7 @@ class FakeModelGateway:
             return
         record = measure_model_request(body) if readable else {"measured": False}
         line = json.dumps(record, separators=(",", ":")).encode() + b"\n"
-        with contextlib.suppress(OSError):
+        try:
             fd = os.open(
                 self._request_log_file, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600
             )
@@ -269,6 +269,13 @@ class FakeModelGateway:
                 os.write(fd, line)
             finally:
                 os.close(fd)
+        except OSError as error:
+            # A lost record must not read as "no request": say so in the
+            # sidecar log the worker attaches to the screen.
+            print(
+                f"fake gateway could not record model-request measurement: {error}",
+                flush=True,
+            )
 
     async def _simulate_latency(self) -> None:
         """Sleep a jittered interval so a real model call is not instant.

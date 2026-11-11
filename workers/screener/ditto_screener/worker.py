@@ -185,7 +185,7 @@ def _attach_private_failure_feedback(
         return False
     return reason_code in _PRIVATE_BUILD_FAILURE_CODES or (
         reason_code or ""
-    ).startswith("seed-")
+    ).startswith(_SHADOW_PROBE_PREFIXES)
 
 
 def _private_failure_feedback(detail: str, reason_code: str | None) -> str:

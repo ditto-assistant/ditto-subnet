@@ -23,6 +23,7 @@ import httpx
 import pytest
 
 from ditto_screener import gate as gate_module
+from ditto_screener import tool_catalog_probe
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import ScreenedImageUploadUnavailable
 from ditto_screener.fake_gateway import measure_model_request
@@ -4120,6 +4121,50 @@ def test_seed_evidence_never_exceeds_the_decision_bound() -> None:
     assert len(result.evidence) == 16
     codes = [item.code for item in result.evidence]
     assert codes[-2:] == ["seed-memory-cap", "seed-envelope-usage"]
+    assert result.reason_code == "health-ok"
+
+
+def test_both_probes_keep_their_records_on_a_saturated_decision() -> None:
+    # Capping per probe let the seed records evict the catalog records that
+    # were appended just before them, losing the shadow measurement.
+    saturated = ScreeningDecision(
+        outcome=ScreeningOutcome.PASS,
+        detail="",
+        manifest_digest=CORE_ONLY_MANIFEST.digest,
+        reason_code="health-ok",
+        evidence=tuple(
+            PolicyEvidence("stable-core", f"filler-{index}", "x") for index in range(16)
+        ),
+    )
+    seed = gate_module._SeedProbe(
+        False,
+        "seed-memory-cap",
+        "the harness exceeded the sandbox memory cap",
+        usage=gate_module._SandboxUsage(412_000_000, 12_345, 536_870_912),
+    )
+    catalog = tool_catalog_probe.ProbeVerdict(
+        False,
+        tool_catalog_probe.CONTEXT_OVERFLOW_CODE,
+        "the harness forwarded 2000 tool definitions",
+        "highest-floor request has 2000 tools",
+    )
+
+    result = gate_module._with_probe_evidence(
+        saturated,
+        [
+            *gate_module._tool_catalog_probe_records(catalog),
+            *gate_module._seed_probe_records(seed),
+        ],
+    )
+
+    assert len(result.evidence) == 16
+    assert [item.code for item in result.evidence[-4:]] == [
+        tool_catalog_probe.CONTEXT_OVERFLOW_CODE,
+        tool_catalog_probe.OBSERVATION_CODE,
+        "seed-memory-cap",
+        "seed-envelope-usage",
+    ]
+    assert result.outcome == ScreeningOutcome.PASS
     assert result.reason_code == "health-ok"
 
 
