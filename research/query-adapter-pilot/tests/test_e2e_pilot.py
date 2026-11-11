@@ -78,6 +78,17 @@ def test_prove_script_through_miner_cli(tmp_path: Path) -> None:
     assert all((tmp_path / s.name / "report.json").is_file() for s in prove.SCENARIOS)
 
 
+def test_prove_relative_out_dir_through_miner_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative --out-dir must work: the spawned miner and client have a
+    different cwd and must still find the token, ready file and report."""
+    monkeypatch.chdir(tmp_path)
+    assert prove.main(["--only", "invalid-nan", "--out-dir", "rel-out"]) == 0
+    workdir = tmp_path / "rel-out" / "invalid-nan"
+    assert (workdir / "report.json").is_file() and (workdir / "health.json").is_file()
+
+
 def test_bench_against_in_process_miner() -> None:
     cfg = bench.BenchConfig(requests=24, tenants=6, cache_capacity=2, concurrency=3)
     doc = bench.run(cfg)

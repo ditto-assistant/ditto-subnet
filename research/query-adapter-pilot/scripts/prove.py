@@ -644,7 +644,9 @@ def run_client(
 def run_scenario(scn: Scenario, out_dir: Path, launcher: Launcher = subprocess_miner) -> Result:
     started = time.monotonic()
     result = Result(scn)
-    workdir = out_dir / scn.name
+    # Absolute before deriving any child path: the miner and client run with a
+    # different cwd and would otherwise resolve a relative path a second time.
+    workdir = out_dir.resolve() / scn.name
     workdir.mkdir(parents=True, exist_ok=True)
     token_file, token = write_token(workdir)
     report_path = workdir / "report.json"
@@ -729,7 +731,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         chosen = [scenario(n) for n in args.only] if args.only else list(SCENARIOS)
     except KeyError as exc:
         parser.error(f"unknown scenario {exc}")
-    out_dir = args.out_dir or Path(tempfile.mkdtemp(prefix="qa-pilot-prove-"))
+    out_dir = (args.out_dir or Path(tempfile.mkdtemp(prefix="qa-pilot-prove-"))).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     results = []
     for scn in chosen:

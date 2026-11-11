@@ -7,12 +7,14 @@ which must fail. The process half of prove.py is covered by test_e2e_*.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import importlib.util
 import os
 import socket
 import stat
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -314,3 +316,24 @@ def test_harness_reports_missing_client_cleanly(tmp_path: Path) -> None:
     assert isinstance(res, prove.Result)
     if importlib.util.find_spec("query_adapter_pilot.client") is None:
         assert not res.ok and any("client exited" in f for f in res.failures)
+
+
+def test_relative_out_dir_is_resolved_before_spawning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The miner and client run with a different cwd, so every path handed to
+    them must already be absolute even when --out-dir is relative."""
+    monkeypatch.chdir(tmp_path)
+    seen: list[Path] = []
+
+    @contextlib.contextmanager
+    def recording_launcher(_scn: Any, workdir: Path, token_file: Path) -> Iterator[Any]:
+        seen.extend([workdir, token_file])
+        raise RuntimeError("stop after recording paths")
+        yield  # pragma: no cover
+
+    res = prove.run_scenario(prove.scenario("happy"), Path("rel-out"), recording_launcher)
+    assert seen and all(p.is_absolute() for p in seen)
+    assert seen[0] == tmp_path.resolve() / "rel-out" / "happy"
+    assert res.report_path is not None and res.report_path.is_absolute()
+    assert (tmp_path / "rel-out" / "happy" / "pilot-token").is_file()
