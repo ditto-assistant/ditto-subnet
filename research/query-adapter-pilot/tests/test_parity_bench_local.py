@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,28 @@ from pathlib import Path
 import pytest
 
 from query_adapter_pilot import bench
-from query_adapter_pilot.contract import CONTRACT_VERSION, PARITY_MIN_COSINE
+from query_adapter_pilot.contract import CONTRACT_VERSION, PARITY_MIN_COSINE, ROUTE_HEALTH
+
+
+def test_timeout_drops_the_connection() -> None:
+    """A socket TimeoutError (an OSError, not a ConnectionError) must close
+    and reset the per-thread connection rather than leave it half-used."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(8)  # completes the TCP handshake, never answers
+        client = bench.LoopbackClient(f"http://127.0.0.1:{srv.getsockname()[1]}", "t", 0.2)
+        with pytest.raises(TimeoutError):
+            client.call("GET", ROUTE_HEALTH, None)
+        assert getattr(client._local, "conn", None) is None
+
+
+def test_wire_sizes_count_successful_round_trips_only() -> None:
+    sizes: dict[str, list[int]] = {"adapt_request": [], "adapt_response": []}
+    bench.record_wire_sizes(sizes, bench.Sample(1, error="MISSING_VERSION"), 4353, 120)
+    bench.record_wire_sizes(sizes, bench.Sample(1, error="TimeoutError"), 4353, 0)
+    assert sizes == {"adapt_request": [], "adapt_response": []}
+    bench.record_wire_sizes(sizes, bench.Sample(1, compute_us=10, cache="hit"), 4353, 4372)
+    assert sizes == {"adapt_request": [4353], "adapt_response": [4372]}
 
 
 def test_local_baseline_is_at_parity_and_counts_inputs() -> None:

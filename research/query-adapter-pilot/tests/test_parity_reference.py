@@ -72,7 +72,9 @@ def test_case_count_covers_every_workload() -> None:
 def test_reference_matches_independent_float64(workload: str) -> None:
     adapters: dict[int, AdapterWeights] = {}
     for _, seed, qseed in (c for c in CASES if c[0] == workload):
-        w = adapters.setdefault(seed, synthetic_adapter(seed))
+        if seed not in adapters:
+            adapters[seed] = synthetic_adapter(seed)
+        w = adapters[seed]
         q = synthetic_query(qseed)
         assert abs(float(np.linalg.norm(q.astype(np.float64))) - 1.0) <= QUERY_NORM_TOLERANCE
         got = apply(w, q)

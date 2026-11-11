@@ -6,7 +6,7 @@ For each scenario this script:
 1. writes a synthetic pilot token to a private temp file,
 2. spawns ``python -m query_adapter_pilot.miner`` on loopback port 0 and waits
    for its ready file (skipped for the ``unavailable`` scenario, which targets
-   a closed loopback port instead),
+   a held loopback port that resets every connection instead),
 3. runs ``python -m query_adapter_pilot run`` against the committed workload,
 4. reads the report (and the miner's ``/v1/health``), asserts the scenario's
    expectations, and SIGTERMs the miner (which must exit 0).
@@ -30,9 +30,11 @@ import json
 import os
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -423,7 +425,7 @@ SCENARIOS: tuple[Scenario, ...] = (
         "smoke",
         _fallback(Outcome.UNAVAILABLE),
         no_miner=True,
-        description="closed loopback port: Ditto recomputes locally",
+        description="held loopback port resets every connection: Ditto recomputes locally",
     ),
     Scenario(
         "timeout",
@@ -520,12 +522,64 @@ def write_token(workdir: Path) -> tuple[Path, str]:
     return path, token
 
 
-def closed_loopback_url() -> str:
-    """A loopback URL nothing listens on (bound, then released)."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    return f"http://127.0.0.1:{port}"
+_RST_ON_CLOSE = struct.pack("ii", 1, 0)  # SO_LINGER on, 0 s: close() sends RST
+
+
+@contextlib.contextmanager
+def refusing_loopback_url() -> Iterator[str]:
+    """A loopback URL that no miner serves. The port stays held by this
+    process for the whole ``with`` block, so no other process can take it (no
+    bind-then-release race), and every connection is reset at once.
+
+    A socket that is bound but not listening is not enough: Linux answers its
+    SYNs with RST, but macOS silently drops them, so the client would see a
+    timeout instead of a refusal. Accept-then-RST fails every connection
+    immediately on both platforms, and the client classifies a reset as
+    ``unavailable``."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    stop = threading.Event()
+
+    def reset_everything() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = srv.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            with contextlib.suppress(OSError):
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, _RST_ON_CLOSE)
+            conn.close()
+
+    with srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(16)
+        srv.settimeout(0.05)
+        thread = threading.Thread(target=reset_everything, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{srv.getsockname()[1]}"
+        finally:
+            stop.set()
+            thread.join(timeout=2)
+
+
+# Per-scenario files the harness, miner, or client write. They are removed
+# before each run so a reused --out-dir can never feed a stale ready file,
+# report, or health snapshot into a new run.
+SCENARIO_ARTIFACTS = (
+    "miner-ready.json",
+    "report.json",
+    "health.json",
+    "client.log",
+    "miner.log",
+    "pilot-token",
+)
+
+
+def clear_artifacts(workdir: Path) -> None:
+    for name in SCENARIO_ARTIFACTS:
+        (workdir / name).unlink(missing_ok=True)
 
 
 def _wait_ready(proc: subprocess.Popen[bytes], ready: Path, log: Path) -> dict[str, Any]:
@@ -560,6 +614,7 @@ def subprocess_miner(scn: Scenario, workdir: Path, token_file: Path) -> Iterator
     """Spawn the reference miner CLI on loopback port 0 and SIGTERM it after."""
     ready = workdir / "miner-ready.json"
     log = workdir / "miner.log"
+    ready.unlink(missing_ok=True)  # never accept a ready file from an earlier run
     cmd = [
         sys.executable,
         "-m",
@@ -648,6 +703,7 @@ def run_scenario(scn: Scenario, out_dir: Path, launcher: Launcher = subprocess_m
     # different cwd and would otherwise resolve a relative path a second time.
     workdir = out_dir.resolve() / scn.name
     workdir.mkdir(parents=True, exist_ok=True)
+    clear_artifacts(workdir)
     token_file, token = write_token(workdir)
     report_path = workdir / "report.json"
     result.report_path = report_path
@@ -655,7 +711,8 @@ def run_scenario(scn: Scenario, out_dir: Path, launcher: Launcher = subprocess_m
     try:
         with contextlib.ExitStack() as stack:
             if scn.no_miner:
-                handle = MinerHandle(url=closed_loopback_url())
+                # port held (resetting connections) until the client has finished
+                handle = MinerHandle(url=stack.enter_context(refusing_loopback_url()))
             else:
                 handle = stack.enter_context(launcher(scn, workdir, token_file))
             proc = run_client(scn, handle.url, token_file, report_path)

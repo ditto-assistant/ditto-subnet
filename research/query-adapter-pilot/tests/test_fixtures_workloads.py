@@ -84,6 +84,34 @@ def _shared_isolation_queries() -> int:
     return fixtures.ISOLATION_ROUNDS * (fixtures.ISOLATION_USERS - 1)
 
 
+def test_write_removes_only_unexpected_top_level_json(tmp_path: Path) -> None:
+    (tmp_path / "stray.json").write_text("{}")
+    (tmp_path / "notes.txt").write_text("keep me")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "nested.json").write_text("{}")
+    fixtures.write(tmp_path)
+    assert not (tmp_path / "stray.json").exists()
+    assert (tmp_path / "notes.txt").read_text() == "keep me"
+    assert (tmp_path / "sub" / "nested.json").is_file()
+    assert fixtures.check(tmp_path) == []
+
+
+def test_builder_order_invariant_survives_optimize() -> None:
+    with pytest.raises(RuntimeError):
+        fixtures.verify_builder_order({"happy": None, "smoke": None}, ("smoke", "happy"))
+    fixtures.verify_builder_order(fixtures.BUILDERS, fixtures.WORKLOAD_NAMES)
+    code = (
+        "import query_adapter_pilot.fixtures as f\n"
+        "try:\n"
+        "    f.verify_builder_order({'b': 1}, ('a',))\n"
+        "except RuntimeError:\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(1)\n"
+    )
+    proc = subprocess.run([sys.executable, "-O", "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_smoke_and_happy_shapes() -> None:
     smoke, happy = _load("smoke"), _load("happy")
     assert len(smoke.users) == 1 and len(smoke.requests) == 3

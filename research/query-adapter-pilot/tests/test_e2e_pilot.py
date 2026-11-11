@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import json
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -24,7 +25,7 @@ miner = pytest.importorskip("query_adapter_pilot.miner")
 pytest.importorskip("query_adapter_pilot.client")
 
 from query_adapter_pilot import bench  # noqa: E402
-from query_adapter_pilot.contract import PARITY_MIN_COSINE  # noqa: E402
+from query_adapter_pilot.contract import CONTRACT_VERSION, PARITY_MIN_COSINE  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,6 +88,23 @@ def test_prove_relative_out_dir_through_miner_cli(
     assert prove.main(["--only", "invalid-nan", "--out-dir", "rel-out"]) == 0
     workdir = tmp_path / "rel-out" / "invalid-nan"
     assert (workdir / "report.json").is_file() and (workdir / "health.json").is_file()
+
+
+def test_reused_out_dir_ignores_stale_ready_file_and_report(tmp_path: Path) -> None:
+    """A ready file pointing at a dead port and a stale report from an earlier
+    run must not be used: the harness waits for the new miner and evaluates
+    the new report."""
+    workdir = tmp_path / "invalid-nan"
+    workdir.mkdir()
+    with prove.refusing_loopback_url() as dead:
+        (workdir / "miner-ready.json").write_text(
+            json.dumps({"contract": CONTRACT_VERSION, "url": dead, "pid": 1})
+        )
+        (workdir / "report.json").write_text(json.dumps({"stale": True}))
+        result = prove.run_scenario(prove.scenario("invalid-nan"), tmp_path)
+        assert result.ok, "\n".join(result.failures)
+    assert result.report is not None and "stale" not in result.report
+    assert result.report["miner_url"] != dead
 
 
 def test_bench_against_in_process_miner() -> None:

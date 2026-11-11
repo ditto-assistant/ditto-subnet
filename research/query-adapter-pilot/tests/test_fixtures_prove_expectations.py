@@ -10,10 +10,12 @@ from __future__ import annotations
 import contextlib
 import copy
 import importlib.util
+import json
 import os
 import socket
 import stat
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
@@ -301,12 +303,62 @@ def test_process_helpers(tmp_path: Path) -> None:
     assert path.read_text() == token and token.startswith("syn-pilot-")
     if os.name == "posix":
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    url = prove.closed_loopback_url()
-    assert url.startswith("http://127.0.0.1:")
-    port = int(url.rsplit(":", 1)[1])
-    with pytest.raises(OSError), socket.create_connection(("127.0.0.1", port), timeout=1):
-        pass
-    assert prove.fetch_health(url, token) is None
+    with prove.refusing_loopback_url() as url:
+        assert url.startswith("http://127.0.0.1:")
+        assert prove.fetch_health(url, token) is None
+
+
+def _attempt(port: int) -> None:
+    """One HTTP-shaped attempt; raises whatever the connection fails with."""
+    with socket.create_connection(("127.0.0.1", port), timeout=2) as conn:
+        conn.sendall(b"GET /v1/health HTTP/1.1\r\nHost: x\r\n\r\n")
+        if not conn.recv(1):
+            raise ConnectionResetError("closed without a response")
+
+
+def test_unavailable_port_stays_held_while_in_use() -> None:
+    """For the whole block every connection fails fast (refused or reset, not
+    a timeout) and no other socket can take the port (no bind-then-release
+    race); the port is released afterwards."""
+    with prove.refusing_loopback_url() as url:
+        port = int(url.rsplit(":", 1)[1])
+        for _ in range(3):
+            started = time.monotonic()
+            with pytest.raises((ConnectionRefusedError, ConnectionResetError)):
+                _attempt(port)
+            assert time.monotonic() - started < 1.0
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as rival, pytest.raises(OSError):
+            rival.bind(("127.0.0.1", port))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as later:
+        later.bind(("127.0.0.1", port))
+
+
+def test_stale_artifacts_are_cleared_before_launch(tmp_path: Path) -> None:
+    """A reused --out-dir must not feed an earlier run's ready file, report,
+    or health snapshot into this run."""
+    workdir = tmp_path / "happy"
+    workdir.mkdir()
+    stale_report, stale_health = good_report("happy")
+    (workdir / "report.json").write_text(json.dumps(stale_report))
+    (workdir / "health.json").write_text(json.dumps(stale_health))
+    (workdir / "miner-ready.json").write_text(
+        json.dumps({"contract": CONTRACT_VERSION, "url": "http://127.0.0.1:9", "pid": 1})
+    )
+    present_at_launch: dict[str, bool] = {}
+
+    @contextlib.contextmanager
+    def recording_launcher(_scn: Any, wd: Path, _token: Path) -> Iterator[Any]:
+        present_at_launch.update({n: (wd / n).exists() for n in prove.SCENARIO_ARTIFACTS})
+        raise RuntimeError("stop after inspecting the workdir")
+        yield  # pragma: no cover
+
+    res = prove.run_scenario(prove.scenario("happy"), tmp_path, recording_launcher)
+    assert present_at_launch["miner-ready.json"] is False
+    assert present_at_launch["report.json"] is False
+    assert present_at_launch["health.json"] is False
+    assert present_at_launch["pilot-token"] is True  # freshly written for this run
+    assert res.report is None and not res.ok
+    assert not (workdir / "report.json").exists()
 
 
 def test_harness_reports_missing_client_cleanly(tmp_path: Path) -> None:

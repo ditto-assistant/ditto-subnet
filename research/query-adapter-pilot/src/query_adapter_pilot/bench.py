@@ -251,7 +251,9 @@ class LoopbackClient:
                 conn.request(method, route, body=body, headers=headers)
                 resp = conn.getresponse()
                 return resp.status, resp.read()
-            except (http.client.HTTPException, ConnectionError):
+            except (http.client.HTTPException, OSError):
+                # OSError covers ConnectionError and socket TimeoutError: either
+                # way the connection state is unknown, so drop it.
                 conn.close()
                 self._local.conn = None
                 if attempt:
@@ -285,6 +287,16 @@ def _adapt(client: LoopbackClient, fleet: Fleet, t: int, q: int) -> tuple[Sample
     error = None if resp.request_id == rid and resp.ref == ref else "ECHO_MISMATCH"
     sample = Sample(elapsed, resp.compute_us, resp.cache, resp.vector, t, q, error)
     return sample, len(body), len(raw)
+
+
+def record_wire_sizes(
+    sizes: dict[str, list[int]], sample: Sample, req_bytes: int, resp_bytes: int
+) -> None:
+    """Only successful round trips count toward the wire-byte serving inputs;
+    an error body or a dropped connection would skew them."""
+    if sample.error is None:
+        sizes["adapt_request"].append(req_bytes)
+        sizes["adapt_response"].append(resp_bytes)
 
 
 def load_miner() -> Any:
@@ -324,8 +336,7 @@ def bench_miner(cfg: BenchConfig, fleet: Fleet, miner: Any) -> dict[str, Any]:
 
         def adapt(t: int, q: int) -> Sample:
             sample, req_bytes, resp_bytes = _adapt(client, fleet, t, q)
-            sizes["adapt_request"].append(req_bytes)
-            sizes["adapt_response"].append(resp_bytes)
+            record_wire_sizes(sizes, sample, req_bytes, resp_bytes)
             return sample
 
         hot = list(range(max(1, min(cfg.tenants, cfg.cache_capacity // 2 or 1))))

@@ -208,7 +208,17 @@ BUILDERS: dict[str, Callable[[], dict[str, Any]]] = {
     "replay": replay,
     "isolation": isolation,
 }
-assert tuple(BUILDERS) == WORKLOAD_NAMES
+
+
+def verify_builder_order(builders: dict[str, Any], names: tuple[str, ...]) -> None:
+    """Seeds derive from a workload's index, so the builder table must list
+    exactly WORKLOAD_NAMES in order. Raised explicitly (not ``assert``) so the
+    invariant survives ``python -O``."""
+    if tuple(builders) != names:
+        raise RuntimeError(f"BUILDERS order {tuple(builders)} != WORKLOAD_NAMES {names}")
+
+
+verify_builder_order(BUILDERS, WORKLOAD_NAMES)
 
 
 def build(name: str) -> dict[str, Any]:
@@ -241,12 +251,20 @@ def render(doc: dict[str, Any]) -> str:
 
 
 def write(directory: Path) -> list[Path]:
+    """Write every workload and remove any other ``*.json`` directly in
+    ``directory`` (not subdirectories, not other extensions), so a fresh
+    ``--write`` always leaves a tree that ``--check`` accepts."""
     directory.mkdir(parents=True, exist_ok=True)
     written = []
     for name, doc in build_all().items():
         path = directory / f"{name}.json"
         path.write_text(render(doc))
         written.append(path)
+    keep = {p.name for p in written}
+    for path in sorted(directory.glob("*.json")):
+        if path.name not in keep and path.is_file():
+            path.unlink()
+            print(f"removed unexpected {path}")
     return written
 
 

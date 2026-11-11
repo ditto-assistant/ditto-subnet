@@ -72,6 +72,9 @@ uv run python -m query_adapter_pilot.fixtures --write testdata/workloads    # re
 | `replay` | 2 | 10 | 6 originals plus 4 `{"replay_of": i}` entries |
 | `isolation` | 3 | 18 | all share versions [1, 2] with different seeds. Each round sends the **same** query to every tenant, interleaved. |
 
+`--write` also removes any other `*.json` directly in the target directory, so
+its output always passes `--check`.
+
 Seeds never collide across workloads (see the `fixtures.py` docstring). To add
 a workload, append it to `WORKLOAD_NAMES`. Do not reorder that list, because
 a workload's index feeds its seeds.
@@ -113,7 +116,7 @@ scenario the out dir holds `report.json`, `health.json`, `client.log`, and
 | `invalid-nan` | smoke | `--fault nan` | `rejected_invalid` | `fallback_local` | final parity, 0 accepted |
 | `invalid-bad-norm` | smoke | `--fault bad-norm` | `rejected_invalid` | `fallback_local` | final parity, 0 accepted |
 | `invalid-wrong-echo` | smoke | `--fault wrong-echo` | `rejected_invalid` | `fallback_local` | final parity, 0 accepted |
-| `unavailable` | smoke | none (closed loopback port) | `unavailable` | `fallback_local` | final parity, 0 accepted |
+| `unavailable` | smoke | none (loopback port held for the run, every connection reset) | `unavailable` | `fallback_local` | final parity, 0 accepted |
 | `timeout` | smoke | `--fault slow --slow-ms 1000`, client `--timeout-ms 200` | `timeout` | `fallback_local` | final parity, 0 accepted |
 | `stale` | stale | `--fault none` | `rejected_stale` | `fallback_local` | final parity, 0 accepted |
 | `missing` | missing | `--fault none` | `rejected_missing` | `fallback_local` | final parity, 0 accepted |
