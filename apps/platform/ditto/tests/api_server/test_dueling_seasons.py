@@ -45,6 +45,7 @@ from ditto.api_server.generator_source_releases import (
     sync_generator_source_releases,
 )
 from ditto.db.models import (
+    Agent,
     BenchmarkRollout,
     BenchmarkRolloutMember,
     DuelingSeason,
@@ -2555,6 +2556,164 @@ class TestSeasonCatchup:
 
         with pytest.raises(ValueError):
             GeneratorCompetitionSettings(season_catchup_max_agents=11)
+
+    async def _shadow_boundary(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        *,
+        stale: int,
+        members: tuple[int, ...] = (),
+        rollout: bool = True,
+    ) -> tuple[list[UUID], UUID, UUID]:
+        """Shadow v16 seasons of a rollout to v16 (or of a canary when not
+        ``rollout``): ``stale`` agents hold a 3/3 quorum only in the
+        provisional season, best first; one more scored in the closing one.
+        The rollout's frozen members are the stale agents at ``members``.
+        Returns the stale agents, the fresh one and the season to open."""
+        default = await _generator(
+            maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        _expired, provisional, closing = await _season_sequence(maker, default)
+        stale_ids = [await _seed_agent(maker, 10 + i) for i in range(stale)]
+        fresh = await _seed_agent(maker, 30)
+        now = datetime.now(UTC)
+        async with maker() as session, session.begin():
+            for season in await session.scalars(select(DuelingSeason)):
+                season.shadow = True
+                if season.id == closing:
+                    season.status = "closed"
+            for rank, agent_id in enumerate([*stale_ids, fresh]):
+                season_id = closing if agent_id == fresh else provisional
+                for validator in _CATCHUP_VALIDATORS:
+                    session.add(
+                        _v16_score(
+                            agent_id, validator, season_id, composite=0.9 - rank / 100
+                        )
+                    )
+            if rollout:
+                rollout_id = uuid4()
+                session.add(
+                    BenchmarkRollout(
+                        rollout_id=rollout_id,
+                        from_version=15,
+                        desired_version=16,
+                        status="collecting",
+                        cohort_size=5,
+                        rescore_cohort_target=5,
+                        priority_cohort_target=5,
+                        created_at=now - timedelta(hours=1),
+                    )
+                )
+                await session.flush()
+                for position, index in enumerate(members, start=1):
+                    session.add(
+                        BenchmarkRolloutMember(
+                            rollout_id=rollout_id,
+                            agent_id=stale_ids[index],
+                            position=position,
+                            frozen_miner_hotkey=f"5PanelMiner{10 + index}",
+                            frozen_composite=0.6,
+                        )
+                    )
+        opened = await self._next(maker, default)
+        async with maker() as session, session.begin():
+            opening = await session.get(DuelingSeason, opened)
+            assert opening is not None
+            opening.shadow = True
+        return stale_ids, fresh, opened
+
+    async def test_rollout_shadow_season_catches_up_its_ranked_quorum(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """DITTO-2564: new desired-version quorum agents are not rollout
+        members, so only the catch-up keeps them in the activation count."""
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        (late,), fresh, opened = await self._shadow_boundary(session_maker, stale=1)
+        # Not on the board: one owner family's weaker sibling, and an agent
+        # short of a quorum.
+        sibling = await _seed_agent(session_maker, 40)
+        partial = await _seed_agent(session_maker, 41)
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, sibling)
+            assert agent is not None
+            agent.miner_hotkey = "5PanelMiner10"
+            window = await dueling_season_window(session, 16)
+            assert window is not None and window.previous is not None
+            provisional = window.previous
+            for validator in _CATCHUP_VALIDATORS:
+                session.add(_v16_score(sibling, validator, provisional, composite=0.5))
+            for validator in _CATCHUP_VALIDATORS[:2]:
+                session.add(_v16_score(partial, validator, provisional, composite=0.99))
+
+        candidates, rotation, catchup = await self._open(
+            session_maker, opened, GeneratorCompetitionSettings()
+        )
+        assert candidates.board == (late, fresh)
+        assert candidates.missing == (late,)
+        assert rotation["source"] == "rollout_members" and rotation["queued"] == 0
+        assert catchup["source"] == "rollout_ranked_quorum"
+        assert catchup["agents"] == [str(late)] and catchup["queued"] == 3
+        assert await self._queued(session_maker, catch_up=True) == sorted(
+            (late, v) for v in _CATCHUP_VALIDATORS
+        )
+
+    async def test_canary_shadow_season_still_skips(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        _stale, _fresh, opened = await self._shadow_boundary(
+            session_maker, stale=2, rollout=False
+        )
+        candidates, _rotation, catchup = await self._open(
+            session_maker, opened, GeneratorCompetitionSettings()
+        )
+        assert candidates.board == ()
+        assert catchup["skipped"] == "canary shadow season: no rollout at this version"
+        assert await self._queued(session_maker, catch_up=True) == []
+
+    async def test_rollout_members_are_left_to_the_opening_cohort(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        (member, owed), _fresh, opened = await self._shadow_boundary(
+            session_maker, stale=2, members=(0,)
+        )
+        _candidates, rotation, catchup = await self._open(
+            session_maker, opened, GeneratorCompetitionSettings()
+        )
+        assert rotation["queued"] == 3
+        assert catchup["in_opening_cohort"] == [str(member)]
+        assert catchup["agents"] == [str(owed)] and catchup["queued"] == 3
+        assert {a for a, _ in await self._queued(session_maker, catch_up=True)} == {
+            owed
+        }
+        assert {a for a, _ in await self._queued(session_maker, catch_up=False)} == {
+            member
+        }
+
+    async def test_rollout_shadow_catchup_respects_the_cap(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        stale, _fresh, opened = await self._shadow_boundary(session_maker, stale=3)
+        _candidates, _rotation, catchup = await self._open(
+            session_maker,
+            opened,
+            GeneratorCompetitionSettings(season_catchup_max_agents=2),
+        )
+        assert catchup["agents"] == [str(a) for a in stale[:2]]
+        assert catchup["capped"] == [str(stale[2])]
+        assert {a for a, _ in await self._queued(session_maker, catch_up=True)} == set(
+            stale[:2]
+        )
 
     async def test_spend_is_the_metered_grant_cost_split_opening_and_catchup(
         self,

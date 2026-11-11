@@ -33,7 +33,9 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
    ledger (:mod:`ditto.db.queries.dueling_season_window`). Then a paid or
    public top-five agent with no score in the season that just closed gets
    one catch-up re-test on the new set (:func:`queue_catchup_retests`), so a
-   mid-season scorer does not expire unscored.
+   mid-season scorer does not expire unscored. A shadow season of an open
+   rollout's desired version catches up its ranked quorum agents instead,
+   so the rollout's activation count does not collapse at the boundary.
 4. **Close.** At ``closes_at_round`` (or on an audited rotation), or as soon
    as its bench version is neither active nor rolling out. Disabling dueling
    commits no new season but lets the open one finish. With
@@ -693,6 +695,10 @@ async def queue_rotation_retests(
 
 CATCHUP_KEY = "catchup"
 """``DuelingSeason.detail`` key: the season-boundary catch-up it queued."""
+CATCHUP_SOURCE_BOARD = "continual_board"
+"""Authoritative season: the active version's paid set and public top five."""
+CATCHUP_SOURCE_ROLLOUT = "rollout_ranked_quorum"
+"""Shadow season of an open rollout: the desired version's ranked quorum."""
 
 
 @dataclass(frozen=True)
@@ -702,11 +708,90 @@ class CatchupCandidates:
 
     closed_season_id: UUID | None
     board: tuple[UUID, ...]
-    """Paid set (folded emission set), then the public top five, deduped."""
+    """Paid set (folded emission set), then the public top five, deduped; for
+    a rollout's shadow season, the desired version's ranked quorum agents,
+    one per owner family (:func:`_rollout_catchup_board`)."""
     missing: tuple[UUID, ...]
     """``board`` members with no accepted score in the closed season, in
     board order."""
     error: str | None = None
+    source: str = CATCHUP_SOURCE_BOARD
+    skipped: str | None = None
+    """Why this season has no catch-up at all (a canary shadow season)."""
+
+
+async def _rollout_catchup_board(
+    session: AsyncSession, bench_version: int
+) -> tuple[UUID, ...]:
+    """A shadow season's catch-up board: who the rollout's flip counts.
+
+    The agents holding a ranked desired-version quorum in the season window
+    (:func:`~ditto.db.queries.scores.ranked_quorum_agent_ids`, the set
+    ``count_ranked_quorum_agents`` gates activation on), best median
+    composite first, one per owner family. Not the KOTH board: an explicit
+    version ledger read admits pre-quorum medians, and the rollout gate never
+    counts those. Scalar columns only, never ``Score.details``.
+    """
+    from ditto.db.models import EvaluationPayment, Score
+    from ditto.db.queries.dueling_season_window import season_scope_predicate
+    from ditto.db.queries.scores import (
+        attested_emission_owner_roots,
+        emission_owner_key,
+        ranked_quorum_agent_ids,
+    )
+
+    ranked = await ranked_quorum_agent_ids(session, bench_version=bench_version)
+    if not ranked:
+        return ()
+    rows: dict[UUID, list[tuple[float, str]]] = {}
+    for agent_id, composite, validator_hotkey in (
+        await session.execute(
+            select(Score.agent_id, Score.composite, Score.validator_hotkey).where(
+                Score.agent_id.in_(ranked),
+                Score.bench_version == bench_version,
+                await season_scope_predicate(
+                    session,
+                    version_column=Score.bench_version,
+                    season_column=Score.dueling_season_id,
+                    bench_versions=(bench_version,),
+                ),
+            )
+        )
+    ).tuples():
+        rows.setdefault(agent_id, []).append((composite, validator_hotkey))
+    # The ledger's median row: ascending composite, validator tie-break.
+    medians = {
+        agent_id: sorted(scores)[(len(scores) - 1) // 2][0]
+        for agent_id, scores in rows.items()
+    }
+    owners = {
+        agent_id: (miner_hotkey, owner, created_at)
+        for agent_id, miner_hotkey, owner, created_at in (
+            await session.execute(
+                select(
+                    Agent.agent_id,
+                    Agent.miner_hotkey,
+                    emission_owner_key(),
+                    Agent.created_at,
+                )
+                .outerjoin(
+                    EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id
+                )
+                .where(Agent.agent_id.in_(medians))
+            )
+        ).tuples()
+    }
+    ordered = sorted(
+        owners,
+        key=lambda agent_id: (-medians[agent_id], owners[agent_id][2], agent_id),
+    )
+    roots = await attested_emission_owner_roots(
+        session, [owners[agent_id][:2] for agent_id in ordered]
+    )
+    board: dict[str, UUID] = {}
+    for agent_id, root in zip(ordered, roots, strict=True):
+        board.setdefault(root, agent_id)
+    return tuple(board.values())
 
 
 async def _catchup_candidates(
@@ -724,37 +809,43 @@ async def _catchup_candidates(
     score in the season that just closed is in that state, so it is read
     here, while those scores still count. Never raises: a failed read is
     recorded and queues nothing.
+
+    A shadow season of the version an open rollout targets reads its board
+    from the desired version's ranked quorum instead
+    (:func:`_rollout_catchup_board`): its opening cohort is the rollout's
+    frozen members, so a new submission that reached a ranked quorum would
+    otherwise expire and drop out of the activation count. A canary-only
+    shadow season has no catch-up.
     """
     from ditto.db.queries.dueling_season_window import dueling_season_window
 
-    if season.shadow or not settings.season_catchup_enabled:
+    if not settings.season_catchup_enabled:
         return CatchupCandidates(closed_season_id=None, board=(), missing=())
+    source = CATCHUP_SOURCE_ROLLOUT if season.shadow else CATCHUP_SOURCE_BOARD
     try:
         async with session.begin_nested():
+            if season.shadow:
+                rollout = await open_rollout(session)
+                if rollout is None or rollout.desired_version != season.bench_version:
+                    return CatchupCandidates(
+                        closed_season_id=None,
+                        board=(),
+                        missing=(),
+                        source=source,
+                        skipped="canary shadow season: no rollout at this version",
+                    )
             window = await dueling_season_window(session, season.bench_version)
             closed = window.current if window is not None else None
             if closed is None:
-                return CatchupCandidates(closed_season_id=None, board=(), missing=())
-            from ditto.api_server.continual_retest_settings import settings_from_row
-            from ditto.api_server.endpoints.validator import _current_retest_cohort
-            from ditto.db.models import Score
-            from ditto.db.queries.continual_retest_settings import (
-                latest_continual_retest_settings_revision,
-            )
-
-            retest_settings = settings_from_row(
-                await latest_continual_retest_settings_revision(session)
-            )
-            emission, wave, _cohort, _challengers = await _current_retest_cohort(
-                session,
-                canonical_version=season.bench_version,
-                settings=retest_settings,
-            )
-            board = tuple(
-                dict.fromkeys(
-                    [*(m.agent_id for m in emission), *(m.agent_id for m in wave)]
+                return CatchupCandidates(
+                    closed_season_id=None, board=(), missing=(), source=source
                 )
-            )
+            from ditto.db.models import Score
+
+            if season.shadow:
+                board = await _rollout_catchup_board(session, season.bench_version)
+            else:
+                board = await _continual_catchup_board(session, season.bench_version)
             current = set(
                 await session.scalars(
                     select(Score.agent_id).where(
@@ -771,11 +862,35 @@ async def _catchup_candidates(
             board=(),
             missing=(),
             error=f"{type(exc).__name__}: {exc}"[:500],
+            source=source,
         )
     return CatchupCandidates(
         closed_season_id=closed,
         board=board,
         missing=tuple(agent_id for agent_id in board if agent_id not in current),
+        source=source,
+    )
+
+
+async def _continual_catchup_board(
+    session: AsyncSession, bench_version: int
+) -> tuple[UUID, ...]:
+    """An authoritative season's catch-up board: the paid set (folded
+    emission set), then the public top five, deduped."""
+    from ditto.api_server.continual_retest_settings import settings_from_row
+    from ditto.api_server.endpoints.validator import _current_retest_cohort
+    from ditto.db.queries.continual_retest_settings import (
+        latest_continual_retest_settings_revision,
+    )
+
+    retest_settings = settings_from_row(
+        await latest_continual_retest_settings_revision(session)
+    )
+    emission, wave, _cohort, _challengers = await _current_retest_cohort(
+        session, canonical_version=bench_version, settings=retest_settings
+    )
+    return tuple(
+        dict.fromkeys([*(m.agent_id for m in emission), *(m.agent_id for m in wave)])
     )
 
 
@@ -804,10 +919,10 @@ async def queue_catchup_retests(
         "enabled": settings.season_catchup_enabled,
         "max_agents": settings.season_catchup_max_agents,
     }
-    if season.shadow:
-        record["skipped"] = "shadow season"
-    elif not settings.season_catchup_enabled:
+    if not settings.season_catchup_enabled:
         record["skipped"] = "season_catchup_enabled is off"
+    elif candidates.skipped is not None:
+        record["skipped"] = candidates.skipped
     elif candidates.error is not None:
         record["error"] = candidates.error
     elif candidates.closed_season_id is None:
@@ -821,6 +936,7 @@ async def queue_catchup_retests(
     cap = settings.season_catchup_max_agents
     agents, capped = owed[:cap], owed[cap:]
     record.update(
+        source=candidates.source,
         closed_season_id=str(candidates.closed_season_id),
         board=[str(agent_id) for agent_id in candidates.board],
         in_opening_cohort=[str(a) for a in candidates.missing if str(a) in in_cohort],
