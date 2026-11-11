@@ -1,7 +1,10 @@
 package server_test
 
 import (
+	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +16,7 @@ import (
 	"github.com/ditto-assistant/model-relay/internal/server"
 
 	"github.com/ditto-assistant/model-relay/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func testConfig() *config.Config {
@@ -106,6 +110,44 @@ func TestMetricsExposeOnlyLoadedDaniLabsBindingMetadata(t *testing.T) {
 	h.ServeHTTP(remote, req)
 	if strings.Contains(remote.Body.String(), "ditto_danilabs_binding_") {
 		t.Fatal("remote caller received private binding metadata")
+	}
+}
+
+func TestMetricsGzipIsEncodedOnce(t *testing.T) {
+	// Ensure the compressed Prometheus response exceeds the middleware's
+	// threshold, as it does on a running relay with Go process metrics.
+	padding := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "relay_test_gzip_padding"}, []string{"value"})
+	prometheus.MustRegister(padding)
+	t.Cleanup(func() { prometheus.Unregister(padding) })
+	for i := 0; i < 100; i++ {
+		sum := sha256.Sum256([]byte(fmt.Sprint(i)))
+		padding.WithLabelValues(fmt.Sprintf("%x", sum)).Set(1)
+	}
+	for _, addr := range []string{"127.0.0.1:12345", "192.0.2.1:12345"} {
+		t.Run(addr, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+			req.RemoteAddr = addr
+			req.Header.Set("Accept-Encoding", "gzip")
+			rec := httptest.NewRecorder()
+			newTestServer().ServeHTTP(rec, req)
+			if rec.Header().Get("Content-Encoding") != "gzip" {
+				t.Fatalf("expected gzip encoding, got %q", rec.Header().Get("Content-Encoding"))
+			}
+			reader, err := gzip.NewReader(rec.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), "relay_test_gzip_padding") {
+				t.Fatal("one decompression did not yield Prometheus metrics")
+			}
+			if addr == "127.0.0.1:12345" && !strings.Contains(string(body), "ditto_danilabs_binding_scope") {
+				t.Fatal("loopback binding metrics missing")
+			}
+		})
 	}
 }
 
