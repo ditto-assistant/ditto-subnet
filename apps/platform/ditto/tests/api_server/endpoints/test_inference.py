@@ -908,6 +908,16 @@ def test_context_length_overflow_requires_an_input_only_provider_rejection() -> 
             "completion)."
         ),
     )
+    for message in (
+        "This endpoint's maximum context length is 32768 tokens. However, you "
+        "requested about 38000 tokens (33000 in the messages, 5000 in the output).",
+        "This endpoint's maximum context length is 131072 tokens. However, you "
+        "requested about 160000 tokens (100000 of text input, 40000 of tool "
+        "input, 20000 in the output).",
+    ):
+        assert _provider_context_length_exceeded(
+            400, {"error": {"code": 400, "message": message}}
+        )
     for status_code, decoded in (
         (502, _context_overflow_error(_CONTEXT_OVERFLOW_RAW)),
         (400, _context_overflow_error("'tools' : maximum number of items is 128")),
@@ -922,6 +932,28 @@ def test_context_length_overflow_requires_an_input_only_provider_rejection() -> 
         (400, {"error": {"code": "400", "message": _CONTEXT_OVERFLOW_RAW}}),
         (400, {"message": _CONTEXT_OVERFLOW_RAW}),
         (200, {"error": {"code": 502, "message": _CONTEXT_OVERFLOW_RAW}}),
+        (200, {"id": "", "error": {"code": 400, "message": _CONTEXT_OVERFLOW_RAW}}),
+        (
+            200,
+            {
+                "error": {
+                    "code": 400,
+                    "message": _CONTEXT_OVERFLOW_RAW,
+                    "metadata": "raw",
+                }
+            },
+        ),
+        (
+            400,
+            {
+                "error": {
+                    "code": 400,
+                    "message": "This endpoint's maximum context length is 131072 "
+                    "tokens. However, you requested about 140000 tokens (120000 "
+                    "of text input, 20000 in the output).",
+                }
+            },
+        ),
         (
             200,
             {

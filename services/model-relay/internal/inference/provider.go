@@ -1188,21 +1188,46 @@ func providerContextLengthExceeded(status int, response map[string]any) bool {
 		if !strings.Contains(message, "in the completion") && !strings.Contains(message, "in the output") {
 			return true
 		}
-		if match := splitContextOverflow.FindStringSubmatch(message); match != nil {
-			limit, limitErr := strconv.ParseInt(match[1], 10, 64)
-			input, inputErr := strconv.ParseInt(match[2], 10, 64)
-			if limitErr == nil && inputErr == nil && input > limit {
-				return true
-			}
+		if limit, input, ok := splitContextCounts(message); ok && input > limit {
+			return true
 		}
 	}
 	return false
 }
 
-// splitContextOverflow reads the OpenAI-style wording "maximum context length
-// is L tokens. ... (I in the messages, C in the completion)".
-var splitContextOverflow = regexp.MustCompile(
-	`maximum context length is (\d+) tokens\b.*\((\d+) in the messages, \d+ in the completion\)`)
+var (
+	contextLimitPattern = regexp.MustCompile(`maximum context length is (\d+) tokens\b`)
+	splitCountsPattern  = regexp.MustCompile(`\(([^()]*\b(?:in the completion|in the output)[^()]*)\)`)
+	inputCountPattern   = regexp.MustCompile(`(\d+) (?:in the messages|of [a-z ]*input)\b`)
+)
+
+// splitContextCounts reads the stated limit and the input tokens from a split
+// count: OpenAI's "(I in the messages, C in the completion)" or OpenRouter's
+// "(T of text input, U of tool input, O in the output)". Input is every count
+// that is not the completion/output.
+func splitContextCounts(message string) (limit, input int64, ok bool) {
+	limitMatch := contextLimitPattern.FindStringSubmatch(message)
+	splitMatch := splitCountsPattern.FindStringSubmatch(message)
+	if limitMatch == nil || splitMatch == nil {
+		return 0, 0, false
+	}
+	limit, err := strconv.ParseInt(limitMatch[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	counts := inputCountPattern.FindAllStringSubmatch(splitMatch[1], -1)
+	if len(counts) == 0 {
+		return 0, 0, false
+	}
+	for _, count := range counts {
+		value, err := strconv.ParseInt(count[1], 10, 64)
+		if err != nil || value > math.MaxInt64-input {
+			return 0, 0, false
+		}
+		input += value
+	}
+	return limit, input, true
+}
 
 func requestDeclaresTool(request map[string]any, name string) bool {
 	tools, _ := request["tools"].([]any)

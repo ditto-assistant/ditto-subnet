@@ -846,6 +846,15 @@ func TestContextLengthExceededRequiresExactProviderRejection(t *testing.T) {
 	)) {
 		t.Fatal("a split count whose input alone exceeds the limit was not recognized")
 	}
+	for _, message := range []string{
+		"This endpoint's maximum context length is 32768 tokens. However, you requested about 38000 tokens (33000 in the messages, 5000 in the output).",
+		"This endpoint's maximum context length is 131072 tokens. However, you requested about 160000 tokens (100000 of text input, 40000 of tool input, 20000 in the output).",
+	} {
+		body, _ := json.Marshal(map[string]any{"error": map[string]any{"code": 400, "message": message}})
+		if !providerContextLengthExceeded(http.StatusBadRequest, decode(string(body))) {
+			t.Fatalf("input-over-limit split not recognized: %s", message)
+		}
+	}
 	for name, testCase := range map[string]struct {
 		status int
 		body   string
