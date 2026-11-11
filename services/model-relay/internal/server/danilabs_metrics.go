@@ -14,10 +14,13 @@ import (
 // The relay may bind on all interfaces. Only an on-host caller receives
 // provider binding metadata, even if a network firewall is misconfigured.
 func (s *Server) metricsHandler() http.Handler {
-	standard := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{})
+	// The outer SizedGzipMiddleware owns compression. Letting promhttp also
+	// compress can produce two gzip layers with only one Content-Encoding.
+	opts := promhttp.HandlerOpts{DisableCompression: true}
+	standard := promhttp.HandlerFor(prometheus.DefaultGatherer, opts)
 	local := promhttp.HandlerFor(
 		prometheus.Gatherers{prometheus.DefaultGatherer, daniLabsBindingMetrics(s.cfg.Inference, s.cfg.DittoRouter)},
-		promhttp.HandlerOpts{},
+		opts,
 	)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
