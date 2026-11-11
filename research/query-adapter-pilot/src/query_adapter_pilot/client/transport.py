@@ -64,6 +64,21 @@ def validate_miner_url(url: str) -> str:
     return f"http://{host}" + (f":{port}" if port is not None else "")
 
 
+def validate_token(token: str) -> str:
+    """Return ``token`` or raise ``ValueError`` unless it is non-empty printable
+    ASCII. Matches the miner's ``MinerConfig.validate``: a latin-1 token can
+    never match there, a character above U+00FF makes ``http.client`` raise
+    ``UnicodeEncodeError`` while writing the header, and a control character
+    is an invalid header value. Either would escape the call's error ladder."""
+    if not isinstance(token, str) or not token:
+        raise ValueError("a non-empty pilot token is required")
+    if not token.isascii():
+        raise ValueError("the pilot token must be ASCII")
+    if not token.isprintable():
+        raise ValueError("the pilot token must be printable ASCII (no control characters)")
+    return token
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
         return None
@@ -94,7 +109,7 @@ class Transport:
 
     def __init__(self, miner_url: str, token: str) -> None:
         self.base_url = validate_miner_url(miner_url)
-        self._token = token
+        self._token = validate_token(token)
 
     def call(self, method: str, route: str, body: dict[str, Any], timeout_s: float) -> HttpResult:
         data = json.dumps(body, separators=(",", ":")).encode()

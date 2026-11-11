@@ -4,11 +4,14 @@ the usage ledger."""
 from __future__ import annotations
 
 import hashlib
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 from test_client_fake_miner import user, workload_json
 
+from query_adapter_pilot import pilot
 from query_adapter_pilot.client import (
     Authorizer,
     PilotClient,
@@ -58,6 +61,23 @@ def test_non_loopback_or_odd_urls_are_refused(url: str) -> None:
 )
 def test_loopback_urls_are_accepted(url: str, normalized: str) -> None:
     assert validate_miner_url(url) == normalized
+
+
+@pytest.mark.parametrize("token", ["caf\u00e9", "tok\u2603en", "ASCII\tbut-control"])
+def test_non_ascii_token_is_refused(token: str, tmp_path: Path) -> None:
+    """Latin-1 tokens can never match the miner; above U+00FF http.client would
+    raise UnicodeEncodeError mid-call. Refuse both at construction."""
+    with pytest.raises(ValueError, match="ASCII"):
+        PilotClient("http://127.0.0.1:9", token, "run1", salt="s")
+    wl = tmp_path / "wl.json"
+    wl.write_text(json.dumps(workload_json([user("syn-alice")], [])))
+    tok = tmp_path / "token"
+    tok.write_text(token, encoding="utf-8")
+    out = tmp_path / "report.json"
+    args = ["run", "--workload", str(wl), "--miner-url", "http://127.0.0.1:9"]
+    args += ["--token-file", str(tok), "--out", str(out)]
+    assert pilot.main(args) == 2
+    assert not out.exists()
 
 
 def test_tenant_alias_is_salted_sha256_prefix() -> None:
