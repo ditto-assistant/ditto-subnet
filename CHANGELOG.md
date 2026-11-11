@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.473.2 (2026-11-11)
+
+### Bug Fixes
+
+- Expose canary run budget evidence
+  ([#3482](https://github.com/ditto-assistant/ditto-subnet/pull/3482),
+  [`d627fe4`](https://github.com/ditto-assistant/ditto-subnet/commit/d627fe492e06582b7f0571796e76a54703eb5f65))
+
+- **inference**: Charge a context-window overflow to the harness
+  ([#3487](https://github.com/ditto-assistant/ditto-subnet/pull/3487),
+  [`d1fa352`](https://github.com/ditto-assistant/ditto-subnet/commit/d1fa352b5cad056618655568e3881c4f732ad718))
+
+
 ## v0.473.1 (2026-11-11)
 
 ### Bug Fixes
