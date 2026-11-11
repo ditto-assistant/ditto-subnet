@@ -4045,6 +4045,19 @@ class PublicActivityEntry(BaseModel):
             ),
         ),
     ] = False
+    queue_withdrawn: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether a 'not_queued' row is out of the active benchmark's "
+                "validator queue because an operator withdrew it, rather than "
+                "because it predates the active era. Its accepted scores stay "
+                "on file; no validator scores it while the withdrawal stands. "
+                "Always false on every other status."
+            ),
+        ),
+    ] = False
     quorum: Annotated[
         int,
         Field(ge=1, description="Independent validator scores required to finalize."),
@@ -4849,6 +4862,10 @@ class PublicAgentSummary(BaseModel):
     scoring_wait: PublicScoringWait | None = Field(
         default=None,
         description="Same as the activity row's scoring_wait.",
+    )
+    queue_withdrawn: bool = Field(
+        default=False,
+        description="Same as the activity row's queue_withdrawn.",
     )
 
 

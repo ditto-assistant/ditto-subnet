@@ -6197,6 +6197,7 @@ class TestPublicActivity:
             "preserved_composite": None,
             "active_benchmarks": [],
             "scoring_wait": None,
+            "queue_withdrawn": False,
         }
         assert "artifact_release" not in body
         assert "screening_attempts" not in body
@@ -6591,6 +6592,7 @@ class TestPublicActivity:
             "validator_queue_gate",
             "validator_queue_gate_detail",
             "previous_generation",
+            "queue_withdrawn",
             "quorum",
             "retry_state",
             "retry_after",
@@ -7695,6 +7697,8 @@ class TestPublicActivity:
         assert by_id[fresh_id]["validator_queue_rank"] == 1
         assert by_id[stranded_id]["validator_queue_rank"] is None
         assert by_id[stranded_id]["status"] == "not_queued"
+        # Historical, not withdrawn: only the era boundary keeps it out.
+        assert by_id[stranded_id]["queue_withdrawn"] is False
         assert body["status_counts"]["waiting_validator"] == 1
         assert body["status_counts"]["not_queued"] == 1
         assert by_id[fresh_id]["previous_generation"] is False
@@ -9402,8 +9406,14 @@ class TestPublicActivity:
 
         assert spent["retry_disposition"] == "terminal_artifact_failure"
         assert spent["terminal_failure_code"] == "inference_allowance_exhausted"
-        # A withdrawal without a code stays the neutral historical label.
+        assert spent["queue_withdrawn"] is False
+        # A withdrawal without a code stays not_queued, flagged as an operator
+        # withdrawal rather than a historical submission (SN-470).
         assert by_id[str(plain_id)]["status"] == "not_queued"
+        assert by_id[str(plain_id)]["queue_withdrawn"] is True
+        summary = (await client.get(f"/api/v1/public/agent/{plain_id}/summary")).json()
+        assert summary["status"] == "not_queued"
+        assert summary["queue_withdrawn"] is True
         assert by_id[str(plain_id)]["terminal_failure_code"] is None
         assert activity["status_counts"].get("scoring_failed") == 1
         assert activity["status_counts"].get("waiting_validator", 0) == 0

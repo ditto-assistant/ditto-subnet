@@ -31914,6 +31914,12 @@ export interface components {
              */
             provisional_composite?: number | null;
             /**
+             * Queue Withdrawn
+             * @description Whether a 'not_queued' row is out of the active benchmark's validator queue because an operator withdrew it, rather than because it predates the active era. Its accepted scores stay on file; no validator scores it while the withdrawal stands. Always false on every other status.
+             * @default false
+             */
+            queue_withdrawn: boolean;
+            /**
              * Quorum
              * @description Independent validator scores required to finalize.
              */
@@ -32228,6 +32234,12 @@ export interface components {
             name_handle?: components["schemas"]["PublicNameHandle"] | null;
             /** Preserved Composite */
             preserved_composite?: number | null;
+            /**
+             * Queue Withdrawn
+             * @description Same as the activity row's queue_withdrawn.
+             * @default false
+             */
+            queue_withdrawn: boolean;
             /** Quorum */
             quorum: number;
             /**

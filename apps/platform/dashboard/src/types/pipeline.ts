@@ -75,6 +75,9 @@ export interface ActivityEntry {
   required_screening_policy_version?: number | null;
   /** Set only on waiting rows held by something beyond the queue. */
   scoring_wait?: ScoringWait | null;
+  /** True on a `not_queued` row an operator withdrew from the active
+   * benchmark queue, rather than one that predates the active era. */
+  queue_withdrawn?: boolean;
 }
 
 interface ActivityPayloadBase<E> {

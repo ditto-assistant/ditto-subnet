@@ -15,6 +15,7 @@ import {
   isSourceReviewIncomplete,
   duplicateComparisonLabel,
   policyScreeningLabel,
+  QUEUE_WITHDRAWN_LABEL,
   reviewEventLabel,
   reviewEvidenceNotes,
   reviewEvidenceText,
@@ -201,6 +202,33 @@ describe("status vocabulary (row 10)", () => {
       "Nothing here was rejected and nothing was lost",
     );
     expect(validationDetail({ status: "not_queued" })).toContain("retained for audit history");
+  });
+
+  it("names an operator withdrawal instead of calling the row historical (SN-470)", () => {
+    const withdrawn = {
+      status: "not_queued",
+      queue_withdrawn: true,
+      score_count: 2,
+      quorum: 3,
+    };
+    expect(activityStage("not_queued", withdrawn)).toEqual([QUEUE_WITHDRAWN_LABEL, ""]);
+    expect(validationProgress(withdrawn)).toBe("2 of 3 · withdrawn");
+    const detail = validationDetail(withdrawn);
+    expect(detail).toBe(
+      "An operator withdrew this submission from the active benchmark queue, so validators " +
+        "will not score it while the withdrawal stands. This is not a rejection: the " +
+        "submission and its 2 accepted scores stay on file.",
+    );
+    expect(detail).not.toContain("historical");
+    expect(validationDetail({ ...withdrawn, score_count: 0 })).toContain(
+      "the submission and its screening record stay on file",
+    );
+    // The flag only refines not_queued; it never relabels another status.
+    expect(activityStage("scored", { queue_withdrawn: true })).toEqual(["Scored", "good"]);
+    expect(activityStage("not_queued", { queue_withdrawn: false })).toEqual([
+      "Historical · not queued",
+      "",
+    ]);
   });
 
   it("keeps the generic floor copy when no floor number is quotable", () => {
