@@ -1736,11 +1736,93 @@ async def rollout_cohort_score_complete(
         )
     ).all():
         statuses[agent_id] = status
-    return all(
-        statuses.get(agent_id) in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
-        or int(count) >= SCORING_QUORUM
+    short = [
+        agent_id
         for agent_id, count in count_rows
+        if statuses.get(agent_id) not in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
+        and int(count) < SCORING_QUORUM
+    ]
+    if not short:
+        return True
+    return set(short) <= await agent_attributable_exhausted_members(
+        session, rollout=rollout, agent_ids=short
     )
+
+
+async def agent_attributable_exhausted_members(
+    session: AsyncSession,
+    *,
+    rollout: BenchmarkRollout,
+    agent_ids: Collection[UUID],
+) -> set[UUID]:
+    """Members whose desired-version quorum died on the artifact's own failure.
+
+    The desired-version twin of the terminal close-out: every remaining slot
+    the member still needs is exhausted on one named agent-attributable code
+    (an oversized request, a spent allowance, ...). Re-leasing the same image
+    repeats that failure, so waiting for the member deadlocks activation as
+    surely as a ban would. The member stays unranked on the desired version
+    until its owner resubmits; it is resolved for the barrier, never scored.
+
+    The closed-out member keeps its status, so this reads the evidence
+    instead: ``withdrawal_gate`` only accepts an ``evaluating`` submission,
+    and a frozen member is ``scored`` or ``live``. Fail-closed exactly like
+    the close-out -- a live lease, an infra or missing detail, or mixed
+    causes keep the member blocking until an operator retry settles it.
+    """
+    from ditto.db.queries.retry_state import (
+        HARNESS_KILLED_137_DETAIL,
+        current_failure_detail,
+        is_agent_attributable_exhaustion,
+        is_agent_attributable_failure_detail,
+    )
+    from ditto.db.queries.tickets import scoring_retry_ticket
+
+    ids = set(agent_ids)
+    if not ids:
+        return set()
+    tickets: dict[UUID, list[ValidatorTicket]] = {agent_id: [] for agent_id in ids}
+    for ticket in await session.scalars(
+        select(ValidatorTicket).where(
+            ValidatorTicket.agent_id.in_(ids),
+            ValidatorTicket.bench_version == rollout.desired_version,
+            scoring_retry_ticket(),
+        )
+    ):
+        tickets[ticket.agent_id].append(ticket)
+    # Members still working, or with no agent-caused failure at all, cannot
+    # qualify; skip the score read for them (the common, healthy case).
+    candidates = {
+        agent_id
+        for agent_id, rows in tickets.items()
+        if not any(ticket.status == TicketStatus.ISSUED for ticket in rows)
+        and any(
+            is_agent_attributable_failure_detail(
+                detail := current_failure_detail(ticket)
+            )
+            or detail == HARNESS_KILLED_137_DETAIL
+            for ticket in rows
+        )
+    }
+    if not candidates:
+        return set()
+    scores: dict[UUID, list[Score]] = {agent_id: [] for agent_id in candidates}
+    for score in await session.scalars(
+        select(Score).where(
+            Score.agent_id.in_(candidates),
+            Score.bench_version == rollout.desired_version,
+            # The barrier's own season-scoped count, so ``needed`` matches it.
+            await _desired_season_scope(session, rollout),
+        )
+    ):
+        scores[score.agent_id].append(score)
+    return {
+        agent_id
+        for agent_id in candidates
+        if is_agent_attributable_exhaustion(
+            scores=scores[agent_id], tickets=tickets[agent_id]
+        )
+    }
 
 
 async def issue_rollout_ticket(
@@ -2359,6 +2441,10 @@ async def activation_blocking_quorum(
             )
         )
     )
+    if members:
+        members -= await agent_attributable_exhausted_members(
+            session, rollout=rollout, agent_ids=members
+        )
     if not members:
         return None
     return ActivationBlockingQuorum(
@@ -2683,7 +2769,8 @@ def bench_promotion_requirement(
 
     - :func:`rollout_cohort_score_complete` over the rollout's frozen
       ``priority_cohort_target``: every position needs ``SCORING_QUORUM``
-      accepted desired-version scores, permanently ineligible members skipped;
+      accepted desired-version scores, permanently ineligible members and
+      agent-attributable exhaustions skipped;
     - ``count_ranked_quorum_agents(desired) >= MIN_DESIRED_AUTHORITY_AGENTS``:
       the emission set (champion plus participation tail) must all hold a
       ranked desired-version quorum before any of them are ranked on it.
@@ -2697,7 +2784,8 @@ def bench_promotion_requirement(
         f"moves to v{rollout_version} only once the first {priority_cohort_size} "
         "inherited priority-cohort positions each hold a complete "
         f"{SCORING_QUORUM}-score v{rollout_version} quorum (permanently "
-        "ineligible members are skipped) and at least "
+        "ineligible members, and members whose own failure exhausted that "
+        "quorum, are skipped) and at least "
         f"{MIN_DESIRED_AUTHORITY_AGENTS} agents hold a complete ranked "
         f"v{rollout_version} quorum, the champion plus the full participation "
         "tail. The whole ledger then flips at once."
@@ -2842,13 +2930,23 @@ async def rollout_state(
     priority_members = [
         member for member in members if member.position <= priority_target
     ]
-    # Same skip-ineligible first-five barrier as rollout_cohort_score_complete,
-    # computed from the member/status rows already loaded above.
-    priority_ready_count = sum(
-        member_statuses.get(member.agent_id) in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
-        or counts.get(member.agent_id, 0) >= SCORING_QUORUM
+    # Same first-five barrier as rollout_cohort_score_complete: a permanently
+    # ineligible member, or one whose own failure exhausted the quorum, is
+    # satisfied. Computed from the member/status rows already loaded above.
+    priority_short = [
+        member.agent_id
         for member in priority_members
-    )
+        if member_statuses.get(member.agent_id)
+        not in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
+        and counts.get(member.agent_id, 0) < SCORING_QUORUM
+    ]
+    priority_ready_count = len(priority_members) - len(priority_short)
+    if priority_short:
+        priority_ready_count += len(
+            await agent_attributable_exhausted_members(
+                session, rollout=rollout, agent_ids=priority_short
+            )
+        )
     priority_complete = (
         len(priority_members) == priority_target
         and priority_ready_count == priority_target

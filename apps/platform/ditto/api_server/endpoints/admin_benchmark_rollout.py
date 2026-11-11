@@ -57,6 +57,7 @@ from ditto.db.queries.benchmark_rollout import (
     DatasetPin,
     RolloutConflictError,
     active_bench_version,
+    agent_attributable_exhausted_members,
     authority_selection_state,
     capable_validator_counts,
     create_rollout_snapshot,
@@ -595,12 +596,23 @@ async def rollout_retry_diagnostics(session: AsyncSession) -> list[dict[str, obj
         rollout=rollout,
         canonical_version=rollout.desired_version,
     )
+    resolved = await agent_attributable_exhausted_members(
+        session,
+        rollout=rollout,
+        agent_ids=[
+            agent.agent_id
+            for agent, position in rows
+            if position <= rollout.priority_cohort_target
+        ],
+    )
     return [
         {
             "agent_id": str(agent.agent_id),
             "agent_name": agent.name,
             "bench_version": retry.bench_version,
-            "blocks_activation": position <= rollout.priority_cohort_target,
+            # A member its own failure closed out no longer gates the flip.
+            "blocks_activation": position <= rollout.priority_cohort_target
+            and agent.agent_id not in resolved,
             "state": retry.state,
             "score_count": retry.score_count,
             "recovery_allowed": retry.recovery_allowed,
