@@ -121,5 +121,8 @@ describe('benchmark canary boundary', () => {
     expect(wrap({ ...budget, reason: null, budget_usd: null }).result?.details?.run_budget)
       .toMatchObject({ reason: null, budget_usd: null, unrun_cases: 304 })
     expect(wrap({ ...budget, budget_usd: undefined }).result?.details?.run_budget?.unrun_cases).toBe(304)
+    expect(wrap({ ...budget, contract_id: null }).result?.details?.run_budget?.unrun_cases).toBe(304)
+    expect(wrap({ ...budget, contract_id: undefined }).result?.details?.run_budget?.unrun_cases).toBe(304)
+    expect(wrap({ ...budget, contract_id: 'unknown-contract' }).result?.details).toBeUndefined()
   })
 })

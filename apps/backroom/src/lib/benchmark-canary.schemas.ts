@@ -37,7 +37,7 @@ const bps = z.number().int().min(0).max(10_000)
 
 // Bench v18's admission budget is aggregate evidence, not the raw case report.
 const canaryRunBudgetSchema = z.object({
-  contract_id: z.literal('run-budget-v1'),
+  contract_id: z.literal('run-budget-v1').nullish(),
   budget_nano_usd: count,
   budget_usd: z.number().finite().nonnegative().nullish(),
   cases: count,
