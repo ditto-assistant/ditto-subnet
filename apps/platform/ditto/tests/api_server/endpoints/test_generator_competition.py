@@ -50,6 +50,7 @@ from ditto.db.models import (
     GeneratorSubmission,
     MinerAvatar,
 )
+from ditto.tests.api_server.conftest import answer_registration_from_neurons
 from ditto.tests.api_server.endpoints.test_scoring import (
     _install_chain,
     _ledger_headers,
@@ -137,6 +138,7 @@ def _install(
                 for index, key in enumerate(registered)
             ]
         )
+        answer_registration_from_neurons(chain)
         return chain
 
     app.dependency_overrides[get_session] = _session

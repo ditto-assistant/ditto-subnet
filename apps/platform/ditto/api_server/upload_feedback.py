@@ -7,7 +7,31 @@ from math import ceil
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from ditto.chain import HotkeyRegistration
     from ditto.db.queries.owner_submission_cooldown import OwnerCooldownNotice
+
+
+def hotkey_not_registered_message(registration: HotkeyRegistration) -> str:
+    """Name the evidence behind a 1101 so a lagging cache reads as one.
+
+    A miss confirmed in chain storage gives that finalized block next to the
+    metagraph cache's; a miner who registered after that block knows to wait,
+    and one who registered before it knows the registration is not there.
+    """
+    subject = f"hotkey is not registered on netuid {registration.netuid}"
+    snapshot = registration.snapshot_block
+    if registration.chain_block is None:
+        return (
+            f"{subject} in Platform's metagraph cache at block {snapshot} "
+            "(not re-checked on chain)"
+        )
+    lag = registration.chain_block - snapshot
+    behind = f", {lag} blocks behind" if lag > 0 else ""
+    return (
+        f"{subject} as of finalized block {registration.chain_block} "
+        f"(read from chain storage; Platform's metagraph cache is at block "
+        f"{snapshot}{behind})"
+    )
 
 
 def _interval(seconds: int) -> str:

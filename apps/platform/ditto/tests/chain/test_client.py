@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,7 +17,12 @@ from ditto.chain.errors import (
     ChainTimeoutError,
     ExtrinsicNotFoundError,
 )
-from ditto.chain.models import BlockInfo, ChainConfig
+from ditto.chain.models import (
+    BlockInfo,
+    ChainConfig,
+    ChainRegistration,
+    ChainRegistrations,
+)
 from ditto.tests.chain.conftest import make_event_record
 
 
@@ -51,6 +57,23 @@ def make_neurons_response(neurons: dict[str, MagicMock]) -> MagicMock:
     return MagicMock(
         block=MagicMock(number=1, hash="0xblock"),
         neurons=neurons,
+    )
+
+
+def make_chain_registrations(
+    block: int, *entries: tuple[int, str, str]
+) -> ChainRegistrations:
+    """A chain-storage registration read of ``(uid, hotkey, coldkey)`` rows."""
+    return ChainRegistrations(
+        netuid=118,
+        block=block,
+        block_timestamp=None,
+        provider="archive.example",
+        observed_at=datetime.now(UTC),
+        registrations=tuple(
+            ChainRegistration(uid=uid, hotkey=hotkey, coldkey=coldkey)
+            for uid, hotkey, coldkey in entries
+        ),
     )
 
 
@@ -311,7 +334,12 @@ class TestIsRegistered:
             make_neurons_response({"5HK1": make_pylon_neuron()})
         )
         async with ChainClient(make_chain_config()) as client:
+            # A snapshot miss is confirmed in chain storage before it is final.
+            client.read_chain_registrations = AsyncMock(  # type: ignore[method-assign]
+                return_value=make_chain_registrations(2, (0, "5HK1", "5CK1"))
+            )
             assert await client.is_registered("5UNREGISTERED", 118) is False
+            client.read_chain_registrations.assert_awaited_once_with(118)
 
 
 class TestGetRegisteredColdkey:
@@ -332,6 +360,9 @@ class TestGetRegisteredColdkey:
             make_neurons_response({"5HK1": make_pylon_neuron()})
         )
         async with ChainClient(make_chain_config()) as client:
+            client.read_chain_registrations = AsyncMock(  # type: ignore[method-assign]
+                return_value=make_chain_registrations(2, (0, "5HK1", "5CK1"))
+            )
             result = await client.get_registered_coldkey("5OTHER", 118)
         assert result is None
 

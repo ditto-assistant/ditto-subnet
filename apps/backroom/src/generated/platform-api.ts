@@ -3120,6 +3120,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/registration-freshness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Registration Freshness
+         * @description Read Pylon's snapshot block, a fresh finalized head and any correction.
+         *
+         *     One finalized header read; never starts a chain-storage registration read
+         *     and changes nothing.
+         */
+        get: operations["get_registration_freshness_api_v1_admin_registration_freshness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/retirements": {
         parameters: {
             query?: never;
@@ -9524,8 +9547,9 @@ export interface paths {
          *     1. Form fields auto-validated by FastAPI regex (already done by
          *        the time this body runs; malformed input returns 422).
          *     2. Fresh domain-separated upload signature (CPU only, no I/O; 400).
-         *     3. Hotkey registered on the configured netuid (1 Pylon call;
-         *        400 if absent, 503 if chain unreachable).
+         *     3. Hotkey registered on the configured netuid (the cached metagraph,
+         *        plus one chain-storage read when the cache lacks the hotkey; 400 if
+         *        absent, 503 if chain unreachable).
          *     4. Stream tar bytes: size cap (413) + sha256 re-verify (400).
          *     5. Resolve the proof as an idempotent retry or an available duplicate-upload
          *        credit. Reusing an assigned proof for different upload data remains a
@@ -20268,6 +20292,23 @@ export interface components {
              * @default 0
              */
             std_err: number;
+        };
+        /**
+         * ChainRegistrationRead
+         * @description The newest registration map Platform read straight from chain storage.
+         */
+        ChainRegistrationRead: {
+            /** Block */
+            block: number;
+            /** Block Timestamp */
+            block_timestamp: string | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Provider */
+            provider: string;
         };
         /** ClaControl */
         ClaControl: {
@@ -37856,6 +37897,59 @@ export interface components {
             fields: string[];
         };
         /**
+         * RegistrationChangeView
+         * @description A uid whose hotkey differs between Pylon's snapshot and what is served.
+         */
+        RegistrationChangeView: {
+            /** Chain Hotkey */
+            chain_hotkey: string | null;
+            /** Pylon Hotkey */
+            pylon_hotkey: string | null;
+            /** Uid */
+            uid: number;
+        };
+        /**
+         * RegistrationFreshnessView
+         * @description Pylon's recent-neurons snapshot height against a fresh finalized head.
+         *
+         *     Pylon ages its cache by when it wrote it, so only ``snapshot_block`` shows
+         *     a refresh that read a lagging node. When ``chain_registrations`` is newer
+         *     than the snapshot, every consumer (upload admission, public activity, the
+         *     emission ledger) is served its uid/hotkey/coldkey and ``changes`` lists
+         *     the uids it corrected.
+         */
+        RegistrationFreshnessView: {
+            chain_registrations: components["schemas"]["ChainRegistrationRead"] | null;
+            /** Changes */
+            changes: components["schemas"]["RegistrationChangeView"][];
+            /** Finalized Block */
+            finalized_block: number | null;
+            /** Finalized Block Error */
+            finalized_block_error: string | null;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Lag Check Interval Seconds */
+            lag_check_interval_seconds: number | null;
+            /** Lag Reconcile Threshold Blocks */
+            lag_reconcile_threshold_blocks: number;
+            /** Netuid */
+            netuid: number;
+            /** Serving Registrations Block */
+            serving_registrations_block: number;
+            /** Snapshot Block */
+            snapshot_block: number;
+            /** Snapshot Lag Blocks */
+            snapshot_lag_blocks: number | null;
+            /**
+             * Snapshot Observed At
+             * Format: date-time
+             */
+            snapshot_observed_at: string;
+        };
+        /**
          * RelayFailure
          * @description Private first-failure metadata; no prompts, headers or exception text.
          */
@@ -53747,6 +53841,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueuePolicySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_registration_freshness_api_v1_admin_registration_freshness_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrationFreshnessView"];
                 };
             };
             /** @description Validation Error */

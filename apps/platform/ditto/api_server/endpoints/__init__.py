@@ -104,6 +104,9 @@ from ditto.api_server.endpoints.admin_quarantine import (
 from ditto.api_server.endpoints.admin_queue_policy_settings import (
     router as admin_queue_policy_settings_router,
 )
+from ditto.api_server.endpoints.admin_registration_freshness import (
+    router as admin_registration_freshness_router,
+)
 from ditto.api_server.endpoints.admin_retirement import (
     router as admin_retirement_router,
 )
@@ -223,6 +226,7 @@ from ditto.api_server.endpoints.validator_confirmation import (
 
 __all__ = [
     "admin_database_backup_router",
+    "admin_registration_freshness_router",
     "health_router",
     "inference_router",
     "admin_artifact_release_settings_router",

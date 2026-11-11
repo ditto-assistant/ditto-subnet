@@ -2681,11 +2681,11 @@ class TestInlineRegistration:
 class TestRegistrationVisibilityLag:
     """The chain and the platform do not agree the instant TAO is recycled.
 
-    `/upload/check` resolves 1101 from Pylon's cached recent-neurons
-    snapshot, so a registration that is already final on chain keeps
-    answering 1101 for a while. Giving up on the first re-check sends the
-    miner away from a submission that is seconds from working, after the
-    recycle amount is already spent.
+    `/upload/check` confirms a 1101 at a finalized block through a read it
+    shares for one block, so a registration that just finalized can still
+    answer 1101 briefly. Giving up on the first re-check sends the miner away
+    from a submission that is seconds from working, after the recycle amount
+    is already spent.
     """
 
     def _run(

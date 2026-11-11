@@ -101,11 +101,11 @@ _BLOCK_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 _UPLOAD_RETRY_DELAYS_S = (2.0, 4.0, 8.0, 16.0, 30.0, 30.0)
 
 # How long to keep re-checking after a finalized registration. The platform
-# answers 1101 from a cached metagraph snapshot rather than from the chain
-# (ditto.chain.client.ChainClient.get_recent_neurons), so a registration that
-# is already final on chain stays invisible to /upload/check for a while. That
-# snapshot's refresh period is not a contract the CLI can read, so this polls
-# rather than sleeping a fixed guess. ~4 minutes total.
+# reads registration from a cached metagraph snapshot and re-reads a hotkey the
+# snapshot lacks from chain storage at a finalized block before answering 1101,
+# sharing that read for one block. A provider can still trail the finalized
+# head, and none of that is a contract the CLI can read, so this polls rather
+# than sleeping a fixed guess. ~4 minutes total.
 _REGISTRATION_VISIBILITY_DELAYS_S = (5.0, 10.0, 15.0, 20.0, 30.0, 30.0, 30.0, 30.0)
 
 # Mirrors ditto.api_server.endpoints.upload.ERROR_CODE_HOTKEY_NOT_REGISTERED.
@@ -486,9 +486,9 @@ def _run_upload(
                     chain_endpoint=chain_endpoint,
                     check_response=check_response,
                 )
-                # The platform resolves registration from a cached metagraph
-                # snapshot, not from the chain directly, so a finalized
-                # registration is not visible to /upload/check immediately.
+                # The platform confirms registration at a finalized block
+                # through a read it shares for one block, so a just-finalized
+                # registration may not be visible to /upload/check immediately.
                 check_response = _await_platform_registration(
                     check=lambda: _check(receipt),
                     hotkey_ss58=handle.hotkey_ss58,
@@ -755,11 +755,11 @@ def _await_platform_registration(
     """Re-check until the platform observes an on-chain registration.
 
     The chain and the platform do not agree instantly. ``/upload/check``
-    resolves registration from Pylon's cached recent-neurons snapshot, so a
-    registration that has already finalized on chain still answers 1101 for
-    some time afterward. Checking once and giving up sends the miner away
-    from a submission that is seconds from working, having already spent the
-    recycle amount.
+    confirms a registration its metagraph cache lacks at a finalized block,
+    through a read shared for one block, so a just-finalized registration can
+    still answer 1101 briefly. Checking once and giving up sends the miner
+    away from a submission that is seconds from working, having already spent
+    the recycle amount.
 
     Only 1101 is waited on. Any other rejection is returned immediately --
     those do not become true by waiting.
@@ -783,7 +783,7 @@ def _await_platform_registration(
 
     print(
         "waiting for the platform to observe the registration "
-        "(it reads a cached metagraph snapshot, so this lags the chain)...",
+        "(it checks a finalized block, which trails the chain head)...",
         file=sys.stderr,
     )
     for attempt, delay in enumerate(_REGISTRATION_VISIBILITY_DELAYS_S, start=1):

@@ -80,6 +80,7 @@ from ditto.db.models import (
 )
 from ditto.db.queries.generator import claimed_fingerprints
 from ditto.db.queries.provider_outages import park_scoring_leases
+from ditto.tests.api_server.conftest import answer_registration_from_neurons
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
     _ADMIN_TOKEN,
@@ -128,6 +129,7 @@ def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> MagicMock
     chain.read_epoch_schedule = AsyncMock(
         side_effect=lambda _netuid: _head_at(_LOOP_EPOCH["epoch"])
     )
+    answer_registration_from_neurons(chain)
 
     async def _chain() -> MagicMock:
         return chain

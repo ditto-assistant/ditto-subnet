@@ -41,6 +41,15 @@ from ditto.api_server.payment_verifier import (
 from ditto.api_server.pricing import (
     OracleUnreachableError,
 )
+from ditto.chain import (
+    ChainClient,
+    ChainConfig,
+    ChainRegistration,
+    ChainRegistrations,
+    HotkeyRegistration,
+    NeuronInfo,
+    NeuronSnapshot,
+)
 from ditto.chain.errors import ChainConnectionError
 from ditto.db.queries.agents import (
     SubmissionCooldownDecision,
@@ -48,6 +57,7 @@ from ditto.db.queries.agents import (
 )
 from ditto.db.queries.owner_submission_cooldown import OwnerCooldownNotice
 from ditto.tests.api_server.conftest import (
+    fake_registration,
     override_get_chain_client,
     override_get_embedder,
     override_get_price_oracle,
@@ -783,8 +793,15 @@ class TestUploadCheck:
 
         async def _fake_chain() -> MagicMock:
             chain = MagicMock()
-            chain.is_registered = AsyncMock(return_value=False)
-            chain.get_registered_coldkey = AsyncMock(return_value=None)
+            chain.get_hotkey_registration = AsyncMock(
+                side_effect=lambda hotkey, netuid, **_: fake_registration(
+                    hotkey,
+                    netuid,
+                    None,
+                    snapshot_block=9_458_900,
+                    chain_block=9_459_200,
+                )
+            )
             return chain
 
         app.dependency_overrides[get_chain_client] = _fake_chain
@@ -794,6 +811,13 @@ class TestUploadCheck:
         result = response.json()
         assert result["ok"] is False
         assert ERROR_CODE_HOTKEY_NOT_REGISTERED in result["error_codes"]
+        # The miss names its evidence, so a miner can tell a lagging cache
+        # from a registration that is really not there.
+        assert result["messages"] == [
+            f"hotkey is not registered on netuid {app.state.config.chain.netuid} "
+            "as of finalized block 9459200 (read from chain storage; Platform's "
+            "metagraph cache is at block 9458900, 300 blocks behind)"
+        ]
         # A client acting on 1101 must be able to bind to this deployment's
         # own target. Without it, registering falls back to a local guess and
         # can recycle TAO on a subnet this platform never reads.
@@ -819,10 +843,17 @@ class TestUploadCheck:
 
         from ditto.api_server.dependencies import get_chain_client
 
+        chain = MagicMock()
+        chain.get_hotkey_registration = AsyncMock(
+            side_effect=lambda hotkey, netuid, *, confirm_absence: fake_registration(
+                hotkey,
+                netuid,
+                None,
+                chain_block=None if not confirm_absence else 42,
+            )
+        )
+
         async def _fake_chain() -> MagicMock:
-            chain = MagicMock()
-            chain.is_registered = AsyncMock(return_value=False)
-            chain.get_registered_coldkey = AsyncMock(return_value=None)
             return chain
 
         app.dependency_overrides[get_chain_client] = _fake_chain
@@ -836,6 +867,13 @@ class TestUploadCheck:
         assert ERROR_CODE_HOTKEY_NOT_REGISTERED in result["error_codes"]
         assert ERROR_CODE_TARBALL_TOO_LARGE in result["error_codes"]
         assert len(result["messages"]) == 3
+        # An unauthenticated hotkey never costs a chain-storage read; its 1101
+        # says it came from the cache alone.
+        assert chain.get_hotkey_registration.await_args.kwargs == {
+            "netuid": app.state.config.chain.netuid,
+            "confirm_absence": False,
+        }
+        assert "(not re-checked on chain)" in " ".join(result["messages"])
 
     async def test_chain_error_returns_503(
         self, app: FastAPI, client: httpx.AsyncClient
@@ -847,7 +885,7 @@ class TestUploadCheck:
 
     async def test_passes_configured_netuid_to_chain_client(self):
         # Build an app with a non-default netuid and assert it flows
-        # through to chain.is_registered + the failure message.
+        # through to chain.get_hotkey_registration + the failure message.
         from dataclasses import replace
         from unittest.mock import AsyncMock, MagicMock
 
@@ -867,14 +905,16 @@ class TestUploadCheck:
         async def _fake_chain() -> MagicMock:
             chain = MagicMock()
 
-            async def _get_registered_coldkey(
-                _hotkey: str, *, netuid: int
-            ) -> str | None:
+            async def _get_hotkey_registration(
+                hotkey: str, *, netuid: int, confirm_absence: bool
+            ) -> HotkeyRegistration:
                 recorded["netuid"] = netuid
-                return None
+                return fake_registration(
+                    hotkey, netuid, None, chain_block=42 if confirm_absence else None
+                )
 
-            chain.get_registered_coldkey = AsyncMock(
-                side_effect=_get_registered_coldkey
+            chain.get_hotkey_registration = AsyncMock(
+                side_effect=_get_hotkey_registration
             )
             return chain
 
@@ -888,6 +928,163 @@ class TestUploadCheck:
 
         assert recorded["netuid"] == 999
         assert "netuid 999" in " ".join(response.json()["messages"])
+
+
+_STALE_SNAPSHOT_BLOCK = 9_458_900
+_REREGISTERED_UID = 237
+
+
+def _stale_metagraph_chain(
+    *, hotkey: str, chain_maps_hotkey: bool = True
+) -> tuple[ChainClient, AsyncMock]:
+    """A real ChainClient whose Pylon snapshot still maps uid 237 to its
+    previous occupant (SN-463). Chain storage, read through the returned mock,
+    already holds ``hotkey`` there unless ``chain_maps_hotkey`` is false.
+    """
+    chain = ChainClient(
+        ChainConfig(pylon_url="http://pylon", netuid=118, open_access_token="token")
+    )
+    chain._pylon_neuron_snapshot = AsyncMock(  # type: ignore[method-assign]
+        return_value=NeuronSnapshot(
+            block=_STALE_SNAPSHOT_BLOCK,
+            neurons=(
+                NeuronInfo(
+                    hotkey="5PreviousOccupantHotkey",
+                    coldkey="5PrevCk",
+                    uid=_REREGISTERED_UID,
+                    stake=0.0,
+                ),
+            ),
+            observed_at=datetime.now(UTC),
+            registrations_block=_STALE_SNAPSHOT_BLOCK,
+        )
+    )
+    occupant = hotkey if chain_maps_hotkey else "5SomeoneElseHotkey"
+    reader = AsyncMock(
+        return_value=ChainRegistrations(
+            netuid=118,
+            block=_STALE_SNAPSHOT_BLOCK + 335,
+            block_timestamp=None,
+            provider="archive.example",
+            observed_at=datetime.now(UTC),
+            registrations=(
+                ChainRegistration(
+                    uid=_REREGISTERED_UID, hotkey=occupant, coldkey="5OccCk"
+                ),
+            ),
+        )
+    )
+    chain.read_chain_registrations = reader  # type: ignore[method-assign]
+    return chain, reader
+
+
+class TestStaleMetagraphRegistration:
+    """SN-463: a stale cache entry must not decide registration on its own."""
+
+    @pytest.fixture(autouse=True)
+    def _session(self, app: FastAPI) -> None:
+        override_get_session(app)
+        _override_payment_verifier(app)
+
+    async def test_check_passes_when_chain_already_maps_the_uid_to_this_hotkey(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        kp = _make_keypair()
+        chain, reader = _stale_metagraph_chain(hotkey=kp.ss58_address)
+        app.dependency_overrides[get_chain_client] = lambda: chain
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_signed_request_body(keypair=kp)
+        )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert ERROR_CODE_HOTKEY_NOT_REGISTERED not in result["error_codes"]
+        assert result["ok"] is True
+        reader.assert_awaited_once_with(118)
+
+    async def test_check_still_1101s_a_hotkey_chain_storage_lacks(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        kp = _make_keypair()
+        chain, reader = _stale_metagraph_chain(
+            hotkey=kp.ss58_address, chain_maps_hotkey=False
+        )
+        app.dependency_overrides[get_chain_client] = lambda: chain
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_signed_request_body(keypair=kp)
+        )
+
+        result = response.json()
+        assert result["error_codes"] == [ERROR_CODE_HOTKEY_NOT_REGISTERED]
+        assert result["messages"] == [
+            "hotkey is not registered on netuid 118 as of finalized block 9459235 "
+            "(read from chain storage; Platform's metagraph cache is at block "
+            "9458900, 335 blocks behind)"
+        ]
+        reader.assert_awaited_once_with(118)
+
+    async def test_unsigned_check_never_reads_chain_storage(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        kp = _make_keypair()
+        chain, reader = _stale_metagraph_chain(hotkey=kp.ss58_address)
+        app.dependency_overrides[get_chain_client] = lambda: chain
+        body = _signed_request_body(keypair=kp)
+        body["signature"] = _BAD_SIG
+
+        result = (await client.post("/api/v1/upload/check", json=body)).json()
+
+        assert result["error_codes"] == [
+            ERROR_CODE_BAD_SIGNATURE,
+            ERROR_CODE_HOTKEY_NOT_REGISTERED,
+        ]
+        assert result["messages"][1] == (
+            "hotkey is not registered on netuid 118 in Platform's metagraph "
+            "cache at block 9458900 (not re-checked on chain)"
+        )
+        reader.assert_not_awaited()
+
+    async def test_unreadable_chain_is_503_not_1101(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        kp = _make_keypair()
+        chain, reader = _stale_metagraph_chain(hotkey=kp.ss58_address)
+        reader.side_effect = ChainConnectionError("every provider down")
+        app.dependency_overrides[get_chain_client] = lambda: chain
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_signed_request_body(keypair=kp)
+        )
+
+        assert response.status_code == 503
+
+    async def test_agent_upload_passes_registration_for_the_new_occupant(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        deps = _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        chain, reader = _stale_metagraph_chain(hotkey=kp.ss58_address)
+        app.dependency_overrides[get_chain_client] = lambda: chain
+        data, files = _upload_agent_form(keypair=kp)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert "not registered" not in response.text
+        reader.assert_awaited_once_with(118)
+        # Registration passed, so the upload went on to verify the payment.
+        deps["verifier"].verify_payment.assert_awaited()
 
 
 class TestOpenApiInclusion:
@@ -1376,7 +1573,11 @@ class TestUploadAgentValidationFailures:
 
         async def _fake_chain() -> MagicMock:
             chain = MagicMock()
-            chain.is_registered = AsyncMock(return_value=False)
+            chain.get_hotkey_registration = AsyncMock(
+                side_effect=lambda hotkey, netuid, **_: fake_registration(
+                    hotkey, netuid, None
+                )
+            )
             return chain
 
         from ditto.api_server.dependencies import get_chain_client

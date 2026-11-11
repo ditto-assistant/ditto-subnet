@@ -152,6 +152,45 @@ func TestPaymentRecoveryForwardsToPythonUnchanged(t *testing.T) {
 	}
 }
 
+// SN-463: the recent-neurons snapshot can still map a re-registered uid to its
+// previous hotkey. A snapshot miss is not a 1101 until Python has re-read it
+// from chain storage, so Go forwards it rather than answering.
+func TestRegistrationMissForwardsToPythonUnchanged(t *testing.T) {
+	secret, hotkey := newSignedHotkey(t)
+	want := signedCheckJSON(t, secret, hotkey, strings.Repeat("c", 64), nil)
+	called := false
+	legacy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		got, _ := io.ReadAll(r.Body)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("forwarded body changed:\nwant %s\n got %s", want, got)
+		}
+		w.WriteHeader(http.StatusTeapot)
+	})
+	d := &Deps{Legacy: legacy, Registration: stubRegistration{}}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/upload/check", bytes.NewReader(want))
+	w := httptest.NewRecorder()
+	d.handleCheck(w, r)
+	if !called || w.Code != http.StatusTeapot {
+		t.Fatalf("legacy called=%v status=%d", called, w.Code)
+	}
+}
+
+func TestRegisteredHotkeyIsNotForwarded(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	secret, hotkey := newSignedHotkey(t)
+	d := uploadDeps(pool, "5RegisteredOwnerColdkey", time.Now().UTC())
+	d.Legacy = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("a snapshot hit must be answered in Go")
+	})
+	got := serveCheck(t, d, signedCheckJSON(t, secret, hotkey, strings.Repeat("d", 64), nil))
+	for _, code := range got.ErrorCodes {
+		if code == errorHotkeyUnregistered {
+			t.Fatalf("codes=%v", got.ErrorCodes)
+		}
+	}
+}
+
 func TestCheckNameValidationMatchesPython(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
