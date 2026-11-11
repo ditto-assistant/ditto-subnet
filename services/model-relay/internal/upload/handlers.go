@@ -1,7 +1,8 @@
 // Package upload implements the first strangler slice of the upload plane:
 // fee pricing and the ordinary pre-payment admission check. Finalized-payment
-// recovery and multipart archive commit remain on Python until their chain,
-// object-storage, and fingerprinting contracts have Go parity coverage.
+// recovery, a hotkey missing from the recent-neurons snapshot, and multipart
+// archive commit remain on Python until their chain, object-storage, and
+// fingerprinting contracts have Go parity coverage.
 package upload
 
 import (
@@ -416,6 +417,16 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		d.Logger.Warn("chain unreachable during upload check", slog.String("error", err.Error()))
 		relayhttp.WriteHTTPError(w, r, http.StatusServiceUnavailable, "chain unavailable; retry shortly", nil)
+		return
+	}
+	if ownerColdkey == "" && d.Legacy != nil {
+		// Pylon's recent-neurons snapshot can keep a re-registered uid's
+		// previous hotkey long past its refresh interval (SN-463). Python
+		// re-reads a snapshot miss from chain storage before answering 1101,
+		// so it owns that answer. Forward unchanged.
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		d.Legacy.ServeHTTP(w, r)
 		return
 	}
 	registered := ownerColdkey != ""

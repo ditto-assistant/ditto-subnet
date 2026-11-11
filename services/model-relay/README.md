@@ -3,9 +3,11 @@
 Go request plane that began as the replacement for the Python platform's
 `DITTO_ROLE=relay` process. It serves the SN118 inference plane plus the first
 upload strangler slice: `GET /api/v1/upload/eval-pricing` and ordinary
-`POST /api/v1/upload/check`. Finalized-payment recovery is forwarded to the
-Python platform, and multipart `/api/v1/upload/agent` remains Python until its
-chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
+`POST /api/v1/upload/check`. Finalized-payment recovery and a hotkey missing
+from Pylon's recent-neurons snapshot are forwarded to the Python platform, which
+re-reads that miss from chain storage before answering 1101. Multipart
+`/api/v1/upload/agent` remains Python until its chain, storage, fingerprinting,
+and atomic-commit contracts have parity tests.
 
 ## Contract anchors
 

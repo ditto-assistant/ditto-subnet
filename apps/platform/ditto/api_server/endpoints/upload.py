@@ -80,7 +80,10 @@ from ditto.api_server.source_inspect import (
 )
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.structural_fingerprint import compute_structural_fingerprint
-from ditto.api_server.upload_feedback import submission_cooldown_message
+from ditto.api_server.upload_feedback import (
+    hotkey_not_registered_message,
+    submission_cooldown_message,
+)
 from ditto.chain import ChainError
 from ditto.db.models import AgentClaBinding, AgentStatus
 from ditto.db.queries.agents import (
@@ -286,19 +289,24 @@ async def check(
         codes.append(ERROR_CODE_BAD_SIGNATURE)
         messages.append("signature did not verify against the hotkey")
 
-    # 2. Hotkey registered. On a chain outage we return 503 instead of
-    #    a silent false-pass that would lie to miners.
+    # 2. Hotkey registered. On a chain outage we return 503 instead of a
+    #    silent false-pass or a false 1101, either of which lies to miners.
+    #    A metagraph-cache miss is re-read from chain storage before it
+    #    becomes a 1101, but only for a signed request: an unauthenticated
+    #    hotkey gets the cache's answer, labelled as such.
     try:
-        owner_coldkey = await chain.get_registered_coldkey(body.hotkey, netuid=netuid)
+        registration = await chain.get_hotkey_registration(
+            body.hotkey, netuid=netuid, confirm_absence=signature_valid
+        )
     except ChainError as e:
         logger.warning(f"chain unreachable during /upload/check: {e}")
         raise HTTPException(
             status_code=503, detail="chain unavailable; retry shortly"
         ) from e
-    registered = owner_coldkey is not None
-    if not registered:
+    owner_coldkey = registration.coldkey
+    if not registration.registered:
         codes.append(ERROR_CODE_HOTKEY_NOT_REGISTERED)
-        messages.append(f"hotkey is not registered on netuid {netuid}")
+        messages.append(hotkey_not_registered_message(registration))
 
     # 3. Tarball size cap.
     if body.file_size_bytes > MAX_TARBALL_SIZE_BYTES:
@@ -576,8 +584,9 @@ async def upload_agent(
     1. Form fields auto-validated by FastAPI regex (already done by
        the time this body runs; malformed input returns 422).
     2. Fresh domain-separated upload signature (CPU only, no I/O; 400).
-    3. Hotkey registered on the configured netuid (1 Pylon call;
-       400 if absent, 503 if chain unreachable).
+    3. Hotkey registered on the configured netuid (the cached metagraph,
+       plus one chain-storage read when the cache lacks the hotkey; 400 if
+       absent, 503 if chain unreachable).
     4. Stream tar bytes: size cap (413) + sha256 re-verify (400).
     5. Resolve the proof as an idempotent retry or an available duplicate-upload
        credit. Reusing an assigned proof for different upload data remains a
@@ -624,17 +633,18 @@ async def upload_agent(
             await rollback_result
 
     # 3. Hotkey must be registered on this subnet. Chain outage surfaces
-    # as 503; falling through would silently accept off-subnet hotkeys.
+    # as 503; falling through would silently accept off-subnet hotkeys. A
+    # metagraph-cache miss is re-read from chain storage before refusing.
     try:
-        registered = await chain.is_registered(hotkey, netuid=netuid)
+        registration = await chain.get_hotkey_registration(hotkey, netuid=netuid)
     except ChainError as e:
         logger.warning(f"chain unreachable during /upload/agent: {e}")
         raise HTTPException(
             status_code=503, detail="chain unavailable; retry shortly"
         ) from e
-    if not registered:
+    if not registration.registered:
         raise HTTPException(
-            status_code=400, detail=f"hotkey not registered on netuid {netuid}"
+            status_code=400, detail=hotkey_not_registered_message(registration)
         )
 
     # 4. Stream the tar; enforce size cap + recompute sha256 on bytes.
@@ -761,7 +771,7 @@ async def upload_agent(
     # unchanged. A bare ChainError surfaces when one of the verifier's
     # five chain reads cannot reach the configured backends, which we treat as
     # a 503 to match the shipped /upload/check pattern around
-    # chain.is_registered.
+    # chain.get_hotkey_registration.
     verified = None
     if using_credit:
         assert credit_owner_coldkey is not None

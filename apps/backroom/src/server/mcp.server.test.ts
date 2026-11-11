@@ -616,6 +616,7 @@ describe('Backroom MCP tools', () => {
         'get_queue_policy_settings',
         'get_screener_capacity',
         'get_database_backup_status',
+        'get_registration_freshness',
         'get_screening_infra_retries',
         'set_screener_provider_settings',
         'set_screener_node_channel_settings',
@@ -3629,6 +3630,48 @@ describe('Backroom MCP tools', () => {
     )
     await client.close()
     await server.close()
+  })
+
+  it('reads how far the metagraph snapshot trails the chain (SN-463)', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const payload = {
+      netuid: 118, generated_at: '2026-11-08T05:08:45Z',
+      snapshot_block: 9458900, snapshot_observed_at: '2026-11-08T05:08:40Z',
+      finalized_block: 9459237, finalized_block_error: null, snapshot_lag_blocks: 337,
+      lag_reconcile_threshold_blocks: 120, lag_check_interval_seconds: 300,
+      chain_registrations: {
+        block: 9459235, block_timestamp: '2026-11-08T05:08:36Z',
+        provider: 'archive.example', observed_at: '2026-11-08T05:08:41Z',
+        provider_url: 'wss://paid.example/ws?authorization=must-be-stripped',
+      },
+      serving_registrations_block: 9459235,
+      changes: [{ uid: 237, pylon_hotkey: '5Previous', chain_hotkey: '5NewOccupant' }],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_registration_freshness', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as typeof payload
+      expect(body.snapshot_lag_blocks).toBe(337)
+      expect(body.chain_registrations?.block).toBe(9459235)
+      expect(body.changes).toEqual([
+        { uid: 237, pylon_hotkey: '5Previous', chain_hotkey: '5NewOccupant' },
+      ])
+      expect(JSON.stringify(body)).not.toContain('must-be-stripped')
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://platform-api.heyditto.ai/api/v1/admin/registration-freshness',
+        expect.any(Object),
+      )
+      fetchMock.mockResolvedValue(Response.json({ detail: 'unavailable' }, { status: 503 }))
+      expect(
+        (await client.callTool({ name: 'get_registration_freshness', arguments: {} })).isError,
+      ).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('reads authoritative screener capacity and provider state', async () => {

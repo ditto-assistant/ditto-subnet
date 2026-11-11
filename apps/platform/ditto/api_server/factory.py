@@ -93,6 +93,7 @@ from ditto.api_server.endpoints import (
     admin_provider_outages_router,
     admin_quarantine_router,
     admin_queue_policy_settings_router,
+    admin_registration_freshness_router,
     admin_retirement_router,
     admin_scoring_lease_settings_router,
     admin_scoring_readiness_router,
@@ -861,6 +862,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_l2_report_canary_router, prefix="/api/v1")
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
     app.include_router(admin_database_backup_router, prefix="/api/v1")
+    app.include_router(admin_registration_freshness_router, prefix="/api/v1")
     app.include_router(admin_screening_infra_retry_router, prefix="/api/v1")
     app.include_router(admin_source_review_queue_slo_router, prefix="/api/v1")
     app.include_router(admin_ath_review_queue_slo_router, prefix="/api/v1")

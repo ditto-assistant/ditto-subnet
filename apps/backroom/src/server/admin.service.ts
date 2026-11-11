@@ -1185,6 +1185,38 @@ export async function fetchDatabaseBackupStatus() {
   )
 }
 
+// Pylon ages its recent-neurons cache by write time, so only the snapshot's
+// block shows a refresh that read a lagging node (SN-463).
+export const registrationFreshnessSchema = z.object({
+  netuid: z.number().int(),
+  generated_at: z.string(),
+  snapshot_block: z.number().int().nonnegative(),
+  snapshot_observed_at: z.string(),
+  finalized_block: z.number().int().nullable(),
+  finalized_block_error: z.string().nullable(),
+  snapshot_lag_blocks: z.number().int().nullable(),
+  lag_reconcile_threshold_blocks: z.number().int(),
+  lag_check_interval_seconds: z.number().nullable(),
+  chain_registrations: z.object({
+    block: z.number().int().nonnegative(),
+    block_timestamp: z.string().nullable(),
+    provider: z.string(),
+    observed_at: z.string(),
+  }).nullable(),
+  serving_registrations_block: z.number().int(),
+  changes: z.array(z.object({
+    uid: z.number().int().nonnegative(),
+    pylon_hotkey: z.string().nullable(),
+    chain_hotkey: z.string().nullable(),
+  })),
+})
+
+export async function fetchRegistrationFreshness() {
+  return registrationFreshnessSchema.parse(
+    await platformAdminRequest('/api/v1/admin/registration-freshness'),
+  )
+}
+
 export async function fetchScreeningInfraRetries() {
   const payload = await platformAdminRequest('/api/v1/admin/screening-infra-retries')
   return screeningInfraRetryViewSchema.parse(payload)

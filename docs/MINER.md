@@ -133,7 +133,7 @@ live registration cost from chain, shows it next to your coldkey balance, and
 offers to register:
 
 ```
-  pre-check rejection 1101: hotkey is not registered on netuid 118
+  pre-check rejection 1101: hotkey is not registered on netuid 118 as of finalized block 9485693 (read from chain storage; Platform's metagraph cache is at block 9485650, 43 blocks behind)
 
 Registration preview
   Netuid:   118
@@ -150,16 +150,22 @@ the ordinary payment confirmation. The registration cost is never cached or
 assumed: it is read at the prompt and read again immediately before the
 extrinsic, and the CLI aborts rather than paying more if it rose in between.
 
-The platform resolves registration from a cached metagraph snapshot rather
-than from the chain directly, so a registration that is already final on chain
-is not visible to `/upload/check` immediately. The CLI waits it out, re-checking
-for about four minutes:
+A 1101 names its evidence. The platform keeps a cached metagraph snapshot that
+can trail the chain, so before it reports a signed request's hotkey as
+unregistered it re-reads chain storage at a finalized block. The message gives
+that block and how far the cache is behind. If you registered after that block,
+the registration is not finalized yet: wait and retry. If you registered
+before it, the hotkey is not registered on the netuid the platform reads.
+
+The platform reads a finalized block, which trails the chain head by a few
+blocks, so a registration may not be visible to `/upload/check` the instant
+it lands. The CLI waits it out, re-checking for about four minutes:
 
 ```
 registered on netuid 118: uid 37
 continuing upload...
-waiting for the platform to observe the registration (it reads a cached
-metagraph snapshot, so this lags the chain)...
+waiting for the platform to observe the registration (it checks a finalized
+block, which trails the chain head)...
   still not visible; re-checking (1/8)
 platform observed the registration after 2/8 checks
 ```

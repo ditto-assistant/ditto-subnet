@@ -399,6 +399,7 @@ import {
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
   fetchDatabaseBackupStatus,
+  fetchRegistrationFreshness,
   fetchScreeningInfraRetries,
   updateScreenerProviderSettings,
   updateScreenerNodeChannelSettings,
@@ -716,6 +717,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read screener capacity, routing and recent jobs before retry.',
   get_database_backup_status:
     'Read encrypted PG backup freshness, manifest, object metadata and GCE snapshot. No contents or secrets.',
+  get_registration_freshness:
+    'Read Pylon metagraph snapshot block vs finalized head, lag, and uids corrected from chain storage.',
   get_screening_infra_retries:
     'Read infra retry policy, parked agents, per-state counts and signature breakers. Derived at read time.',
   set_screener_provider_settings:
@@ -2735,6 +2738,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchDatabaseBackupStatus()),
+  )
+
+  registerTool(
+    'get_registration_freshness',
+    {
+      title: 'Get registration freshness',
+      description:
+        'Read how far Platform\'s Pylon recent-neurons snapshot trails the chain: snapshot_block, a fresh finalized_block and snapshot_lag_blocks. Pylon ages that cache by write time, so a refresh over a lagging node still looks fresh and a re-registered uid keeps its previous hotkey (SN-463). chain_registrations is the newest map Platform read straight from chain storage (on an upload whose hotkey the snapshot lacks, or when the lag passes lag_reconcile_threshold_blocks); changes lists the uids whose hotkey upload admission, public activity and the emission ledger are served from it instead of the snapshot. One header read; starts no registration read. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchRegistrationFreshness()),
   )
 
   registerTool(
