@@ -1162,6 +1162,11 @@ receipts do not distinguish initial quorum from every repair/rollout path.
 Historical timestamp encodings not matching the canonical signed representation
 remain unknown. No prompt, answer, API key or actor credential is returned.
 
+`get_benchmark_canary` also returns the v18 `run_budget` aggregate when the
+signed diagnostic report contains a valid budget block. It distinguishes an
+exhausted budget from a lost meter and reports admitted and unrun case counts
+by phase. It never returns the raw case report or prompt content.
+
 Reconcile this operational view to provider key/model exports with matching
 service periods before claiming realized savings. Do not reduce seeds, panel
 coverage or independent executions solely because a grant's purpose is unknown.

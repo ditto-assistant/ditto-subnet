@@ -4378,7 +4378,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   }, async (input) => result(await listBenchmarkCanaries(input)))
   registerTool('get_benchmark_canary', {
     title: 'Get benchmark canary',
-    description: 'Read one exact diagnostic receipt. Completed means a signed result was recorded, not calibration or activation readiness. Scorer details and traces are not exposed; from bench 16 `result.details` carries only the priced-cost numbers (`priced_cost`: tokens, nano-USD cost, normalized cost, ratio, factor, applied factor) the dueling aggregates (`dueling`: datagen_raw, datagen_gate, column n/sum) and the composite-gate decomposition (`gate_factors`: tool_efficiency, memory_over_call, metamorphic_consistency, metamorphic {groups, split_groups, reference_groups, factor}, conversational_sanity, transform_robustness, audit_pairs, token_efficiency.multiplier, and v9_base ordinary/effective composite micros, semantic/applied factor bps, rollout_mode and per-gate result/factor_bps). Requires backroom:read.',
+    description: 'Read one exact diagnostic receipt. Completed means a signed result was recorded, not calibration or activation readiness. Raw scorer details and traces are not exposed. From bench 16 `result.details` carries priced-cost numbers, dueling aggregates and composite-gate factors; from bench 18 `run_budget` reports the cost budget, whether it was exhausted or its meter lost, and admitted/unrun case counts by phase. Requires backroom:read.',
     inputSchema: getBenchmarkCanaryInputSchema,
     annotations: toolAnnotations('read'),
   }, async (input) => result(await getBenchmarkCanary(input)))
