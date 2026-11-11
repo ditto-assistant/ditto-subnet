@@ -2621,9 +2621,9 @@ class TestSeasonCatchup:
                     )
         opened = await self._next(maker, default)
         async with maker() as session, session.begin():
-            season = await session.get(DuelingSeason, opened)
-            assert season is not None
-            season.shadow = True
+            opening = await session.get(DuelingSeason, opened)
+            assert opening is not None
+            opening.shadow = True
         return stale_ids, fresh, opened
 
     async def test_rollout_shadow_season_catches_up_its_ranked_quorum(
