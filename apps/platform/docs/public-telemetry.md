@@ -299,7 +299,8 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   `promotion_pending` is true the board's `scoring_bench_version` is ahead of it
   by design, and `promotion_requirement` names the two gates still holding
   emissions (the priority-cohort quorum, counted with permanently ineligible
-  members satisfied, and the ranked quorum over the emission set). See
+  and agent-attributably exhausted members satisfied, and the ranked quorum
+  over the emission set). See
   `benchmark-v3-rollout.md` for the gate semantics.
 - `GET /api/v1/public/bench/transcript/{sha256}/telemetry` → an allowlisted
   metrics projection from the immutable transcript whose digest is already

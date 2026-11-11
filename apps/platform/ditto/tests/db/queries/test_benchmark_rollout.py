@@ -81,6 +81,7 @@ from ditto.db.queries.benchmark_rollout import (
     InferenceActivationRequirements,
     RolloutConflictError,
     RolloutSnapshotMember,
+    activation_blocking_quorum,
     active_bench_version,
     append_rollout_member,
     bench_promotion_requirement,
@@ -5448,3 +5449,95 @@ async def test_stranded_admission_is_leased_by_the_activated_topup_lane(
                 expected_sha256="f" * 64,
                 expected_previous_score_count=3,
             )
+
+
+@pytest.mark.parametrize(
+    ("detail", "running_validator", "resolved"),
+    [
+        # Live DITTO-2564 shape: a harness whose request overflows the model
+        # context on its own seeds gets a relay 413 on every remaining slot.
+        ("inference_request_rejected:request_too_large", None, True),
+        ("inference_allowance_exhausted", None, True),
+        # Infrastructure still needs an operator retry after a verified fix.
+        ("model_relay_unavailable", None, False),
+        # A live lease can still land a score.
+        ("inference_request_rejected:request_too_large", 2, False),
+    ],
+)
+async def test_agent_attributable_exhaustion_releases_the_priority_barrier(
+    session_maker: async_sessionmaker[AsyncSession],
+    detail: str,
+    running_validator: int | None,
+    resolved: bool,
+) -> None:
+    """A priority member its own failure closed out never holds the flip.
+
+    The member stays ``scored`` on the active version, so no withdrawal can
+    be written for it; the barrier reads the same fail-closed evidence the
+    terminal close-out does. It is resolved, not scored: it never enters the
+    desired ranked quorum.
+    """
+    from ditto.screener_policy_state import effective_screening_policy_version
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (agent_ids, rollout)):
+        await _seed_non_member_ranked_agent(
+            session, now=now, desired_version=rollout.desired_version
+        )
+        member_id = agent_ids[0]
+        member = await session.get(Agent, member_id)
+        assert member is not None
+        member.status = AgentStatus.SCORED
+        member.screening_policy_version = effective_screening_policy_version()
+        await session.execute(
+            delete(Score).where(
+                Score.agent_id == member_id,
+                Score.bench_version == rollout.desired_version,
+                Score.validator_hotkey != "validator-0",
+            )
+        )
+        _add_exhausted_tail_tickets(
+            session,
+            agent_id=member_id,
+            now=now,
+            bench_version=rollout.desired_version,
+            running_validator=running_validator,
+        )
+        await session.flush()
+        for ticket in await session.scalars(
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id == member_id,
+                ValidatorTicket.status == TicketStatus.EXPIRED,
+            )
+        ):
+            ticket.failure_detail = detail
+        await session.flush()
+
+        assert (
+            await rollout_cohort_score_complete(
+                session, rollout=rollout, cohort_size=rollout.priority_cohort_target
+            )
+            is resolved
+        )
+        state = await rollout_state(session, now=now)
+        assert state["priority_cohort_ready_count"] == (
+            PRIORITY_COHORT_SIZE if resolved else PRIORITY_COHORT_SIZE - 1
+        )
+        assert state["priority_complete"] is resolved
+        blocking = await activation_blocking_quorum(
+            session, bench_versions=(rollout.desired_version,)
+        )
+        assert (blocking is None) is resolved
+        diagnostics = {
+            row["agent_id"]: row for row in await rollout_retry_diagnostics(session)
+        }
+        if str(member_id) in diagnostics:
+            assert diagnostics[str(member_id)]["blocks_activation"] is not resolved
+        assert (await active_bench_version(session) == rollout.desired_version) is (
+            resolved
+        )
+        if resolved:
+            ledger = await list_eligible_ledger(session)
+            assert member_id not in {row.agent_id for row in ledger if row.eligible}
