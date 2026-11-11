@@ -46,6 +46,14 @@ def _bad(message: str) -> ContractError:
     return ContractError(ErrorCode.INVALID_REQUEST, f"workload: {message}")
 
 
+def _list(value: Any, name: str) -> list[Any]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise _bad(f"{name} must be a list")
+    return value
+
+
 def _int(value: Any, name: str, lo: int = 0, hi: int = 2**62) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
         raise _bad(f"{name} must be an integer in [{lo}, {hi}]")
@@ -103,19 +111,21 @@ class Workload:
         if not isinstance(name, str) or not name:
             raise _bad("name is required")
         users: list[UserSpec] = []
-        for u in raw.get("users") or []:
+        for u in _list(raw.get("users"), "users"):
             if not isinstance(u, dict):
                 raise _bad("user must be an object")
             ref = u.get("user_ref")
             if not isinstance(ref, str) or not TENANT_RE.fullmatch(ref):
                 raise _bad("user_ref must be synthetic (syn-...)")
             adapters = []
-            for a in u.get("adapters") or []:
+            for a in _list(u.get("adapters"), "adapters"):
                 if not isinstance(a, dict):
                     raise _bad("adapter must be an object")
                 alpha = a.get("alpha", DEFAULT_ALPHA)
                 if isinstance(alpha, bool) or not isinstance(alpha, (int, float)):
                     raise _bad("alpha must be a number")
+                if not 0.0 < float(alpha) <= 1.0:
+                    raise _bad("alpha must be in (0, 1]")
                 adapters.append(
                     AdapterSpec(
                         version=_int(a.get("version"), "version", 1, MAX_ADAPTER_VERSION),
@@ -127,7 +137,8 @@ class Workload:
                 raise _bad(f"{ref}: duplicate adapter version")
             owned = {a.version for a in adapters}
             provision = tuple(
-                _int(v, "provision", 1, MAX_ADAPTER_VERSION) for v in u.get("provision") or []
+                _int(v, "provision", 1, MAX_ADAPTER_VERSION)
+                for v in _list(u.get("provision"), "provision")
             )
             if not set(provision) <= owned:
                 raise _bad(f"{ref}: provisions a version Ditto does not own")
@@ -142,7 +153,7 @@ class Workload:
             raise _bad("duplicate user_ref")
         refs = {u.user_ref for u in users}
         requests: list[RequestSpec] = []
-        for i, r in enumerate(raw.get("requests") or []):
+        for i, r in enumerate(_list(raw.get("requests"), "requests")):
             if not isinstance(r, dict):
                 raise _bad("request must be an object")
             if "replay_of" in r:
@@ -152,7 +163,7 @@ class Workload:
                 requests.append(RequestSpec(i, requests[j].user_ref, requests[j].query_seed, j))
                 continue
             ref = r.get("user_ref")
-            if ref not in refs:
+            if not isinstance(ref, str) or ref not in refs:
                 raise _bad(f"request {i}: unknown user_ref")
             requests.append(RequestSpec(i, str(ref), _int(r.get("query_seed"), "query_seed")))
         return cls(name, tuple(users), tuple(requests))

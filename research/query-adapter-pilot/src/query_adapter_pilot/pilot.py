@@ -127,11 +127,11 @@ def _parser() -> argparse.ArgumentParser:
 def _configure(args: argparse.Namespace) -> tuple[PilotClient, Workload]:
     try:
         workload = Workload.load(args.workload)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise UsageError(f"bad workload {args.workload}: {exc}") from exc
     try:
-        token = args.token_file.read_text().strip()
-    except OSError as exc:
+        token = args.token_file.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
         raise UsageError(f"cannot read token file {args.token_file}: {exc}") from exc
     if not token:
         raise UsageError(f"token file {args.token_file} is empty")

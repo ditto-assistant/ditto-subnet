@@ -168,6 +168,22 @@ def test_malformed_json_and_non_object(miner: RunningMiner) -> None:
     assert status == 400 and err(body) == ErrorCode.INVALID_REQUEST
 
 
+def test_non_ascii_digit_content_length_is_invalid_request(miner: RunningMiner) -> None:
+    u = urlsplit(miner.url)
+    conn = http.client.HTTPConnection(u.hostname or "", u.port, timeout=10)
+    try:
+        conn.putrequest("POST", ROUTE_ADAPT)
+        conn.putheader(TOKEN_HEADER, TOKEN)
+        conn.putheader("Content-Length", "²")  # "²": str.isdigit() but not int()
+        conn.endheaders()
+        resp = conn.getresponse()
+        assert resp.status == 400
+        assert err(json.loads(resp.read())) == ErrorCode.INVALID_REQUEST
+    finally:
+        conn.close()
+    assert miner.stats()["requests"]["errors"] == {ErrorCode.INVALID_REQUEST: 1}
+
+
 # ─── Adapt request validation ────────────────────────────────────────────────
 
 
@@ -395,6 +411,12 @@ def test_refuses_bad_settings() -> None:
     ):
         with pytest.raises(ValueError):
             start_miner(cfg)
+
+
+def test_refuses_non_ascii_token() -> None:
+    # A latin-1-decoded header can never equal a non-ASCII token's UTF-8 bytes.
+    with pytest.raises(ValueError, match="ASCII"):
+        start_miner(MinerConfig(token="tökén"))
 
 
 def test_localhost_binds_ipv4_loopback() -> None:

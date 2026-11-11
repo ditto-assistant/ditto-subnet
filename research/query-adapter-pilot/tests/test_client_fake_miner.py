@@ -6,7 +6,7 @@ Modes (mutable at runtime through ``FakeMiner.mode``):
 
 * ``honest``: correct adapter output.
 * ``perturb``: unit-norm but wrong vector (fails parity only).
-* ``nan`` / ``bad_norm`` / ``garbage``: malformed output.
+* ``nan`` / ``bad_norm`` / ``garbage`` / ``deep_json``: malformed output.
 * ``wrong_request_id`` / ``wrong_tenant`` / ``wrong_version`` / ``wrong_digest``: bad echo.
 * ``slow``: sleeps ``delay_s`` before answering.
 * ``error:<CODE>``: answers every adapt call with that contract error.
@@ -176,6 +176,9 @@ class FakeMiner:
             ref = AdapterRef(ref.tenant_id, ref.adapter_version, "0" * 64)
         elif mode == "garbage":
             return 200, b"not json {"
+        elif mode == "deep_json":
+            # Well under the 1 MiB cap, but deep enough to blow json's recursion.
+            return 200, b"[" * 100_000 + b"]" * 100_000
         return 200, AdaptResponse(rid, ref, vec, 42, cache).to_wire()
 
 
