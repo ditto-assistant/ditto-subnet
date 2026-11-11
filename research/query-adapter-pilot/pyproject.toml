@@ -13,6 +13,7 @@ dependencies = ["numpy>=2.0"]
 
 [project.scripts]
 query-adapter-pilot = "query_adapter_pilot.__main__:main"
+query-adapter-pilot-miner = "query_adapter_pilot.miner.__main__:main"
 
 [dependency-groups]
 dev = [

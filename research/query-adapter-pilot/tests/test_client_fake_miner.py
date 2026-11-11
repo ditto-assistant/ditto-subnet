@@ -93,6 +93,10 @@ class FakeMiner:
 
     # ─── Handling ────────────────────────────────────────────────────────────
 
+    def _count(self, route: str) -> None:
+        with self._lock:
+            self.calls[route] += 1
+
     def _dispatch(self, h: BaseHTTPRequestHandler, method: str) -> None:
         raw = h.rfile.read(int(h.headers.get("Content-Length") or 0))
         with self._lock:
@@ -102,10 +106,10 @@ class FakeMiner:
                 raise ContractError(ErrorCode.UNAUTHORIZED, "bad pilot token")
             body = json.loads(raw)
             if method == "PUT" and h.path == ROUTE_PROVISION:
-                self.calls["provision"] += 1
+                self._count("provision")
                 status, out = self._provision(body)
             elif method == "POST" and h.path == ROUTE_ADAPT:
-                self.calls["adapt"] += 1
+                self._count("adapt")
                 status, out = self._adapt(body)
             else:
                 status, out = 404, {"error": "no route"}

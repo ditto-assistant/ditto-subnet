@@ -13,6 +13,7 @@ import pytest
 from test_client_fake_miner import TOKEN, FakeMiner, closed_port_url, user, workload_json
 
 from query_adapter_pilot import pilot
+from query_adapter_pilot.client import PilotClient
 from query_adapter_pilot.contract import CONTRACT_VERSION, PARITY_MIN_COSINE, Outcome, Source
 
 REPORT_KEYS = {
@@ -247,6 +248,21 @@ def test_invalid_utf8_token_file_exits_2(
     assert pilot.main(_args(files, "http://127.0.0.1:9")) == 2
     assert "token file" in capsys.readouterr().err
     assert not files["out"].exists()
+
+
+@pytest.mark.parametrize("timeout", ["inf", "-inf", "nan", "0", "-5"])
+def test_non_finite_or_non_positive_timeout_exits_2(
+    files: dict[str, Path], timeout: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert pilot.main(_args(files, "http://127.0.0.1:9", f"--timeout-ms={timeout}")) == 2
+    assert "--timeout-ms" in capsys.readouterr().err
+    assert not files["out"].exists()
+
+
+def test_client_rejects_non_finite_timeout() -> None:
+    for bad in (float("inf"), float("nan")):
+        with pytest.raises(ValueError):
+            PilotClient("http://127.0.0.1:9", TOKEN, "run1", salt="s", timeout_s=bad)
 
 
 def test_argparse_errors_exit_2(files: dict[str, Path]) -> None:
