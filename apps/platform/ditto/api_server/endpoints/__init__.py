@@ -164,6 +164,9 @@ from ditto.api_server.endpoints.admin_treasury_settings import (
 from ditto.api_server.endpoints.admin_unreleased_copy import (
     router as admin_unreleased_copy_router,
 )
+from ditto.api_server.endpoints.admin_upload_payments import (
+    router as admin_upload_payments_router,
+)
 from ditto.api_server.endpoints.admin_v13_private_generation import (
     router as admin_v13_private_generation_router,
 )
@@ -263,6 +266,7 @@ __all__ = [
     "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
     "admin_unreleased_copy_router",
+    "admin_upload_payments_router",
     "admin_competition_improvement_router",
     "admin_screening_review_cost_router",
     "admin_copy_review_router",

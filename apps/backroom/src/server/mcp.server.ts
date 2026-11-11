@@ -6,6 +6,8 @@ import {
 } from '../lib/contributor.schemas'
 import { fetchAgentSourceReleaseEvidence } from './source-release-evidence.service'
 import { fetchArtifactFetchAudit } from './artifact-fetch-audit.service'
+import { fetchUploadPaymentProof } from './upload-payment-proof.service'
+import { uploadPaymentProofInputSchema } from '../lib/upload-payment-proof.schemas'
 import { fetchInfraVoids, fetchProviderOutages, voidInfraScores } from './infra-voids.service'
 import {
   getProviderOutagesInputSchema, listInfraVoidsInputSchema, voidInfraScoresInputSchema,
@@ -959,6 +961,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Per-validator job-poll and weight-ledger outcomes: 204 gates, 428/426/409.',
   get_miner_owner_footprint:
     'Read payment links; common-control signal, not ownership. Verify chain.',
+  get_upload_payment_proof:
+    'Read what one upload-fee proof funded.',
   get_inference_concurrency_settings:
     'Read hosted budgets/concurrency, relay policy and optional history (default 0).',
   get_decision_lane:
@@ -2503,6 +2507,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(compactMinerOwnerFootprint(await fetchOwnerFootprint(input))),
+  )
+
+  registerTool(
+    'get_upload_payment_proof',
+    {
+      title: 'Get upload payment proof',
+      description:
+        'Answer "what happened to this upload fee?" for one finalized payment proof, keyed as the miner CLI prints it: blockHash and extrinsicIndex (the block number is not needed). state is funded_agent (agent is the upload it paid for; an exact retry of that upload returns it, and any other upload citing the proof is refused 3207), reusable_credit (a byte-identical upload left it unspent and agent is that earlier upload; the same hotkey can spend it on a different artifact until recovery_expires_at, then 3208), funded_generator (it paid for generator_submission_id), or unrecorded (no upload consumed it and no credit holds it; Platform accepts it for a hotkey its signer owns until 24 hours after its block time, then 3208). recorded_at is when Platform verified the proof. Platform records only: this never re-reads the chain, so confirm an unrecorded proof\'s block hash, signer, destination, amount and ExtrinsicSuccess on chain before telling a miner it is spendable. miner_coldkey is the payment-time signer, not proof of current ownership. Requires backroom:read and changes nothing.',
+      inputSchema: uploadPaymentProofInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchUploadPaymentProof(input)),
   )
 
   registerTool(

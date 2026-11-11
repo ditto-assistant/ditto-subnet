@@ -5312,6 +5312,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/upload-payments/{block_hash}/{extrinsic_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Upload Payment Proof
+         * @description Return the upload a proof funded, the credit holding it, or neither.
+         */
+        get: operations["get_upload_payment_proof_api_v1_admin_upload_payments__block_hash___extrinsic_index__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v13-official-controls": {
         parameters: {
             query?: never;
@@ -44744,6 +44764,69 @@ export interface components {
             subtensor_network?: string | null;
         };
         /**
+         * UploadPaymentProofAgent
+         * @description The agent upload a proof funded, or the identical upload behind a credit.
+         */
+        UploadPaymentProofAgent: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+        };
+        /**
+         * UploadPaymentProofView
+         * @description Platform's record of one ``(block_hash, extrinsic_index)`` payment proof.
+         */
+        UploadPaymentProofView: {
+            agent?: components["schemas"]["UploadPaymentProofAgent"] | null;
+            /** Amount Rao */
+            amount_rao?: number | null;
+            /** Block Hash */
+            block_hash: string;
+            /** Block Timestamp */
+            block_timestamp?: string | null;
+            /** Dest Address */
+            dest_address?: string | null;
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Generator Submission Id */
+            generator_submission_id?: string | null;
+            /** Miner Coldkey */
+            miner_coldkey?: string | null;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Recovery Expired */
+            recovery_expired?: boolean | null;
+            /** Recovery Expires At */
+            recovery_expires_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "unrecorded" | "funded_agent" | "reusable_credit" | "funded_generator";
+        };
+        /**
          * V12AnswerStuffingGate
          * @description Answer-stuffing gate. Canonicalized only when administered.
          */
@@ -58256,6 +58339,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminUnreleasedCopySignalList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_upload_payment_proof_api_v1_admin_upload_payments__block_hash___extrinsic_index__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                block_hash: string;
+                extrinsic_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadPaymentProofView"];
                 };
             };
             /** @description Validation Error */
