@@ -465,6 +465,11 @@ def test_v13_binds_i2_i3_and_two_security_charges_to_their_defining_element() ->
         "transmission path out of the request",
         "name the collector and who can read it",
         "the authorized review scope for that submission",
+        # Naming the collector is only half the test: the clause also has to
+        # say which readers put the stream back under S2, or a harness that
+        # logs a secret would clear as non-exfiltration.
+        "Report S2 when a reader outside that scope can",
+        "is written is another principal's data or a",
     ):
         assert fragment in v13, fragment
         assert fragment not in v12, fragment

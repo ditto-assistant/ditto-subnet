@@ -3944,6 +3944,8 @@ def test_regression_fixture_covers_allowed_and_prohibited_boundary() -> None:
         "preflight-no-endpoint-execution",
         "preflight-fabricated-observed-call",
         "preflight-branch-leaks-into-scored-requests",
+        "secret-written-to-the-worker-log-sink",
+        "stdout-log-forwarded-to-an-external-collector",
     } <= prohibited
     assert legitimate.isdisjoint(manual_review | prohibited)
     assert manual_review.isdisjoint(prohibited)
@@ -4072,6 +4074,105 @@ def test_policy_v13_binds_the_two_security_charges_to_their_defining_element() -
     assert "crosses no" not in v13
     assert _prompt_revision(13) == "source-review-v42-policy-v13"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
+
+
+async def test_v13_clears_the_requests_own_stdout_but_not_a_leaking_log_sink(
+    tmp_path: Path,
+) -> None:
+    """The stdout clause is a scope test, not a blanket exemption.
+
+    Review held that v13 exempts stdout and stderr without asking where the
+    stream goes, so a harness pushing a secret through a log sink would clear
+    as non-exfiltration. The clause does ask: it requires the collector and
+    its readers to be named, and only the request's own data in the
+    operator-readable screening log is an observation. These are both sides of
+    that line through one review path -- the request's own tool result clears,
+    a secret on the stream and a stream forwarded to an outside collector do
+    not.
+
+    As everywhere in this file the reviewer verdict comes from the transport,
+    so what this pins is that the pipeline enforces the split the prompt asks
+    for, not that the model reaches it unaided.
+    """
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "source-review-regressions.json"
+        ).read_text()
+    )
+    by_name = {
+        case["name"]: case
+        for group in ("legitimate", "prohibited")
+        for case in fixture[group]
+    }
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+
+    own = by_name["stdout-log-of-the-requests-own-tool-result"]
+    observation = await _agent(
+        key,
+        _transport(
+            {
+                "risk_level": "low",
+                "confidence": 0.95,
+                "categories": ["none"],
+                "evidence": [],
+                "summary": "The request's own tool result in the screening log.",
+            },
+            [],
+        ),
+    ).review(
+        str(_archive(tmp_path, f"fn serve() {{ route(); }}\n{own['source']}")),
+        artifact_sha256=_SHA,
+    )
+    assert observation.ok and observation.risk_level == "low"
+    assert "data_exfiltration" not in observation.categories
+
+    for name in (
+        "secret-written-to-the-worker-log-sink",
+        "stdout-log-forwarded-to-an-external-collector",
+    ):
+        case = by_name[name]
+        assert case["category"] == "data_exfiltration", name
+        observation = await _agent(
+            key,
+            _transport(
+                {
+                    "risk_level": "high",
+                    "confidence": 0.95,
+                    "categories": ["data_exfiltration"],
+                    "evidence": [
+                        {
+                            "path": "src/main.rs",
+                            "line": 2,
+                            "category": "data_exfiltration",
+                        }
+                    ],
+                    "summary": "A worker stream leaves the authorized review scope.",
+                },
+                [],
+            ),
+        ).review(
+            str(_archive(tmp_path, f"fn serve() {{ route(); }}\n{case['source']}")),
+            artifact_sha256=_SHA,
+        )
+        assert observation.ok and observation.risk_level == "high", name
+        assert observation.categories == ("data_exfiltration",), name
+
+    # The split rests on these four clauses, and v12 carries none of them: the
+    # stream clears only while the operator-readable log is the whole of its
+    # reach, and a secret or an outside reader puts it back under S2.
+    v12, v13 = _prompt(12), _prompt(13)
+    for fragment in (
+        "name the collector and",
+        "the authorized review scope for that submission",
+        "a reader outside that scope",
+        "or a secret is an S2 effect",
+    ):
+        assert fragment in v13, fragment
+        assert fragment not in v12, fragment
 
 
 @pytest.mark.parametrize("policy_version", (10, 11, 12, 13))
