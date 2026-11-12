@@ -104,7 +104,9 @@ type v19Grammar struct {
 	// markers: every rendering carries one term of each set (whole words,
 	// case-insensitive; a trailing * matches a word prefix; {slot} is filled).
 	markers [][]string
-	// forbid: no rendering carries any of these terms.
+	// forbid: no frame, class word, lead or closer carries any of these
+	// terms. Slot values are the record's own words, filled in verbatim, and
+	// may contain one (the custody step "filed the custody report").
 	forbid []string
 }
 

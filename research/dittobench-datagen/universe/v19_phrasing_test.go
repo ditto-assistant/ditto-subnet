@@ -232,11 +232,13 @@ func TestV19CopyingMinerSuiteMissesV19Wording(t *testing.T) {
 	for name := range v18 {
 		if isStoryV2Oracle(name) {
 			v18["story-any"] = append(v18["story-any"], v18[name]...)
+			delete(v18, name)
 		}
 	}
 	for name := range v19 {
 		if isStoryV2Oracle(name) {
 			v19["story-any"] = append(v19["story-any"], v19[name]...)
+			delete(v19, name)
 		}
 	}
 	families := make([]string, 0, len(v18))
@@ -532,5 +534,28 @@ func TestV19WordingKeepsTheLexicalShortcutRate(t *testing.T) {
 	t.Logf("lexical-shortcut trip rate: v18 %.2f%%, v19 %.2f%%", 100*v18, 100*v19)
 	if v19 > v18+0.005 {
 		t.Fatalf("v19 wordings trip the lexical-shortcut proof at %.2f%%, v18 at %.2f%%", 100*v19, 100*v18)
+	}
+}
+
+// A family's forbidden terms bind the grammar's own words, never the slot
+// values filled in verbatim: a step-actor question about the real step "filed
+// the custody report" says "custody" because the record does. Every real
+// custody step renders verbatim, and the question carries no forbidden term
+// once that step is taken out.
+func TestV19StepActorForbidsHoldingWordsOutsideTheStep(t *testing.T) {
+	g := v19Grammars[V19PhraseProgramStepActor]
+	for i, step := range v14CustodySteps {
+		for seed := int64(1); seed <= 40; seed++ {
+			q := V19Phrase(V19PhraseProgramStepActor, seed, fmt.Sprintf("step:%d", i), V19Slots{"subject": "the Harbor vault", "step": step})
+			if !strings.Contains(q, step) {
+				t.Fatalf("step %q not rendered verbatim: %q", step, q)
+			}
+			rest := strings.ReplaceAll(q, step, " ")
+			for _, term := range g.forbid {
+				if v19HasTerm(rest, term) {
+					t.Fatalf("step %q: the grammar adds forbidden %q: %q", step, term, q)
+				}
+			}
+		}
 	}
 }
