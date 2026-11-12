@@ -79,12 +79,20 @@ def template_families(rows: Iterable[GeneratorSubmission]) -> dict[UUID, str]:
             parent[max(ra, rb)] = min(ra, rb)
 
     first_by_owner: dict[str, int] = {}
+    # Builds of one template share a module and a file count, so only rows in
+    # one such bucket are compared, in size order: a row joins the bucket's
+    # previous row when its size is within the tolerance, which chains a run
+    # of near-equal sizes into one family without comparing every pair.
+    buckets: dict[tuple[str, int], list[int]] = {}
     for index, row in enumerate(ordered):
         owner = first_by_owner.setdefault(row.owner_key, index)
         union(owner, index)
-        for earlier in range(index):
-            if same_template(ordered[earlier], row):
-                union(earlier, index)
+        buckets.setdefault((row.module, row.file_count), []).append(index)
+    for members in buckets.values():
+        by_size = sorted(members, key=lambda index: ordered[index].size_bytes)
+        for previous, current in zip(by_size, by_size[1:], strict=False):
+            if same_template(ordered[previous], ordered[current]):
+                union(previous, current)
     return {
         row.submission_id: str(ordered[find(index)].submission_id)
         for index, row in enumerate(ordered)
