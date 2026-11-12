@@ -14019,6 +14019,11 @@ class GeneratorSubmission(Base):
     round_scored_index: Mapped[int | None] = mapped_column(BigInteger)
     """The latest scored round this generator had a column in, and its column
     score there; columns are filled best-first from these."""
+    prescreen_score: Mapped[float | None] = mapped_column(Float)
+    prescreen_index: Mapped[int | None] = mapped_column(BigInteger)
+    """The latest pre-screen (:class:`GeneratorPrescreen`) this generator had
+    a column in, and its column score there when that pre-screen scored. A
+    pre-screen score only orders the challenger queue; it is never paid."""
     name: Mapped[str | None] = mapped_column(Text)
     """Optional miner-chosen display name (1-64 characters), shown with the
     miner's profile on the public generator pages. ``None`` renders a short
@@ -14666,6 +14671,133 @@ class GeneratorRoundCaseVerdict(Base):
             "generator_round_case_verdicts_submission_idx",
             "submission_id",
             "round_index",
+        ),
+    )
+
+
+class GeneratorPrescreen(Base):
+    """One pre-screen batch (:mod:`ditto.api_server.generator_prescreens`).
+
+    Never-scored generators' packs on a fresh secret seed,
+    ``cases_per_column`` cases each, run by a small panel while no round needs
+    it. Indexes start at ``PRESCREEN_INDEX_BASE`` (2**40), far above any
+    chain-epoch round index, so the scorer and validator wire protocols, which
+    carry a round index, route a pre-screen apart from a round. A pre-screen
+    is never paid and never on the ledger. Lifecycle: ``generating`` ->
+    ``running`` -> ``scoring`` -> ``scored``, or ``void`` with a reason; a
+    batch not scored by ``expires_at`` is void.
+    """
+
+    __tablename__ = "generator_prescreens"
+
+    prescreen_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    seed: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    cases_per_column: Mapped[int] = mapped_column(Integer, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    columns: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    panel: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    lease_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    generation: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    dataset_sha256: Mapped[str | None] = mapped_column(Text)
+    dataset_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
+    column_cases: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    score: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    closed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    void_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "prescreen_index >= 1099511627776",
+            name="generator_prescreens_index_check",
+        ),
+        CheckConstraint(
+            "status IN ('generating', 'running', 'scoring', 'scored', 'void')",
+            name="generator_prescreens_status_check",
+        ),
+        CheckConstraint(
+            "cases_per_column BETWEEN 8 AND 80",
+            name="generator_prescreens_cases_check",
+        ),
+        CheckConstraint(
+            "(status = 'void') = (void_reason IS NOT NULL)",
+            name="generator_prescreens_void_reason_check",
+        ),
+        Index("generator_prescreens_status_idx", "status"),
+    )
+
+
+class GeneratorPrescreenAttempt(Base):
+    """One validator lease of a pre-screen panel run, kept for diagnosis
+    (the pre-screen twin of :class:`GeneratorRoundAttempt`)."""
+
+    __tablename__ = "generator_prescreen_attempts"
+
+    prescreen_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), primary_key=True
+    )
+    slot_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["prescreen_index"],
+            ["generator_prescreens.prescreen_index"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "status IN ('leased', 'completed', 'failed')",
+            name="generator_prescreen_attempts_status_check",
+        ),
+    )
+
+
+class GeneratorPrescreenResult(Base):
+    """One panel agent's signed results on a pre-screen dataset (the
+    pre-screen twin of :class:`GeneratorRoundResult`)."""
+
+    __tablename__ = "generator_prescreen_results"
+
+    prescreen_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    results: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    answered: Mapped[int] = mapped_column(Integer, nullable=False)
+    faulted: Mapped[int] = mapped_column(Integer, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["prescreen_index"],
+            ["generator_prescreens.prescreen_index"],
+            ondelete="CASCADE",
         ),
     )
 

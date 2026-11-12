@@ -558,6 +558,7 @@ describe('Backroom MCP tools', () => {
         'reject_generator_submission',
         'reinstate_generator_submission',
         'list_generator_rounds',
+        'list_generator_prescreens',
         'get_generator_round',
         'preview_generator_round',
         'get_generator_scorer',
@@ -1016,7 +1017,9 @@ describe('Backroom MCP tools', () => {
     // The generator source trio (manifest, excerpt and search over one
     // generator archive; one-line summaries, detail in tool help) measures
     // 239,100 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(239_600)
+    // The pre-screen batch list (two paging inputs, one-line summary, detail
+    // in tool help) measures 239,927 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(240_450)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

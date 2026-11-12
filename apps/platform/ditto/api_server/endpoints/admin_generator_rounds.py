@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from ditto.api_models.generator import MAX_SOURCE_ARCHIVE_BYTES
 from ditto.api_models.generator_round_validator import GENERATOR_ROUND_BENCH_VERSIONS
@@ -36,6 +37,7 @@ from ditto.api_models.generator_rounds import (
     AdminDefaultGeneratorRequest,
     AdminDefaultGeneratorResponse,
     AdminDefaultGeneratorUploadResponse,
+    AdminGeneratorPrescreenListResponse,
     AdminGeneratorRoundActionRequest,
     AdminGeneratorRoundDetail,
     AdminGeneratorRoundLeaseReleaseRequest,
@@ -48,6 +50,7 @@ from ditto.api_models.generator_rounds import (
     GeneratorFrontierAuditRuling,
     GeneratorFrontierSettleRequest,
     GeneratorFrontierView,
+    GeneratorPrescreenView,
     GeneratorRoundBenchContractPreview,
     GeneratorRoundColumnSlot,
     GeneratorRoundLoopStatus,
@@ -115,6 +118,7 @@ from ditto.api_server.storage.errors import (
     ObjectNotFoundError,
 )
 from ditto.db.models import (
+    GeneratorPrescreen,
     GeneratorRoundAttempt,
     GeneratorRoundCommitmentPublication,
     GeneratorSubmission,
@@ -394,6 +398,52 @@ async def admin_round_preview(
             scorer_grading_versions=list(contract.scorer_grading_versions),
         ),
         challenger_queue=_challenger_queue_view(selection.queue, columns),
+    )
+
+
+@router.get("/prescreens", response_model=AdminGeneratorPrescreenListResponse)
+async def admin_list_prescreens(
+    _admin: AdminDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminGeneratorPrescreenListResponse:
+    """Pre-screen batches, newest first, without their datasets."""
+    rows = await session.scalars(
+        select(GeneratorPrescreen)
+        .options(defer(GeneratorPrescreen.dataset_bytes, raiseload=True))
+        .order_by(GeneratorPrescreen.prescreen_index.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    counts = {
+        str(status): int(count)
+        for status, count in await session.execute(
+            select(GeneratorPrescreen.status, func.count()).group_by(
+                GeneratorPrescreen.status
+            )
+        )
+    }
+    return AdminGeneratorPrescreenListResponse(
+        prescreens=[
+            GeneratorPrescreenView(
+                prescreen_index=row.prescreen_index,
+                status=row.status,  # type: ignore[arg-type]
+                opened_at=row.opened_at,
+                expires_at=row.expires_at,
+                closed_at=row.closed_at,
+                settings_revision=row.settings_revision,
+                cases_per_column=row.cases_per_column,
+                bench_version=row.bench_version,
+                columns=[GeneratorRoundColumnSlot(**c) for c in row.columns],
+                panel=[GeneratorRoundPanelSlot(**p) for p in row.panel],
+                dataset_sha256=row.dataset_sha256,
+                lease_attempts=row.lease_attempts,
+                void_reason=row.void_reason,
+            )
+            for row in rows
+        ],
+        counts_by_status=counts,
     )
 
 

@@ -2910,6 +2910,17 @@ class GeneratorRoundLoop:
             logger.exception("generator frontier settlement failed")
             return [f"frontier settlement failed: {type(exc).__name__}: {exc}"[:300]]
 
+    async def _advance_prescreens(self, now: datetime) -> list[str]:
+        """Void expired pre-screens and open one when idle; never raises."""
+        from ditto.api_server.generator_prescreens import advance_prescreens
+
+        try:
+            async with self._session_maker() as session, session.begin():
+                return await advance_prescreens(session, now=now)
+        except Exception as exc:  # noqa: BLE001 - never block round progress
+            logger.exception("generator pre-screen tick failed")
+            return [f"prescreen tick failed: {type(exc).__name__}: {exc}"[:300]]
+
     async def tick(self, *, now: datetime | None = None) -> RoundActions:
         from ditto.api_server.generator_competition import load_settings
 
@@ -2925,6 +2936,10 @@ class GeneratorRoundLoop:
             # settle failure never rolls back round progress, and switching
             # the competition off never strands an audit past its grace.
             for note in await self._settle_frontier(now):
+                actions.note(note)
+            # Pre-screens run in their own transaction too: an expired batch
+            # is voided whatever the mode, and a failure never blocks rounds.
+            for note in await self._advance_prescreens(now):
                 actions.note(note)
             if resolved.settings.mode == "off":
                 self.schedule = GeneratorRoundSchedule(

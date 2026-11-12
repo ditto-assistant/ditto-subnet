@@ -130,6 +130,14 @@ export const generatorCompetitionSettingsSchema = z.object({
   frontier_audit_cases: z.number().int().min(0).max(16).default(3),
   frontier_audit_grace_hours: z.number().int().min(1).max(336).default(24),
   frontier_oracle_timeout_hours: z.number().int().min(1).max(168).default(12),
+  // Pre-screens (ships off: inference spend): batches of up to
+  // prescreen_columns never-scored generators, prescreen_cases cases each, on
+  // the top prescreen_panel_size runnable owners while no round needs the
+  // panel. A Platform or revision that predates the lane reads as off.
+  prescreen_enabled: z.boolean().default(false),
+  prescreen_cases: z.number().int().min(8).max(80).default(16),
+  prescreen_panel_size: z.number().int().min(1).max(16).default(3),
+  prescreen_columns: z.number().int().min(1).max(8).default(4),
 })
 
 // The shortest safe dueling season in subnet epochs (dueling-bench.md
@@ -775,6 +783,30 @@ export const tickGeneratorRoundsInputSchema = z.object({
 export const listGeneratorRoundsInputSchema = z.object({
   limit: z.number().int().min(1).max(100).default(20),
   offset: z.number().int().min(0).default(0),
+})
+
+export const listGeneratorPrescreensInputSchema = listGeneratorRoundsInputSchema
+
+// One pre-screen batch (Platform GeneratorPrescreenView). Its index is at or
+// above 2**40, apart from round indexes; it is never paid and only orders the
+// challenger queue.
+export const generatorPrescreenListSchema = z.object({
+  prescreens: z.array(z.object({
+    prescreen_index: z.number().int(),
+    status: z.enum(['generating', 'running', 'scoring', 'scored', 'void']),
+    opened_at: z.string(),
+    expires_at: z.string(),
+    closed_at: z.string().nullable().optional().default(null),
+    settings_revision: z.number().int(),
+    cases_per_column: z.number().int(),
+    bench_version: z.number().int(),
+    columns: z.array(columnSlotSchema),
+    panel: z.array(roundPanelSlotSchema),
+    dataset_sha256: z.string().nullable().optional().default(null),
+    lease_attempts: z.number().int().default(0),
+    void_reason: z.string().nullable().optional().default(null),
+  })),
+  counts_by_status: z.record(z.string(), z.number().int()),
 })
 
 export const generatorRoundIndexInputSchema = z.object({

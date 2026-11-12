@@ -248,6 +248,17 @@ opens, once it is scored or void.
   - `get_generator_run` returns a qualification run's evaluation. Seeds appear
     only after the run finished, so an operator can regenerate its packs.
   - `get_generator_probe` returns probe epochs. The probe seed is never served.
+  - `list_generator_prescreens` pages pre-screen batches, newest first, with
+    counts by status. A pre-screen runs up to `prescreen_columns`
+    never-scored generators from the head of the challenger queue (one per
+    owner, each never pre-screened), `prescreen_cases` cases each on a fresh
+    secret seed, on the top `prescreen_panel_size` runnable ledger owners. It
+    opens only while no round and no other batch is in flight, and a batch not
+    scored within three hours is void with its generators re-queued. Its index
+    is at or above 2**40, apart from round indexes. A pre-screen is never paid
+    and never on the ledger: it only orders the challenger queue. The lane
+    ships off (`prescreen_enabled`) because it spends inference; enable it only
+    with explicit approval.
   - `get_generator_scorer` returns what each generator scorer advertised on
     its last work poll (version, min/max cases, grading versions, build
     revision, last seen) and whether the live one accepts the governing

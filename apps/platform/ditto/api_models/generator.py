@@ -273,6 +273,24 @@ class GeneratorCompetitionSettings(BaseModel):
     """Hours a scored round waits for its oracle run before it settles with
     no attestations."""
 
+    prescreen_enabled: bool = False
+    """Pre-screen never-scored generators before they take a challenger
+    column (:mod:`ditto.api_server.generator_prescreens`): a batch of up to
+    ``prescreen_columns`` generators from the head of the challenger queue,
+    ``prescreen_cases`` cases each on a fresh secret seed, run by the top
+    ``prescreen_panel_size`` runnable ledger owners while no round needs the
+    panel. Inference spend that is never paid out: a pre-screen score only
+    orders the challenger queue. Ships off, and a revision written before
+    this field existed reads as off."""
+    prescreen_cases: Annotated[int, Field(ge=MIN_PACK_CASES, le=MAX_CASES_PER_SEED)] = (
+        16
+    )
+    """Cases per pre-screen column (the original ``cases_per_seed`` default)."""
+    prescreen_panel_size: Annotated[int, Field(ge=1, le=16)] = 3
+    """Top runnable ledger owners on a pre-screen panel."""
+    prescreen_columns: Annotated[int, Field(ge=1, le=8)] = 4
+    """Never-scored generators per pre-screen batch, one per owner."""
+
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
         if self.min_solver_owners > self.min_panel:
