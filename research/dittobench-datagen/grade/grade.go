@@ -782,6 +782,13 @@ func Hit(expected, response string) bool {
 	return containsBoundedPhrase(r, e)
 }
 
+// HitV14 is the match the grader uses from bench 14 on: the v13 fold, and a
+// "." or "," that no digit follows ends a number token, so "138, so" and
+// "138. Then" both name 138 while "138.5" and "1,380" still do not.
+func HitV14(expected, response string) bool {
+	return hitRuleV13(expected, response, true)
+}
+
 // numberHit accepts the expected count as a digit token, its English word
 // ("3" or "three"), or the idiomatic "once"/"twice" for 1/2, all
 // boundary-checked.
