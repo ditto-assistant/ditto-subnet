@@ -341,6 +341,20 @@ describe('generator competition MCP tools', () => {
       expect(JSON.stringify(shortSeason.content)).toContain('at least 2 epochs')
       expect(fetchMock).not.toHaveBeenCalled()
 
+      // A round holds at most eight columns; Backroom refuses more before Platform does.
+      const nineColumns = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, counted_columns: 5, challenger_columns: 4 },
+          reason: 'add a fourth challenger column',
+          confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(nineColumns.isError).toBe(true)
+      expect(JSON.stringify(nineColumns.content)).toContain('at most 8 columns')
+      expect(fetchMock).not.toHaveBeenCalled()
+
       // A canary shadow version needs dueling on.
       const shadowOff = await client.callTool({
         name: 'set_generator_competition_settings',
@@ -357,7 +371,11 @@ describe('generator competition MCP tools', () => {
 
       const applied = json(await client.callTool({
         name: 'set_generator_competition_settings',
-        arguments: { expectedRevision: 1, settings: { ...settings, upload_fee_required: true }, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, upload_fee_required: true, counted_columns: 5, challenger_columns: 3 },
+          reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
       })) as { revision: number }
       expect(applied.revision).toBe(2)
       expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -365,7 +383,7 @@ describe('generator competition MCP tools', () => {
       expect(settingsUrl).toContain('/api/v1/admin/generator-competition/settings')
       expect(JSON.parse(String(settingsInit.body))).toMatchObject({
         expected_revision: 1, scope: '*', actor: session.email, confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
-        settings: { upload_fee_required: true },
+        settings: { upload_fee_required: true, counted_columns: 5, challenger_columns: 3 },
       })
       expect(settingsInit.headers['X-Admin-Actor']).toBe(session.email)
 
