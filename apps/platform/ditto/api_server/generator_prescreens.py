@@ -143,7 +143,8 @@ def _column(index: int, row: GeneratorSubmission) -> dict[str, Any]:
 async def void_prescreen(
     session: AsyncSession, row: GeneratorPrescreen, reason: str, *, now: datetime
 ) -> None:
-    """Void a batch and return its generators to the queue unscreened."""
+    """Void a batch and return its generators to the queue unscreened. A void
+    batch keeps no score, so every generator still bound to it is unbound."""
     row.status = "void"
     row.void_reason = reason[:1000]
     row.closed_at = now
@@ -151,11 +152,8 @@ async def void_prescreen(
     row.lease_expires_at = None
     await session.execute(
         update(GeneratorSubmission)
-        .where(
-            GeneratorSubmission.prescreen_index == row.prescreen_index,
-            GeneratorSubmission.prescreen_score.is_(None),
-        )
-        .values(prescreen_index=None)
+        .where(GeneratorSubmission.prescreen_index == row.prescreen_index)
+        .values(prescreen_index=None, prescreen_score=None)
     )
 
 
@@ -506,9 +504,10 @@ async def record_prescreen_generation(
 ) -> GeneratorPrescreen:
     """Store a batch's generated dataset (caller commits).
 
-    A column that fails on its pre-screen seed scores zero, and its generator
-    is not rejected: a batch asks for ``prescreen_cases``, which rounds never
-    ask for, so rejection stays a round's verdict.
+    A column that fails on its pre-screen seed scores zero once the batch is
+    scored (:func:`_finish_prescreen`), and its generator is not rejected: a
+    batch asks for ``prescreen_cases``, which rounds never ask for, so
+    rejection stays a round's verdict.
     """
     row = _check_lease(
         await get_prescreen(session, payload.round_index, for_update=True),
@@ -543,7 +542,6 @@ async def record_prescreen_generation(
     accepted = accepted_grading_versions(row.bench_version)
     column_cases: dict[str, list[dict[str, str]]] = {}
     summary: list[dict[str, Any]] = []
-    failed: list[str] = []
     for result in payload.columns:
         declared = result.seed.grading_bench_version if result.seed else None
         if declared is not None and declared not in accepted:
@@ -575,8 +573,6 @@ async def record_prescreen_generation(
                 }
                 for ref in refs
             ]
-        else:
-            failed.append(column["submission_id"])
         summary.append(
             {
                 "column_id": result.column_id,
@@ -598,23 +594,19 @@ async def record_prescreen_generation(
     row.generation = generation
     row.lease_id = None
     row.lease_expires_at = None
-    for submission_id in failed:
-        sub = await session.get(
-            GeneratorSubmission, UUID(submission_id), with_for_update=True
+    if not column_cases:
+        # Every column failed on its own seed (a scorer that cannot serve the
+        # request reports a fault instead, above). The panel has nothing to
+        # run, so the batch is done and each column scores zero, as a failed
+        # column does in a batch that runs. Voiding it would return a lone
+        # broken generator to the queue head, to fail again every tick.
+        await _finish_prescreen(
+            session, row, scorer_version=payload.scorer_version, now=now
         )
-        if sub is not None and sub.prescreen_index == row.prescreen_index:
-            sub.prescreen_score = 0.0
-            sub.updated_at = now
-    if (
-        not column_cases
-        or payload.dataset_base64 is None
-        or payload.dataset_sha256 is None
-    ):
+        return row
+    if payload.dataset_base64 is None or payload.dataset_sha256 is None:
         await void_prescreen(
-            session,
-            row,
-            "no column produced a valid pack on its pre-screen seed",
-            now=now,
+            session, row, "the scorer reported valid packs without a dataset", now=now
         )
         return row
     try:
@@ -720,10 +712,35 @@ async def record_prescreen_score(
             sub.prescreen_score = column_score.pack.score
             sub.updated_at = now
     row.score = payload.score.model_dump(mode="json")
-    row.scorer_version = payload.scorer_version
+    await _finish_prescreen(
+        session, row, scorer_version=payload.scorer_version, now=now
+    )
+    return row
+
+
+async def _finish_prescreen(
+    session: AsyncSession,
+    row: GeneratorPrescreen,
+    *,
+    scorer_version: str,
+    now: datetime,
+) -> None:
+    """Close a batch as scored. A column that produced no valid pack on its
+    seed scores zero here, once the batch is known to finish: a void batch
+    keeps no score (:func:`void_prescreen`)."""
+    generated = row.column_cases or {}
+    for column in row.columns:
+        if column["column_id"] in generated:
+            continue
+        sub = await session.get(
+            GeneratorSubmission, UUID(column["submission_id"]), with_for_update=True
+        )
+        if sub is not None and sub.prescreen_index == row.prescreen_index:
+            sub.prescreen_score = 0.0
+            sub.updated_at = now
+    row.scorer_version = scorer_version
     row.status = "scored"
     row.closed_at = now
     row.lease_id = None
     row.lease_expires_at = None
     await session.flush()
-    return row

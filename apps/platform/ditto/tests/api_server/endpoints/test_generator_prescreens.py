@@ -489,7 +489,109 @@ class TestPrescreenScoring:
             failed = await session.get(GeneratorSubmission, ids["b"])
             assert failed is not None
             assert failed.status == "active"
-            assert failed.prescreen_score == 0.0
+            # Its zero waits for the batch to finish: a void batch keeps none.
+            assert failed.prescreen_score is None
+
+        [batch] = await _batches(session_maker)
+        await _report_panel(session_maker, batch.prescreen_index)
+        work = await _lease(client)
+        assert work is not None and work["kind"] == "score"
+        assert [c["column_id"] for c in work["matrix"]["columns"]] == ["c0"]
+        scored = await client.post(
+            "/api/v1/generator-scorer/round-score",
+            headers=_SCORER,
+            json=_matrix_score(work),
+        )
+        assert scored.status_code == 200, scored.text
+        async with session_maker() as session:
+            for name, score in (("a", 0.1), ("b", 0.0)):
+                sub = await session.get(GeneratorSubmission, ids[name])
+                assert sub is not None and sub.status == "active"
+                assert sub.prescreen_index == batch.prescreen_index
+                assert sub.prescreen_score == pytest.approx(score)
+
+    async def test_an_all_failed_batch_scores_zero_without_a_panel_run(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With every column failed the panel has nothing to run: the batch is
+        scored at once, each generator scores zero, and the next batch takes
+        other generators instead of failing the same ones again."""
+        _install(app, session_maker)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = await _seed_queue(session_maker)
+        await _tick(session_maker)
+        work = await _lease(client)
+        assert work is not None
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work, failing=frozenset({"c0", "c1"})),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "scored"
+        assert await _lease(client) is None
+        [batch] = await _batches(session_maker)
+        assert batch.status == "scored" and batch.void_reason is None
+        async with session_maker() as session:
+            for name in ("a", "b"):
+                sub = await session.get(GeneratorSubmission, ids[name])
+                assert sub is not None and sub.status == "active"
+                assert sub.prescreen_index == batch.prescreen_index
+                assert sub.prescreen_score == 0.0
+
+        await _tick(session_maker)
+        _, second = await _batches(session_maker)
+        assert {c["submission_id"] for c in second.columns} == {
+            str(ids["c"]),
+            str(ids["a2"]),
+        }
+
+    async def test_a_void_batch_returns_every_generator_unscreened(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A running batch with a failed column that then expires keeps no
+        score: both generators, the failed column's included, go back to the
+        queue and open the next batch."""
+        _install(app, session_maker)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = await _seed_queue(session_maker)
+        now = datetime.now(UTC)
+        await _tick(session_maker, now)
+        work = await _lease(client)
+        assert work is not None
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work, failing=frozenset({"c1"})),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "running"
+
+        await _tick(session_maker, now + PRESCREEN_TTL + timedelta(minutes=1))
+        first, second = await _batches(session_maker)
+        assert first.status == "void"
+        assert {c["submission_id"] for c in second.columns} == {
+            str(ids["a"]),
+            str(ids["b"]),
+        }
+        async with session_maker() as session:
+            for name in ("a", "b"):
+                sub = await session.get(GeneratorSubmission, ids[name])
+                assert sub is not None
+                assert sub.prescreen_index == second.prescreen_index
+                assert sub.prescreen_score is None
 
     async def test_round_work_comes_before_a_batch(
         self,
