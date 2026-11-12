@@ -782,6 +782,20 @@ func Hit(expected, response string) bool {
 	return containsBoundedPhrase(r, e)
 }
 
+// HitV14 is Hit under the v14 number boundary the grader uses from bench 14
+// on: a "." or "," that no digit follows ends a number token, so "138, so"
+// and "138. Then" both name 138 while "138.5" and "1,380" still do not.
+func HitV14(expected, response string) bool {
+	e := Normalize(expected)
+	if e == "" {
+		return false
+	}
+	if isPureNumber(e) {
+		return indexNumberTokenRuleV13(Normalize(response), e, 0, true) >= 0
+	}
+	return Hit(expected, response)
+}
+
 // numberHit accepts the expected count as a digit token, its English word
 // ("3" or "three"), or the idiomatic "once"/"twice" for 1/2, all
 // boundary-checked.
