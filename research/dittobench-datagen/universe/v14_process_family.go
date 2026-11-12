@@ -285,7 +285,7 @@ func renderV14Process(d *v13Draws, schema v13Schema, group, variant int, g v13Gr
 	v14SetRecords(m, records)
 	decoy := V14ProcessStepClasses[p.Decoy]
 	m.DecoyClause = fmt.Sprintf(" Its %s is to %s, owned by %s.", schema.Action, decoy.Canonical, g.People[3])
-	m.Question = v13Question(seed, group, variant, []string{
+	m.ask(d, V19PhraseProgramOpenStep, group, variant, []string{
 		"following the recorded order of its %[2]s steps, which step on %[1]s is the first one still open, and who is its %[3]s now?",
 		"for %[1]s, name the earliest %[2]s step in the planned order that is not yet closed, and the person currently named %[3]s for it.",
 		"which %[2]s step on %[1]s comes first in the plan among those still open, and who owns it after every recorded change?",

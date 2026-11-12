@@ -407,8 +407,10 @@ func renderV14EventSequence(d *v13Draws, schema v13Schema, group, variant int, g
 	}
 	var forms []string
 	var args []any
+	family := V19PhraseProgramSequenceBefore
 	switch s.Query {
 	case v14SeqNth:
+		family = V19PhraseProgramSequenceNth
 		forms = []string{
 			"counting from the earliest, which %[2]s was the %[3]s one on %[1]s?",
 			"in date order, what was the %[3]s %[2]s recorded for %[1]s?",
@@ -416,6 +418,7 @@ func renderV14EventSequence(d *v13Draws, schema v13Schema, group, variant int, g
 		}
 		args = []any{subject, schema.Event, v14Ordinals[s.Answer]}
 	case v14SeqAfter:
+		family = V19PhraseProgramSequenceAfter
 		forms = []string{
 			"which %[2]s on %[1]s came immediately after the %[3]s?",
 			"in date order, which %[2]s on %[1]s directly followed the %[3]s?",
@@ -430,7 +433,7 @@ func renderV14EventSequence(d *v13Draws, schema v13Schema, group, variant int, g
 		}
 		args = []any{subject, schema.Event, cls(s.Named).Canonical}
 	}
-	m.Question = v13Question(seed, group, variant, forms,
+	m.ask(d, family, group, variant, forms,
 		[]string{"Name the event.", "Just the event is fine.", "Answer with the event, not the date."}, args...)
 	want := cls(answer)
 	m.Expected = want.Canonical
@@ -494,7 +497,7 @@ func renderV14ChannelAsOf(d *v13Draws, schema v13Schema, group, variant int, g v
 	v14SetRecords(m, records)
 	m.DecoyClause = fmt.Sprintf(" Its %s is %s.", schema.Channel, V13ChannelClasses[a.Decoy].Canonical)
 	query := v14DayProse(seed, fmt.Sprintf("asof-query-%d", group), a.Query)
-	m.Question = v13Question(seed, group, variant, []string{
+	m.ask(d, V19PhraseProgramChannelAsOf, group, variant, []string{
 		"which %[2]s was in force for %[1]s on %[3]s?",
 		"on %[3]s, which %[2]s did %[1]s use to reach the other side?",
 		"for %[1]s, what %[2]s applied on %[3]s?",

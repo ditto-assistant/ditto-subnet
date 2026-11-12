@@ -1810,6 +1810,64 @@ and each rule scores 0.000 on its own. `TestV19ConditionalNextGradesTheFullSente
 pins the contains-phrase behaviour, and `TestV19MixGate` pins the gate and the
 slot counts.
 
+### Seeded phrase grammar (DITTO-2738)
+
+Through v18 each memory question family takes its wording from a short fixed
+list, picked per seed: twelve task frames per story oracle, three body forms
+per business family, three per personal domain and abstention probe. At
+`bench_version >= 19`, `universe/v19_phrasing.go` composes the wording instead.
+Each family has:
+
+- several intent frames, in more than one clause order ("On March 3, which …"
+  / "Which … as of March 3?");
+- synonym classes for verbs, nouns and time phrases (`<now>`: now / currently /
+  these days / at the moment …);
+- an optional politeness or filler lead ("Quick question:", "Remind me,",
+  "Do you know");
+- an optional casual register (contractions, lower-case lead);
+- an optional answer-format closer.
+
+Every pick is a seeded hash draw keyed by (family, seed, question identity), so
+rendering is deterministic, independent per question, and never calls an LLM.
+Slot values (entity, alias, date, quantity, schema label) are filled verbatim
+after composition. The question never names a graded value, and the oracle,
+answer, accept sets, claims, distractors, grounding tokens and evidence are
+unchanged.
+
+Every family declares the meaning markers each rendering must carry and the
+terms it must not carry. For example, an as-of question always says "on
+<date>" or "as of <date>" and never "now", "after" or "since"; a "right before"
+sequence question never says "after". Each grounded-abstention probe and its
+answerable twin draw from the same frames (the near-miss probe adds its
+colleague clause), so the wording cannot tell the decline from the answer.
+
+Hooks: story oracles (`questions_v13.go`); business and v14 role, temporal,
+supersession and state-fold families (`v13Member.ask`); personal domains
+(`v13Member.askPersonal`); and the abstention probes with their answerable
+twins (`v13_absence.go`, `questions.go`). Below 19 every hook renders the v18
+list unchanged. Typos still come from the existing `textnoise` pass. Other
+generators can call `universe.V19Phrase(family, seed, identity, slots)`.
+
+Acceptance, measured over 24 v18 seeds and 24 disjoint v19 seeds
+(`universe/v19_phrasing_test.go`):
+
+| Measure | v18 | v19 |
+|---|---|---|
+| A copying miner's 3-word regex suite (terms that recur in a family's v18 wording and in at most two other families, slot values masked): share of the family's questions it matches | 31-100% (33 of 37 families at 100%) | 0-35% (ceiling 40%) |
+| The same suite, all story oracles pooled (the anchor wording) | 77.1% | 12.7% |
+| Verbatim routing terms quoted from a top v18 agent ("rule did i set", "owes the next", "has the ball", "as far as the records go", …) | present | 0 renderings |
+| Wordings per family | the fixed list: 12 story task frames, 3 body forms per program family | 288-400 distinct of 400 identities with fixed slot values (anchor tail: 113) |
+| Lexical-shortcut proof trips on twin and story wordings | 0.10% | 0.06% |
+| `cmd/parserprobe` GIH memory mean, 8 full seeds | 0.866 | 0.562 |
+| `cmd/parserprobe` story family identification | 0.986 | 0.000 |
+
+`TestV19PhrasingLeavesAnswersUnchanged` checks that a v19 world renders the
+same answers, claims, evidence and grounding as v18 for every story,
+abstention and program case. Each v19 story case still resolves through the
+generation-time oracle (`resolveWithEvidence`).
+`gen/TestV19DatasetRephrasesQuestionsNotAnswers` checks the same on full
+datasets. v2..v18 known vectors do not move.
+
 ## Bench v15 grading policy (shipped ahead of the generation contract)
 
 `grade.PolicyFloorV15` exists only as a grading-policy floor, as v13's grader floor once did; `protocol` gains `BenchVersionV15` only with the generation contract. It

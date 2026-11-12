@@ -141,6 +141,11 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			{Name: "v19BreakerConditions", Size: len(v19BreakerConditions), Role: "answer (next-step condition)"},
 			{Name: "v19BreakerFillers", Size: len(v19BreakerFillers), Role: "record surface"},
 			{Name: "v19BreakerResponses", Size: len(v19BreakerResponses), Role: "record surface"},
+			// Bench v19 phrase grammar (v19_phrasing.go): frames, synonym
+			// classes, politeness leads and closers compose per family, so the
+			// surface is the smallest family's count of distinct renderings.
+			{Name: "v19 phrase grammar", Parts: []string{"v19BalanceFrames", "v19Politeness", "v19Indirect", "v19PersonCloser", "v19StatusCloser", "v19EventCloser", "v19ChannelCloser", "v19PairCloser"},
+				Size: v19SmallestFamilySurface(), Role: "question template (composed per family)"},
 		},
 
 		// Known-small scored pools when the canary landed (#492). Each value is
@@ -249,6 +254,20 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"v13QuestionGrammars":  poolcanary.Keyed,
 			"storyV13TaskGrammars": poolcanary.Keyed,
 			"v13StoryTaskGrammars": poolcanary.Keyed,
+
+			// Bench v19 phrase grammar banks, keyed by family or class name;
+			// the composed surface is scored as "v19 phrase grammar".
+			"v19StoryGrammars":      poolcanary.Keyed,
+			"v19ProgramGrammars":    poolcanary.Keyed,
+			"v19PersonalGrammars":   poolcanary.Keyed,
+			"v19AbstentionGrammars": poolcanary.Keyed,
+			"v19SharedClasses":      poolcanary.Keyed,
+			"v19ProgramClasses":     poolcanary.Keyed,
+			"v19BalanceClasses":     poolcanary.Keyed,
+			"v19Current":            "v19 meaning-marker set the phrasing tests check; never drawn",
+			"v19NotAsOf":            "v19 forbidden-term set the phrasing tests check; never drawn",
+			"v19WhWords":            poolcanary.Internal,
+			"v19Contractions":       "v19 casual-register rewrite pairs applied to template text; not a drawable pool",
 
 			// Configuration and filters.
 			"monetaryOracles":          poolcanary.Internal,
