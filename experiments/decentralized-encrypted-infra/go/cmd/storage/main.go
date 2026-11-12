@@ -191,7 +191,7 @@ func rsBench(object []byte, k, m int) rsResult {
 	return rsResult{
 		K: k, M: m, N: k + m,
 		Expansion:          float64(k+m) / float64(k),
-		ShardKiB:           len(shards[0]) / 1024,
+		ShardKiB:           (len(shards[0]) + 1023) / 1024, // round up: never understate storage
 		EncodeMiBPerSec:    encodeRate,
 		ReconstructMiBPerS: float64(rounds*len(object)) / mib / recon.Seconds(),
 	}

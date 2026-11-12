@@ -372,8 +372,8 @@ nines of availability, −log10(P[object unreadable]), for independent nodes
 |---|---|---|---|---|---|
 | 50% | 0.90 | 1.51 | 1.67 | 0.37 | 2.32 |
 | 70% | 1.57 | 2.61 | 5.14 | 2.28 | 9.95 |
-| 80% | 2.10 | 3.49 | 8.35 | 4.49 | ≥ 15 |
-| 90% | 3.00 | 5.00 | 14.24 | 8.89 | ≥ 15 |
+| 80% | 2.10 | 3.49 | 8.35 | 4.49 | 17.53 |
+| 90% | 3.00 | 5.00 | 14.24 | 8.89 | 31.79 |
 
 - At 80% node uptime, 5 copies give 99.97% availability. RS 10-of-30 gives
   more than eight nines while storing 40% fewer bytes.
@@ -382,7 +382,8 @@ nines of availability, −log10(P[object unreadable]), for independent nodes
   Phase 1's first job.
 - Independence is optimistic. Power cuts, ISP outages, and one owner running
   ten "Macs" fail together. Placement diversity (§2.3 T3) is what makes the
-  table believable.
+  table believable. Values above about 10 nines describe the model, not real
+  homes.
 
 Storj, Sia and Hippius make the same trade at scale:
 

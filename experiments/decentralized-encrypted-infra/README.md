@@ -151,6 +151,10 @@ time than TFHE on all fourteen cores (19.5 s).
 
 Reed–Solomon numbers use the library's default internal parallelism.
 
+The committed `results/storage.json` predates a shard-size rounding fix made
+in review: its `shard_kib` truncates 6553.6 and 2259.9 KiB shards to 6553 and
+2259. `go/cmd/storage` now rounds up, and the throughput figures are unaffected.
+
 SHA-256 Merkle tree over a 16 MiB shard with 4 KiB leaves:
 
 - build: 7.3 ms (2,189 MiB/s);
@@ -162,14 +166,14 @@ uplink is roughly 1,000× slower, so bandwidth, not CPU, is the constraint.
 
 ### 5. Durability math (independent nodes; correlated failures make it worse)
 
-From `results/durability.json`. "Nines" is −log10(probability), capped at 15.
+From `results/durability.json`. "Nines" is −log10(probability). Failure probabilities are summed directly from the lower binomial tail, so tiny values do not cancel to zero. Anything above about 10 nines describes the independence model, not real homes.
 
 | Each node online | 3 copies | 5 copies | RS 10-of-30 (3×) | RS 29-of-80 (2.76×) |
 |---|---|---|---|---|
 | 50% | 0.90 | 1.51 | 1.67 | 2.32 |
 | 70% | 1.57 | 2.61 | 5.14 | 9.95 |
-| 80% | 2.10 | 3.49 | 8.35 | 15 |
-| 90% | 3.00 | 5.00 | 14.24 | 15 |
+| 80% | 2.10 | 3.49 | 8.35 | 17.53 |
+| 90% | 3.00 | 5.00 | 14.24 | 31.79 |
 
 These are availability nines, the share of time an object can be read.
 

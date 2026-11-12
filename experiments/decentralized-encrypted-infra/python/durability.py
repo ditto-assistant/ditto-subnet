@@ -30,9 +30,19 @@ def tail_at_least(n: int, k: int, p: float) -> float:
     return sum(math.comb(n, i) * p**i * (1 - p) ** (n - i) for i in range(k, n + 1))
 
 
-def nines(p_fail: float) -> float:
-    """-log10(p_fail), capped at 15: float64 cannot resolve 1 - p below ~1e-16."""
-    return 15.0 if p_fail < 1e-15 else min(15.0, -math.log10(p_fail))
+def tail_below(n: int, k: int, p: float) -> float:
+    """P[Binomial(n, p) < k], summed directly: 1 - tail_at_least cancels to 0."""
+    return sum(math.comb(n, i) * p**i * (1 - p) ** (n - i) for i in range(k))
+
+
+def over_trials(p: float, trials: float) -> float:
+    """P[at least one event in `trials` independent tries], stable for tiny p."""
+    return -math.expm1(trials * math.log1p(-p))
+
+
+def nines(p_fail: float) -> float | None:
+    """-log10(p_fail); None only if the probability underflows to zero."""
+    return round(-math.log10(p_fail), 2) if p_fail > 0 else None
 
 
 def availability() -> list[dict]:
@@ -40,11 +50,8 @@ def availability() -> list[dict]:
     for p in (0.5, 0.7, 0.8, 0.9, 0.95, 0.99):
         row: dict = {"p_node_online": p}
         for name, (k, n) in SCHEMES.items():
-            unavailable = 1 - tail_at_least(n, k, p)
-            row[name] = {
-                "p_unavailable": unavailable,
-                "nines": round(nines(unavailable), 2),
-            }
+            unavailable = tail_below(n, k, p)
+            row[name] = {"p_unavailable": unavailable, "nines": nines(unavailable)}
         rows.append(row)
     return rows
 
@@ -55,15 +62,12 @@ def durability() -> list[dict]:
     rows = []
     for q_day in (0.001, 0.005, 0.02):
         for window in (1, 7):
-            q = 1 - (1 - q_day) ** window
+            q = over_trials(q_day, window)
             row: dict = {"q_depart_per_day": q_day, "repair_window_days": window}
             for name, (k, n) in SCHEMES.items():
                 p_loss = tail_at_least(n, n - k + 1, q)
-                annual = 1 - (1 - p_loss) ** (365 / window)
-                row[name] = {
-                    "p_loss_per_year": annual,
-                    "nines": round(nines(annual), 2),
-                }
+                annual = over_trials(p_loss, 365 / window)
+                row[name] = {"p_loss_per_year": annual, "nines": nines(annual)}
             rows.append(row)
     return rows
 

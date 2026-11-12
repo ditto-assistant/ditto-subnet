@@ -62,6 +62,8 @@ def main() -> None:
         "--execute", type=int, default=2, help="queries run under real FHE"
     )
     args = parser.parse_args()
+    if args.execute < 0:
+        parser.error("--execute must be >= 0")
 
     with open(args.fixture) as fh:
         fx = json.load(fh)
@@ -131,7 +133,8 @@ def main() -> None:
         executed.append(qmod.forward(q[None, :], fhe="execute")[0])
         timings.append(time.perf_counter() - t)
     out["execute_s_per_query"] = timings
-    out["executed_vs_pilot"] = parity(np.stack(executed), refs[: args.execute])
+    if executed:
+        out["executed_vs_pilot"] = parity(np.stack(executed), refs[: len(executed)])
     out["pilot_bar"] = {
         "min_cos": fx["parity_min_cosine"],
         "max_abs": fx["parity_max_abs"],

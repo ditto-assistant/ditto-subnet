@@ -277,6 +277,15 @@ func runAdapter(argv []string) (any, error) {
 	if *mode != "plain" && *mode != "encrypted" {
 		return nil, fmt.Errorf("unknown -mode %q", *mode)
 	}
+	if *degree < 1 {
+		return nil, fmt.Errorf("-degree must be >= 1, got %d", *degree)
+	}
+	if *nQueries < 1 {
+		return nil, fmt.Errorf("-queries must be >= 1, got %d", *nQueries)
+	}
+	if *mode == "encrypted" && *n1 < 1 {
+		return nil, fmt.Errorf("-bsgs-n1 must be >= 1, got %d", *n1)
+	}
 
 	raw, err := os.ReadFile(*fixturePath)
 	if err != nil {
@@ -306,6 +315,10 @@ func runAdapter(argv []string) (any, error) {
 		return nil, fmt.Errorf("shape %dx%d does not tile %d slots", a.dim, a.hidden, adapterSlots)
 	}
 	n := min(*nQueries, len(fx.Queries))
+	if n == 0 || len(fx.Reference) < n {
+		return nil, fmt.Errorf("fixture has %d queries and %d references; need at least one of each",
+			len(fx.Queries), len(fx.Reference))
+	}
 	queries := make([][]float64, n)
 	refs := make([][]float64, n)
 	for i := 0; i < n; i++ {

@@ -101,6 +101,15 @@ func runSimilarity(argv []string) (any, error) {
 	if *mode != "plain" && *mode != "encrypted" {
 		return nil, fmt.Errorf("unknown -mode %q", *mode)
 	}
+	if *nBlocks < 1 {
+		return nil, fmt.Errorf("-blocks must be >= 1, got %d", *nBlocks)
+	}
+	if *reps < 1 {
+		return nil, fmt.Errorf("-reps must be >= 1, got %d", *reps)
+	}
+	if *mode == "encrypted" && *n1 < 1 {
+		return nil, fmt.Errorf("-bsgs-n1 must be >= 1, got %d", *n1)
+	}
 
 	logQ := []int{55, 40}
 	params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
@@ -124,13 +133,21 @@ func runSimilarity(argv []string) (any, error) {
 	for i := range db {
 		db[i] = randUnit(r)
 	}
+	// Redraw on a repeated index so all ten survive. The committed seed never
+	// collides, so its corpus (and results) are unchanged by the redraw.
+	planted := make(map[int]bool, 10)
 	for p := 0; p < 10; p++ {
 		v := make([]float64, simDim)
 		noise := randUnit(r)
 		for j := range v {
 			v[j] = query[j] + 0.3*float64(p+1)*noise[j]
 		}
-		db[r.IntN(total)] = normalized(v)
+		idx := r.IntN(total)
+		for planted[idx] {
+			idx = r.IntN(total)
+		}
+		planted[idx] = true
+		db[idx] = normalized(v)
 	}
 	want := make([]float64, total)
 	for i, v := range db {
