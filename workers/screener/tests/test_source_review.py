@@ -24,6 +24,7 @@ from ditto_screener import source_review as source_review_module
 from ditto_screener.binary_analysis import BinarySample
 from ditto_screener.source_reachability import ReachabilityState, analyze_reachability
 from ditto_screener.source_review import (
+    _MAX_INVALID_TOOL_ARGUMENT_CALLS,
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     l1_verdict_unsettled,
@@ -4069,7 +4070,7 @@ def test_policy_v13_binds_the_two_security_charges_to_their_defining_element() -
     # names why that scope is authorized rather than claiming the stream
     # never leaves the request.
     assert "crosses no" not in v13
-    assert _prompt_revision(13) == "source-review-v41-policy-v13"
+    assert _prompt_revision(13) == "source-review-v42-policy-v13"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
 
 
@@ -4082,7 +4083,7 @@ def test_prompt_teaches_independent_versioned_invariants(policy_version) -> None
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v41-policy-v13"
+    assert _prompt_revision(13) == "source-review-v42-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I3 MODEL DISSENT",
@@ -5208,6 +5209,99 @@ async def test_no_tool_turn_is_corrected_inside_the_same_review(
     correction = requests[1]["messages"][-1]  # type: ignore[index]
     assert correction["role"] == "user"
     assert "did not call a declared tool" in correction["content"]
+
+
+def _scripted_turns(
+    turns: list[list[dict[str, object]]], requests: list[dict[str, object]]
+) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        tool_calls = turns[min(len(requests), len(turns)) - 1]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    return httpx.MockTransport(handler)
+
+
+async def test_badly_typed_read_file_is_returned_to_the_model_not_a_failure(
+    tmp_path: Path,
+) -> None:
+    """SN-430: one malformed read_file call is corrected inside the review."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    requests: list[dict[str, object]] = []
+    final = _with_policy_v10_invariants(_BENIGN_REVIEW)
+    transport = _scripted_turns(
+        [
+            [
+                _tool(
+                    "read-bad",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": "1", "end_line": 400},
+                )
+            ],
+            [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 400},
+                )
+            ],
+            [_tool("submit-1", "submit_review", final)],
+        ],
+        requests,
+    )
+
+    observation = await _agent(key, transport).review(
+        str(_archive(tmp_path, "fn main() {}")), artifact_sha256=_SHA
+    )
+
+    assert observation.ok, observation.error_code
+    assert observation.error_code is None
+    assert len(requests) == 3
+    feedback = requests[1]["messages"][-1]  # type: ignore[index]
+    assert feedback["role"] == "tool"
+    assert feedback["tool_call_id"] == "read-bad"
+    body = json.loads(feedback["content"])
+    assert body["error"] == "tool-arguments-invalid"
+    assert body["detail"] == "read_file arguments are invalid"
+    assert body["correctable"] is True
+
+
+async def test_reviewer_that_keeps_sending_invalid_arguments_still_fails(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    requests: list[dict[str, object]] = []
+    bad = [
+        _tool(f"read-bad-{index}", "read_file", {"path": 7})
+        for index in range(_MAX_INVALID_TOOL_ARGUMENT_CALLS + 1)
+    ]
+    transport = _scripted_turns([bad], requests)
+
+    observation = await _agent(key, transport).review(
+        str(_archive(tmp_path, "fn main() {}")), artifact_sha256=_SHA
+    )
+
+    assert not observation.ok
+    assert observation.risk_level is None
+    assert observation.error_code == "source-review-model-tool-call-invalid"
+    assert len(requests) == 1
 
 
 async def test_malformed_or_unavailable_reviewer_is_retryable_not_reject(
@@ -7805,3 +7899,72 @@ def test_parse_review_resolves_runtime_paths_only_for_test_directory_citations(
     )
 
     assert observation.risk_level == "high"
+
+
+def test_source_marker_scan_is_noop_without_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    monkeypatch.delenv("SCREENER_SOURCE_MARKER_PATTERNS", raising=False)
+    repo = TarSourceRepository(str(_archive(tmp_path, "fn main() {}\n")))
+    markers = repo.review_leads()["source_markers"]
+    assert markers == {"configured": 0, "matched_markers": [], "locations": []}
+
+
+def test_source_marker_scan_reports_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    monkeypatch.setenv(
+        "SCREENER_SOURCE_MARKER_PATTERNS",
+        '[{"id":"alpha","pattern":"CANARY_[0-9a-f]{6}"},'
+        '{"id":"beta","pattern":"never-naturally-written-phrase"}]',
+    )
+    source = (
+        "fn main() {\n"
+        '    let _ = "CANARY_abc123";\n'
+        "    // never-naturally-written-phrase\n"
+        "}\n"
+    )
+    repo = TarSourceRepository(str(_archive(tmp_path, source)))
+    with caplog.at_level("WARNING"):
+        markers = repo.review_leads()["source_markers"]
+    assert markers["configured"] == 2
+    assert markers["matched_markers"] == ["alpha", "beta"]
+    hit_markers = {loc["marker_id"] for loc in markers["locations"]}
+    assert hit_markers == {"alpha", "beta"}
+    assert all(loc["path"] == "src/main.rs" for loc in markers["locations"])
+    assert any("source marker hit" in record.message for record in caplog.records)
+
+
+def test_source_marker_scan_drops_invalid_patterns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    # A malformed regex and a non-dict entry are dropped; the valid one stays.
+    monkeypatch.setenv(
+        "SCREENER_SOURCE_MARKER_PATTERNS",
+        '[{"id":"bad","pattern":"("},"notadict",{"id":"good","pattern":"ZZTOKEN"}]',
+    )
+    repo = TarSourceRepository(str(_archive(tmp_path, "let x = ZZTOKEN;\n")))
+    markers = repo.review_leads()["source_markers"]
+    assert markers["configured"] == 1
+    assert markers["matched_markers"] == ["good"]
+
+
+def test_source_marker_scan_tolerates_malformed_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    monkeypatch.setenv("SCREENER_SOURCE_MARKER_PATTERNS", "{not json")
+    repo = TarSourceRepository(str(_archive(tmp_path, "fn main() {}\n")))
+    markers = repo.review_leads()["source_markers"]
+    assert markers == {"configured": 0, "matched_markers": [], "locations": []}

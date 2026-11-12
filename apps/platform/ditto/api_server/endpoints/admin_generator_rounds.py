@@ -41,12 +41,20 @@ from ditto.api_models.generator_rounds import (
     AdminGeneratorRoundLeaseReleaseRequest,
     AdminGeneratorRoundListResponse,
     AdminGeneratorRoundPreview,
+    GeneratorFrontierAuditDetail,
+    GeneratorFrontierAuditListResponse,
+    GeneratorFrontierAuditRuling,
+    GeneratorFrontierSettleRequest,
+    GeneratorFrontierView,
     GeneratorRoundBenchContractPreview,
     GeneratorRoundColumnSlot,
     GeneratorRoundLoopStatus,
     GeneratorRoundPanelSlot,
     GeneratorRoundSchedule,
     GeneratorRoundSkippedAgent,
+    GeneratorRoundSkipView,
+    frontier_audit_confirmation,
+    frontier_settle_confirmation,
     void_round_confirmation,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -60,7 +68,19 @@ from ditto.api_server.generator_competition import (
     inspect_upload,
     load_settings,
 )
+from ditto.api_server.generator_frontier import (
+    STATE_SETTLED,
+    FrontierRejected,
+    audit_case_views,
+    audit_views,
+    frontier_view,
+    lock_oracle_tickets,
+    pending_audits,
+    rule_audit,
+    settle_frontier,
+)
 from ditto.api_server.generator_rounds import (
+    FINAL_ROUND_STATUSES,
     ROUND_COMMITMENT_PUBLISHERS,
     ROUND_OPEN_CAPACITY_GRACE,
     GeneratorRoundLoop,
@@ -77,10 +97,12 @@ from ditto.api_server.generator_rounds import (
     result_views,
     round_contract_capacity,
     round_counts_by_status,
+    round_settings,
     round_summaries,
     round_summary,
     select_columns,
     select_round_panel,
+    skipped_round_views,
     standing_views,
     void_round,
 )
@@ -118,6 +140,13 @@ class GeneratorRoundLoopResponse(BaseModel):
     """``False`` when this process does not run the round driver."""
     status: GeneratorRoundLoopStatus | None
     schedule: GeneratorRoundSchedule | None
+    skip_unchanged_rounds: bool | None = None
+    """The governing ``skip_unchanged_rounds`` setting: rounds that would only
+    repeat the last scored round are ``skipped`` and spend no inference."""
+    skipped_rounds: int = 0
+    """Rounds ever skipped as unchanged."""
+    last_skipped_round: GeneratorRoundSkipView | None = None
+    """The newest skipped round and the scored round it carried forward."""
 
 
 class GeneratorRoundTickResponse(BaseModel):
@@ -178,14 +207,20 @@ async def admin_list_rounds(
 
 @router.get("/rounds/loop", response_model=GeneratorRoundLoopResponse)
 async def admin_round_loop(
-    request: Request, _admin: AdminDep
+    request: Request, _admin: AdminDep, session: SessionDep
 ) -> GeneratorRoundLoopResponse:
-    """The round driver's last tick: actions taken, errors, chain position."""
+    """The round driver's last tick: actions taken, errors, chain position,
+    and whether (and when last) it skipped an unchanged round."""
+    resolved = await load_settings(session)
+    skipped = await skipped_round_views(session, limit=1)
     loop = _loop(request)
-    if loop is None:
-        return GeneratorRoundLoopResponse(available=False, status=None, schedule=None)
     return GeneratorRoundLoopResponse(
-        available=True, status=loop.status, schedule=loop.schedule
+        available=loop is not None,
+        status=loop.status if loop is not None else None,
+        schedule=loop.schedule if loop is not None else None,
+        skip_unchanged_rounds=resolved.settings.skip_unchanged_rounds,
+        skipped_rounds=(await round_counts_by_status(session)).get("skipped", 0),
+        last_skipped_round=skipped[0] if skipped else None,
     )
 
 
@@ -319,7 +354,7 @@ async def admin_round_detail(
     row = await get_round(session, round_index)
     if row is None:
         raise HTTPException(status_code=404, detail="unknown round")
-    closed = row.status in {"scoring", "scored", "void"}
+    closed = row.status in {"scoring", "scored", "skipped", "void"}
     now = datetime.now(UTC)
     publications, elected = await commitment_publication_views(session, row, now=now)
     return AdminGeneratorRoundDetail(
@@ -356,7 +391,184 @@ async def admin_round_detail(
         scorer_version=row.scorer_version,
         standings=standing_views(row),
         columns_scored=column_views(row),
+        frontier=frontier_view(row),
     )
+
+
+# --- frontier cases ----------------------------------------------------------
+
+
+@router.get("/frontier/audits", response_model=GeneratorFrontierAuditListResponse)
+async def admin_frontier_audits(
+    _admin: AdminDep,
+    session: SessionDep,
+    include_ruled: bool = False,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> GeneratorFrontierAuditListResponse:
+    """The frontier audit queue: sampled oracle-attested cases awaiting an
+    operator ruling, oldest round first. ``include_ruled`` also lists ruled
+    audits of rounds that have not settled yet."""
+    audits, total = await pending_audits(
+        session, include_ruled=include_ruled, limit=limit, offset=offset
+    )
+    return GeneratorFrontierAuditListResponse(
+        audits=audits,
+        count=total,
+        returned=len(audits),
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(audits) < total,
+    )
+
+
+@router.get("/rounds/{round_index}/frontier", response_model=GeneratorFrontierView)
+async def admin_round_frontier(
+    round_index: int, _admin: AdminDep, session: SessionDep
+) -> GeneratorFrontierView:
+    """A scored round's frontier lane: candidates, the oracle run, the
+    attestations, each column's audit, and the credit applied."""
+    row = await get_round(session, round_index, read_view=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown round")
+    view = frontier_view(row)
+    if view is None:
+        raise HTTPException(status_code=404, detail="round has no frontier lane")
+    return view
+
+
+@router.get(
+    "/rounds/{round_index}/frontier/audits/{column_id}",
+    response_model=GeneratorFrontierAuditDetail,
+)
+async def admin_frontier_audit_detail(
+    round_index: int,
+    column_id: str,
+    _admin: AdminDep,
+    session: SessionDep,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+) -> GeneratorFrontierAuditDetail:
+    """One column's audit sample as the generator wrote it: question, gold
+    and declared competitors, cited evidence, the panel's and the oracle's
+    outcomes, and the user's visible memory (filtered by ``q``) to look for a
+    contradicting fact."""
+    row = await get_round(session, round_index)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown round")
+    audit = next((a for a in audit_views(row) if a.column_id == column_id), None)
+    if audit is None:
+        raise HTTPException(status_code=404, detail="column has no frontier audit")
+    if row.dataset_bytes is None:
+        raise HTTPException(status_code=409, detail="round dataset is unavailable")
+    try:
+        cases = audit_case_views(
+            row, row.dataset_bytes, column_id=column_id, case_ids=audit.sample, query=q
+        )
+    except FrontierRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return GeneratorFrontierAuditDetail(audit=audit, cases=cases)
+
+
+@router.post(
+    "/rounds/{round_index}/frontier/audits/{column_id}",
+    response_model=GeneratorFrontierView,
+)
+async def admin_rule_frontier_audit(
+    round_index: int,
+    column_id: str,
+    payload: GeneratorFrontierAuditRuling,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> GeneratorFrontierView:
+    """Rule one column's frontier audit. ``valid`` keeps every oracle
+    attestation on the column; an invalid ruling names the sampled cases that
+    are not fair memory questions and voids all of the column's frontier
+    credit for the round. The round settles once every audit is ruled."""
+    expected = frontier_audit_confirmation(round_index, column_id, payload.valid)
+    if payload.confirmation != expected:
+        raise HTTPException(
+            status_code=409, detail=f"confirmation must be exactly {expected}"
+        )
+    reason, actor = _check_reason(payload.reason, payload.actor)
+    row = await get_round(session, round_index, for_update=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown round")
+    try:
+        audit = rule_audit(
+            row,
+            column_id=column_id,
+            valid=payload.valid,
+            invalid_case_ids=payload.invalid_case_ids,
+            reason=reason,
+            actor=actor,
+            now=datetime.now(UTC),
+        )
+    except FrontierRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    column = next((c for c in row.columns or () if c["column_id"] == column_id), None)
+    record_operator_action(
+        session,
+        action="frontier_audit_valid" if payload.valid else "frontier_audit_invalid",
+        subject=f"round:{round_index}:column:{column_id}",
+        actor=actor,
+        reason=reason,
+        detail={
+            "sample": audit["sample"],
+            "invalid_case_ids": audit["invalid_case_ids"],
+            "submission_id": (column or {}).get("submission_id"),
+            "miner_hotkey": (column or {}).get("miner_hotkey"),
+        },
+    )
+    await session.commit()
+    return await admin_round_frontier(round_index, _admin, session)
+
+
+@router.post(
+    "/rounds/{round_index}/frontier/settle", response_model=GeneratorFrontierView
+)
+async def admin_settle_frontier(
+    round_index: int,
+    payload: GeneratorFrontierSettleRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> GeneratorFrontierView:
+    """Settle a round's frontier lane now, without waiting for its audits or
+    the oracle: attestations of columns whose audit did not fail apply (none
+    while the oracle has not reported)."""
+    expected = frontier_settle_confirmation(round_index)
+    if payload.confirmation != expected:
+        raise HTTPException(
+            status_code=409, detail=f"confirmation must be exactly {expected}"
+        )
+    reason, actor = _check_reason(payload.reason, payload.actor)
+    # Ticket locks first, then the round: the order a concurrent oracle result
+    # submission takes them, so the two never deadlock.
+    await lock_oracle_tickets(session, round_index)
+    row = await get_round(session, round_index, for_update=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown round")
+    if row.status != "scored" or not row.frontier:
+        raise HTTPException(status_code=404, detail="round has no frontier lane")
+    if row.frontier.get("state") == STATE_SETTLED:
+        raise HTTPException(status_code=409, detail="frontier is already settled")
+    params = dict((await round_settings(session, row)).score_params())
+    applied = await settle_frontier(
+        session,
+        row,
+        params=params,
+        reason=f"operator ({actor}): {reason}",
+        now=datetime.now(UTC),
+    )
+    record_operator_action(
+        session,
+        action="frontier_settle",
+        subject=f"round:{round_index}",
+        actor=actor,
+        reason=reason,
+        detail={"applied": applied},
+    )
+    await session.commit()
+    return await admin_round_frontier(round_index, _admin, session)
 
 
 @router.get(
@@ -415,7 +627,7 @@ async def admin_void_round(
             ),
         )
     row, reason, actor = await _locked_round(session, round_index, payload)
-    if row.status in {"scored", "void"}:
+    if row.status in FINAL_ROUND_STATUSES:
         raise HTTPException(status_code=409, detail=f"a {row.status} round is final")
     now = datetime.now(UTC)
     await expire_round_tickets(session, row, now=now, detail=f"operator void: {reason}")

@@ -17,9 +17,13 @@ ReviewMode = Literal["off", "shadow", "enforce", "inherit"]
 ReviewModel = Literal[
     "openai/gpt-5.6-terra",
     "openai/gpt-6-sol",
+    "openai/gpt-6.1-terra",
     "moonshotai/kimi-k3",
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",
+]
+L3ReviewModel = Literal[
+    "openai/gpt-5.6-sol", "openai/gpt-6-sol", "openai/gpt-6.1-terra"
 ]
 ReasoningEffort = Literal["low", "medium", "high"]
 SourceReviewModel = Literal["openai/gpt-5.6-luna", "openai/gpt-6-luna"]
@@ -110,8 +114,12 @@ class ScreenerReviewSettings(BaseModel):
         "openai/gpt-5.6-sol",
     )
     l3_enabled: bool = True
-    l3_model: Literal["openai/gpt-5.6-sol", "openai/gpt-6-sol"] = "openai/gpt-5.6-sol"
-    timeout_seconds: Annotated[int, Field(ge=30, le=1_800)] = 1_200
+    l3_model: L3ReviewModel = "openai/gpt-5.6-sol"
+    # Deep (L2 analyst + L3) review wall clock for one attempt. The renewable
+    # attempt lease's hard lifetime is derived from this budget (see
+    # ``_screening_attempt_lifetime_cap``), so raising it grows the attempt
+    # deadline consistently; 3600s matches the L1 ceiling.
+    timeout_seconds: Annotated[int, Field(ge=30, le=3_600)] = 1_200
     max_steps: Annotated[int, Field(ge=1, le=256)] = 32
     # L1 Luna inspection depth. Distinct from ``max_steps``, which bounds L2.
     # Exhausting either bound no longer decides the artifact's fate on its

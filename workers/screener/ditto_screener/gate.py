@@ -18,7 +18,10 @@ Flow for one agent:
    with one bounded ``POST /seed`` wave (``SCREENER_SEED_PROBE_MODE``:
    ``shadow`` records the signal, ``enforce`` makes it a contract failure,
    ``off`` skips it). The probe is served by the same isolated fake gateway, so
-   it costs no provider call.
+   it costs no provider call. From bench v18 one ``POST /run`` then offers a
+   full-size tool catalog and the gateway measures what the harness forwards
+   (``SCREENER_TOOL_CATALOG_PROBE_MODE``, same three modes): a model request
+   that cannot fit the scoring model's context window fails in ``enforce``.
 5. **Private policy.** The default v8 manifest performs bounded Luna source
    review after health. A rotating
    private manifest may use timing, random-control, fingerprint, and behavioral
@@ -46,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import contextvars
 import gzip
 import hashlib
 import io
@@ -53,6 +57,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import secrets
 import shutil
@@ -71,7 +76,9 @@ from uuid import UUID
 
 import httpx
 
+from ditto_screener import tool_catalog_probe
 from ditto_screener.adjudicator import build_adjudicator
+from ditto_screener.errors import ScreenedImageUploadUnavailable
 from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL, tool_capability
 from ditto_screener.heartbeat import (
     ScreenerProgressStage,
@@ -124,13 +131,63 @@ from ditto_screening_protocol import (
     ReviewLineagePacket,
     ScoredRuntimeEvidenceLease,
 )
-from ditto_screening_protocol.reason_codes import DOCKER_BUILD_INFRASTRUCTURE
+from ditto_screening_protocol.reason_codes import (
+    DOCKER_BUILD_INFRASTRUCTURE,
+    IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
+)
+from ditto_screening_protocol.reason_codes import (
+    STATIC_MALICIOUS_SOURCE as STATIC_MALICIOUS_SOURCE_REASON_CODE,
+)
+from ditto_screening_protocol.runtime_envelope import runtime_envelope
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
     from ditto_screener.review_settings import EffectiveReviewSettings
 
 logger = logging.getLogger(__name__)
+
+
+_STATIC_REJECT_MAX_LOCATIONS = 8
+
+
+def static_malicious_source_detail(observation: SourceReviewObservation) -> str:
+    """Location-only miner-facing detail for a static safety reject.
+
+    Names the matched categories and up to eight ``path:line`` locations. It
+    never quotes source, so the public reason cannot leak the matched text.
+    """
+    finding = observation.finding or {}
+    raw_evidence = finding.get("evidence") if isinstance(finding, Mapping) else None
+    locations: list[str] = []
+    if isinstance(raw_evidence, Sequence):
+        for item in raw_evidence:
+            if not isinstance(item, Mapping):
+                continue
+            path = str(item.get("path", ""))[:160]
+            line = item.get("line")
+            # The list is comma-separated inside brackets; a path carrying
+            # either delimiter cannot be rendered unambiguously, so omit it.
+            if path and not any(mark in path for mark in ",[]"):
+                locations.append(f"{path}:{line}" if line is not None else path)
+            if len(locations) >= _STATIC_REJECT_MAX_LOCATIONS:
+                break
+    categories = ", ".join(observation.categories[:8])[:400]
+
+    # Platform parses this bracketed shape into the public reason
+    # (``_static_malicious_source_public_reason``); keep the two in step.
+    # Whole trailing locations are dropped to stay within the bound, so the
+    # closing brackets always survive.
+    def render(kept: list[str]) -> str:
+        return (
+            f"static safety check matched categories=[{categories}] "
+            f"locations=[{', '.join(kept)}]; remove or make the flagged code "
+            "unreachable and resubmit"
+        )
+
+    while locations and len(render(locations)) > 1000:
+        locations.pop()
+    return render(locations)
+
 
 # Bytes of a failing build log to attach to the verdict detail.
 _LOG_TAIL_BYTES = 2000
@@ -144,7 +201,7 @@ _PROBE_INTERVAL_SECONDS = 1.0
 _LEASE_MIN_STAGE_SECONDS = 5.0
 _MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 _MAX_ARCHIVE_MEMBERS = 20_000
-_MAX_SCREENED_IMAGE_BYTES = 8 * 1024**3
+_MAX_SCREENED_IMAGE_BYTES = runtime_envelope().screened_image_bytes
 _IMAGE_EXPORT_DISK_RESERVE_BYTES = 256 * 1024**2
 _IMAGE_HASH_CHUNK_BYTES = 8 * 1024**2
 _MAX_CANARY_RESPONSE_BYTES = 64 * 1024
@@ -175,9 +232,26 @@ _VALIDATOR_SANDBOX_TMPFS_SIZE = "512m"
 _VALIDATOR_SANDBOX_TMPFS = (
     f"/tmp:rw,noexec,nosuid,nodev,size={_VALIDATOR_SANDBOX_TMPFS_SIZE}"
 )
-_VALIDATOR_SANDBOX_MEMORY = "3g"
-_VALIDATOR_SANDBOX_CPUS = "2"
-_VALIDATOR_SANDBOX_PIDS = "512"
+# The runtime probe runs at the harness memory cap validators apply to scored
+# leases. Platform stamps the live cap on each claim; the published runtime
+# envelope (docs/RUNTIME-ENVELOPE.md) is the fallback for an older Platform.
+# Per-screen, so concurrent screens on one gate never see each other's cap.
+_SANDBOX_MEMORY_MIB: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "sandbox_memory_mib", default=runtime_envelope().memory_limit_mib
+)
+_VALIDATOR_SANDBOX_CPUS = str(runtime_envelope().cpus)
+_VALIDATOR_SANDBOX_PIDS = str(runtime_envelope().pids_limit)
+
+
+def _validator_sandbox_memory() -> str:
+    """The docker ``--memory`` value for this screen."""
+    return f"{_SANDBOX_MEMORY_MIB.get()}m"
+
+
+def _validator_sandbox_memory_label() -> str:
+    return f"{_SANDBOX_MEMORY_MIB.get()} MiB"
+
+
 _VALIDATOR_SANDBOX_DB = "/tmp/dittobench.db"
 # Known harness persistence variables, locked to the one writable filesystem the
 # runtime contract offers. A harness that honours either variable then persists
@@ -439,6 +513,8 @@ class _AuditRuntime:
     provider: Literal["platform", "chutes"] = _PRIMARY_HARNESS_PROVIDER
     seed_probe: _SeedProbe | None = None
     """Shadow-mode ``/seed`` observation; ``None`` when the probe is off."""
+    tool_catalog_probe: tool_catalog_probe.ProbeVerdict | None = None
+    """Shadow-mode tool-catalog observation; ``None`` when it did not run."""
     tool_route: str = ""
     tool_key: bytes = b""
 
@@ -702,38 +778,76 @@ def _mib(value: int) -> str:
     return f"{value / (1024 * 1024):.0f} MiB"
 
 
-def _with_seed_probe_evidence(
-    decision: ScreeningDecision, probe: _SeedProbe | None
-) -> ScreeningDecision:
-    """Record the ``/seed`` observation without changing the outcome.
+def _seed_probe_records(probe: _SeedProbe | None) -> list[PolicyEvidence]:
+    """The ``/seed`` observation as additive evidence records.
 
-    Two additive records. The failure class is what shadow mode exists for:
-    operators can see how many images would fail the seeding contract, and on
-    which class, before any deployment promotes the probe to ``enforce``. The
+    Two records. The failure class is what shadow mode exists for: operators
+    can see how many images would fail the seeding contract, and on which
+    class, before any deployment promotes the probe to ``enforce``. The
     envelope sample is recorded for passing images too, because the question a
     cap raises -- whether the fleet's images are anywhere near it -- cannot be
     answered from rejections alone.
     """
     if probe is None:
-        return decision
+        return []
     records = []
     if not probe.passed:
         records.append(PolicyEvidence("stable-core", probe.code, probe.detail[:240]))
     summary = probe.usage.summary(
-        _VALIDATOR_SANDBOX_MEMORY, _VALIDATOR_SANDBOX_TMPFS_SIZE
+        _validator_sandbox_memory_label(), _VALIDATOR_SANDBOX_TMPFS_SIZE
     )
     if summary:
         records.append(
             PolicyEvidence("stable-core", "seed-envelope-usage", summary[:240])
         )
+    return records
+
+
+def _tool_catalog_probe_records(
+    probe: tool_catalog_probe.ProbeVerdict | None,
+) -> list[PolicyEvidence]:
+    """The tool-catalog measurement as additive evidence records.
+
+    The measurement is recorded for passing images too: how far the fleet's
+    harnesses sit from the context window is what decides when ``enforce``
+    is safe, and rejections alone cannot show it.
+    """
+    if probe is None:
+        return []
+    records = []
+    if not probe.passed:
+        records.append(PolicyEvidence("stable-core", probe.code, probe.detail[:240]))
+    records.append(
+        PolicyEvidence(
+            "stable-core", tool_catalog_probe.OBSERVATION_CODE, probe.observation
+        )
+    )
+    return records
+
+
+def _with_probe_evidence(
+    decision: ScreeningDecision, records: Sequence[PolicyEvidence]
+) -> ScreeningDecision:
+    """Append probe records without changing the outcome, capping once.
+
+    ScreeningDecision rejects more than _MAX_EVIDENCE records, so reserve the
+    room every probe's records take in a single cut instead of assuming one
+    free slot: a saturated decision plus failure classes plus measurements
+    would otherwise raise before the worker could submit any verdict at all,
+    and capping per probe would let a later probe evict an earlier one's.
+    """
     if not records:
         return decision
-    # ScreeningDecision rejects more than _MAX_EVIDENCE records, so reserve the
-    # room these take instead of assuming one free slot: a saturated decision
-    # plus a failure class plus an envelope sample would otherwise raise before
-    # the worker could submit any verdict at all.
-    keep = max(0, _MAX_EVIDENCE - len(records))
-    return replace(decision, evidence=(*decision.evidence[:keep], *records))
+    tail = tuple(records)[-_MAX_EVIDENCE:]
+    keep = max(0, _MAX_EVIDENCE - len(tail))
+    return replace(decision, evidence=(*decision.evidence[:keep], *tail))
+
+
+def _with_seed_probe_evidence(
+    decision: ScreeningDecision, probe: _SeedProbe | None
+) -> ScreeningDecision:
+    """Record the ``/seed`` observation without changing the outcome."""
+    return _with_probe_evidence(decision, _seed_probe_records(probe))
 
 
 def _gateway_call_count(path: str) -> int:
@@ -775,14 +889,22 @@ def _prepare_gateway_state() -> tuple[str, str]:
         fd = os.open(state_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         os.chmod(state_file, 0o622)
-        events_file = Path(state_dir) / "semantic-events"
-        fd = os.open(events_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(fd)
-        os.chmod(events_file, 0o622)
+        for name in ("semantic-events", _GATEWAY_REQUEST_LOG):
+            appendable = Path(state_dir) / name
+            fd = os.open(appendable, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+            os.chmod(appendable, 0o622)
     except Exception:
         shutil.rmtree(state_dir, ignore_errors=True)
         raise
     return state_dir, state_file
+
+
+# The gateway appends one measurement per forwarded model request here; the
+# worker reads the lines the tool-catalog probe added.
+_GATEWAY_REQUEST_LOG = "model-requests"
+_TOOL_CATALOG_RUN_FILE = "tool-catalog-run.json"
+_MAX_REQUEST_LOG_BYTES = 64 * 1024
 
 
 def _set_semantic_probe(state_file: str, probe: Mapping[str, object]) -> bool:
@@ -1278,8 +1400,12 @@ class BuildGate:
         scored_runtime_evidence_received_at: int | None = None,
         execution_namespace: UUID | None = None,
         review_lineage: ReviewLineagePacket | None = None,
+        sandbox_memory_limit_mib: int | None = None,
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
+
+        ``sandbox_memory_limit_mib`` is the live validator harness cap Platform
+        stamped on the claim; the runtime probe runs at exactly that cap.
 
         ``bench_version`` is the exact generation Platform assigned to this
         submission. Private behavioral challenges reuse it so the challenge
@@ -1316,6 +1442,9 @@ class BuildGate:
         loading any private challenge bank. It has no publish callback.
         """
 
+        _SANDBOX_MEMORY_MIB.set(
+            sandbox_memory_limit_mib or runtime_envelope().memory_limit_mib
+        )
         if build_only and policy_only:
             raise ValueError("build-only and policy-only modes are mutually exclusive")
         if source_only_build and (
@@ -1428,11 +1557,72 @@ class BuildGate:
                     detail=contract_error,
                 )
             source_digest, source_paths = self._source_metadata(tmp_path)
-            if policy_version == 13 and record_archive_verification is not None:
+            if policy_version >= 13 and record_archive_verification is not None:
                 # The streamed archive digest and its bounded container
                 # contract have both been verified. Record before a later L4
                 # hold can skip the build/runtime path.
                 await record_archive_verification()
+
+            if build_only:
+                # The mechanical lane is the whole screen now that model source
+                # review is retired (owner decision 2026-11-07). The static
+                # malicious-source preflight is a safety check, not a review: it
+                # still runs before any submission-controlled Dockerfile or
+                # image, deterministically and without a model.
+                #
+                # Fail closed by design. ``malicious_preflight`` returns only
+                # matches it could not prove inert (legacy decisive rules after
+                # the reachability filter, or v2 decisive candidates in
+                # ``enforce``). The full lane below used to route such a lead
+                # to the L2/L3 reviewer, but under policy >= 13 even a court
+                # clear was held as a quarantine pending verification, so a
+                # lead never passed unreviewed. With the reviewer and holds
+                # gone the outcome is pass or reject, and the safety layer
+                # rejects, with file and line locations so the miner can fix
+                # and resubmit; an operator can act on a false positive.
+                try:
+                    static_lead = TarSourceRepository(tmp_path).malicious_preflight(
+                        artifact_sha256=sha256.lower(),
+                        mode=self._config.static_preflight_v2_mode,
+                        policy_version=policy_version,
+                        audit_recorder=lambda payload: (
+                            self._static_preflight_audit.record(
+                                agent_id=agent_id,
+                                attempt_id=attempt_id,
+                                artifact_sha256=sha256.lower(),
+                                payload=payload,
+                            )
+                        ),
+                    )
+                except StaticPreflightAuditError as error:
+                    logger.exception(
+                        "static preflight audit failed agent_id=%s attempt_id=%s",
+                        agent_id,
+                        attempt_id,
+                    )
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="static-preflight-audit-failed",
+                        summary="static preflight audit journal write failed",
+                        detail=f"screener error: {error}",
+                    )
+                if static_lead is not None:
+                    logger.warning(
+                        "static-source safety reject agent_id=%s attempt_id=%s "
+                        "categories=%s execution_started=false",
+                        agent_id,
+                        attempt_id,
+                        ",".join(static_lead.categories),
+                    )
+                    return core_decision(
+                        ScreeningOutcome.DETERMINISTIC_REJECT,
+                        code=STATIC_MALICIOUS_SOURCE_REASON_CODE,
+                        summary=(
+                            "static safety check found malicious-source patterns; "
+                            "execution was not started"
+                        ),
+                        detail=static_malicious_source_detail(static_lead),
+                    )
 
             # General source review is deliberately deferred until the image
             # has built and passed its runtime contract. Broken Dockerfiles and
@@ -1828,6 +2018,7 @@ class BuildGate:
                 gateway_container=gateway_container,
                 network=network,
                 gateway_state_dir=gateway_state_dir,
+                bench_version=bench_version,
                 progress=report,
             )
             health_elapsed_ms = round(
@@ -1853,7 +2044,10 @@ class BuildGate:
                     summary="screening runtime infrastructure failed"
                     if serve_result.retryable
                     else (
-                        "container did not satisfy the seeding contract"
+                        "harness model request does not fit the scoring "
+                        "model's context window"
+                        if serve_result.code == tool_catalog_probe.CONTEXT_OVERFLOW_CODE
+                        else "container did not satisfy the seeding contract"
                         if serve_result.code
                         else "container did not satisfy the health contract"
                     ),
@@ -2000,8 +2194,14 @@ class BuildGate:
                 )
             # Shadow mode observes only: the seeding signal is recorded as
             # evidence beside the outcome the policy already reached.
-            decision = _with_seed_probe_evidence(
-                decision, active_audit_runtime.seed_probe
+            decision = _with_probe_evidence(
+                decision,
+                [
+                    *_tool_catalog_probe_records(
+                        active_audit_runtime.tool_catalog_probe
+                    ),
+                    *_seed_probe_records(active_audit_runtime.seed_probe),
+                ],
             )
             self._journal.record(context=context, decision=decision)
             held_source_review = is_held_source_review(decision)
@@ -2087,6 +2287,19 @@ class BuildGate:
                         detail=(
                             "screener error: lease budget exhausted during image upload"
                         ),
+                    )
+                except ScreenedImageUploadUnavailable as error:
+                    # Transport or 5xx on a submission-independent upload step
+                    # (Platform restarting, its gateway, or object storage):
+                    # Platform's bounded infra retry takes it from here.
+                    if held_source_review:
+                        logger.warning("held image upload failed: %s", error)
+                        return decision
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code=IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
+                        summary="Platform was unavailable for the screened image",
+                        detail=f"screener error: image upload failed: {error}",
                     )
                 except Exception as error:  # noqa: BLE001 - publish is parked infra
                     if held_source_review:
@@ -3280,6 +3493,7 @@ class BuildGate:
         gateway_container: str,
         network: str,
         gateway_state_dir: str,
+        bench_version: int,
         progress: Callable[[ScreenerProgressStage], None] | None = None,
     ) -> tuple[_StageResult, _AuditRuntime | None]:
         """Run the image and await health against the isolated fake gateway."""
@@ -3347,8 +3561,35 @@ class BuildGate:
                     ),
                     None,
                 )
-        # Production v6 intentionally stops here. No synthetic POST /run is
-        # issued unless a private policy selector explicitly chooses an audit.
+        # A v18+ scored case offers up to the contract's maximum catalog. One
+        # discarded /run at that size shows whether the harness's model request
+        # still fits the scoring model's context window (DITTO-2564).
+        catalog_probe: tool_catalog_probe.ProbeVerdict | None = None
+        if self._config.tool_catalog_probe_mode != "off" and (
+            tool_catalog_probe.applies_to(bench_version)
+        ):
+            catalog_probe = await self._probe_tool_catalog(
+                harness_base,
+                probe_container=gateway_container,
+                gateway_state_dir=gateway_state_dir,
+                bench_version=bench_version,
+                tool_route=tool_route,
+                tool_key=tool_key,
+                timeout=min(
+                    self._config.tool_catalog_probe_timeout_seconds,
+                    self._config.run_timeout_seconds,
+                ),
+            )
+            if (
+                not catalog_probe.passed
+                and self._config.tool_catalog_probe_mode == "enforce"
+            ):
+                return (
+                    _StageResult(False, catalog_probe.detail, code=catalog_probe.code),
+                    None,
+                )
+        # Production v6 intentionally stops here. No other synthetic POST /run
+        # is issued unless a private policy selector explicitly chooses an audit.
         return (
             _StageResult(True, ""),
             _AuditRuntime(
@@ -3357,6 +3598,7 @@ class BuildGate:
                 oracle_answer=oracle_answer,
                 gateway_state_file=str(Path(gateway_state_dir) / "model-called"),
                 seed_probe=seed_probe,
+                tool_catalog_probe=catalog_probe,
                 tool_route=tool_route,
                 tool_key=tool_key,
             ),
@@ -3409,7 +3651,9 @@ class BuildGate:
             "--network-alias",
             _HARNESS_ALIAS,
             "--memory",
-            _VALIDATOR_SANDBOX_MEMORY,
+            _validator_sandbox_memory(),
+            "--memory-swap",
+            _validator_sandbox_memory(),
             "--cpus",
             _VALIDATOR_SANDBOX_CPUS,
             "--pids-limit",
@@ -3550,6 +3794,8 @@ class BuildGate:
                 "-e",
                 "DITTO_FAKE_GATEWAY_SEMANTIC_EVENTS=/state/semantic-events",
                 "-e",
+                f"DITTO_FAKE_GATEWAY_REQUEST_LOG=/state/{_GATEWAY_REQUEST_LOG}",
+                "-e",
                 "DITTO_FAKE_GATEWAY_TLS_CERT=/state/leaf.crt",
                 "-e",
                 "DITTO_FAKE_GATEWAY_TLS_KEY=/state/leaf.key",
@@ -3648,9 +3894,11 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             return _SeedProbe(
                 False,
                 "seed-memory-cap",
-                f"the harness exceeded the sandbox memory cap while serving "
-                f"{seed_path} and was terminated. Validators run the same cap; "
-                f"keep the store's working set inside it.",
+                f"the harness exceeded the {_validator_sandbox_memory_label()} "
+                f"sandbox memory cap while serving {seed_path} and was "
+                f"terminated. Scored validator runs apply this same cap (the "
+                f"live Platform setting); keep the store's working set inside "
+                f"it.",
             )
         if lifecycle in {"dead", "exited"}:
             return _SeedProbe(
@@ -3686,10 +3934,72 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             f"{seed_path} returned no response within {timeout:.0f}s ({tail}).",
         )
 
+    async def _probe_tool_catalog(
+        self,
+        harness_base: str,
+        *,
+        probe_container: str,
+        gateway_state_dir: str,
+        bench_version: int,
+        tool_route: str,
+        tool_key: bytes,
+        timeout: float,
+    ) -> tool_catalog_probe.ProbeVerdict:
+        """Offer a full-size catalog once and measure what reaches the model.
+
+        The request is a scored tool case's envelope with a freshly drawn
+        catalog, so nothing in it marks the screen. Its body is about 1 MiB,
+        past what one ``docker exec`` argument may carry, so it is staged in
+        the gateway's state directory and read there. The verdict comes from
+        the gateway's measurements alone; a failed ``/run`` proves nothing
+        about the request size and passes.
+        """
+        rng = random.SystemRandom()
+        request = _with_tool_endpoint(
+            tool_catalog_probe.run_request(
+                rng,
+                tool_catalog_probe.full_size_catalog(rng),
+                bench_version=bench_version,
+            ),
+            tool_route=tool_route,
+            tool_key=tool_key,
+        )
+        state = Path(gateway_state_dir)
+        log_path = state / _GATEWAY_REQUEST_LOG
+        run_file = state / _TOOL_CATALOG_RUN_FILE
+        try:
+            offset = log_path.stat().st_size
+            run_file.write_bytes(json.dumps(request).encode())
+            os.chmod(run_file, 0o644)
+        except OSError as error:
+            return tool_catalog_probe.ProbeVerdict(
+                True, "tool-catalog-ok", "", f"probe not staged: {error}"[:240]
+            )
+        try:
+            code, out = await self._request_from_sidecar(
+                probe_container,
+                f"{harness_base}/run",
+                payload_file=f"/state/{_TOOL_CATALOG_RUN_FILE}",
+                timeout=timeout,
+            )
+        finally:
+            with contextlib.suppress(OSError):
+                run_file.unlink()
+        run_note = "" if code == 0 else f"/run failed: {_log_tail(out)[:80]}"
+        try:
+            with log_path.open("rb") as log:
+                log.seek(offset)
+                raw = log.read(_MAX_REQUEST_LOG_BYTES)
+        except OSError:
+            raw = b""
+        return tool_catalog_probe.judge(
+            tool_catalog_probe.parse_request_log(raw), run_note=run_note
+        )
+
     def _seed_detail_with_usage(self, probe: _SeedProbe) -> str:
         """The miner-facing reason, with what the container was using."""
         summary = probe.usage.summary(
-            _VALIDATOR_SANDBOX_MEMORY, _VALIDATOR_SANDBOX_TMPFS_SIZE
+            _validator_sandbox_memory_label(), _VALIDATOR_SANDBOX_TMPFS_SIZE
         )
         if not summary:
             return probe.detail
@@ -4440,13 +4750,22 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         url: str,
         *,
         payload: Mapping[str, object] | None = None,
+        payload_file: str | None = None,
         timeout: float,
     ) -> tuple[int, str]:
-        """Make an HTTP request from inside the isolated Docker network."""
+        """Make an HTTP request from inside the isolated Docker network.
+
+        ``payload_file`` names a JSON body already staged in the sidecar's
+        filesystem, for a body too large to pass as a process argument.
+        """
         encoded = ""
         method = "GET"
         if payload is not None:
             encoded = base64.b64encode(json.dumps(payload).encode()).decode()
+            method = "POST"
+        elif payload_file is not None:
+            # ``@`` is outside the base64 alphabet, so it cannot be misread.
+            encoded = f"@{payload_file}"
             method = "POST"
         script = f"""\
 import base64
@@ -4455,7 +4774,11 @@ import urllib.error
 import urllib.request
 
 url, method, data, timeout_raw = sys.argv[1:5]
-body = base64.b64decode(data) if data else None
+if data.startswith("@"):
+    with open(data[1:], "rb") as staged:
+        body = staged.read()
+else:
+    body = base64.b64decode(data) if data else None
 request = urllib.request.Request(
     url, data=body, method=method, headers={{"Content-Type": "application/json"}}
 )

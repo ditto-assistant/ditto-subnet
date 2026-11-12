@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -15,15 +16,18 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+import rehearsal_cost  # noqa: E402  (sibling module: bench 16 priced cost estimate)
 import rehearsal_gates  # noqa: E402  (sibling module: the public v13 gate replay)
 
 DEFAULT_KIT_DIR = SCRIPT_DIR.parent
@@ -35,16 +39,29 @@ LONGMEM_DIR = API_DIR / "integrations" / "longmemeval"
 # constant is only the offline fallback. Keep it at the activated version
 # (Backroom get_benchmark_rollout_control); do not confuse with research
 # CurrentBenchVersion (still v8).
-LIVE_SCORING_BENCH_VERSION = 14
+LIVE_SCORING_BENCH_VERSION = 18
 PUBLIC_ROLLOUT_URL = "https://dittobench.ai/api/v1/public/bench/rollout"
 # Override (or set to "off" to skip the lookup) for air-gapped rehearsals.
 PUBLIC_ROLLOUT_URL_ENV = "DITTOBENCH_PUBLIC_ROLLOUT_URL"
 MIN_BENCH_VERSION = 8
-# Bench 14 is the live scoring contract (activated 2026-10-28). The harness
-# wire stays 9.
+# Bench 17 is the live scoring contract (activated 2026-11-07): the dueling
+# bench with the priced-cost-v2 factor ($0.50 reference, 0.3 floor). The
+# harness wire stays 9.
 # Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
 # ditto/tests/test_bench_version_pins.py diffs across every layer.
-MAX_BENCH_VERSION = 14
+MAX_BENCH_VERSION = 18
+# Bench 16+ canonical runs are a datagen half plus a five-column generator
+# slice (research/dittobench-datagen/docs/dueling-bench.md). A local rehearsal
+# at 16+ builds its own slice from the PUBLIC default generator only: miner
+# generators stay private until their source is released.
+DUELING_MIN_BENCH_VERSION = 16
+DUELING_SLICE_COLUMNS = 5
+DUELING_SLICE_MODE = "dueling-slice-v1"
+GENERATOR_KIT_DIR = REPO_ROOT / "miners" / "dittobench-generator-starter-kit"
+# The default generator's packs are bound to a hotkey. Live slices use the
+# registered default generator's; a local slice uses this well-known public
+# development key (Substrate "Alice"), never a real miner's.
+LOCAL_SLICE_GENERATOR_HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 # Environment variables the harness honours only during a local rehearsal.
 COMPLETION_LOG_ENV = "DITTOBENCH_COMPLETION_LOG"
 # The kit's `answer` slot is off by default (the wire stays at bench 9, so a
@@ -61,6 +78,19 @@ LONGMEM_DATASET_URL = (
 )
 LONGMEM_CONDITION = "longmemeval-s-cleaned-native-memory-tools-v2"
 TERMINAL_STATUSES = {"done", "failed"}
+# The published runtime envelope (docs/RUNTIME-ENVELOPE.md). A standalone
+# starter-kit checkout lacks the monorepo copy and uses these fallbacks, which
+# mirror the published values.
+RUNTIME_ENVELOPE_PATH = (
+    REPO_ROOT
+    / "packages"
+    / "ditto-screening-protocol"
+    / "ditto_screening_protocol"
+    / "data"
+    / "runtime_envelope.json"
+)
+_ENVELOPE_FALLBACK = {"memory_limit_mib": 8192, "cpus": 2, "case_concurrency": 8}
+MEMORY_WARN_FRACTION = 0.85
 SECRET_PATTERNS = (
     re.compile(r"sk-or-v1-[A-Za-z0-9_-]+"),
     re.compile(r"(?i)(authorization:\s*bearer\s+)[^\s]+"),
@@ -147,6 +177,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="pin the generated dataset; omit for a fresh random seed",
     )
     parser.add_argument(
+        "--no-slice",
+        action="store_true",
+        help=(
+            "at bench 16+, score the datagen half only instead of building a "
+            "local generator slice from the public default generator"
+        ),
+    )
+    parser.add_argument(
+        "--slice-sandbox",
+        choices=("local", "docker"),
+        default="local",
+        help=(
+            "where the public default generator runs while building the local "
+            "slice (default: local; docker isolates it like the live scorer)"
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=7200,
@@ -173,6 +220,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "copy the pass-off dataset artifact, transcript, completion log, and "
             "gate result into this directory for an offline re-run "
             "(scripts/rehearsal_gates.py)"
+        ),
+    )
+    parser.add_argument(
+        "--no-cost-meter",
+        action="store_true",
+        help=(
+            "do not route the harness's chat through the local cost meter; the "
+            "bench 16 priced cost estimate is then not printed"
         ),
     )
     parser.add_argument(
@@ -357,6 +412,7 @@ def submit_body(
     harness_url: str,
     seed: int | None,
     bench_version: int = LIVE_SCORING_BENCH_VERSION,
+    slice_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "bench_version": bench_version,
@@ -365,7 +421,197 @@ def submit_body(
     }
     if seed is not None:
         body["seed"] = seed
+    if slice_bytes is not None:
+        if seed is None:
+            raise RehearsalError("a local dueling slice is built for an explicit seed")
+        body.update(
+            {
+                "dueling_slice_mode": DUELING_SLICE_MODE,
+                "dueling_slice_bytes": base64.b64encode(slice_bytes).decode("ascii"),
+                "expected_slice_sha256": hashlib.sha256(slice_bytes).hexdigest(),
+                # Every local column is the public default generator (owner
+                # ""), so nothing is masked and the composite averages all 5.
+                "dueling_owner_key": "",
+            }
+        )
     return body
+
+
+def uses_dueling_slice(args: argparse.Namespace) -> bool:
+    return args.bench_version >= DUELING_MIN_BENCH_VERSION and not args.no_slice
+
+
+def local_slice_pins(bench_version: int) -> dict[str, Any]:
+    """Season pins for a local slice: every column is the public default
+    generator, at the newest pack policy a season at ``bench_version``
+    accepts (policy N, which the default generator declares when offered)."""
+    return {
+        "season_id": str(uuid.uuid4()),
+        "columns": [
+            {
+                "column_id": f"c{index}",
+                "submission_id": "default",
+                "owner_key": "",
+                "miner_hotkey": LOCAL_SLICE_GENERATOR_HOTKEY,
+                "tree_sha256": "",
+                "grading_bench_version": bench_version,
+                "public_default": True,
+                "substituted": False,
+            }
+            for index in range(DUELING_SLICE_COLUMNS)
+        ],
+    }
+
+
+def local_slice_command(
+    challenge_scorer: Path,
+    *,
+    pins_path: Path,
+    out_path: Path,
+    run_seed: int,
+    bench_version: int,
+    sandbox: str,
+    season_secret: str,
+    anchor_block_hash: str,
+) -> list[str]:
+    """``challenge-scorer reproduce-slice`` with a throwaway season.
+
+    The season secret and anchor are fresh random values that exist only for
+    this rehearsal, so the slice seeds derive through the same primitives as a
+    live season (``SeasonSeed``, ``SliceSeed``) without touching a real one.
+    """
+    command = [
+        str(challenge_scorer),
+        "reproduce-slice",
+        "-season-secret",
+        season_secret,
+        "-season-index",
+        "0",
+        "-anchor-block-hash",
+        anchor_block_hash,
+        "-run-seed",
+        str(run_seed),
+        "-bench-version",
+        str(bench_version),
+        "-pins",
+        str(pins_path),
+        "-sandbox",
+        sandbox,
+        "-out",
+        str(out_path),
+    ]
+    for index in range(DUELING_SLICE_COLUMNS):
+        command += ["-source", f"c{index}={GENERATOR_KIT_DIR}"]
+    return command
+
+
+def _run_local_slice(
+    command: list[str], *, timeout: float
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=API_DIR,
+        env=sanitized_build_env(),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def build_local_slice(
+    tmp: Path, *, run_seed: int, bench_version: int, sandbox: str, timeout: float
+) -> bytes:
+    """Build the run's generator slice from the public default generator."""
+    if not GENERATOR_KIT_DIR.is_dir():
+        raise RehearsalError(
+            "a bench 16+ local slice needs the public default generator at "
+            f"{GENERATOR_KIT_DIR}; run --no-slice to score the datagen half only"
+        )
+    challenge_scorer = tmp / "challenge-scorer"
+    try:
+        subprocess.run(
+            ["go", "build", "-o", str(challenge_scorer), "./cmd/challenge-scorer"],
+            cwd=API_DIR,
+            env=sanitized_build_env(),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        detail = getattr(exc, "stderr", None) or getattr(exc, "stdout", None) or str(exc)
+        raise RehearsalError(
+            "building challenge-scorer for the local dueling slice failed "
+            "(rerun with --no-slice to score the datagen half only): "
+            + redact(str(detail).strip()[-2000:])
+        ) from exc
+    pins_path = tmp / "slice-pins.json"
+    pins_path.write_text(json.dumps(local_slice_pins(bench_version)))
+    out_path = tmp / "slice.json"
+    try:
+        result = _run_local_slice(
+            local_slice_command(
+                challenge_scorer,
+                pins_path=pins_path,
+                out_path=out_path,
+                run_seed=run_seed,
+                bench_version=bench_version,
+                sandbox=sandbox,
+                season_secret=secrets.token_hex(32),
+                anchor_block_hash="0x" + secrets.token_hex(32),
+            ),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RehearsalError(
+            f"building the local dueling slice did not finish within {int(timeout)} "
+            "seconds; rerun with --no-slice to score the datagen half only"
+        ) from exc
+    except OSError as exc:
+        raise RehearsalError(
+            "could not start challenge-scorer for the local dueling slice "
+            f"({redact(str(exc))}); rerun with --no-slice to score the datagen "
+            "half only"
+        ) from exc
+    if result.returncode != 0:
+        raise RehearsalError(
+            "building the local dueling slice failed: "
+            + redact((result.stderr or result.stdout).strip()[-2000:])
+        )
+    raw = out_path.read_bytes()
+    digest = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    if digest != hashlib.sha256(raw).hexdigest():
+        raise RehearsalError("local dueling slice digest does not match its bytes")
+    return raw
+
+
+def format_dueling_summary(report: dict[str, Any]) -> str:
+    """The composite's two halves and each generator column's mean."""
+    dueling = (report.get("details") or {}).get("dueling")
+    if not isinstance(dueling, dict):
+        return ""
+    lines = [
+        "",
+        "--- dueling (bench 16+: datagen half + generator slice) ---",
+        f"datagen_raw:         {float(dueling.get('datagen_raw') or 0):.3f}",
+        f"datagen_gate:        {float(dueling.get('datagen_gate') or 0):.3f}",
+        f"column_weight:       {float(dueling.get('column_weight') or 0):.3f}",
+        f"composite_stderr:    {float(dueling.get('composite_stderr') or 0):.3f}",
+    ]
+    for column in dueling.get("columns") or []:
+        n = int(column.get("n") or 0)
+        mean = float(column.get("sum") or 0) / n if n else 0.0
+        tag = " (substituted)" if column.get("substituted") else ""
+        lines.append(
+            f"column {column.get('column_id', '?')}:           mean {mean:.3f} over "
+            f"{n} cases, policy v{column.get('grading_bench_version', '?')}{tag}"
+        )
+    lines += [
+        "Every local column is the PUBLIC default generator. Live seasons pin",
+        "the top eligible miner generators, whose cases stay private until",
+        "their source is released; expect different, usually harder, columns.",
+    ]
+    return "\n".join(lines)
 
 
 def poll_run(api_url: str, run_id: str, *, timeout: float) -> dict[str, Any]:
@@ -541,10 +787,121 @@ def scorer_environment(tmp: Path, broker_port: int) -> dict[str, str]:
     environment["DITTOBENCH_BROKER_PORT"] = str(broker_port)
     environment["DITTOBENCH_PRIVATE_ARTIFACT_DIR"] = str(private_dir)
     environment["DITTOBENCH_ARTIFACT_DIR"] = str(artifact_dir)
-    # One case at a time is friendlier to a laptop-sized local Ollama while
-    # preserving deterministic score semantics (latency is not scored).
-    environment.setdefault("DITTOBENCH_V8_CASE_CONCURRENCY", "1")
+    # Validators overlap this many /run calls on one harness, so practice does
+    # too: a harness that shares state across concurrent cases, or whose peak
+    # memory is the sum of eight cases, must fail here first. An explicit
+    # DITTOBENCH_V8_CASE_CONCURRENCY still wins (with a warning in run()).
+    environment.setdefault(
+        "DITTOBENCH_V8_CASE_CONCURRENCY", str(runtime_envelope()["case_concurrency"])
+    )
     return environment
+
+
+def rehearsal_case_concurrency(api_env: dict[str, str]) -> int:
+    """Cases the local scorer overlaps on one harness.
+
+    The scorer, not the harness, drives the overlap, so read it from the scorer
+    environment: ``scorer_environment`` defaults it to the published envelope,
+    and the harness environment carries it only when the caller exported it.
+    """
+    return int(api_env["DITTOBENCH_V8_CASE_CONCURRENCY"])
+
+
+def runtime_envelope() -> dict[str, int]:
+    """Memory cap, CPUs and case concurrency from the published envelope."""
+    try:
+        raw = json.loads(RUNTIME_ENVELOPE_PATH.read_text(encoding="utf-8"))
+        return {
+            "memory_limit_mib": int(raw["harness"]["memory_limit_mib"]),
+            "cpus": int(raw["harness"]["cpus"]),
+            "case_concurrency": int(raw["concurrency"]["case_concurrency"]),
+        }
+    except (OSError, ValueError, KeyError, TypeError):
+        return dict(_ENVELOPE_FALLBACK)
+
+
+def process_group_rss_bytes(pgid: int) -> int:
+    """Resident memory of every process in ``pgid`` (portable ``ps``)."""
+    completed = subprocess.run(
+        ["ps", "-A", "-o", "pgid=,rss="], capture_output=True, text=True, check=False
+    )
+    total_kib = 0
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] == str(pgid) and fields[1].isdigit():
+            total_kib += int(fields[1])
+    return total_kib * 1024
+
+
+def store_bytes(tmp: Path) -> int:
+    """The harness store size. Validators keep it in the /tmp tmpfs, whose pages
+    count against the same memory cap as the process."""
+    return sum(
+        path.stat().st_size for path in tmp.glob("rehearsal.db*") if path.is_file()
+    )
+
+
+class HarnessMemoryWatch:
+    """Sample the harness's resident memory plus its store against the cap.
+
+    Practice runs the harness as a host process, so the kernel will not OOM-kill
+    it at the validator cap. This reports the same number the validator's cgroup
+    would charge and fails the rehearsal when it crosses the published cap, so
+    an over-cap harness is found here rather than on a scored lease.
+    """
+
+    def __init__(self, pgid: int, tmp: Path, *, interval: float = 1.0) -> None:
+        self.pgid = pgid
+        self.tmp = tmp
+        self.interval = interval
+        self.peak_bytes = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def sample(self) -> None:
+        used = process_group_rss_bytes(self.pgid) + store_bytes(self.tmp)
+        self.peak_bytes = max(self.peak_bytes, used)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            self.sample()
+
+    def start(self) -> HarnessMemoryWatch:
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
+def enforce_memory_envelope(peak_bytes: int, cap_mib: int) -> str:
+    """Report peak usage against the cap; raise past it like a validator would."""
+    peak_mib = peak_bytes / (1024 * 1024)
+    line = (
+        f"harness memory peak {peak_mib:.0f} MiB (RSS + store) of the "
+        f"{cap_mib} MiB validator cap ({100 * peak_mib / cap_mib:.0f}%)"
+    )
+    if peak_mib >= cap_mib:
+        raise RehearsalError(
+            f"harness_oom (local): {line}. A validator kills this harness and "
+            "charges the attempt; see docs/RUNTIME-ENVELOPE.md"
+        )
+    if peak_mib >= MEMORY_WARN_FRACTION * cap_mib:
+        line += " -- WARNING: little headroom before a scored OOM"
+    return line
+
+
+def pin_harness_cpus(pid: int, cpus: int) -> str | None:
+    """Pin the harness to the validator's CPU count where the OS allows it."""
+    if not hasattr(os, "sched_setaffinity"):
+        return (
+            f"note: this OS cannot pin the harness to {cpus} CPUs; validators "
+            f"give it {cpus}, so local latency is optimistic"
+        )
+    available = sorted(os.sched_getaffinity(0))
+    os.sched_setaffinity(pid, set(available[:cpus]))
+    return None
 
 
 def longmem_judge_context() -> str:
@@ -1033,6 +1390,12 @@ def run(args: argparse.Namespace) -> int:
         )
     args.bench_version = resolve_bench_version(args.bench_version)
     print(f"rehearsing bench_version {args.bench_version}", flush=True)
+    if uses_dueling_slice(args):
+        # The slice is built for one seed (run_seed == seed), so pin it now.
+        if args.seed is None:
+            args.seed = secrets.randbelow(2**62) + 1
+        elif args.seed <= 0:
+            raise RehearsalError("a bench 16+ slice rehearsal needs a positive --seed")
 
     with tempfile.TemporaryDirectory(prefix="dittobench-local-rehearsal-") as raw_tmp:
         tmp = Path(raw_tmp)
@@ -1069,11 +1432,24 @@ def run(args: argparse.Namespace) -> int:
 
         harness_env = harness_rehearsal_env(tmp, gates=args.gates)
         api_env = scorer_environment(tmp, broker_port)
+        # Bench 16 prices inference: meter the harness's chat so the summary
+        # can show the estimated cost and cost factor (rehearsal_cost.py).
+        cost_meter = (
+            None
+            if args.no_cost_meter
+            else rehearsal_cost.meter_for_environment(harness_env)
+        )
 
         harness: subprocess.Popen[bytes] | None = None
         api: subprocess.Popen[bytes] | None = None
         with harness_log.open("wb") as harness_output, api_log.open("wb") as api_output:
             try:
+                # Started inside the protected scope so the finally below
+                # always stops it; the meter binds nothing before start().
+                if cost_meter is not None:
+                    harness_env = rehearsal_cost.route_harness_through(
+                        cost_meter.start(), harness_env
+                    )
                 harness = subprocess.Popen(
                     [str(harness_binary), "serve", "--port", str(harness_port)],
                     cwd=kit_dir,
@@ -1082,6 +1458,19 @@ def run(args: argparse.Namespace) -> int:
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
+                envelope = runtime_envelope()
+                cpu_note = pin_harness_cpus(harness.pid, envelope["cpus"])
+                if cpu_note:
+                    print(cpu_note, flush=True)
+                concurrency = rehearsal_case_concurrency(api_env)
+                if concurrency < envelope["case_concurrency"]:
+                    print(
+                        f"warning: case concurrency {concurrency} is below the "
+                        f"validators' {envelope['case_concurrency']}; peak memory "
+                        "and shared-state bugs under overlap are not exercised",
+                        flush=True,
+                    )
+                memory_watch = HarnessMemoryWatch(harness.pid, tmp).start()
                 api = subprocess.Popen(
                     [str(api_binary), "-port", str(api_port)],
                     cwd=API_DIR,
@@ -1095,6 +1484,20 @@ def run(args: argparse.Namespace) -> int:
                 wait_for_health(api_url, api)
                 require_scorer_bench_version(api_url, args.bench_version)
 
+                slice_bytes = None
+                if uses_dueling_slice(args):
+                    print(
+                        "building a local dueling slice from the public default "
+                        f"generator (seed {args.seed})...",
+                        flush=True,
+                    )
+                    slice_bytes = build_local_slice(
+                        tmp,
+                        run_seed=args.seed,
+                        bench_version=args.bench_version,
+                        sandbox=args.slice_sandbox,
+                        timeout=args.timeout,
+                    )
                 accepted = request_json(
                     f"{api_url}/v1/submit",
                     method="POST",
@@ -1103,6 +1506,7 @@ def run(args: argparse.Namespace) -> int:
                         harness_url,
                         args.seed,
                         args.bench_version,
+                        slice_bytes,
                     ),
                 )
                 run_id = accepted.get("run_id")
@@ -1113,6 +1517,14 @@ def run(args: argparse.Namespace) -> int:
                     flush=True,
                 )
                 completed = poll_run(api_url, run_id, timeout=args.timeout)
+                memory_watch.stop()
+                memory_watch.sample()
+                print(
+                    enforce_memory_envelope(
+                        memory_watch.peak_bytes, envelope["memory_limit_mib"]
+                    ),
+                    flush=True,
+                )
                 if completed.get("status") != "done":
                     failure = completed.get("failure") or {}
                     detail = (
@@ -1122,7 +1534,15 @@ def run(args: argparse.Namespace) -> int:
                     )
                     raise RehearsalError(f"local scorer failed run {run_id}: {detail}")
                 print(format_summary(completed))
+                dueling_summary = format_dueling_summary(completed.get("report") or {})
+                if dueling_summary:
+                    print(dueling_summary)
                 combined = dict(completed)
+                cost = rehearsal_cost.estimate(
+                    cost_meter, completed.get("report") or {}, args.bench_version
+                )
+                combined["priced_cost_estimate"] = cost
+                print(rehearsal_cost.format_estimate(cost, args.bench_version))
                 if args.gates:
                     gates = replay_gates(tmp, completed)
                     combined["gates"] = gates
@@ -1174,6 +1594,8 @@ def run(args: argparse.Namespace) -> int:
             finally:
                 stop_process(api)
                 stop_process(harness)
+                if cost_meter is not None:
+                    cost_meter.stop()
 
 
 def main() -> int:

@@ -128,6 +128,22 @@ class ScreenerConfig:
     seed_probe_timeout_seconds: float
     """Deadline for the single post-health ``/seed`` probe."""
 
+    tool_catalog_probe_mode: str
+    """How the full-size tool-catalog probe participates: ``off``, ``shadow``,
+    or ``enforce``.
+
+    For a submission screened at bench v18 or later, one scorer-shaped ``/run``
+    offers a catalog of the contract's maximum size and the isolated fake
+    gateway measures the model requests the harness forwards. A harness that
+    copies the whole catalog into each request overflows the scoring model's
+    context window on every scored case with a large catalog (DITTO-2564).
+    ``shadow`` records the measurement and any overflow as evidence without
+    changing the outcome; ``enforce`` rejects an overflow with
+    ``tool-catalog-context-overflow``."""
+
+    tool_catalog_probe_timeout_seconds: float
+    """Deadline for the single tool-catalog ``/run``."""
+
     v13_runtime_receipts_mode: str
     """``off`` (default) or ``shadow`` for bounded, non-decisive v13 probes.
 
@@ -217,6 +233,10 @@ class ScreenerConfig:
     l2_audit_retention_days: int
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
+    idle_exit_seconds: float | None = None
+    """Exit with ``IDLE_EXIT_STATUS`` after this long without screening work, so
+    an on-demand host can power itself off. Checked only between sweeps, when no
+    claim is in flight. ``None`` (the default) keeps polling forever."""
     l2_always_escalate: bool = False
     scorer_capabilities_url: str | None = None
     expected_scorer_revision: str | None = None
@@ -384,6 +404,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         seed_probe_timeout_seconds=_parse_float(
             "SCREENER_SEED_PROBE_TIMEOUT_SECONDS", "60"
         ),
+        # Additive rollout, like the seed probe: an operator promotes it to
+        # ``enforce`` once the shadow record shows no false overflow.
+        tool_catalog_probe_mode=_parse_choice(
+            "SCREENER_TOOL_CATALOG_PROBE_MODE", "shadow", ("off", "shadow", "enforce")
+        ),
+        tool_catalog_probe_timeout_seconds=_parse_float(
+            "SCREENER_TOOL_CATALOG_PROBE_TIMEOUT_SECONDS", "60"
+        ),
         v13_runtime_receipts_mode=_parse_choice(
             "SCREENER_V13_RUNTIME_RECEIPTS_MODE", "off", ("off", "shadow")
         ),
@@ -400,6 +428,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             str(20 * 1024 * 1024),
         ),
         poll_seconds=_parse_float("SCREENER_POLL_SECONDS", "30"),
+        idle_exit_seconds=_parse_optional_float("SCREENER_IDLE_EXIT_SECONDS"),
         queue_limit=_parse_int("SCREENER_QUEUE_LIMIT", "20"),
         http_timeout_seconds=_parse_float("SCREENER_HTTP_TIMEOUT_SECONDS", "60"),
         policy_manifest_file=os.environ.get("SCREENER_POLICY_MANIFEST_FILE") or None,
@@ -528,6 +557,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_API_KEY_FILE is required by screening policy v8"
         )
+    if config.idle_exit_seconds is not None and not (
+        60 <= config.idle_exit_seconds <= 86_400
+    ):
+        raise ScreenerConfigError(
+            "SCREENER_IDLE_EXIT_SECONDS must be between 60 and 86400"
+        )
     if not 1 <= config.source_review_max_steps <= 240:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_MAX_STEPS must be between 1 and 240"
@@ -609,11 +644,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if config.l2_review_model not in {
         "openai/gpt-5.6-terra",
         "openai/gpt-6-sol",
+        "openai/gpt-6.1-terra",
         "moonshotai/kimi-k3",
     }:
         raise ScreenerConfigError(
             "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra, "
-            "openai/gpt-6-sol, or moonshotai/kimi-k3"
+            "openai/gpt-6-sol, openai/gpt-6.1-terra, or moonshotai/kimi-k3"
         )
     if config.review_inference_provider not in REVIEW_INFERENCE_PROVIDERS:
         raise ScreenerConfigError(
@@ -631,9 +667,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2, optionally "
             "followed by openai/gpt-5.6-sol for legacy revisions"
         )
-    if config.l3_review_model not in {"openai/gpt-5.6-sol", "openai/gpt-6-sol"}:
+    if config.l3_review_model not in {
+        "openai/gpt-5.6-sol",
+        "openai/gpt-6-sol",
+        "openai/gpt-6.1-terra",
+    }:
         raise ScreenerConfigError(
-            "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol or openai/gpt-6-sol"
+            "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol, "
+            "openai/gpt-6-sol, or openai/gpt-6.1-terra"
         )
     if config.l3_review_provider != config.review_inference_provider:
         raise ScreenerConfigError(
@@ -656,9 +697,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError("SCREENER_L2_WORKSPACE_ROOT must be absolute")
     if not 1 <= config.l2_max_steps <= 256:
         raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 256")
-    if not 30 <= config.l2_timeout_seconds <= 1_800:
+    if not 30 <= config.l2_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
-            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 1800"
+            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 3600"
         )
     if not 1 <= config.l2_max_output_tokens <= 1_000_000:
         raise ScreenerConfigError(

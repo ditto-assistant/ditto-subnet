@@ -40,6 +40,7 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
 )
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import (
@@ -184,6 +185,90 @@ async def test_job_claim_types_the_stale_heartbeat_gate(
         with pytest.raises(expected) as raised:
             await platform.request_job(slot_id="slot-0")
     assert (type(raised.value) is PlatformHeartbeatRequiredError) is (status == 428)
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected_seconds"),
+    [
+        ("15", 15.0),
+        ("2.5", 2.5),
+        ("0", 1.0),
+        ("9999", 120.0),
+        (None, None),
+        ("", None),
+        ("Wed, 21 Oct 2015 07:28:00 GMT", None),
+        ("-5", None),
+        ("nan", None),
+        ("inf", None),
+    ],
+)
+async def test_job_claim_types_a_retry_later_refusal(
+    retry_after: str | None, expected_seconds: float | None
+) -> None:
+    """Only a 503 with usable delta-seconds Retry-After is a retry-later."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    headers = {} if retry_after is None else {"Retry-After": retry_after}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503, json={"detail": "dueling slice preparation pending"}, headers=headers
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformError) as raised:
+            await platform.request_job(slot_id="slot-0")
+    if expected_seconds is None:
+        assert type(raised.value) is PlatformError
+    else:
+        assert isinstance(raised.value, PlatformRetryLaterError)
+        assert raised.value.retry_after_seconds == expected_seconds
+        assert "dueling slice preparation pending" in str(raised.value)
+
+
+async def test_confirmation_claim_types_a_retry_later_refusal() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"detail": "dueling slice preparation pending"},
+            headers={"Retry-After": "15"},
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformRetryLaterError) as raised:
+            await platform.request_top5_confirmation_job(slot_id="slot-0")
+    assert raised.value.retry_after_seconds == 15.0
+
+
+async def test_job_claim_conflict_is_not_a_retry_later() -> None:
+    """409 keeps its plain refusal even when it carries Retry-After."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409, json={"detail": "stale"}, headers={"Retry-After": "5"}
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(PlatformError) as raised:
+            await platform.request_job(slot_id="slot-0")
+    assert type(raised.value) is PlatformError
 
 
 def _coding_certification_submit_args() -> tuple[
@@ -1668,3 +1753,145 @@ def test_exchange_accepts_the_split_inference_host_and_nothing_else() -> None:
     ):
         with pytest.raises(PlatformError, match="not the platform"):
             asyncio.run(client.exchange_inference_grant(uuid4(), "key", hostile))
+
+
+def _artifact_ok(agent_id: UUID) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "agent_id": str(agent_id),
+            "sha256": "ab" * 32,
+            "download_url": "https://storage.test/artifact",
+            "expires_at": datetime.now(UTC).isoformat(),
+        },
+    )
+
+
+async def test_get_artifact_rides_out_a_platform_restart_502(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # SN-426: Caddy answered 502 while ditto-api restarted during a deploy, and
+    # the validator handed the ticket back as scoring_error against the miner.
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    nonces: list[str] = []
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonces.append(request.headers["X-Validator-Artifact-Nonce"])
+        if len(nonces) == 1:
+            return httpx.Response(502, text="")
+        return _artifact_ok(agent_id)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(cast(Any, config), http, keypair).get_artifact(
+            agent_id
+        )
+
+    assert response.agent_id == agent_id
+    assert sleeps == [1.0]
+    # Each attempt is a fresh proof, so Platform's nonce replay guard holds.
+    assert len(set(nonces)) == 2
+
+
+@pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
+async def test_get_artifact_outage_is_platform_infrastructure(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempts = 0
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(status, text="upstream gone")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(
+            PlatformInfrastructureError, match=f"artifact unavailable \\({status}\\)"
+        ):
+            await PlatformClient(cast(Any, config), http, keypair).get_artifact(
+                agent_id
+            )
+
+    assert attempts == 4
+    assert sleeps == [1.0, 3.0, 8.0]
+
+
+async def test_get_artifact_transport_failure_is_platform_infrastructure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    async def fake_sleep(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="artifact fetch failed"):
+            await PlatformClient(cast(Any, config), http, keypair).get_artifact(
+                agent_id
+            )
+
+
+@pytest.mark.parametrize("status", [403, 404, 409])
+async def test_get_artifact_refusal_is_not_retried_or_infrastructure(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempts = 0
+
+    async def fake_sleep(_: float) -> None:
+        raise AssertionError("a refusal must not be retried")
+
+    monkeypatch.setattr("ditto.validator.platform.asyncio.sleep", fake_sleep)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(status, text="no")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(
+            PlatformError, match=f"artifact rejected \\({status}\\)"
+        ) as raised:
+            await PlatformClient(cast(Any, config), http, keypair).get_artifact(
+                agent_id
+            )
+
+    assert not isinstance(raised.value, PlatformInfrastructureError)
+    assert attempts == 1

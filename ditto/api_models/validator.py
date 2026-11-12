@@ -111,11 +111,15 @@ from ditto_screening_protocol.confirmation import (
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationEvidenceRoot,
 )
+from ditto_screening_protocol.dueling import DuelingReport
 from ditto_screening_protocol.treasury_enforcement import TreasuryPin
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_DUELING_IDENT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+# Base64 of at most ``challenge.MaxRoundDatasetBytes`` (32 MiB) slice bytes.
+DUELING_SLICE_MAX_BASE64_CHARS = 4 * (((32 << 20) + 2) // 3)
 ValidatorRuntimeState = Literal[
     "polling",
     "running_benchmark",
@@ -372,11 +376,31 @@ class JobResponse(BaseModel):
         int | None,
         Field(default=None, description="Platform-pinned dataset seed (regenerable)."),
     ] = None
-    seed_scope: Literal["agent", "validator"] = Field(
+    seed_scope: Literal["agent", "validator", "season"] = Field(
         default="agent",
         description="Inputs used by the on-chain seed derivation. Validator "
-        "scope additionally binds the ticket holder's hotkey.",
+        "scope additionally binds the ticket holder's hotkey. Season scope "
+        "(protocol 35, title duels) is a dueling season's shared seed: "
+        "``crn_seed([seed_anchor_agent_id], bench_version, seed_index, "
+        "dataset_seed_block_hash)``.",
     )
+    seed_anchor_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description="Season scope: champion the season's family is anchored on.",
+        ),
+    ] = None
+    seed_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description="Season scope: replicate index of the shared seed.",
+        ),
+    ] = None
     dataset_sha256: Annotated[
         str | None,
         Field(default=None, description="SHA-256 of the pinned dataset (tamper pin)."),
@@ -424,6 +448,50 @@ class JobResponse(BaseModel):
             description="Hash of ``dataset_seed_block``; lets the validator "
             "re-derive the seed itself and refuse a ground ticket "
             "(ditto/validator/onchain_seed.py).",
+        ),
+    ] = None
+    # Bench >= 16 (dueling) generator slice, served in the lease body. All five
+    # fields arrive together on a dueling ticket and are absent otherwise, so a
+    # pre-16 lease serializes exactly as before. The validator forwards the
+    # slice to ``/v2/score`` and refuses a >= 16 lease that lacks them or whose
+    # bytes do not hash to ``expected_slice_sha256``.
+    dueling_slice_mode: Literal["dueling-slice-v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    dueling_slice_bytes: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=DUELING_SLICE_MAX_BASE64_CHARS,
+            exclude_if=lambda value: value is None,
+            description="Base64 of the season's frozen slice for this run seed.",
+        ),
+    ] = None
+    expected_slice_sha256: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_SHA256_PATTERN,
+            exclude_if=lambda value: value is None,
+            description="SHA-256 of the decoded slice bytes (tamper pin).",
+        ),
+    ] = None
+    dueling_owner_key: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=256,
+            exclude_if=lambda value: value is None,
+            description="Scored agent's owner key; the scorer self-masks it.",
+        ),
+    ] = None
+    dueling_season_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_DUELING_IDENT_PATTERN,
+            exclude_if=lambda value: value is None,
+            description="Dueling season the slice belongs to.",
         ),
     ] = None
 
@@ -817,9 +885,9 @@ class ValidatorHeartbeatResponse(BaseModel):
 class ArtifactResponse(BaseModel):
     """Returned by ``GET /validator/agent/{agent_id}/artifact``.
 
-    ``download_url`` is a short-lived pre-signed object-store URL the
-    daemon GETs to stream the tarball. ``sha256`` lets the daemon verify
-    the bytes it pulls against what the miner registered.
+    ``download_url`` is a short-lived pre-signed object-store URL to the
+    source tarball. It is ``None`` for a validator whose scorer runs the
+    screened image without source; ``sha256`` still names the artifact.
     """
 
     agent_id: Annotated[UUID, Field(description="Echoes the path-param id.")]
@@ -827,8 +895,14 @@ class ArtifactResponse(BaseModel):
         str, Field(description="Expected SHA-256 of the tarball, lowercase hex.")
     ]
     download_url: Annotated[
-        str, Field(description="Pre-signed URL to GET the tarball bytes.")
-    ]
+        str | None,
+        Field(
+            description=(
+                "Pre-signed source tarball URL; null when the validator scores "
+                "the screened image without source."
+            )
+        ),
+    ] = None
     expires_at: Annotated[
         datetime, Field(description="When ``download_url`` stops being valid (UTC).")
     ]
@@ -1162,6 +1236,18 @@ class CaseScore(BaseModel):
             description="True when an undelivered case was the validator's fault.",
         ),
     ] = False
+    budget_exhausted: Annotated[
+        bool | None,
+        Field(
+            default=None,
+            description=(
+                "True when the run's priced-cost budget was spent before this "
+                "case started (bench v18+): the case never ran and scores 0. "
+                "The harness's own spend, never an infrastructure failure. "
+                "Absent when the case ran, so pre-v18 rows keep their shape."
+            ),
+        ),
+    ] = None
     allow_extra_tools: Annotated[
         bool,
         Field(
@@ -1224,6 +1310,14 @@ class CaseScore(BaseModel):
         # The Go scorer omits or nulls these on cases that have none (memory
         # cases carry no expected tools); coerce null/absent to an empty list.
         return v if v is not None else []
+
+    @field_validator("budget_exhausted", mode="before")
+    @classmethod
+    def _budget_false_is_absent(cls, v: object) -> object:
+        # Only a refused case carries the flag. An explicit false means the
+        # same as absent; store it as absent so exact retries of reports
+        # accepted before the field existed rebuild identical details.
+        return None if v is False else v
 
 
 class CategoryStat(BaseModel):
@@ -1546,6 +1640,16 @@ class ConfirmationScoreRecord(BaseModel):
             default=None, description="Validator's hex sr25519 signature, if stored."
         ),
     ] = None
+    dueling: DuelingReport | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench >= 16 only: this seed's signed ``details.dueling`` "
+            "aggregates. The KOTH fold recomputes the seed's composite with "
+            "both compared agents' owners masked; a v16 record without them "
+            "carries no paired evidence."
+        ),
+    )
 
 
 class LedgerScoreProof(BaseModel):
@@ -1792,6 +1896,20 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    duel_history: Annotated[
+        list[ConfirmationScoreRecord] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel evidence: this agent's bench >= 16 "
+                "confirmation records from the newest dueling seasons, each "
+                "with its signed details.dueling. Served only with "
+                "crown_gate.duel_window_pairs; the dethrone test pairs them "
+                "by (season, seed). Levels never read it."
+            ),
+        ),
+    ] = None
     continual_aggregate_method: Literal["mean_after_quorum"] | None = Field(
         default=None,
         description=(
@@ -1874,9 +1992,77 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    dueling_season_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_DUELING_IDENT_PATTERN,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Bench >= 16 only: the dueling season this row was scored in. "
+                "The fold compares v16 rows only within one "
+                "``(bench_version, dueling_season_id)``; a v16 row without it "
+                "never ranks or pays."
+            ),
+        ),
+    ] = None
+    dueling: DuelingReport | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench >= 16 only: the authoritative score's signed "
+            "``details.dueling`` aggregates (owner key, datagen half, slice "
+            "columns). A v16 row without them never ranks or pays."
+        ),
+    )
     status: Annotated[
         AgentStatus, Field(description="Agent lifecycle state (always ``scored``).")
     ]
+
+
+class CrownGateMarker(BaseModel):
+    """Protocol-34 crown rules a validator applies to the KOTH walk."""
+
+    model_config = ConfigDict(frozen=True)
+
+    min_dethrone_confirmations: Annotated[
+        int,
+        Field(
+            ge=2,
+            le=15,
+            description=(
+                "Shared-seed confirmations a challenger must hold against the "
+                "champion before the paired comparison may move the crown."
+            ),
+        ),
+    ]
+    champion_standing_rank: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=5,
+            description=(
+                "Only an entry inside this many places of the fold's official "
+                "ranking may hold or take the crown."
+            ),
+        ),
+    ]
+    duel_window_pairs: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=2,
+            le=15,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-35 title duel. When present, two bench >= 16 rows are "
+                "compared on the newest this-many pair-masked (season, seed) "
+                "pairs of duel_history across dueling seasons, and the "
+                "challenger dethrones only past the frozen sequential boundary "
+                "(docs/title-duels.md). Absent is the protocol-34 gate."
+            ),
+        ),
+    ] = None
 
 
 class LedgerResponse(BaseModel):
@@ -1970,6 +2156,20 @@ class LedgerResponse(BaseModel):
                 "Protocol-29 consensus marker. When capped, paired tie and "
                 "unpaired dethrone statistics are limited to twice the KOTH "
                 "margin before decay. Absent preserves the legacy fold."
+            ),
+        ),
+    ] = None
+    crown_gate: Annotated[
+        CrownGateMarker | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-34 consensus marker. When present, a challenger "
+                "dethrones only on the paired shared-seed statistic with at "
+                "least min_dethrone_confirmations shared seeds, and the crown "
+                "must sit inside the top champion_standing_rank official "
+                "places. Absent preserves the pre-34 walk."
             ),
         ),
     ] = None

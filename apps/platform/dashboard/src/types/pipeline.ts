@@ -6,6 +6,7 @@
 import type {
   CaseResult,
   CodingShadowScore,
+  DuelingBreakdown,
   GateEvidence,
   NameHandle,
   V9BaseEvidence,
@@ -23,6 +24,20 @@ export type ReviewConclusion =
   | "no_finding"
   | "budget_exhausted"
   | "adverse_signal";
+
+/** Why a waiting submission is not being scored right now when the hold is
+ * not the validator fleet's (`scoring_wait` on activity rows and the agent
+ * summary). From bench v16 every scored run needs an open dueling season. */
+export interface ScoringWait {
+  reason: "dueling_season_closed";
+  bench_version: number;
+  /** Approximate UTC time the next season opens; null when unknown. */
+  next_season_opens_at?: string | null;
+  next_round_epoch?: number | null;
+  /** False when no season is scheduled for bench_version at all (the source
+   * version of an open benchmark rollout); absent means true. */
+  season_scheduled?: boolean;
+}
 
 export interface ActivityEntry {
   agent_id?: string;
@@ -58,6 +73,11 @@ export interface ActivityEntry {
   artifact_sha256?: string | null;
   screening_policy_version?: number | null;
   required_screening_policy_version?: number | null;
+  /** Set only on waiting rows held by something beyond the queue. */
+  scoring_wait?: ScoringWait | null;
+  /** True on a `not_queued` row an operator withdrew from the active
+   * benchmark queue, rather than one that predates the active era. */
+  queue_withdrawn?: boolean;
 }
 
 interface ActivityPayloadBase<E> {
@@ -237,6 +257,9 @@ export interface ValidationAttempt {
     | "grant_rate_denied"
     | "platform_capacity"
     | "provider_failure"
+    | "harness_oom"
+    | "host_memory_pressure"
+    | "harness_killed_137"
     | null;
   deadline?: string | null;
   benchmark_progress?: BenchmarkProgress | null;
@@ -281,6 +304,8 @@ export interface AcceptedScore {
   case_results?: CaseResult[];
   /** Bench v13+ run-level gate verdict (aggregates only). */
   gate_evidence?: GateEvidence | null;
+  /** Bench v16+ dueling and priced-cost breakdown; omitted below v16. */
+  dueling_breakdown?: DuelingBreakdown | null;
 }
 
 /** A continual top-five retest result. Reusable seed identifiers stay private. */

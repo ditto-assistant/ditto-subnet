@@ -117,6 +117,12 @@ CLAIM_NOT_STARTED_REASON_CODE = WORKER_CLAIM_NOT_STARTED
 # headroom and never changes the typed outcome, so it must not become the
 # public reason or a private-failure cause.
 _SEED_ENVELOPE_OBSERVATION = "seed-envelope-usage"
+# Likewise the tool-catalog probe's request-size record on every probed screen.
+_PROBE_OBSERVATIONS = frozenset(
+    {_SEED_ENVELOPE_OBSERVATION, "tool-catalog-request-size"}
+)
+# Shadow probe failures sit beside an outcome they did not decide.
+_SHADOW_PROBE_PREFIXES = ("seed-", "tool-catalog-")
 _PRIVATE_BUILD_FAILURE_CODES = frozenset(
     {"docker-build", "docker-build-infrastructure", "docker-build-timeout"}
 )
@@ -135,9 +141,9 @@ def _verdict_reason_code(
 ) -> str | None:
     """Infer a reason for legacy decisions without an explicit deciding code.
 
-    Seed observations are appended last so they survive the evidence cap.
-    Treating that tail as the reason relabels a quarantine or pass as a seed
-    failure. Seed probes decide only deterministic rejections; successful
+    Seed and tool-catalog observations are appended last so they survive the
+    evidence cap. Treating that tail as the reason relabels a quarantine or
+    pass as a probe failure. The probes decide only deterministic rejections; successful
     oracle observations cannot explain a quarantine or inconclusive outcome.
     """
     if outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
@@ -146,9 +152,9 @@ def _verdict_reason_code(
         return None
     shadow_seed = outcome != ScreenResultOutcome.DETERMINISTIC_REJECT
     for item in reversed(evidence):
-        if item.code == _SEED_ENVELOPE_OBSERVATION:
+        if item.code in _PROBE_OBSERVATIONS:
             continue
-        if shadow_seed and item.code.startswith("seed-"):
+        if shadow_seed and item.code.startswith(_SHADOW_PROBE_PREFIXES):
             continue
         if outcome in {
             ScreenResultOutcome.QUARANTINE,
@@ -179,7 +185,7 @@ def _attach_private_failure_feedback(
         return False
     return reason_code in _PRIVATE_BUILD_FAILURE_CODES or (
         reason_code or ""
-    ).startswith("seed-")
+    ).startswith(_SHADOW_PROBE_PREFIXES)
 
 
 def _private_failure_feedback(detail: str, reason_code: str | None) -> str:
@@ -421,8 +427,13 @@ class ScreenerWorker:
         ).total_seconds() - _LEASE_SUBMIT_MARGIN_SECONDS
         return LeaseDeadline(asyncio.get_running_loop().time() + remaining)
 
-    async def run_forever(self, stop: asyncio.Event) -> None:
-        """Sweep until ``stop`` is set, sleeping when the queue is empty."""
+    async def run_forever(self, stop: asyncio.Event) -> bool:
+        """Sweep until ``stop`` is set, sleeping when the queue is empty.
+
+        Returns True when the worker exited because it stayed idle for
+        ``idle_exit_seconds``. That check runs only after a sweep has returned,
+        so no claim is in flight and no lease can be stranded by the exit.
+        """
         logger.info(
             "screener worker started hotkey=%s netuid=%d platform=%s",
             self._config.screener_hotkey,
@@ -432,6 +443,9 @@ class ScreenerWorker:
         # A lease file left by a process that died mid-review describes no live
         # work in this process; the updater must not wait on it.
         self._clear_active_lease()
+        loop = asyncio.get_running_loop()
+        last_work = loop.time()
+        idle_limit = self._config.idle_exit_seconds
         while not stop.is_set():
             await self._report_heartbeat("polling")
             try:
@@ -439,9 +453,24 @@ class ScreenerWorker:
             except PlatformError as e:
                 logger.warning("sweep failed (retrying next cycle): %s", e)
                 processed = 0
+            if processed > 0:
+                last_work = loop.time()
+            elif (
+                not stop.is_set()
+                and idle_limit is not None
+                and loop.time() - last_work >= idle_limit
+            ):
+                # A failing Platform also counts as idle: an on-demand host that
+                # cannot reach work must still power off rather than bill.
+                logger.info(
+                    "screener worker idle for %.0fs; exiting for host shutdown",
+                    loop.time() - last_work,
+                )
+                return True
             if processed == 0 and not stop.is_set():
                 await self._sleep_or_stop(stop, self._config.poll_seconds)
         logger.info("screener worker stopped")
+        return False
 
     async def _report_heartbeat(
         self,
@@ -880,7 +909,7 @@ class ScreenerWorker:
             async def record_mechanical_verification(
                 check_code: str, *, image_sha256: str | None = None
             ) -> None:
-                if policy_version != 13:
+                if policy_version < 13:
                     return
                 try:
                     await self._platform.record_verification_receipt(
@@ -947,7 +976,7 @@ class ScreenerWorker:
             async def record_runtime_verification(
                 check_code: str, evidence_sha256: str
             ) -> None:
-                if policy_version != 13:
+                if policy_version < 13:
                     return
                 try:
                     await self._platform.record_verification_receipt(
@@ -1039,6 +1068,7 @@ class ScreenerWorker:
                             scored_runtime_evidence=item.scored_runtime_evidence,
                             scored_runtime_evidence_received_at=received_at,
                             review_lineage=review_lineage,
+                            sandbox_memory_limit_mib=item.sandbox_memory_limit_mib,
                         )
                     review_usage_snapshot = (
                         review_usage,

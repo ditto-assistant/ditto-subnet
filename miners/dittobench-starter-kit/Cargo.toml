@@ -25,6 +25,7 @@ uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["clock"] }
+futures = "0.3"
 
 # Cross-encoder reranker: ONNX Runtime + BERT WordPiece tokenizer. Mirrors the
 # production cross-encoder/ stage 1:1 (TinyBERT-L2 INT8, RRF fusion).

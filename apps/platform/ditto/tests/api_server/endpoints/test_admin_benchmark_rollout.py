@@ -475,7 +475,19 @@ async def test_control_discovery_is_authenticated_read_only_and_dynamic(
     # Nothing is offered. A target must be both above the active version and at
     # or above the floor. V8 through v11 are discoverable but remain inert until
     # an authenticated operator starts one.
-    assert body["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14]
+    assert body["available_target_versions"] == [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+    ]
     # Still derived from the shipped registry, which is what "dynamic" means
     # here: the floor filters what may be STARTED, not what exists.
     assert [contract["version"] for contract in body["contracts"]] == [
@@ -492,6 +504,10 @@ async def test_control_discovery_is_authenticated_read_only_and_dynamic(
         12,
         13,
         14,
+        15,
+        16,
+        17,
+        18,
     ]
     assert all(
         contract["capable_validator_count"] == 0 for contract in body["contracts"]
@@ -525,16 +541,16 @@ async def test_control_offers_newer_contracts_without_moving_active_v8_authority
     assert body["active_version"] == 8
     assert body["desired_version"] == 8
     assert body["status"] == "activated"
-    assert body["available_target_versions"] == [9, 10, 11, 12, 13, 14]
+    assert body["available_target_versions"] == [9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     assert body["contracts"][-1] == {
-        "version": 14,
+        "version": 18,
         "minimum_screening_policy_version": 9,
         "requires_screened_image": True,
         "capable_validator_count": 0,
         "start_ready": False,
         "start_blockers": [
-            "benchmark v14 rollout requires at least 1 fresh, identity-matched "
-            "v14 scorer validators"
+            "benchmark v18 rollout requires the decision lane enabled with a "
+            "pinned model (set_inference_concurrency_settings decision_lane)"
         ],
     }
 
@@ -585,8 +601,11 @@ async def test_control_reads_the_cohort_once_and_never_writes(
     # Flat in the number of shipped contracts. Six contracts once cost 106
     # statements here; the count must not track ``benchmark_contracts()``.
     # Retry diagnostics add one bounded batch (at most eight reads), never a
-    # per-member/per-contract query and never per-case score details.
-    assert len(statements) <= 38, "\n".join(statements)
+    # per-member/per-contract query and never per-case score details. The
+    # priority-gate count and the diagnostics' blocks_activation each add one
+    # bounded ticket read for members short of quorum (agent-attributable
+    # exhaustion resolves a member without a score).
+    assert len(statements) <= 41, "\n".join(statements)
     # And the ranking read must not drag the per-case breakdown along with it:
     # that column is kilobytes per score row, for every scored agent.
     assert all("details" not in statement for statement in statements), statements
@@ -599,6 +618,168 @@ async def test_control_reads_the_cohort_once_and_never_writes(
     ]
     assert generator.calls == []
     assert await _rollout_count(maker) == 1
+
+
+async def test_v15_start_blocker_clears_once_the_decision_lane_pins_a_model(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """v15 is the first contract whose scored runs carry the decision lane, so
+    its start is blocked until the operator's board pins a model; once it is,
+    the next blocker is the ordinary capacity gate."""
+    from ditto.db.queries.inference_concurrency_settings import (
+        insert_inference_concurrency_settings_revision,
+    )
+
+    _install(app, session_maker)
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with session_maker() as session, session.begin():
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=13,
+                desired_version=14,
+                status="activated",
+                cohort_size=5,
+                created_at=now - timedelta(days=1),
+                activated_at=now - timedelta(days=1),
+            )
+        )
+        await insert_inference_concurrency_settings_revision(
+            session,
+            parent_revision=0,
+            scope="*",
+            settings={"decision_lane": {"enabled": True, "model": "typesafe/jev-1.14"}},
+            checksum="d" * 64,
+            reason="open the decision lane for bench v15",
+            actor="backroom:test",
+        )
+
+    response = await client.get("/api/v1/admin/benchmark-rollout", headers=_HEADERS)
+
+    assert response.status_code == 200, response.text
+    contract = next(c for c in response.json()["contracts"] if c["version"] == 15)
+    assert contract["version"] == 15
+    assert contract["start_blockers"] == [
+        "benchmark v15 rollout requires at least 1 fresh, identity-matched "
+        "v15 scorer validators"
+    ]
+
+
+async def test_v16_start_blocker_clears_once_dueling_is_enabled(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A v16 (dueling) ticket leases only with a ready slice from an open
+    season, and seasons open only while ``dueling_enabled`` is on and the
+    generator competition is not off. With the decision lane pinned, the v16
+    start is blocked on the dueling lane until the operator turns it on; then
+    the next blocker is the ordinary capacity gate."""
+    from ditto.api_models.generator import GeneratorCompetitionSettings
+    from ditto.db.queries.generator import insert_generator_settings_revision
+    from ditto.db.queries.inference_concurrency_settings import (
+        insert_inference_concurrency_settings_revision,
+    )
+
+    _install(app, session_maker)
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with session_maker() as session, session.begin():
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=14,
+                desired_version=15,
+                status="activated",
+                cohort_size=5,
+                created_at=now - timedelta(days=1),
+                activated_at=now - timedelta(days=1),
+            )
+        )
+        await insert_inference_concurrency_settings_revision(
+            session,
+            parent_revision=0,
+            scope="*",
+            settings={"decision_lane": {"enabled": True, "model": "typesafe/jev-1.14"}},
+            checksum="d" * 64,
+            reason="open the decision lane",
+            actor="backroom:test",
+        )
+
+    async def _v16_blockers() -> list[str]:
+        response = await client.get("/api/v1/admin/benchmark-rollout", headers=_HEADERS)
+        assert response.status_code == 200, response.text
+        contract = next(c for c in response.json()["contracts"] if c["version"] == 16)
+        assert contract["version"] == 16
+        return contract["start_blockers"]
+
+    dueling_blocker = (
+        "benchmark v16 rollout requires dueling_enabled with the generator "
+        "competition on (set_generator_competition_settings); its tickets lease "
+        "only with a ready dueling slice"
+    )
+    assert await _v16_blockers() == [dueling_blocker]
+
+    # Dueling on with the competition off still cannot open a season.
+    parent = 0
+    for settings in (
+        GeneratorCompetitionSettings(mode="off", dueling_enabled=True),
+        GeneratorCompetitionSettings(mode="enforce", dueling_enabled=True),
+    ):
+        mode = settings.mode
+        async with session_maker() as session, session.begin():
+            row = await insert_generator_settings_revision(
+                session,
+                parent_revision=parent,
+                settings=settings.model_dump(mode="json"),
+                checksum="e" * 64,
+                reason=f"dueling {mode}",
+                actor="backroom:test",
+            )
+            parent = row.revision
+        if mode == "off":
+            assert await _v16_blockers() == [dueling_blocker]
+
+    assert await _v16_blockers() == [
+        "benchmark v16 rollout requires at least 1 fresh, identity-matched "
+        "v16 scorer validators"
+    ]
+
+
+async def test_v16_start_is_blocked_while_source_disclosure_is_never(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With dueling on, a ``disclosure = never`` source release policy still
+    keeps every season closed, so a v16 start stays blocked; the guard holds on
+    a direct call with no inference proxy config too."""
+    from types import SimpleNamespace
+
+    from ditto.api_models.generator import GeneratorCompetitionSettings
+    from ditto.api_models.source_disclosure import SourceDisclosure
+    from ditto.api_server.endpoints import admin_benchmark_rollout
+    from ditto.db.queries.generator import insert_generator_settings_revision
+
+    async with session_maker() as session, session.begin():
+        settings = GeneratorCompetitionSettings(mode="enforce", dueling_enabled=True)
+        await insert_generator_settings_revision(
+            session,
+            parent_revision=0,
+            settings=settings.model_dump(mode="json"),
+            checksum="e" * 64,
+            reason="dueling on",
+            actor="backroom:test",
+        )
+
+    async def _never(_session: AsyncSession) -> SimpleNamespace:
+        return SimpleNamespace(disclosure=SourceDisclosure.NEVER)
+
+    monkeypatch.setattr(admin_benchmark_rollout, "artifact_release_policy", _never)
+    async with session_maker() as session:
+        blocker = await admin_benchmark_rollout._dueling_start_blocker(session, 16)
+        assert blocker is not None and "disclosure = never" in blocker
+        assert await admin_benchmark_rollout._dueling_start_blocker(session, 15) is None
 
 
 async def test_control_degrades_the_slow_section_instead_of_hanging(
@@ -673,6 +854,10 @@ async def test_control_degrades_the_slow_section_instead_of_hanging(
         12,
         13,
         14,
+        15,
+        16,
+        17,
+        18,
     ]
     # Fail closed on what could not be proven: no candidate is offered for
     # activation, and the omission is named rather than mistaken for "none".
@@ -737,12 +922,12 @@ async def test_start_requires_full_guard_payload_and_exact_confirmation(
     assert "START BENCHMARK V4" in wrong.json()["message"]
 
     unsupported = await client.post(
-        "/api/v1/admin/benchmark-rollout/15",
+        "/api/v1/admin/benchmark-rollout/19",
         headers=_HEADERS,
         json={
             "reason": "attempt an unshipped contract",
             "actor": "backroom:test",
-            "confirmation": "START BENCHMARK V15",
+            "confirmation": "START BENCHMARK V19",
             "expected_active_version": 2,
         },
     )

@@ -55,6 +55,17 @@ def test_rehearsal_argv_forwards_the_v13_gate_replay(tmp_path: Path) -> None:
     assert "--keep-artifacts" not in without_dir
 
 
+def test_rehearsal_argv_forwards_the_dueling_slice_options() -> None:
+    default = practice.rehearsal_argv(_args())
+    assert "--no-slice" not in default
+    assert "--slice-sandbox" not in default
+    command = practice.rehearsal_argv(
+        _args(bench_version=16, no_slice=True, slice_sandbox="docker")
+    )
+    assert command.count("--no-slice") == 1
+    assert command[command.index("--slice-sandbox") + 1] == "docker"
+
+
 def _assert_runner_rejects_before_work(command: list[str], message: str) -> None:
     flag = message.split()[0]
     assert flag in command

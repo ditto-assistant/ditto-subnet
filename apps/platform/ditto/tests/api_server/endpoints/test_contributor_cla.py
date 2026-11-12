@@ -31,6 +31,7 @@ from ditto.db.models import (
     ClaSignature,
 )
 from ditto.db.queries.contributor_identity import current_cla_version
+from ditto.tests.api_server.conftest import fake_registration
 from ditto.tests.api_server.endpoints.test_admin_artifact_release_settings import (
     _HEADERS as _ADMIN_TOKEN,
 )
@@ -130,6 +131,11 @@ def setup(app, maker):
         get_coldkey_for_hotkey=AsyncMock(return_value=owner),
         get_registered_coldkey=AsyncMock(return_value=owner),
         is_registered=AsyncMock(return_value=True),
+        get_hotkey_registration=AsyncMock(
+            side_effect=lambda hotkey, netuid, **_: fake_registration(
+                hotkey, netuid, owner
+            )
+        ),
     )
     app.state.chain = chain
     app.state.payment_verifier = SimpleNamespace(verify_payment=AsyncMock())
@@ -758,6 +764,7 @@ async def test_nonexistent_owner_is_rejected_without_uid_registration(
     assert result.status_code == 400, result.text
     assert "Owner(hotkey)" in result.json()["message"]
     chain.is_registered.assert_not_awaited()
+    chain.get_hotkey_registration.assert_not_awaited()
     assert (
         await client.get(f"/api/v1/public/cla/status/{alice.ss58_address}")
     ).headers["cache-control"] == "no-store"

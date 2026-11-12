@@ -116,8 +116,9 @@ def first_queued_in_era_predicate(
     The rule needs positive evidence of a first queue entry at or after the
     rollout opened, and no evidence of an earlier one:
 
-    * a non-build-only screening pass, or a quarantine released by an operator,
-      at or after ``rollout.created_at`` -- the two transitions that move a
+    * a screening pass (build-only included, since every admission has been
+      build-only from 2026-11-07), or a quarantine released by an operator, at
+      or after ``rollout.created_at`` -- the two transitions that move a
       submission into ``evaluating``;
     * no screening pass (build-only included) and no release before it;
     * no previous-era queue ticket or accepted score.
@@ -140,12 +141,14 @@ def first_queued_in_era_predicate(
     era_start = rollout.created_at
     passed = ScreeningAttempt.status == "passed"
     released = ScreeningQuarantine.resolution == "release"
+    # Any pass counts: since source review was retired (2026-11-07) every
+    # admission is build-only. A build-only rebuild of already-queued work is
+    # still excluded, because that work has an earlier pass or release.
     passed_in_era = (
         select(ScreeningAttempt.attempt_id)
         .where(
             ScreeningAttempt.agent_id == agent.agent_id,
             passed,
-            ScreeningAttempt.build_only.is_(False),
             ScreeningAttempt.finished_at >= era_start,
         )
         .correlate(agent)
@@ -336,3 +339,27 @@ async def agent_is_admitted(
     return agent_id in await admitted_agent_ids(
         session, bench_version=bench_version, agent_ids=[agent_id]
     )
+
+
+async def agent_is_era_admitted(
+    session: AsyncSession, *, bench_version: int, agent_id: UUID
+) -> bool:
+    """Whether one exact agent clears the era boundary, ignoring queue removals.
+
+    :func:`agent_is_admitted` is this AND no in-force queue removal. A reader
+    that names *which* gate refused a submission needs this half on its own: an
+    operator's removal of a current-era arrival does not make it historical.
+    """
+
+    rollout = await admission_rollout_for_active_version(
+        session, bench_version=bench_version
+    )
+    if rollout is None:
+        return True
+    admitted = await session.scalar(
+        select(Agent.agent_id).where(
+            Agent.agent_id == agent_id,
+            benchmark_admission_predicate(rollout=rollout, bench_version=bench_version),
+        )
+    )
+    return admitted is not None

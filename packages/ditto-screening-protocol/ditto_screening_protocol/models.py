@@ -17,7 +17,7 @@ from pydantic import (
     model_validator,
 )
 
-SCREENING_POLICY_VERSION = 13
+SCREENING_POLICY_VERSION = 14
 STRICT_TWO_OUTCOME_POLICY_VERSION = 13
 # The highest policy version the scheduling API will present as
 # activation-ready. It moves separately from ``SCREENING_POLICY_VERSION`` so a
@@ -28,7 +28,10 @@ STRICT_TWO_OUTCOME_POLICY_VERSION = 13
 # builtin policy 13 on release 0.264.0, and fleet adoption was verified on
 # 2026-09-14; the ceiling then moved to 13 so the operator can schedule the
 # v13 activation window.
-SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 13
+# V14 ships the cost-first (zero-call permitted) oracle behaviour; ceiling moved
+# to 14 on 2026-11-05 after all 12 fleet workers reported builtin policy 14 on
+# release 0.456.0 (81176e2e) and fleet adoption was verified — PR #3391.
+SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 14
 # The oldest policy version a mixed-fleet platform may require during a
 # scheduled activation window. v10 stays the floor while the v13 activation is
 # scheduled but not yet governing; raise it only after every older-policy
@@ -109,7 +112,7 @@ class SubmissionImageBuildResponse(BaseModel):
     build_id: UUID
     attempt_id: UUID
     status: SubmissionImageBuildStatus
-    provider: Literal["targon", "gcp", "hetzner"] | None = None
+    provider: Literal["targon", "gcp", "hetzner", "aws"] | None = None
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     image_ref: Annotated[
         str,
@@ -122,7 +125,7 @@ class SubmissionImageBuildResponse(BaseModel):
     runtime_status: Literal[
         "pending", "running", "succeeded", "fallback_required", "skipped"
     ] = "skipped"
-    runtime_provider: Literal["targon", "gcp", "hetzner"] | None = None
+    runtime_provider: Literal["targon", "gcp", "hetzner", "aws"] | None = None
     runtime_image_reference: (
         Annotated[
             str,
@@ -150,7 +153,7 @@ class SubmissionImageBuildResponse(BaseModel):
         if self.status == "fallback_required" and self.error_code is None:
             raise ValueError("fallback remote build requires an error code")
         if self.runtime_status == "succeeded" and (
-            self.runtime_provider not in ("targon", "gcp", "hetzner")
+            self.runtime_provider not in ("targon", "gcp", "hetzner", "aws")
             or self.runtime_image_reference is None
         ):
             raise ValueError("successful runtime smoke requires provider provenance")
@@ -442,6 +445,19 @@ class ScreenerQueueItem(BaseModel):
                 "attempt's lineage packet before reviewing; null is an "
                 "ordinary full review."
             )
+        ),
+    ] = None
+    sandbox_memory_limit_mib: Annotated[
+        int | None,
+        Field(
+            ge=512,
+            le=32_768,
+            description=(
+                "The live harness memory cap validators apply to scored leases, "
+                "stamped at claim time so the runtime probe runs at the same "
+                "cap. Null from an older Platform; the worker then uses the "
+                "published runtime envelope value."
+            ),
         ),
     ] = None
 
@@ -1686,7 +1702,7 @@ class SubmissionSourceReviewResponse(BaseModel):
     review_id: UUID
     attempt_id: UUID
     status: SubmissionSourceReviewStatus
-    provider: Literal["targon", "gcp", "hetzner"] | None = None
+    provider: Literal["targon", "gcp", "hetzner", "aws"] | None = None
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     observation: SourceReviewObservationPayload | None = None
     error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None

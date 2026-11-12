@@ -85,6 +85,14 @@ platform_uv_tool_dir: /opt/uv-tools
 # repurpose it for the relay pool below — moving it would silently point the
 # deploy verifier at the wrong process.
 platform_api_port: 8000
+# A warm, HTTP-identical standby for rolling Python API deploys. Zero disables
+# it on development hosts. Production sets a distinct loopback port.
+platform_api_standby_port: 0
+
+# How long Caddy keeps re-dialing `ditto-api` while it restarts before giving
+# up with a 502 (SN-426). A deploy refuses connections for ~6s; keep this below
+# the validator's 30s VALIDATOR_HTTP_TIMEOUT_SECONDS.
+platform_api_restart_try_duration: 20s
 
 # --- Go request-plane pool (inference plus narrow upload admission) ----------
 # Local ports of the DITTO_ROLE=relay pm2 processes. Must mirror RELAY_PORTS
@@ -130,7 +138,12 @@ platform_pg_user: ditto
 # caused the 2026-07-16 prod outage; 5/30 matches the live hotfix. Postgres
 # max_connections is 100 on the shared pg VM, so dev+prod at 30 each still
 # leave headroom.
-platform_pg_pool_min_size: 5
+#
+# The minimum is 20 (2026-11): with 5 kept the pool burst to 30 under normal
+# load, and SQLAlchemy closes every overflow connection on check-in, so the API
+# spent 3-4% of its CPU opening and closing connections. The ceiling, and so
+# the max_connections budget, is unchanged.
+platform_pg_pool_min_size: 20
 platform_pg_pool_max_size: 30
 
 # GCS S3-interop object storage. The access key is the HMAC access id
@@ -282,6 +295,12 @@ secret_screener_api_token: ""
 # Accept that shared bearer on /screener/*. Rotating per-node tokens are
 # unaffected; stays true until the GCE overflow fleet stops booting with it.
 platform_screener_legacy_bearer_enabled: true
+
+# Comma-separated SS58 hotkeys whose own shadow agents may be isolated and
+# leased to one chosen validator as operator diagnostics (never scored, ranked,
+# or paid). Empty disables isolate_operator_diagnostic and the diagnostic
+# canary path; Platform fails closed. Per-env value lives in host_vars.
+platform_operator_diagnostic_hotkeys: ""
 secret_platform_perplexity_key: "PERPLEXITY_API_KEY"
 
 # Docker apt repo (Debian).

@@ -41,9 +41,23 @@ from ditto.api_server.payment_verifier import (
 from ditto.api_server.pricing import (
     OracleUnreachableError,
 )
+from ditto.chain import (
+    ChainClient,
+    ChainConfig,
+    ChainRegistration,
+    ChainRegistrations,
+    HotkeyRegistration,
+    NeuronInfo,
+    NeuronSnapshot,
+)
 from ditto.chain.errors import ChainConnectionError
-from ditto.db.queries.agents import SubmissionCooldownError
+from ditto.db.queries.agents import (
+    SubmissionCooldownDecision,
+    SubmissionCooldownError,
+)
+from ditto.db.queries.owner_submission_cooldown import OwnerCooldownNotice
 from ditto.tests.api_server.conftest import (
+    fake_registration,
     override_get_chain_client,
     override_get_embedder,
     override_get_price_oracle,
@@ -77,7 +91,7 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
         AsyncMock(return_value=False),
     )
     monkeypatch.setattr(
-        "ditto.api_server.endpoints.upload.get_submission_retry_at",
+        "ditto.api_server.endpoints.upload.submission_cooldown_decision",
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
@@ -556,13 +570,17 @@ class TestUploadCheck:
                 miner_hotkey=_make_keypair().ss58_address,
             )
         )
-        cooldown = AsyncMock(return_value=datetime.now(UTC) + timedelta(hours=1))
+        cooldown = AsyncMock(
+            return_value=SubmissionCooldownDecision(
+                retry_at=datetime.now(UTC) + timedelta(hours=1)
+            )
+        )
         reserve = AsyncMock()
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha", lookup
         )
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_submission_retry_at", cooldown
+            "ditto.api_server.endpoints.upload.submission_cooldown_decision", cooldown
         )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.reserve_upload_admission", reserve
@@ -621,8 +639,8 @@ class TestUploadCheck:
             hours=2, minutes=30
         )
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_submission_retry_at",
-            AsyncMock(return_value=retry_at),
+            "ditto.api_server.endpoints.upload.submission_cooldown_decision",
+            AsyncMock(return_value=SubmissionCooldownDecision(retry_at=retry_at)),
         )
 
         response = await client.post(
@@ -638,6 +656,42 @@ class TestUploadCheck:
             f"owner coldkey may submit again at {retry_at.isoformat()}. "
             "Please try again in 2 hours and 30 minutes."
         ]
+
+    async def test_owner_override_names_its_interval_without_the_reason(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        retry_at = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=20)
+        expires_at = datetime.now(UTC).replace(microsecond=0) + timedelta(days=14)
+        decision = AsyncMock(
+            return_value=SubmissionCooldownDecision(
+                retry_at=retry_at,
+                owner_override=OwnerCooldownNotice(
+                    cooldown_seconds=86400, expires_at=expires_at
+                ),
+            )
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.submission_cooldown_decision",
+            decision,
+        )
+
+        body = _signed_request_body()
+        response = await client.post("/api/v1/upload/check", json=body)
+
+        result = response.json()
+        assert result["ok"] is False
+        assert ERROR_CODE_SUBMISSION_COOLDOWN in result["error_codes"]
+        assert result["messages"][0].startswith(
+            "an operator submission cooldown applies to this owner: one "
+            f"submission per 1 day until {expires_at.isoformat()}. "
+            f"owner coldkey may submit again at {retry_at.isoformat()}."
+        )
+        assert decision.await_args is not None
+        assert decision.await_args.kwargs["miner_hotkey"] == body["hotkey"]
 
     async def test_reservation_race_includes_the_cooldown_countdown(
         self,
@@ -739,8 +793,15 @@ class TestUploadCheck:
 
         async def _fake_chain() -> MagicMock:
             chain = MagicMock()
-            chain.is_registered = AsyncMock(return_value=False)
-            chain.get_registered_coldkey = AsyncMock(return_value=None)
+            chain.get_hotkey_registration = AsyncMock(
+                side_effect=lambda hotkey, netuid, **_: fake_registration(
+                    hotkey,
+                    netuid,
+                    None,
+                    snapshot_block=9_458_900,
+                    chain_block=9_459_200,
+                )
+            )
             return chain
 
         app.dependency_overrides[get_chain_client] = _fake_chain
@@ -750,6 +811,13 @@ class TestUploadCheck:
         result = response.json()
         assert result["ok"] is False
         assert ERROR_CODE_HOTKEY_NOT_REGISTERED in result["error_codes"]
+        # The miss names its evidence, so a miner can tell a lagging cache
+        # from a registration that is really not there.
+        assert result["messages"] == [
+            f"hotkey is not registered on netuid {app.state.config.chain.netuid} "
+            "as of finalized block 9459200 (read from chain storage; Platform's "
+            "metagraph cache is at block 9458900, 300 blocks behind)"
+        ]
         # A client acting on 1101 must be able to bind to this deployment's
         # own target. Without it, registering falls back to a local guess and
         # can recycle TAO on a subnet this platform never reads.
@@ -775,10 +843,17 @@ class TestUploadCheck:
 
         from ditto.api_server.dependencies import get_chain_client
 
+        chain = MagicMock()
+        chain.get_hotkey_registration = AsyncMock(
+            side_effect=lambda hotkey, netuid, *, confirm_absence: fake_registration(
+                hotkey,
+                netuid,
+                None,
+                chain_block=None if not confirm_absence else 42,
+            )
+        )
+
         async def _fake_chain() -> MagicMock:
-            chain = MagicMock()
-            chain.is_registered = AsyncMock(return_value=False)
-            chain.get_registered_coldkey = AsyncMock(return_value=None)
             return chain
 
         app.dependency_overrides[get_chain_client] = _fake_chain
@@ -792,6 +867,13 @@ class TestUploadCheck:
         assert ERROR_CODE_HOTKEY_NOT_REGISTERED in result["error_codes"]
         assert ERROR_CODE_TARBALL_TOO_LARGE in result["error_codes"]
         assert len(result["messages"]) == 3
+        # An unauthenticated hotkey never costs a chain-storage read; its 1101
+        # says it came from the cache alone.
+        assert chain.get_hotkey_registration.await_args.kwargs == {
+            "netuid": app.state.config.chain.netuid,
+            "confirm_absence": False,
+        }
+        assert "(not re-checked on chain)" in " ".join(result["messages"])
 
     async def test_chain_error_returns_503(
         self, app: FastAPI, client: httpx.AsyncClient
@@ -803,7 +885,7 @@ class TestUploadCheck:
 
     async def test_passes_configured_netuid_to_chain_client(self):
         # Build an app with a non-default netuid and assert it flows
-        # through to chain.is_registered + the failure message.
+        # through to chain.get_hotkey_registration + the failure message.
         from dataclasses import replace
         from unittest.mock import AsyncMock, MagicMock
 
@@ -823,14 +905,16 @@ class TestUploadCheck:
         async def _fake_chain() -> MagicMock:
             chain = MagicMock()
 
-            async def _get_registered_coldkey(
-                _hotkey: str, *, netuid: int
-            ) -> str | None:
+            async def _get_hotkey_registration(
+                hotkey: str, *, netuid: int, confirm_absence: bool
+            ) -> HotkeyRegistration:
                 recorded["netuid"] = netuid
-                return None
+                return fake_registration(
+                    hotkey, netuid, None, chain_block=42 if confirm_absence else None
+                )
 
-            chain.get_registered_coldkey = AsyncMock(
-                side_effect=_get_registered_coldkey
+            chain.get_hotkey_registration = AsyncMock(
+                side_effect=_get_hotkey_registration
             )
             return chain
 
@@ -844,6 +928,163 @@ class TestUploadCheck:
 
         assert recorded["netuid"] == 999
         assert "netuid 999" in " ".join(response.json()["messages"])
+
+
+_STALE_SNAPSHOT_BLOCK = 9_458_900
+_REREGISTERED_UID = 237
+
+
+def _stale_metagraph_chain(
+    *, hotkey: str, chain_maps_hotkey: bool = True
+) -> tuple[ChainClient, AsyncMock]:
+    """A real ChainClient whose Pylon snapshot still maps uid 237 to its
+    previous occupant (SN-463). Chain storage, read through the returned mock,
+    already holds ``hotkey`` there unless ``chain_maps_hotkey`` is false.
+    """
+    chain = ChainClient(
+        ChainConfig(pylon_url="http://pylon", netuid=118, open_access_token="token")
+    )
+    chain._pylon_neuron_snapshot = AsyncMock(  # type: ignore[method-assign]
+        return_value=NeuronSnapshot(
+            block=_STALE_SNAPSHOT_BLOCK,
+            neurons=(
+                NeuronInfo(
+                    hotkey="5PreviousOccupantHotkey",
+                    coldkey="5PrevCk",
+                    uid=_REREGISTERED_UID,
+                    stake=0.0,
+                ),
+            ),
+            observed_at=datetime.now(UTC),
+            registrations_block=_STALE_SNAPSHOT_BLOCK,
+        )
+    )
+    occupant = hotkey if chain_maps_hotkey else "5SomeoneElseHotkey"
+    reader = AsyncMock(
+        return_value=ChainRegistrations(
+            netuid=118,
+            block=_STALE_SNAPSHOT_BLOCK + 335,
+            block_timestamp=None,
+            provider="archive.example",
+            observed_at=datetime.now(UTC),
+            registrations=(
+                ChainRegistration(
+                    uid=_REREGISTERED_UID, hotkey=occupant, coldkey="5OccCk"
+                ),
+            ),
+        )
+    )
+    chain.read_chain_registrations = reader  # type: ignore[method-assign]
+    return chain, reader
+
+
+class TestStaleMetagraphRegistration:
+    """SN-463: a stale cache entry must not decide registration on its own."""
+
+    @pytest.fixture(autouse=True)
+    def _session(self, app: FastAPI) -> None:
+        override_get_session(app)
+        _override_payment_verifier(app)
+
+    async def test_check_passes_when_chain_already_maps_the_uid_to_this_hotkey(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        kp = _make_keypair()
+        chain, reader = _stale_metagraph_chain(hotkey=kp.ss58_address)
+        app.dependency_overrides[get_chain_client] = lambda: chain
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_signed_request_body(keypair=kp)
+        )
+
+        assert response.status_code == 200
+        result = response.json()
+        assert ERROR_CODE_HOTKEY_NOT_REGISTERED not in result["error_codes"]
+        assert result["ok"] is True
+        reader.assert_awaited_once_with(118)
+
+    async def test_check_still_1101s_a_hotkey_chain_storage_lacks(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        kp = _make_keypair()
+        chain, reader = _stale_metagraph_chain(
+            hotkey=kp.ss58_address, chain_maps_hotkey=False
+        )
+        app.dependency_overrides[get_chain_client] = lambda: chain
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_signed_request_body(keypair=kp)
+        )
+
+        result = response.json()
+        assert result["error_codes"] == [ERROR_CODE_HOTKEY_NOT_REGISTERED]
+        assert result["messages"] == [
+            "hotkey is not registered on netuid 118 as of finalized block 9459235 "
+            "(read from chain storage; Platform's metagraph cache is at block "
+            "9458900, 335 blocks behind)"
+        ]
+        reader.assert_awaited_once_with(118)
+
+    async def test_unsigned_check_never_reads_chain_storage(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        kp = _make_keypair()
+        chain, reader = _stale_metagraph_chain(hotkey=kp.ss58_address)
+        app.dependency_overrides[get_chain_client] = lambda: chain
+        body = _signed_request_body(keypair=kp)
+        body["signature"] = _BAD_SIG
+
+        result = (await client.post("/api/v1/upload/check", json=body)).json()
+
+        assert result["error_codes"] == [
+            ERROR_CODE_BAD_SIGNATURE,
+            ERROR_CODE_HOTKEY_NOT_REGISTERED,
+        ]
+        assert result["messages"][1] == (
+            "hotkey is not registered on netuid 118 in Platform's metagraph "
+            "cache at block 9458900 (not re-checked on chain)"
+        )
+        reader.assert_not_awaited()
+
+    async def test_unreadable_chain_is_503_not_1101(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        kp = _make_keypair()
+        chain, reader = _stale_metagraph_chain(hotkey=kp.ss58_address)
+        reader.side_effect = ChainConnectionError("every provider down")
+        app.dependency_overrides[get_chain_client] = lambda: chain
+
+        response = await client.post(
+            "/api/v1/upload/check", json=_signed_request_body(keypair=kp)
+        )
+
+        assert response.status_code == 503
+
+    async def test_agent_upload_passes_registration_for_the_new_occupant(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        from ditto.api_server.dependencies import get_chain_client
+
+        deps = _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        chain, reader = _stale_metagraph_chain(hotkey=kp.ss58_address)
+        app.dependency_overrides[get_chain_client] = lambda: chain
+        data, files = _upload_agent_form(keypair=kp)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert "not registered" not in response.text
+        reader.assert_awaited_once_with(118)
+        # Registration passed, so the upload went on to verify the payment.
+        deps["verifier"].verify_payment.assert_awaited()
 
 
 class TestOpenApiInclusion:
@@ -1332,7 +1573,11 @@ class TestUploadAgentValidationFailures:
 
         async def _fake_chain() -> MagicMock:
             chain = MagicMock()
-            chain.is_registered = AsyncMock(return_value=False)
+            chain.get_hotkey_registration = AsyncMock(
+                side_effect=lambda hotkey, netuid, **_: fake_registration(
+                    hotkey, netuid, None
+                )
+            )
             return chain
 
         from ditto.api_server.dependencies import get_chain_client
@@ -1452,6 +1697,123 @@ class TestUploadAgentPaymentVerifierBranches:
 
         assert response.status_code == 402
         assert response.json()["error_code"] == expected_code
+
+
+class TestUploadAgentSn455PylonMiss:
+    """SN-455: a confirmed payment Pylon reports missing must not 402/3201.
+
+    Runs the real :class:`PaymentVerifier` over a chain whose Pylon read
+    misses (lagging or pruned backend) while the archive providers hold the
+    block, mirroring finney block 9446185 extrinsic 12.
+    """
+
+    _FEE_RAO = 100_000_000
+    _OWNER_SS58 = "5FezHVXfg3nUYSQCVEDg2SCDwNJqnqLfaZ2f5aXBMNtmpkgg"
+    _SEND = "5Ecr5EGwvg2Xue2MdeJeCVSMLYWYuGcFb7y41eo7rQy3mGDN"
+
+    def _wire(
+        self,
+        app: FastAPI,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        archive: Any,
+    ) -> MagicMock:
+        from ditto.api_server.dependencies import get_payment_verifier
+        from ditto.api_server.payment_verifier import PaymentVerifier
+        from ditto.chain.errors import ExtrinsicNotFoundError
+        from ditto.chain.models import ExtrinsicInfo
+
+        _wire_full_stack(app)
+        chain = MagicMock()
+        chain.get_block_hash = AsyncMock(return_value=_GOOD_BLOCK_HASH)
+        chain.get_extrinsic = AsyncMock(
+            side_effect=ExtrinsicNotFoundError("get_extrinsic not found: 404")
+        )
+        if isinstance(archive, Exception):
+            chain.get_extrinsic_at_block_hash = AsyncMock(side_effect=archive)
+        else:
+            chain.get_extrinsic_at_block_hash = AsyncMock(
+                return_value=ExtrinsicInfo(
+                    block_number=13579,
+                    extrinsic_index=7,
+                    extrinsic_hash="0x" + "cd" * 32,
+                    call_module="Balances",
+                    call_function="transfer_keep_alive",
+                    call_args={"dest": self._SEND, "value": self._FEE_RAO},
+                    signer_address=self._OWNER_SS58,
+                )
+            )
+        chain.check_extrinsic_success = AsyncMock(return_value=True)
+        chain.get_block_timestamp = AsyncMock(return_value=int(time.time()))
+        chain.get_coldkey_for_hotkey = AsyncMock(return_value=self._OWNER_SS58)
+        oracle = MagicMock()
+        oracle.get_tao_usd = AsyncMock(return_value=Decimal("400"))
+        verifier = PaymentVerifier(chain=chain, oracle=oracle, send_address=self._SEND)
+
+        async def _real_verifier() -> PaymentVerifier:
+            return verifier
+
+        app.dependency_overrides[get_payment_verifier] = _real_verifier
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.effective_submission_settings",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    fee_amount_rao=self._FEE_RAO, payment_address=self._SEND
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(return_value=None),
+        )
+        return chain
+
+    async def test_archive_confirmed_payment_is_accepted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        chain = self._wire(app, monkeypatch, archive=None)
+        data, files = _upload_agent_form()
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        chain.get_extrinsic_at_block_hash.assert_awaited_once_with(
+            13579, _GOOD_BLOCK_HASH, 7
+        )
+
+    async def test_archive_absent_extrinsic_still_returns_3201(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from ditto.chain.errors import ExtrinsicNotFoundError
+
+        self._wire(
+            app, monkeypatch, archive=ExtrinsicNotFoundError("index past block end")
+        )
+        data, files = _upload_agent_form()
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 402
+        assert response.json()["error_code"] == ERROR_CODE_PAYMENT_NOT_FOUND
+
+    async def test_archive_outage_is_retryable_not_3201(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        self._wire(app, monkeypatch, archive=ChainConnectionError("archives down"))
+        data, files = _upload_agent_form()
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 503
 
 
 class TestUploadAgentReplayHandling:

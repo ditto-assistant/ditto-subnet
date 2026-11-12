@@ -30,7 +30,7 @@ func TestGeneratorRoundAdmission(t *testing.T) {
 	}
 	for _, edit := range []func(*submitRequest){
 		func(r *submitRequest) { r.BenchVersion = 12 },
-		func(r *submitRequest) { r.BenchVersion = 15 },
+		func(r *submitRequest) { r.BenchVersion = 19 },
 		func(r *submitRequest) { r.PrivateDatasetBytes = nil },
 		func(r *submitRequest) { r.ExpectedDatasetSHA256 = "ABC" },
 		func(r *submitRequest) { r.PrivateDatasetBytes = make([]byte, challenge.MaxRoundDatasetBytes+1) },
@@ -57,7 +57,7 @@ func TestGeneratorRoundMaxCasesFeatureNamesThePackContractBound(t *testing.T) {
 // advertises n: the spelling is a cross-component contract.
 func TestGeneratorRoundBenchFeaturesNameEverySupportedPolicy(t *testing.T) {
 	got := generatorRoundBenchFeatures()
-	want := []string{"generator-round-bench-13", "generator-round-bench-14"}
+	want := []string{"generator-round-bench-13", "generator-round-bench-14", "generator-round-bench-15", "generator-round-bench-16", "generator-round-bench-17", "generator-round-bench-18"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("features %v, want %v", got, want)
 	}
@@ -66,7 +66,7 @@ func TestGeneratorRoundBenchFeaturesNameEverySupportedPolicy(t *testing.T) {
 			t.Fatalf("v%d is a pack policy but not a round version", v)
 		}
 	}
-	if runsGeneratorRoundAt(12) || runsGeneratorRoundAt(15) {
+	if runsGeneratorRoundAt(12) || runsGeneratorRoundAt(19) {
 		t.Fatal("round versions outside the pack policies")
 	}
 }
@@ -84,5 +84,71 @@ func TestGeneratorRoundReportExcludesFaultsFromTheMean(t *testing.T) {
 	}
 	if r.Details == nil || r.Details.BenchVersion != 13 || r.Details.DatasetSHA256 != req.ExpectedDatasetSHA256 {
 		t.Fatalf("details: %+v", r.Details)
+	}
+}
+
+func TestGeneratorFrontierOracleAdmission(t *testing.T) {
+	oracle := submitRequest{
+		BenchVersion:          14,
+		PrivateDatasetMode:    generatorFrontierOracleMode,
+		PrivateDatasetBytes:   []byte(`{"contract":"x"}`),
+		ExpectedDatasetSHA256: strings.Repeat("a", 64),
+		OracleCaseIDs:         []string{"c0/a", "c1/b"},
+	}
+	if err := validatePrivateDatasetRequest(oracle, false, true); err != nil {
+		t.Fatalf("valid oracle request refused: %v", err)
+	}
+	if validatePrivateDatasetRequest(oracle, true, false) == nil {
+		t.Fatal("an oracle run needs the round capability")
+	}
+	for name, edit := range map[string]func(*submitRequest){
+		"no cases":      func(r *submitRequest) { r.OracleCaseIDs = nil },
+		"repeated case": func(r *submitRequest) { r.OracleCaseIDs = []string{"c0/a", "c0/a"} },
+		"empty case":    func(r *submitRequest) { r.OracleCaseIDs = []string{""} },
+		"too many": func(r *submitRequest) {
+			r.OracleCaseIDs = make([]string, challenge.MaxRoundColumns*challenge.MaxCases+1)
+		},
+		"cases on panel":  func(r *submitRequest) { r.PrivateDatasetMode = generatorRoundMode },
+		"cases on public": func(r *submitRequest) { r.PrivateDatasetMode, r.PrivateDatasetBytes = "", nil },
+	} {
+		r := oracle
+		edit(&r)
+		if validatePrivateDatasetRequest(r, true, true) == nil {
+			t.Fatalf("%s: invalid oracle request admitted", name)
+		}
+	}
+	// An oracle run is a round run: it never carries or requires a slice.
+	v16 := oracle
+	v16.BenchVersion = 16
+	if requiresDuelingSlice(v16) {
+		t.Fatal("an oracle run at a dueling version must not require a slice")
+	}
+}
+
+func TestOracleCasesByColumn(t *testing.T) {
+	const hotkey = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+	cols := []challenge.RoundColumnPack{
+		{ColumnID: "c0", Pack: challenge.ReferencePack(1, hotkey)},
+		{ColumnID: "c1", Pack: challenge.ReferencePack(2, hotkey)},
+	}
+	a, b := cols[0].Pack.Cases[2].ID, cols[1].Pack.Cases[0].ID
+	got, err := oracleCasesByColumn(cols, []string{"c1/" + b, "c0/" + a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got["c0"]) != 1 || got["c0"][0] != a || len(got["c1"]) != 1 || got["c1"][0] != b {
+		t.Fatalf("grouping: %+v", got)
+	}
+	if _, err := oracleCasesByColumn(cols, []string{"c9/" + a}); err == nil {
+		t.Fatal("a case outside the dataset must be refused")
+	}
+}
+
+// oracle_case_ids select the frontier oracle mode, which practice never runs:
+// they are refused there rather than silently ignored.
+func TestPracticeRefusesOracleCaseIDs(t *testing.T) {
+	rr := submitOn(newPracticeTestServer(), `{"bench_version":15,"run_size":"small","harness_url":"http://127.0.0.1:9","oracle_case_ids":["c0/k1"]}`)
+	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "not accepted on practice") {
+		t.Fatalf("practice with oracle_case_ids = %d %s", rr.Code, rr.Body.String())
 	}
 }

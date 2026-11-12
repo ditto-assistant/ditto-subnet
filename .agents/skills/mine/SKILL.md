@@ -7,7 +7,7 @@ description: >
   operator review bar, package a tarball, and upload. Use when the user
   runs /mine, clones ditto-subnet to mine, asks how to practice, score,
   submit, or upload an agent, compares local OpenRouter 1.0 vs on-chain 0.7,
-  asks whether a harness change would be quarantined or rejected, or mentions
+  asks whether a harness change would be rejected after scoring, or mentions
   ditto practice, evaluate, run-size, starter kit, or SN118 mining.
 ---
 
@@ -17,11 +17,22 @@ This is the miner-facing skill. Load it before editing the starter kit,
 scoring, or uploading. A local score is not a production clearance: walk the
 served path against `$backroom-review` before `full`, packaging, or upload.
 
+Production screening is build and safety checks only (source review retired
+2026-11-07): archive and size limits, a static malicious-source check, the
+isolated image build and health check, copy protection, and banned hotkeys.
+There is no source review and no review hold; only copy protection can hold
+a near-duplicate when its scores finalize. Operators read the top agents' code
+after scoring and can void scores, reject or ban, so the review bar below is
+still the bar a top agent is judged against.
+
 The numbers below drift. For the live scoring bench, emission split, payout
 curve, champion, next epoch, and your own agents' status, run `$subnet-status`
 (`python3 .agents/skills/subnet-status/scripts/subnet_status.py --hotkey <ss58>`).
 
-Live scoring is **bench 14**, `run_size=full`, observed tools, locked
+Live scoring is **bench 18** (the accuracy contract on the dueling bench: a
+production-sized menu of 1,400 to 2,000 tools, multi-call tool encounters graded
+on the outcome, and a $1.00 per 350-case run budget; priced-cost-v2 unchanged,
+$0.50 reference per 350 cases, 0.3 floor), `run_size=full`, observed tools, locked
 `openai/gpt-oss-20b`. Without `--bench-version`, `uv run ditto practice` reads
 the live scoring version (`active_version`) from the public rollout endpoint
 (`https://dittobench.ai/api/v1/public/bench/rollout`) at run time, so the
@@ -32,11 +43,34 @@ each activation. A live version newer than the checkout's `MAX_BENCH_VERSION`
 fails loudly: update ditto-subnet. The wire `bench_version` a harness receives
 stays 9 in every contract.
 
-Bench 14 activated on 2026-10-28. It carries the v13 surface and gates
-(shadow, replayed locally with `--gates`, below) with action-scoped
-declarative over-call scoring. Pin `--bench-version 13` only to compare
-against the previous contract. See
-[`benchmark-v14-rollout.md`](../../../docs/benchmark-v14-rollout.md).
+Bench 18's rollout opened on 2026-11-10. A whole v18 menu (about 100k to 200k
+tokens) does not fit the locked model's context, so a harness that forwards it
+scores 0: retrieve or defer tools. The stock kit serves the Jev hybrid for any
+menu over 64k estimated tokens (`src/hybrid.rs`); unrun cases past the run
+budget score 0 with `budget_exhausted`.
+
+Bench 15 activated on 2026-11-03. It keeps v14's grader and the v13 gates
+(shadow, replayed locally with `--gates`, below) and adds a ~235-tool catalog
+(200 unlinked connector tools that answer "not connected" and count as extra
+calls) plus the scored decision lane at `DITTOBENCH_DECISIONS_URL`. Pin
+`--bench-version 14` only to compare against the previous contract. See
+[`benchmark-v15-rollout.md`](../../../docs/benchmark-v15-rollout.md).
+
+Bench 16 (the dueling bench) is shipped and **shadow, not live**: it scores
+nothing on chain until the operator activates it
+([`benchmark-v16-rollout.md`](../../../docs/benchmark-v16-rollout.md)). A v16
+run is a 175-case datagen half plus a 175-case generator slice (5 columns x 35,
+`composite = gate x (0.5 x datagen + 0.1 x each unmasked column)`; a column
+your own coldkey owns is masked and its 10% returns to the datagen half).
+`uv run ditto practice --bench-version 16` rehearses it: the runner builds a
+local slice with `challenge-scorer reproduce-slice` from the **public default
+generator only** (`miners/dittobench-generator-starter-kit` in all five
+columns, owner `""`, a throwaway local season secret and anchor), passes it to
+the local scorer, and prints the composite plus each column's mean. Live
+columns come from the top eligible miner generators and stay private until
+their source is released, so a local v16 score is a shape check, not a
+prediction. `--no-slice` scores the datagen half only; `--slice-sandbox docker`
+runs the generator isolated.
 
 ## Practice loops (do not collapse these)
 
@@ -45,7 +79,7 @@ against the previous contract. See
 | `cargo run -- mem-eval --k 10` | Retrieval only, no chat model | Retrieval/reranker iteration |
 | `cargo run -- evaluate` | Fixed local subset, **name-only** tool scorer, **no** `tool_endpoint` | Fast prompt/tool-name iteration |
 | `cargo run -- practice --n 20` | Rotating kit templates, still name-only, still no observer | Slightly less overfit than `evaluate` |
-| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, live bench (14) | Smoke after a harness change |
+| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, live bench (15) | Smoke after a harness change |
 | `uv run ditto practice --run-size medium` | Same path, deeper seeding and isolation | Development once small is healthy |
 | `uv run ditto practice --run-size full` | Same path, **on-chain envelope** | Required before upload |
 | `uv run ditto practice --gates` | Same path on the live contract + shadow replay of the public v13 gates with per-case notes | Before upload; after any answer, prompt, catalog, or tool-execution change |
@@ -63,10 +97,10 @@ is ~0.7 is expected. Name-only local scoring plus a tiny template pool is not
 
 ## Run sizes (teach these; do not skip full)
 
-From the **repository root**. All three use the live bench (14) and a
+From the **repository root**. All three use the live bench (15) and a
 validator-visible `tool_endpoint`. Only the envelope changes.
 
-| `--run-size` | Bench 13/14 envelope | When the agent should run it |
+| `--run-size` | Bench 13–15 envelope | When the agent should run it |
 |---|---|---|
 | `small` | 6 tool + 27 memory, 1 wave, no isolation | After every prompt, tool-routing, or observed-execution change. Minutes. |
 | `medium` | 48 tool + 95 memory, 4 waves, isolation | When small is green and you are iterating on seeding, isolation, or harder families. |
@@ -103,9 +137,9 @@ for missing toolchain errors.
 
 ## Review the served path
 
-This is the local half of `$backroom-review`. Read those files; do not copy
-the bar into this skill. Inspect only: no Backroom MCP, no quarantine or ATH
-writes.
+This is the local half of `$backroom-review`, the bar an operator applies
+when reading a top agent after scoring. Read those files; do not copy the bar
+into this skill. Inspect only: no Backroom MCP, no Backroom writes.
 
 - [review-rules.md](../backroom-review/references/review-rules.md)
 - [review-bar.md](../backroom-review/references/review-bar.md)
@@ -129,8 +163,8 @@ python3 .agents/skills/backroom-review/scripts/search-precedents.py "<pattern>"
 ```
 
 Hits are leads, not a verdict. Decide under the same two-limb test,
-production-engine test, and quarantine rejection boundary. Do not invent a
-lighter miner bar.
+production-engine test, and rejection boundary. Do not invent a lighter miner
+bar.
 
 | Result | Do |
 |---|---|
@@ -138,7 +172,8 @@ lighter miner bar.
 | Would reject | Stop. Cite limb/engine/policy, file:line, and precedent. Do not run `full` as certification, package, or upload. |
 | Mixed / source missing | Do not upload. Say what is missing. |
 
-A local pass is not a production clearance. Screening and ATH still apply.
+A local pass is not a production clearance. The build and safety checks, copy
+protection, and post-hoc operator review of top agents still apply.
 
 ## Iterate vs certify
 
@@ -163,9 +198,9 @@ would fail `$backroom-review`.
 
 Require all of:
 
-- `bench_version` is the live scoring version (14; the rehearsal prints
-  `rehearsing bench_version N` up front), or 13 only when you passed
-  `--bench-version 13` to compare against the previous contract
+- `bench_version` is the live scoring version (15; the rehearsal prints
+  `rehearsing bench_version N` up front), or 14 only when you passed
+  `--bench-version 14` to compare against the previous contract
 - `run_size` is the one you asked for
 - `capped_tool_cases` is 0 (or explain why)
 - `observed_tool_cases` is > 0 on a tool-heavy run
@@ -230,7 +265,7 @@ and the kit README's migration note):
 
 - **Every activated bench version N has a matching pack grading policy N.**
   Two policies are accepted at once: the active version and the previous one
-  (today v13 and v14).
+  (today v14 and v15).
 - **No forced migration.** A generator that keeps emitting the previous policy
   keeps its columns and is graded exactly as before. If a request offering N
   breaks it, the scorer retries that seed once on the baseline request

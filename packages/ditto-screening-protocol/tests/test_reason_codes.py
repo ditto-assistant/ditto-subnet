@@ -16,6 +16,7 @@ from ditto_screening_protocol.reason_codes import (
     PROVIDER_BACKOFF_REASON_CODES,
     SCREENING_REASON_CODES,
     SEED_PROBE_REASON_CODES,
+    TOOL_CATALOG_PROBE_REASON_CODES,
     ReasonCodeClass,
     ReasonCodeProducer,
     ScreeningReasonCode,
@@ -49,6 +50,9 @@ def test_current_platform_policy_is_recorded_exactly() -> None:
         "worker-claim-not-started",
         "l2-runtime-evidence-unavailable",
         "source-review-adjudicator-key-unavailable",
+        "image-upload-platform-unavailable",
+        # Retried once only (operator ruling 2026-11-03); Platform caps it.
+        "l2-late-result",
     )
     assert PROVIDER_BACKOFF_REASON_CODES == (
         "targon-build-unavailable",
@@ -134,6 +138,17 @@ def test_seed_probe_codes() -> None:
         "seed-oversized-response",
         "seed-unreachable",
     )
+
+
+def test_tool_catalog_probe_codes() -> None:
+    assert TOOL_CATALOG_PROBE_REASON_CODES == ("tool-catalog-context-overflow",)
+    assert (
+        reason_code_class("tool-catalog-context-overflow")
+        == ReasonCodeClass.AGENT_FAULT
+    )
+    # A miner-owned contract failure never names an admission lane: Platform
+    # must not present it as a Ditto-side outage.
+    assert "tool-catalog-context-overflow" not in ADMISSION_LANE_BY_REASON_CODE
 
 
 def test_unregistered_codes_stay_unclassified() -> None:

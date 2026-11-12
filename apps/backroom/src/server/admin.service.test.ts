@@ -62,7 +62,6 @@ import {
   fetchQueuePolicySettings,
   setQueuePolicySettings,
   fetchScreenerPolicyActivation,
-  scheduleScreenerPolicyActivation,
   fetchValidatorSlotSettings,
   setValidatorSlotSettings,
   setValidatorIssuancePause,
@@ -2338,11 +2337,20 @@ describe('continual retest administration', () => {
     statistical_band_mode: 'disabled' as const,
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'disabled' as const,
+    crown_gate_mode: 'disabled' as const,
+    crown_duel_mode: 'disabled' as const,
+    min_dethrone_confirmations: 3,
+    champion_standing_rank: 3,
     wave_membership: 'participants',
     retest_cohort_size: 5,
     retest_eligibility_mode: 'fixed',
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
+    retest_mode: 'continual' as const,
+    season_duel_seeds: 3,
+    season_duel_rotation_seeds: false,
   }
   const legacyEquivalent = {
     ...readDefaults,
@@ -2375,6 +2383,12 @@ describe('continual retest administration', () => {
       crown_incumbent_fleet_ready: false,
       crown_incumbent_active: false,
       crown_incumbent_required_protocol: 27,
+      crown_gate_fleet_ready: false,
+      crown_gate_active: false,
+      crown_gate_required_protocol: 34,
+      crown_duel_fleet_ready: false,
+      crown_duel_active: false,
+      crown_duel_required_protocol: 35,
       ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
@@ -2391,11 +2405,20 @@ describe('continual retest administration', () => {
     statistical_band_mode: carried,
     ledger_pin_mode: carried,
     crown_incumbent_mode: carried,
+    crown_gate_mode: carried,
+    crown_duel_mode: carried,
+    min_dethrone_confirmations: carried,
+    champion_standing_rank: carried,
     retest_cohort_size: carried,
     wave_membership: carried,
     retest_eligibility_mode: carried,
     retest_eligibility_z: carried,
     retest_cohort_max_size: carried,
+    wave_cadence_tempos: carried,
+    wave_seeds_per_window: carried,
+    retest_mode: carried,
+    season_duel_seeds: carried,
+    season_duel_rotation_seeds: carried,
   })
   // The platform carries every field, so reads and writes both keep them.
   const supported = {
@@ -2412,6 +2435,10 @@ describe('continual retest administration', () => {
       statistical_band_mode: 'disabled' as const,
       ledger_pin_mode: 'epoch' as const,
       crown_incumbent_mode: 'disabled' as const,
+      crown_gate_mode: 'disabled' as const,
+      crown_duel_mode: 'disabled' as const,
+      min_dethrone_confirmations: 3,
+      champion_standing_rank: 3,
       idle_retests_enabled: true,
       rollout_standdown: 'all',
       wave_membership: 'participants',
@@ -2419,6 +2446,11 @@ describe('continual retest administration', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
+      retest_mode: 'continual' as const,
+      season_duel_seeds: 3,
+      season_duel_rotation_seeds: false,
     }
     const enabled = {
       ...control,
@@ -2829,171 +2861,6 @@ describe('screener policy activation', () => {
       revisions: [],
       fleet: null,
     })
-  })
-
-  it('schedules one activation with the exact platform contract', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const scheduled = {
-      ...view,
-      latest: revision(4),
-      revisions: [revision(4), revision(3), revision(2)],
-      fleet: null,
-    }
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ revision: 4 }))
-      .mockResolvedValueOnce(Response.json(scheduled))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).resolves.toEqual(scheduled)
-
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          expected_revision: 3,
-          target_policy_version: 11,
-          activate_at: '2026-08-29T09:00:00-04:00',
-          rescreen_scored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          actor: 'operator@omniaura.ai',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        }),
-      }),
-    )
-  })
-
-  it('defaults rescreenScored to true when the operator omits it', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ revision: 4 }))
-      .mockResolvedValueOnce(Response.json(view))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).resolves.toEqual(view)
-
-    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
-      rescreen_scored: true,
-    })
-  })
-
-  it('rejects a timezone-naive activate_at before any admin call', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).rejects.toThrow()
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('rejects the wrong confirmation phrase before any admin call', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).rejects.toThrow()
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('surfaces the stale-revision 409 detail verbatim', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const detail =
-      'screener policy activation changed; refresh before scheduling (expected 3, current 4)'
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ detail }, { status: 409 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 11,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).rejects.toThrow(detail)
-    // Nothing is re-read after a refusal, so the operator cannot mistake a
-    // fresh GET for a successful schedule.
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('surfaces the platform 422 refusal detail verbatim', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const detail = 'target_policy_version 12 is above builtin_policy_version 11'
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ detail }, { status: 422 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await expect(
-      scheduleScreenerPolicyActivation(
-        {
-          expectedRevision: 3,
-          targetPolicyVersion: 12,
-          activateAt: '2026-08-29T09:00:00-04:00',
-          rescreenScored: true,
-          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
-          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
-        },
-        'operator@omniaura.ai',
-      ),
-    ).rejects.toThrow(detail)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -4231,6 +4098,9 @@ describe('production score reads', () => {
     completed_wave_depth: 0,
     official_sample_count: 3,
     raw_confirmation_depth: 1,
+    confirmation_seed_floor: 8,
+    confirmation_seed_cap: 10,
+    confirmation_seed_target: 9,
     composite_stderr: 0.01,
     aggregate_mode: 'fleet_ready',
     wave_membership: 'participants',
@@ -4269,6 +4139,21 @@ describe('production score reads', () => {
       live_lease_count: 0,
       newer_canonical_work_pending: false,
       least_covered_admitted: true,
+      void_rerun_seed_count: 0,
+      void_rerun_claimable: false,
+      provider_outage_active: false,
+      provider_gate_closed: false,
+      retest_mode: 'continual' as const,
+      season_duel_seed_count: null,
+      season_duel_anchor_champion_id: null,
+      season_duel_held_seed_count: null,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: null,
+      wave_window_epoch: null,
+      wave_next_window_epoch: null,
+      wave_window_start: null,
+      wave_window_opened_seed_count: null,
+      wave_growth_paused: false,
       decision: 'claimable',
     },
     latest_ticket_status: 'issued',
@@ -4278,6 +4163,19 @@ describe('production score reads', () => {
     terminal_ticket_count: 2,
     latest_confirmation_composite: 0.5412,
     latest_confirmation_recorded_at: '2026-09-22T23:45:00Z',
+    retest_samples: [{
+      validator_hotkey: '5HEouuDaDASnWdqDwYtwQATS5z916W9DyDAtK6WyB2jPRReb',
+      seed: '9223372036854775000',
+      composite: 0.651813,
+      run_id: 'fd227604',
+      accepted_at: '2026-09-22T23:45:00Z',
+      grant_id: '33c2b609-0000-4000-8000-000000000000',
+      chat_requests: 3861,
+      failed_requests: 2127,
+      failure_codes: [{ terminal_error_code: 'upstream_http_402', count: 2127 }],
+      void_generation: 0,
+      voided: false,
+    }],
   }
 
   it('reads exact retest admission and preserves int63 seed strings', async () => {
@@ -4285,7 +4183,16 @@ describe('production score reads', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
-    expect(result).toEqual(retestDiagnosticPayload)
+    // A platform that predates the season-expiry fields still parses: they
+    // default to empty/null rather than failing the read.
+    expect(result).toEqual({
+      ...retestDiagnosticPayload,
+      score_dueling_season_ids: [],
+      window_dueling_season_ids: [],
+      in_window_score_count: null,
+      last_valid_composite: null,
+      in_current_pin: null,
+    })
     expect(result.raw_confirmation_seeds).toEqual(['9223372036854775001'])
     // Suppressed by its owner's deeper evidence while outscoring the cutoff it
     // sits behind: a structural exclusion, not a score it failed to reach.
@@ -4298,6 +4205,63 @@ describe('production score reads', () => {
       `https://platform-api.heyditto.ai/api/v1/admin/agents/${provisionalAgentId}/continual-retest-diagnostic`,
       expect.anything(),
     )
+  })
+
+  it('reads an expired dueling season as its own admission reason', async () => {
+    // SN-466: logan v15 after season 26103 opened. The quorum aged out of the
+    // two-season window by design; the read names the seasons on both sides.
+    const payload = {
+      ...retestDiagnosticPayload,
+      canonical_composite: null,
+      official_composite: null,
+      in_retest_cohort: false,
+      is_same_owner_challenger: false,
+      admission_reason: 'expired_dueling_season',
+      ledger_eligible: false,
+      score_dueling_season_ids: ['87a46084-1664-4dbe-bc56-6fb8d3f57200'],
+      window_dueling_season_ids: [
+        '428a8bc5-b002-4af4-91e4-964cb83128f4',
+        '5b1c5a3e-0d0e-4a52-9a0c-3d1b8f0c2a10',
+      ],
+      in_window_score_count: 0,
+      last_valid_composite: 0.960714,
+      in_current_pin: true,
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(payload)))
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result.admission_reason).toBe('expired_dueling_season')
+    expect(result.score_dueling_season_ids).toEqual(['87a46084-1664-4dbe-bc56-6fb8d3f57200'])
+    expect(result.in_window_score_count).toBe(0)
+    expect(result.last_valid_composite).toBe(0.960714)
+    expect(result.in_current_pin).toBe(true)
+  })
+
+  it('reads void re-run debt on an agent outside the cohort', async () => {
+    const payload = {
+      ...retestDiagnosticPayload,
+      in_retest_cohort: false,
+      admission_reason: 'outside_cohort',
+      claim: {
+        ...retestDiagnosticPayload.claim,
+        in_catchup_set: false,
+        route_priority: 'void_rerun',
+        void_rerun_seed_count: 2,
+        void_rerun_claimable: false,
+        provider_outage_active: true,
+        provider_gate_closed: true,
+        decision: 'provider_outage',
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(payload)))
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result.claim).toMatchObject({
+      route_priority: 'void_rerun',
+      void_rerun_seed_count: 2,
+      provider_outage_active: true,
+      decision: 'provider_outage',
+    })
   })
 
   it('still reads a retest diagnostic from a platform without the newer fields', async () => {
@@ -4567,6 +4531,44 @@ describe('production score reads', () => {
       champion_agent_id: topAgentId,
       raw_leader_decision: { required_lead: 0.011, dethrones: false },
       recipients: [{ shared_seed_confirmations: 7 }],
+    })
+  })
+
+  // #2981: a score-ceiling joint crown failed every leaderboard read, and an
+  // unpaid provisional incumbent read as paid.
+  it('relays a joint crown and an unpaid recipient', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const [crowned] = emissions.recipients
+    const joint = {
+      ...leaderboard,
+      emissions: {
+        ...emissions,
+        allocation_mode: 'score_ceiling_pool',
+        score_ceiling_pool_size: 2,
+        recipients: [
+          { ...crowned, role: 'joint_champion', share_of_miner_pool: 0.3, paid: false },
+          {
+            ...crowned,
+            role: 'joint_champion',
+            agent_id: provisionalAgentId,
+            miner_hotkey: '5NewMiner',
+            raw_rank: 2,
+            share_of_miner_pool: 0.3,
+          },
+        ],
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(joint)))
+
+    const page = await fetchScoreLeaderboard({ status: 'finalized', limit: 1, offset: 0 })
+
+    expect(page.emissions).toMatchObject({
+      allocation_mode: 'score_ceiling_pool',
+      score_ceiling_pool_size: 2,
+      recipients: [
+        { role: 'joint_champion', agent_id: topAgentId, paid: false },
+        { role: 'joint_champion', agent_id: provisionalAgentId, paid: true },
+      ],
     })
   })
 
@@ -5268,6 +5270,120 @@ describe('production score reads', () => {
       gate_posture: null,
       median_flagged_case_share: null,
     })
+  })
+
+  it('carries the bench v16 priced inference cost and folds its medians into history', async () => {
+    const pricedCost = (normalizedUsd: number, factorBps: number) => ({
+      contract_id: 'priced-cost-v1',
+      posture: 'enforce',
+      applied: true,
+      result: 'priced',
+      window: 'whole_run',
+      source: 'relay',
+      cases: 350,
+      prompt_tokens: 22_318_268,
+      completion_tokens: 1_690_233,
+      embedding_tokens: 294_000,
+      cost_nano_usd: Math.round(normalizedUsd * 1e9),
+      normalization_cases: 350,
+      normalized_cost_nano_usd: Math.round(normalizedUsd * 1e9),
+      reference_nano_usd: 1_000_000_000,
+      ratio_bps: Math.floor(normalizedUsd * 10_000),
+      floor_bps: 6000,
+      factor_bps: factorBps,
+      applied_factor_bps: factorBps,
+      cost_usd: normalizedUsd,
+      normalized_cost_usd: normalizedUsd,
+      rule_consistent: true,
+    })
+    const v16Scores = {
+      ...agentScores,
+      score_count: 9,
+      scores: [
+        ...agentScores.scores,
+        scoreRow({ validator_hotkey: '5ValA', composite: 0.61, bench_version: 16, seed: 999, run_id: 'run-a16', generated_at: '2026-11-13T00:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: pricedCost(1.81699, 6733) }) }),
+        scoreRow({ validator_hotkey: '5ValB', composite: 0.62, bench_version: 16, seed: 999, run_id: 'run-b16', generated_at: '2026-11-13T01:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: pricedCost(1.70001, 7200) }) }),
+        // A row that could not price its run carries no cost into the medians.
+        scoreRow({ validator_hotkey: '5ValC', composite: 0.9, bench_version: 16, seed: 999, run_id: 'run-c16', generated_at: '2026-11-13T02:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce', priced_cost: { ...pricedCost(0, 10_000), result: 'insufficient_evidence' } }) }),
+      ],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(v16Scores)))
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    const v16 = history.versions.find((version) => version.bench_version === 16)
+    expect(v16?.median_priced_cost_usd).toBeCloseTo((1.81699 + 1.70001) / 2, 10)
+    expect(v16?.median_priced_cost_factor_bps).toBe((6733 + 7200) / 2)
+    expect(history.versions.find((version) => version.bench_version === 7)).toMatchObject({
+      median_priced_cost_usd: null,
+      median_priced_cost_factor_bps: null,
+    })
+  })
+
+  it('carries the bench v16 dueling breakdown through get_agent_scores without owner keys', async () => {
+    const column = (id: string, extra: Record<string, unknown> = {}) => ({
+      column_id: id, grading_bench_version: 16, n: 35, sum: 28, mean: 0.8,
+      substituted: false, public_default: false, self_masked: false, contribution: 0.08,
+      ...extra,
+    })
+    const breakdown = {
+      formula: 'gate x ((1 - w x |U|) x datagen + w x sum col)',
+      season_id: '8f2b6a52-3b7f-4a55-9d0c-0d6c7d2a9e11',
+      season_index: 3,
+      datagen_raw: 0.9,
+      datagen_gate: 0.79832,
+      column_weight: 0.1,
+      counted_columns: 4,
+      datagen_share: 0.6,
+      generator_sum: 0.23,
+      pre_gate_composite: 0.77,
+      composite: 0.6147064,
+      composite_stderr: 0.0125,
+      priced_cost_applied_factor_bps: 9392,
+      priced_cost_factor_bps: 9392,
+      priced_cost_factor: 0.9392,
+      priced_cost_posture: 'enforce',
+      priced_cost_result: 'priced',
+      priced_cost_window: 'whole_run',
+      other_gate_factor: 0.85,
+      columns: [
+        column('c0', { public_default: true }),
+        // A field Platform never sends is stripped, never forwarded.
+        column('c1', { self_masked: true, contribution: 0, owner_key: '5SecretOwner' }),
+        column('c2'),
+        column('c3', { substituted: true }),
+        column('c4'),
+      ],
+    }
+    const v16Scores = {
+      ...agentScores,
+      score_count: 4,
+      scores: [
+        ...agentScores.scores,
+        scoreRow({ validator_hotkey: '5ValA', composite: 0.614706, bench_version: 16, seed: 999, run_id: 'run-a16', generated_at: '2026-11-13T00:00:00Z', dueling_breakdown: breakdown }),
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(Response.json(leaderboard))
+        .mockResolvedValueOnce(Response.json(v16Scores)),
+    )
+
+    const detail = await fetchAgentScores({ agentId: topAgentId, benchVersion: 16 })
+    const [row] = detail.scores
+    expect(row?.dueling_breakdown).toMatchObject({
+      priced_cost_applied_factor_bps: 9392,
+      priced_cost_window: 'whole_run',
+      counted_columns: 4,
+    })
+    expect(row?.dueling_breakdown?.columns.map((c) => c.self_masked)).toEqual([
+      false, true, false, false, false,
+    ])
+    expect(JSON.stringify(detail)).not.toContain('5SecretOwner')
+    expect(JSON.stringify(detail)).not.toContain('owner_key')
+    // Pre-v16 rows carry no breakdown at all.
+    const v7 = detail.other_bench_versions.find((group) => group.bench_version === 7)
+    expect(v7?.scores.every((score) => score.dueling_breakdown === undefined)).toBe(true)
   })
 
   it('reports a mixed bench v13 gate posture as null instead of picking one', async () => {

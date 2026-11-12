@@ -1162,15 +1162,21 @@ func TestConfirmationChatBackpressureRetriesWhenActivated(t *testing.T) {
 	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, nonce, body)))
 	expectEnvelope(t, w, 502, relayhttp.CodeHTTPException, "confirmation provider unavailable")
 
-	if confirmationBackpressureMaxAttempts != 2 {
-		t.Fatalf("this fixture assumes a two-attempt budget; constant is %d",
-			confirmationBackpressureMaxAttempts)
+	// Activated backpressure now shares the transient cap. The injected sleep
+	// does not advance the real clock, so the 80s elapsed cap (which in
+	// production stops a 30s Retry-After at three attempts) is not exercised
+	// here; the per-call cap is.
+	if calls != confirmationTransientMaxAttempts {
+		t.Fatalf("activated backpressure attempts: got %d want %d", calls, confirmationTransientMaxAttempts)
 	}
-	if calls != 2 {
-		t.Fatalf("activated backpressure attempts: got %d want 2", calls)
+	// Retry-After is a floor: no wait may be shorter than the provider asked.
+	if len(sleeps) != confirmationTransientMaxAttempts-1 {
+		t.Fatalf("activated backpressure waits: got %v", sleeps)
 	}
-	if len(sleeps) != 1 || sleeps[0] != 30*time.Second {
-		t.Fatalf("activated backpressure waits: got %v want [30s]", sleeps)
+	for _, sleep := range sleeps {
+		if sleep < 30*time.Second {
+			t.Fatalf("a wait undercut Retry-After 30s: %v", sleeps)
+		}
 	}
 
 	var status string

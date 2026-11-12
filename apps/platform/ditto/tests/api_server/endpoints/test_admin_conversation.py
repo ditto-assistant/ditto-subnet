@@ -15,13 +15,30 @@ from sqlalchemy import func, select
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.screener import require_screener
 from ditto.db.models import Agent, AgentStatus, ConversationAssessment, Score
-from ditto_screening_protocol.conversation import DIMENSIONS, ConversationReport
+from ditto_screening_protocol.conversation import (
+    DIMENSIONS,
+    INSTRUMENT_V1,
+    INSTRUMENT_V2,
+    JUDGE_BUDGET_MICROUSD,
+    JUDGE_MODEL_V1,
+    RUBRIC_SHA256_V1,
+    RUN_RESERVATION_MICROUSD,
+    ConversationReport,
+)
 from ditto_screening_protocol.conversation_story import story, story_digest
 
 TOKEN = uuid4().hex
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 BASE = "/api/v1/admin/conversation-assessments"
 pytestmark = pytest.mark.asyncio
+
+
+def _pass_idle_cooldown(monkeypatch) -> None:
+    """Move the admission gate's clock past the post-idle cooldown."""
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    later = module.monotonic() + module.ADMISSION_IDLE_COOLDOWN_SECONDS + 1
+    monkeypatch.setattr(module, "monotonic", lambda: later)
 
 
 async def install(app, session_maker, monkeypatch, *, enabled=True, count=6):
@@ -79,7 +96,7 @@ def report_for(claim):
         screened_image_sha256=claim["screened_image_sha256"],
         bench_version=claim["bench_version"],
         story_sha256=story_digest(claim["seed"]),
-        provider_model="gpt-6-astra",
+        provider_model="anthropic/claude-opus-5.5",
         status="completed",
         exchanges=[
             {
@@ -102,11 +119,13 @@ def report_for(claim):
                 for i in range(11, 31)
             ]
         },
-        judge_requests=31,
+        judge_requests=1,
         input_tokens=100,
         output_tokens=100,
-        reserved_microusd=25_000_000,
+        reserved_microusd=JUDGE_BUDGET_MICROUSD,
         spent_microusd=6000,
+        judge_cost_is_upper_bound=False,
+        judge_cost_basis="tariff",
     ).model_dump(mode="json")
 
 
@@ -163,9 +182,40 @@ async def test_worker_claim_is_image_bound_and_result_requires_its_owner(
         AsyncMock(return_value=storage),
     )
     worker_base = "/api/v1/screener/conversation-assessments"
-    response = await client.post(worker_base + "/claim")
+    # A worker that predates v2 sends no capability and is offered nothing.
+    legacy = await client.post(worker_base + "/claim")
+    assert legacy.status_code == 200 and legacy.json() is None
+    stale = await client.post(
+        worker_base + "/claim",
+        json={
+            "instruments": [INSTRUMENT_V1],
+            "reservation_microusd": RUN_RESERVATION_MICROUSD,
+        },
+    )
+    assert stale.status_code == 200 and stale.json() is None
+    # A v2 worker still sized for the old $30 hold is offered nothing either.
+    for hold in (None, 30_000_000):
+        old_hold = await client.post(
+            worker_base + "/claim",
+            json={"instruments": [INSTRUMENT_V2], "reservation_microusd": hold},
+        )
+        assert old_hold.status_code == 200 and old_hold.json() is None
+    response = await client.post(
+        worker_base + "/claim",
+        json={
+            "instruments": [INSTRUMENT_V2],
+            "reservation_microusd": RUN_RESERVATION_MICROUSD,
+        },
+    )
     assert response.status_code == 200, response.text
     claim = response.json()
+    assert claim["instrument"] == INSTRUMENT_V2
+    assert claim["judge_budget_microusd"] == 850_000
+    assert claim["harness_budget_microusd"] == 150_000
+    expires = datetime.fromisoformat(claim["expires_at"])
+    assert (
+        timedelta(minutes=124) < expires - datetime.now(UTC) <= timedelta(minutes=125)
+    )
     assert claim["screened_image_url"] == "https://artifacts.example/image.tar"
     report = report_for(claim)
     payload = {"lease_token": claim["lease_token"], "report": report}
@@ -185,7 +235,14 @@ async def test_worker_claim_is_image_bound_and_result_requires_its_owner(
     report["judge_cost_is_upper_bound"] = False
     accepted = await client.post(path, json=payload)
     assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["spent_microusd"] == 36000
+    observed = accepted.json()
+    assert observed["spent_microusd"] == 36000
+    assert observed["spent_is_upper_bound"] is False
+    assert observed["judge_spent_microusd"] == 6000
+    assert observed["harness_spent_microusd"] == 30000
+    assert observed["judge_model"] == "claude-opus-5-5"
+    assert observed["exchange_count"] == 30 and observed["failed_turns"] == []
+    assert observed["harness_requests"] == 60
     listing = (await client.get(BASE, headers=HEADERS)).json()
     assert "seed" not in str(listing) and "lease_token" not in str(listing)
     assert "screened_image_url" not in str(listing)
@@ -216,7 +273,9 @@ async def test_concurrent_claims_only_admit_top_five_once(
     assert {c["agent_id"] for c in claims} == {str(e.agent_id) for e in entries[:5]}
     assert len({c["seed"] for c in claims}) == 5
     listing = (await client.get(BASE, headers=HEADERS)).json()
-    assert listing["reserved_last_day_microusd"] == 150_000_000
+    # Four settled at their recorded $0.006, the open claim at its full hold.
+    assert listing["reserved_last_day_microusd"] == 4 * 6000 + 1_000_000
+    assert listing["daily_budget_microusd"] == 30_000_000
     assert sum(i["proposed_quality_micros"] is None for i in listing["items"]) == 1
 
 
@@ -253,13 +312,19 @@ async def test_overlapping_idle_polls_build_one_board_and_expose_diagnostics(
     finally:
         release.set()
         await first
-    # Sequential reads are fresh; neither ranks nor a no-work decision are cached.
+    # A no-work answer holds for the idle cooldown: the next poll does not
+    # rebuild the board. Ranks are never cached, only the wait.
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    assert reader.await_count == 1
+    # Once the cooldown has passed, a sequential read rebuilds it fresh.
+    _pass_idle_cooldown(monkeypatch)
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
     assert reader.await_count == 2
     final = (await client.get(BASE, headers=HEADERS)).json()["admission_diagnostics"]
     assert final["scope"] == "process"
     assert final["in_flight"] is False
     assert final["attempts"] == 2
+    assert final["idle_skips"] == 1
     assert final["last_outcome"] == "idle"
     assert final["last_elapsed_ms"] >= 0
     assert final["last_completed_at"] is not None
@@ -343,7 +408,8 @@ async def test_changed_story_and_expired_lease_cannot_score(
     assert (await client.post(path, headers=HEADERS, json=payload)).status_code == 409
     listing = (await client.get(BASE, headers=HEADERS)).json()
     assert listing["items"][0]["status"] == "expired"
-    assert listing["reserved_last_day_microusd"] == 30_000_000
+    # An expired claim's spend is unknown, so it keeps the full hold.
+    assert listing["reserved_last_day_microusd"] == 1_000_000
 
 
 async def test_fee_proposal_uses_existing_audited_revision_and_preserves_cooldown(
@@ -474,7 +540,7 @@ async def test_manual_retry_preserves_history_and_never_retries_twice(
     ).status_code == 200
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
     listing = (await client.get(BASE, headers=HEADERS)).json()
-    assert listing["reserved_last_day_microusd"] == 60_000_000
+    assert listing["reserved_last_day_microusd"] == 2 * 6000
     parent = next(
         i for i in listing["items"] if i["assessment_id"] == original["assessment_id"]
     )
@@ -489,42 +555,54 @@ async def test_manual_retry_preserves_history_and_never_retries_twice(
         assert await db.scalar(select(func.count()).select_from(Score)) == 0
 
 
-async def test_cap_admits_one_extra_retry_then_waits_without_erasing_reservations(
+async def test_cap_counts_recorded_spend_and_full_holds_for_open_claims(
     app, client, session_maker, monkeypatch
 ):
+    """The $30 cap bounds what the lane spent: settled runs count their
+    recorded spend, an open or expired claim counts its whole $1 hold, and an
+    authorized retry waits for headroom instead of erasing anything."""
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    monkeypatch.setattr(module, "DAILY_BUDGET_MICROUSD", 2_500_000)
     await install(app, session_maker, monkeypatch, count=5)
     original, _, approval = await failed_attempt(client)
-    second, _, second_approval = await failed_attempt(client)
-    for _ in range(3):
-        await failed_attempt(client)
+    await failed_attempt(client)
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    assert listing["reserved_last_day_microusd"] == 2 * 6000
+    open_claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    async with session_maker() as db, db.begin():
+        row = await db.get(ConversationAssessment, UUID(open_claim["assessment_id"]))
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    _pass_idle_cooldown(monkeypatch)
+    leased = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    assert leased is not None
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    # Two settled runs plus two full holds: one expired, one live.
+    assert listing["reserved_last_day_microusd"] == 2 * 6000 + 2_000_000
+    assert listing["next_budget_slot_at"] is not None
     response = await client.post(
         BASE + "/authorize-retry", headers=HEADERS, json=approval
     )
     assert response.status_code == 200, response.text
-    assert response.json()["daily_budget_microusd"] == 180_000_000
-    assert response.json()["reserved_last_day_microusd"] == 150_000_000
-    assert response.json()["next_budget_slot_at"] is None
-    retry, _, _ = await failed_attempt(client)
-    assert retry["seed"] == original["seed"]
-    assert retry["agent_id"] == original["agent_id"]
-    # Even an independently authorized second retry cannot reserve a seventh slot.
-    response = await client.post(
-        BASE + "/authorize-retry", headers=HEADERS, json=second_approval
+    report = report_for(leased)
+    report.update(
+        status="incomplete", error_code="judge_cost_limit", grades=None, exchanges=[]
     )
-    assert response.status_code == 200, response.text
-    assert response.json()["reserved_last_day_microusd"] == 180_000_000
-    assert response.json()["next_budget_slot_at"] is not None
-    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
-    async with session_maker() as db, db.begin():
-        parent = await db.get(ConversationAssessment, UUID(original["assessment_id"]))
-        parent.created_at = datetime.now(UTC) - timedelta(days=1, seconds=1)
+    result = await client.post(
+        BASE + f"/{leased['assessment_id']}/result",
+        headers=HEADERS,
+        json={"lease_token": leased["lease_token"], "report": report},
+    )
+    assert result.status_code == 200, result.text
+    _pass_idle_cooldown(monkeypatch)
     retried = (await client.post(BASE + "/claim", headers=HEADERS)).json()
-    assert retried["seed"] == second["seed"]
+    assert retried["seed"] == original["seed"]
     listing = (await client.get(BASE, headers=HEADERS)).json()
-    assert listing["reserved_last_day_microusd"] == 180_000_000
-    assert listing["current_submission_fee_rao"] == 40_000_000
-    assert len(listing["items"]) == 7
-    assert all(item["reserved_microusd"] == 30_000_000 for item in listing["items"])
+    assert listing["reserved_last_day_microusd"] == 3 * 6000 + 2_000_000
+    assert all(
+        item["reserved_microusd"] == RUN_RESERVATION_MICROUSD
+        for item in listing["items"]
+    )
 
 
 @pytest.mark.parametrize("guard", ["image", "expired", "changed_report"])
@@ -568,3 +646,210 @@ async def test_authorized_retry_rechecks_admission_guards(
             else:
                 parent.report = {**parent.report, "output_tokens": 999}
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+
+
+async def test_writes_that_can_create_work_end_the_idle_cooldown(
+    app, client, session_maker, monkeypatch
+):
+    await install(app, session_maker, monkeypatch, enabled=False)
+    # Off: the attempt is idle and starts the cooldown.
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    diagnostics = (await client.get(BASE, headers=HEADERS)).json()[
+        "admission_diagnostics"
+    ]
+    assert diagnostics["idle_skips"] == 1
+    payload = {
+        "mode": "shadow",
+        "expected_revision": 0,
+        "actor": "operator@example.com",
+        "reason": "Start the bounded shadow canary",
+        "confirmation": "APPLY CONVERSATION SHADOW SETTINGS",
+    }
+    changed = await client.post(BASE + "/settings", headers=HEADERS, json=payload)
+    assert changed.status_code == 200, changed.text
+    # Turning admission on is seen at once, not after the cooldown.
+    claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    assert claim is not None
+
+
+async def test_a_write_during_an_idle_attempt_does_not_arm_the_cooldown(
+    app, monkeypatch
+):
+    from ditto.api_server.endpoints import admin_conversation as module
+
+    request = Request({"type": "http", "app": app})
+    gate = module._admission_gate(request)
+
+    async def raced(*_args):
+        # Saw no work, then an operator write enabled admission mid-attempt.
+        gate.clear_idle_cooldown()
+        return None
+
+    monkeypatch.setattr(module, "_claim_assessment", raced)
+    assert await module.claim_assessment(request, None) is None
+    assert gate.idle_until == 0.0
+
+    next_attempt = AsyncMock(return_value=None)
+    monkeypatch.setattr(module, "_claim_assessment", next_attempt)
+    assert await module.claim_assessment(request, None) is None
+    next_attempt.assert_awaited_once()
+    assert gate.diagnostics.idle_skips == 0
+    # That undisturbed idle answer does start the wait.
+    assert gate.idle_until > 0.0
+
+
+async def test_stored_v1_report_still_lists_with_its_evidence(
+    app, client, session_maker, monkeypatch
+):
+    """Reports judged by Astra before v2 stay verifiable and visible."""
+    await install(app, session_maker, monkeypatch)
+    claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    report = report_for(claim)
+    report.update(
+        instrument=INSTRUMENT_V1,
+        model=JUDGE_MODEL_V1,
+        rubric_sha256=RUBRIC_SHA256_V1,
+        provider_model="openai/gpt-6-astra",
+        judge_requests=31,
+        judge_cost_is_upper_bound=True,
+        judge_cost_basis=None,
+        status="incomplete",
+        grades=None,
+        error_code="harness_inference_incomplete",
+        harness_usage={
+            "profile": "conversation-openrouter-oss20b-pplx768-v1",
+            "requests": 106,
+            "tokens": 404062,
+            "spent_microusd": 54767,
+            "unmetered": True,
+            "failed": True,
+            "failure": {
+                "code": "provider_http_error",
+                "stage": "provider",
+                "http_status": 429,
+            },
+        },
+    )
+    for exchange in report["exchanges"][24:]:
+        exchange["assistant"] = ""
+    for exchange in report["exchanges"]:
+        exchange.pop("assistant_truncated")
+        exchange.pop("failure")
+    ConversationReport.model_validate(report)
+    async with session_maker() as db, db.begin():
+        row = await db.get(ConversationAssessment, UUID(claim["assessment_id"]))
+        row.instrument = INSTRUMENT_V1
+        row.report = report
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    item = next(
+        i for i in listing["items"] if i["assessment_id"] == claim["assessment_id"]
+    )
+    assert item["instrument"] == INSTRUMENT_V1 and item["judge_model"] == JUDGE_MODEL_V1
+    assert item["spent_microusd"] == 6000 + 54767 and item["spent_is_upper_bound"]
+    assert item["empty_answers"] == 6 and item["exchange_count"] == 30
+    assert item["harness_failure_code"] == "provider_http_error"
+    assert item["harness_failure_http_status"] == 429
+    assert listing["instrument"] == INSTRUMENT_V2
+
+
+async def test_admission_covers_fifteen_ranks_then_repeats_the_leaders(
+    app, client, session_maker, monkeypatch
+):
+    """Every eligible rank 1-15 artifact gets one canonical assessment first;
+    only then do ranks 1-5 get two fresh-seed repeats each. Rank 16 never."""
+    entries = await install(app, session_maker, monkeypatch, count=16)
+    claims = []
+    while claim := (await client.post(BASE + "/claim", headers=HEADERS)).json():
+        claims.append(claim)
+        result = await client.post(
+            BASE + f"/{claim['assessment_id']}/result",
+            headers=HEADERS,
+            json={"lease_token": claim["lease_token"], "report": report_for(claim)},
+        )
+        assert result.status_code == 200, result.text
+        assert len(claims) <= 25
+    canonical, repeats = claims[:15], claims[15:]
+    assert [c["agent_id"] for c in canonical] == [str(e.agent_id) for e in entries[:15]]
+    leaders = {str(e.agent_id) for e in entries[:5]}
+    assert len(repeats) == 10 and {c["agent_id"] for c in repeats} == leaders
+    by_agent: dict[str, set[str]] = {}
+    for claim in claims:
+        by_agent.setdefault(claim["agent_id"], set()).add(claim["seed"])
+    assert all(len(by_agent[agent]) == 3 for agent in leaders)  # Fresh seeds.
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    indexes = sorted(i["repeat_index"] for i in listing["items"])
+    assert indexes == [0] * 15 + [1] * 5 + [2] * 5
+    repeat_rows = [i for i in listing["items"] if i["repeat_index"]]
+    first = {c["agent_id"]: c for c in canonical}
+    assert all(
+        r["base_quality_micros"]
+        == round(
+            next(
+                e for e in entries if str(e.agent_id) == r["agent_id"]
+            ).official_composite
+            * 1_000_000
+        )
+        for r in repeat_rows
+    )
+    assert set(first) >= {r["agent_id"] for r in repeat_rows}
+
+
+async def test_an_unscored_canonical_is_never_repeated(
+    app, client, session_maker, monkeypatch
+):
+    await install(app, session_maker, monkeypatch, count=1)
+    await failed_attempt(client)
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+
+
+async def test_failed_or_expired_repeats_do_not_use_up_samples(
+    app, client, session_maker, monkeypatch
+):
+    """Only completed repeats count toward the two samples; the attempt cap
+    still stops an agent whose repeats keep failing after four tries."""
+    await install(app, session_maker, monkeypatch, count=1)
+    canonical = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    result = await client.post(
+        BASE + f"/{canonical['assessment_id']}/result",
+        headers=HEADERS,
+        json={"lease_token": canonical["lease_token"], "report": report_for(canonical)},
+    )
+    assert result.status_code == 200, result.text
+    # First repeat expires unreported; second ends incomplete.
+    expired = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    async with session_maker() as db, db.begin():
+        row = await db.get(ConversationAssessment, UUID(expired["assessment_id"]))
+        row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    _pass_idle_cooldown(monkeypatch)
+    failed = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    report = report_for(failed)
+    report.update(
+        status="incomplete",
+        error_code="harness_unresponsive",
+        grades=None,
+        exchanges=[],
+    )
+    assert (
+        await client.post(
+            BASE + f"/{failed['assessment_id']}/result",
+            headers=HEADERS,
+            json={"lease_token": failed["lease_token"], "report": report},
+        )
+    ).status_code == 200
+    # Neither counted: two more repeats are offered, then the attempt cap stops.
+    offered = []
+    for _ in range(3):
+        _pass_idle_cooldown(monkeypatch)
+        claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+        if claim is None:
+            break
+        offered.append(claim)
+        await client.post(
+            BASE + f"/{claim['assessment_id']}/result",
+            headers=HEADERS,
+            json={"lease_token": claim["lease_token"], "report": report_for(claim)},
+        )
+    assert len(offered) == 2  # Attempts 3 and 4 complete the two samples.
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    assert sorted(i["repeat_index"] for i in listing["items"]) == [0, 1, 2, 3, 4]

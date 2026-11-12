@@ -396,6 +396,162 @@ class PublicBenchmarkQualityFactor(BaseModel):
     explanation: str
 
 
+DUELING_BREAKDOWN_FORMULA = "gate x ((1 - w x |U|) x datagen + w x sum col)"
+"""The bench v16+ dueling composite (``challenge.DuelingComposite``)."""
+
+
+class PublicDuelingColumn(BaseModel):
+    """One generator-slice column of a bench v16+ run, as aggregates only.
+
+    Mirrors the Backroom canary read: no owner key, no generator submission
+    id, no case text. ``self_masked`` says the column's generator belongs to
+    the scored agent's own owner, so the composite dropped it (its weight
+    returned to the datagen half).
+    """
+
+    column_id: Annotated[str, Field(pattern=r"^c[0-9]{1,2}$")]
+    grading_bench_version: Annotated[int | None, Field(default=None, ge=1)] = None
+    n: Annotated[int, Field(ge=0, description="Executed cases in this column.")]
+    sum: Annotated[float, Field(ge=0.0, description="Sum of the column's case scores.")]
+    mean: Annotated[
+        float, Field(ge=0.0, le=1.0, description="``sum / n`` (0 with no cases).")
+    ]
+    substituted: Annotated[
+        bool,
+        Field(
+            description=(
+                "The pinned generator failed and the public default generator "
+                "filled this column."
+            )
+        ),
+    ]
+    public_default: Annotated[
+        bool,
+        Field(description="The column's pinned generator is the public default."),
+    ]
+    self_masked: Annotated[
+        bool,
+        Field(
+            description=(
+                "Owned by the scored agent's own owner, so excluded from ``U`` "
+                "(an agent never scores on its owner's generator)."
+            )
+        ),
+    ]
+    contribution: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description="``w x mean`` when counted, 0 when self-masked.",
+        ),
+    ]
+
+
+class PublicDuelingBreakdown(BaseModel):
+    """Bench v16+ arithmetic from the datagen half and slice to the composite.
+
+    Projected by Platform from the stored, ingestion-validated
+    ``scores.dueling`` aggregates and the ``priced_cost`` gate evidence. It is
+    a read-side explanation only: the signed composite is authoritative and
+    nothing here feeds ranking, weights or ingestion.
+    """
+
+    formula: str = DUELING_BREAKDOWN_FORMULA
+    season_id: str
+    season_index: Annotated[int, Field(ge=0)]
+    datagen_raw: Annotated[
+        float, Field(ge=0.0, le=1.0, description="The datagen half's raw mean.")
+    ]
+    datagen_gate: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description=(
+                "The run's whole composite gate (quality gates times the "
+                "applied priced-cost factor)."
+            ),
+        ),
+    ]
+    column_weight: Annotated[float, Field(ge=0.0, le=1.0, description="``w``.")]
+    counted_columns: Annotated[
+        int, Field(ge=0, description="``|U|``: columns not self-masked.")
+    ]
+    datagen_share: Annotated[
+        float, Field(ge=0.0, le=1.0, description="``1 - w x |U|``.")
+    ]
+    generator_sum: Annotated[
+        float, Field(ge=0.0, le=1.0, description="``w x sum col`` over ``U``.")
+    ]
+    pre_gate_composite: Annotated[
+        float,
+        Field(
+            ge=0.0, le=1.0, description="``datagen_share x datagen + generator_sum``."
+        ),
+    ]
+    composite: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description=(
+                "``datagen_gate x pre_gate_composite``, recomputed from the "
+                "aggregates; it reproduces the signed composite."
+            ),
+        ),
+    ]
+    composite_stderr: Annotated[float | None, Field(default=None, ge=0.0)] = None
+    priced_cost_applied_factor_bps: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            le=10_000,
+            description=(
+                "The priced-cost factor inside ``datagen_gate`` (10000 under "
+                "shadow or without complete accounting). Null when the run "
+                "recorded no priced cost."
+            ),
+        ),
+    ] = None
+    priced_cost_factor_bps: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            le=10_000,
+            description="The factor the published curve gives, applied or not.",
+        ),
+    ] = None
+    priced_cost_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description="``priced_cost_applied_factor_bps / 10000``.",
+        ),
+    ] = None
+    priced_cost_posture: str | None = None
+    priced_cost_result: str | None = None
+    priced_cost_window: Annotated[str | None, Field(default=None, max_length=32)] = None
+    other_gate_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "``datagen_gate / priced_cost_factor``: every other gate "
+                "combined. Null when the run recorded no priced cost or its "
+                "factor is 0."
+            ),
+        ),
+    ] = None
+    columns: list[PublicDuelingColumn] = Field(default_factory=list)
+
+
 class PublicCompositeBreakdown(BaseModel):
     """Public arithmetic from capability means to the final composite.
 
@@ -754,6 +910,63 @@ class PublicRewardEligibility(BaseModel):
     ] = None
 
 
+class PublicSeasonExpiry(BaseModel):
+    """Why a bench v16+ row is shown although its scores left the live window.
+
+    Scores count for the dueling season they were taken in and the one after
+    (``current`` plus the provisional ``previous``); older ones expire from the
+    authoritative ledger by design, so the platform never pays to re-score the
+    board on every rotation. This label keeps such an agent visible instead of
+    dropping it, without re-scoring it and without changing any pin or weight.
+    """
+
+    state: Annotated[
+        Literal["pinned_carry", "expired"],
+        Field(
+            description=(
+                "``pinned_carry``: the agent is in the epoch pin validators "
+                "fold right now, so it keeps its pinned rank and official "
+                "composite until the next pin, which is built from the live "
+                "window and will not include it. ``expired``: the last valid "
+                "quorum, shown unranked for reference only."
+            )
+        ),
+    ]
+    score_dueling_season_ids: Annotated[
+        list[UUID],
+        Field(
+            description="Distinct dueling seasons the accepted scores were taken in."
+        ),
+    ]
+    window_dueling_season_ids: Annotated[
+        list[UUID],
+        Field(
+            description=(
+                "The live window: the current season, then the provisional "
+                "previous one. Only scores from these seasons rank or pay."
+            )
+        ),
+    ]
+    in_window_score_count: Annotated[
+        int, Field(ge=0, description="Accepted scores inside the live window.")
+    ]
+    last_valid_composite: Annotated[
+        float,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description="Median of the expired quorum, as stored. Never re-scored.",
+        ),
+    ]
+    pinned_epoch_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="``pinned_carry`` only: the pin that still carries it.",
+        ),
+    ] = None
+
+
 class PublicLeaderboardEntry(BaseModel):
     """One miner's best score, aggregate-only, for public display.
 
@@ -948,6 +1161,18 @@ class PublicLeaderboardEntry(BaseModel):
                 "separate from ``rank`` and from champion status. Absent on a "
                 "historical board and on a platform with the gate switched off "
                 "and nothing to report."
+            ),
+        ),
+    ] = None
+    season_expiry: Annotated[
+        PublicSeasonExpiry | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Bench v16+ live board only: set when this row's scores have "
+                "expired from the two-season window. Absent on every row whose "
+                "quorum is still in the window."
             ),
         ),
     ] = None
@@ -1605,7 +1830,7 @@ class PublicDethroneDecision(BaseModel):
     required_lead: Annotated[float, Field(ge=0.0)]
     margin_lead: Annotated[float, Field(ge=0.0)]
     statistical_lead: Annotated[float | None, Field(default=None, ge=0.0)]
-    method: Literal["flat", "unpaired", "paired"]
+    method: Literal["flat", "unpaired", "paired", "duel"]
     dethrones: bool
     required_score: float
     score_ceiling: Annotated[float, Field(gt=0.0)]
@@ -1645,6 +1870,144 @@ class PublicDethroneDecision(BaseModel):
             ),
         ),
     ] = None
+
+
+class PublicCrownRules(BaseModel):
+    """The operator's crown rules and whether validators enforce them yet."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    active: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether validators fold these rules now. False while the "
+                "operator has them off or until every recently-live weight "
+                "setter reports required_protocol; the King and challenger "
+                "standings below always explain the configured rules."
+            ),
+        ),
+    ]
+    required_protocol: Annotated[int, Field(ge=1)] = 34
+    min_dethrone_confirmations: Annotated[
+        int,
+        Field(
+            ge=2,
+            description=(
+                "Shared-seed confirmations a challenger must hold against the "
+                "King before the paired comparison may move the crown."
+            ),
+        ),
+    ]
+    champion_standing_rank: Annotated[
+        int,
+        Field(
+            ge=1,
+            description=(
+                "Official places (the board's rank) the King must stay within. "
+                "A King that drops below hands the crown to the best-qualified "
+                "challenger inside them."
+            ),
+        ),
+    ]
+
+
+class PublicCrownKing(BaseModel):
+    """The single reigning King of the emission fold."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    official_rank: Annotated[
+        int, Field(ge=1, description="Position in the board's official order.")
+    ]
+    official_score: Annotated[
+        float,
+        Field(
+            description=(
+                "The score the crown comparison uses: the continual mean of the "
+                "quorum and completed retest waves (the board's "
+                "official_composite)."
+            ),
+        ),
+    ]
+    shared_seed_confirmations: Annotated[
+        int,
+        Field(ge=0, description="Champion-anchored confirmation seeds it holds."),
+    ] = 0
+
+
+class PublicCrownChallenger(BaseModel):
+    """One challenger dueling the King for the crown."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    official_rank: Annotated[int, Field(ge=1)]
+    official_score: float
+    shared_seed_confirmations: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Confirmation seeds this challenger and the King have both been "
+                "scored on. The crown can move only once this reaches "
+                "required_confirmations."
+            ),
+        ),
+    ]
+    required_confirmations: Annotated[int, Field(ge=2)]
+    within_standing: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether it sits inside the official places that may hold the "
+                "crown (crown_rules.champion_standing_rank)."
+            ),
+        ),
+    ]
+    paired_lead: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Mean per-seed score lead over the King on their shared seeds "
+                "(negative is a deficit). Null until they share two seeds."
+            ),
+        ),
+    ] = None
+    required_lead: Annotated[
+        float | None,
+        Field(
+            ge=0.0,
+            description=(
+                "The paired lead it must strictly exceed to dethrone. Null "
+                "until they share two seeds."
+            ),
+        ),
+    ] = None
+    lead_needed: Annotated[
+        float | None,
+        Field(
+            ge=0.0,
+            description=(
+                "How much more paired lead it needs (zero once it is ahead "
+                "enough). Null until they share two seeds."
+            ),
+        ),
+    ] = None
+    status: Annotated[
+        Literal["outside_standing", "needs_confirmations", "dueling", "would_dethrone"],
+        Field(
+            description=(
+                "outside_standing: below the official places that may hold the "
+                "crown. needs_confirmations: too few shared seeds for the duel "
+                "to count. dueling: enough evidence, not enough lead. "
+                "would_dethrone: clears the King under the crown rules."
+            ),
+        ),
+    ]
 
 
 class PublicKothEmissions(BaseModel):
@@ -1806,6 +2169,31 @@ class PublicKothEmissions(BaseModel):
         ),
     ] = None
     recipients: list[PublicEmissionRecipient] = Field(default_factory=list)
+    crown_rules: Annotated[
+        PublicCrownRules | None,
+        Field(
+            default=None,
+            description=(
+                "The crown rules: shared-seed confirmations needed to dethrone "
+                "and the official standing the King must keep."
+            ),
+        ),
+    ] = None
+    king: Annotated[
+        PublicCrownKing | None,
+        Field(default=None, description="The reigning King of the fold."),
+    ] = None
+    challengers: Annotated[
+        list[PublicCrownChallenger],
+        Field(
+            default_factory=list,
+            description=(
+                "The next distinct miners in official order, each dueling the "
+                "King: shared-seed confirmations, paired lead or deficit, and "
+                "what it still needs to take the crown."
+            ),
+        ),
+    ]
     crown_incumbent_active: Annotated[
         bool,
         Field(
@@ -2751,6 +3139,15 @@ class PublicValidatorScore(BaseModel):
     model_use: PublicModelUse | None = None
     token_efficiency: PublicTokenEfficiency | None = None
     composite_breakdown: PublicCompositeBreakdown | None = None
+    dueling_breakdown: PublicDuelingBreakdown | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench v16+ dueling arithmetic: datagen half, generator-slice "
+            "columns (self-masked columns flagged) and the priced-cost factor "
+            "inside the composite gate. Aggregates only; omitted below v16."
+        ),
+    )
     v9_base: PublicV9BaseEvidence | None = None
     median_ms: Annotated[int, Field(ge=0, description="Median per-case latency (ms).")]
     n: Annotated[int, Field(ge=0, description="Number of cases scored.")]
@@ -3284,6 +3681,111 @@ _REVIEW_CONCLUSION_DESCRIPTION = (
 )
 
 
+class PublicScoringWait(BaseModel):
+    """Why a submission that is owed scores is not being scored right now.
+
+    Set only on a row waiting for validators, and only when the hold is not
+    the fleet's: from bench v16 every scored run needs a generator slice from
+    an open dueling season of the version the row is leased at, so while none
+    is open validators turn the work away and the row waits for a season
+    instead. During a benchmark rollout, rows submitted before it started are
+    finished at the source version and the rest at the target version, so
+    ``bench_version`` is the row's own.
+    """
+
+    reason: Annotated[
+        Literal["dueling_season_closed"],
+        Field(
+            description=(
+                "'dueling_season_closed': no dueling season is open for the "
+                "bench version the queue scores at. Scoring resumes when the "
+                "next season opens at a generator-round boundary."
+            )
+        ),
+    ]
+    bench_version: Annotated[
+        int, Field(ge=1, description="The bench version waiting for a season.")
+    ]
+    next_season_opens_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "Approximate UTC time the next season opens: the start of the "
+                "round boundary it is due at, from the last observed chain "
+                "position and the nominal block time. Null when that cannot "
+                "be estimated; the season still opens at a round boundary."
+            ),
+        ),
+    ] = None
+    next_round_epoch: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=("Subnet epoch of that round boundary, or null when unknown."),
+        ),
+    ] = None
+    season_scheduled: Annotated[
+        bool,
+        Field(
+            default=True,
+            description=(
+                "True when a season for bench_version opens at a generator-round "
+                "boundary. False when none is scheduled (for example the source "
+                "version of an open benchmark rollout, whose seasons pause until "
+                "the rollout ends): the row waits for a season of its version."
+            ),
+        ),
+    ] = True
+
+
+class PublicDuelingSeasonState(BaseModel):
+    """Whether the bench version the queue scores at has an open season."""
+
+    open: Annotated[
+        bool,
+        Field(
+            description=(
+                "True while a dueling season is open for bench_version. While "
+                "false, validators cannot score bench_version and waiting "
+                "submissions resume when the next season opens."
+            )
+        ),
+    ]
+    bench_version: Annotated[
+        int,
+        Field(
+            ge=1,
+            description=(
+                "The bench version the queue scores at: the rollout's desired "
+                "version while a rollout is open, else the active version."
+            ),
+        ),
+    ]
+    next_opens_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "Approximate UTC time the next season opens, or null when open "
+                "or when it cannot be estimated."
+            ),
+        ),
+    ] = None
+    next_round_epoch: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Subnet epoch of the round boundary the next season opens at, "
+                "or null when open or unknown."
+            ),
+        ),
+    ] = None
+
+
 class PublicActivityEntry(BaseModel):
     """One submission's safe, public lifecycle state."""
 
@@ -3543,6 +4045,19 @@ class PublicActivityEntry(BaseModel):
             ),
         ),
     ] = False
+    queue_withdrawn: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether a 'not_queued' row is out of the active benchmark's "
+                "validator queue because an operator withdrew it, rather than "
+                "because it predates the active era. Its accepted scores stay "
+                "on file; no validator scores it while the withdrawal stands. "
+                "Always false on every other status."
+            ),
+        ),
+    ] = False
     quorum: Annotated[
         int,
         Field(ge=1, description="Independent validator scores required to finalize."),
@@ -3609,6 +4124,18 @@ class PublicActivityEntry(BaseModel):
                 "ordinary case and means the cause is mixed, unnamed or stale: "
                 "the row is unattributed rather than proven to be a fleet "
                 "failure, and must not be described as one."
+            ),
+        ),
+    ] = None
+    scoring_wait: Annotated[
+        PublicScoringWait | None,
+        Field(
+            default=None,
+            description=(
+                "Why this waiting submission is not being scored right now when "
+                "the hold is not the validator fleet's, e.g. no dueling season "
+                "is open. Null when nothing beyond the queue holds it, and on "
+                "every row that is not waiting for validators."
             ),
         ),
     ] = None
@@ -3790,8 +4317,10 @@ class PublicAdmissionRetry(BaseModel):
     Failed cost-bearing attempts never retry automatically, except a Ditto-owned
     failure that never judged the artifact: a Docker build infrastructure
     failure, a claim the worker released before starting it, missing scorer
-    runtime evidence, or a screening node whose source-review court could not
-    start. ``parked`` names a source-review/provider failure (including OpenRouter
+    runtime evidence, a screening node whose source-review court could not
+    start, Platform briefly unavailable while the screened image was being
+    stored, or (once) a private deep review that ran out of time. ``parked``
+    names a source-review/provider failure (including OpenRouter
     throttling), while ``stuck`` names another Ditto-owned infrastructure
     failure. Both require a guarded Backroom retry.
     ``retry_queued`` means a retry is waiting for a screener slot: either that
@@ -3954,6 +4483,9 @@ PublicValidationFailureCode = Literal[
     "provider_failure",
     "provider_outage_parked",
     "seed_deadline_exceeded",
+    "harness_oom",
+    "host_memory_pressure",
+    "harness_killed_137",
 ]
 
 _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
@@ -3961,6 +4493,9 @@ _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
         "inference_allowance_exhausted",
         "inference_request_rejected",
         "model_inference_required",
+        # OOM kill at the harness's own published memory cap while the host
+        # kept headroom (docs/RUNTIME-ENVELOPE.md).
+        "harness_oom",
     }
 )
 _ADMISSION_PUBLIC_CODES: frozenset[str] = frozenset(
@@ -3988,6 +4523,9 @@ _PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
         # reading it learns why a run stopped without learning anything the
         # platform keeps private.
         "provider_outage_parked",
+        # An OOM kill the scorer could not pin on the harness's own cap: the
+        # host ran short, or the cgroup never reached its limit.
+        "host_memory_pressure",
     }
 )
 
@@ -3997,7 +4535,12 @@ _PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
 # overloaded validator host and by a slow harness (ditto-subnet#2921). The code
 # says only which stage stopped the run, which reveals nothing about the
 # submission, so the dashboard keeps its neutral "unattributed" hold copy.
-_PUBLIC_UNATTRIBUTED_CODES: frozenset[str] = frozenset({"seed_deadline_exceeded"})
+#
+# ``harness_killed_137`` is the same shape: a SIGKILL with no OOM flag names the
+# stage, not the sender.
+_PUBLIC_UNATTRIBUTED_CODES: frozenset[str] = frozenset(
+    {"seed_deadline_exceeded", "harness_killed_137"}
+)
 
 
 def public_validation_failure_code(
@@ -4096,6 +4639,10 @@ class PublicConfirmationScore(BaseModel):
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     bench_version: Annotated[int, Field(ge=1)]
     accepted_at: datetime
+    voided_as_infrastructure: bool = False
+    """The platform set this sample aside because its run measured an
+    inference outage, not the agent. It stays listed for audit, counts toward
+    nothing, and its seed is re-run."""
 
 
 class PublicProvisionalScore(BaseModel):
@@ -4124,6 +4671,15 @@ class PublicProvisionalScore(BaseModel):
     model_use: PublicModelUse | None = None
     token_efficiency: PublicTokenEfficiency | None = None
     composite_breakdown: PublicCompositeBreakdown | None = None
+    dueling_breakdown: PublicDuelingBreakdown | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench v16+ dueling arithmetic: datagen half, generator-slice "
+            "columns (self-masked columns flagged) and the priced-cost factor "
+            "inside the composite gate. Aggregates only; omitted below v16."
+        ),
+    )
     v9_base: PublicV9BaseEvidence | None = None
     calibration_brier: Annotated[
         float | None,
@@ -4303,6 +4859,14 @@ class PublicAgentSummary(BaseModel):
         float | None, Field(default=None, ge=0.0, le=1.0)
     ] = None
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
+    scoring_wait: PublicScoringWait | None = Field(
+        default=None,
+        description="Same as the activity row's scoring_wait.",
+    )
+    queue_withdrawn: bool = Field(
+        default=False,
+        description="Same as the activity row's queue_withdrawn.",
+    )
 
 
 class PublicValidatorRetry(BaseModel):
@@ -5237,7 +5801,7 @@ class PublicSubmissionImageBuild(BaseModel):
         "canceled",
         "consumed",
     ]
-    provider: Literal["targon", "gcp", "hetzner"] | None = None
+    provider: Literal["targon", "gcp", "hetzner", "aws"] | None = None
     attempt_count: Annotated[int, Field(ge=0, le=3)]
     output_sha256: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
     output_size_bytes: Annotated[int | None, Field(ge=1, le=4294967296)] = None
@@ -5313,7 +5877,7 @@ class PublicScreenerHeartbeat(BaseModel):
     screener_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Screener's public hotkey.")
     ]
-    provider: Literal["gcp", "targon", "hetzner", "home", "test"] | None = None
+    provider: Literal["gcp", "targon", "hetzner", "aws", "home", "test"] | None = None
     node_status: Literal["active", "draining", "quarantined", "revoked"] | None = None
     capacity: Annotated[int, Field(ge=1, le=16)] = 1
     software_version: str
@@ -5619,3 +6183,11 @@ class PublicBenchRolloutResponse(BaseModel):
     )
     members: list[PublicBenchRolloutMember] = Field(default_factory=list)
     qualification_blockers: list[dict[str, str]] = Field(default_factory=list)
+    dueling_season: PublicDuelingSeasonState | None = Field(
+        default=None,
+        description=(
+            "Whether a dueling season is open for the bench version the queue "
+            "scores at, and roughly when the next one opens if not. From bench "
+            "v16 every scored run needs one. Null below bench v16."
+        ),
+    )

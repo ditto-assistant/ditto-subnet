@@ -60,7 +60,7 @@ export interface RewardEligibility {
 }
 
 export interface RawLeaderDecision {
-  /** "paired" | "unpaired" | anything else reads as the fixed margin. */
+  /** "paired" | "duel" | "unpaired" | anything else reads as the fixed margin. */
   method?: string;
   challenger_lead: number;
   required_lead: number;
@@ -122,6 +122,56 @@ export interface EmissionsFold {
   next_pin_projection?: NextPinProjection | null;
   /** The epoch-pinned ledger validators are folding right now. */
   ledger_pin?: LedgerPin | null;
+  /** Protocol 34 crown rules; absent from an older Platform. */
+  crown_rules?: CrownRules | null;
+  /** The single reigning King, as the crown rules see it. */
+  king?: CrownKing | null;
+  /** The next distinct miners in official order, each dueling the King. */
+  challengers?: CrownChallenger[] | null;
+}
+
+/** `emissions.crown_rules`: shared-seed evidence and standing the crown needs. */
+export interface CrownRules {
+  /** Whether validators fold these rules yet (false while rolling out). */
+  active: boolean;
+  required_protocol?: number;
+  min_dethrone_confirmations: number;
+  champion_standing_rank: number;
+}
+
+export interface CrownKing {
+  agent_id: string;
+  miner_hotkey: string;
+  /** Position in the board's official order (the rank column). */
+  official_rank: number;
+  /** The board's official_composite: quorum plus completed retest waves. */
+  official_score: number;
+  shared_seed_confirmations?: number;
+}
+
+/** "outside_standing" | "needs_confirmations" | "dueling" | "would_dethrone";
+ * read as a string so a newer Platform status still renders. */
+export type CrownChallengerStatus =
+  | "outside_standing"
+  | "needs_confirmations"
+  | "dueling"
+  | "would_dethrone"
+  | (string & {});
+
+export interface CrownChallenger {
+  agent_id: string;
+  miner_hotkey: string;
+  official_rank: number;
+  official_score: number;
+  /** Seeds this challenger and the King were both scored on. */
+  shared_seed_confirmations: number;
+  required_confirmations: number;
+  within_standing: boolean;
+  /** Mean per-seed lead over the King on shared seeds; null under two seeds. */
+  paired_lead?: number | null;
+  required_lead?: number | null;
+  lead_needed?: number | null;
+  status: CrownChallengerStatus;
 }
 
 /** `emissions.ledger_pin`: identity of the frozen ledger the fleet folds this
@@ -345,6 +395,8 @@ export interface LeaderboardEntry {
   registered?: boolean | null;
   emission_eligible?: boolean;
   reward_eligibility?: RewardEligibility | null;
+  /** Bench v16+: set when this row's scores expired from the two-season window. */
+  season_expiry?: SeasonExpiry | null;
   miner_uid?: number | null;
   score_count?: number;
   score_quorum?: number;
@@ -370,6 +422,21 @@ export interface LeaderboardEntry {
   _emission?: EmissionRecipient | null;
   /** Client-side annotation from the chain weights snapshot. */
   _chainWeight?: ChainWeightInfo | null;
+}
+
+/**
+ * Why a bench v16+ row is still on the board although its scores left the
+ * live two-season window. Expiry is deliberate cost control: nothing is
+ * re-scored. ``pinned_carry`` rows keep the rank and composite of the pin
+ * validators fold until the next pin; ``expired`` rows are unranked reference.
+ */
+export interface SeasonExpiry {
+  state: "pinned_carry" | "expired";
+  score_dueling_season_ids: string[];
+  window_dueling_season_ids: string[];
+  in_window_score_count: number;
+  last_valid_composite: number;
+  pinned_epoch_index?: number | null;
 }
 
 export type V9GateResult =
@@ -412,7 +479,7 @@ export interface V9AuthoritativeToolGate {
  * protocol package (`ditto/tests/test_bench_version_pins.py` diffs it).
  */
 export interface V9BaseEvidence {
-  bench_version: 9 | 10 | 11 | 12 | 13 | 14;
+  bench_version: 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18;
   score_gates: {
     rollout_mode: "shadow" | "enforce";
     model_use: V9ModelUseGate;
@@ -485,6 +552,83 @@ export interface InferenceCostSummary {
   mean_factor_bps?: number | null;
 }
 
+/** Bench v16+ priced inference cost (`details.priced_cost`): whole-run
+ * tokens priced at the contract's locked public rates, normalised to a
+ * 350-case run, and the factor the composite carries. `rule_consistent` is
+ * Platform's own recomputation of the factor. Mirrors `PricedCostSummary`. */
+export interface PricedCostSummary {
+  contract_id?: string | null;
+  posture?: GatePosture | null;
+  applied?: boolean;
+  result?: "priced" | "insufficient_evidence" | null;
+  window?: string | null;
+  source?: string | null;
+  cases?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  embedding_tokens?: number;
+  decision_calls?: number;
+  decision_input_tokens?: number;
+  decision_output_tokens?: number;
+  prompt_cost_nano_usd?: number;
+  completion_cost_nano_usd?: number;
+  embedding_cost_nano_usd?: number;
+  decision_cost_nano_usd?: number;
+  cost_nano_usd?: number;
+  normalization_cases?: number;
+  normalized_cost_nano_usd?: number;
+  reference_nano_usd?: number;
+  ratio_bps?: number;
+  floor_bps?: number | null;
+  factor_bps?: number | null;
+  applied_factor_bps?: number | null;
+  cost_usd?: number | null;
+  normalized_cost_usd?: number | null;
+  rule_consistent?: boolean | null;
+}
+
+/** One generator-slice column of a bench v16+ run (aggregates only: no
+ * owner key, no generator submission id, no case text). `self_masked` means
+ * the column's generator belongs to the scored agent's own owner, so the
+ * composite dropped it. Mirrors `PublicDuelingColumn`. */
+export interface DuelingColumn {
+  column_id: string;
+  grading_bench_version?: number | null;
+  n: number;
+  sum: number;
+  mean: number;
+  substituted: boolean;
+  public_default: boolean;
+  self_masked: boolean;
+  contribution: number;
+}
+
+/** Bench v16+ dueling arithmetic, `gate x ((1 - w x |U|) x datagen + w x sum
+ * col)`, projected by Platform from the stored aggregates and the priced-cost
+ * gate evidence. Omitted below v16. Mirrors `PublicDuelingBreakdown`. */
+export interface DuelingBreakdown {
+  formula: string;
+  season_id: string;
+  season_index: number;
+  datagen_raw: number;
+  datagen_gate: number;
+  column_weight: number;
+  counted_columns: number;
+  datagen_share: number;
+  generator_sum: number;
+  pre_gate_composite: number;
+  composite: number;
+  composite_stderr?: number | null;
+  priced_cost_applied_factor_bps?: number | null;
+  priced_cost_factor_bps?: number | null;
+  priced_cost_factor?: number | null;
+  priced_cost_posture?: string | null;
+  priced_cost_result?: string | null;
+  priced_cost_window?: string | null;
+  other_gate_factor?: number | null;
+  columns: DuelingColumn[];
+}
+
 /** Run-level bench v13+ gate verdict published beside a validator's score.
  *
  * Aggregates only: the per-case notes behind these counts are owner-only
@@ -500,6 +644,7 @@ export interface GateEvidence {
   claim_provenance?: ClaimProvenanceSummary | null;
   twin_post_pass?: TwinPostPassSummary | null;
   inference_cost?: InferenceCostSummary | null;
+  priced_cost?: PricedCostSummary | null;
   catalog_suppression_rate?: number | null;
   flagged_case_count?: number;
   flagged_case_share?: number | null;
@@ -565,6 +710,16 @@ export interface RolloutMember {
   score_count?: number;
 }
 
+/** `dueling_season` on /public/bench/rollout: whether the bench version the
+ * queue scores at has an open dueling season. Null below bench v16. */
+export interface DuelingSeasonState {
+  open: boolean;
+  bench_version: number;
+  /** Approximate UTC time the next season opens; null when open or unknown. */
+  next_opens_at?: string | null;
+  next_round_epoch?: number | null;
+}
+
 export interface RolloutState {
   active_version?: number | null;
   desired_version?: number | null;
@@ -587,6 +742,7 @@ export interface RolloutState {
   qualification_blockers?: string[];
   qualification_converged?: boolean;
   canary_capable_validator_count?: number | null;
+  dueling_season?: DuelingSeasonState | null;
 }
 
 // ── Chain weights (/public/weights) ──────────────────────────

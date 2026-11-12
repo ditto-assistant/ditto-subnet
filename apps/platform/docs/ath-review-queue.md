@@ -1,5 +1,13 @@
 # The ATH review queue
 
+> **Automatic source-review holds are retired (2026-11-07).** Score
+> finalization no longer opens a deferred source review, top-five integrity
+> double-check, outlier escalation or transform-audit hold. The queue now
+> holds copy holds (still automatic: they are copy protection), holds an
+> operator opens by hand with `open_ath_review` or a rulings batch, and rows
+> opened before the retirement. The double-check and outlier sections below
+> describe that historical machinery.
+
 The operator queue for SN118 is **`ath_reviews` rows with `status = 'pending'`**.
 Nothing else is. This document exists because two other surfaces look like the
 queue and are not, and because the queue's two status columns can disagree.
@@ -324,6 +332,17 @@ FROM ath_reviews r
 JOIN agents a USING (agent_id)
 WHERE r.status = 'pending' AND a.status <> 'ath_pending_review';
 ```
+
+A stranded hold behind an agent that is already `rejected` or `banned` is
+terminal history, and an operator closes it with a `reject` ruling in the
+batched rulings court (SN-434). It previews `steps: ["close_terminal"]`, needs
+no `evidence_references` (a terminal agent has no source finding to cite),
+and under the agent and review row locks resolves the review as `reject` with
+one `reject` action whose evidence carries `terminal_close: true`. The agent,
+its scores and the board are untouched, so `would_change_crown` is always
+false. The close did not ban anyone, so it is never a reject that `open` can
+reconsider. A `clear` on such a row stays a conflict and names the reject as
+the way out.
 
 Reconciling them is deliberately not automated. Winner-take-all makes a
 false-positive hold expensive for an honest miner and a false clear expensive

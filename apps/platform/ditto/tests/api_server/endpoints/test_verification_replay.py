@@ -47,6 +47,7 @@ from ditto.db.models import (
     ScreeningVerificationReplayReceipt,
     ScreeningVerificationReplaySignedObservation,
 )
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 from ditto_screening_protocol.models import SourceReviewNote, source_review_notes_digest
 from ditto_screening_protocol.v13_replay_observation import (
     V13ReplayBinding,
@@ -138,7 +139,7 @@ async def _enroll(
                 instance_id=f"{node_id}-worker-1",
                 software_version="v0.999.0",
                 protocol_version=7,
-                policy_version=13,
+                policy_version=SCREENING_POLICY_VERSION,
                 state="polling",
                 first_seen_at=now,
                 reported_at=now,
@@ -147,7 +148,7 @@ async def _enroll(
                 system_metrics={
                     "replay_process": {"key_sha256": process_key_sha},
                     "release": {
-                        "builtin_policy_version": 13,
+                        "builtin_policy_version": SCREENING_POLICY_VERSION,
                         "revision": "a" * 40,
                         "version": "v0.999.0",
                         "activated_at": int(now.timestamp()),
@@ -538,7 +539,7 @@ async def test_replay_claim_rechecks_worker_readiness_after_capacity_enabled(
         await claim_replay(_request(), SECOND_WORKER, session)
     assert wrong_policy.value.status_code == 409
 
-    heartbeat.policy_version = 13
+    heartbeat.policy_version = SCREENING_POLICY_VERSION
     await session.commit()
     claimed = await claim_replay(_request(), SECOND_WORKER, session)
     assert claimed is not None and claimed.replay_id == created.replay_id

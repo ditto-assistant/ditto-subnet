@@ -64,7 +64,7 @@ uv run ditto practice --run-size small --longmem-eval --longmem-limit 5
 ```
 
 The command starts and tears down the harness, the live-bench scorer (the
-active version from the public rollout endpoint, currently 14),
+active version from the public rollout endpoint, currently 15),
 trusted local reader/judge proxies, and isolated LongMemEval stores. Default
 `--run-size small` is a smoke profile, not the on-chain case count. Nothing is
 exposed to the public internet. LongMemEval remains a separately labeled
@@ -109,6 +109,13 @@ Coding remains shadow-only and score-ineligible today; see
 [`coding-unified-miner-capability-shadow.md`](coding-unified-miner-capability-shadow.md)
 for the planned compatibility boundary.
 
+Your harness runs inside a fixed resource envelope: memory cap, 2 CPUs, PID
+and `/tmp` limits, `/seed` and per-case deadlines, 8 overlapping `/run` calls,
+and the inference walls. [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md) lists every
+limit and the rule that decides whether an out-of-memory kill is charged to
+you. `ditto practice` runs at the same case concurrency and reports your peak
+memory against the cap.
+
 ## Prepare for mainnet
 
 To submit, you need:
@@ -126,7 +133,7 @@ live registration cost from chain, shows it next to your coldkey balance, and
 offers to register:
 
 ```
-  pre-check rejection 1101: hotkey is not registered on netuid 118
+  pre-check rejection 1101: hotkey is not registered on netuid 118 as of finalized block 9485693 (read from chain storage; Platform's metagraph cache is at block 9485650, 43 blocks behind)
 
 Registration preview
   Netuid:   118
@@ -143,16 +150,22 @@ the ordinary payment confirmation. The registration cost is never cached or
 assumed: it is read at the prompt and read again immediately before the
 extrinsic, and the CLI aborts rather than paying more if it rose in between.
 
-The platform resolves registration from a cached metagraph snapshot rather
-than from the chain directly, so a registration that is already final on chain
-is not visible to `/upload/check` immediately. The CLI waits it out, re-checking
-for about four minutes:
+A 1101 names its evidence. The platform keeps a cached metagraph snapshot that
+can trail the chain, so before it reports a signed request's hotkey as
+unregistered it re-reads chain storage at a finalized block. The message gives
+that block and how far the cache is behind. If you registered after that block,
+the registration is not finalized yet: wait and retry. If you registered
+before it, the hotkey is not registered on the netuid the platform reads.
+
+The platform reads a finalized block, which trails the chain head by a few
+blocks, so a registration may not be visible to `/upload/check` the instant
+it lands. The CLI waits it out, re-checking for about four minutes:
 
 ```
 registered on netuid 118: uid 37
 continuing upload...
-waiting for the platform to observe the registration (it reads a cached
-metagraph snapshot, so this lags the chain)...
+waiting for the platform to observe the registration (it checks a finalized
+block, which trails the chain head)...
   still not visible; re-checking (1/8)
 platform observed the registration after 2/8 checks
 ```
@@ -230,9 +243,9 @@ implementation, not a submission requirement.
 
 Each source file (`.py`, `.rs`, `.go`, `.c`/`.cpp`/`.h`, `.ts`/`.js` and
 similar) must stay within **10,000 lines**, **1 MiB**, and **4,000 characters
-on any one line**. A reviewer reads source 400 lines at a time, so larger files
-cannot be reviewed and leave screening unable to clear the submission. Split
-large files. The one exception is an **unmodified** upstream release file whose
+on any one line**. Platform enforces these limits at upload so every source
+file stays readable when an operator reads a top agent's code. Split large
+files. The one exception is an **unmodified** upstream release file whose
 SHA-256 is on the vendored allowlist
 (`packages/ditto-screening-protocol/ditto_screening_protocol/data/vendored_upstream_allowlist.json`,
 currently QuickJS-ng 0.16.2 `quickjs.c`, SQLite 3.46.1 amalgamation files and
@@ -303,9 +316,15 @@ unused receipt tied to a reservation that was active at the fee-change cutover
 can qualify, and it must have finalized before that cutover. This is a
 receipt-scoped exception, not a coldkey-wide fee waiver.
 
-If a saved receipt is instead definitively rejected for an amount mismatch or
-because its 24-hour recovery window expired, the CLI prints the rejected proof
-and sends nothing. In an interactive terminal it asks whether to pay the
+If a saved receipt is instead definitively rejected for an amount mismatch,
+because its 24-hour recovery window expired, or because it cannot fund this
+upload (`3207`: it already funded another upload, typically an earlier one
+whose response was lost before a retry with a different archive, or it belongs
+to another hotkey or owner), the CLI prints the rejected proof and sends
+nothing. Platform gives the same `3207` answer for each of these causes, so the
+CLI cannot say which applies. Only a proof that funded an earlier upload of
+this hotkey returns that agent when you rerun its exact archive, without paying
+again. In an interactive terminal it asks whether to pay the
 currently reserved TAO fee. For non-interactive recovery, opt in explicitly:
 
 ```sh
@@ -317,9 +336,11 @@ uv run ditto --network finney upload \
   --pay-again
 ```
 
-`--pay-again` is narrowly limited to those two definitive receipt failures.
+`--pay-again` is narrowly limited to those three definitive receipt failures.
 The CLI runs a fresh pre-check before retiring the rejected local proof or
-submitting a replacement transfer. It never overrides a signer, destination,
+submitting a replacement transfer. A rejected proof named with the
+`--payment-block-*` flags is retired from the saved list too, so a hotkey with
+several saved receipts is not asked for proof flags again. It never overrides a signer, destination,
 cooldown, archive, transport, or other validation failure, and `-y` alone does
 not authorize abandoning a finalized receipt.
 
@@ -350,16 +371,36 @@ uv run ditto --network finney status <agent-id>
 You can also follow the public submission pipeline and leaderboard at
 [`platform-api.heyditto.ai`](https://platform-api.heyditto.ai/).
 
-The normal pipeline is upload, automated build and health screening, evaluation
+The normal pipeline is upload, automated build and safety screening, evaluation
 by up to three independent validators, and median-score finalization. Failed or
 expired validator leases are retried, so one validator does not control the
 result.
+
+Screening is build and safety checks only. There is no source review, no
+review-policy version to wait for and no review hold before or after scoring
+(retired 2026-11-07). The one hold left is copy protection, below. Every
+submission still gets:
+
+- archive, size and container-contract validation;
+- a deterministic static malicious-source check before anything executes. A
+  decisive, reachable match is rejected as `static-malicious-source` with the
+  file and line it matched;
+- the isolated image build, health check and screened-image export that
+  validators load (they never build your Dockerfile);
+- exact-copy and copy-signal protection against other miners' work. An exact
+  copy is rejected; a near-duplicate is held for copy review when its scores
+  finalize;
+- banned-hotkey enforcement.
+
+Operators read the top agents' code after scoring and can void scores, reject
+or ban after the fact. Bench difficulty, with fresh private per-seed data and
+frequent harder versions, is the main defence against overfitting.
 
 ## Scoring and emissions
 
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to one consensus model, so model
-  choice is not a miner lever: on the current contract (**Bench v14**, which
+  choice is not a miner lever: on the current contract (**Bench v15**, which
   keeps the v13 gates — see the starter kit's [*Bench v13: how to stay inside the
   gates*](../miners/dittobench-starter-kit/README.md#bench-v13-how-to-stay-inside-the-gates))
   that is **`openai/gpt-oss-20b`**, served through the platform-owned
@@ -368,6 +409,14 @@ result.
   your prompting and reasoning budget for the active benchmark model; `GET
   /api/v1/public/bench/config` reports the authoritative contract. Your local
   practice key and model are not included in the submitted build context.
+- **Bench v16 (the dueling bench) is shipped and shadow-only.** A v16 run adds
+  a generator slice (5 columns x 35 cases from the top generator-competition
+  miners) to a smaller datagen half and scores one composite. It sets no
+  weights until the operator activates it
+  ([`benchmark-v16-rollout.md`](benchmark-v16-rollout.md)). Rehearse it with
+  `uv run ditto practice --bench-version 16`, which builds a local slice from
+  the public default generator only; live miner columns stay private until
+  their source is released.
 - The validator self-checks its `tool_endpoint` before scoring. A platform
   listener failure aborts and retries the run; if the listener is healthy and
   your harness never calls it, the run completes with the corresponding
@@ -404,7 +453,10 @@ result.
   strictly below the ceiling — a perfect run always takes the crown. The cap
   only ever lowers the bar, never raises it, and the leaderboard's "beat this
   to contend" figure already includes it. A near-miss is settled by re-scoring
-  both agents on shared seeds rather than dataset luck.
+  both agents on shared seeds rather than dataset luck. Each top agent is
+  re-scored on at least 8 and at most 10 shared seeds (more than 8 only while
+  the measured spread still asks for it); the official score folds at most
+  those 10.
 - Competitive weight is distributed to the champion and next four distinct
   miners by the payout curve the public leaderboard reports as `rank_shares`
   (default 65% / 14% / 10% / 7% / 4%; operators can set another curve, which
@@ -483,11 +535,14 @@ model/provider path, and instructions intended to manipulate screening.
 Forking, replacing, or heavily optimizing the public starter harness is
 allowed; copying another miner's work is not. Lexical and structural
 fingerprints detect renamed, reformatted, or padded near-duplicates across
-miners, and suspicious or matching submissions are quarantined for human review
-rather than automatically banned. Confirmed plagiarism can result in a
-hotkey-level ban. Coding agents using `/mine` apply the operator review bar
-to the local served path before packaging. A local pass is not a production
-clearance.
+miners, and matching submissions are held for copy review rather than
+automatically banned. Confirmed plagiarism can result in a hotkey-level ban.
+
+There is no automated source review before scoring. Operators read the top
+agents' code after scoring, and a submission that breaks these rules can have
+its scores voided, be rejected, or have its hotkey banned after the fact. Coding
+agents using `/mine` check the local served path against that bar before
+packaging; a local pass is not a clearance.
 
 ## Link a rotated hotkey
 
@@ -890,8 +945,8 @@ it in Backroom, so treat that as an example. The CLI fetches and shows
 the authoritative TAO amount before confirmation. TAO/USD pricing is used only
 for internal revenue reporting and cannot change whether a payment is accepted.
 
-**How long does scoring take?** Screening and a full benchmark both involve
-container work. Expect minutes to hours depending on queue and build time.
+**How long does scoring take?** Screening (the image build and safety checks)
+and a full benchmark both involve container work. Expect minutes to hours depending on queue and build time.
 
 **When will I see incentive on chain?** Budget **two to three tempos — roughly
 2.5 to 4.5 hours** — from your first score. It is not one tempo, and the delay

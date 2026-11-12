@@ -68,6 +68,16 @@ The full design is in
    - **Trivial** cases (everyone solves) earn nothing.
    - **Unsolved** cases earn nothing and also cut your column's credit by a
      squared factor.
+   - **Frontier** cases are ones no agent solves but a subnet-run oracle
+     answers correctly from a short context: your cited evidence, the pairs
+     holding your declared distractors, and the closest competing memories,
+     with nothing marking which is which. They earn full credit (times the
+     operator's `frontier_weight`) and do not count as unsolved. A few
+     frontier cases per column are secretly audited by operators, and one
+     invalid case voids the column's frontier credit for that round. Frontier
+     scoring is in the contract and turns on once the oracle lane is live; see
+     `research/dittobench-datagen/docs/generator-competition.md`, "Frontier
+     cases".
    - **Duplicate** cases earn nothing. A case an earlier round already scored
      belongs to that round.
    - Cases the champion fails earn a 1.5× bonus.
@@ -126,16 +136,17 @@ after payment, it prints `--payment-block-*` flags. Rerun with them within 24
 hours to reuse the payment without paying again. See "Upload fee" in
 [generator-competition.md](../../research/dittobench-datagen/docs/generator-competition.md).
 
-## Grading policies (v13 and v14)
+## Grading policies (v13, v14 and v16)
 
 Every pack declares the memory grading policy its cases are graded under in
 `grading_bench_version`. A v13 round's request accepts only 13 and is
 byte-identical to the original contract. A round frozen at v14 adds
 `"grading_bench_versions": [13, 14]`, and the pack may declare either. Each
 column is graded at the policy its pack declares, so v13 and v14 columns run
-side by side in a v14 round. Bench v14 has been the active agent benchmark
-since 2026-10-28, so new rounds open at v14 (they fall back to v13, with the
-reason recorded, only while too few validators can run a v14 round).
+side by side in a v14 round. Bench v15 has been the active agent benchmark
+since 2026-11-03, so new rounds open at v15 (they fall back to an earlier
+version, with the reason recorded, only while too few validators can run a v15
+round). A v15 round offers `"grading_bench_versions": [14, 15]`.
 
 The v14 policy reads the agent's reply as rendered text: markdown emphasis,
 code, links, headings, bullets and table pipes are stripped before matching,
@@ -181,14 +192,71 @@ retries that seed once on the original v13 request (recorded as
 ### Support window
 
 A round accepts packs at its own bench version and the one before it. v14
-rounds accept v13 and v14 packs; v15 rounds will accept v14 and v15 only, so a
-generator that still emits v13 loses its v15 columns (announced at least 14
-days before v15 activates). Rebuilding against the current
+rounds accept v13 and v14 packs; v15 rounds, live since v15 activated on
+2026-11-03, accept v14 and v15 only, so a generator that still emits v13 loses
+its v15 columns. Rebuilding against the current
 `research/dittobench-datagen` is enough: from this release on, the `challenge`
 package ignores grading policies it does not know yet, so a rebuilt generator
 keeps working when a newer round offers one, as long as the request still
 accepts a policy it supports. A generator built before this release must
-rebuild before v15 rounds.
+rebuild to take part in v15 rounds.
+
+### Bench v16: policy 16 and dueling slices
+
+Bench v16 (the dueling bench, [dueling-bench.md](../../research/dittobench-datagen/docs/dueling-bench.md))
+is shipped but not active. Once it activates, rounds open at v16 and offer
+`"grading_bench_versions": [15, 16]`, so a generator that can declare only 13
+or 14 loses its v16 columns. The same window applies to the dueling slices that
+put generator cases into agents' canonical runs: a season at v16 accepts
+packs declaring 15 or 16, and a season's 32-seed qualification battery must
+see one policy on every seed.
+
+Kit version 5 adds policy 16 to `GradingBenchVersions`. Policy 16 grades like
+15 and adds no pack rule, so the kit's cases declare it unchanged. It does not
+add 15: a v15 round keeps getting exactly the version 4 pack (v14 policy), byte
+for byte apart from the version string, and a v13 or v14 round is unchanged
+too. Rehearse both windows:
+
+```bash
+go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 35 -round-bench 15
+go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 35 -round-bench 16
+```
+
+To migrate a fork, rebuild against the current `research/dittobench-datagen`
+(it knows `challenge.GradingBenchVersionV16`), add it to the policies you pass
+to `req.NewestAccepted`, rehearse at `-round-bench 16`, and re-upload. Declare
+15 as well only if your cases were written for the v15 phrase policy. Your
+generator's columns in canonical agent runs stay private until its source is
+released under the subnet's source-disclosure policy; until then only
+per-column aggregates are shown.
+
+### Bench v18: policy 18 and the hardened families
+
+Kit version 7 adds policy 18 to `GradingBenchVersions`. Policy 18 grades like
+17. In a round that accepts it (window `[17, 18]`), the kit also switches its
+case mix from the four default families to `families.Hardened`: a revert
+without restating the original value, a two-hop custody handoff, a status
+asked inside a middle date interval, and a list member removed and re-added.
+The defaults were trivial in every generator round, so the public default
+generator, which fills empty dueling columns, scored nobody apart. The
+hardened families are small re-implementations of the public first-party
+bench v14 families (`research/dittobench-datagen/universe/v14_*.go`).
+
+A round at v17 or earlier gets exactly the version 6 pack, byte for byte
+apart from the version string. Rehearse both windows:
+
+```bash
+go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 35 -round-bench 17
+go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 35 -round-bench 18
+```
+
+To migrate a fork, rebuild against the current `research/dittobench-datagen`
+(it knows `challenge.GradingBenchVersionV18`), add it to the policies you pass
+to `req.NewestAccepted`, and rehearse at `-round-bench 18`.
 
 ### How this kit improves
 
@@ -257,9 +325,15 @@ The four starter families are:
   validator rejects the case.
 - **Never be ambiguous.** Two cases must not ask the same question about the
   same memory, and a question must have exactly one right answer given the
-  whole haystack. The validator catches identical questions. Only the panel
-  catches subtler ambiguity, as cases no two owners solve, and those cost you
-  the squared penalty.
+  whole haystack. The validator catches identical questions. Subtler
+  ambiguity shows up as cases no two owners solve and the oracle cannot
+  answer either, and those cost you the squared penalty.
+- **Go past the panel, not past the evidence.** A case every agent fails
+  still pays if it is valid. Make it hard through retrieval and resolution
+  (supersession, joins, interference), keep the cited evidence complete, and
+  declare your real competitors in `distractor_answers` so the oracle sees
+  them. `challenge.OracleContext(pack, caseID)` shows you exactly what the
+  oracle will read.
 - **Fill a wide space.** A family that can only produce a few distinct cases
   repeats itself across seeds and rounds, and repeats are duplicates.
 - **Measure, then keep what splits.** Rehearse against agents, read the

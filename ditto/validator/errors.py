@@ -116,12 +116,15 @@ class LeaseRevokedError(ValidatorError):
 
 
 class SandboxOomError(DittobenchError):
-    """The miner sandbox exceeded its bounded memory allowance.
+    """The harness reached its own published memory cap on a healthy host.
 
-    This is an artifact-specific terminal attempt outcome, not evidence that
-    the validator's shared infrastructure is unhealthy. The worker hands the
-    lease back as ``sandbox_oom`` and continues with another harness without
-    disabling the execution slot.
+    Raised only for the scorer's ``harness_oom`` verdict (OOM kill, cgroup peak
+    at the cap, host MemAvailable above the published floor). An artifact-
+    specific terminal outcome, not evidence that the validator's shared
+    infrastructure is unhealthy: the worker hands the lease back as
+    ``sandbox_oom`` with detail ``harness_oom`` and continues with another
+    harness without disabling the execution slot. Every other OOM kill is a
+    :class:`ValidatorInfrastructureError`.
     """
 
 
@@ -135,6 +138,20 @@ class PlatformInfrastructureError(PlatformError):
 
 class PlatformHeartbeatRequiredError(PlatformError):
     """Platform refused a work claim (428) until it sees a fresh heartbeat."""
+
+
+class PlatformRetryLaterError(PlatformError):
+    """Platform refused a work claim (503) for now and said when to ask again.
+
+    Raised only for a 503 that carries a delta-seconds ``Retry-After`` (for
+    example while Platform prepares a bench v16+ seed's dueling slice).
+    ``retry_after_seconds`` is already bounded by the client; a 503 without a
+    usable ``Retry-After`` stays a plain :class:`PlatformError`.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: float) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class WeightReceiptConflictError(PlatformError):

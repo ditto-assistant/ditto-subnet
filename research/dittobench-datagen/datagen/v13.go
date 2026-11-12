@@ -49,11 +49,70 @@ const (
 	v13DecoyCorrectShareBps = 1000
 )
 
+// ToolWorldScale is the world scale (universe.GenerateForVersion) the tool
+// passes read for a run of n tool cases. Through v15 it keys on the case count
+// (80 and 30 are the full and medium thresholds), which is how the v13 full and
+// medium tool counts land on the full and medium worlds. From v16 the tool
+// half is smaller than the world it reads, so the scale is pinned per profile
+// to the v15 world of the same run size: 50 tool cases (full) read the scale-3
+// world and 24 (medium) the scale-2 world. gen.TestV16ProfileIsTheDatagenHalf
+// checks the tool and memory scales agree for every public run size.
+func ToolWorldScale(n, benchVersion int) int {
+	full, medium := 80, 30
+	if benchVersion >= protocol.BenchVersionV16 {
+		full, medium = 50, 24
+	}
+	switch {
+	case n >= full:
+		return 3
+	case n >= medium:
+		return 2
+	default:
+		return 1
+	}
+}
+
 // v13Quota is the per-run count of each v13 family the pass installs.
 type v13Quota struct {
 	Discovery  int
 	Decoy      int
 	Unexpected int
+}
+
+// V18DecoyCases is the decoy-correct quota of the v18 50-case full half.
+const V18DecoyCases = 2
+
+// V18DiscoveryCases is the discovery quota of the v18 50-case full half: the
+// medium three. The full six held a seventh of the half on families every
+// v17 agent saturated; the tool encounters (v18_encounter.go) need the slots.
+const V18DiscoveryCases = 3
+
+// V18UnexpectedCases is the unexpected-tool quota of the v18 50-case full
+// half: the medium two, for the same reason.
+const V18UnexpectedCases = 2
+
+// V18FullToolHalf is the dueling full-profile tool case count from which
+// bench v18 installs the full-run v13 family quotas.
+const V18FullToolHalf = 50
+
+// v13QuotaForVersion is v13QuotaFor under an explicit contract. The 50-case
+// v18 full dueling half keeps the medium discovery and unexpected quotas its
+// case count selects (V18DiscoveryCases, V18UnexpectedCases): on v17 the
+// tool half averaged 0.98-1.00 for every agent, so its slots go to the
+// multi-call encounters rather than to more single-call cases. The decoy-correct
+// share drops from 10% (5) to V18DecoyCases: every decoy_*_result_usage
+// family averaged 1.000 across the 27 v17 production rows, and the 50-case
+// half cannot hold the full restraint quota and all 11 connector cases
+// otherwise.
+func v13QuotaForVersion(n, benchVersion int) v13Quota {
+	q := v13QuotaFor(n)
+	if benchVersion >= protocol.BenchVersionV18 && n >= V18FullToolHalf && n < 80 {
+		q.Discovery, q.Unexpected, q.Decoy = V18DiscoveryCases, V18UnexpectedCases, V18DecoyCases
+		if total := q.Discovery + q.Decoy + q.Unexpected; total > n {
+			return v13QuotaFor(n)
+		}
+	}
+	return q
 }
 
 func v13QuotaFor(n int) v13Quota {
@@ -123,6 +182,28 @@ func toolCategoryWeightV13(name string) int {
 		return 2
 	}
 	return toolCategoryWeightV7(name)
+}
+
+// toolCategoryWeightV18 re-fits the residual draw of the base family mix to
+// the 27 v17 production rows (2026-11-07; mean over all rows / top three
+// agents). The one-per-family floor is unchanged, so this moves only the
+// residual slots of the 50-case half:
+//
+//   - entity_lookup_chain 0.889 / 0.667 (9 cases) was the weakest base tool
+//     family: 2 -> 8.
+//   - link_chain_result_usage 1.000 (22), web_recovery_result_usage 1.000
+//     (22) and stale_context_web 0.981 (44) no longer separate anyone: 6, 5
+//     and 8 -> 2.
+//
+// Families with no v17 evidence keep their v7 weight.
+func toolCategoryWeightV18(name string) int {
+	switch name {
+	case "entity_lookup_chain":
+		return 8
+	case "link_chain_result_usage", "web_recovery_result_usage", "stale_context_web":
+		return 2
+	}
+	return toolCategoryWeightV13(name)
 }
 
 // sampledCategoryOrderV13 is sampledCategoryOrderV9 without a mandatory family
@@ -252,10 +333,16 @@ var v13UnexpectedFamilies = []string{"schedules_result_usage", "tool_registry_re
 // never touches a case that carries seeded evidence (the world carrier or a
 // planted record).
 func applyV13ToolBench(seed int64, cases []protocol.ToolCase) {
+	applyV13ToolBenchForVersion(seed, protocol.BenchVersionV13, cases)
+}
+
+// applyV13ToolBenchForVersion is applyV13ToolBench under an explicit contract;
+// only the world scale its conversion order reads depends on the version.
+func applyV13ToolBenchForVersion(seed int64, benchVersion int, cases []protocol.ToolCase) {
 	if len(cases) == 0 {
 		return
 	}
-	quota := v13QuotaFor(len(cases))
+	quota := v13QuotaForVersion(len(cases), benchVersion)
 	inventory := catalog.InventoryForSeed(seed)
 	decoys := catalog.DecoysForSeed(seed)
 	coined := toolexec.CoinedForSeed(seed)
@@ -300,7 +387,7 @@ func applyV13ToolBench(seed int64, cases []protocol.ToolCase) {
 		surplusTheme = append(surplusTheme, i)
 	}
 
-	eligible := append(surplusTheme, v13ConversionOrder(seed, cases)...)
+	eligible := append(surplusTheme, v13ConversionOrderForVersion(seed, benchVersion, cases)...)
 	next := 0
 	take := func() int {
 		if next >= len(eligible) {
@@ -390,14 +477,22 @@ func v13IsUnexpectedFamily(category string) bool {
 // evidence (the world carrier, a planted record, a state-dependent route) is
 // never replaced, nor is a no-tool, result-usage, or already-v13 case.
 func v13ConversionOrder(seed int64, cases []protocol.ToolCase) []int {
-	scale := 1
-	if len(cases) >= 80 {
-		scale = 3
-	} else if len(cases) >= 30 {
-		scale = 2
+	return v13ConversionOrderForVersion(seed, protocol.BenchVersionV13, cases)
+}
+
+// v13ConversionOrderForVersion is v13ConversionOrder with the world scale the
+// contract's tool passes read (ToolWorldScale), so a world carrier is
+// recognised in the world it actually seeds.
+func v13ConversionOrderForVersion(seed int64, benchVersion int, cases []protocol.ToolCase) []int {
+	scale := ToolWorldScale(len(cases), benchVersion)
+	// Through v15 the carrier set is read from the v13 world, byte for byte as
+	// those contracts shipped. From v16 it is read from the run's own world.
+	pairVersion := protocol.BenchVersionV13
+	if benchVersion >= protocol.BenchVersionV16 {
+		pairVersion = benchVersion
 	}
 	worldPairs := map[string]bool{}
-	for _, pair := range universe.GenerateForVersion(seed, scale, protocol.BenchVersionV13).Pairs {
+	for _, pair := range universe.GenerateForVersion(seed, scale, pairVersion).Pairs {
 		worldPairs[pair.PairID] = true
 	}
 	counts := map[string]int{}
@@ -411,6 +506,10 @@ func v13ConversionOrder(seed int64, cases []protocol.ToolCase) []int {
 		if IsDecoyCorrect(tc.Category) || v13DiscoveryFamily(tc.Category) || tc.Category == "recipe_apply" || tc.Category == "world_theme_discover_set" {
 			return false
 		}
+		if IsV16ConnectorCase(tc.Category) {
+			// Only reachable from v18, whose connector pass runs first.
+			return false
+		}
 		for _, pair := range tc.PrerequisitePairs {
 			if worldPairs[pair.PairID] {
 				return false
@@ -418,13 +517,30 @@ func v13ConversionOrder(seed int64, cases []protocol.ToolCase) []int {
 		}
 		return true
 	}
-	// Profile-scaled floors: the full profile keeps one case per ordinary family
-	// and three per world family; smaller profiles never held a per-family floor
-	// (their v9 draw is a partial weighted sample), so they keep one per world
-	// family and may replace ordinary singletons after every duplicate.
+	// Profile-scaled floors. The world-family floor follows the world the run
+	// reads: three per world family on the full (scale-3) world, one on smaller
+	// worlds. The ordinary-singleton rule follows the sample: the 100-case full
+	// draw keeps one case per ordinary family, while smaller draws are a
+	// partial weighted sample, so their ordinary singletons may be replaced
+	// after every duplicate. Through v15 the two coincide (scale 3 iff 80+
+	// cases). The 50-case v16 full half reads the scale-3 world with a partial
+	// sample, so it keeps the full world-family floor and may replace
+	// singletons; keeping singletons too would leave it 4 convertible slots on
+	// every seed in 1..300, below the v13 and v16 quotas.
 	worldFloor, allowSingletons := v13WorldFamilyFloor, false
+	if scale < 3 {
+		worldFloor = 1
+	}
 	if len(cases) < 80 {
-		worldFloor, allowSingletons = 1, true
+		allowSingletons = true
+	}
+	if benchVersion >= protocol.BenchVersionV18 && len(cases) >= V18FullToolHalf && len(cases) < 80 {
+		// v18 spends world duplicates on the full-run restraint, discovery and
+		// connector quotas: every world tool family averaged 1.000 across the
+		// 27 v17 production rows (world_contact_research_email 0.981), so one
+		// case per world family keeps coverage without holding slots. Like the
+		// other v18 tool overrides it applies only to the 50-case half.
+		worldFloor = 1
 	}
 	var ordinary, singletons, world, routed []int
 	remaining := map[string]int{}

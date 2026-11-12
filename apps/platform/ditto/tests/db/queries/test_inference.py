@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from prometheus_client import REGISTRY
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.inference_concurrency_settings import (
@@ -23,6 +24,8 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.inference import (
+    CHAT_MODE,
+    NO_CHAT_MODE,
     USAGE_ACCOUNTING_VERSION,
     InferenceDecline,
     activate_inference_grant,
@@ -398,6 +401,65 @@ async def test_grant_rejects_wrong_bearer_model_budget_and_replay(
             )
             is InferenceDecline.NONCE_REPLAYED
         )
+
+
+@pytest.mark.asyncio
+async def test_a_no_chat_grant_refuses_chat_and_keeps_embeddings(
+    session: AsyncSession,
+) -> None:
+    """The no-inference mode (docs/no-inference-mode.md) disables chat per grant.
+
+    A ``no_chat`` grant answers every chat call ``model_not_permitted`` even for
+    the model it lists, and keeps its embedding lane. The decision lane is
+    served by the relay alone. The CHECK refuses a no-chat grant without a
+    decision pin, which could otherwise only embed.
+    """
+    config = replace(_config(), embedding_per_ticket_concurrency=8)
+    async with session.begin():
+        _ticket, grant, bearer, now = await _live_v7_embedding_grant(session, config)
+        grant.decision_model = "typesafe/jev-1.14"
+        grant.decision_request_budget = 10
+        grant.decision_token_budget = 1_000
+        grant.inference_mode = NO_CHAT_MODE
+        await session.flush()
+        assert (
+            await begin_inference_request(
+                session,
+                grant_id=grant.grant_id,
+                nonce=uuid4(),
+                bearer=bearer,
+                model=_CHAT_MODEL,
+                token_reservation=10,
+                now=now,
+                config=config,
+            )
+            is InferenceDecline.MODEL_NOT_PERMITTED
+        )
+        accepted = await begin_inference_request(
+            session,
+            grant_id=grant.grant_id,
+            nonce=uuid4(),
+            bearer=bearer,
+            model=config.embedding_model,
+            token_reservation=10,
+            now=now,
+            config=config,
+            request_kind="embedding",
+        )
+        assert not isinstance(accepted, InferenceDecline)
+        assert grant.request_count == 0 and grant.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_a_no_chat_grant_requires_a_decision_pin(session: AsyncSession) -> None:
+    with pytest.raises(IntegrityError, match="inference_mode"):
+        async with session.begin():
+            _ticket, grant, _bearer, _now = await _live_v7_embedding_grant(
+                session, _config()
+            )
+            assert grant.inference_mode == CHAT_MODE
+            grant.inference_mode = NO_CHAT_MODE
+            await session.flush()
 
 
 @pytest.mark.asyncio
@@ -902,11 +964,18 @@ async def test_the_operator_budget_is_stamped_onto_the_new_grant(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize(
+    ("enabled", "bench_version"),
+    [(False, 15), (True, 15), (True, 14), (True, _BENCH_VERSION)],
+)
 async def test_the_decision_lane_is_stamped_only_while_the_operator_pins_it(
-    session: AsyncSession, enabled: bool
+    session: AsyncSession, enabled: bool, bench_version: int
 ) -> None:
-    """Lane off mints the pre-lane grant exactly; lane on stamps pin and walls."""
+    """Lane off mints the pre-lane grant exactly; lane on stamps pin and walls.
+
+    Only v15+ leases carry the lane: a v14-or-earlier lease minted while the
+    board is on is byte-identical to a pre-lane grant.
+    """
     now = datetime.now(UTC)
     agent = Agent(
         agent_id=uuid4(),
@@ -923,7 +992,7 @@ async def test_the_decision_lane_is_stamped_only_while_the_operator_pins_it(
         status=TicketStatus.ISSUED,
         issued_at=now,
         deadline=now + timedelta(minutes=20),
-        bench_version=_BENCH_VERSION,
+        bench_version=bench_version,
         attempt_count=1,
     )
     session.add_all([agent, ticket])
@@ -949,7 +1018,11 @@ async def test_the_decision_lane_is_stamped_only_while_the_operator_pins_it(
         grant.decision_request_budget,
         grant.decision_token_budget,
     )
-    expected = ("typesafe/jev-1.14", 42_000, 9, 9_000) if enabled else (None, 0, 0, 0)
+    expected = (
+        ("typesafe/jev-1.14", 42_000, 9, 9_000)
+        if enabled and bench_version >= 15
+        else (None, 0, 0, 0)
+    )
     assert stamps == expected
     assert (grant.decision_tokens, grant.decision_cost_microusd) == (0, 0)
 

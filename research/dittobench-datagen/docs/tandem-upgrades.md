@@ -159,11 +159,12 @@ What `start_benchmark_rollout` drives on the generator side:
 | Epoch ledger | Epoch close | Fold digest, crown, recipients (existing) |
 | v15 season | Season open | Bench version, pinned columns (submission and tree SHA), each column's declared policy |
 
-## v15: generator cases inside agent runs across a version boundary
+## v16: generator cases inside agent runs across a version boundary
 
-v15 puts five 35-case generator columns into every canonical run, pinned per
+v16 (the dueling bench; written as v15 before v15 shipped as the
+production-scale catalog) puts five 35-case generator columns into every canonical run, pinned per
 season. These are the changes needed so that works across an activation and
-across a pack policy change. They extend the v15 checklist in
+across a pack policy change. They extend the v16 checklist in
 [dueling-bench.md](dueling-bench.md) section 5.
 
 1. **Slices carry the pack's declared policy.** Grade each slice case at its
@@ -180,28 +181,28 @@ across a pack policy change. They extend the v15 checklist in
    and never spans an activation. Activation takes effect at the next season
    open; the open season finishes on its version. `season_id` and
    `bench_version` both key scores, and crown comparisons need both equal.
-4. **Rollout seasons.** While a rollout for 15 is open, Platform runs shadow
-   seasons at 15 for the cohort's desired-version runs, pinned from the same
+4. **Rollout seasons.** While a rollout for 16 is open, Platform runs shadow
+   seasons at 16 for the cohort's desired-version runs, pinned from the same
    eligible set. They are non-authoritative and never move generator pay.
-   Without them the v15 cohort has no slices to run.
+   Without them the v16 cohort has no slices to run.
 5. **Eligibility reads round columns in the season's window.** A column
-   scored in a v14 round at policy 14 is eligible for a v15 season (14 is in
-   {14, 15}); one at policy 13 is not, and its generator must declare 14 or 15
-   in a v15 round first. Its measured solvability is under its declared
+   scored in a round at policy 15 is eligible for a v16 season (15 is in
+   {15, 16}); one at policy 13 or 14 is not, and its generator must declare 15
+   or 16 in a round first. Its measured solvability is under its declared
    policy, which the season pins, so solvability carries over.
-6. **Pack policy 15.** Add `GradingBenchVersionV15` to
-   `supportedGradingBenchVersions` and 15 to `GENERATOR_ROUND_BENCH_VERSIONS`
-   in the v15 contract release, even if `grade/` is unchanged. The pin test
-   fails on a shipped v15 benchmark contract without them. When 15 activates,
-   the window is {14, 15} by `GradingPolicyWindow`; no baseline release is
+6. **Pack policy 16.** Add `GradingBenchVersionV16` to
+   `supportedGradingBenchVersions` and 16 to `GENERATOR_ROUND_BENCH_VERSIONS`
+   in the v16 contract release, even if `grade/` is unchanged. The pin test
+   fails on a shipped v16 benchmark contract without them. When 16 activates,
+   the window is {15, 16} by `GradingPolicyWindow`; no baseline release is
    needed.
-7. **Rollback from 15.** Seasons stop at the next season open; canonical runs
-   return to the v14 datagen-only profile; rounds return to 14. Generators that
-   declared 15 re-choose 14 from the v14 request. Accepted v15 rows stay
+7. **Rollback from 16.** Seasons stop at the next season open; canonical runs
+   return to the v15 datagen-only profile; rounds return to 15. Generators that
+   declared 16 re-choose 15 from the v15 request. Accepted v16 rows stay
    versioned and are not reinterpreted.
 8. **Scorer capability.** dittobench-api advertises `dueling-slice-v1` and a
    per-version feature (`dueling-slice-bench-<n>`), forwarded like
-   `generator_round_bench_versions`, so Platform never leases a v15 run with
+   `generator_round_bench_versions`, so Platform never leases a v16 run with
    slices to a scorer that cannot grade the declared policies.
 
 ## Runbook: activating v14 for both competitions
@@ -354,7 +355,7 @@ has no baseline to retry on.
 | 5 | Generator scorer policy advertisement | **Explicit.** The scorer sends `grading_bench_versions`; none means v13-only. | `challenge-scorer/6`, `generator_scorer_heartbeats.grading_bench_versions` |
 | 6 | Public visibility | **Public.** Each round column's declared policy shows as a quiet badge on the generator board's round results and a generator's round history. | `GeneratorRoundColumnView.grading_bench_version`, dashboard `GradingBadge` |
 | 7 | Legacy retry | **Keep for now.** Starter-kit policy recorded above. | `genrun.Evaluate` |
-| 8 | v15 amendments | **Accepted.** Sections 1 to 4 of the v15 list above amend [dueling-bench.md](dueling-bench.md). | dueling-bench.md "Accepted amendments" |
+| 8 | Dueling amendments (now v16) | **Accepted.** Sections 1 to 4 of the v16 dueling list above amend [dueling-bench.md](dueling-bench.md). | dueling-bench.md "Accepted amendments" |
 
 ## Open questions for the operator
 

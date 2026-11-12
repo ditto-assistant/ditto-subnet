@@ -45,6 +45,16 @@ type WorldPlanSelection struct {
 	// Salt names the shuffle stream. Distinct contracts pass distinct salts so a
 	// later budget change never re-orders an earlier version's candidates.
 	Salt string
+	// StoryArcLimit, when positive, asks story oracles about only that many
+	// arcs, chosen by a seeded order independent of the shuffle stream. Every
+	// arc stays seeded in the world, so the unasked arcs are haystack. Zero (the
+	// v13..v15 value) asks every arc, byte for byte as before. Bench v16 uses it
+	// to keep the full-scale world inside a 125-case memory table.
+	StoryArcLimit int
+	// StoryDropFirst lists story oracle kinds an arc drops, in order, before
+	// the pure-money rotation trims it to StoryPerArc. Nil (every contract
+	// through v17) leaves the selection byte for byte as before.
+	StoryDropFirst []string
 }
 
 // WorldPlanCounts reports how many plans each slot of a WorldPlanSelection
@@ -115,10 +125,19 @@ func (w World) SelectQuestionPlans(sel WorldPlanSelection) ([]QuestionPlan, Worl
 		arcs = append(arcs, arc)
 	}
 	sort.Ints(arcs)
+	if sel.StoryArcLimit > 0 && sel.StoryArcLimit < len(arcs) {
+		arcs = w.limitedStoryArcs(sel.Salt, arcs, sel.StoryArcLimit)
+	}
 	for _, arc := range arcs {
 		plans := storyByArc[arc]
 		if sel.StoryPerArc > len(plans) {
 			return nil, WorldPlanCounts{}, fmt.Errorf("story arc %d offers %d validated oracles, need %d", arc, len(plans), sel.StoryPerArc)
+		}
+		for _, kind := range sel.StoryDropFirst {
+			if len(plans) <= sel.StoryPerArc {
+				break
+			}
+			plans = withoutOracle(plans, kind)
 		}
 		// Drop pure-money oracles in arc rotation until the arc fits its slot.
 		// The rotation starts at the arc index so the dropped oracle differs
@@ -187,6 +206,83 @@ func (w World) SelectQuestionPlans(sel WorldPlanSelection) ([]QuestionPlan, Worl
 	}
 	r.Shuffle(len(selected), func(i, j int) { selected[i], selected[j] = selected[j], selected[i] })
 	return selected, counts, nil
+}
+
+// limitedStoryArcs picks limit of the sorted arcs by a seeded hash order (not
+// the selection shuffle stream, so the rest of the selection is unchanged). The
+// asked arcs keep the world's business/personal kind proportion (largest
+// remainder), and take one arc per theme before repeating any theme (the theme
+// set is shared across kinds), so a partial story slot keeps the full world's
+// domain balance and spreads over its themes. The result is sorted.
+func (w World) limitedStoryArcs(salt string, arcs []int, limit int) []int {
+	ranked := append([]int(nil), arcs...)
+	key := func(arc int) uint64 {
+		h := fnv.New64a()
+		_, _ = fmt.Fprintf(h, "dittobench-story-arc-limit:%s:%d:%d", salt, w.Seed, arc)
+		return h.Sum64()
+	}
+	sort.Slice(ranked, func(i, j int) bool { return key(ranked[i]) < key(ranked[j]) })
+	kindOf := func(arc int) string {
+		if arc >= 0 && arc < len(w.StoryArcs) && w.StoryArcs[arc].V2 != nil {
+			return string(w.StoryArcs[arc].V2.Kind)
+		}
+		return ""
+	}
+	themeOf := func(arc int) string {
+		if arc >= 0 && arc < len(w.StoryArcs) && w.StoryArcs[arc].V2 != nil {
+			return string(w.StoryArcs[arc].V2.Theme)
+		}
+		return fmt.Sprintf("arc-%d", arc)
+	}
+	// Per-kind quota, largest remainder (ties to the kind seen first in
+	// sorted arc order).
+	var kinds []string
+	total := map[string]int{}
+	for _, arc := range arcs {
+		k := kindOf(arc)
+		if total[k] == 0 {
+			kinds = append(kinds, k)
+		}
+		total[k]++
+	}
+	quota := map[string]int{}
+	assigned := 0
+	for _, k := range kinds {
+		quota[k] = limit * total[k] / len(arcs)
+		assigned += quota[k]
+	}
+	for assigned < limit {
+		best := ""
+		bestRem := -1
+		for _, k := range kinds {
+			if quota[k] >= total[k] {
+				continue
+			}
+			if rem := (limit * total[k]) % len(arcs); rem > bestRem {
+				best, bestRem = k, rem
+			}
+		}
+		quota[best]++
+		assigned++
+	}
+	chosen := make([]int, 0, limit)
+	picked := map[int]bool{}
+	taken := map[string]int{}
+	themes := map[string]bool{}
+	for pass := 0; pass < 2; pass++ {
+		for _, arc := range ranked {
+			k := kindOf(arc)
+			if picked[arc] || taken[k] >= quota[k] || (pass == 0 && themes[themeOf(arc)]) {
+				continue
+			}
+			picked[arc] = true
+			taken[k]++
+			themes[themeOf(arc)] = true
+			chosen = append(chosen, arc)
+		}
+	}
+	sort.Ints(chosen)
+	return chosen
 }
 
 func withoutOracle(plans []QuestionPlan, kind string) []QuestionPlan {

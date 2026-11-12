@@ -64,12 +64,16 @@ export const WRITE_TOOL_NAMES = new Set([
   'reinstate_generator_submission',
   'tick_generator_rounds',
   'void_generator_round',
+  'rotate_dueling_season',
+  'republish_dueling_season_commitment',
+  'retry_dueling_slice_preparation',
   'close_generator_round',
   'republish_generator_round_commitment',
   'release_generator_round_lease',
+  'rule_generator_frontier_audit',
+  'settle_generator_round_frontier',
   'register_default_generator',
   'create_default_generator_upload',
-  'advance_scored_policy_rescreen',
   'record_treasury_settings',
   'record_treasury_runtime',
   'record_treasury_receipt',
@@ -97,6 +101,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'retry_trusted_image_build',
   'expire_running_screening',
   'reject_screening_submission',
+  'amend_screening_reject_reason',
   'open_ath_review',
   'resolve_ath_review',
   'create_ath_rulings_upload',
@@ -108,22 +113,23 @@ export const WRITE_TOOL_NAMES = new Set([
   'reinstate_evicted_submission_to_queue',
   'batch_retry_validator_evaluation',
   'replace_validator_score',
+  'void_infra_scores',
   'queue_validator_score_retests',
   'refresh_benchmark_contract',
   'rebuild_screened_image',
   'migrate_zero_score_benchmark_contract',
   'qualify_scored_benchmark_rollout',
   'expand_benchmark_rollout_cohort',
+  'admit_stranded_submission',
   'start_benchmark_rollout',
   'issue_benchmark_canary',
   'cancel_benchmark_canary',
+  'isolate_operator_diagnostic',
   'set_efficiency_bonus_settings',
   'set_continual_retest_settings',
   'set_queue_policy_settings',
   'apply_screener_review_settings',
   'rotate_screener_policy_manifest',
-  'schedule_screener_policy_activation',
-  'schedule_v13_review_clock',
   'restore_scored_screening_snapshot',
   'set_validator_slot_settings',
   'set_validator_issuance_pause',
@@ -131,9 +137,12 @@ export const WRITE_TOOL_NAMES = new Set([
   'activate_v13_scorer_cohort',
   'rotate_v13_scorer_cohort',
   'apply_copy_court_settings',
+  'apply_unreleased_copy_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
   'set_submission_cooldown',
+  'set_owner_submission_cooldown',
+  'revoke_owner_submission_cooldown',
   'set_conversation_settings',
   'authorize_conversation_retry',
   'unban_hotkey',
@@ -164,11 +173,15 @@ export const WRITE_TOOL_NAMES = new Set([
 
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ['get_agent_source_release_evidence', BACKROOM_READ_SCOPE],
+  ['get_artifact_fetch_audit', BACKROOM_READ_SCOPE],
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
   // A closed round's dataset is every column's generated cases: private
   // benchmark content, gated like other private artifacts.
   ['get_generator_round_dataset', BACKROOM_ARTIFACT_SCOPE],
+  // A frontier audit serves sampled cases, gold answers and the user's
+  // visible memory from a scored round's private dataset.
+  ['get_generator_frontier_audit', BACKROOM_ARTIFACT_SCOPE],
   ['get_v13_official_control_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_verification_readiness', BACKROOM_ARTIFACT_SCOPE],
@@ -195,6 +208,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // The court's dry-run triage reads both submissions' source server-side
   // (audited) and returns file paths and line locations, so it gates the same.
   ['preview_copy_court_triage', BACKROOM_ARTIFACT_SCOPE],
+  // The unreleased-copy evidence quotes normalized source text and path:line
+  // locations from two submissions, so it gates the same.
+  ['get_unreleased_copy_signal', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_review_lineage', BACKROOM_ARTIFACT_SCOPE],
   // Baseline diffs render miner source against the starter kit, so they gate on
   // the same dedicated artifact scope.

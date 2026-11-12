@@ -152,7 +152,27 @@ from ditto import __version__
 # requester while a split is served or pinned). Until that Platform setting
 # exists and is written, no split is served and v33 folds exactly as v32.
 # Heartbeat signing bytes are unchanged.
-HEARTBEAT_PROTOCOL_VERSION = 33
+# v34 consumes ``LedgerResponse.crown_gate``: a challenger dethrones only on the
+# paired shared-seed statistic with at least ``min_dethrone_confirmations``
+# seeds shared with the champion, and only an entry inside the top
+# ``champion_standing_rank`` official places may hold or take the crown (an
+# incumbent that falls out hands it to the best-qualified standing entry). A
+# v33 validator ignores the additive marker and keeps the ungated walk -- a
+# different champion, and so a different weight vector -- so Platform must
+# withhold it until every recently-live weight setter reports v34+. Heartbeat
+# signing bytes are unchanged.
+# v35 consumes ``crown_gate.duel_window_pairs`` and ``LedgerEntry.duel_history``
+# (docs/title-duels.md): two bench >= 16 rows dethrone on the sequential title
+# duel, the newest pair-masked (season, seed) pairs across dueling seasons
+# against a frozen boundary, instead of one season's capped fixed-z test. A
+# v34 validator ignores both additive fields and keeps the single-season test
+# -- a different champion -- so Platform withholds them until every
+# recently-live weight setter reports v35+. v35 also verifies a
+# ``seed_scope: "season"`` quorum lease (a dueling season's shared seed, so a
+# rotation re-score doubles as duel evidence) by re-deriving its CRN binding;
+# Platform issues those only to v35+ validators. Heartbeat signing bytes are
+# unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 35
 
 
 @dataclass(frozen=True)

@@ -75,6 +75,14 @@ func isUniqueViolation(err error) bool {
 }
 
 // allowedModels parses the grant's allowed_models JSONB array.
+// Grant inference modes (inference_grants.inference_mode). InferenceModeChat
+// is every grant minted before the no-inference mode; InferenceModeNoChat
+// refuses chat as model_not_permitted and keeps embeddings and decisions.
+const (
+	InferenceModeChat   = "chat"
+	InferenceModeNoChat = "no_chat"
+)
+
 func allowedModels(grant *postgres.InferenceGrant) []string {
 	var models []string
 	if err := json.Unmarshal(grant.AllowedModels, &models); err != nil {
@@ -103,7 +111,13 @@ type beginParams struct {
 type beginResult struct {
 	grant   postgres.InferenceGrant
 	request postgres.InferenceRequest
+	// ticketPurpose is the locked ticket's purpose ("" when the row was
+	// missing). It selects only the scored provider-routing canary.
+	ticketPurpose string
 }
+
+// ticketPurposeBenchmarkCanary mirrors TicketPurpose.BENCHMARK_CANARY.
+const ticketPurposeBenchmarkCanary = "benchmark_canary"
 
 // atCapacity records which admission gate declined (metric label), then
 // answers the one wire value.
@@ -170,8 +184,13 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	if !grant.ExpiresAt.Time.After(p.now) {
 		return decline(relayhttp.DeclineLeaseExpired)
 	}
-	// Step 7: model gate.
+	// Step 7: model gate. A no-chat grant (docs/no-inference-mode.md)
+	// permits no chat model at all; embeddings and the decision lane keep
+	// their own gates below.
 	if p.kind == kindChat {
+		if grant.InferenceMode == InferenceModeNoChat {
+			return decline(relayhttp.DeclineModelNotPermitted)
+		}
 		permitted := false
 		for _, m := range allowedModels(&grant) {
 			if m == p.model {
@@ -471,5 +490,9 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 		grant.EmbeddingActiveRequests++
 	}
 	grant.UpdatedAt = pgTime(p.now)
-	return &beginResult{grant: grant, request: request}, nil, nil
+	purpose := ""
+	if ticket != nil {
+		purpose = ticket.Purpose
+	}
+	return &beginResult{grant: grant, request: request, ticketPurpose: purpose}, nil, nil
 }

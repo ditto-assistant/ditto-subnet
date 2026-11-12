@@ -10,7 +10,8 @@ and posts per-case results here. Nothing in this lane writes an agent score.
 The same module carries the round-commitment lane: Platform elects a few
 validators per committed round to publish the round's seed commitment
 (``dgr1:{round}:{commitment}``) with ``Commitments.set_commitment`` from their
-own Pylon identity, and each reports the block it observed the value at.
+own Pylon identity, and each reports the block it observed the value at. Bench
+v16+ dueling seasons publish ``dds1:{season}:{commitment}`` the same way.
 
 This module is a hand-maintained copy in the validator package
 (``ditto/api_models/generator_round_validator.py``) and Platform
@@ -31,6 +32,18 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ditto.api_models.inference import InferenceGrantOffer
 
 GENERATOR_ROUND_DATASET_MODE: Literal["generator-round-v1"] = "generator-round-v1"
+# The frontier oracle job: a subnet-run reference harness answers a scored
+# round's unsolved cases (``oracle_case_ids``), each from only its bounded
+# ``challenge.OracleContext``. dittobench-api advertises the mode under the
+# same name; the validator forwards it as ``generator_frontier_oracle``, and
+# Platform leases an oracle job only to a validator that does.
+GENERATOR_FRONTIER_ORACLE_DATASET_MODE: Literal["generator-frontier-oracle-v1"] = (
+    "generator-frontier-oracle-v1"
+)
+GENERATOR_FRONTIER_ORACLE_FEATURE = GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+GeneratorRoundDatasetMode = Literal[
+    "generator-round-v1", "generator-frontier-oracle-v1"
+]
 GENERATOR_ROUND_JOB_DOMAIN = "validator-generator-round-job:v1"
 GENERATOR_ROUND_SCORE_DOMAIN = "validator-generator-round-score-v1"
 GENERATOR_ROUND_FAIL_DOMAIN = "validator-generator-round-fail-v1"
@@ -65,7 +78,7 @@ GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX = "generator-round-max-cases-"
 # listed version and advertises each as ``generator-round-bench-<n>``.
 # ``ditto/tests/test_bench_version_pins.py`` diffs this tuple against the Go
 # pack contract.
-GENERATOR_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13, 14)
+GENERATOR_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13, 14, 15, 16, 17, 18)
 # The scorer feature naming one round bench version, and the versions a scorer
 # that advertises none runs (the original v13-only round mode).
 GENERATOR_ROUND_BENCH_FEATURE_PREFIX = "generator-round-bench-"
@@ -132,10 +145,12 @@ class GeneratorRoundJobRequest(_Timed):
 
 
 class GeneratorRoundJobResponse(_Model):
-    """One leased round panel run.
+    """One leased round panel run, or one frontier oracle run.
 
     ``seed`` is a positive placeholder the scorer requires on ``/v2/score``;
-    the round dataset, not the seed, determines every case.
+    the round dataset, not the seed, determines every case. An oracle run
+    (``dataset_mode`` ``generator-frontier-oracle-v1``) answers only
+    ``oracle_case_ids``, and its results must name exactly those cases.
     """
 
     round_index: Annotated[int, Field(ge=0)]
@@ -146,7 +161,7 @@ class GeneratorRoundJobResponse(_Model):
     deadline: datetime
     bench_version: int
     dataset_sha256: Annotated[str, Field(pattern=_SHA256)]
-    dataset_mode: Literal["generator-round-v1"] = GENERATOR_ROUND_DATASET_MODE
+    dataset_mode: GeneratorRoundDatasetMode = GENERATOR_ROUND_DATASET_MODE
     seed: Annotated[int, Field(ge=1)]
     run_size: str = "full"
     case_count: Annotated[int, Field(ge=1, le=MAX_ROUND_CASES)]
@@ -155,6 +170,27 @@ class GeneratorRoundJobResponse(_Model):
     benchmark_runtime: dict | None = None
     """Mirrors ``BenchmarkRuntimeSettings`` (forwarded verbatim to the scorer)."""
     inference: InferenceGrantOffer | None = None
+    oracle_case_ids: (
+        Annotated[
+            list[Annotated[str, Field(min_length=3, max_length=72)]],
+            Field(min_length=1, max_length=MAX_ROUND_CASES),
+        ]
+        | None
+    ) = None
+    """Round case ids (``column/case``) an oracle run answers; required for
+    the oracle mode and refused for a panel run."""
+
+    @model_validator(mode="after")
+    def _oracle_cases(self) -> GeneratorRoundJobResponse:
+        oracle = self.dataset_mode == GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+        if oracle != (self.oracle_case_ids is not None):
+            raise ValueError("oracle_case_ids are required exactly for an oracle run")
+        if self.oracle_case_ids is not None and (
+            len(set(self.oracle_case_ids)) != len(self.oracle_case_ids)
+            or self.case_count != len(self.oracle_case_ids)
+        ):
+            raise ValueError("oracle_case_ids must be distinct and match case_count")
+        return self
 
 
 class GeneratorRoundCaseResult(_Model):
@@ -336,6 +372,122 @@ class GeneratorRoundCommitmentReportRequest(_Timed):
 
 class GeneratorRoundCommitmentReportResponse(_Model):
     round_index: int
+    accepted: bool
+    duplicate: bool = False
+    confirmations: int = 0
+    target: int = 0
+
+
+# --- dueling season commitment publication ----------------------------------
+#
+# Bench v16+ dueling seasons commit their seed before the anchor block exists
+# (``research/dittobench-datagen/docs/dueling-bench.md`` section 2, "No
+# grinding"). When ``onchain_commitment`` is on, Platform elects a few
+# validators advertising ``season_commitments`` to publish
+# ``dds1:{season_index}:{commitment}`` exactly as the round lane publishes
+# ``dgr1``; shadow seasons publish too (their row says shadow).
+
+SEASON_COMMITMENT_TAG = "dds1"
+DUELING_SEASON_COMMITMENT_JOB_DOMAIN = "validator-dueling-season-commitment-job:v1"
+DUELING_SEASON_COMMITMENT_REPORT_DOMAIN = (
+    "validator-dueling-season-commitment-report-v1"
+)
+
+
+def season_commitment_payload(season_index: int, commitment: str) -> str:
+    """The exact ASCII value published with ``Commitments.set_commitment``."""
+    return f"{SEASON_COMMITMENT_TAG}:{season_index}:{commitment}"
+
+
+class DuelingSeasonCommitmentJobRequest(_Timed):
+    """Ask Platform whether this validator should publish a season commitment."""
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58)]
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=_SIG)] = "0" * 128
+
+    def signing_message(self) -> bytes:
+        return (
+            f"{DUELING_SEASON_COMMITMENT_JOB_DOMAIN}:{self.validator_hotkey}:"
+            f"{self.nonce}:{_iso(self.requested_at)}"
+        ).encode()
+
+
+class DuelingSeasonCommitmentJobResponse(_Model):
+    """One committed dueling season this validator is elected to publish.
+
+    ``payload`` is exactly ``season_commitment_payload(season_index,
+    commitment)``; a validator refuses any other value. ``claim_expires_at`` is
+    when Platform stops waiting for this validator's report.
+    """
+
+    season_id: UUID
+    season_index: Annotated[int, Field(ge=0)]
+    bench_version: Annotated[int, Field(ge=16)]
+    shadow: bool
+    commitment: Annotated[str, Field(pattern=_SHA256)]
+    payload: Annotated[
+        str, Field(min_length=1, max_length=MAX_COMMITMENT_PAYLOAD_BYTES)
+    ]
+    claim_expires_at: datetime
+
+    @model_validator(mode="after")
+    def _payload_is_the_commitment(self):  # type: ignore[no-untyped-def]
+        if self.payload != season_commitment_payload(
+            self.season_index, self.commitment
+        ):
+            raise ValueError("payload is not this season's commitment")
+        return self
+
+
+class DuelingSeasonCommitmentReportRequest(_Timed):
+    """Signed outcome of one elected season-commitment publication.
+
+    Same semantics as :class:`GeneratorRoundCommitmentReportRequest`:
+    ``confirmed`` names the block the validator read its own commitment back
+    at; ``failed`` means the submission or the read-back did not succeed.
+    """
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58)]
+    season_id: UUID
+    season_index: Annotated[int, Field(ge=0)]
+    commitment: Annotated[str, Field(pattern=_SHA256)]
+    outcome: GeneratorRoundCommitmentOutcome
+    block_number: Annotated[int | None, Field(ge=1)] = None
+    extrinsic_hash: Annotated[str | None, Field(pattern=_EXTRINSIC_HASH)] = None
+    detail: Annotated[str | None, Field(max_length=500)] = None
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=_SIG)] = "0" * 128
+
+    @model_validator(mode="after")
+    def _confirmed_has_a_block(self):  # type: ignore[no-untyped-def]
+        if self.outcome == "confirmed" and self.block_number is None:
+            raise ValueError("a confirmed publication names its block")
+        return self
+
+    def signing_message(self) -> bytes:
+        return json.dumps(
+            [
+                DUELING_SEASON_COMMITMENT_REPORT_DOMAIN,
+                self.validator_hotkey,
+                str(self.season_id),
+                self.season_index,
+                self.commitment,
+                self.outcome,
+                self.block_number,
+                self.extrinsic_hash,
+                str(self.nonce),
+                _iso(self.requested_at),
+            ],
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+
+
+class DuelingSeasonCommitmentReportResponse(_Model):
+    season_id: UUID
     accepted: bool
     duplicate: bool = False
     confirmations: int = 0

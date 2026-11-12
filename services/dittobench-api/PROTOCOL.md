@@ -7,6 +7,173 @@ starter kit **byte-for-byte**.
 
 All payloads are JSON over HTTP.
 
+## Bench v18 per-run cost budget
+
+From bench_version 18 a canonical scoring run has a **cost budget**
+(`scoregates/run_budget.go`, contract `run-budget-v1`). Before each case
+starts, the scorer prices the run's broker session so far with the same locked
+priced-cost-v2 rates and arithmetic as `details.priced_cost`
+(`scoregates.MeteredCostNanoUSD` calls `BuildPricedCost`), so the budget and the
+factor never disagree about what a run cost. Once the metered cost reaches the
+budget, no further case is admitted.
+
+- **Budget:** the cost at which the factor reaches its floor, derived from the
+  curve: the last breakpoint ratio (2.0x) times the reference ($0.50), so $1.00
+  per 350-case run, scaled to the run's case count and rounded up. Spending past it cannot
+  lower the factor further, so v18 converts it into lost accuracy instead.
+- **Window:** the whole run, the datagen half and the generator slice, the
+  priced-cost window. Cases are admitted in the run's deterministic dispatch
+  order (tool cases, then memory waves, then slice columns, each in index
+  order). Admission is decided on the dispatching goroutine before each worker
+  starts, so the admitted cases are always a prefix of that order, however the
+  workers are scheduled. Cases already running finish, so the final priced
+  cost can exceed the budget.
+- **Unrun cases** score 0 and carry `budget_exhausted: true` with the note
+  `run_budget_exhausted`. They count in the tool and memory means and, for
+  slice cases, inside their column (`details.dueling.columns[].budget_exhausted`
+  counts them). They are not `undelivered` or `validator_fault`: the run
+  completes normally, nothing retries or voids it, and only the multiplicative
+  gates (which judge how the harness answered) skip them. A twin or audit
+  family that loses a member to the budget is dissolved for those gates, like a
+  family with an undelivered member; refused cases are also left out of the
+  median latency, the signed model-use and claim-provenance gate inputs, and
+  every published gate factor.
+- **Meter loss:** if the run's broker session disappears mid-run, the scorer
+  fails closed: it stops admitting cases, and the summary and the refused
+  cases carry `run_budget_meter_lost` instead of `run_budget_exhausted`, with
+  the last successful reading as the cutoff spend.
+- **Report:** `details.run_budget` records the budget, whether it was reached,
+  the admitted and unrun counts by phase, and the metered cost at the cutoff.
+  Platform stores it in the gate-evidence projection from v18 only, and the
+  owner's gate-notes run view carries it.
+- Practice runs without a broker session are not metered; the starter kit's
+  rehearsal (`scripts/rehearsal_cost.py`) prints the budget and where a scored
+  run would stop.
+
+## Bench v16 priced inference cost factor
+
+From bench_version 16 the composite is multiplied by a **priced cost factor**.
+The scorer prices the run's inference at the contract's locked public
+per-token rates, normalises it to a 350-case run, and maps it through a steep
+published curve. The v13 `inference_cost` record (answer output tokens per
+case) stays in shadow beside it. Prompt tokens are about 85% of what a v15 run
+costs, so the v16 factor prices them.
+
+Locked rates (`scoregates/priced_cost.go`, contract `priced-cost-v1`). These
+are contract constants, not live provider bills:
+
+| Meter | Model | Rate | nano-USD / token |
+|---|---|---|---|
+| chat prompt | `openai/gpt-oss-20b` (Amazon Bedrock) | $0.07 / 1M | 70 |
+| chat completion, reasoning included | `openai/gpt-oss-20b` | $0.15 / 1M | 150 |
+| embeddings | `perplexity/pplx-embed-v1-0.6b` | $0.004 / 1M | 4 |
+| decision lane input | `typesafe/jev-1.14` | $0.042 / 1M | 42 |
+| decision lane output | `typesafe/jev-1.14` | not metered | 0 |
+
+Formula (unsigned integers, floor division, uint64 saturation; each token
+count clamped at 2^53-1):
+
+```
+cost_nano_usd  = 70 x prompt + 150 x completion + 4 x embedding
+                 + 42 x decision_input + 0 x decision_output
+normalized     = floor(cost_nano_usd x 350 / cases)          # 350-case run equivalent
+ratio_bps      = min(floor(normalized x 10000 / 1_000_000_000), 100000)   # reference $1.00
+factor_bps     = 10000                                   if ratio_bps <= 10000
+               = 10000 - floor(2000 x (ratio_bps - 10000) / 5000)   if ratio_bps <= 15000
+               = 8000  - floor(2000 x (ratio_bps - 15000) / 5000)   if ratio_bps <= 20000
+               = 6000                                    otherwise (the floor)
+```
+
+The factor is 1.0 at or below $1.00 per 350 cases, 0.90 at $1.25, 0.80 at
+$1.50, 0.70 at $1.75, and the 0.60 floor from $2.00. The Go rule and its
+Python mirror (`ditto_screening_protocol.priced_cost`) share
+`internal/scoregates/testdata/priced_cost_vectors.json`.
+
+**Measurement window: the whole run.** `cases` counts every scored case: the
+datagen half plus the generator slice. Chat counts come from the scored run's
+whole-run relay interval, which is the broker accounting that decides relay
+health. They are read before a dueling run narrows its accounting record to
+the datagen half. The datagen/slice boundary capture is not used. Embedding
+and decision-lane counts are the ticket session's totals. Route probes the
+scorer sends before the run starts are excluded. Pricing only the datagen
+half would let a harness spend freely on the 175 slice cases.
+
+**Where it applies.** The applied factor multiplies the composite gate. On a
+dueling run it rides inside `details.dueling.datagen_gate`, so it scales the
+whole composite: `gate x ((1 - w|U|) x datagen + w x sum col)`. The validator
+and Platform folds already recompute per-seed composites from that block, so
+they apply the factor with no fold change. Column statistics (`n`, `sum`,
+`sum_sq`) stay raw, so the agent's spend never moves a generator's column
+means. That is the only dueling double count that could arise, and it does
+not. The factor is floored at 0.6, so it is a multiplier and not a zeroing
+gate. `dueling-bench.md` section 4 (generator cases never feed a zeroing
+gate) holds. A bench 16 run without a slice (practice) has its composite
+scaled directly, before the v9 base evidence binds it.
+
+**Posture.** The default is `enforce`. `DITTOBENCH_V16_PRICED_COST_POSTURE=shadow`
+reports the factor and applies 10000. It is an emergency switch, not the
+rollout plan. The v16 pre-activation rollout is the shadow window: v16 scores
+do not set weights until the operator activates v16. Enforcing in the
+contract from the first v16 canary therefore shows the real board, and the
+constants can still move before activation if the canary re-check disagrees.
+The posture is a per-validator scorer setting. Flipping it after activation
+would mix seeds scored under both postures in one crown fold, which is a
+mid-bench rescore. Incomplete chat accounting, a successful decision-lane call
+without usage, or zero scored cases reports `result: "insufficient_evidence"`
+and applies 10000. A decision call the relay metered and then answered with an
+error is still priced from its usage. A decision call still in flight when the
+run is priced is charged at its request size as input tokens (an upper bound).
+A call cancelled by the harness or by run teardown keeps that bound, as does
+a call whose relay response body cannot be read. A transport failure with no
+response is not charged. A practice run with no broker session
+meters nothing and names no `source`.
+
+The report adds:
+
+```jsonc
+"details": {
+  "priced_cost": {
+    "contract_id": "priced-cost-v1", "posture": "enforce", "applied": true,
+    "result": "priced", "window": "whole_run", "source": "relay", "cases": 350,
+    "prompt_tokens": 22318268, "completion_tokens": 1690233, "embedding_tokens": 294000,
+    "decision_calls": 0, "decision_input_tokens": 0, "decision_output_tokens": 0,
+    "prices": {"chat_model": "openai/gpt-oss-20b", "prompt_token": 70, "completion_token": 150, "...": "..."},
+    "cost_nano_usd": 1816989710, "normalization_cases": 350,
+    "normalized_cost_nano_usd": 1816989710, "reference_nano_usd": 1000000000,
+    "ratio_bps": 18169, "curve": [{"ratio_bps": 10000, "factor_bps": 10000}, "..."],
+    "floor_bps": 6000, "factor_bps": 6733, "applied_factor_bps": 6733
+  }
+}
+```
+
+Platform shows the block on the public score record, in Backroom and on the
+owner gate notes as `gate_evidence.priced_cost`, with `cost_usd`,
+`normalized_cost_usd`, and `rule_consistent` (Platform's own recomputation).
+`uv run ditto practice` prints the estimated cost and factor of the local run.
+
+## Bench v15 production-scale catalog and decision lane
+
+V15 scores exactly like v14 (plus the v15 atomic-value grading floor). Its
+dataset advertises about 235 tools per seed: the v14 surface plus 200 unlinked
+connector tools (`catalog.ConnectorsForSeed`). The tool endpoint refuses every
+connector call with a "not connected" error and performs nothing.
+
+From v15 the sandbox also carries `DITTOBENCH_DECISIONS_URL`
+(`$DITTOBENCH_INFERENCE_BASE_URL/decisions`, a locked key). `POST` a System One
+body (`{state, questions, assets?}`) there. The broker signs it with the run's
+grant (the same `X-Ditto-*` proof as chat) and forwards it to Platform's
+`/api/v1/inference/decisions`; the relay forces the operator-pinned decision
+model, meters it, and answers `{model, answers, usage}`. Relay status codes
+and `Retry-After` pass through. The broker allows 16 decision calls in flight
+per run; the relay's per-ticket rail is authoritative. Below v15, and on
+confirmation or ablation sessions, the route answers 404.
+
+Capabilities add optional `v15_scored_runtime_env`; its digest covers version
+15 and the v15 key set (which adds `DITTOBENCH_DECISIONS_URL`). Platform
+requires it for v15 fleet readiness, and a v15 rollout cannot start while the
+operator's `decision_lane` board is off. See
+[the rollout plan](../../docs/benchmark-v15-rollout.md).
+
 ## Bench v14 declarative over-call contract
 
 V14 preserves v2–v13 scoring, including v13's whole-case declarative exclusion.
@@ -182,6 +349,20 @@ operator kill switch. A round request carries the exact round dataset bytes
 Its report goes to Platform's round endpoint and never enters the agent score
 ledger.
 
+`generator-frontier-oracle-v1` is the frontier oracle's run on the same round
+dataset, advertised and admitted alongside the round mode. It carries
+`oracle_case_ids` (1 to 640 distinct `column/case` ids, the round's unsolved
+cases), which every other mode refuses. For each listed case the scorer runs
+`challengerun.ExecuteOracle`: it validates the source pack, seeds one memory
+graph per case with only that case's `challenge.OracleContext` (at most 32
+pairs: cited evidence, pairs stating the declared distractors, and BM25
+competitors, with nothing marking which is which), and grades the reply like a
+panel case at the pack's declared policy. The report lists exactly the oracle
+cases. The validator forwards the feature as
+`scorer_benchmarks.generator_frontier_oracle` and refuses to post a report
+naming any other case set. See `research/dittobench-datagen/docs/generator-competition.md`,
+"Frontier cases".
+
 Alongside it the scorer advertises `generator-round-max-cases-<n>`, the
 largest column (cases per pack) it runs: the pack contract's
 `challenge.MaxCases`, currently 80. The validator forwards it as
@@ -192,7 +373,7 @@ validators enforce on a round job.
 
 The mode also advertises `generator-round-bench-<n>` for every bench version
 it runs a round at: the pack grading policies
-`challenge.SupportedGradingBenchVersions` (13 and 14). A round request's
+`challenge.SupportedGradingBenchVersions` (13, 14 and 15). A round request's
 `bench_version` must be one of them. The harness is seeded and run at that
 version, and each case is graded at the `grading_bench_version` its pack
 declares, which must be the round's version or the one before it (the
@@ -201,6 +382,91 @@ two-version window, `challenge.GradingPolicyWindow`;
 the run). The validator forwards the set as
 `scorer_benchmarks.generator_round_bench_versions`; a scorer without the
 features is treated as running only v13 rounds.
+
+### Dueling slices (`dueling-slice-v1`, bench_version >= 16)
+
+From bench_version 16 a canonical run is a **datagen half** plus a **generator
+slice** (`research/dittobench-datagen/docs/dueling-bench.md` section 7.5). The
+scorer advertises `dueling-slice-v1` plus one `dueling-slice-bench-<n>` for
+every bench version `>= 16` it runs (derived from `supported_bench_versions`),
+only in trusted screened-image mode. The validator forwards the set as
+`scorer_benchmarks.dueling_slice_bench_versions`.
+
+`/v2/score` fields:
+
+| Field | Meaning |
+|---|---|
+| `dueling_slice_mode` | `"dueling-slice-v1"` |
+| `dueling_slice_bytes` | base64 of the Platform-pinned slice (`challenge.EncodeSliceDataset`, at most `challenge.MaxRoundDatasetBytes` decoded) |
+| `expected_slice_sha256` | SHA-256 of the decoded bytes (64 lowercase hex) |
+| `dueling_owner_key` | the scored agent's owner key; `""` masks nothing |
+
+A `bench_version >= 16` canonical request without all four is refused
+(`dueling slice required`); a `< 16` request, a generator round, or a practice
+submission carrying any of them is refused. The one practice exception is the
+miner kit's local slice rehearsal: a scorer started with
+`DITTOBENCH_ALLOW_PRIVATE_HARNESS` (which can never also load screened images)
+accepts all four fields on `/v1/submit` at `bench_version >= 16` with an
+explicit `seed`, and scores the slice exactly as below. Hosted practice and a
+practice run without the fields score the datagen half only. The datagen half is never sent: it
+is regenerated from the public seed and checked against `dataset_sha256`
+exactly as before. The slice must hash to its pin, decode under
+`challenge.DecodeSliceDataset` (every pack re-validated, echoing its
+`slice_seed`, pinned hotkey and pinned `grading_bench_version`), carry the
+request's `bench_version`, and carry `run_seed == seed`: a run (canonical,
+retest or confirmation seed) has exactly one seed and one slice.
+
+Execution: the slice runs after every datagen wave, on the same harness, ticket
+inference session, tool catalog and observed tool endpoint, column by column
+through `internal/challengerun` with the run's case concurrency. Each column is
+projected to opaque case, pair, session and user IDs keyed by
+`sha256("dittobench-dueling-slice-projection/v1" || 0x00 || slice_seed)`, so
+reruns are byte-identical and every column answers from its own memory graph.
+`challenge.SliceExecutionCases` drops a case whose fingerprint an earlier column
+already claimed. Each case is graded by `scorer.GradeMemory` at its column's
+`grading_bench_version`, the generator-round grader. A failed `/run` scores 0.
+
+Scoring: gates, efficiency, outlier and canary inputs, metamorphic and twin
+post-passes, v13 shadow telemetry, token accounting and the signed v9 base
+evidence all read the **datagen half only** (relay usage is read at the
+datagen/slice boundary; the whole run still decides relay health). The one
+deliberate exception is the bench 16 priced cost factor (above), which prices
+the whole run. The composite gate's metamorphic-consistency tier is charged
+per split twin group against the v15 full-profile reference of 13 groups
+(`scorer.MetamorphicReferenceGroups`): `1 - 0.40 x split / max(groups, 13)`.
+The 125-case datagen half measures only 5 groups, so the v15 rate rule would
+have charged one split group 8% instead of v15's 3.1%. At 13 or more groups
+the v15 rule applies byte-identically. The composite is
+
+```
+composite = gate x ((1 - w x |U|) x datagen_raw + w x sum_{c in U} col_c)
+```
+
+with `w = 0.1`, `U` the columns not owned by `dueling_owner_key`, and `gate`
+the composite gate times the applied priced cost factor times the applied v9
+score-gate factor (`challenge.DuelingComposite`), quantized to micros like every v9+ composite.
+The report adds:
+
+```jsonc
+"details": {
+  "dueling": {
+    "season_id": "<uuid>", "season_index": 26119,
+    "slice_sha256": "<hex>", "owner_key": "coldkey:...",
+    "datagen_raw": 0.81, "datagen_gate": 0.96, "column_weight": 0.1,
+    "columns": [{"column_id": "c0", "owner_key": "coldkey:...", "submission_id": "<uuid|default>",
+                 "grading_bench_version": 16, "n": 35, "sum": 30.0, "sum_sq": 29.5,
+                 "substituted": false}],
+    "composite_stderr": 0.012
+  }
+}
+```
+
+`composite_stderr` is the stratified standard error
+(`challenge.DuelingCompositeStderr`). Slice cases appear in `per_case` as
+score-only rows (`category: "dueling_slice"`, `case_id: "<column_id>/<case_id>"`,
+`kind: "memory"`); no slice question, answer, grader note or transcript leaves
+the scorer, and `per_category`, `tool_mean`, `memory_mean` and the transcript
+artifact describe the datagen half. `n` counts both halves.
 
 ### Private V13 control-plane transport (default off)
 

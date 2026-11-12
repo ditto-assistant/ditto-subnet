@@ -110,7 +110,7 @@ func TestVersionedScoreRequiresSupportedBenchVersion(t *testing.T) {
 	}{
 		{name: "omitted", body: `{` + base + `}`, want: "bench_version is required"},
 		{name: "old v1", body: `{"bench_version":1,` + base + `}`, want: "unsupported bench_version"},
-		{name: "future", body: `{"bench_version":15,` + base + `}`, want: "unsupported bench_version"},
+		{name: "future", body: `{"bench_version":19,` + base + `}`, want: "unsupported bench_version"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
@@ -190,7 +190,16 @@ func TestRequestedBenchVersionSupportsV8ThroughV10WithoutImplicitDefault(t *test
 			t.Fatalf("retired v%d accepted: (%d, %q)", version, got, msg)
 		}
 	}
-	if got, msg := requestedBenchVersion(15); got != 0 || !strings.Contains(msg, "unsupported") {
-		t.Fatalf("future v14 accepted: (%d, %q)", got, msg)
+	if got, msg := requestedBenchVersion(16); got != 16 || msg != "" {
+		t.Fatalf("explicit v16 rejected: (%d, %q)", got, msg)
+	}
+	if got, msg := requestedBenchVersion(17); got != 17 || msg != "" {
+		t.Fatalf("explicit v17 rejected: (%d, %q)", got, msg)
+	}
+	if got, msg := requestedBenchVersion(18); got != 18 || msg != "" {
+		t.Fatalf("explicit v18 rejected: (%d, %q)", got, msg)
+	}
+	if got, msg := requestedBenchVersion(19); got != 0 || !strings.Contains(msg, "unsupported") {
+		t.Fatalf("future v19 accepted: (%d, %q)", got, msg)
 	}
 }

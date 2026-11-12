@@ -13,6 +13,7 @@ import type {
   ActivityEntry,
   DeferredReviewTrigger,
   ReviewConclusion,
+  ScoringWait,
   ValidationAttempt,
 } from "../../types/pipeline";
 
@@ -30,6 +31,7 @@ export const ACTIVITY_STATUSES: readonly string[] = [
   "below_score_floor",
   "not_queued",
   "retired",
+  "scoring_failed",
   "under_review",
   "rejected",
   "scored",
@@ -69,19 +71,172 @@ export const ACTIVITY_FILTER_LABELS: Record<string, string> = {
  * operator-owned outcomes. The public status alone does not identify which. */
 export const SCREENING_INCOMPLETE_LABEL = "Screening incomplete";
 
+/** The stage label for a submission whose own failures ended its scoring. */
+export const SCORING_FAILED_LABEL = "Cannot finish scoring";
+
+/** Plain language for each allowlisted agent-attributable failure code.
+ *
+ * Only codes the API is willing to publish appear here. An unknown code keeps
+ * the terminal sentence without inventing a cause for it. */
+export const TERMINAL_FAILURE_CAUSES: Record<string, string> = {
+  inference_allowance_exhausted:
+    "The agent used its whole inference allowance before finishing its run.",
+  inference_request_rejected:
+    "The platform rejected the agent's inference requests, so no run could complete.",
+  model_inference_required:
+    "The agent answered without the model inference the benchmark requires.",
+  harness_oom:
+    "The harness exceeded its published sandbox memory cap while the validator host had memory to spare.",
+};
+
+/** Whether the platform has said this artifact cannot finish scoring.
+ *
+ * ``scoring_failed`` is the closed-out form. A row stranded before the
+ * platform began closing these out still reads ``waiting_validator`` while
+ * carrying the same verdict in its retry disposition, and it must not be
+ * described as waiting either. */
+export function isTerminalScoringFailure(
+  status: string | null | undefined,
+  entry?: TerminalFailureFields | null,
+): boolean {
+  if (status === "scoring_failed") return true;
+  if (status !== "waiting_validator" && status !== "below_score_floor") return false;
+  return (
+    entry?.retry_disposition === "terminal_artifact_failure" ||
+    entry?.validator_retry?.disposition === "terminal_artifact_failure"
+  );
+}
+
+/** The published code behind a terminal scoring failure, if any. */
+export function terminalFailureCode(entry?: TerminalFailureFields | null): string | null {
+  return entry?.validator_retry?.terminal_failure_code || entry?.terminal_failure_code || null;
+}
+
+/** The fields that carry a terminal scoring verdict, from either payload. */
+export interface TerminalFailureFields {
+  retry_disposition?: string | null;
+  terminal_failure_code?: string | null;
+  validator_retry?: {
+    disposition?: string | null;
+    terminal_failure_code?: string | null;
+  } | null;
+}
+
+/** The stage label for a submission an operator withdrew from the queue. */
+export const QUEUE_WITHDRAWN_LABEL = "Withdrawn · not queued";
+
+/** The field that names an operator withdrawal, from either payload. */
+export interface QueueWithdrawalFields {
+  queue_withdrawn?: boolean | null;
+}
+
+/** Whether an operator withdrawal, not the era boundary, keeps a `not_queued`
+ * row out of the active benchmark queue. */
+export function isQueueWithdrawn(
+  status: string | null | undefined,
+  entry?: QueueWithdrawalFields | null,
+): boolean {
+  return status === "not_queued" && entry?.queue_withdrawn === true;
+}
+
+// ── Dueling-season wait (bench v16+) ────────────────────────────────────────
+
+/** The chip a waiting row reads while no dueling season is open. */
+export const SEASON_WAIT_LABEL = "Waiting for next season";
+
+/** The fields that carry a season wait, from either payload. */
+export interface ScoringWaitFields {
+  scoring_wait?: ScoringWait | null;
+}
+
+/** The season wait holding a waiting row, or null when validators are the
+ * only thing it waits for. */
+export function seasonWait(
+  status: string | null | undefined,
+  entry?: ScoringWaitFields | null,
+): ScoringWait | null {
+  if (status !== "waiting_validator" && status !== "below_score_floor") return null;
+  const wait = entry?.scoring_wait;
+  return wait?.reason === "dueling_season_closed" ? wait : null;
+}
+
+/** "2h 31m" / "45m" / "1d 3h", rounded up to the minute. */
+function untilHm(seconds: number): string {
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  if (minutes < 60) return minutes + "m";
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + "h " + (minutes % 60) + "m";
+  return Math.floor(hours / 24) + "d " + (hours % 24) + "h";
+}
+
+/**
+ * "about 00:45 UTC (in 2h 31m)", or "" when the estimate is missing, invalid,
+ * or already past. Fixed UTC rendering: never the viewer's locale or
+ * timezone; the date is named only a day or more ahead, where the clock time
+ * alone would be ambiguous.
+ */
+export function seasonOpensText(iso: string | null | undefined, now: Date = new Date()): string {
+  const at = iso == null ? NaN : new Date(iso).getTime();
+  if (Number.isNaN(at) || at <= now.getTime()) return "";
+  const stamp = new Date(at).toISOString();
+  const day = at - now.getTime() >= 86_400_000 ? stamp.slice(0, 10) + " " : "";
+  return (
+    "about " + day + stamp.slice(11, 16) + " UTC (in " + untilHm((at - now.getTime()) / 1000) + ")"
+  );
+}
+
+/**
+ * The plain-language season sentence: "No dueling season is open for bench
+ * 18. Scoring resumes when the next season opens, about 00:45 UTC (in 2h
+ * 31m)." Without an estimate it names the round boundary instead. When no
+ * season is scheduled for the bench at all (a rollout's source version), it
+ * promises no boundary.
+ */
+export function seasonWaitSentence(
+  benchVersion: number | null | undefined,
+  opensAt: string | null | undefined,
+  now: Date = new Date(),
+  scheduled: boolean = true,
+): string {
+  const bench = benchVersion != null ? " for bench " + benchVersion : "";
+  if (!scheduled) {
+    return (
+      "No dueling season is scheduled" +
+      bench +
+      " right now. Scoring resumes when a" +
+      (benchVersion != null ? " bench " + benchVersion : "") +
+      " season opens."
+    );
+  }
+  const when = seasonOpensText(opensAt, now);
+  return (
+    "No dueling season is open" +
+    bench +
+    ". Scoring resumes when the next season opens, " +
+    (when || "at the next generator-round boundary") +
+    "."
+  );
+}
+
 /**
  * Stage pill per status (activityStage 6832–6850). Terminal states for a
  * closed benchmark generation (#462) read as history, not failure:
- * not_queued/retired are neutral, never "bad". #623 renamed the screening
- * stages to the mechanical-admission vocabulary: screening builds a verified
- * image. Source review runs in full before scoring; a held row reads "Under
+ * not_queued/retired are neutral, never "bad". A not_queued row an operator
+ * withdrew names the withdrawal, not "Historical" (SN-470). #623 renamed the
+ * screening stages to the mechanical-admission vocabulary: screening builds a
+ * verified image. Source review runs in full before scoring; a held row reads "Under
  * review", and only a row Platform actually deferred until a score qualified
  * (it carries deferred_review_triggers) reads "Deferred source review".
  */
 export function activityStage(
   status: string | null | undefined,
-  entry?: DeferredReviewFields,
+  entry?: DeferredReviewFields & TerminalFailureFields & ScoringWaitFields & QueueWithdrawalFields,
 ): ChipState {
+  if (isTerminalScoringFailure(status, entry)) return [SCORING_FAILED_LABEL, "bad"];
+  // Validators turn the work away until a season opens, so "waiting for
+  // validators" would name the wrong thing.
+  if (seasonWait(status, entry)) return [SEASON_WAIT_LABEL, "progress"];
+  if (isQueueWithdrawn(status, entry)) return [QUEUE_WITHDRAWN_LABEL, ""];
   const stages: Record<string, ChipState> = {
     uploaded: ["Waiting for admission", "progress"],
     waiting_screening: ["Waiting for admission", "progress"],
@@ -93,6 +248,7 @@ export function activityStage(
     below_score_floor: ["Low-priority completion", "warn"],
     not_queued: ["Historical · not queued", ""],
     retired: ["Retired · earlier benchmark", ""],
+    scoring_failed: [SCORING_FAILED_LABEL, "bad"],
     scored: ["Scored", "good"],
     live: ["Live", "good"],
     under_review: ["Under review", "warn"],
@@ -295,7 +451,10 @@ export interface ActivityStatusFields {
   screening_build_only?: boolean | null;
 }
 
-export type ActivityStatusEntry = ActivityEntry & ActivityStatusFields;
+export type ActivityStatusEntry = ActivityEntry &
+  ActivityStatusFields &
+  TerminalFailureFields &
+  ScoringWaitFields;
 
 /**
  * The Validation column line (validationProgress 6790–6798). #458/#462:
@@ -305,7 +464,11 @@ export type ActivityStatusEntry = ActivityEntry & ActivityStatusFields;
 export function validationProgress(e: ActivityStatusEntry): string {
   const count = Math.max(0, Number(e.score_count) || 0);
   const quorum = Math.max(1, Number(e.quorum) || 3);
+  // Before the lane labels: a below-floor or waiting row carrying a terminal
+  // verdict is not queued for anything.
+  if (isTerminalScoringFailure(e.status, e)) return count + " of " + quorum + " · cannot finish";
   if (e.status === "below_score_floor") return count + " of " + quorum + " · queued last";
+  if (isQueueWithdrawn(e.status, e)) return count + " of " + quorum + " · withdrawn";
   if (e.status === "not_queued") return "Not in active benchmark queue";
   if (e.status === "retired") return count + " of " + quorum + " · benchmark closed";
   const hasStarted =
@@ -370,7 +533,7 @@ export function scoreFloorAttribution(e: ActivityStatusEntry): string {
  * Every branch is public-state-derived; the below_score_floor branch quotes
  * the floor through scoreFloorAttribution, never an unattributed number.
  */
-export function validationDetail(e: ActivityStatusEntry): string {
+export function validationDetail(e: ActivityStatusEntry, now: Date = new Date()): string {
   const count = Math.max(0, Number(e.score_count) || 0);
   const quorum = Math.max(1, Number(e.quorum) || 3);
   const assignments = (e.validation_attempts || []).filter(
@@ -378,6 +541,34 @@ export function validationDetail(e: ActivityStatusEntry): string {
       attempt.status === "issued" &&
       benchmarkVersionKey(attempt.bench_version) === benchmarkVersionKey(e.active_bench_version),
   ).length;
+  if (isTerminalScoringFailure(e.status, e)) {
+    const code = terminalFailureCode(e);
+    const cause = (code && TERMINAL_FAILURE_CAUSES[code]) || "";
+    return (
+      "This submission cannot finish scoring. " +
+      (cause ? cause + " " : "") +
+      "That happened on every remaining validator run, so " +
+      count +
+      " of " +
+      quorum +
+      " scores is final for this benchmark version: no validator will be assigned again and re-running the same artifact would repeat the failure. Fix the artifact and submit a new version. This is not a rejection; the submission, its screening record and its validator history stay on file."
+    );
+  }
+  const wait = seasonWait(e.status, e);
+  if (wait) {
+    return (
+      count +
+      " of " +
+      quorum +
+      " scores received. " +
+      seasonWaitSentence(
+        wait.bench_version,
+        wait.next_season_opens_at,
+        now,
+        wait.season_scheduled !== false,
+      )
+    );
+  }
   if (e.status === "below_score_floor") {
     const provisionalScores = e.provisional_scores || [];
     const scoreFloor = Number(e.score_floor);
@@ -399,6 +590,17 @@ export function validationDetail(e: ActivityStatusEntry): string {
       ". " +
       scoreFloorAttribution(e) +
       " The third score is still queued at low priority so this benchmark record reaches 3 of 3."
+    );
+  }
+  if (isQueueWithdrawn(e.status, e)) {
+    const kept =
+      count > 0
+        ? "the submission and its " + count + " accepted score" + (count === 1 ? "" : "s")
+        : "the submission and its screening record";
+    return (
+      "An operator withdrew this submission from the active benchmark queue, so validators will not score it while the withdrawal stands. This is not a rejection: " +
+      kept +
+      " stay on file."
     );
   }
   if (e.status === "not_queued") {

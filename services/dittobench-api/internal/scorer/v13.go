@@ -98,6 +98,11 @@ func scoreToolCaseV13(c protocol.ToolCase, resp protocol.RunResponse, ok bool, o
 		return cs
 	}
 	switch {
+	case c.Encounter != nil:
+		// Bench v18 encounter: outcome-graded on the observed calls only (a
+		// self-reported call proves no dependency was followed) and the reply.
+		verdict := grade.Encounter(c.Encounter, observed, auth)
+		cs.ToolScore, cs.Notes = verdict.Score, append(cs.Notes, verdict.Notes...)
 	case c.Restraint != nil:
 		cs.ToolScore, cs.Notes = gradeV13Restraint(c, auth, cs.Notes)
 	case c.EffectAnswer != "":

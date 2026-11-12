@@ -110,7 +110,10 @@ render as a failure in the public submission drawer.
 
 `failure_code` is the allowlisted machine cause. Agent-attributable codes
 (`inference_allowance_exhausted`, `inference_request_rejected`,
-`model_inference_required`) are terminal. Infrastructure relay causes
+`model_inference_required`) are terminal. A request whose input exceeds the
+model's context window is one of them: providers refuse it with 400 on every
+attempt, and the relay answers the broker with 413, which validators store as
+`inference_request_rejected:request_too_large`. Infrastructure relay causes
 (`inference_lane_saturated`, `provider_recovery_exhausted`,
 `grant_decline_evidence_mismatch`, `budget_evidence_absent`) stay no-fault —
 the pipeline still marks them deferred — but they must be published so the
@@ -144,7 +147,7 @@ the per-agent detail:
 | `recommended_action` | Meaning | Operator move |
 | --- | --- | --- |
 | `retry` | Remaining slots died of infrastructure, timeout, silent expiry, or an unclassified failure. A fresh lease can still produce a score. | Grant a retry after verifying the infra fix. |
-| `withdraw` | Every remaining slot died of a **named agent-attributable** code (`inference_request_rejected`, `inference_allowance_exhausted`, `model_inference_required`). Re-leasing the same image cannot repair those. | `POST .../withdraw`. This is the documented terminal path. It does **not** mint a score of 0; it removes the row from the validator queue (public `not_queued`) while preserving scores, artifact, payment, and ticket history. |
+| `withdraw` | Every remaining slot died of a **named agent-attributable** code (`inference_request_rejected`, `inference_allowance_exhausted`, `model_inference_required`). Re-leasing the same image cannot repair those. | Usually nothing: the platform closes these out itself, and a periodic sweep catches any it missed (see below). `POST .../withdraw` still works for an operator who wants to act first. It does **not** mint a score of 0; it removes the row from the validator queue (public `scoring_failed` when the slots agree on one code, else `not_queued` with `queue_withdrawn: true`) while preserving scores, artifact, payment, and ticket history. |
 
 The classifier is fail-closed: a mixed remaining set, a 6600s/lease-deadline
 timeout, a Kaniko identity error, a silent expiry, or a missing
@@ -152,6 +155,41 @@ timeout, a Kaniko identity error, a silent expiry, or a missing
 remaining exhausted ticket's **current** `failure_detail` (the one whose
 `failed_at >= issued_at`) is one of the three agent codes does a retry grant
 refuse and point at withdrawal.
+
+### Automatic close-out of a terminal artifact failure
+
+Once the classifier above would say `withdraw` **and** every remaining slot
+agrees on one agent code, the platform writes the withdrawal itself. The hook
+runs in `POST /validator/job/fail`, in its own transaction after the
+validator's report has committed, so a failure there never loses the report.
+It is the same `validator_queue_withdrawals` row the operator route writes,
+with:
+
+- `actor = "platform:terminal-artifact-failure"`;
+- `terminal_failure_code` set to the agreed code (the operator withdraw route
+  stamps the same column when the same evidence holds);
+- `expected_snapshot` a SHA-256 of the evidence, like every operator row.
+
+The hook only logs a failure, so `TerminalFailureSweeper`
+(`api_server/terminal_failure_sweep.py`, every 10 minutes) re-runs the same
+decision for every evaluating agent that has an agent-coded expired ticket and
+no in-force withdrawal. That retries a close-out the hook dropped and also
+closes out rows stranded before the hook existed. Each agent is decided in its
+own transaction under the same row locks, so replicas cannot double-write.
+
+Without it the row stayed `evaluating` indefinitely. Every fresh validator
+could still take a first assignment and burn a full run on an artifact that
+had already failed on three, and the submission page said "No validator is
+assigned yet. Waiting for 3 validators." (kgmin1105 on 2026-11-08: four
+validators, four `inference_allowance_exhausted` runs.)
+
+An in-force withdrawal with a `terminal_failure_code` projects publicly as
+`scoring_failed`, with `validator_retry.disposition =
+"terminal_artifact_failure"` and the code, on the activity feed, the
+operations board and `/public/agent/{id}/pipeline`. The pipeline page also
+reports `scoring_failed` for a row whose live retry verdict is terminal but
+that was never withdrawn. Like every withdrawal it is per benchmark version,
+not a verdict on the miner, and an operator can reinstate it.
 
 The relay-owned provider outage circuit is a separate axis from the failure
 classification above, and it is **provider-wide**. While it is `open`,
@@ -446,7 +484,7 @@ different questions:
 | what happened | the submission burned its slots and cannot reach quorum | the benchmark generation closed underneath it |
 | scope | `(agent, bench_version)` | `(agent, bench_version)`, plus `superseded_by_version` |
 | gate | requires enough exhausted tickets that quorum is unreachable | requires the era to be older than the active one and unadmitted to it |
-| public status | `not_queued` | `retired` |
+| public status | `scoring_failed` with a `terminal_failure_code`, else `not_queued` with `queue_withdrawn: true` | `retired` |
 
 Retirement does **not** change scoring semantics. The `agents` row is not
 touched at all, no score is created or removed, and `AgentStatus` gains no

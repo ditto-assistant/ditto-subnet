@@ -47,6 +47,7 @@ from ditto.api_server.dependencies import (
 )
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_PAYMENT_REPLAYED
 from ditto.api_server.payment_verifier import VerifiedPayment
+from ditto.tests.api_server.conftest import fake_registration
 from ditto.tests.pgharness import truncate_test_tables
 
 pytestmark = pytest.mark.integration
@@ -73,7 +74,7 @@ def _build_fake_chain() -> MagicMock:
     """A MagicMock ChainClient for the hotkey-registered check.
 
     The PaymentVerifier itself is overridden separately, so the chain
-    client only needs to answer ``is_registered``. We mock the chain
+    client only needs to answer ``get_hotkey_registration``. We mock the chain
     rather than letting the real lifespan-opened ChainClient talk to
     Pylon: this test does not require chain access, and the lifespan
     has already opened a real client that would not understand canned
@@ -81,6 +82,11 @@ def _build_fake_chain() -> MagicMock:
     """
     chain = MagicMock()
     chain.is_registered = AsyncMock(return_value=True)
+    chain.get_hotkey_registration = AsyncMock(
+        side_effect=lambda hotkey, netuid, **_: fake_registration(
+            hotkey, netuid, "5Coldkey"
+        )
+    )
     chain.get_latest_block = AsyncMock(return_value=MagicMock(number=13579))
     return chain
 

@@ -36,11 +36,14 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
+from ditto.db.queries.dueling_season_window import dueling_season_window
 from ditto.db.queries.provider_outages import provider_outage_active
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.tickets import scoring_retry_ticket, ticket_retry_budget_spent
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto.screener_policy_state import (
+    lease_screening_policy_floor,
+)
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
 _UNRESOLVED_ROLLOUT = object()
@@ -55,8 +58,14 @@ AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
         "inference_allowance_exhausted",
         "inference_request_rejected",
         "model_inference_required",
+        # OOM kill at the harness's own published cap on a host with headroom.
+        "harness_oom",
     }
 )
+# A SIGKILL with no OOM flag is no-fault on its first validator: retry once.
+# The same kill on a second validator is the harness's own crash.
+HARNESS_KILLED_137_DETAIL = "harness_killed_137"
+HARNESS_KILLED_137_AGENT_REPEATS = 2
 _ADMISSION_DETAIL_PREFIX = "inference_request_rejected:"
 _AGENT_ADMISSION_DETAIL_CODES = frozenset(
     {
@@ -65,6 +74,14 @@ _AGENT_ADMISSION_DETAIL_CODES = frozenset(
         "invalid_schema",
         "model_not_allowed",
     }
+)
+
+
+# Every exact ``failure_detail`` string :func:`is_agent_attributable_failure_detail`
+# accepts, for SQL filters that cannot call it.
+AGENT_ATTRIBUTABLE_FAILURE_DETAIL_VALUES = frozenset(
+    AGENT_ATTRIBUTABLE_FAILURE_DETAILS
+    | {_ADMISSION_DETAIL_PREFIX + code for code in _AGENT_ADMISSION_DETAIL_CODES}
 )
 
 
@@ -214,8 +231,14 @@ def is_agent_attributable_exhaustion(
     if any(ticket.status == TicketStatus.ISSUED for ticket in tickets):
         return False
     details = [current_failure_detail(ticket) for ticket in remaining]
+    repeated_kill = (
+        sum(detail == HARNESS_KILLED_137_DETAIL for detail in details)
+        >= HARNESS_KILLED_137_AGENT_REPEATS
+    )
     return bool(details) and all(
-        is_agent_attributable_failure_detail(detail) for detail in details
+        is_agent_attributable_failure_detail(detail)
+        or (repeated_kill and detail == HARNESS_KILLED_137_DETAIL)
+        for detail in details
     )
 
 
@@ -349,6 +372,23 @@ def retry_disposition(
     return "terminal_artifact_failure"
 
 
+def rollout_quorum_scores(
+    scores: list[Score], *, comparable: frozenset[UUID] | None
+) -> list[Score]:
+    """A rollout member's desired-version scores that still count as quorum.
+
+    At bench v16+ the rollout barrier (``rollout_cohort_score_complete``)
+    counts only the dueling window's seasons: an expired season's score is
+    audit history, not quorum. Counting it here too made a member whose
+    season-boundary re-test failed on infrastructure unrecoverable -- the
+    gate saw a full quorum the barrier did not. ``None`` (below the dueling
+    floor) keeps every score.
+    """
+    if comparable is None:
+        return scores
+    return [score for score in scores if score.dueling_season_id in comparable]
+
+
 def recovery_gate(
     *,
     agent: Agent,
@@ -372,7 +412,7 @@ def recovery_gate(
     )
     if not waiting_for_scores:
         return False, False, "submission is not waiting for validator scores", []
-    if agent.screening_policy_version < effective_screening_policy_version():
+    if agent.screening_policy_version < lease_screening_policy_floor(bench_version):
         return False, False, "submission is not on the current screening policy", []
     if score_count >= SCORING_QUORUM:
         return False, False, "submission already reached scoring quorum", []
@@ -465,7 +505,7 @@ def withdrawal_gate(
 
     if agent.status != AgentStatus.EVALUATING:
         return False, "submission is not waiting for validator scores"
-    if agent.screening_policy_version < effective_screening_policy_version():
+    if agent.screening_policy_version < lease_screening_policy_floor(bench_version):
         return False, "submission is not on the current screening policy"
     if len(scores) >= SCORING_QUORUM:
         return False, "submission already reached scoring quorum"
@@ -610,7 +650,7 @@ def reinstatement_gate(
         )
     if agent.status != AgentStatus.EVALUATING:
         return False, "submission is not waiting for validator scores"
-    if agent.screening_policy_version < effective_screening_policy_version():
+    if agent.screening_policy_version < lease_screening_policy_floor(bench_version):
         return False, "submission is not on the current screening policy"
     if len(scores) >= SCORING_QUORUM:
         return False, "submission already reached scoring quorum"
@@ -726,6 +766,10 @@ async def classify_agent_retry_states(
                 )
             )
         )
+    rollout_comparable: frozenset[UUID] | None = None
+    if rollout is not None and rollout_member_ids:
+        window = await dueling_season_window(session, rollout.desired_version)
+        rollout_comparable = window.comparable if window is not None else None
     agent_by_id = {
         agent.agent_id: agent
         for agent in agents
@@ -815,17 +859,20 @@ async def classify_agent_retry_states(
             continue
         v_scores = [s for s in all_scores if s.bench_version == bench_version]
         v_tickets = [t for t in all_tickets if t.bench_version == bench_version]
+        rollout_qualification = (
+            rollout is not None
+            and bench_version == rollout.desired_version
+            and agent_id in rollout_member_ids
+        )
+        if rollout_qualification:
+            v_scores = rollout_quorum_scores(v_scores, comparable=rollout_comparable)
         automatic, allowed, reason, _ = recovery_gate(
             agent=agent,
             scores=v_scores,
             tickets=v_tickets,
             now=now,
             bench_version=bench_version,
-            rollout_qualification=(
-                rollout is not None
-                and bench_version == rollout.desired_version
-                and agent_id in rollout_member_ids
-            ),
+            rollout_qualification=rollout_qualification,
             work_available_hotkeys=available_hotkeys,
         )
         state = classify_retry_state(

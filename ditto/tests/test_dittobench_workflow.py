@@ -80,7 +80,10 @@ def test_hosted_release_fails_closed_unless_current_contracts_are_advertised() -
         "Verify the live practice endpoint reports its release identity",
     )
 
-    identity_gate = "(.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13, 14])"
+    identity_gate = (
+        "(.supported_bench_versions | sort == "
+        "[8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])"
+    )
     assert identity_gate in verify["run"]
 
 

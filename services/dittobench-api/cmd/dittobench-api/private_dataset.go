@@ -11,14 +11,23 @@ import (
 
 const privateDatasetMode = "platform-private-v1"
 
+// sourceFreeScreenedImageFeature tells the validator this scorer runs a
+// screened image without the source tarball, so Platform may withhold it.
+const sourceFreeScreenedImageFeature = "screened-image-source-free-v1"
+
 func (s *server) datasetFeatures() []string {
-	features := []string{"git_subdir", universe.V13EnterpriseRevision}
+	features := []string{"git_subdir", universe.V13EnterpriseRevision, sourceFreeScreenedImageFeature}
 	if s.allowPrivateDatasets {
 		features = append(features, privateDatasetMode)
 	}
 	if s.allowGeneratorRounds {
-		features = append(features, generatorRoundMode, generatorRoundMaxCasesFeature())
+		features = append(features, generatorRoundMode, generatorFrontierOracleMode, generatorRoundMaxCasesFeature())
 		features = append(features, generatorRoundBenchFeatures()...)
+	}
+	if s.allowDuelingSlices {
+		// Derived from the advertised set, so dueling-slice-bench-<n> appears
+		// exactly when this build runs bench n (>= 16).
+		features = append(features, duelingSliceFeatures(supportedBenchVersions())...)
 	}
 	return features
 }
@@ -29,18 +38,21 @@ func (s *server) privateBodyBytes() int {
 	if s.allowPrivateDatasets {
 		limit = gen.MaxPrivateArtifactBytes
 	}
-	if s.allowGeneratorRounds {
+	if s.allowGeneratorRounds || s.allowDuelingSlices {
 		limit = max(limit, challenge.MaxRoundDatasetBytes)
 	}
 	return limit
 }
 
 func validatePrivateDatasetRequest(req submitRequest, enabled, roundsEnabled bool) error {
+	if isGeneratorRoundMode(req.PrivateDatasetMode) {
+		return validateGeneratorRoundRequest(req, roundsEnabled)
+	}
+	if len(req.OracleCaseIDs) != 0 {
+		return errors.New("oracle_case_ids are only valid in " + generatorFrontierOracleMode)
+	}
 	if req.PrivateDatasetMode == "" && len(req.PrivateDatasetBytes) == 0 {
 		return nil // Existing public contracts are unchanged.
-	}
-	if req.PrivateDatasetMode == generatorRoundMode {
-		return validateGeneratorRoundRequest(req, roundsEnabled)
 	}
 	if !enabled || req.PrivateDatasetMode != privateDatasetMode || req.BenchVersion != 13 {
 		return errors.New("private dataset mode unavailable")

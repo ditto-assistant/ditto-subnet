@@ -8,6 +8,9 @@
 //! - [`grade`]: deterministic judge-free memory grading (no LLM).
 //! - [`scorer`]: turns harness responses into a score report.
 //! - [`baseline`]: the optimizable agent (this is what you tune).
+//! - [`hybrid`]: opt-in reference path where the decision lane (Jev) decides
+//!   and the chat model only writes (`DITTOBENCH_JEV_HYBRID=1`).
+//! - [`jev`]: decision-lane client and System One question builders.
 //! - [`reranker`]: ONNX cross-encoder reranker (production retrieval stage).
 //! - [`seed`]: the bundled LongMemEval seed user (memory retrieval practice).
 //! - [`playground`]: the interactive web playground (fake tools + submit flow).
@@ -19,6 +22,8 @@ pub mod catalog;
 pub mod datagen;
 pub mod eval;
 pub mod grade;
+pub mod hybrid;
+pub mod jev;
 pub mod playground;
 pub mod protocol;
 pub mod reranker;

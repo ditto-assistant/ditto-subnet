@@ -344,6 +344,11 @@ function RetryChip(props: { entry: PipelineEntryExt }): JSX.Element {
 function validationProgress(e: PipelineEntryExt): string {
   const count = Math.max(0, Number(e.score_count) || 0);
   const quorum = Math.max(1, Number(e.quorum) || 3);
+  // A closed-out row and a still-waiting row stranded with the same terminal
+  // verdict read alike; the retry chip already calls both terminal.
+  if (e.status === "scoring_failed" || parkedReading(e)?.tone === "terminal") {
+    return count + " of " + quorum + " · cannot finish";
+  }
   if (e.status === "below_score_floor") return count + " of " + quorum + " · queued last";
   if (e.status === "not_queued") return "Not in active benchmark queue";
   if (e.status === "retired") return count + " of " + quorum + " · benchmark closed";

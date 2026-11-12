@@ -36,6 +36,18 @@ class PlatformRejected(PlatformError):
         super().__init__(f"verdict rejected ({status_code}): {self.body}")
 
 
+class ScreenedImageUploadUnavailable(PlatformError):
+    """Platform or its object store could not take the screened image.
+
+    Raised only after the bounded transient retries are spent, and only for a
+    transport failure or a 5xx on a step whose work does not depend on the
+    submission: initiating the multipart session, minting a part URL, or
+    storing a fixed-size part. A 4xx (an oversized or mismatched image, an
+    expired lease) and any failure of the completion step, which hashes the
+    whole stored image, stay plain :class:`PlatformError`.
+    """
+
+
 class PlatformAuthUnavailable(PlatformError):
     """Permanent local authentication failure that retries cannot repair."""
 

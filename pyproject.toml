@@ -4,13 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ditto"
-version = "0.413.3"
+version = "0.474.0"
 description = "Ditto Bittensor Subnet 118 (SN118): miner CLI + validator for the language-neutral agent-memory-harness incentive layer."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12,<3.14"
 authors = [{ name = "heyDitto" }]
 dependencies = [
+    # Patched floors apply to pip consumers as well as the uv lock.
+    "aiohttp>=3.14.4",
+    "anyio>=4.14.2",
+    "filelock>=4.2.1",
+    "msgpack>=1.2.3",
+    "urllib3>=2.8.0",
     # 10.3.0 carries a breaking change the subnet requires — older releases no
     # longer interoperate with the chain, so pin the floor there (the lock pins
     # the exact resolved version operators install).
@@ -22,14 +28,25 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.12",
     "psutil>=5.9",
-    "ditto-screening-protocol==0.29.0",
+    "ditto-screening-protocol==0.32.0",
 ]
 
 [project.optional-dependencies]
 # Public wandb telemetry (opt-in). The validator imports wandb lazily and
 # degrades to a no-op when it is absent, so this is only needed to actually
 # publish stats: ``uv sync --extra telemetry`` (or ``pip install ditto[telemetry]``).
-telemetry = ["wandb>=0.17"]
+telemetry = ["wandb>=0.17", "GitPython>=3.2.1"]
+
+[tool.uv]
+# Security floors also cover dependencies pulled in through Bittensor and tooling.
+constraint-dependencies = [
+    "aiohttp>=3.14.4",
+    "GitPython>=3.2.1",
+    "anyio>=4.14.2",
+    "filelock>=4.2.1",
+    "msgpack>=1.2.3",
+    "urllib3>=2.8.0",
+]
 
 [tool.uv.sources]
 bittensor-pylon-client = { git = "https://github.com/bittensor-church/bittensor-pylon", subdirectory = "pylon_client" }
@@ -50,6 +67,7 @@ dev = [
 ]
 release = [
     "python-semantic-release==10.6.1",
+    "GitPython>=3.2.1",
 ]
 
 [tool.hatch.build.targets.wheel]

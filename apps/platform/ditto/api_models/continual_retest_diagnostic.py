@@ -66,7 +66,11 @@ class RetestClaimability(BaseModel):
     idle_retests_enabled: bool
     in_catchup_set: bool
     """Whether this agent owes backlog seeds no live lease is covering."""
-    route_priority: Literal["champion", "catchup", "emission", "extended", "not_routed"]
+    route_priority: Literal[
+        "champion", "void_rerun", "catchup", "emission", "extended", "not_routed"
+    ]
+    """``void_rerun``: owes a replacement for an infrastructure-voided sample,
+    which the lane issues right behind the crown regardless of cohort."""
     route_position: int | None
     """1-based place in the auto-route candidate order, or null when absent."""
     pending_seed_count: int
@@ -77,6 +81,45 @@ class RetestClaimability(BaseModel):
     """A newer same-miner submission is still awaiting canonical quorum."""
     least_covered_admitted: bool | None
     """The fairness gate's answer, or null when no seed was claimable anyway."""
+    void_rerun_seed_count: int = 0
+    """Voided seeds still owed a replacement run (a count; seeds stay private).
+
+    Each void owes exactly one replacement for its seed; the count drops as
+    replacements land and never exceeds the number of voids."""
+    void_rerun_claimable: bool = False
+    """Whether a validator polling now could lease one of those seeds."""
+    provider_outage_active: bool = False
+    """Provider circuit open or inside its recovery quiet window; void re-run
+    debt is withheld until the provider is healthy again."""
+    provider_gate_closed: bool = False
+    """The provider-outage gate admits no new lease right now (open circuit
+    cooling down, or its one half-open probe already claimed). The lane then
+    issues nothing on any route and the decision is ``provider_outage``."""
+    retest_mode: Literal["continual", "season_duel"] = "continual"
+    """The lane's retest mode (``docs/title-duels.md``)."""
+    season_duel_seed_count: int | None = None
+    """Shared seeds in the current season's duel, or null when season duels do
+    not govern this version (``continual`` mode, or below the dueling floor)."""
+    season_duel_anchor_champion_id: UUID | None = None
+    """The champion the season's duel family is anchored on: the one that
+    opened the season, which a mid-season crown change does not move."""
+    season_duel_held_seed_count: int | None = None
+    """Duel seeds this agent already ran this season (a count; seeds stay
+    private). Equal to ``season_duel_seed_count`` once its duel is complete."""
+    wave_cadence_tempos: int = 0
+    """Tempo-aligned wave pacing in force (0: historical pacing)."""
+    wave_seeds_per_window: int | None = None
+    wave_window_epoch: int | None = None
+    """First chain epoch of the current pacing window, or null when unpaced
+    (cadence 0, or no ledger pin to anchor a window -- pacing fails open)."""
+    wave_next_window_epoch: int | None = None
+    wave_window_start: datetime | None = None
+    wave_window_opened_seed_count: int | None = None
+    """Fresh shared seeds already opened in this window (a count; seeds stay
+    private)."""
+    wave_growth_paused: bool = False
+    """The window's seed budget is spent: no fresh shared seed opens until
+    ``wave_next_window_epoch``. Catch-up and open waves still lease."""
     decision: Literal[
         "claimable",
         "lane_disabled",
@@ -87,7 +130,43 @@ class RetestClaimability(BaseModel):
         "no_pending_seeds",
         "all_pending_seeds_leased",
         "another_member_less_covered",
+        "provider_outage",
     ]
+
+
+class RetestFailureCode(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    terminal_error_code: str
+    count: int
+
+
+class RetestSampleInference(BaseModel):
+    """One accepted confirmation sample and the inference grant that served it.
+
+    Counts only. A sample whose grant shows many failed chat calls measured the
+    inference path as much as the agent; read ``failure_codes`` before treating
+    a low sample as the agent's own behaviour.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    validator_hotkey: str
+    seed: str
+    """Exact decimal seed; int63 does not survive a JavaScript number."""
+    composite: Annotated[float, Field(ge=0, le=1)]
+    run_id: str
+    accepted_at: datetime
+    grant_id: UUID | None = None
+    """Newest grant for this validator created at or before acceptance."""
+    chat_requests: int = 0
+    failed_requests: int = 0
+    failure_codes: list[RetestFailureCode] = []
+    """Failed chat calls by relay ``terminal_error_code``, most frequent first."""
+    void_generation: int = 0
+    """0 for a first result; ``n`` for the re-run after ``n`` infra voids."""
+    voided: bool = False
+    """Set aside as infrastructure; listed for audit, counts toward nothing."""
 
 
 class AdminContinualRetestDiagnostic(BaseModel):
@@ -125,16 +204,43 @@ class AdminContinualRetestDiagnostic(BaseModel):
         "same_owner_challenger",
         "owner_suppressed",
         "outside_cohort",
+        "expired_dueling_season",
         "not_current_finalized_ledger",
     ]
+    """``expired_dueling_season``: a scored bench v16+ agent whose accepted
+    quorum is entirely or partly from seasons that left the two-season window
+    (``score_dueling_season_ids`` vs ``window_dueling_season_ids``). The
+    expiry is deliberate cost control; only scores taken in the window count
+    again. ``not_current_finalized_ledger`` is any other absence."""
     ledger_eligible: bool = False
     """Whether this generation is in the current finalized eligible ledger."""
+    score_dueling_season_ids: list[UUID] = []
+    """Bench v16+: distinct seasons this agent's accepted scores were taken in."""
+    window_dueling_season_ids: list[UUID] = []
+    """Bench v16+: the live window, current season first, then the previous."""
+    in_window_score_count: int | None = None
+    """Bench v16+: accepted scores inside the live window (``None`` below)."""
+    last_valid_composite: float | None = None
+    """``expired_dueling_season`` only: the expired quorum's stored median."""
+    in_current_pin: bool | None = None
+    """Whether the epoch pin validators fold now lists this agent; ``None`` in
+    live mode or before the first pin. A pinned agent keeps its emissions and
+    its labelled board row until the next pin, which is built from the window."""
     canonical_sample_count: int = 0
     completed_wave_depth: int = 0
     official_sample_count: int = 0
     """Observations behind the official continual composite (quorum + waves)."""
     raw_confirmation_depth: int = 0
     """Distinct accepted shared seeds, including any not yet fold-eligible."""
+    confirmation_seed_floor: int = 0
+    """Shared seeds the lane gathers before variance may stop it (minimum)."""
+    confirmation_seed_cap: int = 0
+    """The continual-retest work cap: the most shared seeds the lane ever
+    targets and the size of the active window the official composite folds."""
+    confirmation_seed_target: int | None = None
+    """The variance-sized seed target the lane is planning toward right now,
+    between floor and cap, from the raw emission set's recorded composites;
+    ``None`` when there is no current emission set."""
     composite_stderr: float | None = None
     aggregate_mode: Literal["disabled", "fleet_ready", "enabled"] = "fleet_ready"
     wave_membership: WaveMembership = "participants"
@@ -162,3 +268,5 @@ class AdminContinualRetestDiagnostic(BaseModel):
     terminal_ticket_count: int = 0
     latest_confirmation_composite: float | None = None
     latest_confirmation_recorded_at: datetime | None = None
+    retest_samples: list[RetestSampleInference] = []
+    """Newest confirmation samples (at most 30) with serving-grant failures."""

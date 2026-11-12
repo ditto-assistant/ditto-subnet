@@ -33,15 +33,28 @@ the tail to finish catch-up. See
 
 Shares are 65 / 14 / 10 / 7 / 4 for champion plus four tail slots.
 
+Once the protocol-34 crown gate is active (`emissions.crown_rules.active`),
+a challenger needs at least `min_dethrone_confirmations` (default 3)
+shared-seed confirmations against the King before the paired comparison can
+move the crown, and the King must stay in the top `champion_standing_rank`
+(default 3) official places. Read `emissions.challengers[]` for the miner's
+exact status: `needs_confirmations` (wait for the lane), `dueling` (enough
+seeds, not enough paired lead; `lead_needed` says how much), or
+`outside_standing`. A higher canonical composite with zero shared seeds is
+not a dethrone. See [crown churn precedent](../../backroom-review/references/precedents/october-30-crown-churn-shared-seed-gate.md).
+
 ## "Seeds" on the public board
 
 Quorum is **three validators** on the submission's own dataset seed. That
 is not the "N seeds" badge.
 
 The badge is **confirmation-lane depth**: champion-anchored shared seeds
-from the top-five rescore lane. Baseline is three, then one new seed per
-round, cap **32** (`TOP5_MAX_CONFIRMATION_SEEDS`). Minimum credible sample
-is 8. **13 is not a cap** — it is current depth.
+from the top-five rescore lane. The lane targets at least 8 seeds and stops
+at the work cap of **10** (`TOP5_MAX_CONFIRMATION_SEEDS` in Platform's
+`koth.py`; it was 15 until November 2026). The official score folds at most
+those 10 most-shared seeds, so a raw depth above 10 recorded under the old cap
+is audit history, not extra weight. `get_continual_retest_diagnostic` reports
+`confirmation_seed_cap` and the live `confirmation_seed_target`.
 
 A new champion starts a new seed family, so the crown often shows 1 seed
 while a tail that already sat in the set shows a larger count. That is the

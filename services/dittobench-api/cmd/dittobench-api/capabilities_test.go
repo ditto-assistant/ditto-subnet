@@ -52,7 +52,8 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 	if got.MemoryPhaseCapacity != maxConcurrentMemoryPhases {
 		t.Fatalf("memory-phase capacity = %d, want %d", got.MemoryPhaseCapacity, maxConcurrentMemoryPhases)
 	}
-	if len(got.Features) != 2 || got.Features[0] != "git_subdir" || got.Features[1] != "v13-deterministic-enterprise-v1" {
+	if len(got.Features) != 3 || got.Features[0] != "git_subdir" || got.Features[1] != "v13-deterministic-enterprise-v1" ||
+		got.Features[2] != sourceFreeScreenedImageFeature {
 		t.Fatalf("wrong feature set: %v", got.Features)
 	}
 	want := []int{}
@@ -61,8 +62,8 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 			want = append(want, version)
 		}
 	}
-	if want[len(want)-1] != protocol.BenchVersionV14 {
-		t.Fatalf("newest advertised candidate = %d, want v14 (issue #2508 scorer half)", want[len(want)-1])
+	if want[len(want)-1] != protocol.BenchVersionV18 {
+		t.Fatalf("newest advertised candidate = %d, want v18 (the accuracy contract)", want[len(want)-1])
 	}
 	if len(got.SupportedBenchVersions) != len(want) {
 		t.Fatalf("wrong supported versions: %v (want %v)", got.SupportedBenchVersions, want)
@@ -168,7 +169,7 @@ func TestV9AndV10CapabilitiesShareQualityAuthorityWithoutChangingCurrentVersion(
 		}
 	}
 	got := capabilitiesOf(t, &server{softwareVersion: "0.10.0", sourceRevision: testSourceRevision})
-	want := []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12, protocol.BenchVersionV13, protocol.BenchVersionV14}
+	want := []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12, protocol.BenchVersionV13, protocol.BenchVersionV14, protocol.BenchVersionV15, protocol.BenchVersionV16, protocol.BenchVersionV17, protocol.BenchVersionV18}
 	if !reflect.DeepEqual(got.SupportedBenchVersions, want) {
 		t.Fatalf("supported versions = %v, want %v", got.SupportedBenchVersions, want)
 	}

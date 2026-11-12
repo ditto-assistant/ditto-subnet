@@ -197,6 +197,11 @@ type ToolCase struct {
 	// mutation has been asked. The harness projection places the follow-up
 	// well after its mutation in the run order. Never serialized.
 	RunAfterCaseID string `json:"-"`
+	// Encounter (bench_version 18, grader-only) is a multi-call tool
+	// encounter: an argument-keyed mock world graded on the final answer, the
+	// required calls (unordered) and the forbidden ones (encounter.go). The
+	// mock endpoint serves Encounter.Rules for the case. Never serialized.
+	Encounter *Encounter `json:"-"`
 }
 
 // AnswerKind values: how a memory case is graded deterministically. Grading is
@@ -1075,6 +1080,14 @@ type CaseScore struct {
 	// gives future bounded per-case recovery an unambiguous gate exclusion
 	// without overloading Undelivered. It is never miner supplied.
 	ValidatorFault bool `json:"validator_fault,omitempty"`
+	// BudgetExhausted (bench_version >= RunBudgetMinBenchVersion) marks a case
+	// the scorer did not run because the run's priced cost had already reached
+	// its budget (details.run_budget). It scores 0. It is the harness's own
+	// spend, never an infrastructure failure: it is not Undelivered or
+	// ValidatorFault, never triggers an infrastructure retry or void, and only
+	// the gates and sibling comparisons skip it (the case had no answer to
+	// compare). Additive-optional.
+	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 	// AllowExtraTools echoes the case's ToolCase.AllowExtraTools so aggregate
 	// factors can tell a case that REQUIRES extra calls (the serving layer forces
 	// the first content-tool call to fail, so a correct harness must retry) from
@@ -1286,6 +1299,13 @@ type RunDetails struct {
 	// value, so the applied factor stays reconstructable. nil when no twin groups
 	// ran.
 	MetamorphicConsistency *float64 `json:"metamorphic_consistency,omitempty"`
+	// Metamorphic (bench_version >= 16) is the applied metamorphic tier: the
+	// groups measured, how many split, and the factor the composite gate
+	// folded. From bench 16 a run with fewer than the v15 reference of 13
+	// groups is charged per split group against 13, so the rate above alone
+	// no longer reconstructs the factor. nil below bench 16 or when no twin
+	// group ran.
+	Metamorphic *MetamorphicTier `json:"metamorphic,omitempty"`
 	// TransformRobustness is the reproduce-under-transform audit result: the
 	// fraction of audit pairs the harness answered CONSISTENTLY, where each pair
 	// is a base case and the same underlying fact re-asked under a post-commit
@@ -1403,6 +1423,19 @@ type RunDetails struct {
 	// applied. Shadow only in v13.0 -- Applied is always false. nil for every
 	// earlier contract.
 	InferenceCost *InferenceCostSummary `json:"inference_cost,omitempty"`
+	// Dueling (bench_version >= DuelingMinBenchVersion) is the generator
+	// slice's aggregates: the datagen half before and after its gates, and each
+	// column's case statistics, so the validator fold can recompute the
+	// composite under any owner mask. nil for every earlier contract.
+	Dueling *DuelingDetails `json:"dueling,omitempty"`
+	// PricedCost (bench_version >= PricedCostMinBenchVersion) is the run's
+	// inference priced at the contract's locked public rates and the cost
+	// factor it maps to (priced_cost.go). nil for every earlier contract.
+	PricedCost *PricedCostSummary `json:"priced_cost,omitempty"`
+	// RunBudget (bench_version >= RunBudgetMinBenchVersion) is the run's
+	// priced-cost budget and where it stopped the run (run_budget.go). nil for
+	// every earlier contract.
+	RunBudget *RunBudgetSummary `json:"run_budget,omitempty"`
 }
 
 // TokenUsage is validator-observed model consumption for one isolated run.
@@ -1510,4 +1543,13 @@ type ScoreReport struct {
 	// (nil when unavailable), forwarded to the platform's anti-copy gate as
 	// advisory (unsigned) moderation metadata. It never affects the score.
 	StructuralFingerprint *CodeFingerprint `json:"structural_fingerprint,omitempty"`
+}
+
+// MetamorphicTier is details.metamorphic: the applied metamorphic-consistency
+// tier of the composite gate.
+type MetamorphicTier struct {
+	Groups          int     `json:"groups"`
+	SplitGroups     int     `json:"split_groups"`
+	ReferenceGroups int     `json:"reference_groups"`
+	Factor          float64 `json:"factor"`
 }

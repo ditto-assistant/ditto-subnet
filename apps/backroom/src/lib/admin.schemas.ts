@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
+import { duelingColumnAggregateSchema } from './benchmark-canary.schemas'
 
 // Every Platform response field must have an explicit Backroom validator. Making
 // optional OpenAPI properties required in this mapped shape is deliberate: it
@@ -63,6 +64,10 @@ export const confirmationBenchVersionSchema = z.union([
   z.literal(12),
   z.literal(13),
   z.literal(14),
+  z.literal(15),
+  z.literal(16),
+  z.literal(17),
+  z.literal(18),
 ])
 
 // Exact set equality against the contract, checked in BOTH directions. A plain
@@ -275,6 +280,7 @@ export const screenerReviewModeSchema = z.enum(['off', 'shadow', 'enforce', 'inh
 export const screenerReviewModelSchema = z.enum([
   'openai/gpt-5.6-terra',
   'openai/gpt-6-sol',
+  'openai/gpt-6.1-terra',
   'moonshotai/kimi-k3',
   'z-ai/glm-5.2',
   'openai/gpt-5.6-sol',
@@ -303,8 +309,8 @@ export const screenerReviewSettingsSchema = z
     l2_model: screenerReviewModelSchema,
     l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
     l3_enabled: z.boolean().default(true),
-    l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol']),
-    timeout_seconds: z.number().int().min(30).max(1_800),
+    l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol', 'openai/gpt-6.1-terra']),
+    timeout_seconds: z.number().int().min(30).max(3_600),
     max_steps: z.number().int().min(1).max(256),
     source_review_max_steps: z.number().int().min(1).max(240).default(200),
     source_review_max_read_bytes: z.number().int().min(32_000).max(16_000_000).default(8_000_000),
@@ -742,9 +748,9 @@ export const screenerFanoutShadowResponseSchema = z.object({
   has_more: z.boolean(),
 })
 
-const screenerProviderSchema = z.enum(['gcp', 'targon', 'hetzner', 'home', 'test'])
-const capacityProviderSchema = z.enum(['hetzner', 'targon', 'gcp'])
-const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(3).superRefine((value, context) => {
+const screenerProviderSchema = z.enum(['gcp', 'targon', 'hetzner', 'aws', 'home', 'test'])
+const capacityProviderSchema = z.enum(['hetzner', 'aws', 'targon', 'gcp'])
+const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(4).superRefine((value, context) => {
   if (new Set(value).size !== value.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Provider priorities must be unique.' })
   }
@@ -1067,7 +1073,7 @@ export const trustedImageBuildSchema = z.object({
     'fallback_required',
     'canceled',
   ]),
-  provider: z.enum(['hetzner', 'targon', 'gcp']).nullable(),
+  provider: z.enum(['hetzner', 'aws', 'targon', 'gcp']).nullable(),
   provider_resource_id: z.string().nullable(),
   image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
   error_code: z.string().nullable(),
@@ -1103,7 +1109,7 @@ export const screenerCapacityViewSchema = z.object({
     job_id: z.string().uuid(),
     lane: z.enum(['build', 'runtime', 'source_review']),
     status: z.string().min(1),
-    provider: z.enum(['hetzner', 'targon', 'gcp']).nullable(),
+    provider: z.enum(['hetzner', 'aws', 'targon', 'gcp']).nullable(),
     node_id: z.string().nullable().default(null),
     provider_resource_id: z.string().nullable(),
     image_reference: z.string().nullable(),
@@ -1151,6 +1157,8 @@ export const screeningInfraRetryViewSchema = z.object({
     jitter_fraction: z.number().nonnegative(),
     auto_retry_max_age_seconds: nonNegativeInt,
     auto_retry_max_streak: nonNegativeInt,
+    // Per-code automatic retry bound (l2-late-result: 1); absent on older Platform.
+    auto_retry_max_retries_by_code: z.record(z.string(), nonNegativeInt).default({}),
     plan_max_claimable: nonNegativeInt,
     breaker_distinct_agents: nonNegativeInt,
     breaker_window_seconds: nonNegativeInt,
@@ -2342,10 +2350,30 @@ export const MAX_RETEST_COHORT_SIZE = 25
 // stops meaning "tied" and starts meaning "nearby", so the platform hard-stops
 // there and the only thing still bounding the cohort would be the size ceiling.
 export const MAX_RETEST_ELIGIBILITY_Z = 3
+// Tempo-aligned wave pacing: mirrors MAX_WAVE_CADENCE_TEMPOS,
+// MAX_WAVE_SEEDS_PER_WINDOW and DEFAULT_WAVE_SEEDS_PER_WINDOW in the platform.
+export const MAX_WAVE_CADENCE_TEMPOS = 24
+export const MAX_WAVE_SEEDS_PER_WINDOW = 16
+export const DEFAULT_WAVE_SEEDS_PER_WINDOW = 3
+// Season title duels (docs/title-duels.md): mirrors MIN_SEASON_DUEL_SEEDS,
+// MAX_SEASON_DUEL_SEEDS and DEFAULT_SEASON_DUEL_SEEDS in the platform.
+export const MIN_SEASON_DUEL_SEEDS = 2
+export const MAX_SEASON_DUEL_SEEDS = 5
+export const DEFAULT_SEASON_DUEL_SEEDS = 3
 export const DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 // Not `strict`. The platform ships `participants` deliberately, and `strict` is
 // kept as the audited rollback path rather than as the default.
 export const DEFAULT_WAVE_MEMBERSHIP = 'participants'
+// Protocol-34 crown rules, mirroring the platform's shipped defaults and bounds.
+// A challenger cannot hold more shared seeds than the lane retains (the
+// platform's 10-seed continual-retest work cap, TOP5_MAX_CONFIRMATION_SEEDS).
+export const DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
+export const MAX_MIN_DETHRONE_CONFIRMATIONS = 10
+// Reads stay lenient up to the validator's 15-seed fold ceiling so a Platform
+// still serving a revision written under the former 15-seed cap stays
+// displayable; writes are bounded by MAX_MIN_DETHRONE_CONFIRMATIONS.
+export const MAX_SERVED_MIN_DETHRONE_CONFIRMATIONS = 15
+export const DEFAULT_CHAMPION_STANDING_RANK = 3
 
 // The ceiling can never cut into the cohort the rank cutoff already admitted.
 // Mirrored from the platform's own model validator so the operator sees which
@@ -2359,6 +2387,28 @@ const checkCohortCeiling = (
       code: 'custom',
       path: ['retest_cohort_max_size'],
       message: `retest_cohort_max_size (${settings.retest_cohort_max_size}) cannot be below retest_cohort_size (${settings.retest_cohort_size}): the ceiling would cut into the cohort the fixed rank already admitted`,
+    })
+  }
+}
+
+// A season duel holding fewer seeds than the crown gate asks for could never
+// move the crown; mirrors the platform's write-time check.
+const checkSeasonDuelSeeds = (
+  settings: {
+    retest_mode: string
+    season_duel_seeds: number
+    min_dethrone_confirmations: number
+  },
+  ctx: z.RefinementCtx,
+) => {
+  if (
+    settings.retest_mode === 'season_duel' &&
+    settings.season_duel_seeds < settings.min_dethrone_confirmations
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['season_duel_seeds'],
+      message: `season_duel_seeds (${settings.season_duel_seeds}) cannot be below min_dethrone_confirmations (${settings.min_dethrone_confirmations}): a season duel would then never carry a full dethrone case`,
     })
   }
 }
@@ -2380,6 +2430,25 @@ const continualRetestSettingsBaseSchema = z.object({
   // Fold change behind fleet protocol 27: defend the crown from the served
   // incumbent instead of re-deriving it from the earliest lineage every read.
   crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  // Fold change behind fleet protocol 34: the crown moves only on the paired
+  // shared-seed statistic with at least min_dethrone_confirmations shared
+  // seeds, and only within the top champion_standing_rank official places.
+  crown_gate_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  // Fold change behind fleet protocol 35, riding a served crown gate: two
+  // bench v16 rows dethrone on the sequential title duel across seasons.
+  crown_duel_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  min_dethrone_confirmations: z
+    .number()
+    .int()
+    .min(2)
+    .max(MAX_SERVED_MIN_DETHRONE_CONFIRMATIONS)
+    .default(DEFAULT_MIN_DETHRONE_CONFIRMATIONS),
+  champion_standing_rank: z
+    .number()
+    .int()
+    .min(1)
+    .max(EMISSION_SET_SIZE)
+    .default(DEFAULT_CHAMPION_STANDING_RANK),
   idle_retests_enabled: z.boolean(),
   rollout_standdown: z
     .enum(['off', 'capable_validators', 'all'])
@@ -2417,6 +2486,29 @@ const continualRetestSettingsBaseSchema = z.object({
     .min(EMISSION_SET_SIZE)
     .max(MAX_RETEST_COHORT_SIZE)
     .default(MAX_RETEST_COHORT_SIZE),
+  // Tempo-aligned waves: 0 is the historical pacing (a new shared seed opens
+  // as soon as the previous wave completes); N opens at most
+  // wave_seeds_per_window new seeds per window of N chain epochs.
+  wave_cadence_tempos: z.number().int().min(0).max(MAX_WAVE_CADENCE_TEMPOS).default(0),
+  wave_seeds_per_window: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_WAVE_SEEDS_PER_WINDOW)
+    .default(DEFAULT_WAVE_SEEDS_PER_WINDOW),
+  // Season title duels: `continual` walks every cohort member to the elastic
+  // target; `season_duel` runs one K-seed duel per dueling season for the top
+  // five (bench v16+ only; inert below the dueling floor).
+  retest_mode: z.enum(['continual', 'season_duel']).default('continual'),
+  season_duel_seeds: z
+    .number()
+    .int()
+    .min(MIN_SEASON_DUEL_SEEDS)
+    .max(MAX_SEASON_DUEL_SEEDS)
+    .default(DEFAULT_SEASON_DUEL_SEEDS),
+  // Phase B2: season rotation re-scores run on the season's duel seeds and
+  // double as duel evidence (season_duel at v16+ only; off by default).
+  season_duel_rotation_seeds: z.boolean().default(false),
 })
 
 export const continualRetestSettingsSchema =
@@ -2436,7 +2528,16 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
     statistical_band_mode: z.enum(['disabled', 'fleet_ready']),
     ledger_pin_mode: z.enum(['live', 'epoch']),
     crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']),
+    crown_gate_mode: z.enum(['disabled', 'fleet_ready']),
+    crown_duel_mode: z.enum(['disabled', 'fleet_ready']),
+    min_dethrone_confirmations: z.number().int().min(2).max(MAX_MIN_DETHRONE_CONFIRMATIONS),
+    champion_standing_rank: z.number().int().min(1).max(EMISSION_SET_SIZE),
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
+    wave_cadence_tempos: z.number().int().min(0).max(MAX_WAVE_CADENCE_TEMPOS),
+    wave_seeds_per_window: z.number().int().min(1).max(MAX_WAVE_SEEDS_PER_WINDOW),
+    retest_mode: z.enum(['continual', 'season_duel']),
+    season_duel_seeds: z.number().int().min(MIN_SEASON_DUEL_SEEDS).max(MAX_SEASON_DUEL_SEEDS),
+    season_duel_rotation_seeds: z.boolean(),
     retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
     retest_eligibility_mode: z.enum(['fixed', 'statistical']),
     retest_eligibility_z: z.number().min(0).max(MAX_RETEST_ELIGIBILITY_Z),
@@ -2447,6 +2548,7 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
       .max(MAX_RETEST_COHORT_SIZE),
   })
   .superRefine(checkCohortCeiling)
+  .superRefine(checkSeasonDuelSeeds)
 
 export const continualRetestSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -2518,6 +2620,12 @@ export const effectiveContinualRetestSettingsSchema = z.object({
   statistical_band_fleet_ready: z.boolean().default(false),
   statistical_band_active: z.boolean().default(false),
   statistical_band_required_protocol: z.number().int().default(29),
+  crown_gate_fleet_ready: z.boolean().default(false),
+  crown_gate_active: z.boolean().default(false),
+  crown_gate_required_protocol: z.number().int().positive().default(34),
+  crown_duel_fleet_ready: z.boolean().default(false),
+  crown_duel_active: z.boolean().default(false),
+  crown_duel_required_protocol: z.number().int().positive().default(35),
   crown_incumbent_fleet_ready: z.boolean().default(false),
   crown_incumbent_active: z.boolean().default(false),
   crown_incumbent_required_protocol: z.number().int().positive().default(27),
@@ -2578,6 +2686,32 @@ type ContinualRetestExtendedFieldSpec = {
 }
 
 export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExtendedFieldSpec> = [
+  {
+    field: 'crown_gate_mode',
+    label: 'a shared-seed crown gate',
+    legacyValue: () => 'disabled',
+    legacyBehaviour: () =>
+      'any challenger that clears the band takes the crown, even with no shared-seed confirmations',
+  },
+  {
+    field: 'crown_duel_mode',
+    label: 'a sequential title duel',
+    legacyValue: () => 'disabled',
+    legacyBehaviour: () =>
+      'the crown moves on one season of shared seeds under the capped fixed-z band',
+  },
+  {
+    field: 'min_dethrone_confirmations',
+    label: 'a dethrone confirmation minimum',
+    legacyValue: () => DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+    legacyBehaviour: () => 'the crown is not gated on shared-seed confirmations',
+  },
+  {
+    field: 'champion_standing_rank',
+    label: 'a champion standing rule',
+    legacyValue: () => DEFAULT_CHAMPION_STANDING_RANK,
+    legacyBehaviour: () => 'the champion keeps the crown at any official rank',
+  },
   {
     field: 'statistical_band_mode',
     label: 'a capped KOTH statistical band',
@@ -2642,6 +2776,37 @@ export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExte
     legacyValue: (bounds) => bounds.max_retest_cohort_size,
     legacyBehaviour: (bounds) =>
       `the cohort can never exceed the rank cutoff, capped at ${bounds.max_retest_cohort_size}`,
+  },
+  {
+    field: 'wave_cadence_tempos',
+    label: 'tempo-aligned wave pacing',
+    legacyValue: () => 0,
+    legacyBehaviour: () => 'a new shared seed opens as soon as the previous wave completes',
+  },
+  {
+    field: 'wave_seeds_per_window',
+    label: 'a per-window wave seed budget',
+    legacyValue: () => DEFAULT_WAVE_SEEDS_PER_WINDOW,
+    legacyBehaviour: () => 'waves are not paced per window',
+  },
+  {
+    field: 'retest_mode',
+    label: 'season title duels',
+    legacyValue: () => 'continual',
+    legacyBehaviour: () =>
+      'the lane walks every cohort member to the elastic shared-seed target',
+  },
+  {
+    field: 'season_duel_seeds',
+    label: 'a season duel seed count',
+    legacyValue: () => DEFAULT_SEASON_DUEL_SEEDS,
+    legacyBehaviour: () => 'there are no season duels',
+  },
+  {
+    field: 'season_duel_rotation_seeds',
+    label: 'season-seeded rotation re-scores',
+    legacyValue: () => false,
+    legacyBehaviour: () => 'rotation re-scores keep their canonical seeds',
   },
 ]
 
@@ -3230,6 +3395,12 @@ export const inferenceRuntimeMetricsSchema = z.object({
       revision_drift: z.boolean().nullable().optional(),
       process_started_at: z.string().nullable().optional(),
       capacity_declines: z.record(z.string(), z.number().int().nonnegative()).default({}),
+      danilabs_binding: z.object({
+        key_present: z.boolean(),
+        router_competition: z.boolean(),
+        scope: z.enum(['unset_or_invalid', 'canary', 'fleet']),
+        deadline: z.string().nullable().optional(),
+      }).nullable().optional(),
       error: z.string().nullable().optional(),
     }),
   ),
@@ -3364,6 +3535,18 @@ export const inferenceFailureTaxonomySchema = z.object({
         upstream_provider: z.string().nullable(),
         provider_basis: z.string(),
         status: z.string(),
+        // Why a failed call failed, as the relay recorded it. Without these
+        // every confirmation provider failure read "failed, no provider, no
+        // cost" and a 5xx could not be told from a timeout or a reset. This
+        // object is non-strict, so an undeclared field would be stripped
+        // silently and never reach the operator: declare them. Null on
+        // completed calls and on failures settled before they were recorded,
+        // so a null on a failed group means "unexplained", never "fine".
+        failure_kind: z.string().nullable().default(null),
+        upstream_http_status: z.number().int().min(100).max(599).nullable().default(null),
+        upstream_error_code: z.number().int().min(400).max(599).nullable().default(null),
+        receipt_free: z.boolean().nullable().default(null),
+        max_upstream_attempts: z.number().int().nonnegative().default(0),
         calls: z.number().int().nonnegative(),
         without_cost: z.number().int().nonnegative(),
         bundles_affected: z.number().int().nonnegative(),
@@ -3511,6 +3694,17 @@ export const DEFAULT_DECISION_LANE_SETTINGS = {
   global_requests_per_minute: 6_000,
 }
 
+// OpenRouter provider preference for the aggregate scored chat route.
+// throughput: OpenRouter sorts eligible ZDR providers by throughput (mostly
+// Bedrock). bf16_price_order: DeepInfra bf16 first, then Bedrock, Groq and
+// DekaLLM bf16, pinned with `only`, fallbacks on, ZDR unchanged.
+// bf16_price_order_canary: the price order for benchmark_canary tickets only.
+export const scoredProviderRoutingSchema = z.enum([
+  'throughput',
+  'bf16_price_order_canary',
+  'bf16_price_order',
+])
+
 const inferenceConcurrencySettingsBaseSchema = z.object({
   // Chat completions one scoring ticket's grant may spend in total. Ships at
   // 16384, ~15x the heaviest observed run.
@@ -3548,13 +3742,23 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
   decision_lane: decisionLaneSettingsSchema
     .nullish()
     .transform((value) => value ?? DEFAULT_DECISION_LANE_SETTINGS),
+  // Additive rolling-upgrade field: a Platform predating it omits it, which
+  // reads as the historical throughput route.
+  scored_provider_routing: scoredProviderRoutingSchema
+    .nullish()
+    .transform((value) => value ?? 'throughput'),
+  danilabs_percent: z.number().int().min(0).max(100)
+    .nullish().transform((value) => value ?? 0),
 })
 
 // The platform enforces this hierarchy with its own model validator and 422s a
 // violation. Mirrored here so the operator sees which field is wrong before a
 // round trip.
 const refineInferenceConcurrencyHierarchy = (
-  value: Omit<z.infer<typeof inferenceConcurrencySettingsBaseSchema>, 'decision_lane'>,
+  value: Omit<
+    z.infer<typeof inferenceConcurrencySettingsBaseSchema>,
+    'decision_lane' | 'scored_provider_routing' | 'danilabs_percent'
+  >,
   context: z.RefinementCtx,
 ) => {
   if (value.chat_per_ticket_concurrency > value.chat_per_validator_concurrency) {
@@ -3638,6 +3842,10 @@ const inferenceConcurrencySettingsWriteSchema = inferenceConcurrencySettingsBase
   .extend({
     benchmark_runtime: benchmarkRuntimeSettingsSchema,
     decision_lane: decisionLaneSettingsSchema.optional(),
+    // Optional on writes for the same reason: an omitted value keeps the
+    // effective route, so a concurrency change never flips provider routing.
+    scored_provider_routing: scoredProviderRoutingSchema.optional(),
+    danilabs_percent: z.number().int().min(0).max(100).optional(),
   })
   .superRefine(refineInferenceConcurrencyHierarchy)
 
@@ -5341,6 +5549,17 @@ export const validatorFleetObservabilityMemberSchema = z
             software_version: z.string().nullish().catch(null),
             source_revision: z.string().nullish().catch(null),
             supported_bench_versions: z.array(z.number().int()).catch([]),
+            // Bench versions the scorer runs generator rounds at, and runs with
+            // a dueling-slice-v1 generator slice (bench 16+). Platform leases a
+            // v16+ ticket only to a validator forwarding the version here.
+            generator_round_bench_versions: z
+              .array(z.number().int())
+              .nullish()
+              .catch(null),
+            dueling_slice_bench_versions: z
+              .array(z.number().int())
+              .nullish()
+              .catch(null),
           })
           .nullish()
           .catch(null),
@@ -6494,6 +6713,28 @@ export const rejectScreeningSubmissionResponseSchema = z.object({
   idempotent: z.boolean(),
 })
 
+export const AMEND_REJECT_REASON_CONFIRMATION = 'AMEND PUBLIC REJECT REASON'
+
+export const amendQuarantineRejectReasonInputSchema = z.object({
+  quarantineId: z.string().uuid(),
+  expectedAgentId: z.string().uuid(),
+  expectedArtifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedAttemptId: databaseUuidSchema,
+  expectedReason: z.string(),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(AMEND_REJECT_REASON_CONFIRMATION),
+})
+
+export const amendQuarantineRejectReasonResponseSchema = z.object({
+  quarantine_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  attempt_id: databaseUuidSchema,
+  previous_reason: z.string(),
+  reason: z.string(),
+  resolved_by: z.string().nullish(),
+  idempotent: z.boolean(),
+})
+
 export const quarantineAgentContextSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
@@ -7023,6 +7264,12 @@ export const validationQueueWithdrawalSchema = z.object({
   // routine cleanup. `nullish` tolerates an older platform where the field is
   // absent rather than null.
   evicted_validator_hotkeys: z.array(z.string()).nullish().default(null),
+  // The agent-attributable code that made scoring quorum unreachable, when
+  // every remaining slot agreed on one. Set on the platform's own close-out
+  // (actor `platform:terminal-artifact-failure`) and on an operator withdrawal
+  // of the same evidence; public surfaces then report `scoring_failed`.
+  // Nullish for a platform that predates the column.
+  terminal_failure_code: z.string().nullish().default(null),
   created_at: z.string(),
   // Set once an eviction has been reversed (ditto-platform reinstatement). A
   // non-null `withdrawal` therefore no longer means "this submission is out of
@@ -8346,7 +8593,7 @@ export const athRulingActionSchema = z.enum(['open', 'clear', 'reject'])
 
 // What execute performs for one ruling. `attest` is a clear on an unheld
 // scored or live agent: the terminal clear is recorded without holding the row.
-export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject'])
+export const athRulingStepSchema = z.enum(['open', 'clear', 'attest', 'reject', 'close_terminal'])
 
 export const athRulingDispositionSchema = z.enum([
   'ready',
@@ -8993,17 +9240,43 @@ export const retestClaimabilitySchema = z.object({
   spare_capacity_window: z.boolean(),
   idle_retests_enabled: z.boolean(),
   in_catchup_set: z.boolean(),
-  route_priority: z.enum(['champion', 'catchup', 'emission', 'extended', 'not_routed']),
+  // `void_rerun`: owes a replacement for an infrastructure-voided sample, which
+  // the lane issues right behind the crown regardless of cohort.
+  route_priority: z.enum([
+    'champion', 'void_rerun', 'catchup', 'emission', 'extended', 'not_routed',
+  ]),
   route_position: z.number().int().positive().nullable(),
   pending_seed_count: z.number().int().nonnegative(),
   claimable_seed_available: z.boolean(),
   live_lease_count: z.number().int().nonnegative(),
   newer_canonical_work_pending: z.boolean(),
   least_covered_admitted: z.boolean().nullable(),
+  // Voided seeds still owed one replacement run: a count, never seed values.
+  void_rerun_seed_count: z.number().int().nonnegative().default(0),
+  void_rerun_claimable: z.boolean().default(false),
+  provider_outage_active: z.boolean().default(false),
+  // The provider gate admits no new lease now: the lane issues nothing on any
+  // route and the decision is `provider_outage`.
+  provider_gate_closed: z.boolean().default(false),
+  // Tempo-aligned wave pacing: the window this lane is in and whether its
+  // fresh-seed budget is spent. Counts only; seed values stay server-side.
+  // Season title duels: the mode, the season's K, the champion its family is
+  // anchored on (the season opener) and how many duel seeds this agent holds.
+  retest_mode: z.enum(['continual', 'season_duel']).default('continual'),
+  season_duel_seed_count: z.number().int().positive().nullable().default(null),
+  season_duel_anchor_champion_id: z.string().uuid().nullable().default(null),
+  season_duel_held_seed_count: z.number().int().nonnegative().nullable().default(null),
+  wave_cadence_tempos: z.number().int().nonnegative().default(0),
+  wave_seeds_per_window: z.number().int().positive().nullable().default(null),
+  wave_window_epoch: z.number().int().nonnegative().nullable().default(null),
+  wave_next_window_epoch: z.number().int().nonnegative().nullable().default(null),
+  wave_window_start: z.string().nullable().default(null),
+  wave_window_opened_seed_count: z.number().int().nonnegative().nullable().default(null),
+  wave_growth_paused: z.boolean().default(false),
   decision: z.enum([
     'claimable', 'lane_disabled', 'not_in_cohort', 'chain_unavailable',
     'round_not_due', 'newer_canonical_work_pending', 'no_pending_seeds',
-    'all_pending_seeds_leased', 'another_member_less_covered',
+    'all_pending_seeds_leased', 'another_member_less_covered', 'provider_outage',
   ]),
 })
 
@@ -9055,13 +9328,26 @@ export const continualRetestDiagnosticSchema = z.object({
   seed_anchor_pinned: z.boolean().nullable(),
   admission_reason: z.enum([
     'in_cohort', 'same_owner_challenger', 'owner_suppressed',
-    'outside_cohort', 'not_current_finalized_ledger',
+    'outside_cohort', 'expired_dueling_season', 'not_current_finalized_ledger',
   ]),
   ledger_eligible: z.boolean().default(false),
+  // Bench v16+: the agent's score seasons against the live two-season window.
+  // expired_dueling_season means the quorum aged out by design (no re-score).
+  score_dueling_season_ids: z.array(z.string().uuid()).default([]),
+  window_dueling_season_ids: z.array(z.string().uuid()).default([]),
+  in_window_score_count: z.number().int().nonnegative().nullable().default(null),
+  last_valid_composite: z.number().min(0).max(1).nullable().default(null),
+  in_current_pin: z.boolean().nullable().default(null),
   canonical_sample_count: z.number().int().nonnegative().default(0),
   completed_wave_depth: z.number().int().nonnegative().default(0),
   official_sample_count: z.number().int().nonnegative().default(0),
   raw_confirmation_depth: z.number().int().nonnegative().default(0),
+  // The lane's seed budget: minimum before variance may stop it, the work cap
+  // (and active fold window), and the variance-sized target it plans toward
+  // now. 0/0/null against a platform that predates the fields.
+  confirmation_seed_floor: z.number().int().nonnegative().default(0),
+  confirmation_seed_cap: z.number().int().nonnegative().default(0),
+  confirmation_seed_target: z.number().int().nonnegative().nullable().default(null),
   composite_stderr: z.number().nonnegative().nullable().default(null),
   aggregate_mode: z.enum(['disabled', 'fleet_ready', 'enabled']).default('fleet_ready'),
   wave_membership: z.enum(['strict', 'participants', 'per_agent']).default('participants'),
@@ -9084,6 +9370,25 @@ export const continualRetestDiagnosticSchema = z.object({
   terminal_ticket_count: z.number().int().nonnegative().default(0),
   latest_confirmation_composite: z.number().min(0).max(1).nullable().default(null),
   latest_confirmation_recorded_at: z.string().nullable().default(null),
+  // Newest confirmation samples paired with the inference grant that served
+  // them. Counts only; a low sample whose grant failed many chat calls measured
+  // the inference path, not the agent.
+  retest_samples: z.array(z.object({
+    validator_hotkey: z.string(),
+    seed: z.string().regex(/^(0|[1-9][0-9]*)$/),
+    composite: z.number().min(0).max(1),
+    run_id: z.string(),
+    accepted_at: z.string(),
+    grant_id: z.string().uuid().nullable().default(null),
+    chat_requests: z.number().int().nonnegative().default(0),
+    failed_requests: z.number().int().nonnegative().default(0),
+    failure_codes: z.array(z.object({
+      terminal_error_code: z.string(),
+      count: z.number().int().nonnegative(),
+    })).default([]),
+    void_generation: z.number().int().nonnegative().default(0),
+    voided: z.boolean().default(false),
+  })).default([]),
 })
 
 export const scoreLeaderboardInputSchema = z.object({
@@ -9154,7 +9459,7 @@ export const publicDethroneDecisionSchema = z.object({
   required_lead: z.number().nonnegative(),
   margin_lead: z.number().nonnegative(),
   statistical_lead: z.number().nonnegative().nullable().optional(),
-  method: z.enum(['flat', 'unpaired', 'paired']),
+  method: z.enum(['flat', 'unpaired', 'paired', 'duel']),
   dethrones: z.boolean(),
   paired_standard_error: z.number().nonnegative().nullable().optional(),
   shared_seed_count: z.number().int().nonnegative().nullable().optional(),
@@ -9162,14 +9467,49 @@ export const publicDethroneDecisionSchema = z.object({
 })
 
 export const publicEmissionRecipientSchema = z.object({
-  role: z.enum(['champion', 'tail']),
+  // A score-ceiling pool crowns its tied cohort as joint champions.
+  role: z.enum(['champion', 'joint_champion', 'tail']),
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
   raw_rank: z.number().int().positive(),
   share_of_miner_pool: z.number().positive().max(1),
+  // False only for a provisional incumbent whose share validators burn;
+  // Platform omits it when true.
+  paid: z.boolean().default(true),
   // Confirmation-seed depth: distinct champion-anchored CRN seeds this top-5
   // agent has been re-scored on by the continual rescore lane.
   shared_seed_confirmations: z.number().int().nonnegative().default(0),
+})
+
+// Protocol-34 crown standings. Nullish/defaulted so an older Platform without
+// them still parses; the King and challengers are the operator's crown read.
+export const publicCrownRulesSchema = z.object({
+  active: z.boolean(),
+  required_protocol: z.number().int().positive(),
+  min_dethrone_confirmations: z.number().int().min(2),
+  champion_standing_rank: z.number().int().positive(),
+})
+
+export const publicCrownKingSchema = z.object({
+  agent_id: z.string().uuid(),
+  miner_hotkey: z.string(),
+  official_rank: z.number().int().positive(),
+  official_score: z.number(),
+  shared_seed_confirmations: z.number().int().nonnegative().default(0),
+})
+
+export const publicCrownChallengerSchema = z.object({
+  agent_id: z.string().uuid(),
+  miner_hotkey: z.string(),
+  official_rank: z.number().int().positive(),
+  official_score: z.number(),
+  shared_seed_confirmations: z.number().int().nonnegative(),
+  required_confirmations: z.number().int().min(2),
+  within_standing: z.boolean(),
+  paired_lead: z.number().nullable().optional(),
+  required_lead: z.number().nonnegative().nullable().optional(),
+  lead_needed: z.number().nonnegative().nullable().optional(),
+  status: z.enum(['outside_standing', 'needs_confirmations', 'dueling', 'would_dethrone']),
 })
 
 export const publicKothEmissionsSchema = z.object({
@@ -9187,12 +9527,19 @@ export const publicKothEmissionsSchema = z.object({
   champion_share: z.number().positive().max(1),
   rank_shares: z.array(z.number().positive().max(1)),
   tail_size: z.number().int().nonnegative(),
+  // `score_ceiling_pool` splits the crown's share equally across a cohort
+  // no submission can separate within the score domain.
+  allocation_mode: z.enum(['ranked', 'score_ceiling_pool']).default('ranked'),
+  score_ceiling_pool_size: z.number().int().nonnegative().default(0),
   champion_agent_id: z.string().uuid(),
   champion_miner_hotkey: z.string(),
   raw_leader_agent_id: z.string().uuid(),
   raw_leader_miner_hotkey: z.string(),
   raw_leader_decision: publicDethroneDecisionSchema.nullable().optional(),
   recipients: z.array(publicEmissionRecipientSchema),
+  crown_rules: publicCrownRulesSchema.nullish().default(null),
+  king: publicCrownKingSchema.nullish().default(null),
+  challengers: z.array(publicCrownChallengerSchema).default([]),
 })
 
 export const publicLeaderboardSchema = z.object({
@@ -9359,6 +9706,41 @@ export const inferenceCostSummarySchema = z.object({
   mean_factor_bps: gateBpsSchema.nullish().default(null),
 })
 
+// Bench v16+ priced inference cost (`details.priced_cost`): whole-run tokens
+// priced at the contract's locked public rates, the 350-case-normalised cost,
+// and the factor the composite carries (inside `details.dueling.datagen_gate`).
+// `rule_consistent` is Platform's own recomputation of the factor.
+export const pricedCostSummarySchema = z.object({
+  contract_id: z.string().nullish().default(null),
+  posture: gatePostureSchema.nullish().default(null),
+  applied: z.boolean().default(false),
+  result: z.enum(['priced', 'insufficient_evidence']).nullish().default(null),
+  window: z.string().nullish().default(null),
+  source: z.string().nullish().default(null),
+  cases: gateCountSchema,
+  prompt_tokens: gateCountSchema,
+  completion_tokens: gateCountSchema,
+  embedding_tokens: gateCountSchema,
+  decision_calls: gateCountSchema,
+  decision_input_tokens: gateCountSchema,
+  decision_output_tokens: gateCountSchema,
+  prompt_cost_nano_usd: gateCountSchema,
+  completion_cost_nano_usd: gateCountSchema,
+  embedding_cost_nano_usd: gateCountSchema,
+  decision_cost_nano_usd: gateCountSchema,
+  cost_nano_usd: gateCountSchema,
+  normalization_cases: gateCountSchema,
+  normalized_cost_nano_usd: gateCountSchema,
+  reference_nano_usd: gateCountSchema,
+  ratio_bps: z.number().int().min(0).max(100_000).default(0),
+  floor_bps: gateBpsSchema.nullish().default(null),
+  factor_bps: gateBpsSchema.nullish().default(null),
+  applied_factor_bps: gateBpsSchema.nullish().default(null),
+  cost_usd: z.number().nonnegative().nullish().default(null),
+  normalized_cost_usd: z.number().nonnegative().nullish().default(null),
+  rule_consistent: z.boolean().nullish().default(null),
+})
+
 export const publicGateEvidenceSchema = z.object({
   bench_version: z.number().int().positive(),
   // The most severe posture any gate ran under: `enforce` means a gate moved
@@ -9368,6 +9750,7 @@ export const publicGateEvidenceSchema = z.object({
   claim_provenance: claimProvenanceSummarySchema.nullish().default(null),
   twin_post_pass: twinPostPassSummarySchema.nullish().default(null),
   inference_cost: inferenceCostSummarySchema.nullish().default(null),
+  priced_cost: pricedCostSummarySchema.nullish().default(null),
   catalog_suppression_rate: gateUnitSchema.nullish().default(null),
   // Cases a gate would zero at enforce (or did), plus cases the shadow cost
   // factor would discount, and that count over the cases the run scored.
@@ -9383,6 +9766,40 @@ export const publicAuditPairCountsSchema = z.object({
   base_only: z.number().int().nonnegative(),
   transform_only: z.number().int().nonnegative(),
   both_wrong: z.number().int().nonnegative(),
+})
+
+// Bench v16+ dueling arithmetic Platform projects from the stored
+// `scores.dueling` aggregates and `priced_cost` gate evidence. Columns extend
+// the canary read's disclosure (no owner key, no generator submission id) with
+// the derived mean, grading version, public-default and self-mask flags.
+const gateBps = z.number().int().min(0).max(10_000)
+export const publicDuelingBreakdownSchema = z.object({
+  formula: z.string(),
+  season_id: z.string(),
+  season_index: z.number().int().nonnegative(),
+  datagen_raw: z.number().min(0).max(1),
+  datagen_gate: z.number().min(0).max(1),
+  column_weight: z.number().min(0).max(1),
+  counted_columns: z.number().int().nonnegative(),
+  datagen_share: z.number().min(0).max(1),
+  generator_sum: z.number().min(0).max(1),
+  pre_gate_composite: z.number().min(0).max(1),
+  composite: z.number().min(0).max(1),
+  composite_stderr: z.number().nonnegative().nullish().default(null),
+  priced_cost_applied_factor_bps: gateBps.nullish().default(null),
+  priced_cost_factor_bps: gateBps.nullish().default(null),
+  priced_cost_factor: z.number().min(0).max(1).nullish().default(null),
+  priced_cost_posture: z.string().nullish().default(null),
+  priced_cost_result: z.string().nullish().default(null),
+  priced_cost_window: z.string().max(32).nullish().default(null),
+  other_gate_factor: z.number().min(0).max(1).nullish().default(null),
+  columns: z.array(duelingColumnAggregateSchema.extend({
+    grading_bench_version: z.number().int().positive().nullish().default(null),
+    mean: z.number().min(0).max(1),
+    public_default: z.boolean(),
+    self_masked: z.boolean(),
+    contribution: z.number().min(0).max(1),
+  })).max(16),
 })
 
 export const publicValidatorScoreSchema = z.object({
@@ -9416,6 +9833,8 @@ export const publicValidatorScoreSchema = z.object({
   signature: z.string().nullable().optional(),
   // Null below bench v13 and for a scorer that emitted no gate telemetry.
   gate_evidence: publicGateEvidenceSchema.nullable().optional(),
+  // Omitted below bench v16; a malformed block drops only itself.
+  dueling_breakdown: publicDuelingBreakdownSchema.optional().catch(undefined),
 })
 
 export const publicAgentScoresSchema = z.object({
@@ -9543,6 +9962,8 @@ export const publicProvisionalScoreSchema = z.object({
   bench_version: z.number().int().positive().nullable().optional(),
   accepted_at: z.string(),
   transcript_sha256: z.string().nullable().optional(),
+  // Bench v16+ only (omitted below), as on settled rows.
+  dueling_breakdown: publicDuelingBreakdownSchema.optional().catch(undefined),
 })
 
 export const publicSubmissionPipelineSchema = z.object({
@@ -9581,6 +10002,10 @@ export const agentScoreHistoryVersionSchema = z.object({
   // share of cases the gates would zero. Null for versions below v13.
   gate_posture: gatePostureSchema.nullable().default(null),
   median_flagged_case_share: z.number().min(0).max(1).nullable().default(null),
+  // Bench v16+: median 350-case-normalised priced inference cost (USD) and
+  // median applied priced-cost factor (bps) over the rows that priced a run.
+  median_priced_cost_usd: z.number().nonnegative().nullable().default(null),
+  median_priced_cost_factor_bps: z.number().min(0).max(10_000).nullable().default(null),
 })
 
 export const agentScoreHistorySchema = z.object({
@@ -9757,19 +10182,15 @@ export const tracePeekResponseSchema = z.object({
   scan_complete: z.boolean(),
 })
 
-// Future screening-policy activation.
+// Screening-policy activation (read-only; scheduling retired with source
+// review on 2026-11-07).
 //
-// The platform keeps the live policy in force and holds ONE pending activation
-// that flips the policy version at a scheduled instant. Revisions are
-// append-only: scheduling a new activation supersedes the pending one but the
-// old rows stay readable as audit. `state` is computed by the platform at read
-// time ("due" once now >= activate_at), so it is never stored and never
-// defaulted here.
-export const SCREENER_POLICY_ACTIVATION_CONFIRMATION = 'SCHEDULE SCREENER POLICY ACTIVATION'
+// The platform keeps the live policy in force. Revisions are append-only and
+// stay readable as audit. `state` is computed by the platform at read time
+// ("due" once now >= activate_at), so it is never stored and never defaulted
+// here.
 export const RESTORE_SCORED_SCREENING_SNAPSHOT_CONFIRMATION =
   'RESTORE SCORED SCREENING SNAPSHOT'
-export const ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION =
-  'ADVANCE SCORED POLICY RESCREEN'
 export const MAX_SCREENER_POLICY_ACTIVATION_REVISIONS = 200
 
 export const screenerPolicyActivationRevisionSchema = z.object({
@@ -9808,21 +10229,6 @@ export const screenerPolicyActivationViewSchema = z.object({
     .max(MAX_SCREENER_POLICY_ACTIVATION_REVISIONS),
   // Absent from platforms older than heartbeat protocol v7.
   fleet: screenerFleetPolicyReadinessSchema.nullish().transform((value) => value ?? null),
-})
-
-// The offset requirement is what makes the schedule unambiguous: a naive
-// "2026-08-29T09:00:00" would be the platform's UTC wall clock, not the
-// operator's, and the 422 that catches it should never have to.
-export const scheduleScreenerPolicyActivationInputSchema = z.object({
-  expectedRevision: z.number().int().nonnegative(),
-  // The platform bounds this to [floor..builtin] and answers 422 out of range;
-  // it stays the authority, so this only rejects nonsense a positive int catches.
-  targetPolicyVersion: z.number().int().positive(),
-  activateAt: z.string().datetime({ offset: true }),
-  rescreenScored: z.boolean().default(true),
-  canaryOnly: z.boolean().default(false),
-  reason: auditReasonSchema(8),
-  confirmation: z.literal(SCREENER_POLICY_ACTIVATION_CONFIRMATION),
 })
 
 export const restoreScoredScreeningSnapshotInputSchema = z.object({
@@ -9879,16 +10285,6 @@ export const scoredPolicyRescreenViewSchema = z.object({
 
 void (scoredPolicyRescreenViewSchema satisfies z.ZodType<GeneratedScoredPolicyRescreenView>)
 
-export const advanceScoredPolicyRescreenInputSchema = z.object({
-  expectedActivationRevision: z.number().int().positive(),
-  expectedAgentId: z.string().uuid(),
-  retryPaused: z.boolean().default(false),
-  maxActiveReleases: z.number().int().min(1).max(4).default(1),
-  reviewSettingsRevision: z.number().int().positive().nullable().default(null),
-  reason: auditReasonSchema(8),
-  confirmation: z.literal(ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION),
-})
-
 export type ScreenerPolicyActivationView = z.infer<typeof screenerPolicyActivationViewSchema>
 
 // Copy-hold triage court: settings control and shadow recommendation feed.
@@ -9935,6 +10331,9 @@ export const copyCourtControlSchema: z.ZodType<GeneratedCopyCourtSettingsRespons
     current: copyCourtRevisionSchema.nullable(),
     history: z.array(copyCourtRevisionSchema),
     runtime: copyCourtRuntimeSchema.nullish(),
+    // Defined with the unreleased-copy schemas below; lazy avoids the
+    // declaration-order dependency.
+    unreleased_copy: z.lazy(() => unreleasedCopyOverviewSchema).nullish(),
   })
 
 export const copyCourtRecommendationSchema: z.ZodType<GeneratedCopyCourtRecommendation> =
@@ -9968,6 +10367,7 @@ export const copyCourtRecommendationListSchema: z.ZodType<GeneratedCopyCourtReco
     count: z.number().int().nonnegative(),
     limit: z.number().int().positive(),
     offset: z.number().int().nonnegative(),
+    unreleased_copy: z.lazy(() => unreleasedCopySignalSchema).nullish(),
   })
 
 export const copyCourtRecommendationsInputSchema = z.object({
@@ -10008,8 +10408,10 @@ export type CopyCourtRecommendationList = z.infer<
 >
 
 // Bench v13+ finalized-block confirmation seed anchors: one row per
-// (champion, bench_version) reign, pinned or still in its finality wait. The
-// ledger serves pinned rows only, so this read is where a waiting reign shows.
+// (champion, bench_version) reign, pinned or still in its finality wait. From
+// bench v16 a reign restarts per dueling season (dueling_season_id). The
+// ledger serves pinned rows only (current season only at v16+), so this read
+// is where a waiting reign shows.
 
 export const confirmationSeedAnchorSchema = z.object({
   champion_agent_id: z.string().uuid(),
@@ -10022,6 +10424,7 @@ export const confirmationSeedAnchorSchema = z.object({
   pinned: z.boolean(),
   pinned_at: z.string().nullable(),
   created_at: z.string(),
+  dueling_season_id: z.string().uuid().nullable().optional().default(null),
 })
 
 export const confirmationSeedAnchorListSchema: z.ZodType<GeneratedConfirmationSeedAnchorList> =
@@ -10178,6 +10581,13 @@ const validatorCapacityAssignmentSchema = z.object({
   stalled: z.boolean(),
   checks_per_minute: z.number().nonnegative().nullable(),
   estimated_remaining_slot_minutes: z.number().nonnegative().nullable(),
+  // The lease's own hosted-inference grant: the evidence that a run whose
+  // heartbeat still says `preparing` is executing cases rather than wedged.
+  // Defaulted so a Backroom deployed ahead of Platform still reads capacity.
+  inference_chat_requests: z.number().int().nonnegative().nullable().default(null),
+  inference_embedding_requests: z.number().int().nonnegative().nullable().default(null),
+  inference_last_activity_at: z.string().nullable().default(null),
+  inference_idle_seconds: z.number().int().nonnegative().nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityAssignment>)
 
 export const validatorCapacityEntrySchema = z.object({
@@ -10540,3 +10950,216 @@ export const validatorRequestOutcomeSummarySchema = z.object({
   unauthenticated: z.record(z.string(), z.number().int().nonnegative()),
   validators: z.array(validatorRequestOutcomesSchema),
 } satisfies PlatformResponseShape<GeneratedValidatorRequestOutcomeSummary>)
+
+// Unreleased-copy signal (shadow). Evidence carries normalized source text
+// from two submissions, so the per-agent read is gated on the artifact scope.
+type GeneratedUnreleasedCopyItem = PlatformComponents['schemas']['UnreleasedCopyItem']
+type GeneratedUnreleasedCopyMatch = PlatformComponents['schemas']['UnreleasedCopyMatch']
+type GeneratedUnreleasedCopyEvaluation =
+  PlatformComponents['schemas']['UnreleasedCopyEvaluation']
+type GeneratedUnreleasedCopyIndex = PlatformComponents['schemas']['AdminUnreleasedCopyIndex']
+type GeneratedUnreleasedCopyRuntime =
+  PlatformComponents['schemas']['AdminUnreleasedCopyRuntime']
+type GeneratedUnreleasedCopySignal = PlatformComponents['schemas']['AdminUnreleasedCopySignal']
+type GeneratedUnreleasedCopySummary =
+  PlatformComponents['schemas']['AdminUnreleasedCopySummary']
+type GeneratedUnreleasedCopyCoverage =
+  PlatformComponents['schemas']['AdminUnreleasedCopyCoverage']
+type GeneratedUnreleasedCopySignalList =
+  PlatformComponents['schemas']['AdminUnreleasedCopySignalList']
+type GeneratedUnreleasedCopyEnforcement =
+  PlatformComponents['schemas']['UnreleasedCopyEnforcement']
+type GeneratedUnreleasedCopyEffectiveSettings =
+  PlatformComponents['schemas']['AdminUnreleasedCopyEffectiveSettings']
+type GeneratedUnreleasedCopySettingsRevision =
+  PlatformComponents['schemas']['AdminUnreleasedCopySettingsRevision']
+type GeneratedUnreleasedCopySettingsResponse =
+  PlatformComponents['schemas']['AdminUnreleasedCopySettingsResponse']
+type GeneratedUnreleasedCopyOverview =
+  PlatformComponents['schemas']['AdminUnreleasedCopyOverview']
+
+const unreleasedCopyTimestamp = () => z.string().datetime({ offset: true })
+
+export const unreleasedCopyItemSchema = z.object({
+  kind: z.string().min(1),
+  text: z.string(),
+  candidate: z.string().min(1),
+  matched: z.string().min(1),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyItem>)
+
+export const unreleasedCopyMatchSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  agent_version: z.number().int().nullable(),
+  miner_hotkey: z.string(),
+  agent_status: z.string(),
+  uploaded_at: unreleasedCopyTimestamp(),
+  released_at: unreleasedCopyTimestamp().nullable(),
+  release_state: z.enum(['unreleased', 'released_after_upload']),
+  score: z.number(),
+  probable_same_owner: z.boolean().default(false),
+  shared_count: z.number().int().nonnegative(),
+  shared_by_kind: z.record(z.string(), z.number().int()),
+  items: z.array(unreleasedCopyItemSchema),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyMatch>)
+
+export const unreleasedCopyEvaluationSchema = z.object({
+  signal_version: z.string(),
+  items_version: z.string(),
+  threshold: z.number(),
+  flagged: z.boolean(),
+  top_score: z.number(),
+  candidate_item_count: z.number().int().nonnegative(),
+  compared_agent_count: z.number().int().nonnegative(),
+  excluded: z.record(z.string(), z.number().int()),
+  evidence_status: z.enum(['attached', 'not_needed', 'unavailable']),
+  matches: z.array(unreleasedCopyMatchSchema),
+  enforcement: z
+    .object({
+      outcome: z.string(),
+      settings_revision: z.number().int().nonnegative(),
+      at: unreleasedCopyTimestamp(),
+    } satisfies PlatformResponseShape<GeneratedUnreleasedCopyEnforcement>)
+    .nullish(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyEvaluation>)
+
+const unreleasedCopyIndexSchema = z.object({
+  items_version: z.string(),
+  item_count: z.number().int().nonnegative(),
+  error: z.string().nullable(),
+  indexed_at: unreleasedCopyTimestamp(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyIndex>)
+
+const unreleasedCopyRuntimeSchema = z.object({
+  running: z.boolean(),
+  mode: z.string(),
+  signal_version: z.string(),
+  threshold: z.number(),
+  interval_seconds: z.number(),
+  storage_configured: z.boolean(),
+  last_tick_started_at: unreleasedCopyTimestamp().nullable(),
+  last_tick_finished_at: unreleasedCopyTimestamp().nullable(),
+  last_tick_counters: z.record(z.string(), z.number().int()),
+  last_tick_error: z.string().nullable(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyRuntime>)
+
+export const unreleasedCopySignalSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  agent_version: z.number().int().nullable(),
+  miner_hotkey: z.string(),
+  agent_status: z.string(),
+  uploaded_at: unreleasedCopyTimestamp(),
+  index: unreleasedCopyIndexSchema.nullable(),
+  mode: z.string().nullable(),
+  computed_at: unreleasedCopyTimestamp().nullable(),
+  recorded: unreleasedCopyEvaluationSchema.nullable(),
+  live: unreleasedCopyEvaluationSchema.nullable(),
+  live_unavailable_reason: z.string().nullable(),
+  runtime: unreleasedCopyRuntimeSchema.nullable(),
+  released_overlap: z
+    .array(
+      z.object({
+        agent_id: z.string().uuid(),
+        agent_name: z.string(),
+        agent_version: z.number().int().nullable(),
+        released_at: unreleasedCopyTimestamp(),
+        shared: z.number().int().nonnegative(),
+      }),
+    )
+    .max(10)
+    .default([]),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySignal>)
+
+const unreleasedCopySummarySchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  agent_version: z.number().int().nullable(),
+  miner_hotkey: z.string(),
+  agent_status: z.string(),
+  uploaded_at: unreleasedCopyTimestamp(),
+  mode: z.string(),
+  flagged: z.boolean(),
+  top_score: z.number(),
+  top_matched_agent_id: z.string().uuid().nullable(),
+  top_matched_name: z.string().nullable(),
+  top_matched_version: z.number().int().nullable(),
+  computed_at: unreleasedCopyTimestamp(),
+  enforcement_outcome: z.string().nullish(),
+  excluded: z.record(z.string(), z.number().int()).nullish(),
+  candidate_item_count: z.number().int().nullish(),
+  compared_agent_count: z.number().int().nullish(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySummary>)
+
+export const unreleasedCopySignalListSchema = z.object({
+  items: z.array(unreleasedCopySummarySchema),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  coverage: z.lazy(() => unreleasedCopyCoverageSchema),
+  runtime: unreleasedCopyRuntimeSchema.nullable(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySignalList>)
+
+const unreleasedCopyCoverageSchema = z.object({
+  agents: z.number().int().nonnegative(),
+  indexed: z.number().int().nonnegative(),
+  unreadable: z.number().int().nonnegative(),
+  oldest_unindexed_at: unreleasedCopyTimestamp().nullable(),
+  evaluated: z.number().int().nonnegative(),
+  flagged: z.number().int().nonnegative(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyCoverage>)
+
+const unreleasedCopyModeSchema = z.enum(['off', 'shadow', 'enforce'])
+
+const unreleasedCopyEffectiveSettingsSchema = z.object({
+  mode: unreleasedCopyModeSchema,
+  threshold: z.number().positive(),
+  revision: z.number().int().nonnegative(),
+  enforce_since: unreleasedCopyTimestamp().nullable(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyEffectiveSettings>)
+
+const unreleasedCopySettingsRevisionSchema = z.object({
+  revision: z.number().int().positive(),
+  parent_revision: z.number().int().nonnegative(),
+  settings: z.object({ mode: unreleasedCopyModeSchema, threshold: z.number().positive() }),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: unreleasedCopyTimestamp(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySettingsRevision>)
+
+export const unreleasedCopySettingsSchema = z.object({
+  effective: unreleasedCopyEffectiveSettingsSchema,
+  history: z.array(unreleasedCopySettingsRevisionSchema),
+  runtime: unreleasedCopyRuntimeSchema.nullable(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySettingsResponse>)
+
+export const unreleasedCopySettingsRevisionResponseSchema =
+  unreleasedCopySettingsRevisionSchema
+
+export const unreleasedCopyOverviewSchema = z.object({
+  effective: unreleasedCopyEffectiveSettingsSchema,
+  coverage: unreleasedCopyCoverageSchema,
+  runtime: unreleasedCopyRuntimeSchema.nullable(),
+  flagged: z.array(unreleasedCopySummarySchema).max(50),
+  near_misses: z.array(unreleasedCopySummarySchema).max(25).default([]),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyOverview>)
+
+export const applyUnreleasedCopySettingsInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  mode: unreleasedCopyModeSchema,
+  threshold: z.number().positive().max(100000).default(40),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+export const unreleasedCopySignalInputSchema = z.object({
+  agentId: z.string().uuid(),
+  live: z.boolean().default(false),
+})
+
+export const unreleasedCopySignalsInputSchema = z.object({
+  flaggedOnly: z.boolean().default(true),
+  minScore: z.number().min(0).default(0),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).default(0),
+})

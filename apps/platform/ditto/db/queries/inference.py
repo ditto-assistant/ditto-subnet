@@ -49,12 +49,13 @@ def _decision_grant_stamps(
 ) -> dict[str, object]:
     """Decision-lane columns for a new grant.
 
-    Only hosted-era (v7+) leases get the lane, and only while the operator's
+    Only bench v15+ leases get the lane (v15 is the first contract whose
+    scored harness may call it), and only while the operator's
     ``decision_lane`` board pins a model. Otherwise the grant keeps the column
     defaults (no model, zero walls), identical to a grant minted before the
-    lane existed. Carries no score: no scorer reads these in Phase 1.
+    lane existed, so every v14-and-earlier lease is byte-identical to before.
     """
-    if ticket.bench_version < 7 or not config.decision_model:
+    if ticket.bench_version < 15 or not config.decision_model:
         return {}
     return {
         "decision_model": config.decision_model,
@@ -62,6 +63,13 @@ def _decision_grant_stamps(
         "decision_request_budget": config.decision_request_budget,
         "decision_token_budget": config.decision_token_budget,
     }
+
+
+CHAT_MODE = "chat"
+NO_CHAT_MODE = "no_chat"
+"""``InferenceGrant.inference_mode`` values. A ``no_chat`` grant refuses every
+chat call as ``model_not_permitted`` and keeps embeddings and the decision lane
+(docs/no-inference-mode.md). Nothing mints one yet."""
 
 
 USAGE_ACCOUNTING_VERSION = 2
@@ -599,10 +607,12 @@ async def begin_inference_request(
     if _aware(grant.expires_at) <= now:
         return InferenceDecline.LEASE_EXPIRED
     if (
-        model not in grant.allowed_models
+        model not in grant.allowed_models or grant.inference_mode == NO_CHAT_MODE
         if request_kind == "chat"
         else grant.bench_version < 7 or model != grant.embedding_model
     ):
+        # A no-chat grant (docs/no-inference-mode.md) permits no chat model at
+        # all; embeddings stay open, and the decision lane lives on the relay.
         return InferenceDecline.MODEL_NOT_PERMITTED
     # This gate is what makes the terminal declines *persistent*. The first
     # refusal below sets the status; every subsequent call in the run lands

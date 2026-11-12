@@ -146,7 +146,12 @@ class TestWrite:
         }
         first = await client.post(
             _URL,
-            json=_payload(benchmark_runtime=runtime, decision_lane=decision_lane),
+            json=_payload(
+                benchmark_runtime=runtime,
+                decision_lane=decision_lane,
+                scored_provider_routing="bf16_price_order_canary",
+                danilabs_percent=10,
+            ),
             headers=_HEADERS,
         )
         assert first.status_code == 200, first.text
@@ -165,6 +170,11 @@ class TestWrite:
         assert legacy.status_code == 200, legacy.text
         assert legacy.json()["settings"]["benchmark_runtime"] == runtime
         assert legacy.json()["settings"]["decision_lane"] == decision_lane
+        assert legacy.json()["settings"]["danilabs_percent"] == 10
+        assert (
+            legacy.json()["settings"]["scored_provider_routing"]
+            == "bf16_price_order_canary"
+        )
 
     async def test_wrong_confirmation_is_refused(
         self,

@@ -58,6 +58,7 @@ export type GeneratorRoundStatus =
   | "running"
   | "scoring"
   | "scored"
+  | "skipped"
   | "void";
 
 export interface GeneratorRoundSummary {
@@ -80,6 +81,10 @@ export interface GeneratorRoundSummary {
   closed_at: string | null;
   scored_at: string | null;
   void_reason: string | null;
+  /** "skipped_unchanged" on a skipped round; absent from an older Platform. */
+  skip_reason?: string | null;
+  /** The scored round a skipped round carries forward. */
+  carried_from_round?: number | null;
   revealed_at: string | null;
   secret_hex: string | null;
   seed: string | null;
@@ -114,6 +119,13 @@ export interface GeneratorRoundColumn extends GeneratorIdentity {
   trivial: number;
   unsolved: number;
   duplicate: number;
+  /** Cases too few agent owners solved that the frontier oracle answered and no failed
+   * audit voided: they earn credit instead of counting as unsolved. Absent on
+   * an older Platform; 0 until the round's frontier lane settles. */
+  frontier?: number | null;
+  /** The round's frontier lane: oracle_pending, audit_pending or settled;
+   * null when the round has none. */
+  frontier_state?: string | null;
   /** The pack grading policy this column's pack declared (13 when it declared
    * none); absent on an older Platform or before generation. */
   grading_bench_version?: number | null;
@@ -147,6 +159,7 @@ export interface GeneratorCaseCounts {
   trivial: number;
   unsolved: number;
   duplicate: number;
+  frontier?: number | null;
 }
 
 export interface GeneratorRunSummary {
@@ -306,7 +319,13 @@ export function nextRoundEta(
 
 /** Cases one column produced: every case lands in exactly one bucket. */
 export function columnCases(column: GeneratorRoundColumn): number {
-  return column.discriminating + column.trivial + column.unsolved + column.duplicate;
+  return (
+    column.discriminating +
+    column.trivial +
+    column.unsolved +
+    column.duplicate +
+    (column.frontier ?? 0)
+  );
 }
 
 /** The newest round with scored results (the one whose detail to show). */
@@ -379,6 +398,13 @@ export function isSubmissionId(value: string | null | undefined): value is strin
     typeof value === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
   );
+}
+
+/** A round index from URL state: digits only, a positive safe integer. */
+export function parseRoundIndex(value: string | null | undefined): number | null {
+  if (typeof value !== "string" || !/^[0-9]{1,15}$/.test(value)) return null;
+  const index = Number(value);
+  return Number.isSafeInteger(index) && index > 0 ? index : null;
 }
 
 /** The newest scored round index any source knows about. The board's entries

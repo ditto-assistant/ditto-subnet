@@ -144,6 +144,34 @@ func v13WorldMinimumForRun(n int) int {
 	return minimum * n / V9FullToolCaseCount
 }
 
+// v18RestraintMayTakeResultUsage reports whether the v18 restraint pass may
+// convert an ordinary product result-usage singleton in the 50-case half. The
+// ones it can reach (link_chain, multi_web, web_recovery, web_result) all
+// averaged 0.988-1.000 across the 27 v17 production rows. World, decoy,
+// unexpected and connector result-usage cases are never taken.
+// n is the run's tool-case count: like every v18 tool override, it applies
+// only in the 50-79-case full dueling half.
+func v18RestraintMayTakeResultUsage(benchVersion, n int, category string) bool {
+	return benchVersion >= protocol.BenchVersionV18 && n >= V18FullToolHalf && n < 80 &&
+		!v9WorldFamily(category) && !IsDecoyCorrect(category) &&
+		!v13IsUnexpectedFamily(category) && !IsV16ConnectorCase(category)
+}
+
+// V18WorldMinimum is the v18 floor on world-derived tool cases in the
+// 50-case full half (the v13 run-scaled floor is 17). World families were
+// saturated on v17 (see v13ConversionOrderForVersion), so v18 keeps one case
+// per world family plus the carrier and the state-dependent routes.
+const V18WorldMinimum = 8
+
+// v13WorldMinimumForRunVersion is v13WorldMinimumForRun under an explicit
+// contract.
+func v13WorldMinimumForRunVersion(n, benchVersion int) int {
+	if benchVersion >= protocol.BenchVersionV18 && n >= V18FullToolHalf && n < 80 {
+		return V18WorldMinimum
+	}
+	return v13WorldMinimumForRun(n)
+}
+
 // v13RestraintCaseCount is the restraint-group case count for a run size.
 // Small stays a cheap smoke path with no groups.
 func v13RestraintCaseCount(n int) int {
@@ -157,6 +185,15 @@ func v13RestraintCaseCount(n int) int {
 	}
 }
 
+// v13RestraintCaseCountForVersion is v13RestraintCaseCount under an explicit
+// contract. The 50-case v18 half keeps the medium restraint quota its case
+// count selects: every v17 restraint family was saturated, and v18 tests
+// restraint inside the multi-call encounters instead (a reconcile request
+// that must change nothing, a triage that must not file a duplicate).
+func v13RestraintCaseCountForVersion(n, benchVersion int) int {
+	return v13RestraintCaseCount(n)
+}
+
 // applyV13ToolSemantics is the single v13 entry point, run after the v9 world
 // and v10 route passes and before writing noise so every planted record and
 // prompt receives the same projection as the rest of the run.
@@ -164,15 +201,16 @@ func applyV13ToolSemantics(seed int64, benchVersion int, cases []protocol.ToolCa
 	if benchVersion < protocol.BenchVersionV13 || len(cases) == 0 {
 		return
 	}
-	scale := 1
-	if len(cases) >= 80 {
-		scale = 3
-	} else if len(cases) >= 30 {
-		scale = 2
+	scale := ToolWorldScale(len(cases), benchVersion)
+	// Through v15 the pass reads the v13 world, byte for byte as those
+	// contracts shipped; from v16 it reads the run's own world.
+	worldVersion := protocol.BenchVersionV13
+	if benchVersion >= protocol.BenchVersionV16 {
+		worldVersion = benchVersion
 	}
-	world := universe.GenerateForVersion(seed, scale, protocol.BenchVersionV13)
+	world := universe.GenerateForVersion(seed, scale, worldVersion)
 	worldCarrier := v13WorldCarrier(world, cases)
-	applyV13RestraintGroups(seed, world, worldCarrier, cases)
+	applyV13RestraintGroupsForVersion(seed, benchVersion, world, worldCarrier, cases)
 	applyV13MutationsAndEffectReads(seed, world, worldCarrier, cases)
 }
 
@@ -249,6 +287,10 @@ func v13Convertible(tc protocol.ToolCase, remaining map[string]int, worldCarrier
 	if IsDecoyCorrect(tc.Category) || v13DiscoveryFamily(tc.Category) || v13IsUnexpectedFamily(tc.Category) {
 		return false
 	}
+	if IsV16ConnectorCase(tc.Category) {
+		// Only reachable from v18, whose connector pass runs first.
+		return false
+	}
 	if index == worldCarrier {
 		return false
 	}
@@ -271,7 +313,13 @@ func v13Convertible(tc protocol.ToolCase, remaining map[string]int, worldCarrier
 // drawn with replacement so each family is present in roughly two thirds of
 // runs and a harness cannot rely on a family being paired.
 func applyV13RestraintGroups(seed int64, world universe.World, worldCarrier int, cases []protocol.ToolCase) {
-	want := v13RestraintCaseCount(len(cases))
+	applyV13RestraintGroupsForVersion(seed, protocol.BenchVersionV13, world, worldCarrier, cases)
+}
+
+// applyV13RestraintGroupsForVersion is applyV13RestraintGroups under an
+// explicit contract; only the group budget depends on the version.
+func applyV13RestraintGroupsForVersion(seed int64, benchVersion int, world universe.World, worldCarrier int, cases []protocol.ToolCase) {
+	want := v13RestraintCaseCountForVersion(len(cases), benchVersion)
 	if want == 0 {
 		return
 	}
@@ -305,7 +353,10 @@ func applyV13RestraintGroups(seed int64, world universe.World, worldCarrier int,
 	// planted-context families (stale_context_web, memory_fetch) whose compact
 	// local record is replaced by the restraint record.
 	for _, withPrerequisites := range []bool{false, true} {
-		if withPrerequisites && len(cases) < V9FullToolCaseCount {
+		// v18 opens this pass only for the 50-79-case full dueling half, the
+		// window every other v18 tool override is scoped to.
+		v18FullHalf := benchVersion >= protocol.BenchVersionV18 && len(cases) >= V18FullToolHalf && len(cases) < 80
+		if withPrerequisites && len(cases) < V9FullToolCaseCount && !v18FullHalf {
 			continue
 		}
 		for i, tc := range cases {
@@ -333,8 +384,9 @@ func applyV13RestraintGroups(seed int64, world universe.World, worldCarrier int,
 				break
 			}
 			if seen[i] || i == worldCarrier || len(tc.PrerequisitePairs) != 0 ||
-				v13WorldDerived(tc.Category) || IsResultUsage(tc.Category) ||
-				v13MemoryRoutingCase(tc) || v9RetiredSourceFamily(tc.Category) || IsV13Restraint(tc.Category) || v13DiscoveryFamily(tc.Category) {
+				v13WorldDerived(tc.Category) || IsResultUsage(tc.Category) && !v18RestraintMayTakeResultUsage(benchVersion, len(cases), tc.Category) ||
+				v13MemoryRoutingCase(tc) || v9RetiredSourceFamily(tc.Category) || IsV13Restraint(tc.Category) || v13DiscoveryFamily(tc.Category) ||
+				IsV16ConnectorCase(tc.Category) {
 				continue
 			}
 			take(i)
@@ -351,7 +403,7 @@ func applyV13RestraintGroups(seed int64, world universe.World, worldCarrier int,
 			worldCount++
 		}
 	}
-	worldMinimum := v13WorldMinimumForRun(len(cases))
+	worldMinimum := v13WorldMinimumForRunVersion(len(cases), benchVersion)
 	for i, tc := range cases {
 		if len(candidates) >= want || worldCount <= worldMinimum {
 			break
@@ -381,7 +433,7 @@ func applyV13RestraintGroups(seed int64, world universe.World, worldCarrier int,
 				break
 			}
 			tc := cases[i]
-			if seen[i] || i == worldCarrier || protected[tc.Category] || len(tc.PrerequisitePairs) != 0 || v13WorldDerived(tc.Category) || IsResultUsage(tc.Category) || v13DiscoveryFamily(tc.Category) || v13MemoryRoutingCase(tc) {
+			if seen[i] || i == worldCarrier || protected[tc.Category] || len(tc.PrerequisitePairs) != 0 || v13WorldDerived(tc.Category) || IsResultUsage(tc.Category) || v13DiscoveryFamily(tc.Category) || v13MemoryRoutingCase(tc) || IsV16ConnectorCase(tc.Category) {
 				continue
 			}
 			redundant := len(tc.ExpectedTools) > 0

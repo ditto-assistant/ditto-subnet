@@ -156,6 +156,7 @@ when you build.
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `src/baseline.rs`             | The agent you optimize. Wires DB + embedder + model + MLP predictor + reranker + harness.               |
 | `src/reranker.rs`             | ONNX cross-encoder reranker, the production rerank stage, 1:1.                                             |
+| `src/hybrid.rs`, `src/jev.rs` | Reference path, the default from bench 18 (`DITTOBENCH_JEV_HYBRID=0` opts out): the decision lane picks, the chat model writes. |
 | `src/seed.rs`                 | Loads the bundled LongMemEval seed user into the vector DB.                                                 |
 | `src/protocol.rs`             | The validator HTTP wire contract (see `PROTOCOL.md`).                                                       |
 | `src/catalog.rs`              | The Ditto tool catalog presented per case.                                                                  |
@@ -273,7 +274,7 @@ The command requires Rust and Go, plus the same local provider setup as
 `serve`: Ollama `embeddinggemma` is required for memory, and chat uses the
 provider selected in `.env`. It builds both binaries, uses an isolated temporary
 database, selects free loopback ports, submits a run on the live scoring bench
-(read from the public rollout endpoint at start; currently 14, with the
+(read from the public rollout endpoint at start; currently 18, with the
 script's `LIVE_SCORING_BENCH_VERSION` as the offline fallback),
 displays progress and the final score/provenance counts, and cleans up on exit.
 `--run-size small` is a smoke profile. `--run-size full` is the on-chain-shaped
@@ -663,6 +664,87 @@ drop it in. To run the exact production stack, use Vertex `text-embedding-005`
 
 - the production `model.bin`.
 
+## Reference: Jev decides, the chat model writes (default from bench 18)
+
+`src/hybrid.rs` is a second served path that uses the scored decision lane
+(`DITTOBENCH_DECISIONS_URL`, TypeSafe Jev System One) for every *decision* and
+the locked chat model only for *strings*. With `DITTOBENCH_JEV_HYBRID` unset it
+serves any request whose tool menu is over 64k estimated tokens (scored runs
+send `bench_version: 9` whatever the contract, so in live scoring the v18 menu
+size is the switch) and every bench 18+ request in local rehearsal. Anything
+else takes the classic path above unchanged (so bench 17 scoring of an
+unmodified kit does not move).
+`DITTOBENCH_JEV_HYBRID=1` forces it on for every bench and `0` forces the
+classic path everywhere. `serve` prints which path each bench takes at startup.
+It is a worked example, not a required library; the competition stays
+language- and architecture-agnostic.
+
+Why it is the default at v18: the classic path scores **0** there. A seed's
+1,454-tool menu is 152,270 tokens of tool input, gpt-oss-20b's context is
+131,072, and every chat call is refused with a 400 before a token is billed.
+If you opt out with `DITTOBENCH_JEV_HYBRID=0` at v18, also set
+`DITTOBENCH_PRELOAD_TOP_K` (32 measured 0.093 at factor 0.50) or trim the menu
+your own way.
+
+Why it pays at v18. A v18 seed offers about 1,450 tools, which is about 156k
+tokens of tool JSON. That is more than gpt-oss-20b's 131k context, so a harness that
+forwards the menu cannot complete a tool case. Validators price a chat prompt
+token at $0.07/M, decision-lane input at $0.042/M and decision output at
+zero. Picking from a long list is what the decision lane answers well, and
+it is the part that makes chat prompts large.
+
+| Step | Who | What |
+| --- | --- | --- |
+| Tool selection | Jev `choice` | The whole menu as `choice` questions of at most 255 options (name plus an 80-character description), packed under the 32k-per-question and 64k-per-request limits. The v18 menu fits one request. Each chunk carries a `none_of_these` option so chunks can be ranked against each other. |
+| Act or not | Jev `choice` + `noul` | A route (recall / act / remember / chat), "did the user ask for no change?" and "do the records show it is already done?". |
+| Notes | Jev `choice` | Ranks 24 retrieved memories; the top 8 reach the prompt (short ones, not a 24-record block). |
+| Argument values | code + Jev `choice` | Code extracts URLs, emails, ids, amounts, dates and quoted or capitalised spans from the request and the notes. Jev picks one for each required string argument of the top tool. |
+| Next tool (multi-call) | Jev `choice` + `noul` | After each tool hop, the next tool from the first pass's top 24 and "is the request done?". |
+| Every string | gpt-oss-20b | Message bodies, titles, every tool call and the final reply, from a prompt holding the request, the chosen notes, the confirmed values and three to six tool schemas. There is no tool menu and no memory dump. |
+
+It stays inside the gates by construction:
+
+- The chat model emits every tool call. `tool_endpoint` only executes a call
+  that matches an unconsumed model emission, so Jev never places one.
+- Every chat call also offers the published semantic top-3 (the catalog-present
+  safe harbor). Restraint stays the model's choice even when Jev says "no
+  action".
+- Every emitted call is executed, and the served text is the model's own.
+- Suggested values come from the request, `/seed` records and served tool
+  results, which are the sources `answer_in_prompt` exempts.
+
+Knobs (environment):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DITTOBENCH_JEV_HYBRID` | unset | Unset: on for a tool menu over 64k estimated tokens (v18) or a bench 18+ request, off otherwise. `1` forces it on for every request, `0` forces the classic path. |
+| `DITTOBENCH_JEV_MENU` | `full` | `grouped` asks about toolkits (name prefixes) first, then only the tools of the top 5 toolkits. It reads about a fifth of the decision tokens, at some recall risk. |
+| `DITTOBENCH_JEV_OFFER_K` | `3` | Tools Jev hands the chat model, before the safe-harbor top-3. |
+| `DITTOBENCH_JEV_NOTES` | `8` | Most memory notes in a prompt. |
+| `DITTOBENCH_JEV_DESC_CHARS` | `80` | Description characters Jev reads per tool. |
+| `DITTOBENCH_DECISIONS_URL` | validator-set | Set by the sandbox on bench 15+ (the route answers 404 on confirmation and ablation sessions). Without it, or when a call fails, the path falls back to code-only (semantic top-k) selection. |
+| `DITTOBENCH_DECISIONS_API_KEY`, `DITTOBENCH_DECISIONS_MODEL` | unset, `typesafe/jev-1.14` | Only for pointing the client at a provider directly. The canonical broker signs the call and forces its own pinned model. |
+| `DITTOBENCH_JEV_USAGE_LOG` | unset | JSONL with per-case chat and decision tokens, largest prompt and tools offered. |
+
+Rehearse it like the default path. With `DITTOBENCH_PROVIDER=openrouter` and
+`OPENROUTER_API_KEY`, the rehearsal's cost meter also fronts OpenRouter's
+System One route as a keyless `DITTOBENCH_DECISIONS_URL` and prices decision
+input tokens. The estimate it prints is then the whole priced cost:
+
+```bash
+uv run ditto practice --bench-version 18 --run-size medium   # the hybrid is the v18 default
+```
+
+Measured on bench v18 (seed 42, full, 350 cases; details in
+[BASELINES.md](BASELINES.md)):
+
+| Path | composite | priced cost / 350 cases | factor |
+| --- | ---: | ---: | ---: |
+| classic path (`DITTOBENCH_JEV_HYBRID=0`) | 0.000 (the menu exceeds the 131k context) | $0.00 | 1.00 |
+| classic path, `DITTOBENCH_PRELOAD_TOP_K=32` | 0.093 | $0.856 | 0.50 |
+| hybrid, `full` menu (the v18 default) | 0.263 | $0.270 | 1.00 |
+| hybrid, `grouped` menu | 0.268 | $0.197 | 1.00 |
+
 ## Changing the retrieval algorithm
 
 Retrieval is the main lever on your score, so this is worth being clear about:
@@ -755,12 +837,42 @@ produces a container serving that protocol on :8080.
 > Status: the hosted practice validator, on-chain submission path (`ditto upload`,
 > eval fee, scoring, weights), and the [SN118 leaderboard](https://platform-api.heyditto.ai/)
 > are live today.
-> Benchmark v14 is the active scoring contract. It keeps the v13 surface and
-> gates (see *Bench v13: how to stay inside the gates* below) and adds
-> action-scoped declarative over-call scoring; `GET /api/v1/public/bench/rollout`
-> (`active_version`) is authoritative for what is active. Every
+> Benchmark v15 is the active scoring contract (activated 2026-11-03). It keeps
+> the v14 grader and the v13 gates (see *Bench v13: how to stay inside the
+> gates* below); `GET /api/v1/public/bench/rollout` (`active_version`) is
+> authoritative for what is active. Every
 > contract uses locked `openai/gpt-oss-20b` inference and validator-observed
 > tool execution, and reaches your harness as wire version 9.
+>
+> **Bench v15 (active since 2026-11-03)** adds two things your harness sees.
+> The tool catalog becomes production-sized: about 235 tools per run, 200 of
+> them third-party connector tools the workspace has not linked (a call returns
+> "not connected" and costs an extra call). Picking the right tool from that
+> menu is now part of the score, and sending the whole catalog to the model on
+> every turn is expensive. The sandbox also gets `DITTOBENCH_DECISIONS_URL`:
+> POST a System One body (`{"state": ..., "questions": {...}}`) there to ask the
+> locked decision model (TypeSafe Jev) choice or score questions, for example
+> which tools to offer the chat model. Use it however you like; it is metered
+> like chat. *Reference: Jev decides, the chat model writes* below is one
+> worked example (the kit default from bench 18). This kit accepts `bench_version` 15 on `/run`.
+>
+> **Bench v16 (shipped, shadow only, not live)** is the dueling bench: a
+> canonical run becomes a 175-case datagen half (the v15 surface at a smaller
+> profile, with connector tools that no longer say whether they are linked)
+> plus a 175-case generator slice, 5 columns of 35 cases from the top
+> generator-competition miners, scored as one composite
+> (`0.5 x datagen + 0.1 per column`). Slice cases reach your harness as
+> ordinary memory `/seed` and `/run` calls. This kit accepts `bench_version` 16
+> on `/run`. Rehearse it locally with
+> `uv run ditto practice --bench-version 16`: the rehearsal builds a local slice
+> from the **public default generator** only
+> (`miners/dittobench-generator-starter-kit`, all five columns, owner `""`, on
+> a throwaway season), sends it to the local scorer, and prints the composite
+> plus each column's mean. Live seasons pin miner generators whose cases stay
+> private until their source is released, so live columns differ.
+> `--no-slice` scores the datagen half alone. v16 does not set weights until
+> the operator activates it; see
+> [`benchmark-v16-rollout.md`](../../docs/benchmark-v16-rollout.md).
 
 1. Registration. You need a hotkey registered on subnet netuid 118 and TAO for
 the registration cost plus per-submission eval fees. `ditto upload` offers to
@@ -826,8 +938,15 @@ so do not branch on a higher number. Version 14 is the active scoring contract;
 `GET /api/v1/public/bench/rollout` is authoritative for what is active
 (`active_version`) and for any rollout target (`desired_version`).
 
-8. Lifecycle. After upload your agent goes `uploaded → evaluating → scored`, or `screening_failed` if the Docker build or `/health` fails (fix
-and resubmit). Scores land on the public score ledger and the
+8. Lifecycle. After upload your agent goes `uploaded → screening → evaluating → scored`.
+Screening is build and safety checks only: archive and size limits, a static
+malicious-source check, the isolated Docker build, `/health` and seeding, and
+copy protection. There is no source review and no review hold; only copy
+protection can hold a submission (an exact copy is rejected, a near-duplicate
+is held for copy review when its scores finalize). A build,
+contract or safety failure ends in `rejected` or `screening_failed` with the
+reason on the status endpoint (fix and resubmit). Operators read the top
+agents' code after scoring and can void scores, reject or ban. Scores land on the public score ledger and the
 [SN118 leaderboard](https://platform-api.heyditto.ai/), with median latency,
 `bench_version`, and per-category stats.
 
@@ -995,9 +1114,11 @@ Everything below is `bench_version >= 13`; v12 and earlier are unchanged.
 The wire stays at version 9 — no `protocol.rs` change is required to *parse*
 v13 traffic, only `MAX_SUPPORTED_BENCH_VERSION` moves to 13 with the v13
 wiring sweep (#1519) so `/run` accepts the new number when a validator
-rehearses it. Bench 14, which keeps this v13 surface and these gates, is now
-the live scoring contract; `local-rehearsal.py` defaults to the live version
-and falls back to `LIVE_SCORING_BENCH_VERSION` 14 offline.
+rehearses it. Bench 15 kept this v13 surface and these gates and added the
+production-scale catalog and decision lane. Bench 17, the dueling bench with
+the priced-cost-v2 factor, is now the live scoring contract;
+`local-rehearsal.py` defaults to the live version and falls back to
+`LIVE_SCORING_BENCH_VERSION` 17 offline.
 
 - **Tool catalog is per seed** (#1843, #1842, #1580, #1840): paraphrased
   descriptions, `enum` on `set_theme`/`set_reasoning_effort`,

@@ -37,6 +37,7 @@ Lifecycle + scope decisions (documented so they're easy to revisit):
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
@@ -88,7 +89,6 @@ from ditto.api_models.confirmation_progress import (
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.inference import InferenceGrantOffer
 from ditto.api_models.queue_policy_settings import (
-    DeferredSourceReviewSettings,
     PrevGenCarryoverSettings,
     QueuePolicySettings,
 )
@@ -109,7 +109,12 @@ from ditto.api_models.system_health import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.upload import _SS58_PATTERN
-from ditto.api_models.validator import ConfirmationDatasetPin, HeldLease, V9BaseEvidence
+from ditto.api_models.validator import (
+    HARNESS_OOM_FAILURE_DETAIL,
+    ConfirmationDatasetPin,
+    HeldLease,
+    V9BaseEvidence,
+)
 from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
@@ -145,6 +150,7 @@ from ditto.api_server.confirmation_candidate_reconciliation import (
 )
 from ditto.api_server.confirmation_seed_anchor import (
     LEGACY_PLANNING,
+    anchor_season_key,
     bind_confirmation_seed,
     list_reign_seed_anchors,
     prefetch_finalized_anchor_hashes,
@@ -160,25 +166,18 @@ from ditto.api_server.crn import (
     fold_seed_bound,
 )
 from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
-from ditto.api_server.deferred_source_review import (
-    DEFERRED_MECHANICAL_REASON,
-    DEFERRED_REVIEW_KIND,
-    DEFERRED_REVIEW_REASON,
-    INTEGRITY_DOUBLE_CHECK_ACTOR,
-    INTEGRITY_DOUBLE_CHECK_ALGORITHM,
-    INTEGRITY_DOUBLE_CHECK_AUDIT_KIND,
-    INTEGRITY_DOUBLE_CHECK_REASON,
-    INTEGRITY_DOUBLE_CHECK_TRIGGER,
-    TOP_FIVE_SIZE,
-    DeferredReviewDecision,
-    evaluate_deferred_review,
-    evaluate_integrity_double_check,
-)
 from ditto.api_server.dependencies import (
     get_chain_client,
     get_dataset_generator,
     get_session,
     get_storage_client,
+)
+from ditto.api_server.dueling_seasons import (
+    DuelingEvidenceRejected,
+    DuelingSliceUnavailable,
+    agent_owner_key,
+    dueling_score_evidence,
+    resolve_dueling_slice,
 )
 from ditto.api_server.efficiency import (
     audited_v9_run_token_total,
@@ -197,24 +196,23 @@ from ditto.api_server.koth import (
     KothEntry,
     KothProjection,
     continual_composite,
+    dueling_seed_records,
     effective_composite,
     emission_set,
+    ledger_row_dueling_fields,
     project_koth,
     retest_cohort,
     top5_round_is_due,
 )
 from ditto.api_server.model_use import evaluate_model_use, model_use_policy
 from ditto.api_server.onchain_seed import derive_seed, derive_validator_seed
+from ditto.api_server.operator_diagnostic import (
+    diagnostic_target_refusal,
+    operator_diagnostic_hotkeys,
+)
 from ditto.api_server.outlier_escalation import (
-    OUTLIER_ALGORITHM_VERSION,
-    OUTLIER_AXIS_EVIDENCE_KIND,
-    OUTLIER_REVIEW_KIND,
-    AxisObservation,
-    OutlierEscalationSettings,
     OutlierEscalationSettingsLoad,
-    evaluate_score_outlier,
     load_outlier_escalation_settings,
-    public_audit_evidence,
 )
 from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.queue_policy_settings import (
@@ -223,13 +221,38 @@ from ditto.api_server.queue_policy_settings import (
 from ditto.api_server.queue_policy_settings import (
     QueuePolicySettingsResolver,
 )
+from ditto.api_server.retest_wave_window import (
+    WaveWindow,
+    current_wave_window,
+    first_retest_issue_by_seed,
+    growth_open,
+)
+from ditto.api_server.rotation_duel_seeds import (
+    agents_with_pending_rotation,
+    assign_rotation_seed,
+    defer_for_season_anchor,
+    mirror_season_seeded_score,
+    rotation_seeds_active,
+    season_seed_binding,
+)
 from ditto.api_server.scoring_gate import (
     PublicSourceRelease,
+    ReviewDecision,
     evaluate_duplicate_signals,
     evaluate_rejected_resubmission,
 )
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
+from ditto.api_server.season_duel import (
+    season_duel_anchor_champion,
+    season_duel_entrant_excluded,
+    season_duel_excluded_entrants,
+    season_duel_owed,
+    season_duel_seed_count,
+    season_duel_seeds,
+    season_duel_unserved,
+)
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.structural_fingerprint import compute_structural_fingerprint
 from ditto.api_server.v13_scorer_cohort import (
     pinned_validator_allowed,
     pinned_validator_may_submit,
@@ -252,7 +275,6 @@ from ditto.chain import ChainError
 from ditto.db.models import (
     Agent,
     AthReview,
-    AthReviewAction,
     BenchmarkDataset,
     BenchmarkRollout,
     ConfirmationBundleSubject,
@@ -261,9 +283,6 @@ from ditto.db.models import (
     InferenceGrant,
     PrivateBenchmarkDataset,
     Score,
-    ScoreAuditEntry,
-    ScreeningAttempt,
-    ScreeningQuarantine,
     ValidatorHeartbeat,
     ValidatorReceiptDiagnostic,
     ValidatorTicket,
@@ -300,6 +319,10 @@ from ditto.db.queries.benchmark_rollout import (
     preserve_desired_authority,
     rollout_cohort_complete,
 )
+from ditto.db.queries.confirmation_score_voids import (
+    VoidRerunDebt,
+    outstanding_void_rerun_debts,
+)
 from ditto.db.queries.confirmation_scores import (
     DEFAULT_WAVE_MEMBERSHIP,
     ConfirmationSeedScore,
@@ -308,6 +331,7 @@ from ditto.db.queries.confirmation_scores import (
     completed_confirmation_wave_seeds,
     confirmation_catchup_seeds,
     confirmation_composites_by_seed,
+    confirmation_history_by_agent,
     fold_eligible_seeds_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import desired_era_work_outstanding
@@ -334,8 +358,10 @@ from ditto.db.queries.lease_liveness import (
 )
 from ditto.db.queries.payments import get_miner_coldkey_for_agent
 from ditto.db.queries.provider_outages import (
+    ProviderWorkGate,
     lock_provider_work_gate,
     park_scoring_leases,
+    provider_outage_active,
     register_provider_probe,
     scoring_probe_key,
 )
@@ -349,6 +375,7 @@ from ditto.db.queries.score_ranking import (
     resolve_efficiency_adjustments,
 )
 from ditto.db.queries.score_retests import (
+    DUELING_ROTATION_RETEST_BASIS,
     V9_CONTRACT_RETEST_BASIS,
     activate_next_score_retest,
 )
@@ -366,6 +393,7 @@ from ditto.db.queries.similarity_grouping import (
     SimilarityBudgetPolicy,
     policy_from_settings,
 )
+from ditto.db.queries.terminal_failure import withdraw_terminal_artifact_failure
 from ditto.db.queries.tickets import (
     OWNER_CONCURRENT_SUBMISSION_LIMIT_DEFAULT,
     RETRY_COOLDOWN,
@@ -378,6 +406,9 @@ from ditto.db.queries.tickets import (
     mark_ticket_scored,
 )
 from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enabled
+from ditto.db.queries.unreleased_copy import (
+    finalization_hold as unreleased_copy_finalization_hold,
+)
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
@@ -394,9 +425,18 @@ from ditto.metrics import (
     DispatchDeclineReason,
 )
 from ditto.score_order import rank_submissions
-from ditto.screener_policy_state import effective_screening_policy_version
+from ditto_screening_protocol.dueling import (
+    DUELING_SLICE_MODE,
+    is_dueling_bench_version,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from ditto.api_models.inference_concurrency_settings import (
+        InferenceConcurrencySettings,
+    )
+    from ditto.api_models.validator_capabilities import V7InferenceCalibration
     from ditto.api_server.config import EfficiencyBonusConfig, InferenceProxyConfig
     from ditto.chain import ChainClient
 
@@ -434,6 +474,29 @@ def _assert_private_dataset_capability(heartbeat: ValidatorHeartbeat | None) -> 
         or scorer.get("status") != "fresh_verified"
     ):
         raise HTTPException(503, "validator cannot execute private datasets")
+
+
+async def _validator_scores_source_free(
+    session: AsyncSession, *, validator_hotkey: str
+) -> bool:
+    """Whether this validator's scorer runs a screened image without source.
+
+    Read from the signed heartbeat capability. Validators that do not
+    advertise it still receive the source URL so the existing fleet keeps
+    scoring until it updates.
+    """
+    heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
+    capabilities = heartbeat.capabilities if heartbeat is not None else None
+    scorer = (
+        capabilities.get("scorer_benchmarks")
+        if isinstance(capabilities, dict)
+        else None
+    )
+    return (
+        isinstance(scorer, dict)
+        and scorer.get("source_free_screened_images") is True
+        and scorer.get("status") == "fresh_verified"
+    )
 
 
 def _inference_grant_offer(
@@ -480,26 +543,11 @@ AUDIT_ALPHA = 0.01
 AUDIT_MIN_DISCORDANT = 6
 TRANSFORM_AUDIT_REVIEW_REASON = "transform_audit_brittleness"
 
-# Enforcement stays OFF by default. The metric now discriminates in principle
-# (see the calibration in dittobench-api docs/BASELINES.md Run 3), but the floor
-# has not been re-validated end to end against the population it judges --
-# champion/tail agents, which are more accurate than the stock reference harness
-# every number above came from. Turn this on only with that evidence.
-TRANSFORM_AUDIT_ENFORCE = os.environ.get(
-    "DITTO_TRANSFORM_AUDIT_ENFORCE", "false"
-).strip().lower() in {"1", "true", "yes", "on"}
-
-
-# Out-of-band composite escalation to ATH review (issue #476). Env-driven like
-# the transform-audit toggle above so the safety net can be rolled out
-# observe-first and enabled without a code change. Ships in ``off`` mode: the
-# gate is a no-op until an operator sets ``DITTO_OUTLIER_ESCALATION_MODE`` to
-# ``observe`` (record would-be holds) or ``enforce`` (open them). The bench-
-# version floor keeps v8-v11 behaviour byte-identical.
-# Loaded once per process at import, like the transform-audit toggle. The load
-# record keeps each field's source (env / default / default_invalid_env) so the
-# admin posture read can show a silently-rejected variable; scoring only ever
-# consumes ``OUTLIER_ESCALATION_SETTINGS``.
+# Out-of-band composite escalation settings (issue #476). Score finalization no
+# longer opens an automatic hold from them (automatic score holds retired
+# 2026-11-07); the operator dry-run read in ``admin_outlier_escalation`` still
+# uses them to show which composites stand out. The load record keeps each
+# field's source (env / default / default_invalid_env) for that posture read.
 OUTLIER_ESCALATION_SETTINGS_LOAD: OutlierEscalationSettingsLoad = (
     load_outlier_escalation_settings(os.environ)
 )
@@ -580,713 +628,6 @@ async def _resolve_queue_policy(request: Request) -> QueuePolicySettings:
     if resolver is None:
         return QUEUE_POLICY_DEFAULTS
     return await resolver.resolve(getattr(request.app.state, "session_maker", None))
-
-
-async def _deferred_screening_attempts(
-    session: AsyncSession, *, agent_ids: Sequence[UUID]
-) -> dict[UUID, ScreeningAttempt]:
-    """Batch-resolve outstanding mechanical admissions without ledger N+1s.
-
-    A prior deferred ATH lifecycle (pending or resolved) is terminal for
-    qualification; an operator clear must not be reopened by a later score
-    mutation. A terminal non-build attempt is also a stop even if historical
-    data somehow lost its review row.
-    """
-    ids = tuple(dict.fromkeys(agent_ids))
-    if not ids:
-        return {}
-    reviewed_ids = set(
-        await session.scalars(
-            select(AthReview.agent_id).where(
-                AthReview.agent_id.in_(ids),
-                AthReview.algorithm_provenance["review_kind"].as_string()
-                == DEFERRED_REVIEW_KIND,
-            )
-        )
-    )
-    terminal_ids = set(
-        await session.scalars(
-            select(ScreeningAttempt.agent_id)
-            .where(
-                ScreeningAttempt.agent_id.in_(ids),
-                ScreeningAttempt.policy_version == effective_screening_policy_version(),
-                ScreeningAttempt.build_only.is_(False),
-                ScreeningAttempt.status.in_(("passed", "quarantined")),
-            )
-            .distinct()
-        )
-    )
-    rows = (
-        await session.scalars(
-            select(ScreeningAttempt)
-            .where(
-                ScreeningAttempt.agent_id.in_(ids),
-                ScreeningAttempt.policy_version == effective_screening_policy_version(),
-                ScreeningAttempt.build_only.is_(True),
-                ScreeningAttempt.status == "passed",
-                ScreeningAttempt.reason_code == DEFERRED_MECHANICAL_REASON,
-            )
-            .order_by(
-                ScreeningAttempt.agent_id,
-                ScreeningAttempt.finished_at.desc(),
-                ScreeningAttempt.attempt_id,
-            )
-        )
-    ).all()
-    outstanding: dict[UUID, ScreeningAttempt] = {}
-    for attempt in rows:
-        if (
-            attempt.agent_id in reviewed_ids
-            or attempt.agent_id in terminal_ids
-            or attempt.agent_id in outstanding
-        ):
-            continue
-        outstanding[attempt.agent_id] = attempt
-    return outstanding
-
-
-async def _deferred_screening_attempt(
-    session: AsyncSession, *, agent_id: UUID
-) -> ScreeningAttempt | None:
-    """Return one admission attempt proving deep review is still outstanding."""
-    return (await _deferred_screening_attempts(session, agent_ids=(agent_id,))).get(
-        agent_id
-    )
-
-
-async def _record_deferred_review_decision(
-    session: AsyncSession,
-    *,
-    agent: Agent,
-    decision: DeferredReviewDecision,
-    mode: Literal["observe", "enforce"],
-    screening_attempt: ScreeningAttempt | None,
-    score_count: int,
-    now: datetime,
-    bench_version: int | None = None,
-    double_check: bool = False,
-) -> None:
-    """Persist an observe record or enforce an idempotent reward hold.
-
-    ``double_check`` records the hold as a top-five integrity double-check: the
-    same ``deferred_source_review`` lifecycle, with its own reason, actor and
-    ``trigger`` provenance so the screener claim pins the stronger posture, and
-    an ``enforced`` score-audit marker that survives later reopens of the
-    agent's single review row and suppresses a second double-check.
-    """
-    if not decision.triggered:
-        return
-    audit_kind = (
-        INTEGRITY_DOUBLE_CHECK_AUDIT_KIND if double_check else DEFERRED_REVIEW_KIND
-    )
-    reason = INTEGRITY_DOUBLE_CHECK_REASON if double_check else DEFERRED_REVIEW_REASON
-    actor = (
-        INTEGRITY_DOUBLE_CHECK_ACTOR
-        if double_check
-        else "platform:deferred-source-review"
-    )
-    trigger_provenance: dict[str, object] = (
-        {"trigger": INTEGRITY_DOUBLE_CHECK_TRIGGER} if double_check else {}
-    )
-    algorithm_version = (
-        INTEGRITY_DOUBLE_CHECK_ALGORITHM
-        if double_check
-        else "deferred-source-review-v1"
-    )
-    retained_review: ScreeningQuarantine | None = None
-    if screening_attempt is not None:
-        retained_review = await session.scalar(
-            select(ScreeningQuarantine).where(
-                ScreeningQuarantine.attempt_id == screening_attempt.attempt_id
-            )
-        )
-    evidence = {
-        "sha256": agent.sha256,
-        "score_count": score_count,
-        "previous_status": agent.status.value,
-        "deferred_review": {
-            **decision.evidence,
-            "mode": mode,
-            "bench_version": bench_version,
-            "screening_attempt_id": (
-                str(screening_attempt.attempt_id)
-                if screening_attempt is not None
-                else None
-            ),
-            "screening_reason_code": (
-                screening_attempt.reason_code if screening_attempt is not None else None
-            ),
-            "review_audit_digest": (
-                retained_review.review_audit_digest
-                if retained_review is not None
-                else None
-            ),
-            "review_audit": (
-                retained_review.review_audit if retained_review is not None else None
-            ),
-        },
-    }
-    existing = await session.scalar(
-        select(AthReview).where(AthReview.agent_id == agent.agent_id).with_for_update()
-    )
-    if mode == "observe":
-        # AthReview is unique per agent and may already hold unrelated resolved
-        # history. The append-only score audit is therefore the authoritative
-        # observe-mode record: every qualification is durable without
-        # overwriting, reopening, or being suppressed by that unique row.
-        await append_audit_entry(
-            session,
-            agent_id=agent.agent_id,
-            validator_hotkey=None,
-            event=EVENT_AUDIT,
-            payload={
-                "audit_kind": audit_kind,
-                "enforced": False,
-                "qualified": True,
-                "trigger_kinds": list(decision.triggers),
-            },
-            recorded_at=now,
-        )
-        return
-
-    if existing is not None and existing.status == "pending":
-        return
-    if double_check:
-        await append_audit_entry(
-            session,
-            agent_id=agent.agent_id,
-            validator_hotkey=None,
-            event=EVENT_AUDIT,
-            payload={
-                "audit_kind": audit_kind,
-                "enforced": True,
-                "qualified": True,
-                "trigger_kinds": list(decision.triggers),
-            },
-            recorded_at=now,
-        )
-
-    previous_status = agent.status.value
-    if existing is None:
-        session.add(
-            AthReview(
-                review_id=uuid4(),
-                agent_id=agent.agent_id,
-                status="pending",
-                opened_at=now,
-                original_reason=reason,
-                original_policy_version=agent.screening_policy_version,
-                original_evidence=evidence,
-                algorithm_provenance={
-                    "snapshot": "score-finalization",
-                    "review_kind": DEFERRED_REVIEW_KIND,
-                    "algorithm_version": algorithm_version,
-                    "opened_by": "platform",
-                    "backfilled": False,
-                    "opened_at_source": (
-                        "integrity-double-check-enforce"
-                        if double_check
-                        else "deferred-review-enforce"
-                    ),
-                    **trigger_provenance,
-                },
-            )
-        )
-    else:
-        prior_provenance = existing.algorithm_provenance
-        prior_review = {
-            "original_reason": existing.original_reason,
-            "original_duplicate_of": (
-                str(existing.original_duplicate_of)
-                if existing.original_duplicate_of is not None
-                else None
-            ),
-            "original_policy_version": existing.original_policy_version,
-            "original_evidence": existing.original_evidence,
-            "algorithm_provenance": prior_provenance,
-            "resolution": existing.resolution,
-            "resolution_reason": existing.resolution_reason,
-            "resolved_by": existing.resolved_by,
-            "resolved_at": (
-                existing.resolved_at.isoformat()
-                if existing.resolved_at is not None
-                else None
-            ),
-        }
-        existing.status = "pending"
-        existing.reopened_at = now
-        existing.resolved_at = None
-        existing.resolved_by = None
-        existing.resolution = None
-        existing.resolution_reason = None
-        existing.original_reason = reason
-        # The reopened lifecycle is a deferred source review, which has no
-        # matched agent. ``agent.duplicate_of`` is cleared below, and
-        # ``resolve_copy_review`` refuses to resolve while the two disagree, so
-        # a retained copy-hold pointer strands the agent in ATH forever -- the
-        # same failure the provenance reset below already guards against.
-        existing.original_duplicate_of = None
-        existing.original_policy_version = agent.screening_policy_version
-        existing.original_evidence = {
-            **evidence,
-            "prior_review": prior_review,
-        }
-        # The current pending lifecycle is a deferred review. Claiming the one
-        # allowed deep attempt keys off this provenance; retaining a resolved
-        # copy/transform kind here would strand the agent in ATH forever.
-        existing.algorithm_provenance = {
-            "snapshot": "score-finalization",
-            "review_kind": DEFERRED_REVIEW_KIND,
-            "algorithm_version": algorithm_version,
-            "opened_by": "platform",
-            "backfilled": False,
-            "opened_at_source": (
-                "integrity-double-check-reopen"
-                if double_check
-                else "deferred-review-reopen"
-            ),
-            "prior_review_kind": prior_provenance.get("review_kind"),
-            **trigger_provenance,
-        }
-        session.add(
-            AthReviewAction(
-                action_id=uuid4(),
-                review_id=existing.review_id,
-                action="reopen",
-                reason=reason,
-                actor=actor,
-                evidence={
-                    "sha256": agent.sha256,
-                    "score_count": score_count,
-                    "previous_status": previous_status,
-                },
-                created_at=now,
-            )
-        )
-    await preserve_desired_authority(session, now=now)
-    agent.status = AgentStatus.ATH_PENDING_REVIEW
-    agent.duplicate_of = None
-    agent.review_reason = reason
-
-
-async def _evaluate_and_record_deferred_review(
-    session: AsyncSession,
-    *,
-    agent: Agent,
-    bench_version: int,
-    score_count: int,
-    settings: DeferredSourceReviewSettings,
-    now: datetime,
-) -> None:
-    """Re-evaluate deferred admissions after a canonical ledger mutation.
-
-    This helper is used both at first quorum and on operator-authorized score
-    replacement. The explicit flush is load-bearing: ``list_eligible_ledger``
-    filters on the agent's finalized status and must see the just-written score
-    and status before deciding rank/anomaly eligibility. In enforce mode a
-    mutation can promote a *different* row into the top five, so the whole
-    canonical same-version ledger is reconsidered. Only rows carrying the
-    immutable mechanical-admission marker can acquire a delayed hold, and the
-    marker resolver suppresses pending or terminal deep-review lifecycles.
-    """
-    # ``off`` and ``bypass`` differ only in pre-score depth (see
-    # ``claim_screening_attempts``); neither computes anything after scoring, so
-    # the canonical ledger is never even read for them.
-    if (
-        settings.mode == "off"
-        or settings.mode == "bypass"
-        or agent.status
-        not in {
-            AgentStatus.SCORED,
-            AgentStatus.LIVE,
-        }
-    ):
-        return
-    mode: Literal["observe", "enforce"] = settings.mode
-    await session.flush()
-    ledger = await list_eligible_ledger(
-        session,
-        bench_version=bench_version,
-        include_fingerprints=False,
-        include_details=False,
-    )
-    if mode == "observe":
-        decision = evaluate_deferred_review(
-            agent_id=agent.agent_id,
-            ledger=ledger,
-            settings=settings,
-        )
-        await _record_deferred_review_decision(
-            session,
-            agent=agent,
-            decision=decision,
-            mode=mode,
-            screening_attempt=None,
-            score_count=score_count,
-            now=now,
-            bench_version=bench_version,
-        )
-        return
-
-    ledger_ids = [row.agent_id for row in ledger if row.eligible]
-    if not ledger_ids:
-        return
-    candidates = {
-        candidate.agent_id: candidate
-        for candidate in await session.scalars(
-            select(Agent).where(
-                Agent.agent_id.in_(ledger_ids),
-                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
-            )
-        )
-    }
-    score_counts = {
-        candidate_id: int(count)
-        for candidate_id, count in (
-            await session.execute(
-                select(Score.agent_id, func.count())
-                .where(
-                    Score.agent_id.in_(ledger_ids),
-                    Score.bench_version == bench_version,
-                )
-                .group_by(Score.agent_id)
-            )
-        ).all()
-    }
-    admissions = await _deferred_screening_attempts(
-        session, agent_ids=tuple(candidates)
-    )
-    for row in ledger:
-        candidate = candidates.get(row.agent_id)
-        if candidate is None or not row.eligible:
-            continue
-        admission_attempt = admissions.get(row.agent_id)
-        if admission_attempt is None:
-            # Legacy/full-reviewed rows never acquire a new hold merely because
-            # the control is enabled later. Resolved terminal deep reviews are
-            # likewise suppressed by the marker resolver.
-            continue
-        decision = evaluate_deferred_review(
-            agent_id=row.agent_id,
-            ledger=ledger,
-            settings=settings,
-        )
-        await _record_deferred_review_decision(
-            session,
-            agent=candidate,
-            decision=decision,
-            mode="enforce",
-            screening_attempt=admission_attempt,
-            score_count=score_counts.get(row.agent_id, 0),
-            now=now,
-            bench_version=bench_version,
-        )
-
-
-async def _held_post_score_review_composites(
-    session: AsyncSession, *, bench_version: int
-) -> list[float]:
-    """Composites of rows the canonical ledger dropped for a deep-review hold.
-
-    Read from each pending hold's own qualification snapshot, which is the
-    ledger composite it held at. A snapshot from before the benchmark version
-    was recorded is counted: it still occupies a slot on the only board it
-    could have come from, and over-counting only delays a hold.
-    """
-    composites: list[float] = []
-    for evidence in await session.scalars(
-        select(AthReview.original_evidence)
-        .join(Agent, Agent.agent_id == AthReview.agent_id)
-        .where(
-            AthReview.status == "pending",
-            Agent.status == AgentStatus.ATH_PENDING_REVIEW,
-            AthReview.algorithm_provenance["review_kind"].as_string()
-            == DEFERRED_REVIEW_KIND,
-        )
-    ):
-        snapshot = (
-            evidence.get("deferred_review") if isinstance(evidence, dict) else None
-        )
-        if not isinstance(snapshot, dict):
-            continue
-        held_version = snapshot.get("bench_version")
-        if held_version is not None and held_version != bench_version:
-            continue
-        candidate = snapshot.get("candidate")
-        composite = candidate.get("composite") if isinstance(candidate, dict) else None
-        if isinstance(composite, int | float) and not isinstance(composite, bool):
-            composites.append(float(composite))
-    return composites
-
-
-async def _evaluate_and_record_integrity_double_check(
-    session: AsyncSession,
-    *,
-    bench_version: int,
-    settings: DeferredSourceReviewSettings,
-    now: datetime,
-) -> None:
-    """Hold each new top-five row once for a stronger integrity double-check.
-
-    Runs after ``_evaluate_and_record_deferred_review`` on every canonical
-    ledger mutation, independent of its ``mode``: that path only reaches
-    mechanically admitted rows, while this one also covers rows that already
-    passed the full pre-score screen. A row is skipped when its agent has any
-    deferred review lifecycle (pending, or resolved by an operator or a deep
-    pass -- never reopened) or an enforced double-check audit marker (which
-    survives a later copy reopen of the agent's single review row).
-    """
-    mode = settings.integrity_double_check_mode
-    if mode == "off":
-        return
-    await session.flush()
-    ledger = await list_eligible_ledger(
-        session,
-        bench_version=bench_version,
-        include_fingerprints=False,
-        include_details=False,
-    )
-    top_ids = [row.agent_id for row in ledger[:TOP_FIVE_SIZE] if row.eligible]
-    if not top_ids:
-        return
-    candidates = {
-        candidate.agent_id: candidate
-        for candidate in await session.scalars(
-            select(Agent).where(
-                Agent.agent_id.in_(top_ids),
-                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
-            )
-        )
-    }
-    if not candidates:
-        return
-    reviewed_ids = set(
-        await session.scalars(
-            select(AthReview.agent_id).where(
-                AthReview.agent_id.in_(tuple(candidates)),
-                AthReview.algorithm_provenance["review_kind"].as_string()
-                == DEFERRED_REVIEW_KIND,
-            )
-        )
-    )
-    # An enforced marker suppresses in every mode. In observe, any earlier
-    # record does too: the ledger mutates on every finalization, and one
-    # would-be hold per agent is the evidence, not one per mutation.
-    audited = (
-        await session.execute(
-            select(ScoreAuditEntry.agent_id, ScoreAuditEntry.payload).where(
-                ScoreAuditEntry.agent_id.in_(tuple(candidates)),
-                ScoreAuditEntry.event == EVENT_AUDIT,
-                ScoreAuditEntry.payload["audit_kind"].as_string()
-                == INTEGRITY_DOUBLE_CHECK_AUDIT_KIND,
-            )
-        )
-    ).all()
-    checked_ids = {
-        audited_id
-        for audited_id, payload in audited
-        if mode == "observe"
-        or (isinstance(payload, dict) and payload.get("enforced") is True)
-    }
-    score_counts = {
-        candidate_id: int(count)
-        for candidate_id, count in (
-            await session.execute(
-                select(Score.agent_id, func.count())
-                .where(
-                    Score.agent_id.in_(tuple(candidates)),
-                    Score.bench_version == bench_version,
-                )
-                .group_by(Score.agent_id)
-            )
-        ).all()
-    }
-    # Snapshot once: the ledger above still ranks rows this loop holds, so
-    # adding them to ``held`` as well would count each one twice.
-    held = await _held_post_score_review_composites(
-        session, bench_version=bench_version
-    )
-    for agent_id in top_ids:
-        candidate = candidates.get(agent_id)
-        if candidate is None or agent_id in reviewed_ids or agent_id in checked_ids:
-            continue
-        decision = evaluate_integrity_double_check(
-            agent_id=agent_id, ledger=ledger, held_composites=held
-        )
-        await _record_deferred_review_decision(
-            session,
-            agent=candidate,
-            decision=decision,
-            mode=mode,
-            screening_attempt=None,
-            score_count=score_counts.get(agent_id, 0),
-            now=now,
-            bench_version=bench_version,
-            double_check=True,
-        )
-
-
-async def _evaluate_and_record_outlier_escalation(
-    session: AsyncSession,
-    *,
-    agent: Agent,
-    bench_version: int,
-    composite: float,
-    cohort: Sequence[float],
-    settings: OutlierEscalationSettings,
-    now: datetime,
-    axes: Mapping[str, AxisObservation] | None = None,
-) -> None:
-    """Escalate an out-of-band composite to ATH review (issue #476).
-
-    The safety net for a gamed fresh contract: on the score-finalization
-    transition, a composite that is a robust upward outlier of its comparable
-    same-benchmark cohort is routed to ``ATH_PENDING_REVIEW`` for operator
-    adjudication instead of being ranked. This reuses the exact hold mechanism
-    the copy and transform-audit holds use -- ``agents.status`` +
-    ``agents.review_reason`` + a pending ``ath_reviews`` row carrying the
-    immutable evidence snapshot -- so the operator queue, resolution flow and
-    ledger exclusion all work unchanged.
-
-    Auto-HOLD, never auto-reject. ``mode="observe"`` records a would-be hold on
-    the append-only audit chain without touching status; ``mode="enforce"``
-    opens the hold. Bench-version scoped so v8-v11 are untouched, and gated on
-    ``SCORED`` so a copy / transform-audit hold that already fired this
-    transition wins outright (this path never re-holds an already-held agent).
-
-    ``axes`` adds per-axis robust-z evidence to every recorded entry. A
-    per-axis outlier that does not hold under the policy (per-axis
-    enforcement off, or the composite below the floor) is appended as
-    ``OUTLIER_AXIS_EVIDENCE_KIND`` evidence only -- never a hold, never a
-    would-be hold -- in both ``observe`` and ``enforce`` mode.
-
-    The audit chain is public, so its entries carry only the neutral per-axis
-    projection (:func:`public_audit_evidence`: axis name + outlier flag). The
-    full per-axis statistics (value, cohort median/MAD, modified z) are kept
-    only on the private ``ath_reviews`` snapshot, which exists only when an
-    ``enforce`` hold opens. An ``observe`` would-be hold and every
-    ``OUTLIER_AXIS_EVIDENCE_KIND`` entry persist ``{axis, outlier}`` and
-    nothing more, so observe mode records which axes were out of band, not
-    their per-axis z distribution. To see the statistics before enforcing,
-    replay the ledger with the dry-run endpoint (``per_axis_enforce=true``).
-    """
-    if settings.mode == "off":
-        return
-    if bench_version < settings.min_bench_version:
-        return
-    # A copy or transform-audit hold that already fired moved the agent out of
-    # SCORED; the deferred path acts only on SCORED/LIVE for the same reason.
-    if agent.status != AgentStatus.SCORED:
-        return
-
-    decision = evaluate_score_outlier(
-        composite=composite, cohort=cohort, settings=settings, axes=axes
-    )
-    if not decision.held:
-        if decision.axis_outliers:
-            # A single axis far out of band while the policy holds nothing:
-            # observe-only evidence on its own audit kind, so the would-be-hold
-            # and hold counts stay exactly the composite policy's.
-            await append_audit_entry(
-                session,
-                agent_id=agent.agent_id,
-                validator_hotkey=None,
-                event=EVENT_AUDIT,
-                payload={
-                    "audit_kind": OUTLIER_AXIS_EVIDENCE_KIND,
-                    "enforced": False,
-                    "qualified": False,
-                    "bench_version": bench_version,
-                    "evidence": public_audit_evidence(decision.evidence),
-                },
-                recorded_at=now,
-            )
-            logger.info(
-                "agent %s: per-axis out-of-band score recorded as evidence: %s",
-                agent.agent_id,
-                ",".join(decision.axis_outliers),
-            )
-        # In-band, below the floor, or an insufficient cohort. Rank normally and
-        # leave no hold; the "why not" lives in the decision evidence, which is
-        # only persisted when a would-be hold fires (below), matching the other
-        # holds' record-on-trigger discipline.
-        return
-
-    if settings.mode == "observe":
-        # Record the would-be hold on the durable audit chain without holding,
-        # so a later switch to enforce leaves no gap in the evidence. AthReview
-        # is unique-per-agent and may carry unrelated resolved history, so the
-        # append-only chain -- not that row -- is the authoritative observe log.
-        await append_audit_entry(
-            session,
-            agent_id=agent.agent_id,
-            validator_hotkey=None,
-            event=EVENT_AUDIT,
-            payload={
-                "audit_kind": OUTLIER_REVIEW_KIND,
-                "enforced": False,
-                "qualified": True,
-                "bench_version": bench_version,
-                "evidence": public_audit_evidence(decision.evidence),
-            },
-            recorded_at=now,
-        )
-        logger.info(
-            "agent %s: out-of-band composite would hold (observe mode): %s",
-            agent.agent_id,
-            decision.reason,
-        )
-        return
-
-    # enforce -- open the hold. Idempotency: the unique (agent_id) row means a
-    # pending review already covering this agent must not be duplicated. A fresh
-    # first-quorum finalization has none; the guard protects any re-entry.
-    existing = await session.scalar(
-        select(AthReview).where(AthReview.agent_id == agent.agent_id).with_for_update()
-    )
-    if existing is not None:
-        return
-
-    agent.status = AgentStatus.ATH_PENDING_REVIEW
-    agent.review_reason = decision.reason
-    session.add(
-        AthReview(
-            review_id=uuid4(),
-            agent_id=agent.agent_id,
-            status="pending",
-            opened_at=now,
-            original_reason=decision.reason,
-            original_policy_version=agent.screening_policy_version,
-            original_evidence=decision.evidence,
-            algorithm_provenance={
-                "snapshot": "score-finalization",
-                "review_kind": OUTLIER_REVIEW_KIND,
-                "algorithm_version": OUTLIER_ALGORITHM_VERSION,
-                "opened_by": "platform",
-                "backfilled": False,
-                "opened_at_source": "outlier_escalation",
-            },
-        )
-    )
-    await append_audit_entry(
-        session,
-        agent_id=agent.agent_id,
-        validator_hotkey=None,
-        event=EVENT_AUDIT,
-        payload={
-            "audit_kind": OUTLIER_REVIEW_KIND,
-            "enforced": True,
-            "qualified": True,
-            "bench_version": bench_version,
-            "evidence": public_audit_evidence(decision.evidence),
-        },
-        recorded_at=now,
-    )
-    logger.warning(
-        "agent %s held for out-of-band score review: %s",
-        agent.agent_id,
-        decision.reason,
-    )
 
 
 async def _fresh_submission_lane_due(
@@ -1693,6 +1034,9 @@ async def _idle_retest_slot(
             allowed_slots=allowed,
             rounds_active=(
                 round_reservation_active and validator_advertises_rounds(heartbeat)
+            ),
+            healthy_slots=(
+                len(capacity.healthy_slots) if capacity is not None else None
             ),
         )
         if len(leases.non_round_slots) >= allowed - reserved:
@@ -2187,6 +1531,38 @@ def _screened_image_key(agent_id: UUID, image_upload_id: UUID) -> str:
     return f"{agent_id}/screened-images/{image_upload_id}.tar"
 
 
+# Uploads are capped at 20 MiB; the backfill read refuses anything larger.
+_STRUCTURAL_BACKFILL_MAX_BYTES = 20 * 1024 * 1024
+
+
+async def _backfill_structural_fingerprint(
+    session: AsyncSession, storage: S3StorageClient, *, agent_id: UUID
+) -> dict | None:
+    """Compute a missing structural sketch from the stored upload, best-effort.
+
+    Uploads compute it on arrival; this covers agents that predate that and are
+    scored by validators that no longer receive (or fingerprint) the source.
+    Runs outside the score transaction so no row lock waits on object storage.
+    """
+    stored = await session.scalar(
+        select(Agent.structural_fingerprint).where(Agent.agent_id == agent_id)
+    )
+    if session.in_transaction():
+        await session.rollback()
+    if stored is not None:
+        return None
+    try:
+        tar_bytes = await storage.get_object(
+            key=_artifact_key(agent_id), max_bytes=_STRUCTURAL_BACKFILL_MAX_BYTES
+        )
+    except Exception:  # noqa: BLE001 - a moderation signal never fails a score
+        logger.warning(
+            "structural fingerprint backfill read failed agent_id=%s", agent_id
+        )
+        return None
+    return await asyncio.to_thread(compute_structural_fingerprint, tar_bytes)
+
+
 # Agents the validator may pull as work. The partial index covers exactly
 # Agents a score may be reported against. ``scored`` / ``live`` are included
 # so a validator can re-score across epochs without a 409;
@@ -2414,6 +1790,166 @@ def _reported_v9_base_evidence(report: ScoreReport) -> V9BaseEvidence | None:
     # its digest. Re-parse into the typed model so later identity comparisons do
     # not read authoritative fields from an opaque dictionary.
     return V9BaseEvidence.model_validate(raw)
+
+
+async def _dueling_lease_fields(
+    request: Request,
+    session: AsyncSession,
+    *,
+    ticket: ValidatorTicket,
+    agent: Agent,
+    run_seed: int | None,
+    now: datetime,
+) -> dict[str, Any]:
+    """The generator slice a bench v16+ lease carries, pinned on the ticket.
+
+    Empty below the dueling floor, so pre-16 leases serialize exactly as
+    before. A missing slice reserves its preparation in an independent
+    transaction and answers 503 with ``Retry-After``; this lease rolls back.
+    """
+    if not is_dueling_bench_version(ticket.bench_version):
+        return {}
+    sessions = getattr(request.app.state, "session_maker", None)
+    if sessions is None or run_seed is None:
+        raise HTTPException(
+            503,
+            "dueling slice preparation is unavailable",
+            headers={"Retry-After": "60", "Cache-Control": "no-store"},
+        )
+    try:
+        lease = await resolve_dueling_slice(
+            sessions,
+            bench_version=ticket.bench_version,
+            run_seed=int(run_seed),
+            pinned_season_id=ticket.dueling_season_id,
+            pinned_slice_sha256=ticket.slice_sha256,
+            now=now,
+        )
+    except DuelingSliceUnavailable as exc:
+        raise HTTPException(
+            503,
+            exc.detail,
+            headers={"Retry-After": str(exc.retry_after), "Cache-Control": "no-store"},
+        ) from None
+    ticket.dueling_season_id = lease.season_id
+    ticket.slice_sha256 = lease.slice_sha256
+    return {
+        "dueling_slice_mode": DUELING_SLICE_MODE,
+        "dueling_slice_bytes": base64.b64encode(lease.slice_bytes).decode("ascii"),
+        "expected_slice_sha256": lease.slice_sha256,
+        "dueling_owner_key": await agent_owner_key(session, agent),
+        "dueling_season_id": str(lease.season_id),
+    }
+
+
+async def _continual_settings(request: Request) -> ContinualRetestSettings:
+    """The cached continual-retest policy (short-TTL resolver)."""
+    resolver: ContinualRetestSettingsResolver = (
+        request.app.state.continual_retest_settings
+    )
+    return await resolver.resolve(getattr(request.app.state, "session_maker", None))
+
+
+async def _activate_dueling_rotation_retest(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    heartbeat: ValidatorHeartbeat | None,
+    bench_version: int,
+    now: datetime,
+    validator_running_benchmark: bool,
+    slot_id: str,
+    ttl: timedelta,
+    settings: ContinualRetestSettings | None = None,
+    season_seeds: bool = True,
+) -> ValidatorTicket | None:
+    """Promote this validator's next dueling season rotation re-test, if any.
+
+    Only at ``bench_version`` and only on a slot whose heartbeat serves it
+    (which, at v16+, includes forwarding the version's dueling slices). Runs
+    beside ordinary work on free slots, like activation-critical contract
+    repair: rotation is the season's mini-rollout.
+
+    ``settings`` (authoritative seasons only) enables phase-B2 season-seeded
+    re-scores (:mod:`ditto.api_server.rotation_duel_seeds`): the promoted
+    ticket moves onto its duel seed, or back to its canonical seed.
+    """
+    protocol = heartbeat.protocol_version if heartbeat is not None else None
+    if (
+        season_seeds
+        and settings is not None
+        and rotation_seeds_active(settings, bench_version=bench_version)
+    ):
+        from ditto.api_server.dueling_seasons import open_season
+
+        if await defer_for_season_anchor(
+            session,
+            settings=settings,
+            bench_version=bench_version,
+            protocol_version=protocol,
+            season=await open_season(session, bench_version),
+            now=now,
+        ):
+            return None
+    # Live rotation leases this slot already holds: re-polling one resumes it,
+    # and a resumed lease must keep the seed its validator is already running.
+    resumable = set(
+        await session.scalars(
+            select(ValidatorTicket.agent_id).where(
+                ValidatorTicket.validator_hotkey == validator_hotkey,
+                ValidatorTicket.bench_version == bench_version,
+                ValidatorTicket.slot_id == slot_id,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+            )
+        )
+    )
+    ticket = await activate_next_score_retest(
+        session,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        supports_version=lambda version: (
+            heartbeat is not None
+            and version == bench_version
+            and heartbeat_supports_version(heartbeat, now=now, version=version)
+        ),
+        validator_running_benchmark=validator_running_benchmark,
+        slot_id=slot_id,
+        required_basis=DUELING_ROTATION_RETEST_BASIS,
+        allow_parallel_ordinary=True,
+        allow_parallel_contract_retests=True,
+        ttl=ttl,
+    )
+    if ticket is not None and settings is not None and ticket.agent_id not in resumable:
+        await assign_rotation_seed(
+            session,
+            ticket,
+            settings=settings,
+            protocol_version=protocol,
+            allow_season_seed=season_seeds,
+        )
+    return ticket
+
+
+async def _dueling_evidence(
+    session: AsyncSession, report: ScoreReport, ticket: ValidatorTicket, agent: Agent
+) -> tuple[UUID | None, dict[str, Any] | None]:
+    """Season and aggregates to store with a v16+ score; 409 on a mismatch,
+    including a report self-masking another owner than the scored agent's."""
+    owner = (
+        await agent_owner_key(session, agent)
+        if is_dueling_bench_version(ticket.bench_version)
+        else None
+    )
+    try:
+        return dueling_score_evidence(
+            report.details,
+            bench_version=ticket.bench_version,
+            season_id=ticket.dueling_season_id,
+            slice_sha256=ticket.slice_sha256,
+            owner_key=owner,
+        )
+    except DuelingEvidenceRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
 def _score_details(
@@ -3892,6 +3428,7 @@ async def request_job(
                     rounds_active=(
                         rounds_reserved_now and validator_advertises_rounds(heartbeat)
                     ),
+                    healthy_slots=len(capacity.healthy_slots),
                 ),
                 non_round_slots=live_leases.non_round_slots,
             ):
@@ -3956,7 +3493,16 @@ async def request_job(
                 or agent is None
                 or agent.sha256 != canary.artifact_sha256
                 or agent.screened_image_sha256 != canary.screened_image_sha256
-                or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+                or (
+                    agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+                    and await diagnostic_target_refusal(
+                        session,
+                        agent,
+                        bench_version=canary_ticket.bench_version,
+                        operator_hotkeys=operator_diagnostic_hotkeys(),
+                    )
+                    is not None
+                )
                 or heartbeat is None
                 or not heartbeat_supports_version(
                     heartbeat, now=now, version=canary_ticket.bench_version
@@ -3977,7 +3523,16 @@ async def request_job(
             if grant is None:
                 raise HTTPException(409, "canary inference capability is unavailable")
             contract = benchmark_contract(canary.bench_version)
+            dueling_fields = await _dueling_lease_fields(
+                request,
+                session,
+                ticket=canary_ticket,
+                agent=agent,
+                run_seed=canary.seed,
+                now=now,
+            )
             return JobResponse(
+                **dueling_fields,
                 agent_id=canary.agent_id,
                 miner_hotkey=agent.miner_hotkey,
                 slot_id=canary.slot_id,
@@ -4032,6 +3587,27 @@ async def request_job(
                 if target_benchmark_ready
                 else None
             )
+            if (
+                ticket is None
+                and target_benchmark_ready
+                and is_dueling_bench_version(rollout.desired_version)
+            ):
+                # A shadow dueling season rotation re-scores the frozen cohort
+                # on the new generator set before any other desired-era work.
+                # Settings pass too, so a stale season binding is always reset
+                # (season seeds themselves only apply at the active version).
+                ticket = await _activate_dueling_rotation_retest(
+                    session,
+                    validator_hotkey=payload.validator_hotkey,
+                    heartbeat=heartbeat,
+                    bench_version=rollout.desired_version,
+                    now=now,
+                    validator_running_benchmark=slot_running_benchmark,
+                    slot_id=slot_id,
+                    ttl=ticket_ttl,
+                    settings=await _continual_settings(request),
+                    season_seeds=False,
+                )
             # The activation boundary waits for every frozen member, not just
             # the first-five authority subset.  Give that bounded cohort first
             # refusal on every capable slot while the rollout is open.  The
@@ -4290,6 +3866,24 @@ async def request_job(
                         validator_running_benchmark=slot_running_benchmark,
                         slot_id=slot_id,
                     )
+                if (
+                    not gated
+                    and ticket is None
+                    and is_dueling_bench_version(canonical_version)
+                ):
+                    # A dueling season rotation re-scores the champion, then
+                    # the retest cohort by rank, ahead of ordinary quorum work.
+                    ticket = await _activate_dueling_rotation_retest(
+                        session,
+                        validator_hotkey=payload.validator_hotkey,
+                        heartbeat=heartbeat,
+                        bench_version=canonical_version,
+                        now=now,
+                        validator_running_benchmark=slot_running_benchmark,
+                        slot_id=slot_id,
+                        ttl=ticket_ttl,
+                        settings=await _continual_settings(request),
+                    )
                 ticket = (
                     ticket
                     if gated or ticket is not None
@@ -4440,7 +4034,27 @@ async def request_job(
                         f"deterministic V{ticket.bench_version} seed binding "
                         "is unavailable",
                     )
-            if seed_block_hash is not None and generator.run_size is not None:
+            # Phase B2: a season-seeded rotation re-score keeps its duel seed
+            # and the season anchor's binding; the validator re-derives it.
+            season_binding = await season_seed_binding(session, ticket)
+            if season_binding is not None:
+                if ticket.dataset_sha256 is None:
+                    if generator.run_size is None:
+                        # Never pair a season seed with a digest derived for
+                        # another seed: fail closed until generation returns.
+                        raise HTTPException(
+                            503,
+                            f"season seed binding for V{ticket.bench_version} "
+                            "is unavailable",
+                        )
+                    assert ticket.seed is not None
+                    ticket.dataset_sha256 = await lease_dataset_sha(
+                        request,
+                        generator,
+                        seed=ticket.seed,
+                        bench_version=ticket.bench_version,
+                    )
+            elif seed_block_hash is not None and generator.run_size is not None:
                 expected_seed = derive_validator_seed(
                     seed_block_hash, agent.agent_id, payload.validator_hotkey
                 )
@@ -4498,7 +4112,20 @@ async def request_job(
                     status_code=503,
                     detail="ticket inference capability is unavailable",
                 )
+            dueling_fields = await _dueling_lease_fields(
+                request,
+                session,
+                ticket=ticket,
+                agent=agent,
+                run_seed=(
+                    ticket.seed
+                    if ticket.seed is not None
+                    else (dataset.seed if dataset is not None else agent.dataset_seed)
+                ),
+                now=now,
+            )
             job = JobResponse(
+                **dueling_fields,
                 agent_id=agent.agent_id,
                 private_dataset_mode=await _private_dataset_mode(
                     session, ticket.dataset_sha256, heartbeat
@@ -4512,7 +4139,21 @@ async def request_job(
                     if ticket.seed is not None
                     else (dataset.seed if dataset is not None else agent.dataset_seed)
                 ),
-                seed_scope="validator" if ticket.seed is not None else "agent",
+                seed_scope=(
+                    "season"
+                    if season_binding is not None
+                    else "validator"
+                    if ticket.seed is not None
+                    else "agent"
+                ),
+                seed_anchor_agent_id=(
+                    season_binding.anchor_agent_id
+                    if season_binding is not None
+                    else None
+                ),
+                seed_index=(
+                    season_binding.seed_index if season_binding is not None else None
+                ),
                 dataset_sha256=(
                     ticket.dataset_sha256
                     if ticket.dataset_sha256 is not None
@@ -4651,6 +4292,18 @@ async def _current_koth_entries(
         agent_ids=[row.agent_id for row in rows],
         bench_version=canonical_version,
     )
+    # Bench v16+: the raw per-validator records with their signed
+    # ``details.dueling``, so this projection pair-masks exactly as the pinned
+    # fold does. Not read below v16, where it would be unused.
+    dueling_history = (
+        await confirmation_history_by_agent(
+            session,
+            agent_ids=[row.agent_id for row in rows],
+            bench_version=canonical_version,
+        )
+        if is_dueling_bench_version(canonical_version)
+        else {}
+    )
     (
         efficiency_bonuses,
         efficiency_factors,
@@ -4696,6 +4349,7 @@ async def _current_koth_entries(
             efficiency_bonus=efficiency_bonuses.get(row.agent_id),
             efficiency_factor=efficiency_factors.get(row.agent_id),
             efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
+            **ledger_row_dueling_fields(row),
         )
         for rank, row in enumerate(raw_rows, start=1)
     ]
@@ -4798,6 +4452,14 @@ async def _current_koth_entries(
                 efficiency_bonus=efficiency_bonuses.get(row.agent_id),
                 efficiency_factor=efficiency_factors.get(row.agent_id),
                 efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
+                **ledger_row_dueling_fields(row),
+                dueling_records=(
+                    None
+                    if v9_confirmed
+                    else dueling_seed_records(
+                        dueling_history.get(row.agent_id, ()), seeds=merged.keys()
+                    )
+                ),
             )
         )
     quality_primary = any(entry.efficiency_factor is not None for entry in entries)
@@ -4979,6 +4641,20 @@ async def _current_retest_cohort(
     # confirmation-enriched owner-dedupe already dropped (aceron_v23 vs v20).
     wave_members = snapshot.raw_emission
     emission_members = emission_set(projection)
+    if season_duel_seed_count(settings, bench_version=canonical_version) is not None:
+        # Season duels retest the top five only: the folded emission set plus
+        # the public-board five whose shared coverage gates the fold. No tie
+        # band, no cohort extension, no owner successors (title-duels.md).
+        seen_duel = {member.agent_id for member in emission_members}
+        return (
+            emission_members,
+            wave_members,
+            (
+                *emission_members,
+                *(m for m in wave_members if m.agent_id not in seen_duel),
+            ),
+            frozenset(),
+        )
     configured_cohort = _configured_retest_cohort(
         entries, projection, settings=settings
     )
@@ -5140,6 +4816,7 @@ async def _champion_anchored_seed_set(
         session,
         agent_ids=tuple(member.agent_id for member in members),
         bench_version=canonical_version,
+        planning=True,
     )
     block_hash, allow_fresh_seeds = await reign_seed_planning(
         session,
@@ -5166,8 +4843,24 @@ async def _top5_confirmation_seed_plan(
     cohort_member_ids: tuple[UUID, ...] = (),
     canonical_version: int,
     seed_planning: tuple[str | None, bool] | None = None,
+    wave_window: WaveWindow | None = None,
+    duel_seed_count: int | None = None,
+    duel_history: Mapping[UUID, Mapping[int, float]] | None = None,
+    pending_rotation: Collection[UUID] = frozenset(),
 ) -> tuple[int, ...]:
     """Every seed this member still owes: its backlog first, then wave growth.
+
+    ``duel_seed_count`` (``retest_mode = season_duel``) replaces both
+    with the season's duel: the first that many seeds of the family anchored
+    on ``champion_agent_id`` (the caller passes the season's anchor champion),
+    minus the seeds this member already ran this season. There is no growth,
+    pacing or catch-up beyond those seeds (:mod:`ditto.api_server.season_duel`).
+
+    ``wave_window`` is the tempo-aligned pacing window
+    (:mod:`ditto.api_server.retest_wave_window`). When it is paced, growth may
+    open a FRESH seed only while the window still has seed budget; a seed some
+    member was already leased keeps growing so its wave can finish, and
+    catch-up is never paced.
 
     ``seed_planning`` is the reign's ``(block_hash, allow_fresh_seeds)`` from
     :mod:`ditto.api_server.confirmation_seed_anchor`; ``None`` reads it. At a
@@ -5194,11 +4887,47 @@ async def _top5_confirmation_seed_plan(
     variance-sized from the emission set and hard-capped, so a completed target
     stops introducing datasets instead of growing forever.
     """
+    if duel_seed_count is not None and member_agent_id in pending_rotation:
+        # Phase B2: its season-seeded rotation re-scores cover the duel seeds.
+        return ()
+    if duel_seed_count is not None:
+        if await season_duel_entrant_excluded(
+            session, bench_version=canonical_version, member_agent_id=member_agent_id
+        ):
+            return ()
+        member_history = (
+            duel_history
+            if duel_history is not None and member_agent_id in duel_history
+            else await confirmation_composites_by_seed(
+                session,
+                agent_ids=(member_agent_id,),
+                bench_version=canonical_version,
+                planning=True,
+            )
+        )
+        if seed_planning is None:
+            seed_planning = await reign_seed_planning(
+                session,
+                champion_agent_id=champion_agent_id,
+                bench_version=canonical_version,
+            )
+        duel_block_hash, duel_fresh = seed_planning
+        return season_duel_owed(
+            season_duel_seeds(
+                champion_agent_id,
+                version=canonical_version,
+                count=duel_seed_count,
+                block_hash=duel_block_hash,
+                allow_fresh_seeds=duel_fresh,
+            ),
+            member_history.get(member_agent_id, {}),
+        )
     cohort_ids = tuple(dict.fromkeys((*cohort_member_ids, *wave_member_ids)))
     history = await confirmation_composites_by_seed(
         session,
         agent_ids=tuple(dict.fromkeys((*cohort_ids, member_agent_id))),
         bench_version=canonical_version,
+        planning=True,
     )
     wave_history = {agent_id: history.get(agent_id, {}) for agent_id in wave_member_ids}
     if seed_planning is None:
@@ -5248,6 +4977,16 @@ async def _top5_confirmation_seed_plan(
         or next_seed in catchup
     ):
         return catchup
+    if wave_window is not None and wave_window.paced:
+        assert wave_window.window_start is not None  # paced implies a start
+        first_issue = await first_retest_issue_by_seed(
+            session,
+            bench_version=canonical_version,
+            since=wave_window.window_start,
+            include=(next_seed,),
+        )
+        if not growth_open(wave_window, next_seed=next_seed, first_issue=first_issue):
+            return catchup
     return (*catchup, next_seed)
 
 
@@ -5325,13 +5064,65 @@ async def _unserved_catchup_members(
     challenger_member_ids: Sequence[UUID] = (),
     canonical_version: int,
     now: datetime,
+    duel_seed_count: int | None = None,
+    duel_history: Mapping[UUID, Mapping[int, float]] | None = None,
+    pending_rotation: Collection[UUID] = frozenset(),
 ) -> frozenset[UUID]:
     """Emission members and bounded owner challengers with unserved backlog.
 
     "Unserved" rather than merely "behind": a member whose whole backlog is
     already leased out is converging as fast as it can, and letting it keep
     blocking extended-cohort work would idle capacity for nothing.
+
+    Under ``duel_seed_count`` the backlog is the season's duel seeds a
+    top-five member has not run (``champion_agent_id`` is the season's anchor
+    champion), so a duel never waits on the reign-backoff round cadence.
     """
+    if duel_seed_count is not None:
+        duel_members = tuple(
+            member_id
+            for member_id in dict.fromkeys((*wave_member_ids, *emission_member_ids))
+            if member_id not in pending_rotation
+        )
+        # An entrant sitting out an extended season's duel owes no seed, so it
+        # never takes catch-up route priority (see _top5_confirmation_seed_plan).
+        excluded = await season_duel_excluded_entrants(
+            session, bench_version=canonical_version, agent_ids=duel_members
+        )
+        duel_members = tuple(m for m in duel_members if m not in excluded)
+        if not duel_members:
+            return frozenset()
+        if duel_history is None:
+            duel_history = await confirmation_composites_by_seed(
+                session,
+                agent_ids=duel_members,
+                bench_version=canonical_version,
+                planning=True,
+            )
+        duel_block_hash, duel_fresh = await reign_seed_planning(
+            session,
+            champion_agent_id=champion_agent_id,
+            bench_version=canonical_version,
+        )
+        return season_duel_unserved(
+            member_ids=duel_members,
+            duel_seeds=season_duel_seeds(
+                champion_agent_id,
+                version=canonical_version,
+                count=duel_seed_count,
+                block_hash=duel_block_hash,
+                allow_fresh_seeds=duel_fresh,
+            ),
+            seeds_by_agent={
+                agent_id: values.keys() for agent_id, values in duel_history.items()
+            },
+            leases=await _live_retest_leases(
+                session,
+                member_agent_ids=duel_members,
+                canonical_version=canonical_version,
+                now=now,
+            ),
+        )
     wave_members = tuple(dict.fromkeys(wave_member_ids or emission_member_ids))
     catchup_members = tuple(
         dict.fromkeys((*emission_member_ids, *challenger_member_ids))
@@ -5340,7 +5131,7 @@ async def _unserved_catchup_members(
     if len(wave_members) < 2:
         return frozenset()
     history = await confirmation_composites_by_seed(
-        session, agent_ids=members, bench_version=canonical_version
+        session, agent_ids=members, bench_version=canonical_version, planning=True
     )
     block_hash, allow_fresh_seeds = await reign_seed_planning(
         session, champion_agent_id=champion_agent_id, bench_version=canonical_version
@@ -5379,6 +5170,162 @@ async def _unserved_catchup_members(
         if any(seed not in covered for seed in catchup):
             unserved.append(member_id)
     return frozenset(unserved)
+
+
+_VOID_RERUN_OWNER_GRACE = timedelta(hours=1)
+"""How long a voided seed waits for its own validator before any may take it.
+
+The voiding validator re-running its key appends at ``void_generation + 1``,
+the path the submit handler already accepts. Waiting forever for it would let
+one offline validator strand the debt, so after this grace -- or at once when
+none of the voiding validators has a fresh heartbeat -- another validator with
+no row on the seed may run it fresh at generation 0 under its own key.
+"""
+_VOID_RERUN_OWNER_HEARTBEAT_FRESHNESS = timedelta(minutes=10)
+
+
+async def _lock_top5_fairness(session: AsyncSession) -> None:
+    """Serialize retest coverage reads with issuance across the fleet.
+
+    Transaction-scoped and re-entrant, so the debt path and the cohort path may
+    both take it in one claim.
+    """
+    if session.get_bind().dialect.name == "postgresql":
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended("top5-confirmation-fairness", 0)
+                )
+            )
+        )
+
+
+async def _void_rerun_debts(
+    session: AsyncSession,
+    *,
+    canonical_version: int,
+    ledger_agent_ids: Collection[UUID],
+    agent_ids: Iterable[UUID] | None = None,
+) -> list[VoidRerunDebt]:
+    """Outstanding void debt for generations still on the eligible ledger."""
+    return [
+        debt
+        for debt in await outstanding_void_rerun_debts(
+            session, bench_version=canonical_version, agent_ids=agent_ids
+        )
+        if debt.agent_id in ledger_agent_ids
+    ]
+
+
+async def _void_rerun_open_to_fleet(
+    session: AsyncSession, *, debt: VoidRerunDebt, now: datetime
+) -> bool:
+    """Whether a validator other than the voiding one may take this seed."""
+    oldest = debt.oldest_void_at
+    if oldest.tzinfo is None:
+        oldest = oldest.replace(tzinfo=UTC)
+    if now - oldest >= _VOID_RERUN_OWNER_GRACE:
+        return True
+    fresh_owner = await session.scalar(
+        select(ValidatorHeartbeat.validator_hotkey)
+        .where(
+            ValidatorHeartbeat.validator_hotkey.in_(sorted(debt.rerun_validators)),
+            ValidatorHeartbeat.seen_at >= now - _VOID_RERUN_OWNER_HEARTBEAT_FRESHNESS,
+        )
+        .limit(1)
+    )
+    return fresh_owner is None
+
+
+async def _validator_may_retest(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    validator_hotkey: str,
+    canonical_version: int,
+    now: datetime,
+) -> bool:
+    """The per-validator holds :func:`issue_confirmation_ticket` would refuse on.
+
+    Checked before choosing a debt so a held validator falls through to the
+    rest of the lane instead of ending the poll on a refused ticket.
+    """
+    latest_retest = await get_latest_score_retest_event(
+        session, agent_id=agent_id, validator_hotkey=validator_hotkey
+    )
+    if (
+        latest_retest is not None
+        and latest_retest.event == EVENT_SCORE_RETEST_REQUESTED
+    ):
+        return False
+    ticket = await session.get(
+        ValidatorTicket, (agent_id, canonical_version, validator_hotkey)
+    )
+    if ticket is None:
+        return True
+    if ticket.status == TicketStatus.ISSUED and _aware_utc(ticket.deadline) > now:
+        # One live ticket per (agent, version, validator): a validator already
+        # running another seed of this agent cannot also take the debt.
+        return False
+    return ticket.retry_after is None or _aware_utc(ticket.retry_after) <= now
+
+
+async def _claim_void_rerun_debt(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    provider_gate: ProviderWorkGate,
+    canonical_version: int,
+    ledger_agent_ids: Collection[UUID],
+    now: datetime,
+) -> VoidRerunDebt | None:
+    """The oldest void debt this validator may re-run now, or None.
+
+    One replacement lease per voided seed: a seed with any live continual
+    retest (from this lane or the cohort lane) is skipped, and the debt itself
+    shrinks as replacements land, so the fleet can never run more seeds than
+    were voided. Beyond the lane-wide provider gate, the debt also waits out
+    the half-open probe and the recovery quiet window: re-leasing into the
+    outage that voided the sample would only void it again.
+    """
+    debts = await _void_rerun_debts(
+        session,
+        canonical_version=canonical_version,
+        ledger_agent_ids=ledger_agent_ids,
+    )
+    if not debts:
+        return None
+    if (
+        not provider_gate.admitted
+        or provider_gate.probe_required
+        or provider_outage_active(provider_gate.circuit, now=now)
+    ):
+        return None
+    leases = await _live_retest_leases(
+        session,
+        member_agent_ids=tuple(debt.agent_id for debt in debts),
+        canonical_version=canonical_version,
+        now=now,
+    )
+    for debt in debts:
+        agent_leases = leases.get(debt.agent_id, {})
+        if any(seed is None or seed == debt.seed for seed in agent_leases.values()):
+            continue
+        if validator_hotkey not in debt.rerun_validators and (
+            validator_hotkey in debt.scored_validators
+            or not await _void_rerun_open_to_fleet(session, debt=debt, now=now)
+        ):
+            continue
+        if not await _validator_may_retest(
+            session,
+            agent_id=debt.agent_id,
+            validator_hotkey=validator_hotkey,
+            canonical_version=canonical_version,
+            now=now,
+        ):
+            continue
+        return debt
+    return None
 
 
 async def _top5_member_is_least_covered(
@@ -5447,6 +5394,7 @@ async def _top5_member_is_least_covered(
         session,
         agent_ids=member_ids,
         bench_version=canonical_version,
+        planning=True,
     )
     eligible: list[UUID] = []
     for member_id in member_ids:
@@ -5816,6 +5764,53 @@ async def request_top5_confirmation_job(
                         "sandbox memory cap; update ditto-subnet"
                     ),
                 )
+        # Provider-outage gate, the same one ``request_job`` applies. A
+        # continual retest spends inference exactly like a canonical lease, so
+        # while the relay's circuit is open nothing new is issued from any
+        # route (champion, debt, catch-up, emission or extended). Open circuits
+        # also park every live non-probe lease without charging an attempt,
+        # and after ``retry_at`` exactly one half-open probe may run. A slot
+        # whose own lease survived parking (the probe) keeps resuming it.
+        provider_probe_key = scoring_probe_key(
+            validator_hotkey=payload.validator_hotkey,
+            slot_id=(
+                payload.slot_id
+                if payload.slot_id is not None
+                else live_retest.slot_id
+                if live_retest is not None
+                else "slot-0"
+            ),
+        )
+        provider_gate = await lock_provider_work_gate(
+            session, now=now, kind="scoring", key=provider_probe_key
+        )
+        if provider_gate.circuit is not None and provider_gate.circuit.state == "open":
+            await park_scoring_leases(session, circuit=provider_gate.circuit, now=now)
+            if live_retest is not None and live_retest.status != TicketStatus.ISSUED:
+                live_retest = None
+        # A legacy member claim names no slot, so it cannot be the probe.
+        if not provider_gate.admitted or (
+            provider_gate.probe_required and not auto_routed
+        ):
+            logger.info(
+                "declined continual retest reason=provider_outage validator=%s slot=%s",
+                payload.validator_hotkey,
+                payload.slot_id,
+            )
+            if auto_routed:
+                note_decline_reason("provider_outage")
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
+            raise HTTPException(
+                status_code=409,
+                detail="continual retests are parked during a provider outage",
+            )
+        cohort_snapshot = await _current_koth_entries(
+            session,
+            canonical_version=canonical_version,
+            wave_membership=continual_settings.wave_membership,
+            efficiency_config=efficiency_config,
+            now=now,
+        )
         (
             emission_members,
             wave_members,
@@ -5827,7 +5822,71 @@ async def request_top5_confirmation_job(
             settings=continual_settings,
             efficiency_config=efficiency_config,
             now=now,
+            snapshot=cohort_snapshot,
         )
+        # Void re-run debt is owed by every ledger-eligible generation, inside
+        # the cohort or not: an outage-voided sample is a run the agent already
+        # earned, not new coverage, so neither the cohort cap nor owner
+        # suppression may strand it (Wonder v6, 2026-11-01).
+        ledger_agent_ids = frozenset(cohort_snapshot.official_scores)
+
+        async def claim_void_rerun_debt() -> VoidRerunDebt | None:
+            if not auto_routed or live_retest is not None:
+                return None
+            await _lock_top5_fairness(session)
+            return await _claim_void_rerun_debt(
+                session,
+                validator_hotkey=payload.validator_hotkey,
+                provider_gate=provider_gate,
+                canonical_version=canonical_version,
+                ledger_agent_ids=ledger_agent_ids,
+                now=now,
+            )
+
+        async def issue_selected(
+            member_id: UUID, seed: int, route: str
+        ) -> JobResponse | Response:
+            return await _issue_continual_retest_job(
+                session,
+                request=request,
+                generator=generator,
+                payload=payload,
+                heartbeat=heartbeat,
+                canonical_version=canonical_version,
+                selected_member_id=member_id,
+                selected_wave_seed=seed,
+                live_retest=live_retest,
+                auto_routed=auto_routed,
+                slot_settings=slot_settings,
+                ticket_ttl=ticket_ttl,
+                inference_config=inference_config,
+                inference_settings=inference_settings,
+                v7_calibration=v7_calibration,
+                route=route,
+                now=now,
+                provider_gate=provider_gate,
+            )
+
+        # A slot re-polling (or restarting) on a live debt lease resumes it
+        # whatever the cohort now says; expiring it as "left the cohort" would
+        # throw away the very re-run the void asked for.
+        if (
+            auto_routed
+            and live_retest is not None
+            and live_retest.seed is not None
+            and any(
+                debt.seed == live_retest.seed
+                for debt in await _void_rerun_debts(
+                    session,
+                    canonical_version=canonical_version,
+                    ledger_agent_ids=ledger_agent_ids,
+                    agent_ids=(live_retest.agent_id,),
+                )
+            )
+        ):
+            return await issue_selected(
+                live_retest.agent_id, live_retest.seed, "void_rerun"
+            )
         # These sets answer different questions and must not be conflated:
         #
         # * ``wave_member_ids`` is the public-board top five (canonical
@@ -5864,6 +5923,9 @@ async def request_top5_confirmation_job(
                         request_id=payload.nonce,
                         compensate=False,
                     )
+                debt = await claim_void_rerun_debt()
+                if debt is not None:
+                    return await issue_selected(debt.agent_id, debt.seed, "void_rerun")
                 note_decline_reason("member_left_cohort")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
@@ -5932,6 +5994,24 @@ async def request_top5_confirmation_job(
             )
         champion = await get_agent_by_id(session, agent_id=champion_agent_id)
         assert champion is not None
+        # Season duels anchor the whole season on the champion that opened it,
+        # so a crown change mid-season neither draws nor re-walks a family.
+        duel_seed_count = season_duel_seed_count(
+            continual_settings, bench_version=canonical_version
+        )
+        if duel_seed_count is not None:
+            # Elect the season's anchor under the fairness lock, so two claims
+            # racing a crown change cannot each create a family for one season.
+            await _lock_top5_fairness(session)
+        anchor_champion_id = (
+            await season_duel_anchor_champion(
+                session,
+                bench_version=canonical_version,
+                champion_agent_id=champion_agent_id,
+            )
+            if duel_seed_count is not None
+            else champion_agent_id
+        )
         # Bench v13+: the reign's confirmation family binds to the finalized
         # hash of ``B_ready + Δ``. First claim of a reign creates the anchor
         # (unpinned); a later claim pins it from the hash prefetched above once
@@ -5939,7 +6019,7 @@ async def request_top5_confirmation_job(
         # seeds and serves catch-up only.
         reign_anchor = await resolve_reign_seed_anchor(
             session,
-            champion_agent_id=champion_agent_id,
+            champion_agent_id=anchor_champion_id,
             bench_version=canonical_version,
             ready_block=block.number,
             now=now,
@@ -5947,6 +6027,17 @@ async def request_top5_confirmation_job(
         )
         seed_planning = (
             reign_anchor.planning if reign_anchor is not None else LEGACY_PLANNING
+        )
+        wave_window = await current_wave_window(
+            session,
+            # Season duels replace wave pacing (the season is the window).
+            cadence_tempos=(
+                0
+                if duel_seed_count is not None
+                else continual_settings.wave_cadence_tempos
+            ),
+            seeds_per_window=continual_settings.wave_seeds_per_window,
+            netuid=getattr(getattr(config, "chain", None), "netuid", None),
         )
         crown_block = champion.dataset_seed_block or block.number
         scheduled_round = top5_round_is_due(
@@ -5969,22 +6060,49 @@ async def request_top5_confirmation_job(
         # Serialize the coverage read with ticket issuance. Catch-up is allowed
         # outside the reign cadence below, so two validators must not both see
         # the same unserved gap and spend separate slots on it.
-        if session.get_bind().dialect.name == "postgresql":
-            await session.execute(
-                select(
-                    func.pg_advisory_xact_lock(
-                        func.hashtextextended("top5-confirmation-fairness", 0)
-                    )
-                )
+        await _lock_top5_fairness(session)
+        # Season duels plan every candidate from one history read; a member
+        # absent from it simply holds no season seed yet.
+        duel_history: dict[UUID, dict[int, float]] | None = (
+            {
+                agent_id: {}
+                for agent_id in dict.fromkeys((*member_ids, *wave_member_ids))
+            }
+            | await confirmation_composites_by_seed(
+                session,
+                agent_ids=tuple(dict.fromkeys((*member_ids, *wave_member_ids))),
+                bench_version=canonical_version,
+                planning=True,
             )
+            if duel_seed_count is not None
+            else None
+        )
+        # Phase B2: members whose season-seeded rotation is still pending owe
+        # the continual lane no duel seed this season.
+        pending_rotation = (
+            await agents_with_pending_rotation(
+                session,
+                agent_ids=tuple(dict.fromkeys((*member_ids, *wave_member_ids))),
+                season_id=await anchor_season_key(session, canonical_version),
+                bench_version=canonical_version,
+            )
+            if duel_seed_count is not None
+            and rotation_seeds_active(
+                continual_settings, bench_version=canonical_version
+            )
+            else frozenset()
+        )
         catchup_member_ids = await _unserved_catchup_members(
             session,
-            champion_agent_id=champion_agent_id,
+            champion_agent_id=anchor_champion_id,
             wave_member_ids=wave_member_ids,
             emission_member_ids=tuple(member.agent_id for member in emission_members),
             challenger_member_ids=tuple(challenger_member_ids),
             canonical_version=canonical_version,
             now=now,
+            duel_seed_count=duel_seed_count,
+            duel_history=duel_history,
+            pending_rotation=pending_rotation,
         )
         candidate_member_ids: tuple[UUID, ...]
         if requested_member_id is not None:
@@ -6020,8 +6138,22 @@ async def request_top5_confirmation_job(
 
         selected_member_id: UUID | None = None
         selected_wave_seed: int | None = None
+        selected_route = "cohort"
         legacy_decline: str | None = None
+        # Void re-run debt ranks directly behind the crown: the champion's own
+        # confirmation work keeps first claim, and every other cohort source
+        # waits on the debt. The debt is bounded by the voids themselves, so
+        # this ordering cannot widen the cohort or add a single extra seed.
+        debt_checked = requested_member_id is not None
         for candidate_member_id in candidate_member_ids:
+            if not debt_checked and candidate_member_id != champion_agent_id:
+                debt_checked = True
+                debt = await claim_void_rerun_debt()
+                if debt is not None:
+                    selected_member_id = debt.agent_id
+                    selected_wave_seed = debt.seed
+                    selected_route = "void_rerun"
+                    break
             if (
                 not scheduled_round
                 and not spare_capacity_round
@@ -6051,12 +6183,16 @@ async def request_top5_confirmation_job(
                 continue
             seeds = await _top5_confirmation_seed_plan(
                 session,
-                champion_agent_id=champion_agent_id,
+                champion_agent_id=anchor_champion_id,
                 member_agent_id=candidate_member_id,
                 wave_member_ids=wave_member_ids,
                 cohort_member_ids=member_ids,
                 canonical_version=canonical_version,
                 seed_planning=seed_planning,
+                wave_window=wave_window,
+                duel_seed_count=duel_seed_count,
+                duel_history=duel_history,
+                pending_rotation=pending_rotation,
             )
             if not seeds:
                 legacy_decline = (
@@ -6098,6 +6234,12 @@ async def request_top5_confirmation_job(
             selected_wave_seed = wave_seed
             break
 
+        if selected_member_id is None and not debt_checked:
+            debt = await claim_void_rerun_debt()
+            if debt is not None:
+                selected_member_id = debt.agent_id
+                selected_wave_seed = debt.seed
+                selected_route = "void_rerun"
         if selected_member_id is None or selected_wave_seed is None:
             if requested_member_id is not None:
                 raise HTTPException(
@@ -6107,200 +6249,240 @@ async def request_top5_confirmation_job(
             note_decline_reason("no_candidate")
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
-        confirmation_datasets: list[ConfirmationDatasetPin] = []
-        # The seed's finalized-block binding, so the validator can re-derive it
-        # and refuse a seed inconsistent with the pin it is told about (the
-        # validator trusts the pin as served; it reads no chain). Searched
-        # across every pinned reign of the version: a catch-up seed introduced
-        # under an earlier champion still binds to that champion's block.
-        seed_binding = bind_confirmation_seed(
-            await list_reign_seed_anchors(session, bench_version=canonical_version),
-            seed=selected_wave_seed,
-            bench_version=canonical_version,
+        return await issue_selected(
+            selected_member_id, selected_wave_seed, selected_route
         )
-        if canonical_version >= 3:
-            if canonical_version >= 13 and (
-                heartbeat is None
-                or not heartbeat_supports_version(
-                    heartbeat, now=now, version=canonical_version
-                )
-            ):
-                raise HTTPException(
-                    503,
-                    f"deterministic V{canonical_version} scorer capability "
-                    "is unavailable",
-                )
-            if generator.run_size is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail="top-5 confirmation dataset generation is unavailable",
-                )
-            confirmation_datasets = [
-                ConfirmationDatasetPin(
-                    seed=selected_wave_seed,
-                    dataset_sha256=await lease_dataset_sha(
-                        request,
-                        generator,
-                        seed=selected_wave_seed,
-                        bench_version=canonical_version,
-                    ),
-                    run_size=generator.run_size,
-                    anchor_agent_id=(
-                        seed_binding.anchor_agent_id
-                        if seed_binding is not None
-                        else None
-                    ),
-                    seed_index=(
-                        seed_binding.seed_index if seed_binding is not None else None
-                    ),
-                    seed_block=(
-                        seed_binding.seed_block if seed_binding is not None else None
-                    ),
-                    seed_block_hash=(
-                        seed_binding.seed_block_hash
-                        if seed_binding is not None
-                        else None
-                    ),
-                )
-            ]
-        for pin in confirmation_datasets:
-            pin.private_dataset_mode = await _private_dataset_mode(
-                session, pin.dataset_sha256, heartbeat
+
+
+async def _issue_continual_retest_job(
+    session: AsyncSession,
+    *,
+    request: Request,
+    generator: DatasetGenerator,
+    payload: Top5ConfirmationJobRequest,
+    heartbeat: ValidatorHeartbeat | None,
+    canonical_version: int,
+    selected_member_id: UUID,
+    selected_wave_seed: int,
+    live_retest: ValidatorTicket | None,
+    auto_routed: bool,
+    slot_settings: ValidatorSlotSettings,
+    ticket_ttl: timedelta,
+    inference_config: InferenceProxyConfig,
+    inference_settings: InferenceConcurrencySettings,
+    v7_calibration: V7InferenceCalibration | None,
+    route: str,
+    now: datetime,
+    provider_gate: ProviderWorkGate,
+) -> JobResponse | Response:
+    """Lease one already-selected ``(member, seed)`` on an idle execution slot.
+
+    Every continual-retest source -- cohort waves and void re-run debt alike --
+    issues through this one path, so the dataset pin, seed binding, slot rail,
+    ticket purpose and inference grant are the same whichever lane chose the
+    seed. The caller owns the transaction.
+    """
+    confirmation_datasets: list[ConfirmationDatasetPin] = []
+    # The seed's finalized-block binding, so the validator can re-derive it
+    # and refuse a seed inconsistent with the pin it is told about (the
+    # validator trusts the pin as served; it reads no chain). Searched
+    # across every pinned reign of the version: a catch-up seed introduced
+    # under an earlier champion still binds to that champion's block.
+    seed_binding = bind_confirmation_seed(
+        await list_reign_seed_anchors(session, bench_version=canonical_version),
+        seed=selected_wave_seed,
+        bench_version=canonical_version,
+    )
+    if canonical_version >= 3:
+        if canonical_version >= 13 and (
+            heartbeat is None
+            or not heartbeat_supports_version(
+                heartbeat, now=now, version=canonical_version
             )
-        # Place this retest on a real execution slot. The lane occupies one
-        # slot exactly like a canonical lease, so it answers the same two
-        # questions the canonical lane already answers: which slots is this
-        # validator offering (healthy, not already running), and how many
-        # leases has the operator allowed it to hold at once. Neither was asked
-        # before: the ticket took the ``slot-0`` column default and the lane was
-        # invisible to the operator cap.
-        retest_slot = (
-            live_retest.slot_id
-            if live_retest is not None
-            else await _idle_retest_slot(
-                session,
-                heartbeat=heartbeat,
-                slot_settings=slot_settings,
-                validator_hotkey=payload.validator_hotkey,
-                now=now,
-                lane="non_round",
-                round_reservation_active=await round_reservation_active(
-                    request.app.state, session
-                ),
-                requested_slot_id=payload.slot_id,
-            )
-        )
-        if retest_slot is None:
-            if auto_routed:
-                note_decline_reason("slot_ceiling")
-                return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        ):
             raise HTTPException(
-                status_code=409,
-                detail="validator has no idle slot for a continual retest",
+                503,
+                f"deterministic V{canonical_version} scorer capability is unavailable",
             )
-        ticket = await issue_confirmation_ticket(
-            session,
-            agent_id=selected_member_id,
-            validator_hotkey=payload.validator_hotkey,
-            now=now,
-            ttl=ticket_ttl,
-            bench_version=canonical_version,
-            seed=(selected_wave_seed if confirmation_datasets else None),
-            dataset_sha256=(
-                confirmation_datasets[0].dataset_sha256
-                if confirmation_datasets
-                else None
-            ),
-            slot_id=retest_slot,
-        )
-        if ticket is None:
-            if auto_routed:
-                note_decline_reason("no_ticket")
-                return Response(status_code=204, headers={"Cache-Control": "no-store"})
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "validator has another live assignment or this retest is deferred"
-                ),
-            )
-        if seed_binding is not None and ticket.seed == selected_wave_seed:
-            # Record the binding on the lease itself, the same columns the
-            # canonical lane pins, so the seed's provenance is auditable from
-            # the ticket without replaying reign history.
-            ticket.seed_block = seed_binding.seed_block
-            ticket.seed_block_hash = seed_binding.seed_block_hash
-        agent = await get_agent_by_id(session, agent_id=ticket.agent_id)
-        assert agent is not None
-        dataset = await session.get(
-            BenchmarkDataset, (agent.agent_id, ticket.bench_version)
-        )
-        contract = benchmark_contract(ticket.bench_version)
-        inference_grant = await ensure_inference_grant(
-            session,
-            ticket=ticket,
-            config=inference_config,
-            supported_profiles=(
-                tuple(
-                    route.profile_revision for route in v7_calibration.supported_routes
-                )
-                if v7_calibration is not None
-                else None
-            ),
-            calibration_manifest_sha256=(
-                v7_calibration.manifest_sha256 if v7_calibration is not None else None
-            ),
-        )
-        if ticket.bench_version >= 7 and inference_grant is None:
+        if generator.run_size is None:
             raise HTTPException(
                 status_code=503,
-                detail="ticket inference capability is unavailable",
+                detail="top-5 confirmation dataset generation is unavailable",
             )
-        job = JobResponse(
-            agent_id=agent.agent_id,
-            slot_id=ticket.slot_id,
-            miner_hotkey=agent.miner_hotkey,
-            sha256=agent.sha256,
-            deadline=ticket.deadline,
-            seed=dataset.seed if dataset is not None else agent.dataset_seed,
-            dataset_sha256=(
-                dataset.sha256 if dataset is not None else agent.dataset_sha256
-            ),
-            run_size=(
-                dataset.run_size if dataset is not None else agent.dataset_run_size
-            ),
-            dataset_seed_block=(
-                dataset.seed_block if dataset is not None else agent.dataset_seed_block
-            ),
-            dataset_seed_block_hash=(
-                dataset.seed_block_hash
-                if dataset is not None
-                else agent.dataset_seed_block_hash
-            ),
-            bench_version=ticket.bench_version,
-            minimum_screening_policy_version=(
-                contract.minimum_screening_policy_version
-            ),
-            requires_screened_image=contract.requires_screened_image,
-            benchmark_runtime=(
-                inference_settings.benchmark_runtime
-                if ticket.bench_version >= 10
-                else None
-            ),
-            confirmation_datasets=confirmation_datasets,
-            inference=(
-                _inference_grant_offer(
-                    request=request,
-                    grant=inference_grant,
-                    bench_version=ticket.bench_version,
-                )
-                if inference_grant is not None
-                else None
-            ),
+        confirmation_datasets = [
+            ConfirmationDatasetPin(
+                seed=selected_wave_seed,
+                dataset_sha256=await lease_dataset_sha(
+                    request,
+                    generator,
+                    seed=selected_wave_seed,
+                    bench_version=canonical_version,
+                ),
+                run_size=generator.run_size,
+                anchor_agent_id=(
+                    seed_binding.anchor_agent_id if seed_binding is not None else None
+                ),
+                seed_index=(
+                    seed_binding.seed_index if seed_binding is not None else None
+                ),
+                seed_block=(
+                    seed_binding.seed_block if seed_binding is not None else None
+                ),
+                seed_block_hash=(
+                    seed_binding.seed_block_hash if seed_binding is not None else None
+                ),
+            )
+        ]
+    for pin in confirmation_datasets:
+        pin.private_dataset_mode = await _private_dataset_mode(
+            session, pin.dataset_sha256, heartbeat
         )
+    # Place this retest on a real execution slot. The lane occupies one
+    # slot exactly like a canonical lease, so it answers the same two
+    # questions the canonical lane already answers: which slots is this
+    # validator offering (healthy, not already running), and how many
+    # leases has the operator allowed it to hold at once. Neither was asked
+    # before: the ticket took the ``slot-0`` column default and the lane was
+    # invisible to the operator cap.
+    retest_slot = (
+        live_retest.slot_id
+        if live_retest is not None
+        else await _idle_retest_slot(
+            session,
+            heartbeat=heartbeat,
+            slot_settings=slot_settings,
+            validator_hotkey=payload.validator_hotkey,
+            now=now,
+            lane="non_round",
+            round_reservation_active=await round_reservation_active(
+                request.app.state, session
+            ),
+            requested_slot_id=payload.slot_id,
+        )
+    )
+    if retest_slot is None:
+        if auto_routed:
+            note_decline_reason("slot_ceiling")
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        raise HTTPException(
+            status_code=409,
+            detail="validator has no idle slot for a continual retest",
+        )
+    ticket = await issue_confirmation_ticket(
+        session,
+        agent_id=selected_member_id,
+        validator_hotkey=payload.validator_hotkey,
+        now=now,
+        ttl=ticket_ttl,
+        bench_version=canonical_version,
+        seed=(selected_wave_seed if confirmation_datasets else None),
+        dataset_sha256=(
+            confirmation_datasets[0].dataset_sha256 if confirmation_datasets else None
+        ),
+        slot_id=retest_slot,
+    )
+    if ticket is None:
+        if auto_routed:
+            note_decline_reason("no_ticket")
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        raise HTTPException(
+            status_code=409,
+            detail=("validator has another live assignment or this retest is deferred"),
+        )
+    # Claim the half-open probe on the already-locked circuit, as request_job
+    # does; a no-op unless this lease is the first one after ``retry_at``.
+    register_provider_probe(
+        provider_gate,
+        now=now,
+        kind="scoring",
+        key=scoring_probe_key(
+            validator_hotkey=payload.validator_hotkey, slot_id=ticket.slot_id
+        ),
+    )
+    if seed_binding is not None and ticket.seed == selected_wave_seed:
+        # Record the binding on the lease itself, the same columns the
+        # canonical lane pins, so the seed's provenance is auditable from
+        # the ticket without replaying reign history.
+        ticket.seed_block = seed_binding.seed_block
+        ticket.seed_block_hash = seed_binding.seed_block_hash
+    agent = await get_agent_by_id(session, agent_id=ticket.agent_id)
+    assert agent is not None
+    dataset = await session.get(
+        BenchmarkDataset, (agent.agent_id, ticket.bench_version)
+    )
+    contract = benchmark_contract(ticket.bench_version)
+    inference_grant = await ensure_inference_grant(
+        session,
+        ticket=ticket,
+        config=inference_config,
+        supported_profiles=(
+            tuple(route.profile_revision for route in v7_calibration.supported_routes)
+            if v7_calibration is not None
+            else None
+        ),
+        calibration_manifest_sha256=(
+            v7_calibration.manifest_sha256 if v7_calibration is not None else None
+        ),
+    )
+    if ticket.bench_version >= 7 and inference_grant is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ticket inference capability is unavailable",
+        )
+    dueling_fields = await _dueling_lease_fields(
+        request,
+        session,
+        ticket=ticket,
+        agent=agent,
+        run_seed=(
+            ticket.seed
+            if ticket.seed is not None
+            else (dataset.seed if dataset is not None else agent.dataset_seed)
+        ),
+        now=now,
+    )
+    job = JobResponse(
+        **dueling_fields,
+        agent_id=agent.agent_id,
+        slot_id=ticket.slot_id,
+        miner_hotkey=agent.miner_hotkey,
+        sha256=agent.sha256,
+        deadline=ticket.deadline,
+        seed=dataset.seed if dataset is not None else agent.dataset_seed,
+        dataset_sha256=(
+            dataset.sha256 if dataset is not None else agent.dataset_sha256
+        ),
+        run_size=(dataset.run_size if dataset is not None else agent.dataset_run_size),
+        dataset_seed_block=(
+            dataset.seed_block if dataset is not None else agent.dataset_seed_block
+        ),
+        dataset_seed_block_hash=(
+            dataset.seed_block_hash
+            if dataset is not None
+            else agent.dataset_seed_block_hash
+        ),
+        bench_version=ticket.bench_version,
+        minimum_screening_policy_version=(contract.minimum_screening_policy_version),
+        requires_screened_image=contract.requires_screened_image,
+        benchmark_runtime=(
+            inference_settings.benchmark_runtime if ticket.bench_version >= 10 else None
+        ),
+        confirmation_datasets=confirmation_datasets,
+        inference=(
+            _inference_grant_offer(
+                request=request,
+                grant=inference_grant,
+                bench_version=ticket.bench_version,
+            )
+            if inference_grant is not None
+            else None
+        ),
+    )
     logger.info(
-        "issued top-5 rescore job champion=%s member=%s validator=%s",
-        champion_agent_id,
+        "issued top-5 rescore job route=%s member=%s seed_leased=%s validator=%s",
+        route,
         selected_member_id,
+        ticket.seed is not None,
         payload.validator_hotkey,
     )
     return job
@@ -6488,6 +6670,14 @@ async def submit_top5_confirmation_score(
                 base_evidence_sha256=report.base_evidence_sha256,
             )
             v9_efficiency_cost_eligible = v9_efficiency_token_total is not None
+        confirmation_season_id, confirmation_dueling = await _dueling_evidence(
+            session, report, ticket, agent
+        )
+        if confirmation_dueling is not None and len(seeds) != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="a bench v16+ confirmation report must carry exactly one seed",
+            )
         await append_confirmation_scores(
             session,
             rows=[
@@ -6500,11 +6690,17 @@ async def submit_top5_confirmation_score(
                     signature=payload.signature,
                     v9_efficiency_token_total=v9_efficiency_token_total,
                     v9_efficiency_cost_eligible=v9_efficiency_cost_eligible,
+                    dueling_season_id=confirmation_season_id,
+                    dueling=confirmation_dueling,
                 )
                 for seed, composite in zip(seeds, composites, strict=True)
             ],
             bench_version=canonical_version,
             created_at=now,
+            # Only a lease pinned to one seed re-runs a voided sample.
+            rerun_seeds=(
+                frozenset({ticket.seed}) if ticket.seed is not None else frozenset()
+            ),
         )
         await mark_ticket_scored(
             session,
@@ -6572,6 +6768,7 @@ async def fail_job(
     )
 
     reopened = False
+    failed_purpose: TicketPurpose | None = None
     async with session.begin():
         try:
             await consume_validator_nonce(
@@ -6669,6 +6866,14 @@ async def fail_job(
             # operation that can extend its attempt cap.
             ticket.status = TicketStatus.EXPIRED
             ticket.deadline = now
+            # An OOM is the miner's only under the published rule, which the
+            # scorer proves and names ``harness_oom``. A validator that cannot
+            # (one predating the rule sends every OOM kill as ``sandbox_oom``
+            # with no cap or host evidence) gets the no-fault branch.
+            unproven_oom = (
+                payload.reason == "sandbox_oom"
+                and payload.failure_detail != HARNESS_OOM_FAILURE_DETAIL
+            )
             if grant_spent_allowance and payload.reason == "infrastructure":
                 # Correct both billing and diagnosis. The stuck-list withdraws
                 # only on named agent codes; leaving budget_evidence_absent
@@ -6682,6 +6887,16 @@ async def fail_job(
                     payload.agent_id,
                     payload.validator_hotkey,
                     payload.reason,
+                    payload.failure_detail,
+                )
+            elif unproven_oom:
+                ticket.failure_reason = "infrastructure"
+                ticket.failure_detail = payload.failure_detail or "sandbox_oom"
+                logger.warning(
+                    "unproven sandbox OOM parked as infrastructure agent=%s "
+                    "validator=%s detail=%s",
+                    payload.agent_id,
+                    payload.validator_hotkey,
                     payload.failure_detail,
                 )
             else:
@@ -6716,11 +6931,11 @@ async def fail_job(
                         payload.validator_hotkey,
                         payload.ticket_deadline.isoformat(),
                     )
-            elif payload.reason == "sandbox_oom":
-                # The sandbox, rather than validator-owned infrastructure,
-                # exhausted its memory allowance. Preserve the failed attempt
-                # and defer this artifact so the validator immediately advances
-                # to another eligible harness instead of reclaiming it.
+            elif ticket.failure_reason == "sandbox_oom":
+                # The harness reached its own published memory cap on a host
+                # with headroom. Preserve the failed attempt and defer this
+                # artifact so the validator immediately advances to another
+                # eligible harness instead of reclaiming it.
                 ticket.retry_after = now + RETRY_COOLDOWN
             elif ticket.purpose == TicketPurpose.CONTINUAL_RETEST:
                 # This pair stays parked. Other validators may still take their
@@ -6733,6 +6948,24 @@ async def fail_job(
             await session.flush()
             await revoke_ticket_inference(session, ticket=ticket, now=now)
             reopened = True
+            failed_purpose = ticket.purpose
+    if reopened and failed_purpose != TicketPurpose.CONTINUAL_RETEST:
+        # Once every remaining quorum slot has died on the agent's own named
+        # failure, record that the artifact cannot finish scoring. Without this
+        # the row stays "waiting for validators" and each fresh validator still
+        # burns a full first-assignment run on it. Its own transaction, after
+        # the report above has committed: a failure here must never lose or
+        # undo the validator's report.
+        try:
+            async with session.begin():
+                await withdraw_terminal_artifact_failure(
+                    session, agent_id=payload.agent_id, now=now
+                )
+        except Exception:
+            logger.exception(
+                "terminal artifact failure withdrawal failed agent=%s",
+                payload.agent_id,
+            )
     logger.info(
         "validator=%s reported job failure agent=%s reason=%s reopened=%s",
         payload.validator_hotkey,
@@ -6977,10 +7210,9 @@ async def agent_artifact(
                 or agent.screened_image_sha256 != canary.screened_image_sha256
             ):
                 raise HTTPException(409, "canary artifact identity changed")
-    url = await storage.presigned_get_url(
-        key=_artifact_key(agent_id),
-        expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
-    )
+        source_free = await _validator_scores_source_free(
+            session, validator_hotkey=x_validator_hotkey
+        )
     image_url = None
     if (
         agent.screened_image_sha256 is not None
@@ -6990,11 +7222,23 @@ async def agent_artifact(
             key=_screened_image_key(agent_id, agent.screened_image_upload_id),
             expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
         )
+    # The screened image is what runs, and Platform computes the structural
+    # fingerprint itself, so a validator whose scorer can run the image alone
+    # never receives miner source.
+    url = (
+        None
+        if source_free and image_url is not None
+        else await storage.presigned_get_url(
+            key=_artifact_key(agent_id),
+            expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
+        )
+    )
     logger.info(
-        "validator=%s fetched artifact url for agent_id=%s bench_version=%s",
+        "validator=%s fetched artifact for agent_id=%s bench_version=%s source=%s",
         x_validator_hotkey,
         agent_id,
         ticket.bench_version,
+        url is not None,
     )
     # Durable counterpart to the log line above. The ticket is keyed by
     # (agent_id, validator_hotkey), so those two columns plus bench_version
@@ -7010,6 +7254,7 @@ async def agent_artifact(
         source_ip=client_ip(request),
         detail=request_detail(
             request,
+            served_source=url is not None,
             served_screened_image=image_url is not None,
             # The ticket row is UPSERTed on reissue, so attempt_count is the
             # only thing tying this fetch to which lease attempt it served.
@@ -7106,7 +7351,11 @@ async def submit_score(
             f"v{MIN_SCOREABLE_BENCH_VERSION} and later only"
         )
 
-    queue_policy = await _resolve_queue_policy(request)
+    backfilled_structural = (
+        await _backfill_structural_fingerprint(session, storage, agent_id=agent_id)
+        if report.structural_fingerprint is None
+        else None
+    )
 
     # 4. Atomic: record the score + advance status together. The row lock
     #    serializes concurrent scorers so the status guard + transition below
@@ -7202,11 +7451,6 @@ async def submit_score(
             raise AgentNotEvaluatableError(
                 f"agent {agent_id} is {agent.status}, not in {_SCOREABLE_STATUSES}"
             )
-        if agent.screening_policy_version < effective_screening_policy_version():
-            raise AgentNotEvaluatableError(
-                f"agent {agent_id} has not passed screening policy "
-                f"{effective_screening_policy_version()}"
-            )
         # k=3 gate: a score is only accepted against a live ticket this validator
         # holds for the agent. No ticket (never issued, expired, or already
         # spent) means the score is unsolicited or late, so it is rejected and
@@ -7267,6 +7511,16 @@ async def submit_score(
             raise HTTPException(
                 status_code=409,
                 detail="score benchmark version does not match its ticket lease",
+            )
+        # The ticket's contract floor is the only screening-policy gate, the
+        # same one the lease allocator applies. A score is never refused for a
+        # later review-policy activation (source review retired 2026-11-07).
+        minimum_policy = benchmark_contract(
+            ticket.bench_version
+        ).minimum_screening_policy_version
+        if agent.screening_policy_version < minimum_policy:
+            raise AgentNotEvaluatableError(
+                f"agent {agent_id} has not passed screening policy {minimum_policy}"
             )
         if ticket.seed is not None and report.seed != ticket.seed:
             raise HTTPException(
@@ -7405,6 +7659,9 @@ async def submit_score(
         # the v13 floor and for a v13+ scorer that emitted none, so v<=12 rows
         # are byte-identical.
         gate_evidence = build_gate_evidence(report, bench_version=ticket.bench_version)
+        dueling_season_id, dueling = await _dueling_evidence(
+            session, report, ticket, agent
+        )
         await upsert_score(
             session,
             agent_id=agent_id,
@@ -7422,6 +7679,35 @@ async def submit_score(
             details=score_details or None,
             model_usage=model_usage,
             gate_evidence=gate_evidence,
+            dueling_season_id=dueling_season_id,
+            dueling=dueling,
+        )
+        # Phase B2: a season-seeded rotation re-score is also that duel
+        # seed's confirmation record (no-op for every canonical ticket), with
+        # the run's audited cost evidence as a single-seed retest records it.
+        cost_versioned = supports_confirmation(ticket.bench_version)
+        mirrored_tokens = (
+            audited_v9_run_token_total(
+                report.details, base_evidence_sha256=report.base_evidence_sha256
+            )
+            if cost_versioned
+            else None
+        )
+        await mirror_season_seeded_score(
+            session,
+            ticket,
+            validator_hotkey=payload.validator_hotkey,
+            seed=report.seed,
+            composite=report.composite,
+            run_id=report.run_id,
+            signature=payload.signature,
+            dueling_season_id=dueling_season_id,
+            dueling=dueling,
+            created_at=audit_now,
+            v9_efficiency_token_total=mirrored_tokens,
+            v9_efficiency_cost_eligible=(
+                mirrored_tokens is not None if cost_versioned else None
+            ),
         )
         await record_ticket_route_quality(
             session,
@@ -7468,20 +7754,6 @@ async def submit_score(
             )
             replacement_median = statistics.median(
                 score.composite for score in replacement_scores
-            )
-            await _evaluate_and_record_deferred_review(
-                session,
-                agent=agent,
-                bench_version=ticket.bench_version,
-                score_count=len(replacement_scores),
-                settings=queue_policy.deferred_source_review,
-                now=audit_now,
-            )
-            await _evaluate_and_record_integrity_double_check(
-                session,
-                bench_version=ticket.bench_version,
-                settings=queue_policy.deferred_source_review,
-                now=audit_now,
             )
             await append_audit_entry(
                 session,
@@ -7531,12 +7803,16 @@ async def submit_score(
                 dataset=replacement_dataset,
                 mirror_transcripts=await transcript_mirror_enabled(session),
             )
-        # Persist the crate's structural (AST) fingerprint from the report, so it
-        # is available for the gate here and for future cross-miner comparison.
-        # Advisory + unsigned: only overwrite when the report actually carries one,
-        # so a re-score by a scorer that omits it never wipes a stored sketch.
-        if report.structural_fingerprint is not None:
-            agent.structural_fingerprint = report.structural_fingerprint.model_dump()
+        # Platform computes the structural (AST) sketch at upload. A report's
+        # sketch is advisory and unsigned, so it only fills a gap left by an
+        # agent that predates that; it never replaces a stored sketch.
+        if agent.structural_fingerprint is None:
+            if report.structural_fingerprint is not None:
+                agent.structural_fingerprint = (
+                    report.structural_fingerprint.model_dump()
+                )
+            elif backfilled_structural is not None:
+                agent.structural_fingerprint = backfilled_structural
         # Finalize at quorum (k=3): an agent stays provisional (``evaluating``)
         # until :data:`SCORING_QUORUM` validators have scored it; only the
         # quorum-th score moves it ``evaluating -> scored``, unless the anti-copy
@@ -7655,6 +7931,18 @@ async def submit_score(
                     # with a bare not-held would silently drop that record.
                     if resubmission.held:
                         decision = resubmission
+                unreleased_copy_hold = False
+                if not decision.held:
+                    # Unreleased-copy signal in enforce mode: an agent uploaded
+                    # after enforcement began whose recorded signal is at or
+                    # above the audited threshold is held for an operator. It
+                    # replaces only a not-held verdict and never rejects.
+                    held_for = await unreleased_copy_finalization_hold(session, agent)
+                    if held_for is not None:
+                        decision = ReviewDecision(
+                            held=True, duplicate_of=held_for[0], reason=held_for[1]
+                        )
+                        unreleased_copy_hold = True
                 if decision.held:
                     await preserve_desired_authority(session, now=audit_now)
                     reference_provenance = reference_corpus_provenance()
@@ -7700,6 +7988,11 @@ async def submit_score(
                                 ],
                                 "backfilled": False,
                                 "opened_at_source": "agent_finalized_audit",
+                                **(
+                                    {"trigger": "unreleased_copy"}
+                                    if unreleased_copy_hold
+                                    else {}
+                                ),
                             },
                         )
                     )
@@ -7764,51 +8057,15 @@ async def submit_score(
                 audit_pvalue, audit_pairs, audit_failed = _transform_audit_verdict(
                     agent_scores
                 )
-                if audit_failed and not TRANSFORM_AUDIT_ENFORCE:
-                    # Observational mode: record what the verdict WOULD have been
-                    # (the EVENT_AUDIT entry below carries `failed`) without
-                    # touching the agent's status. This is what accumulates the
-                    # real-world distribution a future threshold can be set from.
+                if audit_failed:
+                    # Observational only: the EVENT_AUDIT entry below carries
+                    # `failed` without touching the agent's status. Automatic
+                    # score holds are retired (2026-11-07); an operator reads
+                    # the feed and opens a review by hand if it warrants one.
                     logger.info(
                         "agent %s: transform-audit brittleness signature "
                         "(%d base-only vs %d transform-only, p=%.4f <= %.3f) "
                         "— NOT enforced pending champion-population validation",
-                        agent_id,
-                        audit_pairs["base_only"],
-                        audit_pairs["transform_only"],
-                        audit_pvalue if audit_pvalue is not None else 1.0,
-                        AUDIT_ALPHA,
-                    )
-                if (
-                    audit_failed
-                    and TRANSFORM_AUDIT_ENFORCE
-                    and agent.status == AgentStatus.SCORED
-                ):
-                    await preserve_desired_authority(session, now=audit_now)
-                    agent.status = AgentStatus.ATH_PENDING_REVIEW
-                    agent.review_reason = TRANSFORM_AUDIT_REVIEW_REASON
-                    session.add(
-                        AthReview(
-                            review_id=uuid4(),
-                            agent_id=agent.agent_id,
-                            status="pending",
-                            opened_at=audit_now,
-                            original_reason=TRANSFORM_AUDIT_REVIEW_REASON,
-                            original_policy_version=agent.screening_policy_version,
-                            original_evidence={
-                                "audit_pairs": audit_pairs,
-                                "transform_audit_pvalue": audit_pvalue,
-                                "audit_alpha": AUDIT_ALPHA,
-                            },
-                            algorithm_provenance={
-                                "snapshot": "score-finalization",
-                                "opened_at_source": "transform_audit",
-                            },
-                        )
-                    )
-                    logger.warning(
-                        "agent %s held for transform-audit review: %d base-only "
-                        "vs %d transform-only discordant pairs, p=%.4f <= %.3f",
                         agent_id,
                         audit_pairs["base_only"],
                         audit_pairs["transform_only"],
@@ -7838,7 +8095,7 @@ async def submit_score(
                             # Whether the verdict was allowed to affect status.
                             # Published so the feed is unambiguous about which
                             # entries were observational.
-                            "enforced": TRANSFORM_AUDIT_ENFORCE,
+                            "enforced": False,
                             "dataset_seed": (
                                 finalized_dataset.seed
                                 if finalized_dataset is not None
@@ -7863,54 +8120,6 @@ async def submit_score(
                         },
                         recorded_at=audit_now,
                     )
-                # Out-of-band composite escalation (issue #476). After the
-                # anti-copy and transform-audit gates have had their say, a
-                # composite that is a robust upward outlier of its comparable
-                # same-benchmark cohort is routed to ATH review instead of
-                # ranked -- the safety net for a gamed fresh contract whose
-                # spike outruns the other gates. Bench-version scoped (v12+),
-                # so v8-v11 are untouched, and a no-op unless an operator turns
-                # it on. The cohort is the eligible ledger read above, which is
-                # one row per owner and excludes this still-evaluating
-                # candidate, held agents, and banned agents.
-                # Per-axis evidence: each axis is the median of this agent's
-                # quorum on that axis, against the same eligible ledger's axis.
-                await _evaluate_and_record_outlier_escalation(
-                    session,
-                    agent=agent,
-                    bench_version=ticket.bench_version,
-                    composite=median_composite,
-                    cohort=[row.composite for row in eligible],
-                    settings=OUTLIER_ESCALATION_SETTINGS,
-                    now=audit_now,
-                    axes={
-                        "tool_mean": AxisObservation(
-                            value=statistics.median(s.tool_mean for s in agent_scores),
-                            cohort=[row.tool_mean for row in eligible],
-                        ),
-                        "memory_mean": AxisObservation(
-                            value=statistics.median(
-                                s.memory_mean for s in agent_scores
-                            ),
-                            cohort=[row.memory_mean for row in eligible],
-                        ),
-                    },
-                )
-                deferred_settings = queue_policy.deferred_source_review
-                await _evaluate_and_record_deferred_review(
-                    session,
-                    agent=agent,
-                    bench_version=ticket.bench_version,
-                    score_count=len(agent_scores),
-                    settings=deferred_settings,
-                    now=audit_now,
-                )
-                await _evaluate_and_record_integrity_double_check(
-                    session,
-                    bench_version=ticket.bench_version,
-                    settings=deferred_settings,
-                    now=audit_now,
-                )
                 # Append the finalize audit entry: quorum reached, the median the
                 # platform finalized on, and which validators scored it. The
                 # moderation detail (why held / duplicate_of) is deliberately kept

@@ -1,16 +1,19 @@
 """Reads + pin-once writes for the finalized-block confirmation seed anchors.
 
 One :class:`~ditto.db.models.ConfirmationSeedAnchor` row per
-``(champion, bench_version)`` reign binds the champion-anchored CRN seed family
-(:mod:`ditto.api_server.crn`) to a chain block nobody could know at
+``(champion, bench_version, season_key)`` reign binds the champion-anchored
+CRN seed family (:mod:`ditto.api_server.crn`) to a chain block nobody could know at
 submission time. The row is created with a null hash at the reign's first
 continual-retest claim, pinned exactly once when ``anchor_block`` is finalized,
 and never re-pinned: the family it names is what validators already scored.
+``season_key`` is :data:`NIL_SEASON_KEY` below the dueling floor, so a v13-v15
+reign keeps exactly one row; from bench v16 each dueling season gets its own.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -20,35 +23,46 @@ from ditto.db.models import ConfirmationSeedAnchor
 
 if TYPE_CHECKING:
     from datetime import datetime
-    from uuid import UUID
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
+NIL_SEASON_KEY = UUID(int=0)
+"""``season_key`` of every reign anchor outside a dueling season."""
+
 
 async def get_confirmation_seed_anchor(
-    session: AsyncSession, *, champion_agent_id: UUID, bench_version: int
+    session: AsyncSession,
+    *,
+    champion_agent_id: UUID,
+    bench_version: int,
+    season_key: UUID = NIL_SEASON_KEY,
 ) -> ConfirmationSeedAnchor | None:
     """The reign's anchor row, pinned or still waiting, or None when never asked."""
-    return await session.get(ConfirmationSeedAnchor, (champion_agent_id, bench_version))
+    return await session.get(
+        ConfirmationSeedAnchor, (champion_agent_id, bench_version, season_key)
+    )
 
 
 async def list_pinned_confirmation_seed_anchors(
-    session: AsyncSession, *, bench_version: int
+    session: AsyncSession, *, bench_version: int, season_key: UUID | None = None
 ) -> list[ConfirmationSeedAnchor]:
     """Every pinned reign anchor for one version, oldest anchor block first.
 
     Deterministic order matters: the ledger serves this list to the whole fleet
     and a validator binds a historical seed to the first anchor that derives it.
+    ``season_key`` narrows the list to one dueling season's anchors.
     """
+    query = select(ConfirmationSeedAnchor).where(
+        ConfirmationSeedAnchor.bench_version == bench_version,
+        ConfirmationSeedAnchor.anchor_block_hash.is_not(None),
+    )
+    if season_key is not None:
+        query = query.where(ConfirmationSeedAnchor.season_key == season_key)
     rows = await session.scalars(
-        select(ConfirmationSeedAnchor)
-        .where(
-            ConfirmationSeedAnchor.bench_version == bench_version,
-            ConfirmationSeedAnchor.anchor_block_hash.is_not(None),
-        )
-        .order_by(
+        query.order_by(
             ConfirmationSeedAnchor.anchor_block,
             ConfirmationSeedAnchor.champion_agent_id,
+            ConfirmationSeedAnchor.season_key,
         )
     )
     return list(rows.all())
@@ -69,6 +83,7 @@ async def list_confirmation_seed_anchors(
         .order_by(
             ConfirmationSeedAnchor.anchor_block,
             ConfirmationSeedAnchor.champion_agent_id,
+            ConfirmationSeedAnchor.season_key,
         )
     )
     if limit is not None:
@@ -94,6 +109,7 @@ async def list_unpinned_confirmation_seed_anchors(
         .order_by(
             ConfirmationSeedAnchor.anchor_block,
             ConfirmationSeedAnchor.champion_agent_id,
+            ConfirmationSeedAnchor.season_key,
         )
         .limit(max(0, int(limit)))
     )
@@ -107,6 +123,7 @@ async def ensure_confirmation_seed_anchor(
     bench_version: int,
     ready_block: int,
     delta: int,
+    season_key: UUID = NIL_SEASON_KEY,
 ) -> ConfirmationSeedAnchor:
     """Return the reign's anchor row, creating it (unpinned) on first sight.
 
@@ -118,6 +135,7 @@ async def ensure_confirmation_seed_anchor(
     values = {
         "champion_agent_id": champion_agent_id,
         "bench_version": int(bench_version),
+        "season_key": season_key,
         "ready_block": int(ready_block),
         "anchor_block": int(ready_block) + int(delta),
     }
@@ -128,12 +146,12 @@ async def ensure_confirmation_seed_anchor(
     )
     await session.execute(
         insert.values(**values).on_conflict_do_nothing(
-            index_elements=["champion_agent_id", "bench_version"]
+            index_elements=["champion_agent_id", "bench_version", "season_key"]
         )
     )
     row = await session.get(
         ConfirmationSeedAnchor,
-        (champion_agent_id, int(bench_version)),
+        (champion_agent_id, int(bench_version), season_key),
         populate_existing=True,
     )
     assert row is not None

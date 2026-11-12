@@ -153,6 +153,7 @@ export function InferenceConcurrencyControlPanel({
   const applySettings = useServerFn(updateInferenceConcurrencySettings)
   const [state, setState] = useState(initialState)
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initialState))
+  const [daniPercent, setDaniPercent] = useState(String(initialState.effective.settings.danilabs_percent))
   const [caseConcurrency, setCaseConcurrency] = useState(
     String(initialState.effective.settings.benchmark_runtime.case_concurrency),
   )
@@ -199,6 +200,8 @@ export function InferenceConcurrencyControlPanel({
         parsed.embedding_global_requests_per_minute)
 
   const parsedCaseConcurrency = Number(caseConcurrency)
+  const parsedDaniPercent = Number(daniPercent)
+  const daniInvalid = daniPercent.trim() === '' || !Number.isInteger(parsedDaniPercent) || parsedDaniPercent < 0 || parsedDaniPercent > 100
   const parsedDelayMinMs = Number(delayMinMs)
   const parsedDelayMaxMs = Number(delayMaxMs)
   const parsedSandboxMemoryMib = Number(sandboxMemoryMib)
@@ -218,6 +221,7 @@ export function InferenceConcurrencyControlPanel({
 
   const changed =
     fields.some((field) => parsed[field.key] !== effective.settings[field.key]) ||
+    parsedDaniPercent !== effective.settings.danilabs_percent ||
     parsedCaseConcurrency !== effective.settings.benchmark_runtime.case_concurrency ||
     delayMode !== effective.settings.benchmark_runtime.relay_delay_fingerprint_mode ||
     parsedDelayMinMs !==
@@ -229,6 +233,7 @@ export function InferenceConcurrencyControlPanel({
     invalid.length === 0 &&
     !hierarchyBroken &&
     !runtimeInvalid &&
+    !daniInvalid &&
     reason.trim().length >= 8 &&
     confirmation === INFERENCE_CONCURRENCY_CONFIRMATION
 
@@ -240,6 +245,7 @@ export function InferenceConcurrencyControlPanel({
 
   function reset(next = state) {
     setDraft(draftFrom(next))
+    setDaniPercent(String(next.effective.settings.danilabs_percent))
     setCaseConcurrency(String(next.effective.settings.benchmark_runtime.case_concurrency))
     setDelayMode(next.effective.settings.benchmark_runtime.relay_delay_fingerprint_mode)
     setDelayMinMs(
@@ -298,6 +304,7 @@ export function InferenceConcurrencyControlPanel({
             embedding_per_validator_requests_per_minute:
               parsed.embedding_per_validator_requests_per_minute,
             embedding_global_requests_per_minute: parsed.embedding_global_requests_per_minute,
+            danilabs_percent: parsedDaniPercent,
             benchmark_runtime: {
               case_concurrency: parsedCaseConcurrency,
               relay_delay_fingerprint_mode: delayMode,
@@ -378,6 +385,21 @@ export function InferenceConcurrencyControlPanel({
             Retry-After, so a validator backs off and continues rather than discarding the run.
           </span>
         </p>
+
+        <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
+          <label className="block text-xs font-medium text-[var(--muted-strong)]">
+            DaniLabs trial share (0–100%)
+            <input type="number" min={0} max={100} step={1} value={daniPercent}
+              disabled={readOnly || loading} onChange={(event) => setDaniPercent(event.target.value)}
+              className="mt-2 block min-h-11 w-44 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 text-sm outline-none focus:border-[var(--cyan)] disabled:opacity-45" />
+          </label>
+          <p className="mt-2 text-[11px] leading-4 text-[var(--muted)]">
+            Zero disables selection. This is a percentage of eligible GPT-OSS requests, not total traffic.
+            The relay also needs a trial key, scope and unexpired free-trial deadline. Large requests and
+            other lanes stay on their existing route. A failed DaniLabs call is not automatically replayed.
+          </p>
+          {daniInvalid ? <p className="mt-2 text-[11px] text-[var(--red)]">Enter a whole number from 0 to 100.</p> : null}
+        </div>
 
         <div className="mt-5 grid gap-3 lg:grid-cols-2">
           {fields.map((field) => {

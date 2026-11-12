@@ -44,8 +44,15 @@ Environment=SCREENER_CONVERSATION_OPENROUTER_KEY_FILE={{ screener_fleet_conversa
 Environment=SCREENER_CONVERSATION_SPOOL_DIR={{ screener_fleet_state_dir }}/workers/%i/conversation
 {% endif %}
 ExecStart={{ screener_fleet_active_worker_venv }}/bin/{{ 'ditto-screener-replay' if screener_fleet_replay_worker_enabled else 'ditto-screener' }}
+{# The release updater depends on Restart=always: it SIGTERMs each worker's
+   main process and lets systemd start it again on the activated release.
+   Template-only comment so existing hosts render byte-identical units. #}
 Restart=always
 RestartSec=10
+# Status 85 is an opt-in idle exit (SCREENER_IDLE_EXIT_SECONDS): a clean,
+# deliberate stop that systemd must not undo. Every other exit still restarts.
+SuccessExitStatus=85
+RestartPreventExitStatus=85
 TimeoutStopSec=70min
 KillSignal=SIGTERM
 NoNewPrivileges=true

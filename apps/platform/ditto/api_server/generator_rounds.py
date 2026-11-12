@@ -1,9 +1,11 @@
 """Generator-competition rounds: the chain-epoch agent x generator matrix.
 
-A round is keyed on the chain's own epoch counter,
-``round_index = SubnetEpochIndex // epochs_per_round``, so every round opens
-and closes on a Yuma epoch boundary and lands in the same epoch-pinned ledger
-validators fold. The lifecycle (:func:`advance_rounds`, driven by
+A round is keyed on the chain's own epoch counter: it opens at a recorded
+``first_epoch_index`` and spans ``epochs_per_round`` subnet epochs, so every
+round opens and closes on a Yuma epoch boundary and lands in the same
+epoch-pinned ledger validators fold. Round indexes continue from the latest
+round (:func:`round_clock`), so a cadence change never moves the index space
+below rounds that already ran. The lifecycle (:func:`advance_rounds`, driven by
 :class:`GeneratorRoundLoop` and safe to re-run):
 
 1. **Commit.** While round ``r`` runs, Platform draws round ``r + 1``'s 32-byte
@@ -25,7 +27,11 @@ validators fold. The lifecycle (:func:`advance_rounds`, driven by
    only thing missing is validator capacity (heartbeats absent, stale, or
    mid-update), the round stays committed and later ticks of its opening
    epoch retry for :data:`ROUND_OPEN_CAPACITY_GRACE`; only then is it void,
-   with an ``infra:`` reason.
+   with an ``infra:`` reason. With ``skip_unchanged_rounds`` (the default), a
+   round whose frozen columns and panel match the last scored round is
+   ``skipped`` instead (:func:`unchanged_round_source`): no generation, no
+   panel runs, no inference. The ledger keeps paying that scored round, and
+   the skip keeps it fresh (:func:`build_round_ledger`).
 3. **Generate.** The scorer builds each column generator and runs it on its
    column seed; Platform stores the canonical round dataset.
 4. **Run.** Validators lease each panel agent on a ``generator_round`` ticket
@@ -38,8 +44,11 @@ validators fold. The lifecycle (:func:`advance_rounds`, driven by
    matrix: column scores for generators and pairwise-neutral standings for
    agents. A round with fewer than ``min_panel`` results that answered at
    least one case is void instead (see :class:`PanelTally`).
-6. **Reveal.** ``privacy_window_rounds`` after a round opens, its secret,
-   seed, and dataset become public so anyone can re-derive every case.
+6. **Reveal.** ``privacy_window_rounds`` subnet epochs after a round opens
+   (and once it is scored, skipped or void), its secret, seed, and dataset become
+   public so anyone can re-derive every case. The window is counted in
+   epochs, not in rounds of the current cadence, so it keeps the same
+   wall-clock length when ``epochs_per_round`` changes.
 
 Derivations mirror ``research/dittobench-datagen/challenge/round.go`` and are
 pinned by ``challenge/testdata/round_vectors.json``.
@@ -52,10 +61,11 @@ import base64
 import binascii
 import contextlib
 import hashlib
+import json
 import logging
 import secrets
 import struct
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -92,6 +102,7 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundResultView,
     GeneratorRoundSchedule,
     GeneratorRoundScoreResult,
+    GeneratorRoundSkipView,
     GeneratorRoundStandingView,
     GeneratorRoundSummary,
     GeneratorRoundWork,
@@ -105,6 +116,10 @@ from ditto.api_models.generator_rounds import (
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_capabilities import ValidatorCapabilities
 from ditto.api_server.generator_competition import scorer_request_error
+from ditto.api_server.generator_frontier import (
+    advance_frontier_rounds,
+    begin_frontier,
+)
 from ditto.api_server.generator_scorer_capability import (
     ScorerCapability,
     grading_versions,
@@ -176,12 +191,71 @@ OPEN_DEFERRED_KEY = "open_deferred"
 # --- derivations ------------------------------------------------------------
 
 
-def round_index_for(subnet_epoch_index: int, epochs_per_round: int) -> int:
-    return subnet_epoch_index // epochs_per_round
+@dataclass(frozen=True)
+class RoundClock:
+    """The round a subnet epoch falls in: its index, the epoch it opens at,
+    and how many epochs it spans."""
+
+    current: int
+    first_epoch: int
+    epochs_per_round: int
+
+    @property
+    def next_round_epoch(self) -> int:
+        return self.first_epoch + self.epochs_per_round
 
 
-def round_first_epoch(round_index: int, epochs_per_round: int) -> int:
-    return round_index * epochs_per_round
+def derive_round_clock(
+    subnet_epoch_index: int,
+    epochs_per_round: int,
+    anchor: tuple[int, int, int] | None,
+) -> RoundClock:
+    """Place ``subnet_epoch_index`` on the round schedule.
+
+    ``anchor`` is ``(round_index, first_epoch_index, epochs_per_round)`` of
+    the latest round that opens at or before the epoch. Inside that round's
+    span the epoch belongs to it; past it, rounds of the current
+    ``epochs_per_round`` follow back to back from where it ended, one index
+    each. Without any round yet, the index is ``epoch // epochs_per_round``
+    (the original keying, which every round before ``first_epoch_index``
+    followed). Changing the cadence therefore only changes how long the next
+    rounds are: indexes keep increasing, so rounds that already ran stay
+    "earlier" for closing, revealing and newest-first reads.
+    """
+    if anchor is None:
+        current = subnet_epoch_index // epochs_per_round
+        return RoundClock(current, current * epochs_per_round, epochs_per_round)
+    index, first, span = anchor
+    end = first + span
+    if subnet_epoch_index < end:
+        return RoundClock(index, first, span)
+    skipped = (subnet_epoch_index - end) // epochs_per_round
+    return RoundClock(
+        index + 1 + skipped, end + skipped * epochs_per_round, epochs_per_round
+    )
+
+
+async def round_clock(
+    session: AsyncSession, subnet_epoch_index: int, epochs_per_round: int
+) -> RoundClock:
+    """:func:`derive_round_clock` anchored on the stored rounds."""
+    anchor = (
+        await session.execute(
+            select(
+                GeneratorRound.round_index,
+                GeneratorRound.first_epoch_index,
+                GeneratorRound.epochs_per_round,
+            )
+            .where(GeneratorRound.first_epoch_index <= subnet_epoch_index)
+            .order_by(GeneratorRound.round_index.desc())
+            .limit(1)
+        )
+    ).first()
+    return derive_round_clock(
+        subnet_epoch_index,
+        epochs_per_round,
+        None if anchor is None else (int(anchor[0]), int(anchor[1]), int(anchor[2])),
+    )
 
 
 def round_commitment(round_index: int, secret: bytes) -> str:
@@ -221,6 +295,8 @@ class ChainPosition:
     last_epoch_block_hash: str
     tempo: int
     block: int
+    next_epoch_block: int | None = None
+    """First block after ``block`` at which the chain steps the epoch."""
 
 
 @dataclass
@@ -480,6 +556,8 @@ def _commit_row(
     round_index: int,
     *,
     settings: GeneratorCompetitionSettings,
+    first_epoch: int,
+    epochs_per_round: int,
     epoch_index: int,
     now: datetime,
 ) -> GeneratorRound:
@@ -487,7 +565,8 @@ def _commit_row(
     return GeneratorRound(
         round_index=round_index,
         status="committed",
-        epochs_per_round=settings.epochs_per_round,
+        epochs_per_round=epochs_per_round,
+        first_epoch_index=first_epoch,
         secret=secret,
         commitment=round_commitment(round_index, secret),
         committed_at=now,
@@ -531,6 +610,213 @@ def _void_unopened(row: GeneratorRound, reason: str, *, now: datetime) -> None:
 def active_panel(row: GeneratorRound) -> list[dict[str, Any]]:
     """The round's frozen panel minus agents dropped while it ran."""
     return [slot for slot in row.panel or () if not slot.get("dropped_reason")]
+
+
+# --- skip unchanged rounds ----------------------------------------------------
+
+SKIPPED_UNCHANGED = "skipped_unchanged"
+"""The reason (and ``generation`` key) of a round skipped because nothing it
+could measure changed since the last scored round."""
+FINAL_ROUND_STATUSES = ("scored", "skipped", "void")
+"""Statuses a round never leaves."""
+
+
+def _round_signature(
+    *,
+    columns: Iterable[dict[str, Any]],
+    panel: Iterable[dict[str, Any]],
+    bench_version: int | None,
+    cases_per_column: int | None,
+    score_params: Mapping[str, float | int | str],
+) -> str:
+    """Everything a round measures, order-free: which generator sources hold a
+    column, which agents sit on the panel (and which is the champion), the
+    bench contract, the column size and the score params.
+
+    Column labels, seat order and whether a column is counted or a challenger
+    are left out. Every column is scored the same way against the whole panel,
+    and generator pay reads only column scores. ``counted`` is re-derived from
+    the latest round scores, so the 5th and 6th best generators trade it after
+    almost every scored round; keying on it would rerun the same matrix
+    forever."""
+    document = {
+        "columns": sorted(
+            [
+                str(column["submission_id"]),
+                str(column.get("source_sha256") or ""),
+                bool(column.get("public_default")),
+            ]
+            for column in columns
+        ),
+        "panel": sorted(
+            [
+                str(slot["agent_id"]),
+                bool(slot.get("champion")),
+                bool(slot.get("reference")),
+            ]
+            for slot in panel
+        ),
+        "bench_version": bench_version,
+        "cases_per_column": cases_per_column,
+        "score_params": dict(score_params),
+    }
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def skipped_round_source(generation: dict[str, Any] | None) -> int | None:
+    """The scored round a ``skipped`` round carried forward, if any."""
+    skip = (generation or {}).get(SKIPPED_UNCHANGED)
+    if not isinstance(skip, dict):
+        return None
+    source = skip.get("carried_from_round")
+    return source if isinstance(source, int) else None
+
+
+async def round_carry_freshness(
+    session: AsyncSession, *, since: datetime
+) -> dict[int, datetime]:
+    """Per scored round, when the latest skip since ``since`` carried it.
+
+    A skipped round re-measures nothing, so its source round's column scores
+    are still the latest evidence: the ledger dates them from the latest skip
+    that carried them, not from when they were scored."""
+    carried: dict[int, datetime] = {}
+    for generation, closed_at in await session.execute(
+        select(GeneratorRound.generation, GeneratorRound.closed_at).where(
+            GeneratorRound.status == "skipped",
+            GeneratorRound.closed_at >= since,
+        )
+    ):
+        source = skipped_round_source(generation)
+        if source is None or closed_at is None:
+            continue
+        prior = carried.get(source)
+        carried[source] = closed_at if prior is None else max(prior, closed_at)
+    return carried
+
+
+@dataclass(frozen=True)
+class UnchangedRound:
+    """The scored round an opening round would only repeat."""
+
+    source_round: int
+    signature: str
+
+
+async def unchanged_round_source(
+    session: AsyncSession,
+    row: GeneratorRound,
+    *,
+    settings: GeneratorCompetitionSettings,
+    now: datetime,
+) -> UnchangedRound | None:
+    """The last scored round, when ``row`` (just frozen) would repeat it.
+
+    ``row`` repeats it when its columns, panel, bench version, column size and
+    score params all match, and the scored round is a complete measurement:
+    every column generated, no panel agent dropped, every seated agent
+    reported. It must also still be inside ``window_days`` (counting earlier
+    skips that carried it), so a skip never revives a lapsed ledger entry.
+    ``None`` means run the round."""
+    from ditto.api_server.generator_competition import settings_at
+
+    if not settings.skip_unchanged_rounds:
+        return None
+    source = await session.scalar(
+        select(GeneratorRound)
+        .options(defer(GeneratorRound.dataset_bytes))
+        .where(
+            GeneratorRound.status == "scored",
+            GeneratorRound.round_index < row.round_index,
+        )
+        .order_by(GeneratorRound.round_index.desc())
+        .limit(1)
+    )
+    if source is None or source.scored_at is None:
+        return None
+    since = now - timedelta(days=settings.window_days)
+    fresh = max(
+        source.scored_at,
+        (await round_carry_freshness(session, since=since)).get(
+            source.round_index, source.scored_at
+        ),
+    )
+    if fresh < since:
+        return None
+    seated = active_panel(source)
+    if len(seated) != len(source.panel or ()):
+        return None
+    if set(source.column_cases or {}) != {c["column_id"] for c in source.columns or ()}:
+        return None
+    tally = await panel_tally(session, source)
+    if tally.reported < tally.seated:
+        return None
+    source_settings = await settings_at(session, source.settings_revision)
+    before = _round_signature(
+        columns=source.columns or (),
+        panel=seated,
+        bench_version=source.bench_version,
+        cases_per_column=source.cases_per_column,
+        score_params=source_settings.measurement_params(),
+    )
+    after = _round_signature(
+        columns=row.columns or (),
+        panel=row.panel or (),
+        bench_version=row.bench_version,
+        cases_per_column=row.cases_per_column,
+        score_params=settings.measurement_params(),
+    )
+    if before != after:
+        return None
+    return UnchangedRound(source_round=source.round_index, signature=after)
+
+
+async def skipped_round_views(
+    session: AsyncSession, *, limit: int
+) -> list[GeneratorRoundSkipView]:
+    """The newest ``limit`` skipped rounds, newest first."""
+    rows = await session.execute(
+        select(
+            GeneratorRound.round_index,
+            GeneratorRound.generation,
+            GeneratorRound.closed_at,
+        )
+        .where(GeneratorRound.status == "skipped")
+        .order_by(GeneratorRound.round_index.desc())
+        .limit(limit)
+    )
+    return [
+        GeneratorRoundSkipView(
+            round_index=int(index),
+            reason=SKIPPED_UNCHANGED,
+            carried_from_round=skipped_round_source(generation),
+            skipped_at=closed_at,
+        )
+        for index, generation, closed_at in rows
+    ]
+
+
+def skip_round(
+    row: GeneratorRound, unchanged: UnchangedRound, *, now: datetime
+) -> None:
+    """Close a just-frozen round as ``skipped`` (caller commits).
+
+    The columns, panel and seed stay recorded, so the round still shows what
+    it would have run; nothing is generated, leased or scored."""
+    row.status = "skipped"
+    row.closed_at = now
+    row.lease_id = None
+    row.lease_expires_at = None
+    row.generation = {
+        **(row.generation or {}),
+        SKIPPED_UNCHANGED: {
+            "reason": SKIPPED_UNCHANGED,
+            "carried_from_round": unchanged.source_round,
+            "signature": unchanged.signature,
+            "skipped_at": now.isoformat(),
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -770,7 +1056,8 @@ async def advance_rounds(
     if settings.mode == "off":
         return out
     per = settings.epochs_per_round
-    current = round_index_for(position.subnet_epoch_index, per)
+    clock = await round_clock(session, position.subnet_epoch_index, per)
+    current = clock.current
 
     # 1. Close every earlier round still in flight. Every multi-round lock in
     # this module is taken in ascending round_index order (see
@@ -813,12 +1100,15 @@ async def advance_rounds(
         for note in await drop_ineligible_panel_agents(session, row, now=now):
             out.note(note)
 
-    # 2. Commit the next round ahead of time.
+    # 2. Commit the next round ahead of time. It opens where the current
+    # round ends and spans the current setting's epochs.
     if await get_round(session, current + 1) is None:
         session.add(
             _commit_row(
                 current + 1,
                 settings=settings,
+                first_epoch=clock.next_round_epoch,
+                epochs_per_round=per,
                 epoch_index=position.subnet_epoch_index,
                 now=now,
             )
@@ -827,10 +1117,15 @@ async def advance_rounds(
 
     # 3. Open the current round.
     opening = await get_round(session, current, for_update=True)
-    first_epoch = round_first_epoch(current, per)
+    first_epoch = clock.first_epoch if opening is None else opening.first_epoch_index
     if opening is None:
         late = _commit_row(
-            current, settings=settings, epoch_index=position.subnet_epoch_index, now=now
+            current,
+            settings=settings,
+            first_epoch=clock.first_epoch,
+            epochs_per_round=clock.epochs_per_round,
+            epoch_index=position.subnet_epoch_index,
+            now=now,
         )
         late.commitment_publication = "disabled"
         void_round(late, "not committed before the round opened", now=now)
@@ -857,6 +1152,11 @@ async def advance_rounds(
                     f"{deferral.get('attempts')}, until {deferral.get('until')}): "
                     f"{deferral.get('reason')}"
                 )
+            elif opening.status == "skipped":
+                out.note(
+                    f"round {current}: skipped ({SKIPPED_UNCHANGED}: same columns "
+                    f"and panel as round {skipped_round_source(opening.generation)})"
+                )
             else:
                 out.note(f"round {current}: {opening.status}")
 
@@ -865,12 +1165,16 @@ async def advance_rounds(
     for settled in await settle_commitment_publications(session):
         out.note(settled)
 
-    # 5. Reveal rounds past the privacy window.
+    # 5. Reveal rounds past the privacy window: ``privacy_window_rounds``
+    # subnet epochs after each round's own first epoch. Counting epochs, not
+    # round indexes of the current cadence, keeps every round's reveal on its
+    # original wall-clock schedule across an ``epochs_per_round`` change.
     reveal = await session.scalars(
         select(GeneratorRound)
         .where(
-            GeneratorRound.round_index <= current - settings.privacy_window_rounds,
-            GeneratorRound.status.in_(("scored", "void")),
+            GeneratorRound.first_epoch_index
+            <= position.subnet_epoch_index - settings.privacy_window_rounds,
+            GeneratorRound.status.in_(FINAL_ROUND_STATUSES),
             GeneratorRound.revealed_at.is_(None),
         )
         .order_by(GeneratorRound.round_index)
@@ -880,6 +1184,20 @@ async def advance_rounds(
         revealed.revealed_at = now
         out.note(f"round {revealed.round_index}: revealed")
     await session.flush()
+
+    # 6. Dueling seasons (bench v16+) ride the same boundaries. A season
+    # failure never holds rounds back: it rolls back to its own savepoint.
+    from ditto.api_server.dueling_seasons import advance_seasons
+
+    try:
+        async with session.begin_nested():
+            for note in await advance_seasons(
+                session, resolved=resolved, position=position, now=now
+            ):
+                out.note(f"dueling {note}")
+    except Exception as exc:  # noqa: BLE001 - rounds must still advance
+        logger.exception("dueling season tick failed")
+        out.note(f"dueling seasons: tick failed: {type(exc).__name__}: {exc}"[:500])
     return out
 
 
@@ -1253,6 +1571,11 @@ async def open_round(
             now=now,
         )
         return
+    # Nothing to measure: the last scored round already ran exactly this
+    # matrix. Skipping costs no generation and no panel inference.
+    unchanged = await unchanged_round_source(session, row, settings=settings, now=now)
+    if unchanged is not None:
+        skip_round(row, unchanged, now=now)
 
 
 # --- scorer work ------------------------------------------------------------
@@ -1675,6 +1998,9 @@ async def record_round_score(
     row.status = "scored"
     row.lease_id = None
     row.lease_expires_at = None
+    # Unsolved miner-column cases become frontier candidates for the oracle
+    # (generator_frontier), under the policy the round opened with.
+    begin_frontier(row, await round_settings(session, row), now=now)
     await session.flush()
     return row
 
@@ -1738,9 +2064,9 @@ def round_seconds_left(row: GeneratorRound, head: EpochSchedule) -> float | None
     so nothing is extrapolated from a stale snapshot. Zero once the head has
     reached the closing epoch; None when the head predates the round.
     """
-    closing_epoch = (row.round_index + 1) * row.epochs_per_round
+    closing_epoch = row.first_epoch_index + row.epochs_per_round
     epochs_after_next = closing_epoch - head.subnet_epoch_index - 1
-    if head.subnet_epoch_index < row.round_index * row.epochs_per_round:
+    if head.subnet_epoch_index < row.first_epoch_index:
         return None
     if epochs_after_next < 0:
         # The chain is already past the round's closing boundary.
@@ -1796,6 +2122,7 @@ async def pending_panel_agents(
             )
             .where(
                 GeneratorRoundAttempt.round_index == row.round_index,
+                GeneratorRoundAttempt.kind == "panel",
                 GeneratorRoundAttempt.status == "leased",
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
@@ -1972,6 +2299,10 @@ def _summary(
         closed_at=row.closed_at,
         scored_at=row.scored_at,
         void_reason=row.void_reason,
+        skip_reason=SKIPPED_UNCHANGED if row.status == "skipped" else None,
+        carried_from_round=(
+            skipped_round_source(row.generation) if row.status == "skipped" else None
+        ),
         revealed_at=row.revealed_at,
         secret_hex=row.secret.hex() if revealed else None,
         seed=row.seed if revealed else None,
@@ -2020,6 +2351,8 @@ def column_views(row: GeneratorRound) -> list[GeneratorRoundColumnView]:
                 trivial=pack["trivial"] if pack else None,
                 unsolved=pack["unsolved"] if pack else None,
                 duplicate=pack["duplicate"] if pack else None,
+                frontier=int(pack.get("frontier") or 0) if pack else None,
+                frontier_state=(row.frontier or {}).get("state"),
                 grading_bench_version=declared.get(column["column_id"]),
             )
         )
@@ -2239,6 +2572,7 @@ async def submission_round_views(
                 trivial=int(pack["trivial"]),
                 unsolved=int(pack["unsolved"]),
                 duplicate=int(pack["duplicate"]),
+                frontier=int(pack.get("frontier") or 0),
                 panel_size=sum(
                     1 for slot in row.panel or () if not slot.get("dropped_reason")
                 ),
@@ -2280,6 +2614,9 @@ async def build_round_ledger(
             count=0, mode="off", window_days=settings.window_days
         )
     since = now - timedelta(days=settings.window_days)
+    # A round skipped as unchanged carries its source round's scores forward:
+    # the source counts as fresh from the latest skip that carried it.
+    carried = await round_carry_freshness(session, since=since)
     # Only the columns the fold reads. Loading whole rows pulled every
     # ledgered generator's source archive and, once per submission, its
     # round's full dataset through the event loop on each read; aggregating
@@ -2289,6 +2626,8 @@ async def build_round_ledger(
             GeneratorRound.status == "scored", GeneratorRound.scored_at >= since
         )
     )
+    if carried:
+        first = min(carried) if first is None else min(first, min(carried))
     if first is None:
         return _ledger_response([], settings=settings, now=now)
     # Every scored round from the window's first on: a generator whose latest
@@ -2321,10 +2660,18 @@ async def build_round_ledger(
             .group_by(GeneratorRoundCaseVerdict.submission_id)
         )
     }
+
+    def fresh_at(index: int) -> datetime | None:
+        scored_at = rounds[index].scored_at
+        carry = carried.get(index)
+        if scored_at is None or carry is None:
+            return scored_at or carry
+        return max(scored_at, carry)
+
     latest = {
         submission_id: index
         for submission_id, index in latest.items()
-        if rounds[index].scored_at is not None and rounds[index].scored_at >= since
+        if (fresh := fresh_at(index)) is not None and fresh >= since
     }
     subs: Sequence[Any] = (
         (
@@ -2465,7 +2812,23 @@ class GeneratorRoundLoop:
             last_epoch_block_hash=block_hash,
             tempo=schedule.tempo,
             block=schedule.block,
+            next_epoch_block=schedule.next_epoch_block,
         )
+
+    async def _settle_frontier(self, now: datetime) -> list[str]:
+        """Settle every frontier lane that is ready; never raises."""
+        try:
+            async with self._session_maker() as session, session.begin():
+
+                async def params_for(row: GeneratorRound) -> dict[str, Any]:
+                    return dict((await round_settings(session, row)).score_params())
+
+                return await advance_frontier_rounds(
+                    session, params_for=params_for, now=now
+                )
+        except Exception as exc:  # noqa: BLE001 - never block round progress
+            logger.exception("generator frontier settlement failed")
+            return [f"frontier settlement failed: {type(exc).__name__}: {exc}"[:300]]
 
     async def tick(self, *, now: datetime | None = None) -> RoundActions:
         from ditto.api_server.generator_competition import load_settings
@@ -2477,27 +2840,37 @@ class GeneratorRoundLoop:
             async with self._session_maker() as session:
                 resolved = await load_settings(session)
             per = resolved.settings.epochs_per_round
+            # Frontier lanes settle on their own clock (audit grace, oracle
+            # timeout), in their own transaction, and whatever the mode: a
+            # settle failure never rolls back round progress, and switching
+            # the competition off never strands an audit past its grace.
+            for note in await self._settle_frontier(now):
+                actions.note(note)
             if resolved.settings.mode == "off":
                 self.schedule = GeneratorRoundSchedule(
                     mode="off", epochs_per_round=per, observed_at=now
                 )
                 return actions
             position = await self.read_position()
-            current = round_index_for(position.subnet_epoch_index, per)
+            async with self._session_maker() as session:
+                clock = await round_clock(session, position.subnet_epoch_index, per)
             self.schedule = GeneratorRoundSchedule(
                 mode=resolved.settings.mode,
                 epochs_per_round=per,
                 subnet_epoch_index=position.subnet_epoch_index,
-                current_round=current,
-                next_round_epoch=round_first_epoch(current + 1, per),
+                current_round=clock.current,
+                next_round_epoch=clock.next_round_epoch,
                 tempo=position.tempo,
                 block=position.block,
+                next_epoch_block=position.next_epoch_block,
                 observed_at=now,
             )
             async with self._session_maker() as session, session.begin():
-                actions = await advance_rounds(
+                advanced = await advance_rounds(
                     session, resolved=resolved, position=position, now=now
                 )
+            # advance_rounds already logged its own actions.
+            actions.actions.extend(advanced.actions)
             return actions
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"[:500]
@@ -2780,7 +3153,8 @@ async def settle_commitment_publications(session: AsyncSession) -> list[str]:
         if confirmations > 0:
             row.commitment_publication = "published"
             row.commitment_error = None
-        elif row.status == "void":
+        elif row.status in ("void", "skipped"):
+            # Nobody needs the on-chain copy of a round that never ran.
             row.commitment_publication = "disabled"
         else:
             row.commitment_publication = "failed"

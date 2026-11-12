@@ -150,6 +150,7 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_DISK_PERCENT_CEILING` | Stop claiming tickets at or above this disk usage (default `95`). `0` disables; otherwise a multiple of 5 in `[50, 100]`. |
 | `VALIDATOR_MEMORY_PERCENT_CEILING` | Same, for memory (default `95`). |
 | `VALIDATOR_CPU_PERCENT_CEILING` | Same, for CPU. Defaults to `0` (disabled) -- a pinned CPU is a working benchmark host, not a failing one. |
+| `VALIDATOR_HOST_MEMORY_RESERVE_MIB` | Host memory held back from harness caps (default `1024`). The worker offers at most `(host RAM - reserve) // live harness cap` benchmark slots, and always at least one when the host has the cap plus 1 GiB. With the live 8192 MiB cap: 8 GiB host 0, 16 GiB 1, 32 GiB 3, 64 GiB 7. Platform never lets the generator-round reservation take a host's only healthy slot. See [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md). |
 | `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Keep `true`; v7/v8 scoring fails closed without a ticket session. |
 | `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Keep `true`; the validator must not claim work without the platform proxy. |
 
@@ -385,11 +386,16 @@ to be visible.
   `docker system prune`, never removes containers, volumes, networks, or
   third-party images, and never forces removal of an image still referenced by
   a container. Do not run broad cleanup against the host Docker daemon.
-- **Sandbox resource failure (`sandbox_oom`, `sandbox_tmpfs_exhausted`):**
-  these are validator-infrastructure classifications, not miner verdicts; the
-  worker stops claiming work and the ticket expires safely. Fix the resource
-  issue, then ask the Ditto team for the audited single-agent retry; never
-  bulk retry or alter accepted scores.
+- **Sandbox resource failure (`host_memory_pressure`, `harness_killed_137`,
+  `sandbox_tmpfs_exhausted`, legacy `sandbox_oom`):** these are
+  validator-infrastructure classifications, not miner verdicts; the worker
+  blocks that slot, stops claiming work for the sweep, and the ticket is parked
+  without charging the miner. Fix the resource issue (usually too many slots for
+  the host's RAM; see `VALIDATOR_HOST_MEMORY_RESERVE_MIB`), then ask the Ditto
+  team for the audited single-agent retry; never bulk retry or alter accepted
+  scores. Only `harness_oom` -- an OOM kill at the harness's own published cap
+  while the host kept headroom -- is charged to the miner. The rules are in
+  [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md).
 
 ## Automatic full-stack updates (recommended)
 
@@ -785,6 +791,93 @@ every recently-live weight-setting validator reports protocol 27, there is
 no force override, and `crown_incumbent_mode: disabled` is the exact
 rollback. A pin taken while the marker is off records no incumbent, so a
 flip lands at the next pin for the whole fleet.
+
+### Crown gate (protocol 34)
+
+Incumbency stops a senior lineage from retaking the crown, but it still let
+any challenger that cleared the band take it on an **unpaired** comparison:
+a newcomer's unretested three-seed canonical against the incumbent's
+retest-folded official score. On 2026-10-29/30 that moved the crown five
+times in a day, including to entries with zero shared-seed confirmations and
+to one ranked eighth on the board.
+
+Under the operator policy `crown_gate_mode: fleet_ready` each pin carries
+`crown_gate: {min_dethrone_confirmations, champion_standing_rank}` (defaults
+3 and 3, operator settings on the continual retest board). The fold then:
+
+1. Ranks the pool exactly as the tail does (official quality first). If the
+   opening champion is outside the top `champion_standing_rank`, the crown
+   passes to the highest-ranked standing entry that shares at least
+   `min_dethrone_confirmations` seeds with it, or to rank 1 when none does.
+2. Walks only standing challengers in `first_seen` order. A challenger
+   dethrones only through the paired shared-seed statistic, and only with at
+   least `min_dethrone_confirmations` shared seeds. An unpaired or flat
+   comparison never moves the crown.
+
+The rule is symmetric and deterministic: both entries' seed maps and the
+served ranking are on the pin, so every validator computes the same King.
+Activation follows the earlier fold markers: served only after every
+recently-live weight setter reports protocol 34, a sub-34 requester gets 428
+while a pinned gate is served, the stale path refuses rather than replays it,
+and `crown_gate_mode: disabled` is the exact rollback. The public board shows
+the King, each challenger's shared seeds vs `min_dethrone_confirmations`, the
+paired lead or deficit, and what it still needs, under `emissions.king` and
+`emissions.challengers`.
+
+### Title duel (protocol 35)
+
+The gate above still decides each bench v16 crown on one season's three
+shared seeds. It uses a fixed z = 1.64 band, capped at twice the margin and
+decayed near the top. A challenger exactly as good as the King passes that
+test about half the time, so the crown changed 2–3 times a day on noise
+(`docs/title-duels.md`).
+
+Under `crown_duel_mode: fleet_ready`, a served crown gate also carries
+`duel_window_pairs` (15), and each entry carries `duel_history`: its
+confirmation records, with their signed `details.dueling`, from the five
+newest dueling seasons that hold any confirmation record. A season that ran no
+duel (idle skip) is passed over, so evidence carries forward. For two bench v16
+rows the fold then works as follows:
+
+1. **Pairs.** A pair is a `(season, seed)` that both agents scored in that
+   season. Each side is the median across validators, with both owners'
+   columns masked. Pairs are kept across seasons: levels are not comparable
+   across generator sets, but within-season differences are.
+2. **Window.** It takes the newest 15 pairs, ordered by
+   `(season_index desc, season_id, seed)`.
+3. **Test.** A challenger dethrones only if it holds at least
+   `min_dethrone_confirmations` pairs and its mean paired lead strictly
+   exceeds `max(KOTH_MARGIN × decay, c(n) × se)`. `c(n)` is the frozen
+   Student-t table in `ditto_screening_protocol.title_duel` (per-look level
+   0.01, 6.965 at n = 3 down to 2.624 at n = 15). The statistical term is never
+   capped. The served ceiling clamp still bounds the lead.
+4. **Standing.** Standing replacement counts duel pairs instead of shared
+   seeds. Ranking, tail order and tie pooling stay same-season.
+
+Activation follows the gate. Platform serves the marker only together with
+the gate, and only after every recently-live weight setter reports protocol
+35. A requester below 35 gets 428 while it is served. `crown_duel_mode:
+disabled` is the exact rollback. Both folds call the shared arithmetic and run
+the shared `crown_gate_cases.json` duel cases.
+
+### Continual retest seed budget
+
+Platform owns how many shared seeds the continual retest lane buys. Each round
+targets the variance-sized count between `TOP5_MIN_CONFIRMATION_SEEDS` (8) and
+the work cap `TOP5_MAX_CONFIRMATION_SEEDS` (10) in
+`apps/platform/ditto/api_server/koth.py`, and the ledger serves each entry only
+the active window of at most that many most-shared seeds. Accepted rows stay
+append-only; a deeper window recorded under an older cap simply stops folding.
+
+The validator's own `TOP5_MAX_CONFIRMATION_SEEDS` (15, `ditto/validator/config.py`)
+is a separate, frozen fold ceiling: it truncates whatever a malformed Platform
+might serve and bounds a served `min_dethrone_confirmations`. Platform mirrors
+it as `CONFIRMATION_SEED_CEILING` for its pin projection, served-gate parsing
+and seed binding, and the shared `crown_gate_cases.json` ceiling case fails if
+either fold moves it. Lowering the work cap therefore needs no validator
+release or fleet gate: every validator folds the bounded window it is served.
+Lowering the ceiling itself would; a validator that truncated below a pin's
+served window would crown a different King and fail `ledger_pin_mismatch`.
 
 ### Provisional incumbent (protocol 28)
 

@@ -26,18 +26,18 @@ func packBytes(t *testing.T, p Pack) []byte {
 }
 
 func TestSupportedGradingBenchVersions(t *testing.T) {
-	if got := SupportedGradingBenchVersions(); !reflect.DeepEqual(got, []int{13, 14}) {
+	if got := SupportedGradingBenchVersions(); !reflect.DeepEqual(got, []int{13, 14, 15, 16, 17, 18}) {
 		t.Fatalf("supported = %v", got)
 	}
 	if GradingBenchVersion != protocol.BenchVersionV13 {
 		t.Fatal("the baseline policy must stay v13: every pre-v14 generator emits it")
 	}
-	for round, want := range map[int][]int{12: nil, 13: {13}, 14: {13, 14}, 15: {14}} {
+	for round, want := range map[int][]int{12: nil, 13: {13}, 14: {13, 14}, 15: {14, 15}, 16: {15, 16}, 17: {16, 17}, 18: {17, 18}, 19: {18}} {
 		if got := GradingBenchVersionsThrough(round); !reflect.DeepEqual(got, want) {
 			t.Errorf("through(%d) = %v, want %v", round, got, want)
 		}
 	}
-	if SupportsGradingBenchVersion(12) || SupportsGradingBenchVersion(15) || !SupportsGradingBenchVersion(14) {
+	if SupportsGradingBenchVersion(12) || SupportsGradingBenchVersion(19) || !SupportsGradingBenchVersion(18) || !SupportsGradingBenchVersion(14) || !SupportsGradingBenchVersion(15) || !SupportsGradingBenchVersion(16) || !SupportsGradingBenchVersion(17) {
 		t.Fatal("support set is wrong")
 	}
 }
@@ -134,14 +134,14 @@ func TestV14RequestAcceptsBothPolicies(t *testing.T) {
 	// A policy this package does not know yet is ignored, not refused, so a
 	// generator built now keeps working when a newer scorer offers it.
 	future := req
-	future.GradingBenchVersions = []int{13, 14, 15}
+	future.GradingBenchVersions = []int{13, 14, 19}
 	if err := future.Validate(); err != nil || future.NewestAccepted(nil) != 14 {
-		t.Fatalf("a request offering an unknown v15 must validate and pick 14: %v", err)
+		t.Fatalf("a request offering an unknown v19 must validate and pick 14: %v", err)
 	}
 	// A request whose window moved past every policy this package knows is
 	// refused: the generator must be rebuilt.
 	moved := NewGenerateRequest(req.Seed, testHotkey, 16)
-	moved.GradingBenchVersion, moved.GradingBenchVersions = 15, []int{15, 16}
+	moved.GradingBenchVersion, moved.GradingBenchVersions = 19, []int{19, 20}
 	if moved.Validate() == nil {
 		t.Fatal("a request accepting only unknown policies must be refused")
 	}
@@ -192,9 +192,9 @@ func TestPackGradingVersionReachesTheGrader(t *testing.T) {
 
 func TestPackGradingVersionRules(t *testing.T) {
 	p := v14ReferencePack(3)
-	p.GradingBenchVersion = 15
+	p.GradingBenchVersion = 19
 	if r := Validate(p); r.Valid || !hasRule(r, "", "grading_bench_version") {
-		t.Fatalf("v15 pack accepted: %+v", r.Issues)
+		t.Fatalf("v19 pack accepted: %+v", r.Issues)
 	}
 	p = v14ReferencePack(3)
 	p.Cases[0].BenchVersion = 13

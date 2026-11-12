@@ -1332,3 +1332,22 @@ describe("review-event evidence in the table (#622/#636)", () => {
     expect(cell.textContent).not.toContain("Initial comparison");
   });
 });
+
+it("names stranded terminal activity rows as unable to finish scoring", async () => {
+  stubActivityFetch(() => ({
+    ...activity,
+    entries: [
+      {
+        ...activity.entries![0],
+        status: "waiting_validator",
+        retry_disposition: "terminal_artifact_failure",
+        terminal_failure_code: "inference_allowance_exhausted",
+      },
+    ],
+  }));
+  await renderPage();
+  await waitFor(() => {
+    const row = document.querySelector("#activity-rows tr[aria-label]");
+    expect(row?.getAttribute("aria-label")).toContain("Cannot finish scoring");
+  });
+});

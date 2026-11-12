@@ -111,6 +111,7 @@ def apply_settings(
             settings.embedding_global_requests_per_minute
         ),
         **_decision_stamps(settings),
+        scored_provider_routing=settings.scored_provider_routing,
     )
 
 

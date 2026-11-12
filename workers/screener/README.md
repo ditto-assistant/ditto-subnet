@@ -2,6 +2,16 @@
 
 Platform-operated screening worker for Ditto SN118 submissions.
 
+> **Source review is retired (2026-11-07).** Platform now leases every attempt
+> as `build_only`, so the worker runs the mechanical lane only: verified
+> download, archive and container-contract checks, the deterministic static
+> malicious-source preflight (a decisive, reachable match is a
+> `static-malicious-source` reject), the isolated build, the health and seeding
+> contract, and the screened-image export. The L1/L2/L3 review, L4
+> adjudication, policy modules and challenges described below no longer run on
+> submissions; the code remains until a follow-up removes it. See
+> `apps/platform/docs/screener-protocol.md`.
+
 The stable core leases one submission at a time from `ditto-platform`,
 downloads and verifies its tarball, enforces safe language-neutral Docker
 rules, builds the Docker image, starts it with resource caps and an internal fake
@@ -209,6 +219,31 @@ Required values are supplied through the production host's protected
   screened image, passing ones included -- how close the fleet runs to the caps
   cannot be read from rejections alone. An image without a shell reports
   nothing and screening is unchanged.
+- `SCREENER_TOOL_CATALOG_PROBE_MODE`: `shadow` (default), `enforce`, or
+  `off`. For a submission screened at bench v18 or later, after the seed probe,
+  one scorer-shaped `POST /run` offers a freshly drawn catalog of the
+  contract's maximum size (2,000 toolkit tools, pinned to
+  `catalog.MaxCatalogTools` in `ditto_screener/data/tool-catalog-probe-v18.json`
+  and checked by tests on both the Go and Python side). The isolated fake
+  gateway measures every model request the harness forwards: its byte size,
+  tool count, and a provable lower bound on its gpt-oss (o200k) prompt tokens
+  that counts only names, descriptions and message text, one token per word.
+  A request whose bound exceeds the 131,072-token context window of
+  `openai/gpt-oss-20b` is the DITTO-2564 failure: every provider refuses it on
+  each scored case with a large catalog. `shadow` records it as
+  `tool-catalog-context-overflow` evidence beside the existing outcome;
+  `enforce` makes it a deterministic rejection with that reason code. Every
+  probed screen also records `tool-catalog-request-size` (largest request's
+  tools, token bound and bytes, plus a note when it carries more than the 128
+  tools Groq accepts; the scored route falls back past Groq, so that never
+  fails). A failed `/run` or an unmeasurable body passes.
+  `SCREENER_TOOL_CATALOG_PROBE_TIMEOUT_SECONDS` (default `60`) bounds the run.
+  To enforce, add `SCREENER_TOOL_CATALOG_PROBE_MODE=enforce` to
+  `infra/ansible/roles/screener_worker/templates/screener.env.j2` in a reviewed
+  change and roll the screener fleet (the rendered `screener.env` is
+  overwritten on each apply, so a hand edit does not last). Do it once the
+  shadow `tool-catalog-context-overflow` records name only harnesses that also
+  fail scored v18 runs with `inference_request_rejected:request_too_large`.
 - `SCREENER_V13_RUNTIME_RECEIPTS_MODE`: `off` (default) or `shadow`. The shadow
   mode sends bounded `/run` and `/seed` requests through the isolated smoke
   network and records digest-only, exact-attempt observations for V13 runtime
@@ -218,7 +253,9 @@ Required values are supplied through the production host's protected
   remain off until its overhead and evidence profile have been calibrated.
   A source hold before runtime leaves these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
-- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; legacy
+- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`;
+  `openai/gpt-6.1-terra` is also accepted (Platform revisions may select it
+  for L2 and L3); legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
   `SCREENER_L2_FALLBACK_MODELS` is the ordered OpenRouter model-failover chain
   (`z-ai/glm-5.2` by default). A fallback is used only after a
@@ -227,7 +264,8 @@ Required values are supplied through the production host's protected
   critic/adjudicator after L2. `false` keeps L1 routing and the L2 analyst
   active while making the L2 result authoritative. Platform review-settings
   revisions can change this between leases without a worker restart.
-- `SCREENER_L3_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; both layers use
+- `SCREENER_L3_REVIEW_MODEL`: defaults to `openai/gpt-6-sol` (or
+  `openai/gpt-6.1-terra`); both layers use
   OpenRouter ZDR routing and deny data collection.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built
   `ditto-screener-l2-analyzer:active` image.

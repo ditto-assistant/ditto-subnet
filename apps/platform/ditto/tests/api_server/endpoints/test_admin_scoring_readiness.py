@@ -23,9 +23,11 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     Score,
+    ValidatorQueueWithdrawal,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.scores import SCORING_QUORUM
+from ditto.screener_policy_state import lease_screening_policy_floor
 from ditto.tests.legacy_era import retired_era_writes_allowed
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 
@@ -173,6 +175,98 @@ async def test_historical_nonmember_is_not_leaseable_even_with_dataset(
     assert any("historical submission" in reason for reason in body["blocking_reasons"])
 
 
+_WITHDRAWAL_REASON = "superseded by a newer version from the same miner"
+
+
+async def _withdraw(
+    maker: async_sessionmaker[AsyncSession],
+    agent_id: UUID,
+    *,
+    evicted_validator_hotkeys: list[str] | None = None,
+    reinstated: bool = False,
+) -> None:
+    async with maker() as session, session.begin():
+        session.add(
+            ValidatorQueueWithdrawal(
+                withdrawal_id=uuid4(),
+                agent_id=agent_id,
+                bench_version=MIN_SCOREABLE_BENCH_VERSION,
+                actor="operator",
+                reason=_WITHDRAWAL_REASON,
+                expected_snapshot="test",
+                score_count=2,
+                ticket_snapshot=[],
+                evicted_validator_hotkeys=evicted_validator_hotkeys,
+                reinstated_at=_T0 + timedelta(minutes=5) if reinstated else None,
+                created_at=_T0,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("evicted_validator_hotkeys", "kind"),
+    [(None, "an operator withdrawal"), ([], "an operator eviction")],
+)
+async def test_queue_removal_is_named_instead_of_historical(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    sr_maker: async_sessionmaker[AsyncSession],
+    evicted_validator_hotkeys: list[str] | None,
+    kind: str,
+) -> None:
+    """SN-470: an operator removal does not make a current-era arrival historical.
+
+    A submission that arrived after its rollout opened collected two scores
+    and was then withdrawn from the queue. Readiness reported "historical
+    submission", which sent the investigation to the era boundary.
+    """
+    agent_id = await _seed(sr_maker)
+    await _withdraw(
+        sr_maker, agent_id, evicted_validator_hotkeys=evicted_validator_hotkeys
+    )
+    _install(app, sr_maker)
+
+    body = await _get(client, agent_id)
+
+    assert body["leaseable"] is False
+    assert body["blocking_reasons"] == [
+        f"removed from the v{MIN_SCOREABLE_BENCH_VERSION} validator queue by "
+        f"{kind} at {_T0.isoformat(timespec='seconds')}: {_WITHDRAWAL_REASON}"
+    ]
+
+
+async def test_reinstated_removal_does_not_block(
+    app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed(sr_maker)
+    await _withdraw(sr_maker, agent_id, reinstated=True)
+    _install(app, sr_maker)
+
+    body = await _get(client, agent_id)
+
+    assert body["leaseable"] is True, body["blocking_reasons"]
+
+
+async def test_withdrawn_historical_submission_names_both_gates(
+    app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Reinstating alone would not admit it, so both refusals are reported."""
+    agent_id = await _seed(sr_maker, historical=True)
+    await _withdraw(sr_maker, agent_id)
+    _install(app, sr_maker)
+
+    body = await _get(client, agent_id)
+
+    reasons = body["blocking_reasons"]
+    assert body["leaseable"] is False
+    assert len(reasons) == 2, reasons
+    assert reasons[0].startswith(
+        f"removed from the v{MIN_SCOREABLE_BENCH_VERSION} validator queue by an "
+        "operator withdrawal"
+    )
+    assert "historical submission" in reasons[1]
+
+
 async def test_missing_screened_image_blocks_and_names_fields(
     app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
 ) -> None:
@@ -196,10 +290,11 @@ async def test_missing_active_era_dataset_blocks(
     assert any("benchmark dataset" in r for r in body["blocking_reasons"])
 
 
-async def test_stale_screening_policy_blocks(
+async def test_policy_below_the_screened_image_floor_blocks(
     app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
 ) -> None:
-    agent_id = await _seed(sr_maker, policy_version=SCREENING_POLICY_VERSION - 1)
+    """Only the screened-image floor gates; a later review policy never does."""
+    agent_id = await _seed(sr_maker, policy_version=lease_screening_policy_floor() - 1)
     _install(app, sr_maker)
     body = await _get(client, agent_id)
     assert body["leaseable"] is False

@@ -311,6 +311,82 @@ async def test_oversized_decision_packet_holds_without_model_request(
     assert result.escalation_code == "adjudicator-packet-too-large"
 
 
+def _preload_case_evidence(case_bytes: int) -> object:
+    """Real preloaded windows padded to ``case_bytes`` of extra evidence."""
+    real = adjudicator_module._preload_ledger_evidence
+
+    def preload(
+        repository: TarSourceRepository,
+        notes: object,
+        finding: object = None,
+    ) -> tuple[str, set[tuple[str, int]], bool]:
+        evidence, reads, incomplete = real(repository, notes, finding)  # type: ignore[arg-type]
+        padding = "\n".join(
+            f"src/ledger_{index:02d}.py:{index}: " + "x" * 2_350
+            for index in range(case_bytes // 2_400)
+        )
+        return evidence + "\n" + padding, reads, incomplete
+
+    return preload
+
+
+async def test_policy_prompt_does_not_count_against_the_case_packet_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SN-435: the 28 KB v13 system prompt left ~36 KB for evidence.
+
+    A 16-window ledger of ~40 KB of preloaded source is a legitimate case
+    (Dr reported 66-82 KB packets); it must reach the court rather than be
+    held as ``adjudicator-packet-too-large``.
+    """
+    monkeypatch.setattr(
+        adjudicator_module, "_preload_ledger_evidence", _preload_case_evidence(40_000)
+    )
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        call = _call("request_operator_review", {"reason": "Other paths unverified"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "tool_calls": [call]}}]
+            },
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+
+    assert result.escalation_code != "adjudicator-packet-too-large"
+    assert requests, "a legitimate case packet must reach the court"
+    messages = requests[0]["messages"]
+    assert isinstance(messages, list)
+    whole = adjudicator_module._packet_bytes(messages)
+    case = adjudicator_module._case_bytes(messages)
+    assert whole > adjudicator_module._MAX_DECISION_PACKET_BYTES
+    assert case < adjudicator_module._MAX_DECISION_PACKET_BYTES
+    assert whole - case > 25_000  # the v13 system prompt
+
+
+async def test_oversized_case_material_still_holds_without_model_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        adjudicator_module, "_preload_ledger_evidence", _preload_case_evidence(70_000)
+    )
+
+    def unexpected_request(_request: httpx.Request) -> httpx.Response:
+        pytest.fail("an oversized case packet must not reach the model")
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(unexpected_request)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-packet-too-large"
+
+
 async def test_request_uses_provider_supported_completion_parameter(
     tmp_path: Path,
 ) -> None:
@@ -2041,8 +2117,9 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v21-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v21-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v22-policy-v13"
+    assert adjudicator_prompt_revision(14) == "adjudicator-v22-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v22-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -2055,7 +2132,7 @@ def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
     assert "NARROWED" not in policy_v11
     assert "NARROWED" not in _system_prompt(10)
     with pytest.raises(ValueError, match="not implemented by this build"):
-        adjudicator_prompt_revision(14)
+        adjudicator_prompt_revision(15)
 
 
 def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None:

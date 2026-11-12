@@ -246,6 +246,87 @@ describe("EntityPanel miner tenant", () => {
   });
 });
 
+// #2982: an upheld claim keeps the stem on the struck row as "disputed", and a
+// pending claim marks every row that shares it. Only a reserved row is the
+// handle's owner; otherwise the handle resolves to the claimant the public
+// profile names.
+describe("EntityPanel handle routes", () => {
+  const IMPOSTOR = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+  const CLAIMANT = "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y";
+
+  function contested(impostor: string, claimant: string): typeof entries {
+    const base = leaderboard.entries?.[0];
+    if (!base) throw new Error("fixture has no leaderboard entries");
+    const row = (hotkey: string, index: number, composite: number, status: string) => ({
+      ...base,
+      agent_id: "00000000-0000-4000-8000-00000000000" + index,
+      agent_name: "hogwarts",
+      miner_hotkey: hotkey,
+      composite,
+      official_composite: composite,
+      name_handle: { stem: "hogwarts", status, claim_id: "claim-1" },
+    });
+    const rows = rankEntries([row(IMPOSTOR, 1, 0.9, impostor), row(CLAIMANT, 2, 0.8, claimant)]);
+    // The precondition the bug needs: the impostor outranks the claimant.
+    expect(rows.map((each) => each.miner_hotkey)).toEqual([IMPOSTOR, CLAIMANT]);
+    return rows;
+  }
+
+  function installClaimantProfile(status: string): void {
+    const original = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (raw.includes("/public/miners/")) {
+        return Promise.resolve(
+          Response.json({
+            miner_hotkey: CLAIMANT,
+            name_handle: { stem: "hogwarts", status, claim_id: "claim-1" },
+            avatar_url: null,
+            profile: { x_url: "https://x.com/hogwarts", github_url: null, discord_handle: null },
+            submissions: [],
+          }),
+        );
+      }
+      return original(input, init);
+    }) as typeof fetch;
+  }
+
+  function shownHotkey(): string {
+    return document.getElementById("d-hotkey-copy")?.getAttribute("data-key") ?? "";
+  }
+
+  it("opens the claimant's row, not a higher-ranked struck impostor", async () => {
+    installClaimantProfile("reserved");
+    const rows = contested("disputed", "reserved");
+    renderPanel({}, rows);
+    visit("/h/hogwarts");
+    await waitFor(() => expect(shownHotkey()).toBe(CLAIMANT));
+    expect(document.getElementById("d-title")).toHaveTextContent("hogwarts");
+    expect(document.getElementById("d-bench")).toHaveTextContent("Rank #2");
+  });
+
+  it("titles the struck impostor's own panel by its hotkey", () => {
+    const rows = contested("disputed", "reserved");
+    renderPanel({}, rows);
+    visit("/#/overview?miner=" + IMPOSTOR);
+    expect(shownHotkey()).toBe(IMPOSTOR);
+    expect(document.getElementById("d-title")).toHaveTextContent(shortKey(IMPOSTOR));
+    expect(document.getElementById("d-title")?.textContent).not.toContain("hogwarts");
+    // The badge still says why the name is gone.
+    expect(document.querySelector(".handle-badge.disputed")).not.toBeNull();
+  });
+
+  it("resolves a pending handle to the claimant the profile names", async () => {
+    installClaimantProfile("pending");
+    const rows = contested("pending", "pending");
+    renderPanel({}, rows);
+    visit("/h/hogwarts");
+    await waitFor(() => expect(shownHotkey()).toBe(CLAIMANT));
+    // On the board, so the standing is the claimant's own.
+    await waitFor(() => expect(document.getElementById("d-bench")).toHaveTextContent("Rank #2"));
+  });
+});
+
 // The miner panel is the profile: standing first (that is the board question
 // that opened it), then socials plus the submission history, open and scanned
 // by status band rather than read end to end. Run evidence lives on each
@@ -315,6 +396,19 @@ describe("EntityPanel miner profile card", () => {
     const link = rows()[0]?.querySelector('a[data-entity-link="agent"]');
     expect(link).toHaveTextContent("luffy0");
     expect(link).toHaveAttribute("href", expect.stringContaining("agent=agent-0"));
+  });
+
+  it("places terminal scoring failures under Closed", async () => {
+    installProfileFetch([submission(0, "scoring_failed"), submission(1, "waiting_validator")]);
+    renderPanel();
+    visit("/h/jupiter");
+    await waitFor(() => expect(rows().length).toBe(2));
+    expect(rows()[0]?.textContent).toContain("Cannot finish scoring");
+    expect(bandButton("Closed").textContent).toContain("1");
+    bandButton("Closed").click();
+    await waitFor(() => expect(rows().length).toBe(1));
+    expect(rows()[0]?.textContent).toContain("Cannot finish scoring");
+    expect(rows()[0]?.textContent).not.toContain("Waiting for validators");
   });
 
   it("filters the history by status band", async () => {

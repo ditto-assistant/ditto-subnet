@@ -58,6 +58,23 @@ def add_subparser(
     )
     parser.add_argument("--seed", type=int, help="Pin the generated dataset seed.")
     parser.add_argument(
+        "--no-slice",
+        action="store_true",
+        help=(
+            "At bench 16+ (the dueling bench), score the datagen half "
+            "only instead of building a local generator slice from the public "
+            "default generator."
+        ),
+    )
+    parser.add_argument(
+        "--slice-sandbox",
+        choices=("local", "docker"),
+        help=(
+            "Where the public default generator runs while building the local "
+            "bench 16+ slice (default: local)."
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=7200,
@@ -128,6 +145,10 @@ def rehearsal_argv(args: argparse.Namespace) -> list[str]:
         command.extend(("--bench-version", str(args.bench_version)))
     if args.seed is not None:
         command.extend(("--seed", str(args.seed)))
+    if getattr(args, "no_slice", False):
+        command.append("--no-slice")
+    if getattr(args, "slice_sandbox", None) is not None:
+        command.extend(("--slice-sandbox", args.slice_sandbox))
     if args.report is not None:
         command.extend(("--report", str(args.report)))
     # Forward dependent options even without their parent flag: the runner

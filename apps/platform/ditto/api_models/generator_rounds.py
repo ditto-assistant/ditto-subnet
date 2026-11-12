@@ -1,7 +1,8 @@
 """Wire models for generator-competition rounds (the agent x generator matrix).
 
-A round is keyed on the chain's epoch counter:
-``round_index = SubnetEpochIndex // epochs_per_round``. Platform commits each
+A round is keyed on the chain's epoch counter: it opens at a subnet epoch
+and spans ``epochs_per_round`` epochs, and round indexes continue from the
+latest round across a cadence change. Platform commits each
 round's secret one round ahead (``commitment``; elected validators publish
 it on-chain),
 derives the seed from the secret and the block the round opened at, and
@@ -36,7 +37,9 @@ from ditto.api_models.generator_ledger import (
 from ditto.api_models.generator_round_validator import round_commitment_payload
 from ditto.api_models.name_claim import PublicNameHandle
 
-RoundStatus = Literal["committed", "generating", "running", "scoring", "scored", "void"]
+RoundStatus = Literal[
+    "committed", "generating", "running", "scoring", "scored", "skipped", "void"
+]
 CommitmentPublication = Literal["pending", "published", "failed", "disabled"]
 CommitmentPublicationStatus = Literal["claimed", "confirmed", "failed", "expired"]
 RoundCaseStatus = Literal[
@@ -84,6 +87,8 @@ class GeneratorRoundSchedule(RoundModel):
     next_round_epoch: int | None = None
     tempo: int | None = None
     block: int | None = None
+    next_epoch_block: int | None = None
+    """First block after ``block`` at which the chain steps the epoch."""
     observed_at: datetime | None = None
     last_error: str | None = None
 
@@ -101,6 +106,13 @@ class GeneratorRoundColumnView(RoundModel):
     trivial: int | None = None
     unsolved: int | None = None
     duplicate: int | None = None
+    frontier: int | None = None
+    """Cases no two panel owners solved that the frontier oracle answered and
+    no failed audit voided; they earn credit instead of the unsolved penalty
+    once the round's frontier lane settles."""
+    frontier_state: str | None = None
+    """The round's frontier lane (``oracle_pending``, ``audit_pending``,
+    ``settled``), or ``None`` when it has none."""
     name: str | None = None
     """The generator's public display name (``None`` when unnamed)."""
     name_handle: PublicNameHandle | None = None
@@ -156,6 +168,13 @@ class GeneratorRoundSummary(RoundModel):
     closed_at: datetime | None = None
     scored_at: datetime | None = None
     void_reason: str | None = None
+    skip_reason: str | None = None
+    """``skipped_unchanged`` for a ``skipped`` round: its columns, panel, bench
+    version, column size and score params matched the last scored round, so
+    it ran no generation or panel inference."""
+    carried_from_round: int | None = None
+    """The scored round a ``skipped`` round carries forward: the ledger keeps
+    paying that round's column scores and dates them from this skip."""
     revealed_at: datetime | None = None
     secret_hex: str | None = None
     """Revealed secret; ``RoundCommitment(round, secret)`` must equal
@@ -230,6 +249,8 @@ class GeneratorSubmissionRoundView(RoundModel):
     panel_size: int
     grading_bench_version: int | None = None
     """The pack grading policy the column's pack declared (13 when none)."""
+    frontier: int = 0
+    """Oracle-attested cases scored as frontier (after the round settled)."""
 
 
 class PublicGeneratorSubmissionDetail(RoundModel):
@@ -359,6 +380,9 @@ class AdminGeneratorRoundDetail(RoundModel):
     scorer_version: str | None
     standings: list[GeneratorRoundStandingView]
     columns_scored: list[GeneratorRoundColumnView]
+    frontier: GeneratorFrontierView | None = None
+    """The scored round's frontier lane (oracle, audits, applied credit), or
+    null when it had no frontier candidates."""
 
 
 class AdminGeneratorRoundListResponse(RoundModel):
@@ -465,6 +489,17 @@ class AdminGeneratorRoundPreview(RoundModel):
     blockers: list[str]
     skipped_panel_agents: list[GeneratorRoundSkippedAgent] = Field(default_factory=list)
     bench_contract: GeneratorRoundBenchContractPreview | None = None
+
+
+class GeneratorRoundSkipView(RoundModel):
+    """One round skipped because it would only repeat the last scored round."""
+
+    round_index: int
+    reason: str
+    """Always ``skipped_unchanged``."""
+    carried_from_round: int | None
+    """The scored round whose column scores the ledger keeps paying."""
+    skipped_at: datetime | None
 
 
 class GeneratorRoundLoopStatus(RoundModel):
@@ -616,3 +651,163 @@ class GeneratorRoundScoreResult(RoundModel):
 class GeneratorRoundAck(RoundModel):
     round_index: int
     status: RoundStatus
+
+
+# --- frontier cases (generator_frontier) -------------------------------------
+
+FrontierState = Literal["oracle_pending", "audit_pending", "settled"]
+FrontierAuditStatus = Literal["pending", "passed", "failed"]
+
+
+def frontier_audit_confirmation(round_index: int, column_id: str, valid: bool) -> str:
+    """The exact confirmation an operator types to rule one frontier audit."""
+    verdict = "VALID" if valid else "INVALID"
+    return f"RULE FRONTIER AUDIT {round_index} {column_id} {verdict}"
+
+
+def frontier_settle_confirmation(round_index: int) -> str:
+    """The exact confirmation an operator types to settle a round's frontier."""
+    return f"SETTLE GENERATOR FRONTIER {round_index}"
+
+
+class GeneratorFrontierOracleView(RoundModel):
+    """The oracle run's outcome on a round's frontier candidates."""
+
+    validator_hotkey: str
+    run_id: str
+    recorded_at: datetime
+    passed: int
+    """Candidates the oracle answered at or above ``solve_threshold``."""
+    failed: int
+    faulted: int
+    results: list[dict]
+    """Per-case ``{case_id, score, fault}`` exactly as the validator signed."""
+
+
+class GeneratorFrontierAuditView(RoundModel):
+    """One column's sampled operator audit of its oracle-attested cases."""
+
+    round_index: int
+    column_id: str
+    submission_id: UUID | None
+    miner_hotkey: str | None
+    status: FrontierAuditStatus
+    sample: list[str]
+    """Round case ids drawn with ``challenge.FrontierAuditSample`` from the
+    secret round seed."""
+    attested_cases: int
+    invalid_case_ids: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    actor: str | None = None
+    ruled_at: datetime | None = None
+    audit_deadline: datetime | None = None
+    """When the round's attestations apply anyway if still unruled."""
+
+
+class GeneratorFrontierView(RoundModel):
+    """A scored round's frontier lane: candidates, oracle, audits, outcome."""
+
+    round_index: int
+    state: FrontierState
+    oracle_agent_id: UUID
+    frontier_weight: float
+    audit_cases: int
+    candidates: list[str]
+    """Round case ids the panel left unsolved on miner columns."""
+    oracle_attempts: int
+    oracle_deadline: datetime | None
+    """When the round settles with no attestations if the oracle never
+    reports (while ``oracle_pending``)."""
+    oracle: GeneratorFrontierOracleView | None
+    attested: dict[str, list[str]]
+    audits: list[GeneratorFrontierAuditView]
+    applied: dict[str, list[str]] | None = None
+    """Case ids that became ``frontier`` per column, once settled."""
+    column_scores: dict[str, float]
+    """Current column scores (frontier credit included once settled)."""
+    base_column_scores: dict[str, float] | None = None
+    """Column scores before frontier credit, once settled."""
+    created_at: datetime
+    settled_at: datetime | None = None
+    settle_reason: str | None = None
+
+
+class GeneratorFrontierAuditListResponse(RoundModel):
+    audits: list[GeneratorFrontierAuditView]
+    count: int
+    """Every audit matching the filter (the queue total)."""
+    returned: int
+    """Audits in this page."""
+    limit: int
+    offset: int
+    has_more: bool
+    """Another page exists past ``offset + returned``."""
+
+
+class GeneratorFrontierMemoryPair(RoundModel):
+    pair_id: str
+    timestamp: str
+    wave: int
+    prompt: str
+    response: str
+
+
+class GeneratorFrontierCaseView(RoundModel):
+    """One audited case as the generator wrote it, with its evidence, the
+    panel's and the oracle's outcomes, and the user's visible memory."""
+
+    case_id: str
+    question: str
+    expected_answer: str
+    answer_kind: str | None = None
+    answer_items: list[str] = Field(default_factory=list)
+    accept_any: list[str] = Field(default_factory=list)
+    distractor_answers: list[str] = Field(default_factory=list)
+    forbidden_answer: str | None = None
+    dump_guard: list[str] = Field(default_factory=list)
+    user_id: str = ""
+    run_after_wave: int = 0
+    evidence: list[GeneratorFrontierMemoryPair]
+    """The pairs the case cites as evidence."""
+    visible_pairs: int
+    """Pairs the case's user holds at or before ``run_after_wave``."""
+    memory_matches: list[GeneratorFrontierMemoryPair]
+    """Visible pairs containing the ``q`` search text (or every visible pair,
+    capped, when no search is given): check for a contradicting fact."""
+    memory_truncated: bool = False
+    panel_mean_score: float | None = None
+    panel_solvers: int | None = None
+    panel_size: int | None = None
+    oracle_score: float | None = None
+    oracle_fault: bool | None = None
+
+
+class GeneratorFrontierAuditDetail(RoundModel):
+    audit: GeneratorFrontierAuditView
+    cases: list[GeneratorFrontierCaseView]
+
+
+class GeneratorFrontierAuditRuling(BaseModel):
+    """An operator's ruling on one frontier audit sample."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    valid: bool
+    """True: every sampled case is a fair, unambiguous memory question with a
+    correct gold answer. False: name the invalid ones."""
+    invalid_case_ids: list[str] = Field(default_factory=list)
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+    """``RULE FRONTIER AUDIT {round} {column} VALID|INVALID``."""
+
+
+class GeneratorFrontierSettleRequest(BaseModel):
+    """Settle a round's frontier lane now, applying what has survived."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+    """``SETTLE GENERATOR FRONTIER {round}``."""

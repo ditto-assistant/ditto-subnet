@@ -237,6 +237,11 @@ type ConfirmationInferenceRequest struct {
 	UpstreamProvider    pgtype.Text        `json:"upstreamProvider"`
 	StartedAt           pgtype.Timestamptz `json:"startedAt"`
 	CompletedAt         pgtype.Timestamptz `json:"completedAt"`
+	FailureKind         pgtype.Text        `json:"failureKind"`
+	UpstreamHttpStatus  pgtype.Int4        `json:"upstreamHttpStatus"`
+	UpstreamAttempts    pgtype.Int4        `json:"upstreamAttempts"`
+	ReceiptFree         pgtype.Bool        `json:"receiptFree"`
+	UpstreamErrorCode   pgtype.Int4        `json:"upstreamErrorCode"`
 }
 
 type InferenceConcurrencySettingsRevision struct {
@@ -296,6 +301,7 @@ type InferenceGrant struct {
 	DecisionTokens               int64              `json:"decisionTokens"`
 	DecisionCostMicrousd         int64              `json:"decisionCostMicrousd"`
 	DecisionActiveRequests       int32              `json:"decisionActiveRequests"`
+	InferenceMode                string             `json:"inferenceMode"`
 }
 
 type InferenceProviderRoute struct {
@@ -418,4 +424,6 @@ type ValidatorTicket struct {
 	ContainerLogTailAttempt      pgtype.Int4        `json:"containerLogTailAttempt"`
 	ProviderOutageEpoch          pgtype.UUID        `json:"providerOutageEpoch"`
 	ProviderOutageAttemptedEpoch pgtype.UUID        `json:"providerOutageAttemptedEpoch"`
+	DuelingSeasonID              pgtype.UUID        `json:"duelingSeasonId"`
+	SliceSha256                  pgtype.Text        `json:"sliceSha256"`
 }

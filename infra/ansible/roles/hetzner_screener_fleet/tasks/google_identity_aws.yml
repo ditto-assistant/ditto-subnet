@@ -1,0 +1,79 @@
+---
+# AWS identity mode. The EC2 instance role (ditto-screener-node) is federated
+# into GCP Workload Identity at screener_fleet_aws_wif_provider. gcloud signs an
+# STS GetCallerIdentity request with the instance-role credentials it reads
+# from IMDSv2 and exchanges it for a short-lived federated token. The GCP side
+# grants secretAccessor directly to that role's principalSet, so the
+# credential configuration names no service account and holds no secret.
+#
+# The configuration lives in the secret agent's private 0700 directory, the
+# same place the X.509 mode keeps its credential, so the rootless builder user
+# can never read it. The builder's egress to 169.254.0.0/16 (IMDS included) is
+# rejected by the executor egress guard.
+- name: Check for the Google Cloud CLI
+  ansible.builtin.command: gcloud --version
+  register: screener_fleet_gcloud_check
+  changed_when: false
+  check_mode: false
+  failed_when: false
+
+- name: Install the Google Cloud CLI for AWS federation
+  when: screener_fleet_gcloud_check.rc != 0
+  block:
+    - name: Add the pinned Google Cloud apt key
+      ansible.builtin.get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/google-cloud.gpg
+        mode: "0644"
+        checksum: "sha256:{{ screener_fleet_google_cloud_apt_key_sha256 }}"
+
+    - name: Add the Google Cloud apt repository
+      ansible.builtin.deb822_repository:
+        name: google-cloud-sdk
+        types: [deb]
+        uris: https://packages.cloud.google.com/apt
+        suites: [cloud-sdk]
+        components: [main]
+        signed_by: /usr/share/keyrings/google-cloud.gpg
+        state: present
+
+    - name: Install the Google Cloud CLI
+      ansible.builtin.apt:
+        name: google-cloud-cli
+        state: present
+        update_cache: true
+
+# Rendered on every converge to a staging file so a changed provider takes
+# effect, then copied over the 0400 credential only when the bytes differ.
+- name: Render the non-secret AWS external-account configuration
+  ansible.builtin.command:
+    argv:
+      - gcloud
+      - iam
+      - workload-identity-pools
+      - create-cred-config
+      - "{{ screener_fleet_aws_wif_provider }}"
+      - --aws
+      - --enable-imdsv2
+      - "--output-file={{ screener_fleet_x509_credential_file }}.next"
+  become_user: "{{ screener_fleet_secret_agent_user }}"
+  environment:
+    HOME: "{{ screener_fleet_x509_identity_dir }}"
+    CLOUDSDK_CONFIG: "{{ screener_fleet_x509_cloudsdk_config }}"
+  changed_when: false
+  check_mode: false
+
+- name: Install the AWS external-account configuration
+  ansible.builtin.copy:
+    src: "{{ screener_fleet_x509_credential_file }}.next"
+    dest: "{{ screener_fleet_x509_credential_file }}"
+    remote_src: true
+    owner: "{{ screener_fleet_secret_agent_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0400"
+
+- name: Remove the staged AWS external-account configuration
+  ansible.builtin.file:
+    path: "{{ screener_fleet_x509_credential_file }}.next"
+    state: absent
+  changed_when: false

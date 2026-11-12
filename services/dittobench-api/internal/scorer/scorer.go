@@ -400,6 +400,18 @@ func CanaryIntegrityFactor(perCase []protocol.CaseScore) float64 {
 // (nothing to measure). The raw rate is advisory; the derived
 // MetamorphicConsistencyFactor is what folds into the composite.
 func MetamorphicConsistency(perCase []protocol.CaseScore) *float64 {
+	consistent, total := metamorphicGroupCounts(perCase)
+	if total == 0 {
+		return nil
+	}
+	v := round6(float64(consistent) / float64(total))
+	return &v
+}
+
+// metamorphicGroupCounts returns how many invariance twin groups the harness
+// answered consistently and how many groups were measured, under exactly the
+// membership rules MetamorphicConsistency documents.
+func metamorphicGroupCounts(perCase []protocol.CaseScore) (consistent, total int) {
 	groups := map[string][]bool{}
 	undelivered := map[string]bool{}
 	for _, cs := range perCase {
@@ -433,7 +445,9 @@ func MetamorphicConsistency(perCase []protocol.CaseScore) *float64 {
 		// An undelivered sibling makes the whole family unusable: a 3-member group
 		// with one timeout would otherwise read as split and charge phrasing
 		// brittleness for a transport failure.
-		if cs.Undelivered {
+		// A budget-refused member (bench v18) never ran, so it drops the family
+		// the same way.
+		if cs.Undelivered || cs.BudgetExhausted {
 			undelivered[cs.TwinGroup] = true
 			continue
 		}
@@ -444,10 +458,6 @@ func MetamorphicConsistency(perCase []protocol.CaseScore) *float64 {
 	for g := range undelivered {
 		delete(groups, g)
 	}
-	if len(groups) == 0 {
-		return nil
-	}
-	consistent := 0
 	for _, verdicts := range groups {
 		all, none := true, true
 		for _, v := range verdicts {
@@ -461,14 +471,18 @@ func MetamorphicConsistency(perCase []protocol.CaseScore) *float64 {
 			consistent++
 		}
 	}
-	v := round6(float64(consistent) / float64(len(groups)))
-	return &v
+	return consistent, len(groups)
 }
 
 // auditHalf classifies a case as the base or the transformed side of an audit
 // pair, or "" for everything else. Derived from the validator-internal question
 // id, so no new wire field is needed on the case itself and the harness sees
 // nothing new.
+// AuditHalfFor is a memory case's audit half (base or transform), empty when
+// the case is not in an audit pair: the family identity a budget-refused
+// case must keep.
+func AuditHalfFor(mc protocol.MemoryCase) string { return auditHalf(mc) }
+
 func auditHalf(mc protocol.MemoryCase) string {
 	if !isAuditGroup(mc.TwinGroup) {
 		return ""
@@ -506,7 +520,8 @@ func AuditPairs(perCase []protocol.CaseScore) protocol.AuditPairCounts {
 		// Never delivered: leave the side nil so the pair is dropped below. Before
 		// this, a timed-out case still produced a (wrong) verdict, so the pair
 		// looked complete and the guard below could never fire.
-		if cs.Undelivered {
+		// A budget-refused case (bench v18) never ran either: no verdict.
+		if cs.Undelivered || cs.BudgetExhausted {
 			continue
 		}
 		g := groups[cs.TwinGroup]
@@ -1013,6 +1028,126 @@ func ScoredPopulation(perCase []protocol.CaseScore) []protocol.CaseScore {
 	return filtered
 }
 
+// DatagenHalf is a run's ordinary (datagen) score before and after the
+// composite gate: the half a bench >= 16 dueling composite combines with its
+// generator slice (docs/dueling-bench.md section 1). AggregateForVersion
+// composes exactly these values, so the two can never drift.
+type DatagenHalf struct {
+	ToolMean   float64
+	MemoryMean float64
+	// Raw is 0.5 x tool_mean + 0.5 x memory_mean (or the single present mean),
+	// before any gate.
+	Raw float64
+	// RawStderr is Raw's standard error before any gate.
+	RawStderr float64
+	// Gate is the composite gate factor (CompositeGateForVersion; 1 before v3).
+	Gate float64
+}
+
+// DatagenHalfForVersion returns the datagen half of a run's scored
+// population (ScoredPopulation is applied first, as AggregateForVersion does).
+func DatagenHalfForVersion(perCase []protocol.CaseScore, benchVersion int) DatagenHalf {
+	return datagenHalf(ScoredPopulation(perCase), benchVersion)
+}
+
+func datagenHalf(perCase []protocol.CaseScore, benchVersion int) DatagenHalf {
+	var toolSum, toolN, memSum, memN float64
+	var toolSumSq, memSumSq float64
+	for _, cs := range perCase {
+		switch cs.Kind {
+		case protocol.KindMemory:
+			memSum += cs.Score
+			memSumSq += cs.Score * cs.Score
+			memN++
+		default:
+			toolSum += cs.Score
+			toolSumSq += cs.Score * cs.Score
+			toolN++
+		}
+	}
+	var half DatagenHalf
+	if toolN > 0 {
+		half.ToolMean = toolSum / toolN
+	}
+	if memN > 0 {
+		half.MemoryMean = memSum / memN
+	}
+	// DittoBench v2 composite (bench_version 2): 0.5*tool_mean + 0.5*memory_mean
+	// when both kinds are present; falls back to the single present mean for
+	// tool-only or memory-only runs. Rebalanced from v1's 0.6/0.4:
+	// memory is the core product value, memory-coupled tool cases already push
+	// memory competence into tool_mean, and the raw-pairs tier (Tier B) makes
+	// memory_mean the harder axis. Latency/cost stay OUT of the composite.
+	//
+	// Combine the tool-half and memory-half standard errors. The two halves are
+	// independent samples and the composite is 0.5*tool + 0.5*mem, so
+	// Var(composite) = 0.25*Var(toolMean) + 0.25*Var(memMean) and
+	// SE = 0.5*sqrt(se_tool^2 + se_mem^2). When only one half is present the
+	// composite is that half's mean, so its SE is that half's SE.
+	seTool := stdErrOfMean(toolSum, toolSumSq, int(toolN))
+	seMem := stdErrOfMean(memSum, memSumSq, int(memN))
+	switch {
+	case toolN > 0 && memN > 0:
+		half.Raw = 0.5*half.ToolMean + 0.5*half.MemoryMean
+		half.RawStderr = 0.5 * math.Sqrt(seTool*seTool+seMem*seMem)
+	case toolN > 0:
+		half.Raw = half.ToolMean
+		half.RawStderr = seTool
+	case memN > 0:
+		half.Raw = half.MemoryMean
+		half.RawStderr = seMem
+	}
+	// Apply the composite gate. Computed ONCE here and reused for the standard
+	// error, so the two can never drift apart. v5 layers the
+	// conversational-sanity and transform-audit tiers on top of the v3 gate
+	// (CompositeGateForVersion); pre-v5 versions get exactly the v3 gate.
+	half.Gate = 1.0
+	if benchVersion >= protocol.BenchVersionV3 {
+		half.Gate = CompositeGateForVersion(gatedPopulation(perCase, benchVersion), benchVersion)
+	}
+	return half
+}
+
+// gatedPopulation is the population the composite gate reads. From the v18
+// run budget a case the budget refused never ran: it already scores 0 in the
+// means above, and the multiplicative gates (conversational sanity, transform
+// audit, metamorphic consistency, over-call, canary) must not charge it a
+// second time as if the harness had answered badly. Below v18 no case carries
+// the flag and the population is unchanged.
+// GatedPopulationForVersion is gatedPopulation for the run's published gate
+// factors and signed gate evidence, so they decompose the applied gate.
+func GatedPopulationForVersion(perCase []protocol.CaseScore, benchVersion int) []protocol.CaseScore {
+	return gatedPopulation(perCase, benchVersion)
+}
+
+func gatedPopulation(perCase []protocol.CaseScore, benchVersion int) []protocol.CaseScore {
+	if !protocol.RunBudgetBenchVersion(benchVersion) {
+		return perCase
+	}
+	// A twin or audit family that lost a member to the budget cannot establish
+	// agreement any more, exactly like a family with an undelivered member.
+	// Its surviving members stay in the population for every other gate but
+	// are detached from the family, so no family gate reads a lone survivor
+	// as a consistent group.
+	broken := map[string]bool{}
+	for _, cs := range perCase {
+		if cs.BudgetExhausted && cs.TwinGroup != "" {
+			broken[cs.TwinGroup] = true
+		}
+	}
+	out := make([]protocol.CaseScore, 0, len(perCase))
+	for _, cs := range perCase {
+		if cs.BudgetExhausted {
+			continue
+		}
+		if broken[cs.TwinGroup] {
+			cs.TwinGroup = ""
+		}
+		out = append(out, cs)
+	}
+	return out
+}
+
 // AggregateForVersion folds per-case scores into a ScoreReport under an explicit
 // bench version's contract: composite, per-category breakdown, and median
 // latency.
@@ -1026,8 +1161,7 @@ func ScoredPopulation(perCase []protocol.CaseScore) []protocol.CaseScore {
 // contract explicit rather than incidental.
 func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersion int) protocol.ScoreReport {
 	perCase = ScoredPopulation(perCase)
-	var toolSum, toolN, memSum, memN float64
-	var toolSumSq, memSumSq float64
+	half := datagenHalf(perCase, benchVersion)
 	latencies := make([]int64, 0, len(perCase))
 	catSum := map[string]float64{}
 	catSumSq := map[string]float64{}
@@ -1035,16 +1169,9 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 	catOrder := make([]string, 0)
 
 	for _, cs := range perCase {
-		latencies = append(latencies, cs.LatencyMs)
-		switch cs.Kind {
-		case protocol.KindMemory:
-			memSum += cs.Score
-			memSumSq += cs.Score * cs.Score
-			memN++
-		default:
-			toolSum += cs.Score
-			toolSumSq += cs.Score * cs.Score
-			toolN++
+		// A budget-refused case (bench v18) never ran: it has no latency.
+		if !cs.BudgetExhausted || !protocol.RunBudgetBenchVersion(benchVersion) {
+			latencies = append(latencies, cs.LatencyMs)
 		}
 		if _, seen := catCount[cs.Category]; !seen {
 			catOrder = append(catOrder, cs.Category)
@@ -1053,39 +1180,7 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 		catSumSq[cs.Category] += cs.Score * cs.Score
 		catCount[cs.Category]++
 	}
-
-	toolMean := 0.0
-	if toolN > 0 {
-		toolMean = toolSum / toolN
-	}
-	memMean := 0.0
-	if memN > 0 {
-		memMean = memSum / memN
-	}
-	// DittoBench v2 composite (bench_version 2): 0.5*tool_mean + 0.5*memory_mean
-	// when both kinds are present; falls back to the single present mean for
-	// tool-only or memory-only runs. Rebalanced from v1's 0.6/0.4:
-	// memory is the core product value, memory-coupled tool cases already push
-	// memory competence into tool_mean, and the raw-pairs tier (Tier B) makes
-	// memory_mean the harder axis. Latency/cost stay OUT of the composite.
-	composite := 0.0
-	switch {
-	case toolN > 0 && memN > 0:
-		composite = 0.5*toolMean + 0.5*memMean
-	case toolN > 0:
-		composite = toolMean
-	case memN > 0:
-		composite = memMean
-	}
-	// Apply the composite gate. Computed ONCE here and reused for the standard
-	// error below, so the two can never drift apart. v5 layers the
-	// conversational-sanity and transform-audit tiers on top of the v3 gate
-	// (CompositeGateForVersion); pre-v5 versions get exactly the v3 gate.
-	gate := 1.0
-	if benchVersion >= protocol.BenchVersionV3 {
-		gate = CompositeGateForVersion(perCase, benchVersion)
-	}
-	composite = round6(composite * gate)
+	composite := round6(half.Raw * half.Gate)
 
 	perCat := make([]protocol.CategoryStat, 0, len(catOrder))
 	for _, cat := range catOrder {
@@ -1098,23 +1193,6 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 			StdErr:   round6(stdErrOfMean(catSum[cat], catSumSq[cat], n)),
 		})
 	}
-
-	// Combine the tool-half and memory-half standard errors.
-	// The two halves are independent samples and the composite is 0.5*tool +
-	// 0.5*mem, so Var(composite) = 0.25*Var(toolMean) + 0.25*Var(memMean) and
-	// SE = 0.5*sqrt(se_tool^2 + se_mem^2). When only one half is present the
-	// composite is that half's mean, so its SE is that half's SE.
-	seTool := stdErrOfMean(toolSum, toolSumSq, int(toolN))
-	seMem := stdErrOfMean(memSum, memSumSq, int(memN))
-	var compositeStderr float64
-	switch {
-	case toolN > 0 && memN > 0:
-		compositeStderr = 0.5 * math.Sqrt(seTool*seTool+seMem*seMem)
-	case toolN > 0:
-		compositeStderr = seTool
-	case memN > 0:
-		compositeStderr = seMem
-	}
 	// Scale the SE by the same gate factors the composite carries, so this is the
 	// SE of the *gated* composite the KOTH ledger compares, not of the ungated
 	// mean. The gates are pure multipliers on the mean (composite = gate*mean),
@@ -1122,7 +1200,8 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 	// reported SE overstates the final composite's uncertainty and widens the
 	// dethrone band too far. The factors are the same pure functions of perCase
 	// applied to the composite above.
-	compositeStderr *= gate
+	compositeStderr := half.RawStderr * half.Gate
+	toolMean, memMean := half.ToolMean, half.MemoryMean
 
 	report := protocol.ScoreReport{
 		RunID:           runID,
@@ -1140,7 +1219,7 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 	// score cannot hide inside the memory mean. nil (omitted) for pre-v5 runs and
 	// runs that drew no conversational case.
 	if benchVersion >= protocol.BenchVersionV5 {
-		report.ConversationalSanity = ConversationalSanity(perCase)
+		report.ConversationalSanity = ConversationalSanity(gatedPopulation(perCase, benchVersion))
 	}
 	return report
 }

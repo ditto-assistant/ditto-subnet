@@ -209,6 +209,77 @@ async def test_source_release_evidence_preserves_exact_public_handoffs(
     assert "must-not-leak" not in response.text
 
 
+async def test_artifact_fetch_audit_lists_fetchers_before_reference_by_sha(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    first_id, second_id = uuid4(), uuid4()
+    sha = "c" * 64
+    async with maker() as session, session.begin():
+        for agent_id in (first_id, second_id):
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=f"5H{agent_id.hex[:8]}",
+                    name="same-bytes",
+                    sha256=sha,
+                    status=AgentStatus.SCORED,
+                    created_at=_T0 - timedelta(days=1),
+                )
+            )
+        for agent_id, kind, identity, minutes, detail in (
+            (first_id, "validator", "5Validator", 30, {"served_source": True}),
+            (
+                second_id,
+                "screener",
+                "node-1",
+                20,
+                {"served_source": False, "served_screened_image": True},
+            ),
+            (first_id, "validator", "5Validator", -5, None),
+        ):
+            session.add(
+                ArtifactFetchAudit(
+                    agent_id=agent_id,
+                    endpoint="validator.agent_artifact",
+                    requester_kind=kind,
+                    requester_id=identity,
+                    artifact_sha256=sha,
+                    fetched_at=_T0 - timedelta(minutes=minutes),
+                    source_ip="192.0.2.1",
+                    detail={
+                        **(detail or {}),
+                        "claimed_forwarded_for": {"x-real-ip": "198.51.100.7"},
+                    },
+                )
+            )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/v1/admin/artifact-fetch-audit",
+            params={"artifact_sha256": sha, "before": _T0.isoformat()},
+            headers=_HEADERS,
+        )
+        both = await client.get(
+            "/api/v1/admin/artifact-fetch-audit",
+            params={"artifact_sha256": sha, "agent_id": str(first_id)},
+            headers=_HEADERS,
+        )
+    assert both.status_code == 422
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body["agent_ids"]) == {str(first_id), str(second_id)}
+    assert body["total"] == 2 and body["truncated"] is False
+    assert [row["requester_id"] for row in body["rows"]] == ["5Validator", "node-1"]
+    assert [row["served_source"] for row in body["rows"]] == [True, False]
+    assert (
+        body["rows"][0]["source_ip_hash"] and body["rows"][0]["forwarded_claim_present"]
+    )
+    assert "192.0.2.1" not in response.text
+    assert "198.51.100.7" not in response.text
+
+
 async def test_source_release_evidence_absence_is_not_private_proof(
     app: FastAPI, maker: async_sessionmaker[AsyncSession]
 ) -> None:

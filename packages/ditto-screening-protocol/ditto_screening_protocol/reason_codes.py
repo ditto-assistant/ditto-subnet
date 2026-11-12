@@ -13,9 +13,13 @@ This module records the classification Platform applies today; it does not
 decide policy. Moving a code to ``FLEET_INFRA`` widens Platform's automatic
 retry and is a deliberate policy change (#1201, #2449): every producer of the
 code must be reachable only from fleet, transport or lock state, never from
-the submitted artifact, a budget or a lease. It also means updating the partial
-index ``screening_attempts_infra_failed_idx`` in Platform (``models.py``, a new
-migration, and ``_infra_failure_filters``) in the same change.
+the submitted artifact, a budget or a lease. The one bounded exception is a
+code Platform caps per code (``INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE`` in its
+infra planner): ``l2-late-result`` is retried once, so an artifact that makes
+review slow can cost at most one extra screen. It also means updating the
+partial index ``screening_attempts_infra_failed_idx`` in Platform
+(``models.py``, a new migration, and ``_infra_failure_filters``) in the same
+change.
 
 A code absent from the registry is unclassified. Platform treats it as it
 always has (an operator retry, no admission lane, and a detail-derived public
@@ -42,7 +46,9 @@ class ReasonCodeClass(StrEnum):
     FLEET_INFRA = "fleet_infra"
     """Fleet-owned and independent of the artifact. Platform's bounded infra
     planner retries it automatically within its backoff, breaker, age and
-    streak caps, and it never counts toward the inconclusive park cap."""
+    streak caps (plus a per-code retry cap for a code an artifact can slow,
+    such as ``l2-late-result``), and it never counts toward the inconclusive
+    park cap."""
 
     PROVIDER_BACKOFF = "provider_backoff"
     """A provider or reviewer outage. Held on reclaim for a short backoff and,
@@ -95,6 +101,16 @@ L2_RUNTIME_EVIDENCE_UNAVAILABLE: Final = "l2-runtime-evidence-unavailable"
 SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE: Final = (
     "source-review-adjudicator-key-unavailable"
 )
+IMAGE_UPLOAD_PLATFORM_UNAVAILABLE: Final = "image-upload-platform-unavailable"
+"""The screened-image upload hit a transport failure or a 5xx from Platform or
+its object store on a submission-independent step (initiate, part mint, part
+store) after the worker's own retries. A 4xx and any completion failure stay
+``image-upload-failed`` on the operator retry."""
+L2_LATE_RESULT: Final = "l2-late-result"
+"""The L2/L3 deep review ran past its deadline (its own ``timeout_seconds`` or
+the attempt lease); the private failure subcode names which bound fired and
+the masked outcome. Retried automatically at most once
+(``screening_infra_retry.INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE``)."""
 TARGON_BUILD_UNAVAILABLE: Final = "targon-build-unavailable"
 TARGON_RUNTIME_UNAVAILABLE: Final = "targon-runtime-unavailable"
 TARGON_SOURCE_REVIEW_UNAVAILABLE: Final = "targon-source-review-unavailable"
@@ -109,6 +125,11 @@ WORKER_LEASE_ORPHANED: Final = "worker-lease-orphaned"
 SCREENING_LEASE_EXPIRED: Final = "screening-lease-expired"
 SOURCE_REVIEW_INCONCLUSIVE: Final = "source-review-inconclusive"
 REPEATEDLY_INCONCLUSIVE: Final = "repeatedly-inconclusive"
+STATIC_MALICIOUS_SOURCE: Final = "static-malicious-source"
+"""The deterministic static malicious-source preflight found a decisive,
+reachable match before any submission-controlled build or runtime started. With
+model source review retired (2026-11-07) the mechanical lane rejects it outright
+with file and line locations; no reviewer resolves it and nothing is held."""
 SOURCE_REVIEW_CONFIRMED_VIOLATION: Final = "source-review-confirmed-violation"
 """A policy v13 invariant breach whose causal proof is complete and which the
 independent L3 violation adjudicator confirmed after it could have refuted it.
@@ -117,6 +138,11 @@ VERIFICATION_INCOMPLETE_UNREVIEWABLE: Final = "verification-incomplete-unreviewa
 """Historical platform verification rejection, retained for existing records.
 Repeated inconclusive, infrastructure, and provider failures now stay parked for
 manual review or retry; they do not produce this policy reason code."""
+TOOL_CATALOG_CONTEXT_OVERFLOW: Final = "tool-catalog-context-overflow"
+"""Handed a full-size benchmark tool catalog, the harness forwarded a model
+request whose provable token lower bound exceeds the locked scoring model's
+context window. Every provider refuses that request on every scored case that
+serves such a catalog, so the miner owns it."""
 V2_COMPLETE_STATIC_REVIEWS: Final = 2
 """Historical threshold retained for compatibility; no longer a rejection rule."""
 
@@ -144,6 +170,19 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode(
         SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE, _F, _WORKER, "source_review"
     ),
+    # Platform restarting, its gateway, or object storage refused a fixed-size,
+    # idempotent upload step (transport or 5xx). The image had already built
+    # and passed; the request bodies are bounded metadata or a fixed-size part,
+    # so the submission cannot choose the failure. The verdict-bearing
+    # completion step and every 4xx stay ``image-upload-failed``. Storing the
+    # screened image is the hand-off of the build lane's output.
+    ScreeningReasonCode(IMAGE_UPLOAD_PLATFORM_UNAVAILABLE, _F, _WORKER, "build"),
+    # The deep review ran past its stage budget or lease, typically while the
+    # review provider kept failing (2026-11-02/03 gpt-6-sol ``server_error``).
+    # An artifact can make a review slow, so Platform retries it only once
+    # (operator ruling 2026-11-03); a second consecutive late result parks for
+    # an operator. A miner never needs a manual retry for our timeout.
+    ScreeningReasonCode(L2_LATE_RESULT, _F, _WORKER, "source_review"),
     # --- PROVIDER_BACKOFF: held on reclaim, counted with peer evidence.
     ScreeningReasonCode(TARGON_BUILD_UNAVAILABLE, _P, _RETIRED, "build"),
     ScreeningReasonCode(TARGON_RUNTIME_UNAVAILABLE, _P, _RETIRED, "runtime_smoke"),
@@ -172,7 +211,6 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode("lease-budget-exhausted", _O, _WORKER),
     ScreeningReasonCode("source-review-unavailable", _O, _WORKER),
     ScreeningReasonCode("l2-cache-lock-timeout", _O, _WORKER),
-    ScreeningReasonCode("l2-late-result", _O, _WORKER),
     # The review gateway answered HTTP 402: the account paying for review
     # inference is out of credits or its spend is not authorized. Fleet
     # billing, never the artifact, so it must never count toward a park cap;
@@ -189,6 +227,8 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode("docker-build", _A, _WORKER),
     ScreeningReasonCode("docker-build-timeout", _A, _WORKER),
     ScreeningReasonCode("container-harness-contract", _A, _WORKER),
+    # The static malicious-source safety preflight (mechanical lane).
+    ScreeningReasonCode(STATIC_MALICIOUS_SOURCE, _A, _WORKER),
     # The Rust-only harness contract was replaced by the container contract.
     ScreeningReasonCode("rust-harness-contract", _A, _RETIRED),
     ScreeningReasonCode("exact-cross-miner-duplicate", _A, _WORKER),
@@ -202,6 +242,9 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode("seed-http-error", _A, _WORKER),
     ScreeningReasonCode("seed-oversized-response", _A, _WORKER),
     ScreeningReasonCode("seed-unreachable", _A, _WORKER),
+    # Tool-catalog probe rejection: the forwarded model request cannot fit the
+    # scoring model's context window once the catalog is full size.
+    ScreeningReasonCode(TOOL_CATALOG_CONTEXT_OVERFLOW, _A, _WORKER),
     # --- POLICY: held without a fault finding.
     ScreeningReasonCode(SOURCE_REVIEW_INCONCLUSIVE, _POLICY, _WORKER),
     # Platform's exhaustion hold after repeated inconclusive attempts.
@@ -277,3 +320,10 @@ SEED_PROBE_REASON_CODES: Final[tuple[str, ...]] = tuple(
     if code.startswith("seed-")
 )
 """Seeding-probe rejections, each with its own public guidance in Platform."""
+
+TOOL_CATALOG_PROBE_REASON_CODES: Final[tuple[str, ...]] = tuple(
+    code
+    for code in reason_codes(ReasonCodeClass.AGENT_FAULT)
+    if code.startswith("tool-catalog-")
+)
+"""Tool-catalog probe rejections, each with its own public guidance in Platform."""

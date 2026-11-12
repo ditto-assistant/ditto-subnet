@@ -95,6 +95,7 @@ from ditto.db.queries.benchmark_rollout import (
     heartbeat_supports_version,
     open_rollout,
 )
+from ditto.db.queries.dueling_season_window import dueling_season_window
 from ditto.db.queries.lease_liveness import (
     ACTION_OPERATOR_EVICTED,
     expire_issued_tickets,
@@ -123,6 +124,7 @@ from ditto.db.queries.retry_state import (
     recovery_gate,
     reinstatement_gate,
     resolve_bench_version,
+    rollout_quorum_scores,
     withdrawal_gate,
     work_available_validator_hotkeys,
 )
@@ -135,8 +137,12 @@ from ditto.db.queries.score_retests import (
     score_retest_queue_positions,
 )
 from ditto.db.queries.scores import SCORING_QUORUM
+from ditto.db.queries.terminal_failure import (
+    terminal_failure_code,
+    ticket_snapshot_wire,
+)
 from ditto.db.queries.tickets import (
-    release_generator_round_dataset_pin,
+    release_foreign_dataset_pin,
     scoring_retry_ticket,
     ticket_attempt_cap,
 )
@@ -171,22 +177,7 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-def _ticket_wire(ticket: ValidatorTicket) -> dict[str, object]:
-    return {
-        "validator_hotkey": ticket.validator_hotkey,
-        "status": ticket.status.value,
-        "issued_at": _aware(ticket.issued_at).isoformat(timespec="microseconds"),
-        "deadline": _aware(ticket.deadline).isoformat(timespec="microseconds"),
-        "bench_version": ticket.bench_version,
-        "attempt_count": ticket.attempt_count,
-        "manual_retry_grants": ticket.manual_retry_grants,
-        "infra_retry_grants": ticket.infra_retry_grants,
-        "retry_after": (
-            _aware(ticket.retry_after).isoformat(timespec="microseconds")
-            if ticket.retry_after is not None
-            else None
-        ),
-    }
+_ticket_wire = ticket_snapshot_wire
 
 
 def _snapshot(
@@ -356,6 +347,7 @@ def _withdrawal_item(
         expected_snapshot=row.expected_snapshot,
         score_count=row.score_count,
         evicted_validator_hotkeys=row.evicted_validator_hotkeys,
+        terminal_failure_code=row.terminal_failure_code,
         created_at=row.created_at,
         reinstated_at=row.reinstated_at,
     )
@@ -510,6 +502,18 @@ async def _load(
         )
     )
     scores = [score for score in all_scores if score.bench_version == bench_version]
+    if agent.status in (
+        AgentStatus.SCORED,
+        AgentStatus.LIVE,
+    ) and await is_open_rollout_qualification(
+        session, agent_id=agent_id, bench_version=bench_version
+    ):
+        # The same season-scoped quorum the rollout barrier counts, for the
+        # same settled members ``classify_agent_retry_states`` scopes.
+        window = await dueling_season_window(session, bench_version)
+        scores = rollout_quorum_scores(
+            scores, comparable=window.comparable if window is not None else None
+        )
     tickets = [
         ticket for ticket in all_tickets if ticket.bench_version == bench_version
     ]
@@ -1071,6 +1075,10 @@ async def withdraw_failed_validation_from_queue(
             expected_snapshot=current_snapshot,
             score_count=len(scores),
             ticket_snapshot=[_ticket_wire(ticket) for ticket in tickets],
+            # Same evidence the automatic close-out reads, so an operator
+            # withdrawal of a terminal artifact reports ``scoring_failed``
+            # publicly instead of a neutral ``not_queued``.
+            terminal_failure_code=terminal_failure_code(scores=scores, tickets=tickets),
             created_at=datetime.now(UTC),
         )
         session.add(withdrawal)
@@ -2364,7 +2372,7 @@ async def replace_validator_score_after_infrastructure_failure(
         assert target is not None and ticket is not None
         now = datetime.now(UTC)
         deadline = now + replacement_ttl
-        release_generator_round_dataset_pin(ticket)
+        release_foreign_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1

@@ -46,6 +46,19 @@ const (
 	RoutingModeAdaptive            = "adaptive"
 )
 
+// Scored aggregate provider routing, selected live from the operator's
+// scored_provider_routing board field (never from the environment).
+//
+//   - throughput: OpenRouter sorts the eligible ZDR providers by throughput.
+//   - bf16_price_order_canary: benchmark_canary tickets use the bf16 price
+//     order; every other ticket keeps throughput.
+//   - bf16_price_order: every scored chat call uses the bf16 price order.
+const (
+	ScoredProviderRoutingThroughput     = "throughput"
+	ScoredProviderRoutingBF16PriceOrder = "bf16_price_order"
+	ScoredProviderRoutingBF16Canary     = "bf16_price_order_canary"
+)
+
 // Lookup resolves one environment variable, reporting presence. It matches
 // os.LookupEnv so tests can substitute a map.
 type Lookup func(key string) (string, bool)
@@ -238,8 +251,12 @@ type InferenceProxyConfig struct {
 	Required      bool   // DITTO_INFERENCE_PROXY_REQUIRED, default false
 	PublicBaseURL string // DITTO_INFERENCE_PUBLIC_BASE_URL, default http://localhost:8000
 
-	OpenRouterAPIKey string // OPENROUTER_API_KEY; REQUIRED when Enabled
-	PerplexityAPIKey string // PERPLEXITY_API_KEY; optional
+	OpenRouterAPIKey   string // OPENROUTER_API_KEY; REQUIRED when Enabled
+	PerplexityAPIKey   string // PERPLEXITY_API_KEY; optional
+	DaniLabsAPIKey     string // DANILABS_API_KEY; optional, server-only
+	DaniLabsTrialUntil string // DANILABS_FREE_TRIAL_UNTIL; RFC3339, required to route
+	DaniLabsTrialScope string // DANILABS_TRIAL_SCOPE: canary or fleet
+	DaniLabsPercent    int    // live board selection percentage; defaults to zero
 
 	UpstreamURL          string // DITTO_INFERENCE_UPSTREAM_URL
 	EmbeddingUpstreamURL string // DITTO_EMBEDDING_UPSTREAM_URL
@@ -318,6 +335,12 @@ type InferenceProxyConfig struct {
 	DecisionTicketRPM            int    // DB-policy fallback default 600
 	DecisionValidatorRPM         int    // DB-policy fallback default 2400
 	DecisionGlobalRPM            int    // DB-policy fallback default 6000
+
+	// ScoredProviderRouting is the board's scored_provider_routing value
+	// (applySettings). The chat handler resolves the canary mode against the
+	// ticket purpose before the provider call, so completeChatWithRecovery
+	// only ever sees throughput or bf16_price_order. Empty means throughput.
+	ScoredProviderRouting string
 }
 
 type envReader struct {
@@ -564,8 +587,11 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		Required:      r.boolval("DITTO_INFERENCE_PROXY_REQUIRED", false),
 		PublicBaseURL: strings.TrimRight(r.str("DITTO_INFERENCE_PUBLIC_BASE_URL", "http://localhost:8000"), "/"),
 
-		OpenRouterAPIKey: r.str("OPENROUTER_API_KEY", ""),
-		PerplexityAPIKey: r.str("PERPLEXITY_API_KEY", ""),
+		OpenRouterAPIKey:   r.str("OPENROUTER_API_KEY", ""),
+		PerplexityAPIKey:   r.str("PERPLEXITY_API_KEY", ""),
+		DaniLabsAPIKey:     r.str("DANILABS_API_KEY", ""),
+		DaniLabsTrialUntil: r.str("DANILABS_FREE_TRIAL_UNTIL", ""),
+		DaniLabsTrialScope: r.str("DANILABS_TRIAL_SCOPE", ""),
 
 		UpstreamURL:          r.str("DITTO_INFERENCE_UPSTREAM_URL", "https://openrouter.ai/api/v1/chat/completions"),
 		EmbeddingUpstreamURL: r.str("DITTO_EMBEDDING_UPSTREAM_URL", "https://openrouter.ai/api/v1/embeddings"),

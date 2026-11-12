@@ -10,7 +10,8 @@ summaries are persisted on the accepted score and exposed on three surfaces
 with three disclosure levels:
 
 - ``PublicGateEvidence`` -- run-level aggregates only (posture, the four gate
-  summaries, flagged-case count and share, per-finding counts). Public.
+  summaries plus the bench 16+ ``priced_cost`` block, flagged-case count and
+  share, per-finding counts). Public.
 - ``MinerGateNotesResponse`` -- the per-case notes, keyed by a stable
   ``note_id`` a dispute can cite. Owner only (miner session).
 - ``scores.gate_evidence`` -- the stored projection (``StoredGateEvidence``),
@@ -25,7 +26,8 @@ every field is additive-optional and absent below bench_version 13):
   generator's metamorphic relation), and the bare twin markers
   ``twin_concordant`` / ``counterfactual_insensitive`` in ``notes``;
 - per run: ``details.catalog_gate``, ``details.claim_provenance``,
-  ``details.twin_post_pass`` and ``details.inference_cost``.
+  ``details.twin_post_pass`` and ``details.inference_cost``, plus from bench
+  16 ``details.priced_cost`` (the enforced priced inference cost factor).
 
 Every published note is drawn from :data:`GATE_FINDINGS`, the Platform copy of
 ``services/dittobench-api/testdata/v13_gate_findings.json`` -- a token the
@@ -42,13 +44,23 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import MappingProxyType
-from typing import Annotated, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 # Floor, not an enumeration: every later bench version carries the evidence.
 GATE_EVIDENCE_MIN_BENCH_VERSION = 13
+
+# Bench version from which a run carries the per-run cost budget
+# (``details.run_budget`` and the per-case ``budget_exhausted`` flag).
+RUN_BUDGET_MIN_BENCH_VERSION = 18
 
 # Version of the *stored* projection shape (``scores.gate_evidence``), so a
 # later reshaping can tell old rows apart without a data migration.
@@ -219,6 +231,82 @@ class InferenceCostSummary(BaseModel):
     mean_factor_bps: _BPS | None = None
 
 
+class PricedCostSummary(BaseModel):
+    """Run-level bench v16+ priced inference cost (``details.priced_cost``).
+
+    The scorer prices the WHOLE run (datagen half and generator slice) at the
+    contract's locked public per-token rates, normalises it to a 350-case run
+    and maps it to ``factor_bps`` through the published curve
+    (``ditto_screening_protocol.priced_cost``). ``applied_factor_bps`` is what
+    the composite carries (inside ``details.dueling.datagen_gate``): the factor
+    under ``enforce``, 10000 under ``shadow`` or without complete accounting.
+    ``rule_consistent`` is Platform's own recomputation of the factor from the
+    reported token counts; ``False`` means the scorer's block disagrees with
+    the published rule.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    contract_id: Annotated[str | None, Field(max_length=64)] = None
+    posture: GatePosture | None = None
+    applied: bool = False
+    result: Literal["priced", "insufficient_evidence"] | None = None
+    window: Annotated[str | None, Field(max_length=32)] = None
+    source: Annotated[str | None, Field(max_length=32)] = None
+    cases: _Count = 0
+    prompt_tokens: _Count = 0
+    completion_tokens: _Count = 0
+    embedding_tokens: _Count = 0
+    decision_calls: _Count = 0
+    decision_input_tokens: _Count = 0
+    decision_output_tokens: _Count = 0
+    prompt_cost_nano_usd: _Count = 0
+    completion_cost_nano_usd: _Count = 0
+    embedding_cost_nano_usd: _Count = 0
+    decision_cost_nano_usd: _Count = 0
+    cost_nano_usd: _Count = 0
+    normalization_cases: _Count = 0
+    normalized_cost_nano_usd: _Count = 0
+    reference_nano_usd: _Count = 0
+    ratio_bps: Annotated[int, Field(ge=0, le=100_000)] = 0
+    floor_bps: _BPS | None = None
+    factor_bps: _BPS | None = None
+    applied_factor_bps: _BPS | None = None
+    cost_usd: Annotated[float | None, Field(ge=0.0)] = None
+    """``cost_nano_usd`` in dollars (display)."""
+    normalized_cost_usd: Annotated[float | None, Field(ge=0.0)] = None
+    """``normalized_cost_nano_usd`` in dollars: the 350-case run equivalent."""
+    rule_consistent: bool | None = None
+
+
+class RunBudgetSummary(BaseModel):
+    """Run-level bench v18 per-run cost budget (``details.run_budget``).
+
+    The scorer stops admitting cases, in dispatch order, once the run's
+    metered priced cost reaches ``budget_nano_usd``; every unrun case scores
+    0 with ``budget_exhausted``. A spent budget is the harness's own cost,
+    never an infrastructure failure. ``reason`` is ``run_budget_exhausted``,
+    or ``run_budget_meter_lost`` when the run's metering session disappeared
+    and the scorer stopped admitting cases (``spent_nano_usd_at_cutoff`` is
+    then the last successful reading).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    contract_id: Annotated[str | None, Field(max_length=64)] = None
+    budget_nano_usd: _Count = 0
+    budget_usd: Annotated[float | None, Field(ge=0.0)] = None
+    cases: _Count = 0
+    exhausted: bool = False
+    admitted_cases: _Count = 0
+    unrun_cases: _Count = 0
+    unrun_tool_cases: _Count = 0
+    unrun_memory_cases: _Count = 0
+    unrun_slice_cases: _Count = 0
+    spent_nano_usd_at_cutoff: _Count = 0
+    reason: Annotated[str | None, Field(max_length=64)] = None
+
+
 class StoredGateCase(BaseModel):
     """One flagged case in the persisted projection (``scores.gate_evidence``).
 
@@ -256,11 +344,25 @@ class StoredGateEvidence(BaseModel):
     claim_provenance: ClaimProvenanceSummary | None = None
     twin_post_pass: TwinPostPassSummary | None = None
     inference_cost: InferenceCostSummary | None = None
+    priced_cost: PricedCostSummary | None = None
+    run_budget: RunBudgetSummary | None = None
+    """Bench v18+; omitted from the stored projection when absent."""
     catalog_suppression_rate: _UnitFloat | None = None
     gate_counts: dict[str, int] = Field(default_factory=dict)
     flagged_case_count: _Count = 0
     flagged_case_share: _UnitFloat | None = None
     cases: list[StoredGateCase] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_run_budget(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        # A projection without a budget keeps the pre-v18 shape on every dump,
+        # including a round trip of a stored row, not just at build time.
+        dumped = handler(self)
+        if isinstance(dumped, dict) and dumped.get("run_budget") is None:
+            dumped.pop("run_budget", None)
+        return dumped
 
 
 _POSTURE_DESCRIPTION = (
@@ -282,8 +384,9 @@ _GATE_COUNTS_DESCRIPTION = (
 class PublicGateEvidence(BaseModel):
     """Run-level v13 gate verdict, published beside a validator's score.
 
-    Aggregates only: the posture the gates ran under, the four gate summaries
-    (counts and rates), how many cases the gates would zero, and per-finding
+    Aggregates only: the posture the gates ran under, the gate summaries
+    (counts and rates), the bench 16+ priced inference cost and its factor,
+    how many cases the gates would zero, and per-finding
     counts. The per-case notes behind these counts are owner-only
     (``GET /me/agents/{agent_id}/gate-notes``).
     """
@@ -296,6 +399,7 @@ class PublicGateEvidence(BaseModel):
     claim_provenance: ClaimProvenanceSummary | None = None
     twin_post_pass: TwinPostPassSummary | None = None
     inference_cost: InferenceCostSummary | None = None
+    priced_cost: PricedCostSummary | None = None
     catalog_suppression_rate: Annotated[
         float | None,
         Field(
@@ -371,6 +475,9 @@ class MinerGateNotesRun(BaseModel):
     claim_provenance: ClaimProvenanceSummary | None = None
     twin_post_pass: TwinPostPassSummary | None = None
     inference_cost: InferenceCostSummary | None = None
+    priced_cost: PricedCostSummary | None = None
+    run_budget: RunBudgetSummary | None = None
+    """Bench v18+: why unrun cases scored 0 (they carry no gate notes)."""
     catalog_suppression_rate: _UnitFloat | None = None
     flagged_case_count: _Count = 0
     flagged_case_share: _UnitFloat | None = None

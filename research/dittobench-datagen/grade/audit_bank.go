@@ -121,12 +121,10 @@ func GradingPolicyFloors() []int {
 	return floors
 }
 
-// PolicyFloorV15 is a grader-only policy floor ahead of the v15 generation
-// contract, as v13's grader floor once was. It deliberately lives here, not
-// in protocol: protocol's BenchVersionVN constants track only versions the
-// generator can reproduce (ditto/tests/test_bench_version_pins.py). When the
-// v15 contract lands, protocol.BenchVersionV15 replaces this constant.
-const PolicyFloorV15 = 15
+// PolicyFloorV15 is the v15 grading-policy floor. It shipped ahead of the v15
+// generation contract as a grader-only floor; the contract has landed, so it
+// is now the protocol constant under its historical grader name.
+const PolicyFloorV15 = protocol.BenchVersionV15
 
 // AuditBankFloor is the first bench version with a public grader audit bank.
 const AuditBankFloor = protocol.BenchVersionV9

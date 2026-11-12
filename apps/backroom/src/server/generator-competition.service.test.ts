@@ -8,7 +8,10 @@ import {
   createBackroomMcpServer,
   type McpGrantProps,
 } from './mcp.server'
+import { PlatformAdminError } from './ditto.server'
+import { frontierRefusal } from './generator-competition.service'
 import {
+  generatorFrontierAuditListSchema,
   generatorCompetitionSettingsSchema,
   generatorRunDetailSchema,
 } from '../lib/generator-competition.schemas'
@@ -50,11 +53,16 @@ const settings = {
   lease_ttl_seconds: 7200, max_attempts: 6, retry_backoff_seconds: 3600,
   epochs_per_round: 4, counted_columns: 5, challenger_columns: 1, reference_agent_ids: [],
   privacy_window_rounds: 6, onchain_commitment: true, validator_rounds_enabled: false, min_round_validators: 3,
-  upload_fee_required: false,
+  upload_fee_required: false, dueling_enabled: false, rounds_per_season: 1,
+  dueling_shadow_bench_version: null,
 }
 // What a Platform that predates the generator upload fee (and the round
-// switch quorum) returns.
-const { upload_fee_required: _absent, min_round_validators: _noQuorum, ...olderSettings } = settings
+// switch quorum, and dueling seasons) returns.
+const {
+  upload_fee_required: _absent, min_round_validators: _noQuorum,
+  dueling_enabled: _noDueling, rounds_per_season: _noSeasons,
+  dueling_shadow_bench_version: _noShadow, ...olderSettings
+} = settings
 const runSummary = {
   run_id: RUN, attempt: 1, status: 'qualified', outcome: 'qualified', score: null,
   case_counts: null,
@@ -112,11 +120,18 @@ describe('generator competition MCP tools', () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     try {
       const control = json(await client.callTool({ name: 'get_generator_competition_settings', arguments: {} })) as {
-        effective: { settings: { mode: string, upload_fee_required: boolean, min_round_validators: number } }
+        effective: {
+          settings: {
+            mode: string, upload_fee_required: boolean, min_round_validators: number,
+            dueling_enabled: boolean, rounds_per_season: number,
+          }
+        }
       }
       expect(control.effective.settings.mode).toBe('off')
       expect(control.effective.settings.upload_fee_required).toBe(false)
       expect(control.effective.settings.min_round_validators).toBe(3)
+      expect(control.effective.settings.dueling_enabled).toBe(false)
+      expect(control.effective.settings.rounds_per_season).toBe(1)
       const listing = json(await client.callTool({ name: 'list_generator_submissions', arguments: { status: 'active' } }))
       expect(JSON.stringify(listing)).not.toContain('must-not-pass')
       expect(json(await client.callTool({ name: 'get_generator_submission', arguments: { submissionId: SUBMISSION } })))
@@ -221,6 +236,34 @@ describe('generator competition MCP tools', () => {
         arguments: { expectedRevision: 1, settings: olderSettings, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
       })
       expect(partial.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      // A dueling season spans at least two epochs.
+      const shortSeason = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, epochs_per_round: 1, dueling_enabled: true },
+          reason: 'turn dueling seasons on',
+          confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(shortSeason.isError).toBe(true)
+      expect(JSON.stringify(shortSeason.content)).toContain('at least 2 epochs')
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      // A canary shadow version needs dueling on.
+      const shadowOff = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, dueling_shadow_bench_version: 16 },
+          reason: 'shadow canary',
+          confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(shadowOff.isError).toBe(true)
+      expect(JSON.stringify(shadowOff.content)).toContain('needs dueling_enabled')
       expect(fetchMock).not.toHaveBeenCalled()
 
       const applied = json(await client.callTool({
@@ -651,5 +694,245 @@ describe('generator competition MCP tools', () => {
       await reader.client.close()
       await reader.server.close()
     }
+  })
+
+  it('shows a round skipped as unchanged and the loop that skipped it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const summary = {
+      round_index: 12, status: 'skipped', epochs_per_round: 4, commitment: 'aa'.repeat(32),
+      commitment_publication: 'disabled', committed_at: '2026-11-04T00:00:00Z', column_count: 5,
+      panel_size: 5, panel_dropped: 0, results: 0, answered_results: 0, secret_hex: null, seed: null,
+      void_reason: null, skip_reason: 'skipped_unchanged', carried_from_round: 11,
+    }
+    const detail = {
+      summary, settings_revision: 2, cases_per_column: 70, seed: null, columns: [], panel: [],
+      generation: { skipped_unchanged: { reason: 'skipped_unchanged', carried_from_round: 11 } },
+      column_case_counts: {}, dataset_bytes: null, lease_id: null, lease_expires_at: null,
+      lease_attempts: 0, commitment_published_at: null, commitment_error: null, attempts: [],
+      results: [], pending_agents: [], score: null, scorer_version: null, standings: [],
+      columns_scored: [], skipped_panel_agents: [],
+    }
+    const loop = {
+      available: true,
+      status: { last_tick_at: null, last_success_at: null, last_error: null, last_actions: ['round 12: skipped'], ticks: 1 },
+      schedule: { mode: 'enforce', epochs_per_round: 4 },
+      skip_unchanged_rounds: true,
+      skipped_rounds: 3,
+      last_skipped_round: { round_index: 12, reason: 'skipped_unchanged', carried_from_round: 11, skipped_at: '2026-11-04T05:00:00Z' },
+    }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.includes('/rounds/loop')
+        ? Response.json(loop)
+        : url.includes('/rounds?')
+          ? Response.json({ schedule: { mode: 'enforce', epochs_per_round: 4 }, rounds: [summary], counts_by_status: { skipped: 3 } })
+          : Response.json(detail)
+    )))
+
+    const reader = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await reader.client.callTool({ name: 'list_generator_rounds', arguments: {} })))
+        .toMatchObject({ rounds: [{ status: 'skipped', skip_reason: 'skipped_unchanged', carried_from_round: 11 }] })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 12 } })))
+        .toMatchObject({ summary: { status: 'skipped', skip_reason: 'skipped_unchanged', carried_from_round: 11 } })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))
+        .toMatchObject({
+          skip_unchanged_rounds: true,
+          skipped_rounds: 3,
+          last_skipped_round: { round_index: 12, reason: 'skipped_unchanged', carried_from_round: 11 },
+        })
+    } finally {
+      await reader.client.close()
+      await reader.server.close()
+    }
+  })
+
+  it('reads and rules frontier audits with artifact-scoped cases and guarded writes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const audit = {
+      round_index: 7, column_id: 'c1', submission_id: SUBMISSION, miner_hotkey: '5GenMiner',
+      status: 'pending', sample: ['c1/k2', 'c1/k5'], attested_cases: 6, invalid_case_ids: [],
+      reason: null, actor: null, ruled_at: null, audit_deadline: '2026-11-10T10:00:00Z',
+    }
+    const frontier = {
+      round_index: 7, state: 'audit_pending', oracle_agent_id: AGENT, frontier_weight: 1, audit_cases: 2,
+      candidates: ['c1/k0', 'c1/k2', 'c1/k5'], oracle_attempts: 1, oracle_deadline: null,
+      oracle: {
+        validator_hotkey: '5Validator', run_id: 'run-o', recorded_at: '2026-11-09T10:00:00Z',
+        passed: 2, failed: 1, faulted: 0,
+        results: [{ case_id: 'c1/k0', score: 0, fault: false }, { case_id: 'c1/k2', score: 1, fault: false }, { case_id: 'c1/k5', score: 1, fault: false }],
+      },
+      attested: { c1: ['c1/k2', 'c1/k5'] }, audits: [audit], applied: null,
+      column_scores: { c1: 0 }, base_column_scores: null, created_at: '2026-11-09T09:00:00Z',
+      settled_at: null, settle_reason: null,
+    }
+    const pair = { pair_id: 'new2', timestamp: '2026-02-01T09:00:00Z', wave: 1, prompt: 'The code is now 5002.', response: 'Updated.' }
+    const calls: Array<[string, string, unknown]> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const path = url.replace('https://platform-api.heyditto.ai', '')
+      const method = init?.method ?? 'GET'
+      calls.push([method, path, init?.body ? JSON.parse(String(init.body)) : null])
+      if (path.startsWith('/api/v1/admin/generator-competition/frontier/audits')) {
+        return Response.json({ audits: [audit], count: 3, returned: 1, limit: 1, offset: 0, has_more: true })
+      }
+      if (path.startsWith('/api/v1/admin/generator-competition/rounds/7/frontier/audits/c1') && method === 'GET') {
+        return Response.json({
+          audit,
+          cases: [{
+            case_id: 'c1/k2', question: 'What is the code for locker 2 now?', expected_answer: '5002',
+            answer_kind: 'number', answer_items: [], accept_any: [], distractor_answers: ['1002'],
+            forbidden_answer: null, dump_guard: [], user_id: '', run_after_wave: 1, evidence: [pair],
+            visible_pairs: 16, memory_matches: [pair], memory_truncated: false,
+            panel_mean_score: 0, panel_solvers: 0, panel_size: 3, oracle_score: 1, oracle_fault: false,
+          }],
+        })
+      }
+      if (path.endsWith('/rounds/7/frontier/settle')) return Response.json({ ...frontier, state: 'settled', applied: { c1: ['c1/k2', 'c1/k5'] } })
+      if (path.endsWith('/rounds/7/frontier/audits/c1')) return Response.json({ ...frontier, audits: [{ ...audit, status: 'passed' }] })
+      if (path.endsWith('/rounds/7/frontier')) return Response.json(frontier)
+      return Response.json({ detail: 'unexpected' }, { status: 404 })
+    }))
+
+    const reader = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await reader.client.callTool({ name: 'list_generator_frontier_audits', arguments: {} })))
+        // The paging contract survives parsing: count is the queue total.
+        .toMatchObject({
+          count: 3, returned: 1, limit: 1, offset: 0, has_more: true,
+          audits: [{ column_id: 'c1', sample: ['c1/k2', 'c1/k5'] }],
+        })
+      expect(calls[0][1]).toBe('/api/v1/admin/generator-competition/frontier/audits?include_ruled=false&limit=50&offset=0')
+      expect(json(await reader.client.callTool({ name: 'get_generator_round_frontier', arguments: { roundIndex: 7 } })))
+        .toMatchObject({ state: 'audit_pending', attested: { c1: ['c1/k2', 'c1/k5'] }, oracle: { passed: 2 } })
+      // Case content is private benchmark content: artifact scope only.
+      const noArtifact = await reader.client.callTool({ name: 'get_generator_frontier_audit', arguments: { roundIndex: 7, columnId: 'c1' } })
+      expect(noArtifact.isError).toBe(true)
+      const noWrite = await reader.client.callTool({
+        name: 'settle_generator_round_frontier',
+        arguments: { roundIndex: 7, reason: 'oracle agent misconfigured', confirmation: 'SETTLE GENERATOR FRONTIER 7' },
+      })
+      expect(noWrite.isError).toBe(true)
+    } finally {
+      await reader.client.close()
+      await reader.server.close()
+    }
+
+    const artifactReader = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      calls.length = 0
+      expect(json(await artifactReader.client.callTool({
+        name: 'get_generator_frontier_audit', arguments: { roundIndex: 7, columnId: 'c1', q: 'locker 2' },
+      }))).toMatchObject({ cases: [{ expected_answer: '5002', distractor_answers: ['1002'], oracle_score: 1 }] })
+      expect(calls[0][1]).toBe('/api/v1/admin/generator-competition/rounds/7/frontier/audits/c1?q=locker%202')
+    } finally {
+      await artifactReader.client.close()
+      await artifactReader.server.close()
+    }
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      calls.length = 0
+      // Confirmation names the verdict; a valid ruling names no invalid case.
+      for (const args of [
+        { valid: true, invalidCaseIds: [], confirmation: 'RULE FRONTIER AUDIT 7 c1 INVALID' },
+        { valid: true, invalidCaseIds: ['c1/k2'], confirmation: 'RULE FRONTIER AUDIT 7 c1 VALID' },
+        { valid: false, invalidCaseIds: [], confirmation: 'RULE FRONTIER AUDIT 7 c1 INVALID' },
+      ]) {
+        const refused = await client.callTool({
+          name: 'rule_generator_frontier_audit',
+          arguments: { roundIndex: 7, columnId: 'c1', reason: 'both cases are fair supersession', ...args },
+        })
+        expect(refused.isError).toBe(true)
+      }
+      expect(calls).toEqual([])
+      expect(json(await client.callTool({
+        name: 'rule_generator_frontier_audit',
+        arguments: {
+          roundIndex: 7, columnId: 'c1', valid: true, reason: 'both cases are fair supersession',
+          confirmation: 'RULE FRONTIER AUDIT 7 c1 VALID',
+        },
+      }))).toMatchObject({ audits: [{ status: 'passed' }] })
+      expect(calls[0]).toEqual([
+        'POST', '/api/v1/admin/generator-competition/rounds/7/frontier/audits/c1',
+        { valid: true, invalid_case_ids: [], reason: 'both cases are fair supersession', actor: session.email, confirmation: 'RULE FRONTIER AUDIT 7 c1 VALID' },
+      ])
+      calls.length = 0
+      expect(json(await client.callTool({
+        name: 'settle_generator_round_frontier',
+        arguments: { roundIndex: 7, reason: 'oracle agent misconfigured', confirmation: 'SETTLE GENERATOR FRONTIER 7' },
+      }))).toMatchObject({ state: 'settled' })
+      expect(calls[0][2]).toMatchObject({ confirmation: 'SETTLE GENERATOR FRONTIER 7', actor: session.email })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('describes the frontier audit memory fields without overstating them', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const tool = (await client.listTools()).tools.find((t) => t.name === 'get_generator_frontier_audit')
+      const help = (await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool: 'get_generator_frontier_audit' } }))
+      const text = [tool?.description ?? '', JSON.stringify(help)].join(' ')
+      // visible_pairs is a count; memory_matches is a capped, possibly
+      // truncated list: neither may read as the user's whole memory.
+      expect(text).toContain('the count of the user')
+      expect(text).toContain('memory_truncated is true when the list was cut')
+      expect(text).not.toContain("visible_pairs (the user's memory at that point)")
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('rejects impossible frontier audit paging from Platform', () => {
+    const page = { audits: [], count: 0, returned: 0, limit: 50, offset: 0, has_more: false }
+    expect(generatorFrontierAuditListSchema.parse(page)).toMatchObject(page)
+    for (const bad of [{ count: -1 }, { limit: 0 }, { limit: -5 }, { returned: -1 }, { offset: -1 }]) {
+      expect(() => generatorFrontierAuditListSchema.parse({ ...page, ...bad })).toThrow()
+    }
+  })
+
+  it('defaults the frontier settings a write omits', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse(settings)
+    expect(parsed).toMatchObject({
+      frontier_weight: 1, frontier_oracle_agent_id: null, frontier_audit_cases: 3,
+      frontier_audit_grace_hours: 24, frontier_oracle_timeout_hours: 12,
+    })
+    expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, frontier_weight: 1.5 })).toThrow()
+  })
+
+  it('defaults the season catch-up settings a write omits and bounds the cap', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse(settings)
+    expect(parsed).toMatchObject({ season_catchup_enabled: true, season_catchup_max_agents: 5 })
+    expect(generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_enabled: false }))
+      .toMatchObject({ season_catchup_enabled: false })
+    expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_max_agents: 11 })).toThrow()
+  })
+
+  it('names the frontier write that was refused and the recovery its status implies', () => {
+    const conflict = (message: string) => new PlatformAdminError('request', message, 409)
+    const invalid = (message: string) => new PlatformAdminError('request', message, 422)
+
+    const ruled = frontierRefusal('rule', conflict('column c1 audit is already passed'))!.message
+    expect(ruled).toContain('Nothing was ruled')
+    expect(ruled).toContain('re-read get_generator_round_frontier')
+
+    // A settle refusal says nothing about ruling or an audit sample.
+    const settled = frontierRefusal('settle', conflict('frontier is already settled'))!.message
+    expect(settled).toContain('Nothing was settled')
+    expect(settled).not.toMatch(/ruled|sample/)
+
+    // A 422 is the request itself: correct it; re-reading fixes nothing.
+    for (const kind of ['rule', 'settle'] as const) {
+      const message = frontierRefusal(kind, invalid('request validation failed'))!.message
+      expect(message).toContain('correct the refused fields')
+      expect(message).not.toContain('re-read')
+    }
+    expect(frontierRefusal('settle', invalid('x'))!.message).not.toContain('invalidCaseIds')
+
+    // Anything else passes through untouched.
+    expect(frontierRefusal('rule', new PlatformAdminError('server', 'boom', 503))).toBeNull()
+    expect(frontierRefusal('rule', new Error('plain'))).toBeNull()
   })
 })

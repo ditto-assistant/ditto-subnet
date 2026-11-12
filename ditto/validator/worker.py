@@ -41,6 +41,7 @@ from ditto.api_models.confirmation_progress import (
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_FRONTIER_ORACLE_DATASET_MODE,
     GENERATOR_ROUND_BENCH_VERSIONS,
     LEGACY_SCORER_ROUND_BENCH_VERSIONS,
     GeneratorRoundCaseResult,
@@ -77,13 +78,18 @@ from ditto.api_models.validator_weights_fold import (
 )
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
-from ditto.validator.config import lease_budget_seconds
+from ditto.validator.config import TOP5_MAX_CONFIRMATION_SEEDS, lease_budget_seconds
 from ditto.validator.crn import (
     confirmation_seeds,
     crn_block_binding_active,
     crn_seed,
 )
-from ditto.validator.dittobench import SUPPORTED_BENCH_VERSIONS
+from ditto.validator.dittobench import (
+    SUPPORTED_BENCH_VERSIONS,
+    DuelingSlice,
+    DuelingSliceError,
+    dueling_slice_from_lease,
+)
 from ditto.validator.errors import (
     DittobenchError,
     LeaseDeadlineError,
@@ -91,6 +97,7 @@ from ditto.validator.errors import (
     PlatformError,
     PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    PlatformRetryLaterError,
     SandboxOomError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
@@ -153,11 +160,13 @@ from ditto.validator.update_control import write_update_state
 from ditto.validator.updater_status import collect_updater_status
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
+    CrownGate,
     _entry_has_seeds,
     agents_needing_rescore,
     apply_miner_emission_cap,
     blend_track_weights,
     contested_confirmation_set,
+    dueling_fold_dropped,
     filter_weight_confirmed,
     owner_burn_destination_required,
     reign_seed_planning,
@@ -174,6 +183,8 @@ from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
     CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
+from ditto_screening_protocol.dueling import is_dueling_bench_version
+from ditto_screening_protocol.runtime_envelope import runtime_envelope
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_approval import (
     verify_follower_policy_approval,
@@ -250,6 +261,43 @@ def _ledger_ceiling_band_clamp(ledger: LedgerResponse) -> bool:
 def _ledger_statistical_band_cap(ledger: LedgerResponse) -> bool:
     """Use the protocol-29 cap only when the served pin activates it."""
     return getattr(ledger, "statistical_band_mode", None) == "capped"
+
+
+def _ledger_crown_gate(ledger: LedgerResponse) -> CrownGate | None:
+    """The protocol-34 crown rules when the served ledger carries them.
+
+    Platform withholds ``crown_gate`` until the operator selects it and every
+    recently-live weight setter reports v34, so the whole fleet starts gating
+    the crown in the same epoch. A missing or out-of-range marker is treated
+    as absent by every validator identically and folds the pre-34 walk.
+    """
+    served = getattr(ledger, "crown_gate", None)
+    if served is None:
+        return None
+    min_seeds = getattr(served, "min_dethrone_confirmations", None)
+    standing = getattr(served, "champion_standing_rank", None)
+    if (
+        isinstance(min_seeds, bool)
+        or isinstance(standing, bool)
+        or not isinstance(min_seeds, int)
+        or not isinstance(standing, int)
+        or not 2 <= min_seeds <= TOP5_MAX_CONFIRMATION_SEEDS
+        or not 1 <= standing <= 5
+    ):
+        return None
+    # Protocol 35: a served title-duel window. Out of range reads as absent, so
+    # every validator falls back to the protocol-34 gate identically.
+    window = getattr(served, "duel_window_pairs", None)
+    duel_window = (
+        window
+        if isinstance(window, int)
+        and not isinstance(window, bool)
+        and 2 <= window <= TOP5_MAX_CONFIRMATION_SEEDS
+        else None
+    )
+    return CrownGate(
+        min_shared_seeds=min_seeds, standing_rank=standing, duel_window=duel_window
+    )
 
 
 def _ledger_rank_shares(
@@ -542,6 +590,33 @@ def _confirmation_pin_binding_mismatch(
     return None
 
 
+def _season_seed_matches(job: object) -> bool:
+    """Whether a season-scoped quorum seed (protocol 35) re-derives.
+
+    A title-duel quorum run scores a dueling season's shared seed, the same
+    champion-anchored CRN family a confirmation pin names, so it is verified
+    the same way: ``seed == crn_seed([seed_anchor_agent_id],
+    version=bench_version, k=seed_index, block_hash=dataset_seed_block_hash)``.
+    Any missing binding field is a mismatch: a season seed is never accepted
+    unverified, unlike a pre-derivation agent seed.
+    """
+    seed = getattr(job, "seed", None)
+    anchor = getattr(job, "seed_anchor_agent_id", None)
+    index = getattr(job, "seed_index", None)
+    block_hash = getattr(job, "dataset_seed_block_hash", None)
+    version = getattr(job, "bench_version", None)
+    if seed is None or anchor is None or index is None or not block_hash:
+        return False
+    if version is None or not crn_block_binding_active(int(version)):
+        return False
+    return (
+        crn_seed(
+            [str(anchor)], version=int(version), k=int(index), block_hash=block_hash
+        )
+        == seed
+    )
+
+
 def confirmation_failure_class(error: BaseException) -> str:
     """Map an exception to an allowlisted, low-cardinality failure slug.
 
@@ -603,6 +678,12 @@ _JOB_HEARTBEAT_REFRESH_SECONDS = 120.0
 # never re-dispatches its once-per-sweep retest lane. Until the heartbeat refresh
 # above, the stale-heartbeat 428 ended these sweeps at about this age.
 _IDLE_SWEEP_MAX_SECONDS = 300.0
+# How many consecutive 503 + ``Retry-After`` job refusals one slot rides out in
+# a sweep before isolating itself as for any other refusal. Platform answers a
+# bench v16+ seed's first lease this way while it prepares the dueling slice
+# (normally seconds, Retry-After 15s), so a few waits cover a fresh seed, while
+# a preparation stuck behind operator review cannot keep the slot spinning.
+_JOB_RETRY_LATER_MAX_CONSECUTIVE = 6
 
 # Must stay exhaustive over ``BenchmarkProgressStage``: a missing stage raises
 # KeyError in ``_publish_benchmark_progress``, which the fail-open telemetry
@@ -976,6 +1057,7 @@ class ValidatorWorker:
         self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
         self._scorer_runs_generator_rounds = False
+        self._scorer_runs_frontier_oracle = False
         self._scorer_round_bench_versions = LEGACY_SCORER_ROUND_BENCH_VERSIONS
         # Re-zeroed at the top of every sweep; seeded here so a hand-back from
         # outside a sweep (a drain, or a test driving the method directly)
@@ -998,6 +1080,10 @@ class ValidatorWorker:
             else DEFAULT_RESOURCE_CEILINGS
         )
         self._constrained_resources: tuple[ConstrainedResource, ...] = ()
+        # The harness memory cap host-memory admission sizes against: the
+        # published envelope until a lease stamps the live Platform value.
+        self._sandbox_memory_limit_mib = runtime_envelope().memory_limit_mib
+        self._memory_admitted_slots_logged: int | None = None
         # Opaque per-run token for the active ticket, learned from the first
         # scorer snapshot that carries a run id (None for the pre-run stages).
         # Rides every published BenchmarkProgress so the platform can tell a
@@ -1275,6 +1361,7 @@ class ValidatorWorker:
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
+                retry_laters = 0
                 token = _CURRENT_SLOT.set(slot_id)
                 try:
                     while not self._new_work_blocked(stop_requested, drain_requested):
@@ -1285,6 +1372,42 @@ class ValidatorWorker:
                             pending_claims += 1
                         try:
                             job = await self._request_job_with_fresh_heartbeat(slot_id)
+                        except PlatformRetryLaterError as error:
+                            async with budget_lock:
+                                claimed -= 1
+                                pending_claims -= 1
+                                lease_state_changed.set()
+                            retry_laters += 1
+                            if retry_laters > _JOB_RETRY_LATER_MAX_CONSECUTIVE:
+                                logger.warning(
+                                    "job request for %s deferred %d times in a "
+                                    "row; slot is isolated: %s",
+                                    slot_id,
+                                    retry_laters,
+                                    error,
+                                )
+                                slot_failed += 1
+                                break
+                            # Not a failure: Platform is preparing what this
+                            # claim needs and named when to ask again. Wait on
+                            # the same slot (stop/drain cut the wait short and
+                            # the loop guard then ends it) instead of idling it
+                            # until the longest sibling lease finishes.
+                            logger.info(
+                                "job request for %s deferred; retrying in %gs "
+                                "(%d/%d): %s",
+                                slot_id,
+                                error.retry_after_seconds,
+                                retry_laters,
+                                _JOB_RETRY_LATER_MAX_CONSECUTIVE,
+                                error,
+                            )
+                            await self._sleep_or_interrupt(
+                                error.retry_after_seconds,
+                                stop_requested,
+                                drain_requested,
+                            )
+                            continue
                         except PlatformError as error:
                             async with budget_lock:
                                 claimed -= 1
@@ -1297,6 +1420,7 @@ class ValidatorWorker:
                             )
                             slot_failed += 1
                             break
+                        retry_laters = 0
                         if job is None:
                             async with budget_lock:
                                 claimed -= 1
@@ -1577,7 +1701,11 @@ class ValidatorWorker:
                             self._healthy_slots.discard(slot_id)
                             if any(
                                 code in str(error)
-                                for code in ("sandbox_oom", "sandbox_tmpfs_exhausted")
+                                for code in (
+                                    "sandbox_oom",
+                                    "sandbox_tmpfs_exhausted",
+                                    "host_memory_pressure",
+                                )
                             ):
                                 self._resource_blocked_until[slot_id] = (
                                     time.monotonic() + _RESOURCE_SLOT_RECOVERY_SECONDS
@@ -1669,6 +1797,9 @@ class ValidatorWorker:
         if self._admission != "accepting":
             return set()
         scorer_capacity = int(getattr(self._dittobench, "full_run_capacity", 1))
+        memory_slots = self._memory_admitted_slots()
+        if memory_slots is not None and memory_slots < scorer_capacity:
+            scorer_capacity = memory_slots
         unblocked = sorted(
             slot_id
             for slot_id in self._slots
@@ -1683,6 +1814,39 @@ class ValidatorWorker:
                 scorer_capacity,
             )
         return set(unblocked[:scorer_capacity])
+
+    def _memory_admitted_slots(self) -> int | None:
+        """Slots whose harness caps fit in host memory less the reserve.
+
+        ``None`` when the host's memory is unobserved (no collector, or a probe
+        failure): absence of evidence never stops a validator from working.
+        """
+        if self._system_metrics is None:
+            return None
+        try:
+            specs = self._system_metrics.host_specs()
+        except Exception:  # noqa: BLE001 - telemetry must never gate work
+            return None
+        if not isinstance(specs, HostSpecs):
+            return None
+        admitted = self._resource_ceilings.memory_admitted_slots(
+            specs.memory_total_mib, self._sandbox_memory_limit_mib
+        )
+        if (
+            admitted < len(self._slots)
+            and admitted != self._memory_admitted_slots_logged
+        ):
+            logger.warning(
+                "host memory admits %s of %s configured slot(s): %s MiB host, "
+                "%s MiB reserve, %s MiB harness cap",
+                admitted,
+                len(self._slots),
+                specs.memory_total_mib,
+                self._resource_ceilings.host_memory_reserve_mib,
+                self._sandbox_memory_limit_mib,
+            )
+        self._memory_admitted_slots_logged = admitted
+        return admitted
 
     async def _scoring_preflight(self) -> bool:
         """Functionally probe scorer dependencies before requesting a lease."""
@@ -1914,6 +2078,10 @@ class ValidatorWorker:
                 scorer_benchmarks.status == "fresh_verified"
                 and scorer_benchmarks.generator_rounds
             )
+            self._scorer_runs_frontier_oracle = bool(
+                self._scorer_runs_generator_rounds
+                and scorer_benchmarks.generator_frontier_oracle
+            )
             self._scorer_round_bench_versions = (
                 scorer_benchmarks.generator_round_bench_versions
                 if scorer_benchmarks.generator_round_bench_versions is not None
@@ -1924,6 +2092,7 @@ class ValidatorWorker:
                     "scorer_benchmarks": scorer_benchmarks,
                     "treasury_weights": await self._treasury_weight_capability(),
                     "round_commitments": self._round_commitments.supported(),
+                    "season_commitments": (self._round_commitments.supports_seasons()),
                 }
             )
             # v9: per-component runtime health. A collector failure (or no
@@ -2546,6 +2715,16 @@ class ValidatorWorker:
         # registration filters as any payable entry.
         provisional = _ledger_provisional_incumbent(ledger)
         weight_entries = _ledger_weight_entries(ledger)
+        dueling_dropped = dueling_fold_dropped(weight_entries)
+        if dueling_dropped:
+            # Fail closed: a v16 row without its season or aggregates cannot
+            # be compared inside one season, so it neither ranks nor pays.
+            logger.warning(
+                "weight fold dropped %d bench>=16 ledger row(s) without a "
+                "dueling season or aggregates: %s",
+                len(dueling_dropped),
+                sorted(str(entry.agent_id) for entry in dueling_dropped),
+            )
         if isinstance(treasury_pin, EnforcingTreasuryPin):
             weight_entries = [
                 e
@@ -2641,6 +2820,7 @@ class ValidatorWorker:
                 ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
                 statistical_band_cap=_ledger_statistical_band_cap(ledger),
                 incumbent_agent_id=_ledger_crown_incumbent(ledger),
+                crown_gate=_ledger_crown_gate(ledger),
                 unpaid_agent_id=(
                     provisional.agent_id if provisional is not None else None
                 ),
@@ -2773,6 +2953,7 @@ class ValidatorWorker:
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
+            crown_gate=_ledger_crown_gate(ledger),
         )
         if not miner_weights:
             logger.info(
@@ -3354,13 +3535,41 @@ class ValidatorWorker:
         slot_token = None
         ticket_claimed = False
         try:
-            try:
-                job = await self._platform.request_top5_confirmation_job(
-                    slot_id=_slot_id
-                )
-            finally:
-                if _claim_resolved is not None:
-                    _claim_resolved.set()
+            retry_laters = 0
+            while True:
+                try:
+                    job = await self._platform.request_top5_confirmation_job(
+                        slot_id=_slot_id
+                    )
+                except PlatformRetryLaterError as error:
+                    # Platform is preparing this lease's dueling slice. The
+                    # lane runs once per sweep, so giving up here would defer
+                    # the retest a whole sweep; wait it out, bounded like the
+                    # canonical slot loop. Siblings' claims proceed meanwhile.
+                    retry_laters += 1
+                    if retry_laters > _JOB_RETRY_LATER_MAX_CONSECUTIVE:
+                        raise
+                    if _claim_resolved is not None:
+                        _claim_resolved.set()
+                    logger.info(
+                        "top-five confirmation claim for %s deferred; retrying "
+                        "in %gs (%d/%d): %s",
+                        _slot_id,
+                        error.retry_after_seconds,
+                        retry_laters,
+                        _JOB_RETRY_LATER_MAX_CONSECUTIVE,
+                        error,
+                    )
+                    await self._sleep_or_interrupt(
+                        error.retry_after_seconds, stop_requested, drain_requested
+                    )
+                    if self._new_work_blocked(stop_requested, drain_requested):
+                        return False
+                    continue
+                finally:
+                    if _claim_resolved is not None:
+                        _claim_resolved.set()
+                break
             if job is None:
                 return False
             # Mirrors the canonical path's slot-mismatch guard: binding an
@@ -3414,6 +3623,29 @@ class ValidatorWorker:
                 )
                 await self._report_ticket_failed(
                     job, "infrastructure", "confirmation_dataset_pins_duplicated"
+                )
+                return False
+            # A dueling lease carries one season slice, derived from one run
+            # seed, so it can pin exactly one confirmation dataset.
+            try:
+                dueling_slice = dueling_slice_from_lease(job)
+            except DuelingSliceError as exc:
+                logger.warning(
+                    "top-five confirmation dueling slice refused agent=%s: %s",
+                    job.agent_id,
+                    exc,
+                )
+                await self._report_ticket_failed(job, "infrastructure", exc.code)
+                return False
+            if dueling_slice is not None and len(received_seeds) != 1:
+                logger.warning(
+                    "top-five confirmation dueling lease pins %d seeds for one "
+                    "slice agent=%s",
+                    len(received_seeds),
+                    job.agent_id,
+                )
+                await self._report_ticket_failed(
+                    job, "infrastructure", "dueling_slice_seed_count"
                 )
                 return False
             # Bench v13+ anti-grind, the confirmation-lane twin of the P2 check
@@ -3478,7 +3710,7 @@ class ValidatorWorker:
             # sibling slot's issuance -- for hours.
             leased = job
             report = await self._run_within_lease(
-                lambda: self._evaluate_confirmation_lease(leased),
+                lambda: self._evaluate_confirmation_lease(leased, dueling_slice),
                 job=job,
                 slot=slot,
             )
@@ -3619,6 +3851,10 @@ class ValidatorWorker:
             or not _runs_generator_round_version(
                 job.bench_version, self._scorer_round_bench_versions
             )
+            or (
+                job.dataset_mode == GENERATOR_FRONTIER_ORACLE_DATASET_MODE
+                and not self._scorer_runs_frontier_oracle
+            )
         ):
             await self._platform.fail_generator_round_job(
                 job, reason="infrastructure", detail="round_job_not_executable"
@@ -3643,6 +3879,11 @@ class ValidatorWorker:
                 else None
             ),
         )
+        if lease.benchmark_runtime is not None:
+            # Host-memory admission sizes later claims against the live cap.
+            self._sandbox_memory_limit_mib = (
+                lease.benchmark_runtime.sandbox_memory_limit_mib
+            )
         slot_token = _CURRENT_SLOT.set(job.slot_id)
         slot = self._slot_state()
         slot.revoked.clear()
@@ -3672,6 +3913,13 @@ class ValidatorWorker:
                 )
                 for case in per_case
             ]
+            if job.oracle_case_ids is not None and sorted(
+                r.case_id for r in results
+            ) != sorted(job.oracle_case_ids):
+                # The scorer must answer exactly the oracle's cases; anything
+                # else (an older scorer running the whole dataset) is refused
+                # here rather than posted as an attestation.
+                raise DittobenchError("oracle run results do not match the job")
             accepted = await self._platform.submit_generator_round_score(
                 job, run_id=run_id, results=results
             )
@@ -3756,13 +4004,19 @@ class ValidatorWorker:
                 inference_ticket_deadline=job.deadline if broker else None,
                 ticket_deadline=job.deadline,
                 benchmark_runtime=lease.benchmark_runtime,
+                # Without this the slot sat at ``preparing`` for the whole panel
+                # run, and Platform flagged every round run longer than its
+                # 15-minute early-stage grace as a stalled benchmark. The scorer
+                # reports ``running`` with per-column case counts like any run.
+                progress_callback=self._on_dittobench_progress,
+                oracle_case_ids=job.oracle_case_ids,
             )
         finally:
             if broker is not None:
                 await self._dittobench.cancel_inference_session(broker.session_id)
 
     async def _evaluate_confirmation_lease(
-        self, job: JobResponse
+        self, job: JobResponse, dueling_slice: DuelingSlice | None = None
     ) -> ScoreReport | None:
         """Activate the lease's inference grant and evaluate its pinned seeds."""
         broker = await self._activate_ticket_inference(job)
@@ -3786,6 +4040,8 @@ class ValidatorWorker:
                 ),
                 ticket_deadline=job.deadline,
                 benchmark_runtime=job.benchmark_runtime,
+                # Decoded and verified before the lease was claimed.
+                dueling_slice=dueling_slice,
             )
         finally:
             if broker is not None:
@@ -3804,6 +4060,7 @@ class ValidatorWorker:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport | None:
         """Evaluate fresh seeds and package one signed append-only receipt.
 
@@ -3841,6 +4098,7 @@ class ValidatorWorker:
                         inference_ticket_deadline=inference_ticket_deadline,
                         ticket_deadline=ticket_deadline,
                         benchmark_runtime=benchmark_runtime,
+                        dueling_slice=dueling_slice,
                     )
                 )
             except (PlatformError, DittobenchError) as exc:
@@ -3956,6 +4214,7 @@ class ValidatorWorker:
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
+            crown_gate=_ledger_crown_gate(ledger),
         )
         if not stale:
             return ledger
@@ -4076,6 +4335,7 @@ class ValidatorWorker:
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
+            crown_gate=_ledger_crown_gate(ledger),
         )
         if not contested:
             return
@@ -4656,8 +4916,15 @@ class ValidatorWorker:
                 f"benchmark v{job.bench_version} ticket did not declare its "
                 "policy-9 screened-image contract"
             )
+        if job.seed_scope == "season" and not _season_seed_matches(job):
+            raise ValidatorInfrastructureError(
+                f"season-scoped ticket seed {job.seed} for agent {job.agent_id} "
+                "does not re-derive from its season anchor; refusing to score",
+                code="seed_binding_mismatch",
+            )
         if (
-            job.seed is not None
+            job.seed_scope != "season"
+            and job.seed is not None
             and job.dataset_seed_block_hash
             and not seed_matches(
                 job.dataset_seed_block_hash,
@@ -4676,6 +4943,12 @@ class ValidatorWorker:
                 f"{job.dataset_seed_block_hash!r}; refusing to score",
                 code="seed_binding_mismatch",
             )
+        try:
+            dueling_slice = dueling_slice_from_lease(job)
+        except DuelingSliceError as exc:
+            raise ValidatorInfrastructureError(
+                f"{exc}; refusing to score", code=exc.code
+            ) from exc
         # Claim the slot publicly BEFORE activating inference. Exchanging the
         # grant and standing up the broker session is unbounded work -- with
         # several slots contending for inference it can hold a slot for many
@@ -4717,6 +4990,7 @@ class ValidatorWorker:
                     job.slot_id if inference_session_id is not None else None
                 ),
                 benchmark_runtime=job.benchmark_runtime,
+                dueling_slice=dueling_slice,
             )
         finally:
             if broker is not None:
@@ -4739,6 +5013,7 @@ class ValidatorWorker:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport:
         """Run one re-score while managing its benchmark heartbeat.
 
@@ -4766,6 +5041,7 @@ class ValidatorWorker:
                 inference_ticket_deadline=inference_ticket_deadline,
                 ticket_deadline=ticket_deadline,
                 benchmark_runtime=benchmark_runtime,
+                dueling_slice=dueling_slice,
             )
         finally:
             heartbeat_stop.set()
@@ -4791,6 +5067,7 @@ class ValidatorWorker:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport:
         """Fetch, verify, and score one artifact without managing heartbeats."""
         if not _supports_bench_version(bench_version):
@@ -4857,6 +5134,7 @@ class ValidatorWorker:
             inference_ticket_deadline=inference_ticket_deadline,
             ticket_deadline=ticket_deadline,
             benchmark_runtime=benchmark_runtime,
+            dueling_slice=dueling_slice,
         )
         return report
 
@@ -4987,6 +5265,7 @@ class ValidatorWorker:
         inference_grant_id: UUID | None = None,
         inference_slot_id: str | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. The single-seed
         path used by the ticket sweep (:meth:`_score_job`)."""
@@ -4999,6 +5278,7 @@ class ValidatorWorker:
                 private_dataset_mode=private_dataset_mode,
                 run_size=run_size,
                 bench_version=bench_version,
+                dueling_slice=dueling_slice,
             )
             return await self._submit_report(agent_id, miner_hotkey, report)
 
@@ -5028,6 +5308,7 @@ class ValidatorWorker:
                 ),
                 ticket_deadline=ticket_deadline,
                 benchmark_runtime=benchmark_runtime,
+                dueling_slice=dueling_slice,
             )
             await self._publish_benchmark_progress(
                 "finalizing", completed=report.n, total=report.n
@@ -5085,7 +5366,21 @@ class ValidatorWorker:
         must replicate across seeds and not ride one lucky common-seed draw, with
         no per-seed rows on the platform. Seeds that fail to score are skipped;
         with one survivor this degrades to the plain single-seed submission and
-        with none returns ``None`` (the caller keeps the stale ledger score)."""
+        with none returns ``None`` (the caller keeps the stale ledger score).
+
+        A bench >= 16 run needs its season slice, which only a Platform lease
+        carries (:func:`dueling_slice_from_lease`). This unleased lane has no
+        slice, so it does not run a dueling version at all: the re-score is
+        left to the leased continual lane instead of submitting runs the
+        scorer would refuse."""
+        if is_dueling_bench_version(bench_version):
+            logger.info(
+                "skipping unleased CRN re-score of agent %s at bench_version %d: "
+                "a dueling run needs a leased season slice",
+                agent_id,
+                bench_version,
+            )
+            return None
         reports: list[ScoreReport] = []
         for s in seeds:
             try:

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager, nullcontext
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote, urlsplit
 
@@ -26,12 +27,19 @@ from ditto.chain.models import (
     ChainEpoch,
     ChainMinerEarning,
     ChainMinerEmissionReceipt,
+    ChainRegistration,
+    ChainRegistrations,
     ChainWeight,
     ChainWeightsSnapshot,
     ChainWeightVector,
     EpochSchedule,
     ExtrinsicInfo,
+    HotkeyRegistration,
     NeuronInfo,
+    NeuronSnapshot,
+    RegistrationChange,
+    RegistrationFreshness,
+    _call_args_to_dict,
 )
 from ditto.chain.treasury_read_trace import TreasuryReadTrace
 from ditto.chain.treasury_runtime_cache import TreasuryRuntimeCache
@@ -51,6 +59,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _RECENT_NEURONS_CACHE_TTL_SECONDS = 12.0
+
+# Pylon re-reads the metagraph every 90 blocks (its soft limit of 100 less a
+# 10-block lead). A snapshot further behind the finalized head than this has
+# fallen out of that cycle, so registrations are re-read from chain storage
+# rather than waiting for a refresh that may keep reading a lagging node.
+SNAPSHOT_LAG_RECONCILE_BLOCKS = 120
+
+# A provider whose finalized block is older than this is behind the chain
+# itself: its storage cannot prove a hotkey unregistered while another
+# provider may be current.
+_CHAIN_HEAD_MAX_AGE_SECONDS = 120.0
 
 
 # --- Substrate WebSocket URLs (used only for the Pylon events gap) ---
@@ -187,9 +206,19 @@ class ChainClient:
         self._config = config
         self._pylon: AsyncPylonClient | None = None
         self._recent_neurons_lock = asyncio.Lock()
-        self._recent_neurons_cache: dict[int, tuple[float, tuple[NeuronInfo, ...]]] = {}
-        self._recent_neurons_flights: dict[int, asyncio.Task[list[NeuronInfo]]] = {}
+        self._recent_neurons_cache: dict[int, tuple[float, NeuronSnapshot]] = {}
+        self._recent_neurons_flights: dict[int, asyncio.Task[NeuronSnapshot]] = {}
+        # Registrations read from chain storage, newest per netuid. They replace
+        # a snapshot's uid/hotkey/coldkey until Pylon catches up to their block.
+        self._chain_registrations_lock = asyncio.Lock()
+        self._chain_registrations: dict[int, tuple[float, ChainRegistrations]] = {}
+        self._chain_registration_flights: dict[
+            int, asyncio.Task[ChainRegistrations]
+        ] = {}
+        self._metagraph_lag_checks: dict[int, asyncio.Task[None]] = {}
+        self._metagraph_lag_checked_at: dict[int, float] = {}
         self._clock = time.monotonic
+        self._wall_clock = time.time
 
     def _new_treasury_substrate(
         self, *, archive: bool = False, url: str | None = None
@@ -243,13 +272,21 @@ class ChainClient:
         tb: TracebackType | None,
     ) -> None:
         """Close the underlying Pylon client."""
-        flights = tuple(self._recent_neurons_flights.values())
+        flights = (
+            *self._recent_neurons_flights.values(),
+            *self._chain_registration_flights.values(),
+            *self._metagraph_lag_checks.values(),
+        )
         for flight in flights:
             flight.cancel()
         if flights:
             await asyncio.gather(*flights, return_exceptions=True)
         self._recent_neurons_flights.clear()
         self._recent_neurons_cache.clear()
+        self._chain_registration_flights.clear()
+        self._chain_registrations.clear()
+        self._metagraph_lag_checks.clear()
+        self._metagraph_lag_checked_at.clear()
         if self._pylon is not None:
             await self._pylon.__aexit__(exc_type, exc, tb)
             self._pylon = None
@@ -263,7 +300,11 @@ class ChainClient:
     # --- Neuron discovery ---
 
     async def get_recent_neurons(self, netuid: int) -> list[NeuronInfo]:
-        """Fetch the current metagraph from Pylon's cached recent-neurons endpoint.
+        """Fetch the subnet's current neurons.
+
+        Pylon's cached recent-neurons snapshot, with each uid's hotkey and
+        coldkey taken from a newer chain-storage read when one is held (see
+        :meth:`get_neuron_snapshot`).
 
         Args:
             netuid: Subnet netuid to fetch.
@@ -275,6 +316,30 @@ class ChainClient:
             ChainConnectionError: When Pylon is unreachable or returns an error.
             ChainTimeoutError: When the request exceeds the configured timeout.
         """
+        return list((await self.get_neuron_snapshot(netuid)).neurons)
+
+    async def get_neuron_snapshot(self, netuid: int) -> NeuronSnapshot:
+        """Pylon's recent-neurons snapshot and the chain block it describes.
+
+        Pylon re-reads the metagraph on its own schedule over one long-lived
+        node connection and ages the cache by when it wrote it, so a refresh
+        that reads a lagging node is served as fresh: a re-registered uid can
+        keep its previous hotkey for hours. The snapshot's block is therefore
+        compared with a fresh finalized head (see
+        :attr:`ChainConfig.metagraph_lag_check_seconds`), and registrations
+        read from chain storage at a newer block replace the snapshot's.
+
+        Raises:
+            ChainConnectionError: When Pylon is unreachable or returns an error.
+            ChainTimeoutError: When the request exceeds the configured timeout.
+        """
+        snapshot = await self._pylon_neuron_snapshot(netuid)
+        self._schedule_metagraph_lag_check(netuid, snapshot.block)
+        cached = self._chain_registrations.get(netuid)
+        return snapshot.with_registrations(cached[1] if cached else None)
+
+    async def _pylon_neuron_snapshot(self, netuid: int) -> NeuronSnapshot:
+        """Pylon's recent-neurons snapshot, shared for one block."""
         self._ensure_pylon()
         now = self._clock()
         async with self._recent_neurons_lock:
@@ -283,7 +348,7 @@ class ChainClient:
                 cached is not None
                 and now - cached[0] < _RECENT_NEURONS_CACHE_TTL_SECONDS
             ):
-                return list(cached[1])
+                return cached[1]
 
             flight = self._recent_neurons_flights.get(netuid)
             if flight is None:
@@ -295,9 +360,9 @@ class ChainClient:
 
         # A disconnected request must not cancel the shared Pylon refresh for
         # every other waiter. The Pylon client retains its own request timeout.
-        return list(await asyncio.shield(flight))
+        return await asyncio.shield(flight)
 
-    async def _refresh_recent_neurons(self, netuid: int) -> list[NeuronInfo]:
+    async def _refresh_recent_neurons(self, netuid: int) -> NeuronSnapshot:
         """Fetch and translate one shared recent-neurons snapshot."""
         pylon = self._ensure_pylon()
         try:
@@ -307,45 +372,356 @@ class ChainClient:
                 raise _translate_pylon_error(
                     e, f"get_recent_neurons(netuid={netuid})"
                 ) from e
-            neurons = [
-                NeuronInfo.from_pylon(neuron, hotkey=hotkey)
-                for hotkey, neuron in response.neurons.items()
-            ]
+            block = int(response.block.number)
+            snapshot = NeuronSnapshot(
+                block=block,
+                neurons=tuple(
+                    NeuronInfo.from_pylon(neuron, hotkey=hotkey)
+                    for hotkey, neuron in response.neurons.items()
+                ),
+                observed_at=datetime.now(UTC),
+                registrations_block=block,
+            )
             async with self._recent_neurons_lock:
-                self._recent_neurons_cache[netuid] = (
-                    self._clock(),
-                    tuple(neurons),
-                )
-            return neurons
+                self._recent_neurons_cache[netuid] = (self._clock(), snapshot)
+            return snapshot
         finally:
             async with self._recent_neurons_lock:
                 current = asyncio.current_task()
                 if self._recent_neurons_flights.get(netuid) is current:
                     self._recent_neurons_flights.pop(netuid, None)
 
+    async def get_hotkey_registration(
+        self, hotkey: str, netuid: int, *, confirm_absence: bool = True
+    ) -> HotkeyRegistration:
+        """Return whether ``hotkey`` is registered on ``netuid``, with evidence.
+
+        The metagraph snapshot answers for a hotkey it contains. A hotkey it
+        lacks is looked up in chain storage at a fresh finalized head before
+        it is reported unregistered, because the snapshot can trail the chain
+        by far more than Pylon's refresh interval. That read is shared for one
+        block and also replaces every re-registered uid in what other
+        consumers see. ``confirm_absence=False`` answers from the snapshot
+        alone, for callers that have not authenticated the hotkey.
+
+        Raises:
+            ChainConnectionError: When Pylon, or every chain provider needed
+                to confirm an absence, is unreachable.
+            ChainTimeoutError: When those reads time out.
+        """
+        snapshot = await self.get_neuron_snapshot(netuid)
+        neuron = snapshot.neuron(hotkey)
+        if neuron is not None or not confirm_absence:
+            return HotkeyRegistration(
+                hotkey=hotkey,
+                netuid=netuid,
+                uid=None if neuron is None else neuron.uid,
+                coldkey=None if neuron is None else neuron.coldkey,
+                snapshot_block=snapshot.block,
+            )
+        chain = await self._fresh_chain_registrations(netuid)
+        # A read no newer than what the snapshot already reflects cannot
+        # contradict it: a hotkey it still lists has since been replaced.
+        entry = (
+            chain.lookup(hotkey) if chain.block > snapshot.registrations_block else None
+        )
+        if entry is not None:
+            lag = chain.block - snapshot.block
+            logger.log(
+                logging.WARNING
+                if lag > SNAPSHOT_LAG_RECONCILE_BLOCKS
+                else logging.INFO,
+                "hotkey %s holds uid %s on netuid=%s at block %s but is absent "
+                "from Pylon's recent-neurons snapshot at block %s (%s blocks behind)",
+                hotkey,
+                entry.uid,
+                netuid,
+                chain.block,
+                snapshot.block,
+                lag,
+            )
+        return HotkeyRegistration(
+            hotkey=hotkey,
+            netuid=netuid,
+            uid=None if entry is None else entry.uid,
+            coldkey=None if entry is None else entry.coldkey,
+            snapshot_block=snapshot.block,
+            chain_block=chain.block,
+        )
+
     async def is_registered(self, hotkey: str, netuid: int) -> bool:
         """Return ``True`` iff ``hotkey`` is registered on ``netuid``.
 
-        Walks the latest :meth:`get_recent_neurons` response. The Pylon
-        cache is one block stale at worst (~12 s), acceptable for
-        registration checks at HTTP-request scope.
+        See :meth:`get_hotkey_registration`: a snapshot miss is confirmed in
+        chain storage before this returns ``False``.
 
         Raises:
-            ChainConnectionError: When Pylon is unreachable.
+            ChainConnectionError: When Pylon or the chain is unreachable.
             ChainTimeoutError: When the request exceeds the configured timeout.
         """
-        neurons = await self.get_recent_neurons(netuid)
-        return any(n.hotkey == hotkey for n in neurons)
+        return (await self.get_hotkey_registration(hotkey, netuid)).registered
 
     async def get_registered_coldkey(self, hotkey: str, netuid: int) -> str | None:
         """Return the current coldkey owner when ``hotkey`` is registered.
 
-        This uses the same recent-neurons snapshot as :meth:`is_registered`, so
-        pre-payment policy checks can bind to ownership without a second chain
-        backend or trusting a miner-supplied coldkey.
+        Same answer as :meth:`is_registered`, so pre-payment policy checks can
+        bind to ownership without trusting a miner-supplied coldkey.
         """
-        neurons = await self.get_recent_neurons(netuid)
-        return next((n.coldkey for n in neurons if n.hotkey == hotkey), None)
+        return (await self.get_hotkey_registration(hotkey, netuid)).coldkey
+
+    async def get_registration_freshness(self, netuid: int) -> RegistrationFreshness:
+        """Pylon's snapshot height against a fresh finalized head, for operators.
+
+        Reads Pylon's cached snapshot and one finalized header; never triggers
+        a chain-storage registration read. A failed header read is reported
+        rather than raised so the snapshot's own height stays visible.
+        """
+        snapshot = await self._pylon_neuron_snapshot(netuid)
+        try:
+            finalized_block: int | None = (await self.get_finalized_block()).number
+            finalized_block_error = None
+        except ChainError as e:
+            finalized_block = None
+            finalized_block_error = self._safe_rpc_error(e)[:300]
+        cached = self._chain_registrations.get(netuid)
+        chain = cached[1] if cached else None
+        serving = snapshot.with_registrations(chain)
+        pylon_hotkeys = {n.uid: n.hotkey for n in snapshot.neurons}
+        serving_hotkeys = {n.uid: n.hotkey for n in serving.neurons}
+        changes = tuple(
+            RegistrationChange(
+                uid=uid,
+                pylon_hotkey=pylon_hotkeys.get(uid),
+                chain_hotkey=serving_hotkeys.get(uid),
+            )
+            for uid in sorted(pylon_hotkeys.keys() | serving_hotkeys.keys())
+            if pylon_hotkeys.get(uid) != serving_hotkeys.get(uid)
+        )
+        return RegistrationFreshness(
+            netuid=netuid,
+            snapshot_block=snapshot.block,
+            snapshot_observed_at=snapshot.observed_at,
+            finalized_block=finalized_block,
+            finalized_block_error=finalized_block_error,
+            chain_registrations=chain,
+            serving_registrations_block=serving.registrations_block,
+            changes=changes,
+        )
+
+    def _schedule_metagraph_lag_check(self, netuid: int, snapshot_block: int) -> None:
+        """Start a background height check when one is due; never delays a read."""
+        interval = self._config.metagraph_lag_check_seconds
+        if interval is None or netuid in self._metagraph_lag_checks:
+            return
+        now = self._clock()
+        checked_at = self._metagraph_lag_checked_at.get(netuid)
+        if checked_at is not None and now - checked_at < interval:
+            return
+        self._metagraph_lag_checked_at[netuid] = now
+        task = asyncio.create_task(
+            self._check_metagraph_lag(netuid, snapshot_block),
+            name=f"metagraph-lag-check-{netuid}",
+        )
+        self._metagraph_lag_checks[netuid] = task
+
+        def _forget(done: asyncio.Task[None]) -> None:
+            if self._metagraph_lag_checks.get(netuid) is done:
+                del self._metagraph_lag_checks[netuid]
+
+        task.add_done_callback(_forget)
+
+    async def _check_metagraph_lag(self, netuid: int, snapshot_block: int) -> None:
+        """Re-read registrations from chain storage when the snapshot trails."""
+        try:
+            head = await self.get_finalized_block()
+            cached = self._chain_registrations.get(netuid)
+            current = max(snapshot_block, cached[1].block if cached else 0)
+            if head.number - current <= SNAPSHOT_LAG_RECONCILE_BLOCKS:
+                return
+            logger.warning(
+                "Pylon recent-neurons snapshot for netuid=%s is at block %s, "
+                "%s blocks behind finalized block %s; reading registrations "
+                "from chain storage",
+                netuid,
+                snapshot_block,
+                head.number - snapshot_block,
+                head.number,
+            )
+            await self._fresh_chain_registrations(netuid)
+        except Exception as e:  # noqa: BLE001 - a background check must not surface
+            logger.warning(
+                "metagraph lag check for netuid=%s failed: %s",
+                netuid,
+                self._safe_rpc_error(e),
+            )
+
+    async def _fresh_chain_registrations(self, netuid: int) -> ChainRegistrations:
+        """Chain-storage registrations no older than one block, shared."""
+        now = self._clock()
+        async with self._chain_registrations_lock:
+            cached = self._chain_registrations.get(netuid)
+            if (
+                cached is not None
+                and now - cached[0] < _RECENT_NEURONS_CACHE_TTL_SECONDS
+            ):
+                return cached[1]
+            flight = self._chain_registration_flights.get(netuid)
+            if flight is None:
+                flight = asyncio.create_task(
+                    self._refresh_chain_registrations(netuid),
+                    name=f"chain-registrations-{netuid}",
+                )
+                self._chain_registration_flights[netuid] = flight
+        # Shielded for the same reason as the Pylon refresh: one caller's
+        # disconnect must not cancel the read every other waiter shares.
+        return await asyncio.shield(flight)
+
+    async def _refresh_chain_registrations(self, netuid: int) -> ChainRegistrations:
+        """Read registrations once and keep the newest read seen."""
+        try:
+            chain = await self.read_chain_registrations(netuid)
+            async with self._chain_registrations_lock:
+                cached = self._chain_registrations.get(netuid)
+                # A provider behind an earlier read must not roll it back.
+                if cached is None or chain.block >= cached[1].block:
+                    self._chain_registrations[netuid] = (self._clock(), chain)
+                else:
+                    chain = cached[1]
+            return chain
+        finally:
+            async with self._chain_registrations_lock:
+                current = asyncio.current_task()
+                if self._chain_registration_flights.get(netuid) is current:
+                    self._chain_registration_flights.pop(netuid, None)
+
+    async def read_chain_registrations(self, netuid: int) -> ChainRegistrations:
+        """Read every uid's hotkey and owner coldkey at a fresh finalized head.
+
+        One ``Keys`` map and one batched ``Owner`` read at a single finalized
+        block hash, on a new connection to each provider in the epoch
+        schedule's order. A provider whose finalized block is more than two
+        minutes old, or whose block time cannot be read, is not shown current
+        and is passed over; when no provider that answered is current, the
+        newest answer is returned.
+
+        Raises:
+            ChainConnectionError: When no provider returned a registration map.
+            ChainTimeoutError: When every provider timed out.
+        """
+        failures: list[tuple[str, Exception]] = []
+        behind: ChainRegistrations | None = None
+        urls = tuple(
+            dict.fromkeys((*self._historical_substrate_urls(), self._substrate_url()))
+        )
+        for url in urls:
+            provider = urlsplit(url).hostname or "configured archive"
+            try:
+                async with asyncio.timeout(self._config.archive_rpc_timeout_seconds):
+                    chain = await self._read_chain_registrations_from(
+                        url, provider, netuid
+                    )
+            except Exception as error:
+                failures.append((provider, error))
+                logger.warning(
+                    "chain registration read failed provider=%s error=%s",
+                    provider,
+                    self._safe_rpc_error(error),
+                )
+                continue
+            age = chain.head_age_seconds(self._wall_clock())
+            if age is not None and age <= _CHAIN_HEAD_MAX_AGE_SECONDS:
+                return chain
+            if age is None:
+                logger.warning(
+                    "chain registration read provider=%s gave no block time; "
+                    "finalized block %s cannot be shown current",
+                    provider,
+                    chain.block,
+                )
+            else:
+                logger.warning(
+                    "chain registration read provider=%s is behind: finalized "
+                    "block %s is %.0fs old",
+                    provider,
+                    chain.block,
+                    age,
+                )
+            if behind is None or chain.block > behind.block:
+                behind = chain
+        if behind is not None:
+            return behind
+        summary = "; ".join(
+            f"{provider}: {self._safe_rpc_error(error)}" for provider, error in failures
+        )
+        if failures and all(
+            isinstance(error, (TimeoutError, ChainTimeoutError))
+            for _, error in failures
+        ):
+            raise ChainTimeoutError(
+                f"read_chain_registrations({netuid}) timed out: {summary}"
+            )
+        raise ChainConnectionError(
+            f"read_chain_registrations({netuid}) failed: {summary}"
+        )
+
+    async def _read_chain_registrations_from(
+        self, url: str, provider: str, netuid: int
+    ) -> ChainRegistrations:
+        """Read one provider's registrations at its own finalized head."""
+        async with self._new_treasury_substrate(url=url) as substrate:
+            block_hash = await substrate.get_chain_finalised_head()
+            header = await substrate.get_block_header(block_hash=block_hash)
+            block = _block_number_from_header(header)
+            block_timestamp = await self._read_block_timestamp(substrate, block_hash)
+            key_map = await substrate.query_map(
+                module=_SUBTENSOR_MODULE,
+                storage_function=_KEYS_STORAGE,
+                params=[netuid],
+                block_hash=block_hash,
+                fully_exhaust=True,
+            )
+            hotkeys = sorted(
+                [(int(uid), str(hotkey)) async for uid, hotkey in key_map if hotkey]
+            )
+            if not hotkeys:
+                # An empty map is a wrong netuid or a failed read, never proof
+                # that no hotkey is registered.
+                raise ChainConnectionError(
+                    f"no registrations for netuid={netuid} at block {block}"
+                )
+            storage_keys = [
+                await substrate.create_storage_key(
+                    _SUBTENSOR_MODULE, _OWNER_STORAGE, [hotkey], block_hash
+                )
+                for _, hotkey in hotkeys
+            ]
+            owners = {
+                key.to_hex(): _unwrap_substrate_value(value)
+                for key, value in await substrate.query_multi(
+                    storage_keys, block_hash=block_hash
+                )
+            }
+        # Every registered hotkey has an owner. A missing one is a partial
+        # read, and an empty coldkey would merge unrelated owners downstream.
+        missing = sum(1 for key in storage_keys if not owners.get(key.to_hex()))
+        if missing:
+            raise ChainConnectionError(
+                f"owner read missing {missing} of {len(hotkeys)} hotkeys for "
+                f"netuid={netuid} at block {block}"
+            )
+        return ChainRegistrations(
+            netuid=netuid,
+            block=block,
+            block_timestamp=block_timestamp,
+            provider=provider,
+            observed_at=datetime.now(UTC),
+            registrations=tuple(
+                ChainRegistration(
+                    uid=uid, hotkey=hotkey, coldkey=str(owners[key.to_hex()])
+                )
+                for (uid, hotkey), key in zip(hotkeys, storage_keys, strict=True)
+            ),
+        )
 
     # --- Block + extrinsic reads ---
 
@@ -401,6 +777,75 @@ class ChainClient:
                 f"get_extrinsic(block={block_number}, idx={extrinsic_index})",
             ) from e
         return ExtrinsicInfo.from_pylon(response)
+
+    async def get_extrinsic_at_block_hash(
+        self, block_number: int, block_hash: str, extrinsic_index: int
+    ) -> ExtrinsicInfo:
+        """Read one extrinsic from the archive providers by its block hash.
+
+        Pylon's :meth:`get_extrinsic` is a single backend. When it lags the
+        chain head, or no longer serves an older block body, it answers
+        not-found for a payment that executed (SN-455). This read uses the
+        archive providers, which already serve every other payment check, so
+        a confirmed extrinsic is reported missing only when an archive that
+        holds the block has no extrinsic at ``extrinsic_index``.
+
+        Args:
+            block_number: Block number, copied onto the returned info.
+            block_hash: Canonical hash of that block, already bound to
+                ``block_number`` by the caller.
+            extrinsic_index: Zero-based index of the extrinsic within the block.
+
+        Raises:
+            ExtrinsicNotFoundError: When an archive returned the block and it
+                has no extrinsic at ``extrinsic_index``.
+            ChainTimeoutError: When every archive provider timed out.
+            ChainConnectionError: When no archive provider returned the block.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        failures: list[tuple[str, Exception]] = []
+        for url in self._historical_substrate_urls():
+            provider = urlsplit(url).hostname or "configured archive"
+            try:
+                async with asyncio.timeout(self._config.archive_rpc_timeout_seconds):
+                    async with AsyncSubstrateInterface(url=url) as substrate:
+                        block = await substrate.get_block(block_hash=block_hash)
+            except Exception as error:
+                failures.append((provider, error))
+                logger.warning(
+                    "archive extrinsic read failed provider=%s block=%s error=%s",
+                    provider,
+                    block_hash,
+                    self._safe_rpc_error(error),
+                )
+                continue
+            extrinsics = (block or {}).get("extrinsics")
+            # Every canonical block carries at least the timestamp inherent, so
+            # an empty body is a bad provider answer, not proof of absence.
+            if not extrinsics:
+                failures.append((provider, RuntimeError("block body unavailable")))
+                continue
+            if not 0 <= extrinsic_index < len(extrinsics):
+                raise ExtrinsicNotFoundError(
+                    f"block {block_hash} has {len(extrinsics)} extrinsics; "
+                    f"index {extrinsic_index} does not exist"
+                )
+            return _extrinsic_info_from_substrate(
+                extrinsics[extrinsic_index], block_number, extrinsic_index
+            )
+
+        summary = "; ".join(
+            f"{provider}: {self._safe_rpc_error(error)}" for provider, error in failures
+        )
+        if failures and all(isinstance(error, TimeoutError) for _, error in failures):
+            raise ChainTimeoutError(
+                f"get_extrinsic_at_block_hash({block_hash}) timed out: {summary}"
+            )
+        raise ChainConnectionError(
+            f"get_extrinsic_at_block_hash({block_hash}) failed: "
+            f"{summary or 'no archive endpoint configured'}"
+        )
 
     async def get_block_hash(self, block_number: int) -> str:
         """Resolve the canonical hash for ``block_number`` from Substrate.
@@ -1833,6 +2278,33 @@ def _translate_pylon_error(exc: Exception, op: str) -> Exception:
     if isinstance(exc, TimeoutError):
         return ChainTimeoutError(f"{op} timed out: {exc}")
     return ChainConnectionError(f"{op} failed: {exc}")
+
+
+def _extrinsic_info_from_substrate(
+    raw: Any, block_number: int, extrinsic_index: int
+) -> ExtrinsicInfo:
+    """Build an :class:`ExtrinsicInfo` from an async-substrate block extrinsic.
+
+    ``get_block`` yields scale-codec ``GenericExtrinsic`` objects whose
+    ``value`` is ``{"extrinsic_hash", "address", "call": {"call_module",
+    "call_function", "call_args": [{"name", "type", "value"}]}}`` -- the same
+    call shape Pylon returns, so the verifier reads both identically.
+    """
+    value = getattr(raw, "value", raw)
+    if not isinstance(value, dict):
+        value = {}
+    call = value.get("call")
+    if not isinstance(call, dict):
+        call = {}
+    return ExtrinsicInfo(
+        block_number=block_number,
+        extrinsic_index=extrinsic_index,
+        extrinsic_hash=str(value.get("extrinsic_hash") or ""),
+        call_module=str(call.get("call_module") or ""),
+        call_function=str(call.get("call_function") or ""),
+        call_args=_call_args_to_dict(call.get("call_args")),
+        signer_address=str(value.get("address") or ""),
+    )
 
 
 def _block_number_from_header(header: Any) -> int:

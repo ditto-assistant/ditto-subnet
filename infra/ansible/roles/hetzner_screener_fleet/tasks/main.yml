@@ -9,8 +9,21 @@
          screener_fleet_node_id is regex('^subnet-screener-[1-9][0-9]*$')) or
         (not screener_fleet_runtime_enabled and
          screener_fleet_node_id is regex('^subnet-screener(?:-dev)?-[1-9][0-9]*$'))
-      - screener_fleet_debian_cloud_image_url.startswith('https://')
-      - screener_fleet_debian_cloud_image_sha256 | length == 64
+      - screener_fleet_provider in ['hetzner', 'aws']
+      - screener_fleet_google_identity in ['x509', 'aws']
+      # An EC2 node proves itself only through its instance role; a Hetzner
+      # node has no instance metadata to sign with.
+      - (screener_fleet_provider == 'aws') == (screener_fleet_google_identity == 'aws')
+      - not (screener_fleet_google_identity == 'aws' and screener_fleet_x509_enabled | bool)
+      - >-
+        not screener_fleet_kvm_enabled | bool or
+        (screener_fleet_debian_cloud_image_url.startswith('https://') and
+         screener_fleet_debian_cloud_image_sha256 | length == 64)
+      - >-
+        screener_fleet_idle_exit_seconds | string | length == 0 or
+        (screener_fleet_idle_exit_seconds | string is regex('^[0-9]+$') and
+         screener_fleet_idle_exit_seconds | int >= 60 and
+         screener_fleet_idle_exit_seconds | int <= 86400)
       - screener_fleet_worker_processes | int >= 1
       - screener_fleet_worker_processes | int <= 16
       - >-
@@ -23,25 +36,44 @@
       - screener_fleet_vm_memory_mib | int <= 12288
     fail_msg: >-
       Use a supported Debian 12/13 host, a valid dedicated or rehearsal node
-      id, and a digest-verified Debian guest image before preparing the host.
+      id, a hetzner/x509 or aws/aws provider and Google identity pair, a
+      digest-verified Debian guest image when KVM is enabled, and an idle exit
+      of 60..86400 seconds or none before preparing the host.
 
 - name: Assert immutable screener runtime inputs
   ansible.builtin.assert:
     that:
-      - screener_fleet_provider_resource_id | length > 0
+      - >-
+        (screener_fleet_provider == 'hetzner' and
+         screener_fleet_provider_resource_id | string | length > 0) or
+        (screener_fleet_provider == 'aws' and
+         screener_fleet_provider_resource_id is regex('^i-[0-9a-f]{8,17}$'))
       - screener_fleet_release_sha is regex('^[0-9a-f]{40}$')
       - screener_fleet_builder_image is regex('^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$')
     fail_msg: >-
-      Runtime convergence requires the Robot server id, immutable release SHA,
-      and digest-pinned builder image. Rehearsal mode deliberately requires no
+      Runtime convergence requires the provider resource id (Hetzner Robot
+      server id or EC2 instance id), immutable release SHA, and digest-pinned
+      builder image. Rehearsal mode deliberately requires no
       production identity or source-review secret.
   when: screener_fleet_runtime_enabled
+
+- name: Require the exact AWS federation contract
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_aws_wif_provider is regex('^projects/[0-9]+/locations/global/workloadIdentityPools/screener-aws/providers/aws-ec2$')
+      - screener_fleet_gcp_project is regex('^[a-z][a-z0-9-]{4,28}[a-z0-9]$')
+      - screener_fleet_registration_token_secret is regex('^[A-Za-z0-9_-]{1,255}$')
+    fail_msg: >-
+      AWS identity requires the Terraform screener-aws WIF provider resource,
+      the GCP project, and the Secret Manager id of the single-use enrollment
+      grant. None of them is a secret.
+  when: screener_fleet_google_identity == 'aws'
 
 - name: Set the dedicated host name
   ansible.builtin.hostname:
     name: "{{ screener_fleet_node_id }}"
 
-- name: Install KVM, libvirt, cloud-init image, and trusted-container tools
+- name: Install KVM, libvirt, and cloud-init image tools
   ansible.builtin.apt:
     name:
       - qemu-system-x86
@@ -51,6 +83,13 @@
       - virtinst
       - cloud-image-utils
       - libguestfs-tools
+    state: present
+    update_cache: true
+  when: screener_fleet_kvm_enabled | bool
+
+- name: Install trusted-container tools
+  ansible.builtin.apt:
+    name:
       - docker.io
       - git
       - curl
@@ -87,7 +126,7 @@
   ansible.builtin.user:
     name: "{{ screener_fleet_user }}"
     group: "{{ screener_fleet_group }}"
-    groups: kvm,libvirt,docker
+    groups: "{{ 'kvm,libvirt,docker' if screener_fleet_kvm_enabled | bool else 'docker' }}"
     append: true
     system: true
     create_home: false
@@ -102,13 +141,14 @@
     create_home: false
     home: "{{ screener_fleet_x509_identity_dir }}"
     shell: /usr/sbin/nologin
-  when: screener_fleet_x509_enabled
+  when: screener_fleet_secret_agent_enabled | bool
 
 - name: Allow libvirt QEMU to read disposable screener disks
   ansible.builtin.user:
     name: libvirt-qemu
     groups: "{{ screener_fleet_group }}"
     append: true
+  when: screener_fleet_kvm_enabled | bool
 
 - name: Ensure screener fleet directories
   ansible.builtin.file:
@@ -130,7 +170,7 @@
     - { path: "{{ screener_fleet_l2_workspace_root }}", group: "{{ screener_fleet_executor_group }}", mode: "0770" }
     - { path: "{{ screener_fleet_update_state_dir }}", mode: "0700", owner: root, group: root }
 
-- name: Ensure private X.509 identity and shared secret directories
+- name: Ensure private Google identity and shared secret directories
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
@@ -141,7 +181,7 @@
     - { path: "{{ screener_fleet_x509_identity_dir }}", mode: "0700" }
     - { path: "{{ screener_fleet_x509_cloudsdk_config }}", mode: "0700" }
     - { path: "{{ screener_fleet_secrets_dir }}", mode: "0750" }
-  when: screener_fleet_x509_enabled
+  when: screener_fleet_secret_agent_enabled | bool
 
 - name: Generate the non-exported X.509 client private key
   ansible.builtin.command:
@@ -361,11 +401,13 @@
     group: "{{ screener_fleet_group }}"
     mode: "0640"
   register: screener_fleet_cloud_image
+  when: screener_fleet_kvm_enabled | bool
 
 - name: Inspect the customized disposable guest base
   ansible.builtin.stat:
     path: "{{ screener_fleet_base_image }}"
   register: screener_fleet_base_image_state
+  when: screener_fleet_kvm_enabled | bool
 
 - name: Copy the cloud image before customization
   ansible.builtin.copy:
@@ -376,6 +418,7 @@
     group: "{{ screener_fleet_group }}"
     mode: "0644"
   when:
+    - screener_fleet_kvm_enabled | bool
     - screener_fleet_cloud_image.changed or not screener_fleet_base_image_state.stat.exists
   register: screener_fleet_base_image_copy
 
@@ -393,7 +436,9 @@
       - /etc/machine-id
   environment:
     LIBGUESTFS_BACKEND: direct
-  when: screener_fleet_base_image_copy.changed
+  when:
+    - screener_fleet_kvm_enabled | bool
+    - screener_fleet_base_image_copy.changed
   changed_when: true
 
 - name: Keep the public guest base readable after libvirt ownership changes
@@ -403,6 +448,7 @@
     owner: "{{ screener_fleet_user }}"
     group: "{{ screener_fleet_group }}"
     mode: "0644"
+  when: screener_fleet_kvm_enabled | bool
 
 - name: Render the isolated libvirt NAT network
   ansible.builtin.template:
@@ -412,22 +458,27 @@
     group: root
     mode: "0644"
   register: screener_fleet_network_xml
+  when: screener_fleet_kvm_enabled | bool
 
 - name: Inspect the libvirt NAT network
   ansible.builtin.command: virsh net-info ditto-screener-nat
   register: screener_fleet_network
   changed_when: false
   failed_when: false
+  when: screener_fleet_kvm_enabled | bool
 
 - name: Define the libvirt NAT network
   ansible.builtin.command: >-
     virsh net-define {{ screener_fleet_config_dir }}/libvirt-network.xml
-  when: screener_fleet_network.rc != 0
+  when:
+    - screener_fleet_kvm_enabled | bool
+    - screener_fleet_network.rc != 0
   changed_when: true
 
 - name: Autostart the libvirt NAT network
   ansible.builtin.command: virsh net-autostart ditto-screener-nat
   changed_when: false
+  when: screener_fleet_kvm_enabled | bool
 
 - name: Start the libvirt NAT network
   ansible.builtin.command: virsh net-start ditto-screener-nat
@@ -436,6 +487,13 @@
   failed_when:
     - screener_fleet_network_start.rc != 0
     - "'already active' not in screener_fleet_network_start.stderr"
+  when: screener_fleet_kvm_enabled | bool
+
+- name: Render the AWS instance-role Google identity
+  ansible.builtin.include_tasks: google_identity_aws.yml
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_google_identity == 'aws'
 
 - name: Inspect enrolled node credential
   ansible.builtin.stat:
@@ -443,12 +501,64 @@
   register: screener_fleet_credential
   when: screener_fleet_runtime_enabled
 
+# An aws node has no operator in the loop: it reads the single-use grant
+# through its own federated instance role, only while it is not yet enrolled.
+# A re-converge after enrollment never touches the grant again.
+- name: Prepare root-only gcloud state for the enrollment grant read
+  ansible.builtin.file:
+    path: "{{ screener_fleet_aws_enrollment_cloudsdk_config }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_google_identity == 'aws'
+    - not screener_fleet_credential.stat.exists
+
+- name: Read the single-use registration grant through the federated instance role
+  ansible.builtin.command:
+    argv:
+      - gcloud
+      - secrets
+      - versions
+      - access
+      - latest
+      - "--secret={{ screener_fleet_registration_token_secret }}"
+      - "--project={{ screener_fleet_gcp_project }}"
+  environment:
+    CLOUDSDK_CONFIG: "{{ screener_fleet_aws_enrollment_cloudsdk_config }}"
+    CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: "{{ screener_fleet_x509_credential_file }}"
+  register: screener_fleet_registration_grant
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_google_identity == 'aws'
+    - not screener_fleet_credential.stat.exists
+
+- name: Remove the enrollment gcloud state
+  ansible.builtin.file:
+    path: "{{ screener_fleet_aws_enrollment_cloudsdk_config }}"
+    state: absent
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_google_identity == 'aws'
+
 - name: Require one-time registration authority before initial enrollment
   ansible.builtin.assert:
-    that: screener_fleet_registration_token | length >= 43
+    that: screener_fleet_registration_token_value | length >= 43
     fail_msg: >-
       Pass screener_fleet_registration_token through Ansible Vault for the
-      first converge. It is consumed and removed after enrollment.
+      first converge (aws nodes read it from
+      screener_fleet_registration_token_secret). It is consumed and removed
+      after enrollment.
+  vars:
+    screener_fleet_registration_token_value: >-
+      {{ screener_fleet_registration_grant.stdout | default('') | trim
+         if screener_fleet_google_identity == 'aws'
+         else screener_fleet_registration_token }}
   when:
     - screener_fleet_runtime_enabled
     - not screener_fleet_credential.stat.exists
@@ -456,11 +566,16 @@
 
 - name: Write the one-time registration token
   ansible.builtin.copy:
-    content: "{{ screener_fleet_registration_token }}\n"
+    content: "{{ screener_fleet_registration_token_value }}\n"
     dest: "{{ screener_fleet_registration_token_file }}"
     owner: "{{ screener_fleet_user }}"
     group: "{{ screener_fleet_group }}"
     mode: "0600"
+  vars:
+    screener_fleet_registration_token_value: >-
+      {{ screener_fleet_registration_grant.stdout | default('') | trim
+         if screener_fleet_google_identity == 'aws'
+         else screener_fleet_registration_token }}
   when:
     - screener_fleet_runtime_enabled
     - not screener_fleet_credential.stat.exists
@@ -715,7 +830,7 @@
     mode: "0755"
   when:
     - screener_fleet_runtime_enabled
-    - screener_fleet_x509_enabled
+    - screener_fleet_secret_agent_enabled | bool
 
 - name: Install source-review secret materializer units
   ansible.builtin.template:
@@ -730,7 +845,7 @@
   notify: Reload systemd for screener fleet
   when:
     - screener_fleet_runtime_enabled
-    - screener_fleet_x509_enabled
+    - screener_fleet_secret_agent_enabled | bool
 
 - name: Materialize the source-review secret without exposing its value
   ansible.builtin.systemd:
@@ -740,7 +855,7 @@
   no_log: true
   when:
     - screener_fleet_runtime_enabled
-    - screener_fleet_x509_enabled
+    - screener_fleet_secret_agent_enabled | bool
 
 - name: Enable periodic source-review secret refresh
   ansible.builtin.systemd:
@@ -749,7 +864,7 @@
     state: started
   when:
     - screener_fleet_runtime_enabled
-    - screener_fleet_x509_enabled
+    - screener_fleet_secret_agent_enabled | bool
 
 - name: Inspect source-review API key file
   ansible.builtin.stat:
@@ -757,7 +872,7 @@
   register: screener_fleet_source_review_key
   when: screener_fleet_runtime_enabled
 
-- name: Require an owner-only source-review key after X.509 materialization
+- name: Require an owner-only source-review key after Google materialization
   ansible.builtin.assert:
     that:
       - screener_fleet_source_review_key.stat.exists
@@ -769,7 +884,7 @@
       L2 and L4 reject group-readable credentials before making a model call.
   when:
     - screener_fleet_runtime_enabled
-    - screener_fleet_x509_enabled
+    - screener_fleet_secret_agent_enabled | bool
 
 - name: Require source-review authority before initial converge
   ansible.builtin.assert:
@@ -779,7 +894,7 @@
       stored mode 0600 and never forwarded to a build or smoke guest.
   when:
     - screener_fleet_runtime_enabled
-    - not screener_fleet_x509_enabled
+    - not screener_fleet_secret_agent_enabled | bool
     - not screener_fleet_source_review_key.stat.exists
   no_log: true
 
@@ -792,9 +907,30 @@
     mode: "0600"
   when:
     - screener_fleet_runtime_enabled
-    - not screener_fleet_x509_enabled
+    - not screener_fleet_secret_agent_enabled | bool
     - not screener_fleet_source_review_key.stat.exists
   no_log: true
+
+- name: Assert operator source markers are literal-safe for systemd
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_source_marker_patterns is sequence
+      - screener_fleet_source_marker_patterns is not string
+      - screener_fleet_source_marker_patterns | length <= 64
+      - >-
+        screener_fleet_source_marker_patterns
+        | rejectattr('id', 'defined') | list | length == 0
+      - >-
+        screener_fleet_source_marker_patterns
+        | rejectattr('pattern', 'defined') | list | length == 0
+      - >-
+        (screener_fleet_source_marker_patterns | to_json)
+        is not search("['\\\\\n]")
+    fail_msg: >-
+      screener_fleet_source_marker_patterns must be a list of at most 64
+      {id, pattern} entries with no single quote, backslash, or newline.
+    quiet: true
+  when: screener_fleet_runtime_enabled
 
 - name: Render the screener fleet environment
   ansible.builtin.template:
@@ -969,6 +1105,9 @@
   when:
     - screener_fleet_runtime_enabled
     - screener_fleet_auto_update_enabled
+
+- name: Converge the on-demand idle shutdown
+  ansible.builtin.include_tasks: idle_shutdown.yml
 
 - name: Converge the persistent screener BuildKit cache timer
   ansible.builtin.include_tasks: cache_gc.yml

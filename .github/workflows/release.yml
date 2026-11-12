@@ -43,7 +43,7 @@ env:
   OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
   COMPATIBILITY_EPOCH: "2"
   UPDATE_PROTOCOL: "1"
-  HEARTBEAT_PROTOCOL: "33"
+  HEARTBEAT_PROTOCOL: "35"
   COMPOSE_SCHEMA: "1"
   SCREENER_FLEET_UPDATE_PROTOCOL: "1"
 
@@ -57,7 +57,6 @@ jobs:
       release_base: ${{ steps.release-base.outputs.sha }}
       miner_cli: ${{ steps.components.outputs.miner_cli }}
       miner_starter_kit: ${{ steps.components.outputs.miner_starter_kit }}
-      dittobench_coding_starter_kit: ${{ steps.components.outputs.dittobench_coding_starter_kit }}
       validator_stack: ${{ steps.components.outputs.validator_stack }}
       dittobench_api: ${{ steps.components.outputs.dittobench_api }}
       dittobench_datagen: ${{ steps.components.outputs.dittobench_datagen }}
@@ -128,7 +127,6 @@ jobs:
     if: >-
       needs.plan.outputs.miner_cli == 'true' ||
       needs.plan.outputs.miner_starter_kit == 'true' ||
-      needs.plan.outputs.dittobench_coding_starter_kit == 'true' ||
       needs.plan.outputs.validator_stack == 'true' ||
       needs.plan.outputs.dittobench_api == 'true' ||
       needs.plan.outputs.dittobench_datagen == 'true' ||
@@ -184,7 +182,6 @@ jobs:
       (
         needs.plan.outputs.miner_cli == 'true' ||
         needs.plan.outputs.miner_starter_kit == 'true' ||
-        needs.plan.outputs.dittobench_coding_starter_kit == 'true' ||
         needs.plan.outputs.validator_stack == 'true' ||
         needs.plan.outputs.dittobench_api == 'true' ||
         needs.plan.outputs.dittobench_datagen == 'true' ||
@@ -375,113 +372,6 @@ jobs:
           cargo build --locked --verbose
           cargo test --locked --verbose
           python3 -m unittest scripts/test_submission_lab.py scripts/test_submission_workbench.py
-
-  verify-dittobench-coding-starter-kit:
-    needs: [plan, admit-current]
-    if: >-
-      needs.admit-current.outputs.current == 'true' &&
-      needs.plan.outputs.dittobench_coding_starter_kit == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      # Incremental compilation state is dead weight in CI: it roughly doubles
-      # the cached target/ trees, and the shared repository cache evicts at
-      # 10 GB, taking the warm-build win with it.
-      CARGO_INCREMENTAL: "0"
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: miners/dittobench-coding-starter-kit
-    steps:
-      - name: Check out the exact merge commit before release
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 1
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Install Rust for coding starter-kit verification
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-
-      - name: Install uv for coding practice verification
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          enable-cache: true
-
-      - name: Install Python 3.12 for coding practice verification
-        run: uv python install 3.12
-
-      - name: Cache coding starter-kit Cargo dependencies
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            miners/dittobench-coding-starter-kit/target
-            miners/dittobench-unified-starter-kit/target
-          # The `-target-` key name retires the registry-only cache entries: an
-          # exact hit on the old key would skip the save and leave target/
-          # uncached forever.
-          key: ${{ runner.os }}-coding-starter-kit-target-${{ hashFiles('miners/dittobench-coding-starter-kit/Cargo.lock', 'miners/dittobench-starter-kit/Cargo.lock', 'miners/dittobench-unified-starter-kit/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-coding-starter-kit-
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Gate coding starter kit release on exact merge source
-        run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets --all-features -- -D warnings
-          cargo test --locked --all-targets --all-features --verbose
-
-      - name: Run scripted coding practice E2E from exact merge source
-        working-directory: .
-        run: bash scripts/test-coding-starter-practice-e2e.sh
-
-      # Layer cache shared with pull-request CI: on the common release where
-      # the miner trees are untouched, the whole build resolves from cache.
-      - name: Build coding starter kit image from exact merge source
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: miners/dittobench-coding-starter-kit
-          tags: dittobench-coding-starter-kit:release-gate
-          push: false
-          cache-from: type=gha,scope=coding-starter-kit
-          cache-to: type=gha,mode=max,scope=coding-starter-kit,compression=zstd
-
-      - name: Verify unified starter kit from exact merge source
-        working-directory: miners/dittobench-unified-starter-kit
-        run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets --all-features -- -D warnings
-          cargo test --locked --all-targets --all-features --verbose
-          cargo run --locked -- submit
-          cd ../..
-          uv run ditto verify \
-            --path miners/dittobench-unified-starter-kit/dittobench-submission.tgz
-
-      # load: the route probe below runs this tag from the local daemon.
-      - name: Build unified starter kit image from exact merge source
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: miners
-          file: miners/dittobench-unified-starter-kit/Dockerfile
-          tags: dittobench-unified-miner:release-gate
-          push: false
-          load: true
-          cache-from: type=gha,scope=unified-starter-kit
-          cache-to: type=gha,mode=max,scope=unified-starter-kit,compression=zstd
-
-      - name: Probe unified starter kit routes from exact merge source
-        working-directory: .
-        run: >-
-          bash miners/dittobench-unified-starter-kit/scripts/test-image-health.sh
-          dittobench-unified-miner:release-gate
 
   verify-platform:
     needs: [plan, admit-current]
@@ -756,7 +646,6 @@ jobs:
       - admit-current
       - verify-root
       - verify-starter-kit
-      - verify-dittobench-coding-starter-kit
       - verify-platform
       - verify-model-relay
       - verify-backroom
@@ -777,8 +666,6 @@ jobs:
           ROOT_RESULT: ${{ needs.verify-root.result }}
           STARTER_REQUIRED: ${{ needs.plan.outputs.miner_starter_kit }}
           STARTER_RESULT: ${{ needs.verify-starter-kit.result }}
-          CODING_STARTER_REQUIRED: ${{ needs.plan.outputs.dittobench_coding_starter_kit }}
-          CODING_STARTER_RESULT: ${{ needs.verify-dittobench-coding-starter-kit.result }}
           PLATFORM_REQUIRED: ${{ needs.plan.outputs.platform }}
           PLATFORM_RESULT: ${{ needs.verify-platform.result }}
           MODEL_RELAY_RESULT: ${{ needs.verify-model-relay.result }}
@@ -814,7 +701,6 @@ jobs:
             fi
           }
           require_selected "$STARTER_REQUIRED" "$STARTER_RESULT" starter-kit
-          require_selected "$CODING_STARTER_REQUIRED" "$CODING_STARTER_RESULT" dittobench-coding-starter-kit
           require_selected "$PLATFORM_REQUIRED" "$PLATFORM_RESULT" platform
           require_selected "$PLATFORM_REQUIRED" "$MODEL_RELAY_RESULT" model-relay
           require_selected "$BACKROOM_REQUIRED" "$BACKROOM_RESULT" backroom
@@ -2293,9 +2179,10 @@ jobs:
               .source_revision == $sha and
               .software_version == $version and
               (.source_revision_mismatch | not) and
-              (.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13, 14])
+              (.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
             ' >/dev/null
-          for bench_version in 8 9; do
+          # 18 is the newest advertised contract (the accuracy contract).
+          for bench_version in 8 9 18; do
             headers_file="$(mktemp)"
             body_file="$(mktemp)"
             trap 'rm -f "$headers_file" "$body_file"' EXIT

@@ -32,6 +32,7 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE",
         "SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS",
         "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS",
+        "SCREENER_IDLE_EXIT_SECONDS",
         "NETUID",
     ):
         monkeypatch.delenv(k, raising=False)
@@ -341,13 +342,13 @@ def test_platform_review_budget_limits_are_accepted(monkeypatch):
     monkeypatch.setenv("SCREENER_L2_MAX_STEPS", "256")
     monkeypatch.setenv("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000000")
     monkeypatch.setenv("SCREENER_L2_MAX_COST_USD", "25")
-    monkeypatch.setenv("SCREENER_L2_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("SCREENER_L2_TIMEOUT_SECONDS", "3600")
     monkeypatch.setenv("SCREENER_L2_CRITIC_REASONING_EFFORT", "high")
     config = parse_screener_config_from_env()
     assert config.l2_max_steps == 256
     assert config.l2_max_output_tokens == 1_000_000
     assert config.l2_max_cost_usd == 25
-    assert config.l2_timeout_seconds == 1800
+    assert config.l2_timeout_seconds == 3600
     assert config.l2_critic_reasoning_effort == "high"
 
 
@@ -357,7 +358,7 @@ def test_platform_review_budget_limits_are_accepted(monkeypatch):
         ("SCREENER_L2_MAX_STEPS", "257"),
         ("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000001"),
         ("SCREENER_L2_MAX_COST_USD", "25.01"),
-        ("SCREENER_L2_TIMEOUT_SECONDS", "1801"),
+        ("SCREENER_L2_TIMEOUT_SECONDS", "3601"),
         ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "29"),
         ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "601"),
         ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "soon"),
@@ -374,3 +375,14 @@ def test_l2_turn_timeout_override_is_parsed(monkeypatch) -> None:
     _base_env(monkeypatch)
     monkeypatch.setenv("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "240")
     assert parse_screener_config_from_env().l2_max_completion_request_seconds == 240
+
+
+def test_idle_exit_is_opt_in_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    assert parse_screener_config_from_env().idle_exit_seconds is None
+    monkeypatch.setenv("SCREENER_IDLE_EXIT_SECONDS", "600")
+    assert parse_screener_config_from_env().idle_exit_seconds == 600
+    for invalid in ("30", "90000"):
+        monkeypatch.setenv("SCREENER_IDLE_EXIT_SECONDS", invalid)
+        with pytest.raises(ScreenerConfigError, match="IDLE_EXIT_SECONDS"):
+            parse_screener_config_from_env()

@@ -56,7 +56,9 @@ from ditto.api_server.generator_rounds import (
     ROUND_LEASE_CUTOFF,
     ChainPosition,
     GeneratorRoundLoop,
+    RoundClock,
     advance_rounds,
+    derive_round_clock,
     get_round,
     round_column_seed,
     round_commitment,
@@ -78,6 +80,7 @@ from ditto.db.models import (
 )
 from ditto.db.queries.generator import claimed_fingerprints
 from ditto.db.queries.provider_outages import park_scoring_leases
+from ditto.tests.api_server.conftest import answer_registration_from_neurons
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
     _ADMIN_TOKEN,
@@ -126,6 +129,7 @@ def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> MagicMock
     chain.read_epoch_schedule = AsyncMock(
         side_effect=lambda _netuid: _head_at(_LOOP_EPOCH["epoch"])
     )
+    answer_registration_from_neurons(chain)
 
     async def _chain() -> MagicMock:
         return chain
@@ -593,7 +597,10 @@ class TestRoundLifecycle:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         chain = _install(app, session_maker)
-        await _apply_settings(client, validator_rounds_enabled=True)
+        # Round 4 reruns round 3's matrix on purpose (fingerprint claims).
+        await _apply_settings(
+            client, validator_rounds_enabled=True, skip_unchanged_rounds=False
+        )
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
         _patch_panel(monkeypatch, agents)
         _patch_lane(monkeypatch)
@@ -830,7 +837,7 @@ class TestRoundLifecycle:
         assert held["grading_bench_version"] == 13
         # ``enforce`` marks the same qualified miner generators eligible and
         # changes nothing else about the ledger.
-        await _apply_settings(client, mode="enforce")
+        await _apply_settings(client, mode="enforce", skip_unchanged_rounds=False)
         enforced = (await client.get("/api/v1/generator/board")).json()
         assert enforced["mode"] == "enforce"
         assert [(e["miner_hotkey"], e["score"]) for e in enforced["entries"]] == [
@@ -866,7 +873,7 @@ class TestRoundLifecycle:
             assert row is not None
             row.scored_at = scored_at
             await session.commit()
-        await _apply_settings(client, mode="shadow")
+        await _apply_settings(client, mode="shadow", skip_unchanged_rounds=False)
         public = (await client.get("/api/v1/generator/rounds/3")).json()
         assert len(public["standings"]) == 3
         assert public["columns"][2]["miner_hotkey"] is None
@@ -921,7 +928,7 @@ class TestRoundLifecycle:
                 str(miner_b),
             ]
 
-        # Reveal after the privacy window (6 rounds).
+        # Reveal after the privacy window (6 subnet epochs from its first).
         await _advance(session_maker, 36)
         public = (await client.get("/api/v1/generator/rounds/3")).json()
         assert public["summary"]["secret_hex"] == secret.hex()
@@ -1342,16 +1349,108 @@ class TestRoundLifecycle:
             assert row is not None and row.status == "void"
             assert row.void_reason == "round interval changed from 4 to 5"
 
-        # The voided index is never reused: under 5 epochs the next round is
-        # round 2 (epochs 10..14), and once it opens it blocks the change.
-        await _advance(session_maker, 9)  # commits round 2
-        await _advance(session_maker, 10)  # opens it
+        # The voided index keeps its span and is never reused: the next round
+        # is round 2, opening where round 1 ends (epochs 8..12 under 5), and
+        # once it opens it blocks the change.
+        assert "round 2: committed" in await _advance(session_maker, 4)
+        await _advance(session_maker, 8)  # opens it
         async with session_maker() as session:
             opened = await get_round(session, 2)
             assert opened is not None
             assert opened.status in ("generating", "running")
+            assert (opened.first_epoch_index, opened.epochs_per_round) == (8, 5)
+            nxt = await get_round(session, 3)
+            assert nxt is not None and nxt.first_epoch_index == 13
         refused = await _apply_settings(client, status=409, epochs_per_round=4)
         assert "are open" in refused.text
+
+    async def test_a_longer_interval_keeps_indexes_and_reveals_on_schedule(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """1 -> 4 epochs per round, the way production moves at epoch ~26k.
+
+        ``epoch // 4`` would put the current round far below rounds that
+        already ran; they would never close or reveal, and the next round
+        would land on an index below them. Indexes must keep increasing and
+        every earlier round must reveal ``privacy_window_rounds`` epochs after
+        its own first epoch, exactly as it would have without the change."""
+        _install(app, session_maker)
+        await _apply_settings(client, epochs_per_round=1, privacy_window_rounds=6)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        base = 26_040
+        await _advance(session_maker, base - 1)  # commits round base
+        for epoch in range(base, base + 3):
+            await _advance(session_maker, epoch)
+        # Every earlier round is finished and none is open, as the
+        # settings write requires: void the opened ones directly.
+        async with session_maker() as session, session.begin():
+            for index in range(base, base + 3):
+                row = await get_round(session, index, for_update=True)
+                assert row is not None and row.first_epoch_index == index
+                if row.status != "void":
+                    row.status = "void"
+                    row.void_reason = "test: finished"
+                    row.closed_at = datetime.now(UTC)
+                    row.lease_id = None
+                    row.lease_expires_at = None
+
+        await _apply_settings(client, epochs_per_round=4, privacy_window_rounds=6)
+        async with session_maker() as session:
+            ahead = await get_round(session, base + 3)
+            assert ahead is not None and ahead.status == "void"
+            assert (ahead.first_epoch_index, ahead.epochs_per_round) == (base + 3, 1)
+
+        # Still inside round base+2's epoch: nothing renumbers and no round
+        # below base+2 is created.
+        await _advance(session_maker, base + 2)
+        async with session_maker() as session:
+            assert await get_round(session, (base + 2) // 4) is None
+        # The voided round's epoch: the first 4-epoch round is committed
+        # right after it, one index later.
+        assert f"round {base + 4}: committed" in await _advance(session_maker, base + 3)
+        async with session_maker() as session:
+            first_long = await get_round(session, base + 4)
+            assert first_long is not None
+            assert (first_long.first_epoch_index, first_long.epochs_per_round) == (
+                base + 4,
+                4,
+            )
+        # It opens on its first epoch and spans four; the next follows it.
+        actions = await _advance(session_maker, base + 4)
+        assert f"round {base + 4}: void (opening epoch missed)" not in actions
+        assert f"round {base + 5}: committed" in actions
+        async with session_maker() as session:
+            opened = await get_round(session, base + 4)
+            assert opened is not None and opened.open_epoch_index == base + 4
+            nxt = await get_round(session, base + 5)
+            assert nxt is not None and nxt.first_epoch_index == base + 8
+        for epoch in range(base + 5, base + 8):
+            assert f"round {base + 5}" not in " ".join(
+                await _advance(session_maker, epoch)
+            )
+
+        # Reveals stay on each round's original schedule: round r at epoch
+        # r + 6, whatever the cadence is now.
+        async with session_maker() as session:
+            revealed = {
+                row.round_index: row.revealed_at is not None
+                for row in await session.scalars(
+                    select(GeneratorRound).where(GeneratorRound.round_index >= base)
+                )
+            }
+        assert revealed[base] and revealed[base + 1]
+        assert not revealed[base + 2] and not revealed[base + 3]
+        await _advance(session_maker, base + 8)
+        async with session_maker() as session:
+            row = await get_round(session, base + 2)
+            assert row is not None and row.revealed_at is not None
 
     async def test_mode_off_and_missing_generators(
         self,
@@ -1599,7 +1698,10 @@ class TestFaultOnlyRounds:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _install(app, session_maker)
-        await _apply_settings(client, validator_rounds_enabled=True)
+        # Round 2 reruns round 1's matrix on purpose (an infra-faulted rerun).
+        await _apply_settings(
+            client, validator_rounds_enabled=True, skip_unchanged_rounds=False
+        )
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
         _patch_panel(monkeypatch, agents)
         _patch_lane(monkeypatch)
@@ -1669,6 +1771,211 @@ class TestFaultOnlyRounds:
             ).all()
 
 
+async def _run_and_score_round(client: httpx.AsyncClient) -> None:
+    """Generate the open round, run every panel agent, score the matrix."""
+    case_ids = await _generate_round(client)
+    while (job := await _lease_job(client)) is not None:
+        await _report(client, job, case_ids)
+    work = (
+        await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+    ).json()["work"]
+    assert work["kind"] == "score"
+    resp = await client.post(
+        "/api/v1/generator-scorer/round-score",
+        headers=_SCORER,
+        json=_matrix_score(work),
+    )
+    assert resp.status_code == 200, resp.text
+
+
+class TestSkipUnchangedRounds:
+    async def test_an_unchanged_round_is_skipped_and_keeps_paying(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        app.state.generator_round_loop = None
+        await _apply_settings(client, validator_rounds_enabled=True)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(4)]
+        _patch_panel(monkeypatch, agents[:3])
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+        )
+        await _qualify_all(session_maker)
+
+        # Round 1 is the first measurement: it runs and scores.
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        await _run_and_score_round(client)
+        scored = (await client.get("/api/v1/generator/board")).json()["entries"]
+        assert [(e["miner_hotkey"], e["round_index"]) for e in scored] == [
+            ("5GenMinerA", 1)
+        ]
+
+        # Round 2 would rerun the same generators on the same panel: skipped
+        # at opening, with nothing to generate and nothing to lease.
+        actions = await _advance(session_maker, 8)
+        assert (
+            "round 2: skipped (skipped_unchanged: same columns and panel as "
+            "round 1)" in actions
+        )
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "skipped"
+            assert row.seed is not None and row.dataset_sha256 is None
+            assert row.void_reason is None and row.closed_at is not None
+            source = await get_round(session, 1)
+            assert source is not None and len(row.panel or []) == 3
+            assert row.columns == source.columns
+            assert (row.generation or {})["skipped_unchanged"][
+                "carried_from_round"
+            ] == 1
+            assert not (
+                await session.scalars(
+                    select(GeneratorRoundAttempt).where(
+                        GeneratorRoundAttempt.round_index == 2
+                    )
+                )
+            ).all()
+        assert (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"] is None
+        assert await _lease_job(client) is None
+
+        detail = (await client.get(f"{_ROUNDS_URL}/2", headers=_ADMIN)).json()
+        assert detail["summary"]["status"] == "skipped"
+        assert detail["summary"]["skip_reason"] == "skipped_unchanged"
+        assert detail["summary"]["carried_from_round"] == 1
+        loop = (await client.get(f"{_ROUNDS_URL}/loop", headers=_ADMIN)).json()
+        assert loop["skip_unchanged_rounds"] is True
+        assert loop["skipped_rounds"] == 1
+        assert loop["last_skipped_round"]["round_index"] == 2
+        assert loop["last_skipped_round"]["reason"] == "skipped_unchanged"
+        assert loop["last_skipped_round"]["carried_from_round"] == 1
+
+        # The ledger keeps paying round 1, byte for byte.
+        carried = (await client.get("/api/v1/generator/board")).json()["entries"]
+        assert [(e["miner_hotkey"], e["round_index"], e["score"]) for e in carried] == [
+            (e["miner_hotkey"], e["round_index"], e["score"]) for e in scored
+        ]
+        # Round 1 scored before the window still pays: the skip re-dated it.
+        async with session_maker() as session:
+            source = await get_round(session, 1)
+            assert source is not None and source.scored_at is not None
+            source.scored_at -= timedelta(days=8)
+            await session.commit()
+        stale_source = (await client.get("/api/v1/generator/board")).json()
+        assert [e["round_index"] for e in stale_source["entries"]] == [1]
+        # ...and a skip older than the window does not.
+        async with session_maker() as session:
+            skipped = await get_round(session, 2)
+            assert skipped is not None and skipped.closed_at is not None
+            skipped.closed_at -= timedelta(days=8)
+            await session.commit()
+        assert (await client.get("/api/v1/generator/board")).json()["entries"] == []
+        async with session_maker() as session:
+            source = await get_round(session, 1)
+            skipped = await get_round(session, 2)
+            assert source is not None and skipped is not None
+            assert source.scored_at is not None and skipped.closed_at is not None
+            source.scored_at += timedelta(days=8)
+            skipped.closed_at += timedelta(days=8)
+            await session.commit()
+
+        # Round 3 is still unchanged: skipped again, carrying round 1.
+        assert any("round 3: skipped" in a for a in await _advance(session_maker, 12))
+
+        # A panel change (a new upload seated) re-measures: round 4 runs.
+        _patch_panel(monkeypatch, [agents[3], *agents[1:3]])
+        await _advance(session_maker, 16)
+        async with session_maker() as session:
+            row = await get_round(session, 4)
+            assert row is not None and row.status == "generating"
+        await _run_and_score_round(client)
+
+        # A new generator column re-measures too.
+        await _advance(session_maker, 20)
+        async with session_maker() as session:
+            row = await get_round(session, 5)
+            assert row is not None and row.status == "skipped"
+        await _seed_generator(
+            session_maker, hotkey="5GenMinerB", owner="coldkey:gb", salt="b"
+        )
+        await _advance(session_maker, 24)
+        async with session_maker() as session:
+            row = await get_round(session, 6)
+            assert row is not None and row.status == "generating"
+
+        # Skipped rounds reveal on the round schedule like any other.
+        await _advance(session_maker, 32)
+        public = (await client.get("/api/v1/generator/rounds/2")).json()
+        assert public["summary"]["status"] == "skipped"
+        assert public["summary"]["secret_hex"] is not None
+
+    async def test_skip_off_reruns_an_unchanged_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(
+            client, validator_rounds_enabled=True, skip_unchanged_rounds=False
+        )
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        await _run_and_score_round(client)
+        await _advance(session_maker, 8)
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "generating"
+        loop = (await client.get(f"{_ROUNDS_URL}/loop", headers=_ADMIN)).json()
+        assert loop["skip_unchanged_rounds"] is False
+        assert loop["last_skipped_round"] is None
+
+    async def test_an_incomplete_measurement_is_never_carried(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A scored round that dropped a panel agent measured less than the
+        next round would: the next round runs."""
+        _install(app, session_maker)
+        await _apply_settings(client, validator_rounds_enabled=True, panel_size=4)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(4)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        async with session_maker() as session, session.begin():
+            row = await get_round(session, 1, for_update=True)
+            assert row is not None and row.panel is not None
+            row.panel = [
+                {**slot, "dropped_reason": "test drop"} if i == 3 else slot
+                for i, slot in enumerate(row.panel)
+            ]
+        await _run_and_score_round(client)
+        await _advance(session_maker, 8)
+        async with session_maker() as session:
+            row = await get_round(session, 2)
+            assert row is not None and row.status == "generating"
+
+
 class TestOperatorControls:
     async def test_void_republish_tick_and_loop(
         self,
@@ -1693,6 +2000,7 @@ class TestOperatorControls:
                 last_epoch_block=8560,
                 tempo=360,
                 block=8565,
+                next_epoch_block=8920,
             )
         )
         chain.get_finalized_block_hash = AsyncMock(return_value=_BLOCK)
@@ -1701,6 +2009,7 @@ class TestOperatorControls:
         assert "round 6: committed" in tick["actions"]
         assert tick["schedule"]["current_round"] == 5
         assert tick["schedule"]["next_round_epoch"] == 24
+        assert tick["schedule"]["next_epoch_block"] == 8920
         # Platform never publishes the commitment itself: it waits for elected
         # validators, and the loop has no publication step any more.
         async with session_maker() as session:
@@ -2060,6 +2369,58 @@ class TestRoundRunsNeverSpendScoringAttempts:
             assert row.status == TicketStatus.SCORED
             assert (row.attempt_count, row.manual_retry_grants) == (1, 1)
 
+    async def test_round_on_a_canary_row_drops_the_canary_attempt(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, 0)
+        key = (agent_id, 13, _VALIDATOR.ss58_address)
+        now = datetime.now(UTC)
+        failed_at = now - timedelta(hours=2)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATOR.ss58_address,
+                    slot_id="slot-1",
+                    status=TicketStatus.EXPIRED,
+                    purpose=TicketPurpose.BENCHMARK_CANARY,
+                    purpose_revision=1,
+                    issued_at=failed_at - timedelta(hours=1),
+                    deadline=failed_at,
+                    bench_version=13,
+                    seed=77,
+                    attempt_count=1,
+                    manual_retry_grants=0,
+                    failure_reason="scoring_error",
+                    failure_detail="canary_failed",
+                    failed_at=failed_at,
+                    legacy_completion_allowed=False,
+                )
+            )
+
+        # The canary's attempt is not scoring history: the round lease reads
+        # as a round-only row, not one with a spent scoring attempt.
+        ticket = await self._lease(session_maker, agent_id, now=now)
+        assert (ticket.attempt_count, ticket.manual_retry_grants) == (0, 0)
+        assert ticket.failure_reason is None
+        assert tickets_mod.is_round_only_ticket(ticket)
+
+        async with session_maker() as session, session.begin():
+            row = await session.get(ValidatorTicket, key, with_for_update=True)
+            assert row is not None
+            tickets_mod.finish_generator_round_ticket(row)
+        async with session_maker() as session:
+            row = await session.get(ValidatorTicket, key)
+            assert row is not None
+            # Closed like any round-only row: no quorum slot, budget intact.
+            assert (row.status, row.attempt_count, row.retry_after) == (
+                TicketStatus.EXPIRED,
+                0,
+                None,
+            )
+            assert not tickets_mod.counts_toward_scoring_retry(row)
+            assert not tickets_mod.ticket_retry_budget_spent(row)
+
 
 def test_round_capability_does_not_need_the_private_v13_transport() -> None:
     """A scorer serving rounds is round-capable with private datasets off.
@@ -2125,8 +2486,32 @@ def _head(
     )
 
 
+def test_round_clock_continues_indexes_across_a_cadence_change() -> None:
+    # No round yet: the original keying.
+    assert derive_round_clock(26_046, 4, None) == RoundClock(6_511, 26_044, 4)
+    # Inside the anchor round's span the epoch belongs to it, at its span.
+    assert derive_round_clock(26_046, 4, (26_046, 26_046, 1)) == RoundClock(
+        26_046, 26_046, 1
+    )
+    assert derive_round_clock(29, 1, (7, 28, 4)) == RoundClock(7, 28, 4)
+    # Past it, rounds of the current cadence follow back to back.
+    clock = derive_round_clock(26_047, 4, (26_046, 26_046, 1))
+    assert clock == RoundClock(26_047, 26_047, 4) and clock.next_round_epoch == 26_051
+    assert derive_round_clock(26_055, 4, (26_046, 26_046, 1)) == RoundClock(
+        26_049, 26_055, 4
+    )
+    assert derive_round_clock(26_058, 4, (26_046, 26_046, 1)) == RoundClock(
+        26_049, 26_055, 4
+    )
+    # Shortening works the same way.
+    assert derive_round_clock(40, 1, (9, 36, 4)) == RoundClock(10, 40, 1)
+    assert derive_round_clock(42, 1, (9, 36, 4)) == RoundClock(12, 42, 1)
+
+
 def test_round_seconds_left_tracks_the_closing_boundary() -> None:
-    row = GeneratorRound(round_index=7, epochs_per_round=1, open_block=9_000)
+    row = GeneratorRound(
+        round_index=7, epochs_per_round=1, first_epoch_index=7, open_block=9_000
+    )
     cutoff = ROUND_LEASE_CUTOFF.total_seconds()
     closing = round_seconds_left(
         row, _head(epoch=7, last_epoch_block=9_000, block=9_300)
@@ -2141,9 +2526,54 @@ def test_round_seconds_left_tracks_the_closing_boundary() -> None:
     early = _head(epoch=7, last_epoch_block=9_000, block=9_005, next_epoch=9_050)
     assert round_seconds_left(row, early) == 45 * 12
     # A multi-epoch round adds a tempo per epoch still to run after the next.
-    row = GeneratorRound(round_index=7, epochs_per_round=4, open_block=9_000)
+    row = GeneratorRound(
+        round_index=7, epochs_per_round=4, first_epoch_index=28, open_block=9_000
+    )
     mid = round_seconds_left(row, _head(epoch=29, last_epoch_block=9_360, block=9_400))
     assert mid == ((9_360 + 360 + 2 * 360) - 9_400) * 12
     # Past the closing epoch no time is left; before the round, no estimate.
     assert round_seconds_left(row, _head(epoch=32, last_epoch_block=0, block=1)) == 0
     assert round_seconds_left(row, _head(epoch=27, last_epoch_block=0, block=1)) is None
+
+
+def test_round_signature_ignores_labels_order_and_counted() -> None:
+    """The same generator sources on the same panel measure the same thing,
+    whichever column is counted; a different source or champion does not."""
+    from ditto.api_server.generator_rounds import _round_signature
+
+    a = {"submission_id": "a", "source_sha256": "1", "public_default": False}
+    b = {"submission_id": "b", "source_sha256": "2", "public_default": False}
+    panel = [
+        {"agent_id": "x", "champion": True},
+        {"agent_id": "y", "champion": False},
+    ]
+    params: dict[str, float | int] = {"min_panel": 3, "target_cases": 70}
+
+    def signature(columns: list[dict], seats: list[dict] = panel) -> str:
+        return _round_signature(
+            columns=columns,
+            panel=seats,
+            bench_version=15,
+            cases_per_column=70,
+            score_params=params,
+        )
+
+    base = signature(
+        [
+            {**a, "column_id": "c0", "counted": True},
+            {**b, "column_id": "c1", "counted": False},
+        ]
+    )
+    assert base == signature(
+        [
+            {**b, "column_id": "c0", "counted": True},
+            {**a, "column_id": "c1", "counted": False},
+        ]
+    )
+    assert base != signature(
+        [{**a, "column_id": "c0"}, {**b, "column_id": "c1", "source_sha256": "3"}]
+    )
+    assert base != signature(
+        [{**a, "column_id": "c0"}, {**b, "column_id": "c1"}],
+        [{"agent_id": "x", "champion": False}, {"agent_id": "y", "champion": True}],
+    )

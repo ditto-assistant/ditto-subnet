@@ -1,4 +1,187 @@
 {
+  "DuelingSeasonCommitmentJobRequest": {
+    "properties": {
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "signature": {
+        "default": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "pattern": "^[0-9a-f]{128}$",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "nonce",
+      "requested_at"
+    ],
+    "type": "object"
+  },
+  "DuelingSeasonCommitmentJobResponse": {
+    "properties": {
+      "bench_version": {
+        "minimum": 16,
+        "type": "integer"
+      },
+      "claim_expires_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "commitment": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "payload": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "season_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "season_index": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "shadow": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "season_id",
+      "season_index",
+      "bench_version",
+      "shadow",
+      "commitment",
+      "payload",
+      "claim_expires_at"
+    ],
+    "type": "object"
+  },
+  "DuelingSeasonCommitmentReportRequest": {
+    "properties": {
+      "block_number": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "commitment": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "detail": {
+        "anyOf": [
+          {
+            "maxLength": 500,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "extrinsic_hash": {
+        "anyOf": [
+          {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "outcome": {
+        "enum": [
+          "confirmed",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "season_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "season_index": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "signature": {
+        "default": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "pattern": "^[0-9a-f]{128}$",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "season_id",
+      "season_index",
+      "commitment",
+      "outcome",
+      "nonce",
+      "requested_at"
+    ],
+    "type": "object"
+  },
+  "DuelingSeasonCommitmentReportResponse": {
+    "properties": {
+      "accepted": {
+        "type": "boolean"
+      },
+      "confirmations": {
+        "default": 0,
+        "type": "integer"
+      },
+      "duplicate": {
+        "default": false,
+        "type": "boolean"
+      },
+      "season_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "target": {
+        "default": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "season_id",
+      "accepted"
+    ],
+    "type": "object"
+  },
   "GeneratorRoundCaseResult": {
     "properties": {
       "case_id": {
@@ -393,8 +576,11 @@
         "type": "integer"
       },
       "dataset_mode": {
-        "const": "generator-round-v1",
         "default": "generator-round-v1",
+        "enum": [
+          "generator-round-v1",
+          "generator-frontier-oracle-v1"
+        ],
         "type": "string"
       },
       "dataset_sha256": {
@@ -423,6 +609,24 @@
         "anyOf": [
           {
             "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "oracle_case_ids": {
+        "anyOf": [
+          {
+            "items": {
+              "maxLength": 72,
+              "minLength": 3,
+              "type": "string"
+            },
+            "maxItems": 640,
+            "minItems": 1,
+            "type": "array"
           },
           {
             "type": "null"

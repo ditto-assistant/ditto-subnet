@@ -1,7 +1,10 @@
 package server_test
 
 import (
+	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +16,7 @@ import (
 	"github.com/ditto-assistant/model-relay/internal/server"
 
 	"github.com/ditto-assistant/model-relay/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func testConfig() *config.Config {
@@ -62,6 +66,88 @@ func TestMetricsEndpointShape(t *testing.T) {
 	}
 	if rec.Header().Get("X-Request-ID") == "" {
 		t.Fatalf("middleware must echo X-Request-ID on /metrics too")
+	}
+}
+
+func TestMetricsExposeOnlyLoadedDaniLabsBindingMetadata(t *testing.T) {
+	cfg := testConfig()
+	cfg.Inference.DaniLabsAPIKey = "secret-that-must-not-be-exposed"
+	cfg.Inference.DaniLabsTrialScope = "canary"
+	cfg.Inference.DaniLabsTrialUntil = "2026-11-11T16:00:00Z"
+	cfg.DittoRouter.Enabled = true
+	cfg.DittoRouter.APIKey = "router-secret-that-must-not-be-exposed"
+	cfg.DittoRouter.Lanes = []string{config.DittoRouterLaneCompetition}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := server.New(cfg, logger, nil, nil, "deadbeef").Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	h.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{
+		"ditto_danilabs_binding_key_present 1\n",
+		"ditto_danilabs_binding_scope 1\n",
+		"ditto_danilabs_binding_router_competition 1\n",
+		"ditto_danilabs_binding_deadline_seconds 1.7944128e+09\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing metric %q", want)
+		}
+	}
+	if strings.Contains(body, cfg.Inference.DaniLabsAPIKey) || strings.Contains(body, cfg.DittoRouter.APIKey) {
+		t.Fatal("metrics exposed credential")
+	}
+	cfg.DittoRouter.APIKey = ""
+	withoutRouterKey := httptest.NewRecorder()
+	server.New(cfg, logger, nil, nil, "deadbeef").Handler().ServeHTTP(withoutRouterKey, req)
+	if !strings.Contains(withoutRouterKey.Body.String(), "ditto_danilabs_binding_router_competition 0\n") {
+		t.Fatal("router without a key must not report an active competition lane")
+	}
+	remote := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+	h.ServeHTTP(remote, req)
+	if strings.Contains(remote.Body.String(), "ditto_danilabs_binding_") {
+		t.Fatal("remote caller received private binding metadata")
+	}
+}
+
+func TestMetricsGzipIsEncodedOnce(t *testing.T) {
+	// Ensure the compressed Prometheus response exceeds the middleware's
+	// threshold, as it does on a running relay with Go process metrics.
+	padding := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "relay_test_gzip_padding"}, []string{"value"})
+	prometheus.MustRegister(padding)
+	t.Cleanup(func() { prometheus.Unregister(padding) })
+	for i := 0; i < 100; i++ {
+		sum := sha256.Sum256([]byte(fmt.Sprint(i)))
+		padding.WithLabelValues(fmt.Sprintf("%x", sum)).Set(1)
+	}
+	for _, addr := range []string{"127.0.0.1:12345", "192.0.2.1:12345"} {
+		t.Run(addr, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+			req.RemoteAddr = addr
+			req.Header.Set("Accept-Encoding", "gzip")
+			rec := httptest.NewRecorder()
+			newTestServer().ServeHTTP(rec, req)
+			if rec.Header().Get("Content-Encoding") != "gzip" {
+				t.Fatalf("expected gzip encoding, got %q", rec.Header().Get("Content-Encoding"))
+			}
+			reader, err := gzip.NewReader(rec.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), "relay_test_gzip_padding") {
+				t.Fatal("one decompression did not yield Prometheus metrics")
+			}
+			if addr == "127.0.0.1:12345" && !strings.Contains(string(body), "ditto_danilabs_binding_scope") {
+				t.Fatal("loopback binding metrics missing")
+			}
+		})
 	}
 }
 

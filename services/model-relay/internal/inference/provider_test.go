@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -408,6 +409,65 @@ func TestPublicProviderResponseKeepsEmptyToolCallsArray(t *testing.T) {
 	}
 }
 
+// providerBodyReasoning is the provider body behind the shared golden relay
+// response in testdata/public_response_reasoning_usage.json. Platform's
+// Python mirror and the dittobench-api broker read the same file.
+const providerBodyReasoning = `{
+	"id":"gen-1","object":"chat.completion","created":1755000000,
+	"model":"openai/gpt-oss-20b",
+	"choices":[{"index":0,"finish_reason":"stop","logprobs":null,
+		"message":{"role":"assistant","content":"hi"}}],
+	"usage":{"prompt_tokens":10,"completion_tokens":1500,"cost":0.01,
+		"completion_tokens_details":{"reasoning_tokens":1200,"audio_tokens":0}}
+}`
+
+// #2972: the v13 cost ledger books answer tokens as completion minus
+// reasoning, so the relay passes the provider's reasoning count through. It is
+// optional, so a missing or invalid count is left out rather than failing the
+// call.
+func TestPublicProviderResponseCarriesBoundedReasoningTokens(t *testing.T) {
+	render := func(t *testing.T, body string) string {
+		t.Helper()
+		payload := decodeProviderBody(t, body)
+		public, herr := publicProviderResponse(payload, []byte(body))
+		if herr != nil {
+			t.Fatalf("unexpected error: %v", herr.message)
+		}
+		raw, err := compactJSON(public)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		return string(raw)
+	}
+	golden, err := os.ReadFile("testdata/public_response_reasoning_usage.json")
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if got, want := render(t, providerBodyReasoning), strings.TrimSpace(string(golden)); got != want {
+		t.Fatalf("relay response = %s\nwant %s", got, want)
+	}
+
+	const plain = `"usage":{"prompt_tokens":10,"completion_tokens":1500,"total_tokens":1510}}`
+	const reported = `"completion_tokens_details":{"reasoning_tokens":1200,"audio_tokens":0}`
+	for _, details := range []string{
+		`"no_details":true`,
+		`"completion_tokens_details":null`,
+		`"completion_tokens_details":{}`,
+		`"completion_tokens_details":{"reasoning_tokens":null}`,
+		`"completion_tokens_details":{"reasoning_tokens":-1}`,
+		`"completion_tokens_details":{"reasoning_tokens":1501}`,
+		`"completion_tokens_details":{"reasoning_tokens":12.0}`,
+		`"completion_tokens_details":{"reasoning_tokens":true}`,
+		`"completion_tokens_details":{"reasoning_tokens":"12"}`,
+		`"completion_tokens_details":[1200]`,
+	} {
+		body := strings.Replace(providerBodyReasoning, reported, details, 1)
+		if got := render(t, body); !strings.HasSuffix(got, plain) {
+			t.Fatalf("details %s: usage must stay plain, got %s", details, got)
+		}
+	}
+}
+
 const structuredOutputFailureBody = `{"error":{"message":"Upstream error from Groq: Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.","code":502}}`
 const unexpectedToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool choice is none, but model called a tool","code":502}}`
 const undeclaredToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool call validation failed: tool call validation failed: attempted to call tool 'calendar_search_events' which was not in request.tools","code":502}}`
@@ -431,7 +491,7 @@ func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 }
 
 func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *testing.T) {
-	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "")
+	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "", "")
 	if aggregate["sort"] != "throughput" || aggregate["allow_fallbacks"] != true ||
 		aggregate["data_collection"] != "deny" || aggregate["zdr"] != true {
 		t.Fatalf("aggregate provider preferences: %v", aggregate)
@@ -440,9 +500,39 @@ func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *test
 	if !ok || len(ignored) != 1 || ignored[0] != "coreweave" {
 		t.Fatalf("aggregate ignored providers: %v", aggregate["ignore"])
 	}
-	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8")
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8", "")
 	if adaptive["allow_fallbacks"] != false {
 		t.Fatalf("adaptive provider unexpectedly gained fallbacks: %v", adaptive)
+	}
+}
+
+func TestBF16PriceOrderPinsBF16ProvidersWithPrivacyAndFallbacks(t *testing.T) {
+	preferences := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "",
+		config.ScoredProviderRoutingBF16PriceOrder)
+	if _, sorted := preferences["sort"]; sorted {
+		t.Fatalf("bf16 price order must not also sort: %v", preferences)
+	}
+	if preferences["allow_fallbacks"] != true || preferences["data_collection"] != "deny" ||
+		preferences["zdr"] != true {
+		t.Fatalf("bf16 price order lost fallbacks or privacy: %v", preferences)
+	}
+	want := "deepinfra,amazon-bedrock,groq,dekallm"
+	for _, key := range []string{"order", "only"} {
+		got, _ := preferences[key].([]string)
+		if strings.Join(got, ",") != want {
+			t.Fatalf("%s = %v, want %s", key, got, want)
+		}
+	}
+	// Adaptive routing and the canary mode (resolved before this call) never
+	// reach the price order.
+	for _, routing := range []string{"", config.ScoredProviderRoutingThroughput, config.ScoredProviderRoutingBF16Canary} {
+		if got := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "", routing); got["sort"] != "throughput" {
+			t.Fatalf("routing %q: %v", routing, got)
+		}
+	}
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "bf16", config.ScoredProviderRoutingBF16PriceOrder)
+	if only, _ := adaptive["only"].([]string); len(only) != 1 || only[0] != "deepinfra" {
+		t.Fatalf("adaptive route changed: %v", adaptive)
 	}
 }
 
@@ -691,6 +781,96 @@ func TestHTTP400ProviderRejectionRemainsSingleShot(t *testing.T) {
 	}
 	if exhausted.terminalErrorCode != "upstream_http_400" {
 		t.Fatalf("terminal code=%q", exhausted.terminalErrorCode)
+	}
+}
+
+// The OpenRouter envelope a v18 harness got for sending ~1,500 tool
+// definitions to gpt-oss-20b (2026-11-11, DITTO-2564), trimmed of request ids.
+const contextLengthExceededBody = `{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"{\"message\":\"The model returned the following errors: ErrorEvent { error: APIError { type: \\\"BadRequestError\\\", code: Some(400), message: \\\"Input length (145769) exceeds model's maximum context length (131072).\\\", param: None } }\"}","provider_name":"Amazon Bedrock","is_byok":false,"previous_errors":[{"code":400,"message":"Provider returned error","provider_name":"Groq","raw":"{\"error\":{\"message\":\"'tools' : maximum number of items is 128\",\"type\":\"invalid_request_error\"}}\n"}]}},"user_id":"org_test"}`
+
+func TestContextLengthExceededIsSingleShotAndPublic413(t *testing.T) {
+	var calls int
+	var slept time.Duration
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(contextLengthExceededBody))
+	}))
+	defer upstream.Close()
+
+	completed, exhausted := completeChatWithRecovery(
+		context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL),
+		map[string]any{"model": "openai/gpt-oss-20b", "messages": []any{}},
+		"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+		func(_ context.Context, delay time.Duration) { slept += delay },
+	)
+	if completed != nil || exhausted == nil {
+		t.Fatalf("result=%v exhausted=%v", completed, exhausted)
+	}
+	if calls != 1 || exhausted.upstreamAttempts != 1 || slept != 0 {
+		t.Fatalf("calls/attempts/sleep=%d/%d/%s", calls, exhausted.upstreamAttempts, slept)
+	}
+	if exhausted.terminalErrorCode != providerContextLengthExceededCode {
+		t.Fatalf("terminal code=%q", exhausted.terminalErrorCode)
+	}
+	if exhausted.routeObservable || exhausted.timedOut {
+		t.Fatalf("an oversized request must not mark the route: %+v", exhausted)
+	}
+	failure := chatProviderFailure(exhausted)
+	if failure.status != http.StatusRequestEntityTooLarge ||
+		failure.message != "request exceeds the model's maximum context length" || len(failure.headers) != 0 {
+		t.Fatalf("public failure=%+v", failure)
+	}
+}
+
+func TestContextLengthExceededRequiresExactProviderRejection(t *testing.T) {
+	decode := func(body string) map[string]any {
+		var response map[string]any
+		decoder := json.NewDecoder(strings.NewReader(body))
+		decoder.UseNumber()
+		if err := decoder.Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	if !providerContextLengthExceeded(http.StatusBadRequest, decode(contextLengthExceededBody)) {
+		t.Fatal("production envelope not recognized")
+	}
+	if !providerContextLengthExceeded(http.StatusBadRequest, decode(
+		`{"error":{"code":400,"message":"This endpoint's maximum context length is 131072 tokens. However, you requested about 145769 tokens."}}`,
+	)) {
+		t.Fatal("OpenRouter's own context-window message not recognized")
+	}
+	if !providerContextLengthExceeded(http.StatusBadRequest, decode(
+		`{"error":{"code":400,"message":"This model's maximum context length is 32768 tokens. However, you requested 38000 tokens (33000 in the messages, 5000 in the completion)."}}`,
+	)) {
+		t.Fatal("a split count whose input alone exceeds the limit was not recognized")
+	}
+	for _, message := range []string{
+		"This endpoint's maximum context length is 32768 tokens. However, you requested about 38000 tokens (33000 in the messages, 5000 in the output).",
+		"This endpoint's maximum context length is 131072 tokens. However, you requested about 160000 tokens (100000 of text input, 40000 of tool input, 20000 in the output).",
+	} {
+		body, _ := json.Marshal(map[string]any{"error": map[string]any{"code": 400, "message": message}})
+		if !providerContextLengthExceeded(http.StatusBadRequest, decode(string(body))) {
+			t.Fatalf("input-over-limit split not recognized: %s", message)
+		}
+	}
+	for name, testCase := range map[string]struct {
+		status int
+		body   string
+	}{
+		"other 400":            {400, `{"error":{"code":400,"message":"Provider returned error","metadata":{"raw":"'tools' : maximum number of items is 128"}}}`},
+		"completion overflow":  {400, `{"error":{"code":400,"message":"This model's maximum context length is 8192 tokens. However, you requested 20000 tokens (2000 in the messages, 18000 in the completion)."}}`},
+		"openrouter output":    {400, `{"error":{"code":400,"message":"This endpoint's maximum context length is 131072 tokens. However, you requested about 140000 tokens (120000 of text input, 20000 in the output)."}}`},
+		"200 non-400 envelope": {200, `{"error":{"code":502,"message":"maximum context length"}}`},
+		"outer status not 400": {502, contextLengthExceededBody},
+		"inner code not 400":   {400, `{"error":{"code":502,"message":"maximum context length"}}`},
+		"code not a number":    {400, `{"error":{"code":"400","message":"maximum context length"}}`},
+		"no error object":      {400, `{"message":"maximum context length"}`},
+	} {
+		if providerContextLengthExceeded(testCase.status, decode(testCase.body)) {
+			t.Fatalf("%s was classified as a context overflow", name)
+		}
 	}
 }
 

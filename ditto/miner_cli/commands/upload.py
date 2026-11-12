@@ -51,6 +51,7 @@ from ditto.miner_cli.errors import (
     PaymentCancelledError,
     PaymentFinalizationTimeoutError,
     PaymentRecoveryExpiredError,
+    PaymentReplayedError,
     PaymentSubmissionError,
     PreCheckRejectedError,
     RegistrationCancelledError,
@@ -100,11 +101,11 @@ _BLOCK_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 _UPLOAD_RETRY_DELAYS_S = (2.0, 4.0, 8.0, 16.0, 30.0, 30.0)
 
 # How long to keep re-checking after a finalized registration. The platform
-# answers 1101 from a cached metagraph snapshot rather than from the chain
-# (ditto.chain.client.ChainClient.get_recent_neurons), so a registration that
-# is already final on chain stays invisible to /upload/check for a while. That
-# snapshot's refresh period is not a contract the CLI can read, so this polls
-# rather than sleeping a fixed guess. ~4 minutes total.
+# reads registration from a cached metagraph snapshot and re-reads a hotkey the
+# snapshot lacks from chain storage at a finalized block before answering 1101,
+# sharing that read for one block. A provider can still trail the finalized
+# head, and none of that is a contract the CLI can read, so this polls rather
+# than sleeping a fixed guess. ~4 minutes total.
 _REGISTRATION_VISIBILITY_DELAYS_S = (5.0, 10.0, 15.0, 20.0, 30.0, 30.0, 30.0, 30.0)
 
 # Mirrors ditto.api_server.endpoints.upload.ERROR_CODE_HOTKEY_NOT_REGISTERED.
@@ -226,8 +227,9 @@ def add_subparser(
         action="store_true",
         help=(
             "If the platform definitively rejects a saved receipt for amount "
-            "mismatch or expiry, retire it and continue to a newly confirmed "
-            "payment. Never causes a second transfer for other failures."
+            "mismatch, expiry, or because it already funded another upload, "
+            "retire it and continue to a newly confirmed payment. Never causes "
+            "a second transfer for other failures."
         ),
     )
     parser.set_defaults(func=run)
@@ -446,7 +448,11 @@ def _run_upload(
 
         try:
             check_response = _check(receipt)
-        except (PaymentAmountMismatchError, PaymentRecoveryExpiredError) as error:
+        except (
+            PaymentAmountMismatchError,
+            PaymentRecoveryExpiredError,
+            PaymentReplayedError,
+        ) as error:
             if receipt is None:
                 raise
             if cla_error is not None:
@@ -480,9 +486,9 @@ def _run_upload(
                     chain_endpoint=chain_endpoint,
                     check_response=check_response,
                 )
-                # The platform resolves registration from a cached metagraph
-                # snapshot, not from the chain directly, so a finalized
-                # registration is not visible to /upload/check immediately.
+                # The platform confirms registration at a finalized block
+                # through a read it shares for one block, so a just-finalized
+                # registration may not be visible to /upload/check immediately.
                 check_response = _await_platform_registration(
                     check=lambda: _check(receipt),
                     hotkey_ss58=handle.hotkey_ss58,
@@ -645,9 +651,12 @@ def _run_upload(
             print(
                 f"\nupload could not be confirmed after payment. "
                 f"Your finalized payment was saved and can be reused.\n"
-                f"Rerun upload with this hotkey using either the same archive or "
-                f"a replacement; the CLI will reuse this proof and will not send "
-                f"another transfer.\n"
+                f"Rerun upload with this hotkey and the same archive first: if "
+                f"the upload was recorded, that returns it, and either way the "
+                f"CLI reuses this proof and will not send another transfer. A "
+                f"replacement archive can reuse it only if the upload was not "
+                f"recorded; otherwise the platform reports the proof as already "
+                f"used, and the CLI asks before paying again.\n"
                 f"If the saved proof is unavailable, rerun with:\n"
                 f"  --payment-block-hash {receipt.block_hash} "
                 f"--payment-block-number {receipt.block_number} "
@@ -746,11 +755,11 @@ def _await_platform_registration(
     """Re-check until the platform observes an on-chain registration.
 
     The chain and the platform do not agree instantly. ``/upload/check``
-    resolves registration from Pylon's cached recent-neurons snapshot, so a
-    registration that has already finalized on chain still answers 1101 for
-    some time afterward. Checking once and giving up sends the miner away
-    from a submission that is seconds from working, having already spent the
-    recycle amount.
+    confirms a registration its metagraph cache lacks at a finalized block,
+    through a read shared for one block, so a just-finalized registration can
+    still answer 1101 briefly. Checking once and giving up sends the miner
+    away from a submission that is seconds from working, having already spent
+    the recycle amount.
 
     Only 1101 is waited on. Any other rejection is returned immediately --
     those do not become true by waiting.
@@ -774,7 +783,7 @@ def _await_platform_registration(
 
     print(
         "waiting for the platform to observe the registration "
-        "(it reads a cached metagraph snapshot, so this lags the chain)...",
+        "(it checks a finalized block, which trails the chain head)...",
         file=sys.stderr,
     )
     for attempt, delay in enumerate(_REGISTRATION_VISIBILITY_DELAYS_S, start=1):
@@ -1087,7 +1096,9 @@ def _offer_owner_link(
 def _authorize_replacement_payment(
     *,
     args: argparse.Namespace,
-    error: PaymentAmountMismatchError | PaymentRecoveryExpiredError,
+    error: PaymentAmountMismatchError
+    | PaymentRecoveryExpiredError
+    | PaymentReplayedError,
     receipt: PaymentReceipt,
 ) -> None:
     """Require explicit consent before abandoning a finalized payment proof."""
@@ -1095,9 +1106,25 @@ def _authorize_replacement_payment(
         f"block={receipt.block_number} index={receipt.extrinsic_index} "
         f"hash={receipt.block_hash}"
     )
+    spent = ""
+    if isinstance(error, PaymentReplayedError):
+        # Platform answers every 3207 with the same "payment proof already
+        # used" envelope, whether the proof funded an earlier upload, belongs
+        # to another hotkey, funded a generator upload or no longer matches the
+        # reservation owner. The CLI cannot tell which, so it names them all
+        # and states the rerun only as the one case it can recover.
+        spent = (
+            "This proof cannot fund this upload. Platform does not say why: it "
+            "may have funded an earlier upload, belong to another hotkey, have "
+            "funded a generator upload, or no longer match this reservation. "
+            "Only if it funded an earlier upload of this hotkey whose response "
+            "was lost does rerunning that upload's exact archive return it "
+            "without paying again.\n"
+        )
     print(
         f"warning: the platform rejected the saved payment proof ({error}).\n"
         f"Rejected proof: {proof}\n"
+        f"{spent}"
         "No second transfer has been sent.",
         file=sys.stderr,
     )
@@ -1145,6 +1172,27 @@ def _retire_rejected_saved_payment(
             sha256=sha256,
             payment=payment,
         )
+    elif receipt_source == "explicit":
+        # Several saved credits must be chosen by proof flags. A rejected one
+        # named that way leaves the saved list too, or every later upload stops
+        # at "multiple unconsumed payments" again. The hash flag accepts either
+        # hex case, so match it without regard to case.
+        retired = [
+            clear_pending_payment(
+                network=saved.network,
+                hotkey=saved.hotkey,
+                name=saved.name,
+                sha256=saved.sha256,
+                payment=saved.payment,
+            )
+            for saved in load_pending_payments_for_hotkey(
+                network=network, hotkey=hotkey
+            )
+            if saved.payment.block_hash.lower() == payment.block_hash.lower()
+            and saved.payment.block_number == payment.block_number
+            and saved.payment.extrinsic_index == payment.extrinsic_index
+        ]
+        cleared = all(retired)
     else:
         return
     if not cleared:

@@ -19,7 +19,7 @@ import {
   tokenPenaltyChipLabel,
 } from "../../lib/scoring";
 import { TipTarget } from "../ui/Tooltip";
-import type { RewardEligibility } from "../../types/leaderboard";
+import type { RewardEligibility, SeasonExpiry } from "../../types/leaderboard";
 import type { BoardEntry } from "./leaderboard-data";
 import { rankMoveState } from "./board-state";
 
@@ -142,6 +142,38 @@ export function RewardEligibilityChip(props: { entry: BoardEntry }): JSX.Element
         tabindex={0}
         text={tip()}
       >
+        {label()}
+      </TipTarget>
+    </Show>
+  );
+}
+
+/**
+ * A dueling season rotation expired this row's scores (SN-466). The platform
+ * keeps it visible instead of dropping it, and this chip says which way: still
+ * paid by the current pin until the next one, or an unranked last valid score.
+ * Nothing renders on a row whose quorum is inside the live window.
+ */
+export function SeasonExpiryChip(props: { entry: BoardEntry }): JSX.Element {
+  const expiry = (): SeasonExpiry | null => props.entry.season_expiry ?? null;
+  const label = (): string =>
+    expiry()?.state === "pinned_carry" ? "Season expired \u00b7 pinned" : "Season expired";
+  const tip = (): string => {
+    const record = expiry();
+    if (record === null) return "";
+    const last = record.last_valid_composite.toFixed(4);
+    return record.state === "pinned_carry"
+      ? `This agent's scores are from a dueling season that has left the live window. ` +
+          `Epoch pin ${record.pinned_epoch_index ?? "?"} still includes it, so it keeps this ` +
+          `rank and score until the next pin. That pin only counts scores from the ` +
+          `current and previous season.`
+      : `Last valid score ${last}, from a dueling season that has left the live window. ` +
+          `Shown for reference: it does not rank or earn until it has new scores ` +
+          `from the current or previous season.`;
+  };
+  return (
+    <Show when={expiry() !== null}>
+      <TipTarget class="rollout-chip tip season-expiry-chip settled" tabindex={0} text={tip()}>
         {label()}
       </TipTarget>
     </Show>

@@ -22,6 +22,7 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			{Name: "legacyAccents", Size: len(legacyAccents), Role: "distractor option (served inventory)"},
 			{Name: "legacyFonts", Size: len(legacyFonts), Role: "distractor option (served inventory)"},
 			{Name: "decoyShapes", Size: len(decoyShapes), Role: "question cue (near-miss capability family)"},
+			{Name: "v16ConnectorScripts", Size: len(v16ConnectorScripts), Role: "question cue (v16 linked and named connector apps)"},
 		},
 
 		// Known-small scored pools when the canary landed (#492). Each value is
@@ -37,8 +38,16 @@ func TestPoolCardinalityCanary(t *testing.T) {
 		},
 
 		Exempt: map[string]string{
-			"v13Schemas":      poolcanary.Keyed, // keyed by tool name
-			"v13RetiredTools": poolcanary.Internal,
+			"v13Schemas":             poolcanary.Keyed, // keyed by tool name
+			"v13RetiredTools":        poolcanary.Internal,
+			"v16DescriptionRewrites": poolcanary.Keyed,    // keyed by the v15 description it rewrites
+			"V16LinkStatePhrases":    poolcanary.Internal, // contract-test denylist, never served
+			// v18 production catalog: the bulk menu comes from the pinned
+			// snapshot; these are its sampling filter and paraphrase banks. No
+			// scored case expects a snapshot tool.
+			"catalogSizes":            poolcanary.Internal, // per-contract menu size, never rendered
+			"v18LinkedToolkitAliases": poolcanary.Keyed,    // keyed by v16 linkable app
+			"v18Synonyms":             "meaning-preserving paraphrase swaps for the non-answer snapshot menu",
 		},
 	})
 }

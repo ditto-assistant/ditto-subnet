@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import re
 import statistics
 from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import replace
@@ -129,6 +130,7 @@ from ditto.db.models import (
     TranscriptMirrorSettingsRevision,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
+    ValidatorQueueWithdrawal,
     ValidatorRequestNonce,
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
@@ -3586,9 +3588,45 @@ class TestArtifact:
         assert body["screened_image_id"] == "sha256:" + "34" * 32
         assert body["screened_image_ref"] == f"ditto-screen/{agent_id}:latest"
         assert body["bench_version"] == _BENCH_VERSION
-        assert storage.presigned_get_url.await_args_list[1].kwargs["key"] == (
-            f"{agent_id}/screened-images/{upload_id}.tar"
+        image_key = f"{agent_id}/screened-images/{upload_id}.tar"
+        # A validator without the source-free capability still gets source.
+        assert body["download_url"] is not None
+        assert {
+            call.kwargs["key"] for call in storage.presigned_get_url.await_args_list
+        } == {image_key, f"{agent_id}/agent.tar.gz"}
+
+        await _seed_validator_heartbeat(
+            session_maker,
+            protocol_version=15,
+            capabilities={
+                "scorer_benchmarks": {
+                    "status": "fresh_verified",
+                    "source_free_screened_images": True,
+                }
+            },
         )
+        storage.presigned_get_url.reset_mock()
+        response = await client.get(
+            f"/api/v1/validator/agent/{agent_id}/artifact",
+            headers=_artifact_headers(agent_id),
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["download_url"] is None
+        assert body["screened_image_url"].startswith("https://")
+        assert body["sha256"]
+        assert [
+            call.kwargs["key"] for call in storage.presigned_get_url.await_args_list
+        ] == [image_key]
+        async with session_maker() as s:
+            served = [
+                (row.detail or {}).get("served_source")
+                for row in await s.scalars(
+                    select(ArtifactFetchAudit).order_by(ArtifactFetchAudit.seq)
+                )
+            ]
+        assert served == [True, False]
 
     async def test_without_open_ticket_returns_409(
         self,
@@ -5790,6 +5828,38 @@ class TestFailJob:
         )
         assert reissued.status_code == 204, reissued.text
 
+    async def test_unproven_sandbox_oom_is_parked_as_infrastructure(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A validator predating the deterministic OOM rule cannot prove the
+        harness reached its own cap, so its bare ``sandbox_oom`` is no-fault."""
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="sandbox_oom",
+                failure_detail="SandboxOomError: memory allowance",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+
+        async with session_maker() as s:
+            ticket = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.failure_reason == "infrastructure"
+            assert ticket.failure_detail == "SandboxOomError: memory allowance"
+
     async def test_sandbox_oom_is_recorded_and_defers_same_harness(
         self,
         app: FastAPI,
@@ -5804,7 +5874,9 @@ class TestFailJob:
         failed = await client.post(
             "/api/v1/validator/job/fail",
             headers=_AUTH_HEADER,
-            json=_job_fail_payload(agent_id, reason="sandbox_oom"),
+            json=_job_fail_payload(
+                agent_id, reason="sandbox_oom", failure_detail="harness_oom"
+            ),
         )
         assert failed.status_code == 200, failed.text
         assert failed.json()["reopened"] is True
@@ -6382,6 +6454,204 @@ class TestFailJob:
             "/api/v1/validator/job/fail", headers=_AUTH_HEADER, json=stale
         )
         assert resp.status_code == 409
+
+    async def _seed_failed_sibling_tickets(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        agent_id: UUID,
+        details: list[str],
+    ) -> None:
+        """Expired, budget-spent canonical tickets on other validators."""
+        now = datetime.now(UTC)
+        async with maker() as s, s.begin():
+            for index, detail in enumerate(details):
+                s.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=f"5Sibling{index:040d}",
+                        status=TicketStatus.EXPIRED,
+                        issued_at=now - timedelta(hours=2, minutes=index),
+                        deadline=now - timedelta(hours=1, minutes=index),
+                        bench_version=_BENCH_VERSION,
+                        attempt_count=1,
+                        manual_retry_grants=0,
+                        infra_retry_grants=0,
+                        failure_reason="scoring_error",
+                        failure_detail=detail,
+                        failed_at=now - timedelta(hours=1, minutes=index),
+                        retry_after=now - timedelta(hours=1, minutes=index),
+                    )
+                )
+
+    async def _withdrawals(
+        self, maker: async_sessionmaker[AsyncSession], agent_id: UUID
+    ) -> list[ValidatorQueueWithdrawal]:
+        async with maker() as s:
+            return list(
+                (
+                    await s.scalars(
+                        select(ValidatorQueueWithdrawal).where(
+                            ValidatorQueueWithdrawal.agent_id == agent_id
+                        )
+                    )
+                ).all()
+            )
+
+    async def test_quorum_lost_to_the_agents_own_allowance_closes_it_out(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # kgmin1105 (2026-11-08): four validators each ran the artifact and
+        # each run spent its whole inference allowance. The row stayed
+        # "waiting for validators" and every fresh validator could still burn a
+        # first-assignment run on it. The third agent-attributable failure now
+        # writes the terminal withdrawal that stops that.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._seed_failed_sibling_tickets(
+            session_maker, agent_id, ["inference_allowance_exhausted"] * 2
+        )
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                failure_detail="inference_allowance_exhausted",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        [withdrawal] = await self._withdrawals(session_maker, agent_id)
+        assert withdrawal.actor == "platform:terminal-artifact-failure"
+        assert withdrawal.terminal_failure_code == "inference_allowance_exhausted"
+        assert withdrawal.bench_version == _BENCH_VERSION
+        assert withdrawal.reinstated_at is None
+        assert withdrawal.evicted_validator_hotkeys is None
+        assert len(withdrawal.ticket_snapshot) == 3
+        # Backroom parses expected_snapshot as a 64-hex digest on every row.
+        assert re.fullmatch(r"[0-9a-f]{64}", withdrawal.expected_snapshot)
+        async with session_maker() as s:
+            agent = await s.get(Agent, agent_id)
+            assert agent is not None
+            # Not a verdict on the miner: the lifecycle row is untouched and an
+            # operator can reinstate the withdrawal like any other.
+            assert agent.status == AgentStatus.EVALUATING
+
+    async def test_sweep_recovers_after_close_out_hook_fails(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server.terminal_failure_sweep import TerminalFailureSweeper
+
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._seed_failed_sibling_tickets(
+            session_maker, agent_id, ["inference_allowance_exhausted"] * 2
+        )
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        broken_hook = AsyncMock(side_effect=RuntimeError("transient close-out failure"))
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.validator.withdraw_terminal_artifact_failure",
+            broken_hook,
+        )
+        response = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                failure_detail="inference_allowance_exhausted",
+            ),
+        )
+        assert response.status_code == 200, response.text
+        broken_hook.assert_awaited_once()
+        assert await self._withdrawals(session_maker, agent_id) == []
+        async with session_maker() as session:
+            tickets = list(
+                (
+                    await session.scalars(
+                        select(ValidatorTicket).where(
+                            ValidatorTicket.agent_id == agent_id
+                        )
+                    )
+                ).all()
+            )
+            assert len(tickets) == 3
+            assert all(ticket.status == TicketStatus.EXPIRED for ticket in tickets)
+            assert all(
+                ticket.failure_detail == "inference_allowance_exhausted"
+                for ticket in tickets
+            )
+        sweeper = TerminalFailureSweeper(session_maker=session_maker)
+        assert await sweeper.sweep() == 1
+        [withdrawal] = await self._withdrawals(session_maker, agent_id)
+        assert withdrawal.terminal_failure_code == "inference_allowance_exhausted"
+        assert await sweeper.sweep() == 0
+
+    async def test_quorum_still_reachable_is_not_closed_out(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._seed_failed_sibling_tickets(
+            session_maker, agent_id, ["inference_allowance_exhausted"]
+        )
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                failure_detail="inference_allowance_exhausted",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        assert await self._withdrawals(session_maker, agent_id) == []
+
+    async def test_a_mixed_or_infrastructure_cause_is_never_closed_out(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # Fail-closed: one slot that died on infrastructure keeps the row on
+        # the operator retry path instead of blaming the artifact.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._seed_failed_sibling_tickets(
+            session_maker,
+            agent_id,
+            ["inference_allowance_exhausted", "inference_allowance_exhausted"],
+        )
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="infrastructure",
+                failure_detail="model_relay_unavailable",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        assert await self._withdrawals(session_maker, agent_id) == []
 
 
 class TestSubmitScore:
@@ -9296,7 +9566,7 @@ class TestTop5ConfirmationLane:
         )
         async with session_maker() as session:
             anchor = await session.get(
-                ConfirmationSeedAnchor, (champion, _BENCH_VERSION)
+                ConfirmationSeedAnchor, (champion, _BENCH_VERSION, UUID(int=0))
             )
             assert anchor is not None
             # The anchor did not move with the newer head observed at claim time.
@@ -11860,6 +12130,110 @@ class TestTop5CatchUpConvergence:
             settled[:3]
         ), "each validator must hold a distinct backlog seed"
 
+    async def test_tempo_window_holds_fresh_growth_but_not_catchup(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """``wave_cadence_tempos``: once a window has opened its seed budget,
+        a settled member gets no fresh growth seed until the next window, while
+        the promoted newcomer still drains its whole backlog."""
+        from uuid import uuid4
+
+        from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+        from ditto.api_server.endpoints.validator import (
+            _current_emission_set,
+            _top5_confirmation_seed_plan,
+        )
+        from ditto.api_server.retest_wave_window import current_wave_window
+        from ditto.db.models import LedgerEpochSnapshot, ValidatorTicket
+
+        champion, newcomer, settled = await _seed_catchup_board(
+            app, session_maker, settled_depth=2
+        )
+        async with session_maker() as session:
+            members = await _current_emission_set(
+                session, canonical_version=_BENCH_VERSION
+            )
+        member_ids = tuple(member.agent_id for member in members)
+        settled_member = next(
+            agent_id for agent_id in member_ids if agent_id not in (champion, newcomer)
+        )
+        settled_wave = tuple(
+            agent_id for agent_id in member_ids if agent_id != newcomer
+        )
+
+        async def plan_for(agent_id: UUID, paced: bool) -> tuple[int, ...]:
+            async with session_maker() as session:
+                window = (
+                    await current_wave_window(
+                        session, cadence_tempos=4, seeds_per_window=1
+                    )
+                    if paced
+                    else None
+                )
+                return await _top5_confirmation_seed_plan(
+                    session,
+                    champion_agent_id=champion,
+                    member_agent_id=agent_id,
+                    # The settled wave alone: a depth-zero newcomer in the wave
+                    # would hold growth open by itself (strict issuance).
+                    wave_member_ids=(
+                        member_ids if agent_id == newcomer else settled_wave
+                    ),
+                    cohort_member_ids=member_ids,
+                    canonical_version=_BENCH_VERSION,
+                    wave_window=window,
+                )
+
+        unpaced = await plan_for(settled_member, paced=False)
+        assert len(unpaced) == 1 and unpaced[0] not in settled, (
+            "a settled member owes exactly the next fresh growth seed"
+        )
+
+        # The window opens after the board's recorded waves, so they belong to
+        # earlier windows.
+        window_start = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                LedgerEpochSnapshot(
+                    snapshot_id=uuid4(),
+                    netuid=118,
+                    epoch_index=26088,
+                    last_epoch_block=26088 * 361,
+                    pinned_block=26088 * 361 + 2,
+                    pinned_block_hash="0x" + "ab" * 32,
+                    pinned_at=window_start,
+                    bench_version=_BENCH_VERSION,
+                    entries=[],
+                    context={},
+                    ledger_digest="cd" * 32,
+                )
+            )
+        # Budget not yet spent: the window still opens the fresh seed.
+        assert await plan_for(settled_member, paced=True) == unpaced
+
+        # A fresh seed opened inside this window spends the budget of one.
+        async with session_maker() as session, session.begin():
+            issued = window_start + timedelta(seconds=1)
+            session.add(
+                ValidatorTicket(
+                    agent_id=champion,
+                    validator_hotkey="wave-window-validator",
+                    slot_id="slot-0",
+                    status=TicketStatus.ISSUED,
+                    issued_at=issued,
+                    deadline=issued + timedelta(hours=2),
+                    bench_version=_BENCH_VERSION,
+                    attempt_count=1,
+                    seed=987_654_321,
+                    purpose=TicketPurpose.CONTINUAL_RETEST,
+                )
+            )
+        assert await plan_for(settled_member, paced=True) == ()
+        # Catch-up is never paced.
+        assert await plan_for(newcomer, paced=True) == tuple(settled)
+
     async def test_emission_catchup_bypasses_the_growth_cadence(
         self,
         app: FastAPI,
@@ -12408,6 +12782,217 @@ class TestTop5CatchUpConvergence:
                 )
             )
         assert issued == 2, "ordinary quorum scoring must be untouched"
+
+
+class TestSeasonDuelLane:
+    """``retest_mode = season_duel`` (``docs/title-duels.md``, phase A).
+
+    The fixture era is v7; the season-duel gate is lowered onto it so the lane
+    runs end to end. Every other dueling predicate keeps its own v16 floor,
+    which is exactly what phase A needs: it changes only which seeds lease.
+    """
+
+    @pytest.fixture(autouse=True)
+    async def _v7_duel_lane(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ditto.api_server.season_duel as season_duel
+
+        monkeypatch.setattr(season_duel, "is_dueling_bench_version", lambda _v: True)
+        _install_dataset_generator(app)
+        await _install_ticket_inference(app, session_maker)
+
+    async def test_plan_is_the_season_duel_not_the_walk(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A depth-zero entrant owes the K duel seeds, never the whole walk; a
+        member already holding them owes nothing more this season."""
+        from ditto.api_server.crn import champion_anchored_seeds
+        from ditto.api_server.endpoints.validator import (
+            _current_emission_set,
+            _top5_confirmation_seed_plan,
+        )
+
+        champion, newcomer, settled = await _seed_catchup_board(
+            app, session_maker, settled_depth=4
+        )
+        async with session_maker() as session:
+            members = await _current_emission_set(
+                session, canonical_version=_BENCH_VERSION
+            )
+        member_ids = tuple(member.agent_id for member in members)
+        settled_member = next(
+            agent_id for agent_id in member_ids if agent_id not in (champion, newcomer)
+        )
+
+        async def plan_for(agent_id: UUID, duel: int | None) -> tuple[int, ...]:
+            async with session_maker() as session:
+                return await _top5_confirmation_seed_plan(
+                    session,
+                    champion_agent_id=champion,
+                    member_agent_id=agent_id,
+                    wave_member_ids=member_ids,
+                    cohort_member_ids=member_ids,
+                    canonical_version=_BENCH_VERSION,
+                    duel_seed_count=duel,
+                )
+
+        duel = tuple(
+            champion_anchored_seeds(champion, version=_BENCH_VERSION, max_seeds=3)
+        )
+        assert await plan_for(newcomer, None) == tuple(settled), "the walk: 4 seeds"
+        assert await plan_for(newcomer, 3) == duel, "the duel: exactly K seeds"
+        assert await plan_for(settled_member, 3) == ()
+        assert await plan_for(champion, 3) == ()
+
+    async def test_cohort_is_the_top_five_without_extension_or_band(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.api_server.continual_retest_settings import settings_from_row
+        from ditto.api_server.endpoints.validator import _current_retest_cohort
+        from ditto.db.queries.continual_retest_settings import (
+            latest_continual_retest_settings_revision,
+        )
+
+        await _seed_catchup_board(
+            app,
+            session_maker,
+            pool_composites=(0.90, 0.88, 0.86, 0.84, 0.82, 0.80, 0.78, 0.76),
+        )
+        await _set_retest_cohort_size(
+            session_maker,
+            8,
+            retest_eligibility_mode="statistical",
+            retest_cohort_max_size=12,
+            retest_mode="season_duel",
+        )
+        async with session_maker() as session:
+            settings = settings_from_row(
+                await latest_continual_retest_settings_revision(session)
+            )
+            emission, wave, cohort, challengers = await _current_retest_cohort(
+                session, canonical_version=_BENCH_VERSION, settings=settings
+            )
+        top_five = {m.agent_id for m in (*emission, *wave)}
+        assert {m.agent_id for m in cohort} == top_five
+        assert len(emission) == 5 and len(cohort) <= 10
+        assert challengers == frozenset()
+
+    async def test_a_mid_season_crown_keeps_the_opening_family(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The season opened under another king: the board champion now owes
+        that family's K seeds (not its own walk), split one per validator off
+        the reign-backoff cadence."""
+        from ditto.api_server.crn import champion_anchored_seeds
+        from ditto.db.models import ConfirmationSeedAnchor
+        from ditto.db.queries.confirmation_seed_anchors import NIL_SEASON_KEY
+
+        champion, _newcomer, _settled = await _seed_catchup_board(
+            app, session_maker, settled_depth=4
+        )
+        opener = await _seed_agent(
+            session_maker, status=AgentStatus.SCORED, name="opener", sha256="a3" * 32
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                ConfirmationSeedAnchor(
+                    champion_agent_id=opener,
+                    bench_version=_BENCH_VERSION,
+                    season_key=NIL_SEASON_KEY,
+                    ready_block=97,
+                    anchor_block=100,
+                )
+            )
+        await _set_retest_cohort_size(session_maker, 5, retest_mode="season_duel")
+        app.state.continual_retest_settings.invalidate()
+        for keypair in _KEYPAIRS:
+            response = await client.post(
+                "/api/v1/validator/top5-confirmation-job",
+                headers=_top5_auth_header(keypair),
+                json=_auto_top5_job_payload("slot-0", keypair=keypair),
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["agent_id"] == str(champion)
+        leased = await _leased_retest_seeds(session_maker, champion)
+        assert sorted(seed for seed in leased.values() if seed is not None) == sorted(
+            champion_anchored_seeds(opener, version=_BENCH_VERSION, max_seeds=3)
+        )
+
+
+async def test_season_duel_anchor_is_the_season_opener(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A crown change mid-season keeps the family on the opening champion."""
+    from ditto.api_server.season_duel import season_duel_anchor_champion
+    from ditto.db.models import ConfirmationSeedAnchor
+    from ditto.db.queries.confirmation_seed_anchors import NIL_SEASON_KEY
+
+    opener = await _seed_agent(
+        session_maker, status=AgentStatus.SCORED, name="opener", sha256="a1" * 32
+    )
+    usurper = await _seed_agent(
+        session_maker, status=AgentStatus.SCORED, name="usurper", sha256="a2" * 32
+    )
+    async with session_maker() as session:
+        assert (
+            await season_duel_anchor_champion(
+                session, bench_version=_BENCH_VERSION, champion_agent_id=usurper
+            )
+            == usurper
+        ), "no row yet: the current champion opens the season"
+    async with session_maker() as session, session.begin():
+        for agent_id, block in ((usurper, 200), (opener, 100)):
+            session.add(
+                ConfirmationSeedAnchor(
+                    champion_agent_id=agent_id,
+                    bench_version=_BENCH_VERSION,
+                    season_key=NIL_SEASON_KEY,
+                    ready_block=block - 3,
+                    anchor_block=block,
+                )
+            )
+    async with session_maker() as session:
+        assert (
+            await season_duel_anchor_champion(
+                session, bench_version=_BENCH_VERSION, champion_agent_id=usurper
+            )
+            == opener
+        )
+
+
+def test_season_duel_gate_is_inert_below_the_dueling_floor() -> None:
+    from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+    from ditto.api_server.season_duel import season_duel_seed_count
+
+    duel = ContinualRetestSettings(retest_mode="season_duel", season_duel_seeds=4)
+    assert season_duel_seed_count(duel, bench_version=15) is None
+    assert season_duel_seed_count(duel, bench_version=16) == 4
+    assert season_duel_seed_count(ContinualRetestSettings(), bench_version=16) is None
+
+
+def test_season_duel_unserved_counts_only_unleased_owed_seeds() -> None:
+    from ditto.api_server.season_duel import season_duel_owed, season_duel_unserved
+
+    a, b, c = uuid4(), uuid4(), uuid4()
+    assert season_duel_owed((1, 2, 3), (2, 9)) == (1, 3)
+    unserved = season_duel_unserved(
+        member_ids=(a, b, c),
+        duel_seeds=(1, 2, 3),
+        seeds_by_agent={a: (1, 2, 3), b: (1,), c: ()},
+        leases={b: {"v1": 2, "v2": 3}, c: {"v1": 1}},
+    )
+    assert unserved == frozenset({c})
 
 
 async def test_v30_treasury_capability_is_signed_and_cannot_be_retrofitted(

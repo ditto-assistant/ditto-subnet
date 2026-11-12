@@ -231,10 +231,7 @@ import {
   v13ReplayPrivateReceiptSchema,
 } from '../lib/v13-private.schemas'
 
-import {
-  scheduleV13ReviewClockInputSchema,
-  v13ReviewClockScheduleSchema,
-} from '../lib/review-clock.schemas'
+import { v13ReviewClockScheduleSchema } from '../lib/review-clock.schemas'
 
 import {
   conversationAssessmentInputSchema,
@@ -246,7 +243,26 @@ import {
 
 import { benchmarkCanarySchema, issueBenchmarkCanaryInputSchema,
   getBenchmarkCanaryInputSchema, cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema,
+  getOperatorDiagnosticInputSchema, isolateOperatorDiagnosticInputSchema, operatorDiagnosticSchema,
 } from '../lib/benchmark-canary.schemas'
+
+export async function getOperatorDiagnostic(rawInput: unknown) {
+  const input = getOperatorDiagnosticInputSchema.parse(rawInput)
+  return operatorDiagnosticSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/operator-diagnostic/${input.agentId}`,
+  ))
+}
+
+export async function isolateOperatorDiagnostic(actor: string, rawInput: unknown) {
+  const input = isolateOperatorDiagnosticInputSchema.parse(rawInput)
+  return operatorDiagnosticSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/operator-diagnostic/${input.agentId}/isolate`, {
+      method: 'POST', actor,
+      body: { actor, expected_artifact_sha256: input.expectedArtifactSha256,
+        reason: input.reason, confirmation: input.confirmation },
+    },
+  ))
+}
 
 export async function listBenchmarkCanaries(rawInput: unknown) {
   const input = listBenchmarkCanariesInputSchema.parse(rawInput)
@@ -327,6 +343,8 @@ import {
   expireRunningScreeningResponseSchema,
   rejectScreeningSubmissionInputSchema,
   rejectScreeningSubmissionResponseSchema,
+  amendQuarantineRejectReasonInputSchema,
+  amendQuarantineRejectReasonResponseSchema,
   screeningSubmissionFiltersSchema,
   releaseVerifiedV13CourtClearInputSchema,
   releaseVerifiedV13CourtClearResponseSchema,
@@ -481,10 +499,8 @@ import {
   setQueuePolicySettingsInputSchema,
   screenerPolicyActivationViewSchema,
   scoredPolicyRescreenViewSchema,
-  advanceScoredPolicyRescreenInputSchema,
   restoreScoredScreeningSnapshotInputSchema,
   restoreScoredScreeningSnapshotResponseSchema,
-  scheduleScreenerPolicyActivationInputSchema,
   VALIDATOR_SLOT_SETTINGS_SCOPE,
   validatorSlotSettingsControlSchema,
   validatorIssuanceConfirmation,
@@ -519,6 +535,13 @@ import {
   copyCourtRevisionSchema,
   copyCourtRecommendationListSchema,
   copyCourtRecommendationsInputSchema,
+  applyUnreleasedCopySettingsInputSchema,
+  unreleasedCopySettingsRevisionResponseSchema,
+  unreleasedCopySettingsSchema,
+  unreleasedCopySignalInputSchema,
+  unreleasedCopySignalListSchema,
+  unreleasedCopySignalSchema,
+  unreleasedCopySignalsInputSchema,
   copyCourtTriagePreviewInputSchema,
   copyCourtTriagePreviewSchema,
   confirmationSeedAnchorListSchema,
@@ -593,7 +616,28 @@ import {
   submissionTermsReadSchema,
   submissionTermsSchema,
 } from '../lib/submission-terms.schemas'
+import {
+  competitionImprovementMetricsInputSchema,
+  competitionImprovementMetricsSchema,
+} from '../lib/competition-improvement.schemas'
+import {
+  admitStrandedSubmissionInputSchema,
+  strandedAdmissionResponseSchema,
+  strandedAdmissionsInputSchema,
+  strandedAdmissionsSchema,
+  strandedPreviousEraInputSchema,
+  strandedPreviousEraSchema,
+} from '../lib/benchmark-era-stranded.schemas'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
+import {
+  ownerCooldownLookupSchema,
+  ownerCooldownsInputSchema,
+  ownerCooldownsSchema,
+  revokeOwnerCooldownConfirmation,
+  revokeOwnerCooldownInputSchema,
+  setOwnerCooldownConfirmation,
+  setOwnerCooldownInputSchema,
+} from '../lib/owner-submission-cooldown.schemas'
 import {
   submissionDepositAddressControlSchema,
   updateSubmissionDepositAddressInputSchema,
@@ -1013,6 +1057,62 @@ export async function fetchCopyCourtRecommendations(rawInput: unknown) {
   return copyCourtRecommendationListSchema.parse(payload)
 }
 
+export async function fetchUnreleasedCopySignal(rawInput: unknown) {
+  const input = unreleasedCopySignalInputSchema.parse(rawInput)
+  const params = new URLSearchParams({ live: String(input.live) })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/unreleased-copy/agents/${encodeURIComponent(input.agentId)}?${params.toString()}`,
+  )
+  return unreleasedCopySignalSchema.parse(payload)
+}
+
+export async function fetchCompetitionImprovementMetrics(rawInput: unknown) {
+  const input = competitionImprovementMetricsInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.benchVersion !== undefined) params.set('bench_version', String(input.benchVersion))
+  if (input.since !== undefined) params.set('since', input.since)
+  const query = params.toString()
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/competition-improvement/metrics${query ? `?${query}` : ''}`,
+  )
+  return competitionImprovementMetricsSchema.parse(payload)
+}
+
+export async function fetchUnreleasedCopySignals(rawInput: unknown) {
+  const input = unreleasedCopySignalsInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    flagged_only: String(input.flaggedOnly),
+    min_score: String(input.minScore),
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/unreleased-copy/signals?${params.toString()}`,
+  )
+  return unreleasedCopySignalListSchema.parse(payload)
+}
+
+export async function fetchUnreleasedCopySettings() {
+  const payload = await platformAdminRequest('/api/v1/admin/unreleased-copy/settings')
+  return unreleasedCopySettingsSchema.parse(payload)
+}
+
+export async function applyUnreleasedCopySettings(actor: string, rawInput: unknown) {
+  const input = applyUnreleasedCopySettingsInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/unreleased-copy/settings', {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      settings: { mode: input.mode, threshold: input.threshold },
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return unreleasedCopySettingsRevisionResponseSchema.parse(payload)
+}
+
 export async function fetchCopyCourtTriagePreview(rawInput: unknown, actor: string) {
   const input = copyCourtTriagePreviewInputSchema.parse(rawInput)
   const payload = await platformAdminRequest(
@@ -1082,6 +1182,38 @@ export const databaseBackupStatusSchema = z.object({
 export async function fetchDatabaseBackupStatus() {
   return databaseBackupStatusSchema.parse(
     await platformAdminRequest('/api/v1/admin/database-backup-status', { timeoutMs: 60_000 }),
+  )
+}
+
+// Pylon ages its recent-neurons cache by write time, so only the snapshot's
+// block shows a refresh that read a lagging node (SN-463).
+export const registrationFreshnessSchema = z.object({
+  netuid: z.number().int(),
+  generated_at: z.string(),
+  snapshot_block: z.number().int().nonnegative(),
+  snapshot_observed_at: z.string(),
+  finalized_block: z.number().int().nullable(),
+  finalized_block_error: z.string().nullable(),
+  snapshot_lag_blocks: z.number().int().nullable(),
+  lag_reconcile_threshold_blocks: z.number().int(),
+  lag_check_interval_seconds: z.number().nullable(),
+  chain_registrations: z.object({
+    block: z.number().int().nonnegative(),
+    block_timestamp: z.string().nullable(),
+    provider: z.string(),
+    observed_at: z.string(),
+  }).nullable(),
+  serving_registrations_block: z.number().int(),
+  changes: z.array(z.object({
+    uid: z.number().int().nonnegative(),
+    pylon_hotkey: z.string().nullable(),
+    chain_hotkey: z.string().nullable(),
+  })),
+})
+
+export async function fetchRegistrationFreshness() {
+  return registrationFreshnessSchema.parse(
+    await platformAdminRequest('/api/v1/admin/registration-freshness'),
   )
 }
 
@@ -1331,6 +1463,69 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
     }
   }
   return control
+}
+
+const OWNER_COOLDOWNS_PATH = `${SUBMISSION_SETTINGS_PATH}/owner-cooldowns`
+
+export async function fetchOwnerCooldowns(rawInput: unknown) {
+  const input = ownerCooldownsInputSchema.parse(rawInput ?? {})
+  if ((input.scope === undefined) !== (input.ownerKey === undefined)) {
+    throw new Error('scope and ownerKey must be given together')
+  }
+  const params = new URLSearchParams({
+    include_inactive: String(input.includeInactive),
+    limit: String(input.limit),
+  })
+  if (input.scope !== undefined && input.ownerKey !== undefined) {
+    params.set('scope', input.scope)
+    params.set('owner_key', input.ownerKey)
+  }
+  const payload = await platformAdminRequest(`${OWNER_COOLDOWNS_PATH}?${params.toString()}`)
+  return ownerCooldownsSchema.parse(payload)
+}
+
+export async function setOwnerCooldown(actor: string, rawInput: unknown) {
+  const input = setOwnerCooldownInputSchema.parse(rawInput)
+  const expected = setOwnerCooldownConfirmation(input)
+  if (input.confirmation !== expected) {
+    throw new Error(`confirmation must be exactly ${expected}`)
+  }
+  const payload = await platformAdminRequest(OWNER_COOLDOWNS_PATH, {
+    method: 'POST',
+    actor,
+    body: {
+      scope: input.scope,
+      owner_key: input.ownerKey,
+      cooldown_seconds: input.cooldownSeconds,
+      expires_in_days: input.expiresInDays,
+      expected_revision: input.expectedRevision,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return ownerCooldownLookupSchema.parse(payload)
+}
+
+export async function revokeOwnerCooldown(actor: string, rawInput: unknown) {
+  const input = revokeOwnerCooldownInputSchema.parse(rawInput)
+  const expected = revokeOwnerCooldownConfirmation(input)
+  if (input.confirmation !== expected) {
+    throw new Error(`confirmation must be exactly ${expected}`)
+  }
+  const payload = await platformAdminRequest(`${OWNER_COOLDOWNS_PATH}/revoke`, {
+    method: 'POST',
+    actor,
+    body: {
+      scope: input.scope,
+      owner_key: input.ownerKey,
+      expected_revision: input.expectedRevision,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return ownerCooldownLookupSchema.parse(payload)
 }
 
 const HOTKEY_BANS_PATH = '/api/v1/admin/hotkey-bans'
@@ -1847,76 +2042,13 @@ export async function fetchV13ReviewClock() {
   return v13ReviewClockScheduleSchema.parse(await platformAdminRequest(V13_REVIEW_CLOCK_PATH))
 }
 
-export async function scheduleV13ReviewClock(rawInput: unknown, actor: string) {
-  const input = scheduleV13ReviewClockInputSchema.parse(rawInput)
-  await platformAdminRequest(V13_REVIEW_CLOCK_PATH, {
-    method: 'POST',
-    actor,
-    body: {
-      expected_revision: input.expectedRevision,
-      policy_version: 13,
-      policy_document_digest: input.policyDocumentDigest,
-      policy_manifest_digest: input.policyManifestDigest,
-      activate_at: input.activateAt,
-      window_seconds: input.windowSeconds,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return fetchV13ReviewClock()
-}
-
 export async function fetchScreenerPolicyActivation() {
   const payload = await platformAdminRequest(SCREENER_POLICY_ACTIVATION_PATH)
   return screenerPolicyActivationViewSchema.parse(payload)
 }
 
-export async function scheduleScreenerPolicyActivation(rawInput: unknown, actor: string) {
-  const input = scheduleScreenerPolicyActivationInputSchema.parse(rawInput)
-  await platformAdminRequest(SCREENER_POLICY_ACTIVATION_PATH, {
-    method: 'POST',
-    actor,
-    body: {
-      expected_revision: input.expectedRevision,
-      target_policy_version: input.targetPolicyVersion,
-      activate_at: input.activateAt,
-      rescreen_scored: input.rescreenScored,
-      ...(input.canaryOnly ? { canary_only: true } : {}),
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return fetchScreenerPolicyActivation()
-}
-
 export async function fetchScoredPolicyRescreen() {
   const payload = await platformAdminRequest(`${SCREENER_POLICY_ACTIVATION_PATH}/scored-rescreen`)
-  return scoredPolicyRescreenViewSchema.parse(payload)
-}
-
-export async function advanceScoredPolicyRescreen(rawInput: unknown, actor: string) {
-  const input = advanceScoredPolicyRescreenInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `${SCREENER_POLICY_ACTIVATION_PATH}/advance-scored-rescreen`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        expected_activation_revision: input.expectedActivationRevision,
-        expected_agent_id: input.expectedAgentId,
-        retry_paused: input.retryPaused,
-        max_active_releases: input.maxActiveReleases,
-        ...(input.reviewSettingsRevision === null
-          ? {}
-          : { review_settings_revision: input.reviewSettingsRevision }),
-        reason: input.reason,
-        actor,
-        confirmation: input.confirmation,
-      },
-    },
-  )
   return scoredPolicyRescreenViewSchema.parse(payload)
 }
 
@@ -3146,6 +3278,26 @@ export async function rejectScreeningSubmission(rawInput: unknown, actor: string
   return rejectScreeningSubmissionResponseSchema.parse(payload)
 }
 
+export async function amendQuarantineRejectReason(rawInput: unknown, actor: string) {
+  const input = amendQuarantineRejectReasonInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-quarantines/${encodeURIComponent(input.quarantineId)}/amend-reason`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        expected_agent_id: input.expectedAgentId,
+        expected_artifact_sha256: input.expectedArtifactSha256,
+        expected_attempt_id: input.expectedAttemptId,
+        expected_reason: input.expectedReason,
+        reason: input.reason,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return amendQuarantineRejectReasonResponseSchema.parse(payload)
+}
+
 export async function fetchScreeningArtifact(rawInput: unknown, actor: string) {
   const input = screeningArtifactInputSchema.parse(rawInput)
   const payload = await platformAdminRequest(
@@ -3486,6 +3638,54 @@ export async function releaseValidatorScoreRetest(rawInput: unknown, actor: stri
     },
   )
   return releaseValidatorScoreRetestResponseSchema.parse(payload)
+}
+
+export async function fetchStrandedPreviousEra(rawInput: unknown) {
+  const input = strandedPreviousEraInputSchema.parse(rawInput ?? {})
+  const params = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+    owner_best_only: String(input.ownerBestOnly),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/benchmark-rollout/stranded-previous-era?${params.toString()}`,
+  )
+  return strandedPreviousEraSchema.parse(payload)
+}
+
+export async function fetchStrandedAdmissions(rawInput: unknown) {
+  const input = strandedAdmissionsInputSchema.parse(rawInput ?? {})
+  const params = new URLSearchParams()
+  if (input.agentId) params.set('agent_id', input.agentId.toLowerCase())
+  const query = params.toString()
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/benchmark-rollout/stranded-previous-era/admissions${query ? `?${query}` : ''}`,
+  )
+  return strandedAdmissionsSchema.parse(payload)
+}
+
+export async function admitStrandedSubmission(actor: string, rawInput: unknown) {
+  const input = admitStrandedSubmissionInputSchema.parse(rawInput)
+  const agentId = input.agentId.toLowerCase()
+  type AdmitRequest = PlatformOperations['admit_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era__agent_id__admit_post']['requestBody']['content']['application/json']
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/benchmark-rollout/stranded-previous-era/${encodeURIComponent(agentId)}/admit`,
+    {
+      method: 'POST',
+      actor,
+      // Admission may render one active-version dataset before committing.
+      timeoutMs: 120_000,
+      body: {
+        actor,
+        reason: input.reason,
+        confirmation: input.confirmation,
+        expected_active_version: input.expectedActiveVersion,
+        expected_sha256: input.expectedSha256.toLowerCase(),
+        expected_previous_score_count: input.expectedPreviousScoreCount,
+      } satisfies AdmitRequest,
+    },
+  )
+  return strandedAdmissionResponseSchema.parse(payload)
 }
 
 export async function fetchBenchmarkContractRefresh(rawInput: unknown) {
@@ -3890,6 +4090,7 @@ function provisionalAgentScores({
     bench_version: score.bench_version ?? null,
     generated_at: score.accepted_at,
     transcript_sha256: score.transcript_sha256 ?? null,
+    ...(score.dueling_breakdown ? { dueling_breakdown: score.dueling_breakdown } : {}),
   }))
   return agentScoresDetailSchema.parse({
     agent_id: pipeline.agent_id,
@@ -4186,6 +4387,17 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
     const shares = gated.flatMap((evidence) =>
       typeof evidence.flagged_case_share === 'number' ? [evidence.flagged_case_share] : [],
     )
+    // Bench v16+ priced inference cost: the 350-case-normalised cost and the
+    // factor the composite carried, over the rows that priced their run.
+    const priced = gated.flatMap((evidence) =>
+      evidence.priced_cost?.result === 'priced' ? [evidence.priced_cost] : [],
+    )
+    const pricedCosts = priced.flatMap((cost) =>
+      typeof cost.normalized_cost_usd === 'number' ? [cost.normalized_cost_usd] : [],
+    )
+    const pricedFactors = priced.flatMap((cost) =>
+      typeof cost.applied_factor_bps === 'number' ? [cost.applied_factor_bps] : [],
+    )
     const version = {
       bench_version: benchVersion,
       score_count: rows.length,
@@ -4202,6 +4414,8 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
         previousMedian === null ? null : medianComposite - previousMedian,
       gate_posture: postures.size === 1 ? ([...postures][0] ?? null) : null,
       median_flagged_case_share: shares.length ? median(shares) : null,
+      median_priced_cost_usd: pricedCosts.length ? median(pricedCosts) : null,
+      median_priced_cost_factor_bps: pricedFactors.length ? median(pricedFactors) : null,
     }
     previousMedian = medianComposite
     return version

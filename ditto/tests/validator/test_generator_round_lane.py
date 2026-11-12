@@ -373,3 +373,176 @@ async def test_round_run_keeps_the_validator_heartbeat_fresh(
     assert states.count("running_benchmark") >= 2
     assert states[-1] == "polling"
     assert worker._active_agent_id is None
+
+
+async def test_round_run_publishes_scorer_progress_past_preparing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A panel run reports the scorer's stage and case counts on its slot.
+
+    Without the callback the slot stayed at ``preparing`` for the whole run,
+    and Platform's early-stage rule flagged every round run longer than 15
+    minutes as a stalled benchmark while the harness was answering cases.
+    """
+    from ditto.validator.dittobench import DittobenchProgressSnapshot
+
+    job = _job(case_count=420)
+    dittobench = MagicMock()
+    seen: list[tuple[str, int | None, int | None]] = []
+
+    async def round_with_progress(**kwargs: object):
+        callback = kwargs["progress_callback"]
+        assert callable(callback)
+        await callback(
+            DittobenchProgressSnapshot(
+                stage="running_benchmark",
+                completed=70,
+                total=420,
+                run_token="0123456789abcdef",
+            )
+        )
+        progress = worker._benchmark_progress
+        assert progress is not None
+        seen.append((progress.stage, progress.completed, progress.total))
+        return ("run-1", [{"case_id": "c0/a", "score": 1.0}])
+
+    dittobench.run_generator_round = AsyncMock(side_effect=round_with_progress)
+    worker, platform = _worker(job, dittobench)
+
+    async def no_heartbeat(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    monkeypatch.setattr(worker, "_report_heartbeat", no_heartbeat)
+
+    assert await worker._run_generator_round_lane() is True
+
+    assert seen == [("running_benchmark", 70, 420)]
+    platform.submit_generator_round_score.assert_awaited_once()
+    assert worker._slots["slot-0"].active_agent_id is None
+
+
+# --- frontier oracle runs ----------------------------------------------------
+
+
+def _oracle_job(**overrides: object) -> GeneratorRoundJobResponse:
+    return _job(
+        dataset_mode="generator-frontier-oracle-v1",
+        oracle_case_ids=["c0/a", "c1/b"],
+        **overrides,
+    )
+
+
+def test_oracle_cases_bind_to_the_oracle_mode() -> None:
+    with pytest.raises(ValueError):
+        _job(oracle_case_ids=["c0/a", "c1/b"])  # a panel run never carries them
+    with pytest.raises(ValueError):
+        _job(dataset_mode="generator-frontier-oracle-v1")  # an oracle run needs them
+    with pytest.raises(ValueError):
+        _oracle_job(case_count=3)  # case_count is the oracle case count
+    with pytest.raises(ValueError):
+        _job(
+            dataset_mode="generator-frontier-oracle-v1",
+            oracle_case_ids=["c0/a", "c0/a"],
+        )
+
+
+async def test_an_oracle_run_answers_exactly_its_cases() -> None:
+    job = _oracle_job()
+    dittobench = MagicMock()
+    dittobench.run_generator_round = AsyncMock(
+        return_value=(
+            "run-o",
+            [
+                {"case_id": "c1/b", "score": 1.0, "category": "generator_round"},
+                {"case_id": "c0/a", "score": 0.0, "category": "generator_round"},
+            ],
+        )
+    )
+    worker, platform = _worker(job, dittobench)
+    worker._scorer_runs_frontier_oracle = True
+
+    assert await worker._run_generator_round_lane() is True
+
+    kwargs = dittobench.run_generator_round.await_args.kwargs
+    assert kwargs["oracle_case_ids"] == ["c0/a", "c1/b"]
+    platform.submit_generator_round_score.assert_awaited_once()
+    platform.fail_generator_round_job.assert_not_awaited()
+
+
+async def test_an_oracle_run_answering_other_cases_is_never_posted() -> None:
+    job = _oracle_job()
+    dittobench = MagicMock()
+    # An older scorer ignored the oracle cases and ran the whole dataset.
+    dittobench.run_generator_round = AsyncMock(
+        return_value=(
+            "run-o",
+            [
+                {"case_id": "c0/a", "score": 1.0, "category": "generator_round"},
+                {"case_id": "c0/z", "score": 1.0, "category": "generator_round"},
+                {"case_id": "c1/b", "score": 1.0, "category": "generator_round"},
+            ],
+        )
+    )
+    worker, platform = _worker(job, dittobench)
+    worker._scorer_runs_frontier_oracle = True
+
+    assert await worker._run_generator_round_lane() is True
+
+    platform.submit_generator_round_score.assert_not_awaited()
+    platform.fail_generator_round_job.assert_awaited_once()
+    assert platform.fail_generator_round_job.await_args.kwargs["reason"] == (
+        "scoring_error"
+    )
+
+
+async def test_an_oracle_job_without_the_scorer_mode_is_handed_back() -> None:
+    job = _oracle_job()
+    dittobench = MagicMock()
+    dittobench.run_generator_round = AsyncMock()
+    worker, platform = _worker(job, dittobench)
+
+    assert await worker._run_generator_round_lane() is True
+
+    dittobench.run_generator_round.assert_not_awaited()
+    assert platform.fail_generator_round_job.await_args.kwargs["detail"] == (
+        "round_job_not_executable"
+    )
+
+
+async def test_dittobench_oracle_submission_uses_the_oracle_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = DittobenchClient.__new__(DittobenchClient)
+    client._config = MagicMock(dittobench_mock=False)  # type: ignore[attr-defined]
+    submitted: dict[str, object] = {}
+
+    async def _submit(**kwargs: object) -> str:
+        submitted.update(kwargs)
+        return "run-o"
+
+    async def _poll_run(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"run_id": "run-o", "per_case": [{"case_id": "c0/a", "score": 1.0}]}
+
+    monkeypatch.setattr(client, "_submit", _submit)
+    monkeypatch.setattr(client, "_poll_run", _poll_run)
+    await client.run_generator_round(
+        tarball_url=None,
+        tarball_sha256="ab" * 32,
+        dataset_bytes=_DATASET,
+        dataset_sha256=hashlib.sha256(_DATASET).hexdigest(),
+        seed=5,
+        screened_image_url="https://i",
+        screened_image_sha256="12" * 32,
+        screened_image_size_bytes=1,
+        screened_image_id="sha256:" + "34" * 32,
+        screened_image_ref="r",
+        inference_session_id=None,
+        inference_grant_id=None,
+        inference_agent_id=None,
+        inference_slot_id=None,
+        inference_ticket_deadline=None,
+        ticket_deadline=datetime.now(UTC) + timedelta(minutes=30),
+        oracle_case_ids=["c0/a"],
+    )
+    assert submitted["private_dataset_mode"] == "generator-frontier-oracle-v1"
+    assert submitted["oracle_case_ids"] == ["c0/a"]

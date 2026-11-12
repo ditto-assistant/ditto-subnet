@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Any, Literal, cast
 
 ArchiveRpcAuthMode = Literal["none", "query", "path"]
@@ -91,6 +92,16 @@ class ChainConfig:
     archive_rpc_timeout_seconds: float = 10.0
     """Maximum connection-plus-query time allowed for each archive provider."""
 
+    metagraph_lag_check_seconds: float | None = None
+    """How often a consumed Pylon metagraph snapshot is compared with a fresh
+    finalized head; ``None`` disables the check.
+
+    Pylon ages its recent-neurons cache by when it wrote it, not by the block
+    it read, so a refresh over a lagging node connection still looks fresh.
+    The check is one header read; registrations are re-read from chain storage
+    only when the snapshot has fallen behind.
+    """
+
     def __post_init__(self) -> None:
         """Validate that at least one Pylon auth mode is configured."""
         if bool(self.identity_name) != bool(self.identity_token):
@@ -108,6 +119,11 @@ class ChainConfig:
             raise ValueError("archive_rpc_auth_mode must be one of: none, query, path")
         if self.archive_rpc_timeout_seconds <= 0:
             raise ValueError("archive_rpc_timeout_seconds must be positive")
+        if (
+            self.metagraph_lag_check_seconds is not None
+            and self.metagraph_lag_check_seconds <= 0
+        ):
+            raise ValueError("metagraph_lag_check_seconds must be positive or None")
 
 
 def parse_chain_config_from_env() -> ChainConfig:
@@ -139,6 +155,10 @@ def parse_chain_config_from_env() -> ChainConfig:
     public_archive_rpc_urls = (
         _FINNEY_PUBLIC_ARCHIVE_RPC_URLS if subtensor_network == "finney" else ()
     )
+    # Zero disables the check.
+    metagraph_lag_check_seconds = (
+        float(os.environ.get("METAGRAPH_LAG_CHECK_SECONDS", "300")) or None
+    )
 
     return ChainConfig(
         pylon_url=os.environ.get("PYLON_URL", "http://localhost:8001"),
@@ -155,6 +175,7 @@ def parse_chain_config_from_env() -> ChainConfig:
         archive_rpc_timeout_seconds=float(
             os.environ.get("SUBTENSOR_ARCHIVE_RPC_TIMEOUT_SECONDS", "10")
         ),
+        metagraph_lag_check_seconds=metagraph_lag_check_seconds,
     )
 
 
@@ -210,6 +231,143 @@ class NeuronInfo:
             is_active=bool(getattr(raw, "active", False)),
             validator_permit=bool(getattr(raw, "validator_permit", False)),
         )
+
+
+@dataclass(frozen=True)
+class ChainRegistration:
+    """One uid's hotkey and that hotkey's owner coldkey, from chain storage."""
+
+    uid: int
+    hotkey: str
+    coldkey: str
+
+
+@dataclass(frozen=True)
+class ChainRegistrations:
+    """Every uid's registration on a subnet at one finalized block.
+
+    Read from ``SubtensorModule.Keys`` and ``Owner`` on a fresh connection, so
+    it shares neither Pylon's long-lived node connection nor its refresh cycle.
+    """
+
+    netuid: int
+    block: int
+    block_timestamp: int | None
+    """Unix seconds of ``block``; ``None`` when the timestamp read failed."""
+
+    provider: str
+    """Hostname that served the read. Never carries a credential."""
+
+    observed_at: datetime
+    registrations: tuple[ChainRegistration, ...]
+
+    def lookup(self, hotkey: str) -> ChainRegistration | None:
+        """The registration ``hotkey`` holds at :attr:`block`, if any."""
+        return next((r for r in self.registrations if r.hotkey == hotkey), None)
+
+    def head_age_seconds(self, now: float) -> float | None:
+        """How old :attr:`block` was at unix time ``now``, when known."""
+        if self.block_timestamp is None:
+            return None
+        return max(0.0, now - self.block_timestamp)
+
+
+@dataclass(frozen=True)
+class NeuronSnapshot:
+    """A subnet's neurons and the chain block they describe.
+
+    ``block`` is the block Pylon read its recent-neurons snapshot at. Pylon
+    ages that cache by when it wrote it, not by this block, so a refresh over
+    a lagging node connection is served as fresh; the block is the only height
+    signal. ``registrations_block`` is newer than ``block`` when uid, hotkey and
+    coldkey were taken from a newer read of chain storage.
+    """
+
+    block: int
+    neurons: tuple[NeuronInfo, ...]
+    observed_at: datetime
+    """When Platform fetched the snapshot from Pylon."""
+
+    registrations_block: int
+
+    def neuron(self, hotkey: str) -> NeuronInfo | None:
+        """The neuron registered to ``hotkey`` in this snapshot, if any."""
+        return next((n for n in self.neurons if n.hotkey == hotkey), None)
+
+    def with_registrations(self, chain: ChainRegistrations | None) -> NeuronSnapshot:
+        """This snapshot with each uid's registration taken from a newer chain read.
+
+        A neuron whose uid still holds the same hotkey keeps Pylon's other
+        fields. A uid re-registered since the snapshot carries the chain's
+        hotkey and coldkey with neutral defaults (no stake, no validator
+        permit), and the hotkey it replaced is gone. A chain read no newer than
+        the snapshot changes nothing.
+        """
+        if chain is None or chain.block <= self.registrations_block:
+            return self
+        current = {(n.uid, n.hotkey): n for n in self.neurons}
+        neurons = tuple(
+            replace(neuron, coldkey=entry.coldkey)
+            if (neuron := current.get((entry.uid, entry.hotkey))) is not None
+            else NeuronInfo(
+                hotkey=entry.hotkey, coldkey=entry.coldkey, uid=entry.uid, stake=0.0
+            )
+            for entry in chain.registrations
+        )
+        return replace(self, neurons=neurons, registrations_block=chain.block)
+
+
+@dataclass(frozen=True)
+class HotkeyRegistration:
+    """Whether a hotkey is registered on a subnet, with the evidence used."""
+
+    hotkey: str
+    netuid: int
+    uid: int | None
+    coldkey: str | None
+    """Owner coldkey; ``None`` exactly when the hotkey is not registered."""
+
+    snapshot_block: int
+    """Block of the Pylon metagraph snapshot that was consulted."""
+
+    chain_block: int | None = None
+    """Finalized block of the chain-storage read made because the snapshot
+    lacked the hotkey; ``None`` when the snapshot alone answered."""
+
+    @property
+    def registered(self) -> bool:
+        """Whether the hotkey holds a uid on :attr:`netuid`."""
+        return self.coldkey is not None
+
+
+@dataclass(frozen=True)
+class RegistrationChange:
+    """A uid whose hotkey differs between Pylon's snapshot and chain storage."""
+
+    uid: int
+    pylon_hotkey: str | None
+    chain_hotkey: str | None
+
+
+@dataclass(frozen=True)
+class RegistrationFreshness:
+    """How far Pylon's metagraph snapshot trails the chain, for operators."""
+
+    netuid: int
+    snapshot_block: int
+    snapshot_observed_at: datetime
+    finalized_block: int | None
+    """A fresh finalized head; ``None`` when no provider answered."""
+
+    finalized_block_error: str | None
+    chain_registrations: ChainRegistrations | None
+    """The newest chain-storage registration read held in memory, if any."""
+
+    serving_registrations_block: int
+    """Block the registrations every consumer currently sees describe."""
+
+    changes: tuple[RegistrationChange, ...]
+    """Uids where what consumers see differs from Pylon's snapshot."""
 
 
 @dataclass(frozen=True)

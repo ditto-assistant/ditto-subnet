@@ -43,6 +43,35 @@ def provider_outage_active(
     return _aware(circuit.last_failure_at) > now - PROVIDER_RECOVERY_QUIET_WINDOW
 
 
+def provider_gate_closed(
+    circuit: ProviderOutageCircuit | None, *, now: datetime
+) -> bool:
+    """Whether :func:`lock_provider_work_gate` refuses every new workload now.
+
+    The read-only, fleet-wide twin of the gate: open and cooling down, or open
+    with a live half-open probe already claimed. After ``retry_at`` with no
+    probe registered, one workload would be admitted, so the gate reads open.
+    """
+    if circuit is None or circuit.state == "closed":
+        return False
+    if _aware(circuit.retry_at) > now:
+        return True
+    return (
+        circuit.probe_kind is not None
+        and circuit.probe_expires_at is not None
+        and _aware(circuit.probe_expires_at) > now
+    )
+
+
+async def read_provider_circuit(
+    session: AsyncSession, *, provider: str = OPENROUTER_PROVIDER
+) -> ProviderOutageCircuit | None:
+    """The circuit row without a lock, for read-only projections."""
+    return await session.scalar(
+        select(ProviderOutageCircuit).where(ProviderOutageCircuit.provider == provider)
+    )
+
+
 def scoring_probe_key(*, validator_hotkey: str, slot_id: str) -> str:
     return f"{validator_hotkey}:{slot_id}"
 
@@ -188,7 +217,9 @@ __all__ = [
     "ProviderWorkGate",
     "lock_provider_work_gate",
     "park_scoring_leases",
+    "provider_gate_closed",
     "provider_outage_active",
+    "read_provider_circuit",
     "register_provider_probe",
     "scoring_probe_key",
 ]

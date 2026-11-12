@@ -26,6 +26,10 @@ from ditto.api_server.endpoints import admin_leaderboard
 from ditto.api_server.endpoints.validator import _KothLaneSnapshot
 from ditto.api_server.koth import KothEntry, continual_composite
 from ditto.chain import ChainClient
+from ditto.db.queries.confirmation_score_voids import VoidRerunDebt
+from ditto.db.queries.dueling_season_expiry import SeasonCoverage, SeasonScore
+from ditto.db.queries.dueling_season_window import DuelingSeasonWindow
+from ditto.db.queries.retest_sample_inference import RetestSampleInference
 
 pytestmark = pytest.mark.asyncio
 
@@ -187,6 +191,9 @@ def _install(
     pending_seeds: tuple[int, ...] = (_SEEDS[0], _SEEDS[1]),
     leases: dict[str, int | None] | None = None,
     least_covered: bool = True,
+    samples: tuple[RetestSampleInference, ...] = (),
+    debts: tuple[VoidRerunDebt, ...] = (),
+    circuit: object | None = None,
 ) -> None:
     """Stub only the database and chain edges; the fold logic stays real."""
     monkeypatch.setattr(
@@ -234,6 +241,34 @@ def _install(
         admin_leaderboard,
         "miner_has_newer_canonical_work",
         AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        admin_leaderboard,
+        "retest_sample_inference",
+        AsyncMock(return_value=list(samples)),
+    )
+    monkeypatch.setattr(
+        admin_leaderboard,
+        "voided_confirmation_keys",
+        AsyncMock(return_value=frozenset()),
+    )
+
+    async def _debts(
+        _session: object, *, ledger_agent_ids: frozenset[UUID], **_: object
+    ) -> list[VoidRerunDebt]:
+        # The lane's own ledger filter, applied to the stubbed debt rows.
+        return [debt for debt in debts if debt.agent_id in ledger_agent_ids]
+
+    monkeypatch.setattr(admin_leaderboard, "_void_rerun_debts", _debts)
+    monkeypatch.setattr(
+        admin_leaderboard, "read_provider_circuit", AsyncMock(return_value=circuit)
+    )
+    # Bench v13 sits below the dueling floor: no season coverage, no pin read.
+    monkeypatch.setattr(
+        admin_leaderboard, "season_coverage", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(
+        admin_leaderboard, "_in_current_pin", AsyncMock(return_value=None)
     )
 
 
@@ -321,6 +356,11 @@ async def test_exact_agent_diagnostic_preserves_seeds_and_owner_reason(
     assert claim.claimable_seed_available
     assert claim.live_lease_count == 0
     assert claim.decision == "claimable"
+    # Season duels are off by default and say so rather than guessing.
+    assert claim.retest_mode == "continual"
+    assert claim.season_duel_seed_count is None
+    assert claim.season_duel_anchor_champion_id is None
+    assert claim.season_duel_held_seed_count is None
     # Outstanding work is a count. No seed value reaches the claim projection.
     assert all(
         str(seed) not in claim.model_dump_json() for seed in (_SEEDS[0], _SEEDS[1])
@@ -387,6 +427,11 @@ async def test_stronger_successor_is_outside_the_cohort_it_outscores(
     assert incumbent_result.official_sample_count == 18
     assert incumbent_result.representative_selection == "self"
     assert incumbent_result.representative_margin == 0
+    # The lane's seed budget is visible: floor 8, work cap 10, and the live
+    # variance target (no recorded wave variance here, so the floor).
+    assert incumbent_result.confirmation_seed_floor == 8
+    assert incumbent_result.confirmation_seed_cap == 10
+    assert incumbent_result.confirmation_seed_target == 8
 
 
 def _decide(
@@ -401,6 +446,7 @@ def _decide(
     claimable_seed_available: bool = True,
     newer_canonical_work_pending: bool = False,
     least_covered_admitted: bool | None = True,
+    provider_gate_closed: bool = False,
 ) -> str:
     """Call the lane-order decision with one gate flipped at a time."""
     return admin_leaderboard._claim_decision(
@@ -414,6 +460,7 @@ def _decide(
         claimable_seed_available=claimable_seed_available,
         newer_canonical_work_pending=newer_canonical_work_pending,
         least_covered_admitted=least_covered_admitted,
+        provider_gate_closed=provider_gate_closed,
     )
 
 
@@ -437,3 +484,241 @@ async def test_claim_decision_follows_the_lane_gate_order() -> None:
         )
         == "claimable"
     )
+
+
+async def test_diagnostic_carries_each_samples_grant_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A low sample shows the relay failures behind it, seed kept exact."""
+    sample = RetestSampleInference(
+        validator_hotkey="5HEouuDa",
+        seed=_SEEDS[0],
+        composite=0.651813,
+        run_id="fd227604",
+        accepted_at=_NOW.replace(tzinfo=None),
+        void_generation=0,
+        grant_id=UUID("33c2b609-0000-4000-8000-000000000000"),
+        chat_requests=3861,
+        failed_requests=2127,
+        failure_codes=(("upstream_http_402", 2127),),
+    )
+    _install(
+        monkeypatch,
+        snapshot=_snapshot(challenger=True),
+        catchup=frozenset({_SUCCESSOR}),
+        samples=(sample,),
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _SUCCESSOR,
+    )
+
+    [wire] = result.retest_samples
+    assert wire.seed == str(_SEEDS[0])
+    assert wire.accepted_at.tzinfo is not None
+    assert (wire.chat_requests, wire.failed_requests) == (3861, 2127)
+    assert [(code.terminal_error_code, code.count) for code in wire.failure_codes] == [
+        ("upstream_http_402", 2127)
+    ]
+
+
+def _debt(agent_id: UUID, seed: int) -> VoidRerunDebt:
+    return VoidRerunDebt(
+        agent_id=agent_id,
+        bench_version=_BENCH_VERSION,
+        seed=seed,
+        outstanding=1,
+        rerun_validators=frozenset({"5HEouuDa"}),
+        scored_validators=frozenset({"5HEouuDa"}),
+        oldest_void_at=_NOW,
+        newest_void_at=_NOW,
+    )
+
+
+async def test_void_rerun_debt_makes_an_outside_cohort_agent_claimable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wonder v6 shape: outside the cohort, owed two outage-voided seeds.
+
+    The cohort answer alone is ``not_in_cohort``; the void debt routes it
+    right behind the crown, as a count with no seed value in the projection.
+    """
+    debts = (_debt(_SUCCESSOR, _SEEDS[3]), _debt(_SUCCESSOR, _SEEDS[4]))
+    _install(
+        monkeypatch,
+        snapshot=_snapshot(challenger=False),
+        catchup=frozenset(),
+        debts=debts,
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _SUCCESSOR,
+    )
+
+    assert not result.in_retest_cohort
+    assert result.admission_reason == "owner_suppressed"
+    claim = result.claim
+    assert claim is not None
+    assert claim.route_priority == "void_rerun"
+    assert claim.route_position == 2
+    assert claim.void_rerun_seed_count == 2
+    assert claim.void_rerun_claimable
+    assert not claim.provider_outage_active
+    assert claim.decision == "claimable"
+    assert all(
+        str(seed) not in claim.model_dump_json() for seed in (_SEEDS[3], _SEEDS[4])
+    )
+
+
+async def test_void_rerun_debt_waits_out_an_open_provider_circuit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(
+        monkeypatch,
+        snapshot=_snapshot(challenger=False),
+        catchup=frozenset(),
+        debts=(_debt(_SUCCESSOR, _SEEDS[3]),),
+        circuit=SimpleNamespace(
+            state="open",
+            last_failure_at=_NOW,
+            retry_at=datetime.now(UTC) + timedelta(minutes=2),
+            probe_kind=None,
+            probe_expires_at=None,
+        ),
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _SUCCESSOR,
+    )
+
+    claim = result.claim
+    assert claim is not None
+    assert claim.void_rerun_seed_count == 1
+    assert not claim.void_rerun_claimable
+    assert claim.provider_outage_active
+    assert claim.provider_gate_closed
+    assert claim.decision == "provider_outage"
+
+
+async def test_closed_provider_gate_blocks_every_route_in_the_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An in-cohort catch-up member is no more claimable than the debt."""
+    _install(
+        monkeypatch,
+        snapshot=_snapshot(challenger=True),
+        catchup=frozenset({_SUCCESSOR}),
+        circuit=SimpleNamespace(
+            state="open",
+            last_failure_at=_NOW,
+            retry_at=datetime.now(UTC) + timedelta(minutes=2),
+            probe_kind=None,
+            probe_expires_at=None,
+        ),
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _SUCCESSOR,
+    )
+
+    claim = result.claim
+    assert claim is not None
+    assert result.in_retest_cohort
+    assert claim.route_priority == "catchup"
+    assert claim.claimable_seed_available
+    assert claim.provider_gate_closed
+    assert claim.decision == "provider_outage"
+    assert _decide(provider_gate_closed=True) == "provider_outage"
+    assert _decide(lane_enabled=False, provider_gate_closed=True) == "lane_disabled"
+
+
+_EXPIRED = UUID("04956b03-dd1d-418d-acab-39abf30628af")
+_SEASON_EXPIRED = UUID("87a46084-1664-4dbe-bc56-6fb8d3f57200")
+_SEASON_PREVIOUS = UUID("5b1c5a3e-0d0e-4a52-9a0c-3d1b8f0c2a10")
+_SEASON_CURRENT = UUID("428a8bc5-b002-4af4-91e4-964cb83128f4")
+
+
+def _expired_coverage() -> SeasonCoverage:
+    """logan v15 at 10:47 ET: a 3/3 quorum, all of it from season 26101."""
+    return SeasonCoverage(
+        agent_id=_EXPIRED,
+        bench_version=17,
+        window=DuelingSeasonWindow(
+            bench_version=17, current=_SEASON_CURRENT, previous=_SEASON_PREVIOUS
+        ),
+        scores=tuple(
+            SeasonScore(
+                validator_hotkey=f"5Val{index}",
+                dueling_season_id=_SEASON_EXPIRED,
+                composite=composite,
+                n=350,
+            )
+            for index, composite in enumerate((0.95, 0.960714, 0.97), start=1)
+        ),
+        opened_seasons=(_SEASON_CURRENT, _SEASON_PREVIOUS, _SEASON_EXPIRED),
+    )
+
+
+@pytest.mark.parametrize(
+    ("coverage", "in_pin", "reason"),
+    [
+        (_expired_coverage(), True, "expired_dueling_season"),
+        (None, None, "not_current_finalized_ledger"),
+    ],
+)
+async def test_an_expired_season_quorum_is_named_not_reported_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    coverage: SeasonCoverage | None,
+    in_pin: bool | None,
+    reason: str,
+) -> None:
+    """SN-466: an agent absent from the ledger because its quorum aged out of
+    the two-season window says so, with the seasons on both sides."""
+    _install(monkeypatch, snapshot=_snapshot(challenger=False), catchup=frozenset())
+    monkeypatch.setattr(
+        admin_leaderboard,
+        "season_coverage",
+        AsyncMock(return_value={} if coverage is None else {_EXPIRED: coverage}),
+    )
+    monkeypatch.setattr(
+        admin_leaderboard, "_in_current_pin", AsyncMock(return_value=in_pin)
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _EXPIRED,
+    )
+
+    assert result.admission_reason == reason
+    assert not result.ledger_eligible
+    assert result.official_composite is None
+    assert result.in_current_pin is in_pin
+    if coverage is None:
+        assert result.score_dueling_season_ids == []
+        assert result.window_dueling_season_ids == []
+        assert result.in_window_score_count is None
+        assert result.last_valid_composite is None
+        return
+    assert result.score_dueling_season_ids == [_SEASON_EXPIRED]
+    assert result.window_dueling_season_ids == [_SEASON_CURRENT, _SEASON_PREVIOUS]
+    assert result.in_window_score_count == 0
+    assert result.last_valid_composite == pytest.approx(0.960714)

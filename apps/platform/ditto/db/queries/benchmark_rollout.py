@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, select, true
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import (
+    BenchmarkContract,
     benchmark_contract,
     latest_benchmark_contract,
 )
@@ -36,6 +37,12 @@ from ditto.db.models import (
     ValidatorHeartbeat,
     ValidatorTicket,
 )
+from ditto.db.queries.dueling_season_window import (
+    DuelingSeasonWindow,
+    dueling_season_window,
+    season_scope_predicate,
+)
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -387,6 +394,13 @@ async def rolling_top_five(
                     if target_version is not None
                     else (source_version,)
                 ),
+                # Bench v16+: only each version's dueling season window ranks.
+                await season_scope_predicate(
+                    session,
+                    version_column=Score.bench_version,
+                    season_column=Score.dueling_season_id,
+                    bench_versions=(source_version, target_version),
+                ),
             )
         )
     ).all()
@@ -506,6 +520,12 @@ async def historical_rescore_cohort(
             ).where(
                 Score.agent_id.in_([agent.agent_id for agent in agents]),
                 Score.bench_version.in_(versions),
+                await season_scope_predicate(
+                    session,
+                    version_column=Score.bench_version,
+                    season_column=Score.dueling_season_id,
+                    bench_versions=versions,
+                ),
             )
         )
     ).all()
@@ -1438,9 +1458,23 @@ def verified_scorer_for_version(
     # an earlier canary scorer cannot serve these contracts.
     if version >= 13 and not scorer.deterministic_v13_datasets:
         return None
+    # Bench v16+ (dueling) runs carry a generator slice: lease them only to a
+    # validator that forwards the version in ``dueling_slice_bench_versions``.
+    if is_dueling_bench_version(version) and version not in (
+        scorer.dueling_slice_bench_versions or ()
+    ):
+        return None
     # A v14 target needs its own version-bound environment packet. The
     # historical v13 packet stays immutable and cannot qualify a v14 rollout.
     if version == 14 and scorer.v14_scored_runtime_env is None:
+        return None
+    # v15 adds the decision-lane key to the sandbox environment, so it needs
+    # its own packet; a v14 packet cannot qualify a v15 rollout.
+    if version == 15 and scorer.v15_scored_runtime_env is None:
+        return None
+    # v16 injects the v15 keys, but its packet is version-bound like the
+    # others, so a v15 packet cannot qualify a v16 rollout.
+    if version == 16 and scorer.v16_scored_runtime_env is None:
         return None
     if version >= 9 and not _scorer_meets_version_floor(
         heartbeat,
@@ -1677,7 +1711,9 @@ async def rollout_cohort_score_complete(
             .outerjoin(
                 Score,
                 (Score.agent_id == BenchmarkRolloutMember.agent_id)
-                & (Score.bench_version == rollout.desired_version),
+                & (Score.bench_version == rollout.desired_version)
+                # Bench v16+: an expired season's score is not a quorum row.
+                & await _desired_season_scope(session, rollout),
             )
             .where(
                 BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
@@ -1700,11 +1736,109 @@ async def rollout_cohort_score_complete(
         )
     ).all():
         statuses[agent_id] = status
-    return all(
-        statuses.get(agent_id) in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
-        or int(count) >= SCORING_QUORUM
+    short = [
+        agent_id
         for agent_id, count in count_rows
+        if statuses.get(agent_id) not in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
+        and int(count) < SCORING_QUORUM
+    ]
+    if not short:
+        return True
+    return set(short) <= await agent_attributable_exhausted_members(
+        session, rollout=rollout, agent_ids=short
     )
+
+
+async def agent_attributable_exhausted_members(
+    session: AsyncSession,
+    *,
+    rollout: BenchmarkRollout,
+    agent_ids: Collection[UUID],
+) -> set[UUID]:
+    """Members whose desired-version quorum died on the artifact's own failure.
+
+    The desired-version twin of the terminal close-out: every remaining slot
+    the member still needs is exhausted on one named agent-attributable code
+    (an oversized request, a spent allowance, ...). Re-leasing the same image
+    repeats that failure, so waiting for the member deadlocks activation as
+    surely as a ban would. The member stays unranked on the desired version
+    until its owner resubmits; it is resolved for the barrier, never scored.
+
+    The closed-out member keeps its status, so this reads the evidence
+    instead: ``withdrawal_gate`` only accepts an ``evaluating`` submission,
+    and a frozen member is ``scored`` or ``live``. Fail-closed exactly like
+    the close-out -- a live lease, an infra or missing detail, or mixed
+    causes keep the member blocking until an operator retry settles it.
+    """
+    from ditto.db.queries.retry_state import (
+        HARNESS_KILLED_137_DETAIL,
+        current_failure_detail,
+        is_agent_attributable_exhaustion,
+        is_agent_attributable_failure_detail,
+    )
+    from ditto.db.queries.tickets import scoring_retry_ticket
+
+    ids = set(agent_ids)
+    if not ids:
+        return set()
+    # ``active_bench_version`` reaches this on every call while the barrier
+    # is open, so it reads plain columns, never ORM rows: no log tail or
+    # per-case score breakdown is fetched, and no partial ticket or score
+    # lands in a session the caller may go on to lease or write from. The
+    # rows carry exactly the attributes the retry-state predicates read.
+    tickets: dict[UUID, list[ValidatorTicket]] = {agent_id: [] for agent_id in ids}
+    for ticket in await session.execute(
+        select(
+            ValidatorTicket.agent_id,
+            ValidatorTicket.validator_hotkey,
+            ValidatorTicket.status,
+            ValidatorTicket.purpose,
+            ValidatorTicket.provider_outage_epoch,
+            ValidatorTicket.attempt_count,
+            ValidatorTicket.manual_retry_grants,
+            ValidatorTicket.failure_detail,
+            ValidatorTicket.failed_at,
+            ValidatorTicket.issued_at,
+        ).where(
+            ValidatorTicket.agent_id.in_(ids),
+            ValidatorTicket.bench_version == rollout.desired_version,
+            scoring_retry_ticket(),
+        )
+    ):
+        tickets[ticket.agent_id].append(cast("ValidatorTicket", ticket))
+    # Members still working, or with no agent-caused failure at all, cannot
+    # qualify; skip the score read for them (the common, healthy case).
+    candidates = {
+        agent_id
+        for agent_id, rows in tickets.items()
+        if not any(ticket.status == TicketStatus.ISSUED for ticket in rows)
+        and any(
+            is_agent_attributable_failure_detail(
+                detail := current_failure_detail(ticket)
+            )
+            or detail == HARNESS_KILLED_137_DETAIL
+            for ticket in rows
+        )
+    }
+    if not candidates:
+        return set()
+    scores: dict[UUID, list[Score]] = {agent_id: [] for agent_id in candidates}
+    for score in await session.execute(
+        select(Score.agent_id, Score.validator_hotkey).where(
+            Score.agent_id.in_(candidates),
+            Score.bench_version == rollout.desired_version,
+            # The barrier's own season-scoped count, so ``needed`` matches it.
+            await _desired_season_scope(session, rollout),
+        )
+    ):
+        scores[score.agent_id].append(cast("Score", score))
+    return {
+        agent_id
+        for agent_id in candidates
+        if is_agent_attributable_exhaustion(
+            scores=scores[agent_id], tickets=tickets[agent_id]
+        )
+    }
 
 
 async def issue_rollout_ticket(
@@ -1747,14 +1881,48 @@ ROLLOUT_SCOREABLE_STATUSES = (
 )
 
 
+async def _desired_season_scope(
+    session: AsyncSession, rollout: BenchmarkRollout
+) -> ColumnElement[bool]:
+    """``scores`` rows of the desired version's dueling season window;
+    ``true()`` below the dueling floor."""
+    return await season_scope_predicate(
+        session,
+        version_column=Score.bench_version,
+        season_column=Score.dueling_season_id,
+        bench_versions=(rollout.desired_version,),
+    )
+
+
+def rollout_member_policy_predicate(
+    contract: BenchmarkContract,
+) -> ColumnElement[bool]:
+    """Screening-policy gate shared by every rollout-member lease path.
+
+    Only the contract's floor applies: it pins the screened-image handoff the
+    validator requires. ``POST /validator/score`` accepts the same floor, so a
+    lease issued here can always land. Source review and scheduled
+    review-policy activations are retired (2026-11-07); a member is never held
+    for a later review policy.
+    """
+    return Agent.screening_policy_version >= contract.minimum_screening_policy_version
+
+
 def _rollout_member_candidates(
     *,
     rollout: BenchmarkRollout,
     validator_hotkey: str,
     now: datetime,
     extra_predicates: Sequence[ColumnElement[bool]] = (),
+    score_season_scope: ColumnElement[bool] | None = None,
 ) -> tuple[Select, ColumnElement[int]]:
     """Frozen members this validator may advance, and their quorum occupancy.
+
+    ``score_season_scope`` (:func:`_desired_season_scope`) counts, at a bench
+    v16+ desired version, only scores of its dueling season window, so a
+    member whose scores expired can be topped up by a validator that never
+    scored it. A validator whose own row expired re-runs it through the season
+    rotation retest instead (``already_scored`` still excludes it here).
 
     One candidate filter for the open rollout lane and its post-activation
     top-up, so the distinct-validator rule, the retry budget and the
@@ -1776,6 +1944,7 @@ def _rollout_member_candidates(
         .where(
             Score.agent_id == BenchmarkRolloutMember.agent_id,
             Score.bench_version == rollout.desired_version,
+            true() if score_season_scope is None else score_season_scope,
         )
         .correlate(BenchmarkRolloutMember)
         .scalar_subquery()
@@ -1838,7 +2007,7 @@ def _rollout_member_candidates(
         .where(
             BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
             Agent.status.in_(ROLLOUT_SCOREABLE_STATUSES),
-            Agent.screening_policy_version >= contract.minimum_screening_policy_version,
+            rollout_member_policy_predicate(contract),
             complete_screened_image,
             ~already_scored,
             ~already_ticketed,
@@ -1929,6 +2098,7 @@ async def issue_rollout_topup_ticket(
         validator_hotkey=validator_hotkey,
         now=now,
         extra_predicates=extra_predicates,
+        score_season_scope=await _desired_season_scope(session, rollout),
     )
     if (
         await session.scalar(
@@ -1973,7 +2143,7 @@ async def _issue_rollout_member_ticket(
     """Lease one frozen ``rollout`` member to ``validator_hotkey``'s slot."""
     from ditto.db.queries.tickets import (
         expire_overdue_tickets,
-        release_generator_round_dataset_pin,
+        release_foreign_dataset_pin,
         ticket_attempt_cap,
     )
 
@@ -2020,7 +2190,7 @@ async def _issue_rollout_member_ticket(
     )
     existing_statement = existing_statement.where(
         Agent.status.in_(ROLLOUT_SCOREABLE_STATUSES),
-        Agent.screening_policy_version >= contract.minimum_screening_policy_version,
+        rollout_member_policy_predicate(contract),
         complete_screened_image,
     )
     existing = await session.scalar(existing_statement)
@@ -2039,6 +2209,7 @@ async def _issue_rollout_member_ticket(
         validator_hotkey=validator_hotkey,
         now=now,
         extra_predicates=extra_predicates,
+        score_season_scope=await _desired_season_scope(session, rollout),
     )
 
     def ordered_candidate(statement: Select) -> Select:
@@ -2199,7 +2370,7 @@ async def _issue_rollout_member_ticket(
             ticket.seed_block_hash = None
             ticket.provider_outage_epoch = None
             ticket.provider_outage_attempted_epoch = None
-        release_generator_round_dataset_pin(ticket)
+        release_foreign_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -2217,6 +2388,126 @@ async def _issue_rollout_member_ticket(
         ticket.first_reported_at = None
     await session.flush()
     return ticket
+
+
+@dataclass(frozen=True)
+class ActivationBlockingQuorum:
+    """An open rollout's priority members still short of the 3/3 barrier.
+
+    These are the members ``rollout_retry_diagnostics`` reports as
+    ``blocks_activation`` that :func:`rollout_cohort_score_complete` still
+    waits for: the same frozen ``priority_cohort_target`` width and the same
+    season-scoped raw score count. Re-score lanes read it to decide whether
+    their work supplies a missing quorum score or would only re-buy evidence
+    while an activation-blocking member waits for the slot.
+    """
+
+    rollout: BenchmarkRollout
+    members: frozenset[UUID]
+    window: DuelingSeasonWindow | None
+
+    def supplies_missing_score(
+        self, agent_id: UUID, *, score_season_id: UUID | None
+    ) -> bool:
+        """Whether re-scoring this member's row from one validator adds a
+        quorum score: the member blocks, and that row no longer counts
+        (at bench v16+, its season left the comparable window)."""
+        if agent_id not in self.members:
+            return False
+        if self.window is None:
+            return False
+        return score_season_id not in self.window.comparable
+
+
+async def activation_blocking_quorum(
+    session: AsyncSession, *, bench_versions: Collection[int]
+) -> ActivationBlockingQuorum | None:
+    """The open rollout's blocking members, if it targets one of
+    ``bench_versions``; otherwise ``None``.
+
+    ``None`` outside an open rollout, at another version, or once every
+    priority member holds its raw quorum, so callers leave non-rollout and
+    post-barrier ordering untouched. One rollout read however many versions
+    the caller holds work for: only the open rollout's target can block.
+    """
+    if not bench_versions:
+        return None
+    rollout = await open_rollout(session)
+    if rollout is None or rollout.desired_version not in bench_versions:
+        return None
+    score_count = (
+        select(func.count(Score.validator_hotkey))
+        .where(
+            Score.agent_id == BenchmarkRolloutMember.agent_id,
+            Score.bench_version == rollout.desired_version,
+            await _desired_season_scope(session, rollout),
+        )
+        .correlate(BenchmarkRolloutMember)
+        .scalar_subquery()
+    )
+    members = frozenset(
+        await session.scalars(
+            select(BenchmarkRolloutMember.agent_id)
+            .join(Agent, Agent.agent_id == BenchmarkRolloutMember.agent_id)
+            .where(
+                BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
+                BenchmarkRolloutMember.position <= rollout.priority_cohort_target,
+                Agent.status.not_in(tuple(PERMANENTLY_INELIGIBLE_MEMBER_STATUSES)),
+                score_count < SCORING_QUORUM,
+            )
+        )
+    )
+    if members:
+        members -= await agent_attributable_exhausted_members(
+            session, rollout=rollout, agent_ids=members
+        )
+    if not members:
+        return None
+    return ActivationBlockingQuorum(
+        rollout=rollout,
+        members=members,
+        window=await dueling_season_window(session, rollout.desired_version),
+    )
+
+
+async def blocking_quorum_lease_available(
+    session: AsyncSession,
+    *,
+    blocking: ActivationBlockingQuorum,
+    validator_hotkey: str,
+    now: datetime,
+) -> bool:
+    """Whether ``validator_hotkey`` could lease a blocking member's missing
+    quorum score right now through :func:`issue_rollout_ticket`.
+
+    The rollout lane's own gates, narrowed to the priority positions: a fresh
+    heartbeat that serves the desired version (as
+    :func:`_issue_rollout_member_ticket` requires), and a distinct validator
+    that has not scored, does not hold, and is not cooling down on a member
+    whose scores plus live leases are below quorum. A member whose third score
+    is already leased elsewhere, or that this validator cannot advance, does
+    not hold the slot.
+    """
+    rollout = blocking.rollout
+    heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
+    if heartbeat is None or not heartbeat_supports_version(
+        heartbeat, now=now, version=rollout.desired_version
+    ):
+        return False
+    statement, _occupancy = _rollout_member_candidates(
+        rollout=rollout,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        extra_predicates=(
+            BenchmarkRolloutMember.position <= rollout.priority_cohort_target,
+        ),
+        score_season_scope=await _desired_season_scope(session, rollout),
+    )
+    return (
+        await session.scalar(
+            statement.with_only_columns(BenchmarkRolloutMember.agent_id).limit(1)
+        )
+    ) is not None
 
 
 async def _terminal_exhausted_rollout_tail(
@@ -2301,7 +2592,9 @@ async def _activate_earned_rollout(
             .outerjoin(
                 Score,
                 (Score.agent_id == BenchmarkRolloutMember.agent_id)
-                & (Score.bench_version == rollout.desired_version),
+                & (Score.bench_version == rollout.desired_version)
+                # Bench v16+: an expired season's score is not a quorum row.
+                & await _desired_season_scope(session, rollout),
             )
             .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
             .group_by(BenchmarkRolloutMember.agent_id)
@@ -2360,7 +2653,9 @@ async def maybe_activate_rollout(
             .outerjoin(
                 Score,
                 (Score.agent_id == BenchmarkRolloutMember.agent_id)
-                & (Score.bench_version == rollout.desired_version),
+                & (Score.bench_version == rollout.desired_version)
+                # Bench v16+: an expired season's score is not a quorum row.
+                & await _desired_season_scope(session, rollout),
             )
             .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
             .group_by(BenchmarkRolloutMember.agent_id)
@@ -2490,7 +2785,8 @@ def bench_promotion_requirement(
 
     - :func:`rollout_cohort_score_complete` over the rollout's frozen
       ``priority_cohort_target``: every position needs ``SCORING_QUORUM``
-      accepted desired-version scores, permanently ineligible members skipped;
+      accepted desired-version scores, permanently ineligible members and
+      agent-attributable exhaustions skipped;
     - ``count_ranked_quorum_agents(desired) >= MIN_DESIRED_AUTHORITY_AGENTS``:
       the emission set (champion plus participation tail) must all hold a
       ranked desired-version quorum before any of them are ranked on it.
@@ -2504,7 +2800,8 @@ def bench_promotion_requirement(
         f"moves to v{rollout_version} only once the first {priority_cohort_size} "
         "inherited priority-cohort positions each hold a complete "
         f"{SCORING_QUORUM}-score v{rollout_version} quorum (permanently "
-        "ineligible members are skipped) and at least "
+        "ineligible members, and members whose own failure exhausted that "
+        "quorum, are skipped) and at least "
         f"{MIN_DESIRED_AUTHORITY_AGENTS} agents hold a complete ranked "
         f"v{rollout_version} quorum, the champion plus the full participation "
         "tail. The whole ledger then flips at once."
@@ -2608,7 +2905,9 @@ async def rollout_state(
             .outerjoin(
                 Score,
                 (Score.agent_id == BenchmarkRolloutMember.agent_id)
-                & (Score.bench_version == rollout.desired_version),
+                & (Score.bench_version == rollout.desired_version)
+                # Bench v16+: an expired season's score is not a quorum row.
+                & await _desired_season_scope(session, rollout),
             )
             .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
             .group_by(BenchmarkRolloutMember.agent_id, Agent.status)
@@ -2647,13 +2946,23 @@ async def rollout_state(
     priority_members = [
         member for member in members if member.position <= priority_target
     ]
-    # Same skip-ineligible first-five barrier as rollout_cohort_score_complete,
-    # computed from the member/status rows already loaded above.
-    priority_ready_count = sum(
-        member_statuses.get(member.agent_id) in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
-        or counts.get(member.agent_id, 0) >= SCORING_QUORUM
+    # Same first-five barrier as rollout_cohort_score_complete: a permanently
+    # ineligible member, or one whose own failure exhausted the quorum, is
+    # satisfied. Computed from the member/status rows already loaded above.
+    priority_short = [
+        member.agent_id
         for member in priority_members
-    )
+        if member_statuses.get(member.agent_id)
+        not in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
+        and counts.get(member.agent_id, 0) < SCORING_QUORUM
+    ]
+    priority_ready_count = len(priority_members) - len(priority_short)
+    if priority_short:
+        priority_ready_count += len(
+            await agent_attributable_exhausted_members(
+                session, rollout=rollout, agent_ids=priority_short
+            )
+        )
     priority_complete = (
         len(priority_members) == priority_target
         and priority_ready_count == priority_target

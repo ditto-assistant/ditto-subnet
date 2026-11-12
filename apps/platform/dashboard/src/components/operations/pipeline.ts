@@ -4,6 +4,7 @@
 // argument and stay pure.
 import type { FleetEntry, FleetReport } from "../../types/fleet";
 import type { BenchmarkProgress, PipelineEntry } from "../../types/pipeline";
+import { TERMINAL_FAILURE_CAUSES } from "../pipeline/status";
 
 /** Ops-feed fields beyond the shared wire type (the feed superset carries
  * the queue gate the shared PipelineEntry does not declare). */
@@ -109,18 +110,9 @@ export interface ParkedReading {
   tone: "hold" | "terminal";
 }
 
-/** Plain language for each allowlisted agent-attributable code.
- *
- * Only codes the API is willing to publish appear here. An unknown code keeps
- * the terminal sentence without inventing a cause for it. */
-const TERMINAL_CAUSES: Record<string, string> = {
-  inference_allowance_exhausted:
-    "The agent used its whole inference allowance before finishing its run.",
-  inference_request_rejected:
-    "The platform rejected the agent's inference requests, so no run could complete.",
-  model_inference_required:
-    "The agent answered without the model inference the benchmark requires.",
-};
+/** Plain language for each allowlisted agent-attributable code (shared with
+ * the submission page so the two surfaces cannot word it differently). */
+const TERMINAL_CAUSES = TERMINAL_FAILURE_CAUSES;
 
 /** Codes that name a failure Ditto owns, with the sentence that explains it.
  *
@@ -137,6 +129,8 @@ const HOLD_CAUSES: Record<string, string> = {
     "An inference grant check failed inside Ditto, not anything in this submission.",
   budget_evidence_absent:
     "An inference budget record was missing inside Ditto, not anything in this submission.",
+  host_memory_pressure:
+    "The validator host ran short of memory and the kernel stopped the harness, not anything in this submission.",
 };
 
 /** Codes that name the stage that stopped a run without blaming either side.
@@ -151,6 +145,13 @@ const UNATTRIBUTED_HOLD_STAGES: Record<string, { label: string; title: string }>
       "A validator stopped the run because the harness did not finish loading its memory " +
       "before the scorer's deadline. A busy validator and a slow harness both cause this, " +
       "so the platform has not attributed it to either side.",
+  },
+  harness_killed_137: {
+    label: "On hold · killed",
+    title:
+      "The harness was stopped by SIGKILL with no out-of-memory flag, so nothing shows who " +
+      "sent it. It is retried on another validator; the same kill there counts as the " +
+      "harness's own failure.",
   },
 };
 

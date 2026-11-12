@@ -321,7 +321,8 @@ _MODEL_FAULT_CODE_PREFIXES = (
     "source-review-inconsistent-verdict",
 )
 _ARCHIVE_UNREADABLE_CODE = "source-review-archive-invalid"
-# L2 finished, but after the attempt's lease deadline: a time outcome.
+# L2 ran past its deadline: the layer's own ``timeout_seconds`` or the attempt
+# lease, whichever is earlier. The subcode names which one fired.
 _LATE_RESULT_CODE = "l2-late-result"
 
 
@@ -332,7 +333,7 @@ def _retryable_detail(reason_code: str | None) -> str:
     if reason_code == _ARCHIVE_UNREADABLE_CODE:
         return "screener error: private source review could not read the archive"
     if reason_code == _LATE_RESULT_CODE:
-        return "screener error: private review finished after its lease deadline"
+        return "screener error: private review ran past its review deadline"
     return _INFRA_UNAVAILABLE_DETAIL
 
 
@@ -1219,12 +1220,40 @@ class BehavioralOracleModule(_BaseModule):
                     ),
                 ),
             )
+        if observation.gateway_calls == 0:
+            # Zero-call: a pure retrieval/deterministic agent that never contacts
+            # the gateway.  Under the cost-first policy (v14+) these agents are
+            # explicitly permitted — they compete on accuracy and cost alone and
+            # have no LLM claim to verify.  Older policy treated them as an
+            # operator-escalation inconclusive.
+            if context.policy_version >= 14:
+                return ModuleResult(
+                    ModuleDisposition.CLEAR,
+                    (
+                        PolicyEvidence(
+                            self.module_id,
+                            "behavioral-oracle-no-call-clear",
+                            "agent made no model calls; zero-call agents are "
+                            "permitted under the cost-first policy",
+                        ),
+                    ),
+                )
+            return ModuleResult(
+                ModuleDisposition.INCONCLUSIVE,
+                (
+                    PolicyEvidence(
+                        self.module_id,
+                        "behavioral-oracle-insufficient-round-trips",
+                        "behavioral oracle had too few round-trips for a decision",
+                        observation.response_digest,
+                    ),
+                ),
+            )
         if observation.gateway_calls < self.min_gateway_calls or (
             observation.gateway_calls == 1 and not observation.gateway_token_observed
         ):
-            # No model call at all: a static lookup that never touches the gateway.
-            # Alternate honest provider loops can still differ, so this remains
-            # operator escalation rather than a terminal reject.
+            # Partial round-trips with no token: not fully inconclusive but not
+            # zero-call either.
             return ModuleResult(
                 ModuleDisposition.INCONCLUSIVE,
                 (

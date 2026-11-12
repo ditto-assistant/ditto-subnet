@@ -23,8 +23,14 @@ from ditto.api_server.endpoints.admin_burn_settings import (
 from ditto.api_server.endpoints.admin_claim_provenance import (
     router as admin_claim_provenance_router,
 )
+from ditto.api_server.endpoints.admin_competition_improvement import (
+    router as admin_competition_improvement_router,
+)
 from ditto.api_server.endpoints.admin_confirmation_bundles import (
     router as admin_confirmation_bundles_router,
+)
+from ditto.api_server.endpoints.admin_confirmation_score_voids import (
+    router as admin_confirmation_score_voids_router,
 )
 from ditto.api_server.endpoints.admin_confirmation_seed_anchors import (
     router as admin_confirmation_seed_anchors_router,
@@ -40,6 +46,9 @@ from ditto.api_server.endpoints.admin_copy_review import (
 )
 from ditto.api_server.endpoints.admin_database_backup import (
     router as admin_database_backup_router,
+)
+from ditto.api_server.endpoints.admin_dueling import (
+    router as admin_dueling_router,
 )
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
@@ -86,11 +95,17 @@ from ditto.api_server.endpoints.admin_outlier_escalation import (
 from ditto.api_server.endpoints.admin_owner import (
     router as admin_owner_router,
 )
+from ditto.api_server.endpoints.admin_provider_outages import (
+    router as admin_provider_outages_router,
+)
 from ditto.api_server.endpoints.admin_quarantine import (
     router as admin_quarantine_router,
 )
 from ditto.api_server.endpoints.admin_queue_policy_settings import (
     router as admin_queue_policy_settings_router,
+)
+from ditto.api_server.endpoints.admin_registration_freshness import (
+    router as admin_registration_freshness_router,
 )
 from ditto.api_server.endpoints.admin_retirement import (
     router as admin_retirement_router,
@@ -146,6 +161,12 @@ from ditto.api_server.endpoints.admin_treasury_receipts import (
 from ditto.api_server.endpoints.admin_treasury_settings import (
     router as admin_treasury_settings_router,
 )
+from ditto.api_server.endpoints.admin_unreleased_copy import (
+    router as admin_unreleased_copy_router,
+)
+from ditto.api_server.endpoints.admin_upload_payments import (
+    router as admin_upload_payments_router,
+)
 from ditto.api_server.endpoints.admin_v13_private_generation import (
     router as admin_v13_private_generation_router,
 )
@@ -194,6 +215,9 @@ from ditto.api_server.endpoints.miner_mcp import router as miner_mcp_router
 from ditto.api_server.endpoints.miner_me import router as miner_me_router
 from ditto.api_server.endpoints.name_claims import router as name_claims_router
 from ditto.api_server.endpoints.public import router as public_router
+from ditto.api_server.endpoints.public_dueling import (
+    router as public_dueling_router,
+)
 from ditto.api_server.endpoints.retrieval import router as retrieval_router
 from ditto.api_server.endpoints.scoring import router as scoring_router
 from ditto.api_server.endpoints.screener import router as screener_router
@@ -205,6 +229,7 @@ from ditto.api_server.endpoints.validator_confirmation import (
 
 __all__ = [
     "admin_database_backup_router",
+    "admin_registration_freshness_router",
     "health_router",
     "inference_router",
     "admin_artifact_release_settings_router",
@@ -224,6 +249,8 @@ __all__ = [
     "admin_inference_concurrency_settings_router",
     "admin_inference_observability_router",
     "admin_generator_competition_router",
+    "admin_dueling_router",
+    "public_dueling_router",
     "admin_generator_rounds_router",
     "admin_scoring_lease_settings_router",
     "generator_router",
@@ -238,6 +265,9 @@ __all__ = [
     "admin_lease_revocations_router",
     "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
+    "admin_unreleased_copy_router",
+    "admin_upload_payments_router",
+    "admin_competition_improvement_router",
     "admin_screening_review_cost_router",
     "admin_copy_review_router",
     "admin_claim_provenance_router",
@@ -259,6 +289,8 @@ __all__ = [
     "admin_v13_private_generation_router",
     "admin_submission_settings_router",
     "admin_submission_deposit_address_router",
+    "admin_confirmation_score_voids_router",
+    "admin_provider_outages_router",
     "admin_validation_retry_router",
     "admin_validator_capacity_router",
     "admin_validator_request_outcomes_router",
