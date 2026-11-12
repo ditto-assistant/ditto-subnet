@@ -259,6 +259,19 @@ opens, once it is scored or void.
     `min_round_validators` (the switch quorum, default 3) and the live
     scorer's `scorer_grading_versions`; `reason` names a quorum or scorer
     shortfall that keeps rounds on the previous version.
+  - `preview_generator_round` `challenger_queue` lists every never-scored
+    qualified miner generator in pick order, with its template `family`,
+    `family_position` and `status` (what a round opened now would do with
+    it: `challenger` or `counted` column, `in_flight`, `owner_has_column`
+    or `waiting`). A family is one owner key, joined with builds of one
+    template under other owners (same Go module and file count, archive size
+    within 1%). Families are interleaved: a family's next unmeasured build
+    waits until every other family has been measured as often, so one
+    coldkey's batch of near-identical builds no longer holds a challenger
+    column every round. A generator whose column in an earlier round is
+    still in flight is skipped as a challenger. The grouping only orders the
+    queue; it never rejects a generator. The public default generator is
+    never in the queue.
   - `list_generator_rounds`, `get_generator_round`, `preview_generator_round`
     and `get_generator_round_loop` expose the following:
     - the schedule;

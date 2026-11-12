@@ -13156,6 +13156,8 @@ export interface components {
             bench_contract?: components["schemas"]["GeneratorRoundBenchContractPreview"] | null;
             /** Blockers */
             blockers: string[];
+            /** Challenger Queue */
+            challenger_queue?: components["schemas"]["GeneratorChallengerQueueEntry"][];
             /** Columns */
             columns: components["schemas"]["GeneratorRoundColumnSlot"][];
             /** Panel */
@@ -25374,6 +25376,51 @@ export interface components {
              * @enum {string}
              */
             status: "discriminating" | "trivial" | "unsolved" | "duplicate";
+        };
+        /**
+         * GeneratorChallengerQueueEntry
+         * @description One never-scored qualified miner generator in the challenger queue.
+         *
+         *     The public default generator is never in the queue: it only fills counted
+         *     columns no miner generator can fill.
+         */
+        GeneratorChallengerQueueEntry: {
+            /** Column Id */
+            column_id?: string | null;
+            /** Family */
+            family: string;
+            /** Family Measured */
+            family_measured: number;
+            /** Family Position */
+            family_position: number;
+            /** Family Size */
+            family_size: number;
+            /** File Count */
+            file_count: number;
+            /** In Flight Round */
+            in_flight_round?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Module */
+            module: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Qualified At */
+            qualified_at: string | null;
+            /** Queue Position */
+            queue_position: number | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "challenger" | "counted" | "in_flight" | "owner_has_column" | "waiting";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
         };
         /**
          * GeneratorCompetitionSettings

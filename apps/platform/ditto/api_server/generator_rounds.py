@@ -115,6 +115,7 @@ from ditto.api_models.generator_rounds import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_capabilities import ValidatorCapabilities
+from ditto.api_server.generator_challenger_queue import QueueEntry, challenger_queue
 from ditto.api_server.generator_competition import scorer_request_error
 from ditto.api_server.generator_frontier import (
     advance_frontier_rounds,
@@ -312,9 +313,12 @@ class RoundActions:
 
 
 async def _qualified_generators(session: AsyncSession) -> list[GeneratorSubmission]:
+    # Column selection reads identity and scores only, never the archive bytes
+    # (up to 4 MiB each), so they stay unloaded.
     return list(
         await session.scalars(
             select(GeneratorSubmission)
+            .options(defer(GeneratorSubmission.source_bytes, raiseload=True))
             .where(
                 GeneratorSubmission.status == "active",
                 GeneratorSubmission.qualified_at.is_not(None),
@@ -332,17 +336,18 @@ async def _qualified_generators(session: AsyncSession) -> list[GeneratorSubmissi
 IN_FLIGHT_ROUND_STATUSES = ("generating", "running", "scoring")
 
 
-async def _in_flight_submissions(session: AsyncSession) -> set[UUID]:
-    """Miner generators holding a column in a round that has not finished."""
-    held: set[UUID] = set()
-    for columns in await session.scalars(
-        select(GeneratorRound.columns).where(
-            GeneratorRound.status.in_(IN_FLIGHT_ROUND_STATUSES)
-        )
+async def _in_flight_submissions(session: AsyncSession) -> dict[UUID, int]:
+    """Miner generators holding a column in a round that has not finished,
+    each with the earliest such round."""
+    held: dict[UUID, int] = {}
+    for round_index, columns in await session.execute(
+        select(GeneratorRound.round_index, GeneratorRound.columns)
+        .where(GeneratorRound.status.in_(IN_FLIGHT_ROUND_STATUSES))
+        .order_by(GeneratorRound.round_index)
     ):
         for column in columns or ():
             if not column.get("public_default"):
-                held.add(UUID(column["submission_id"]))
+                held.setdefault(UUID(column["submission_id"]), int(round_index))
     return held
 
 
@@ -369,9 +374,24 @@ def _column(index: int, row: GeneratorSubmission, *, counted: bool) -> dict[str,
     }
 
 
+@dataclass(frozen=True)
+class ColumnSelection:
+    """A round's frozen columns and the challenger queue they were drawn from."""
+
+    columns: list[dict[str, Any]]
+    queue: list[QueueEntry]
+
+
 async def select_columns(
     session: AsyncSession, settings: GeneratorCompetitionSettings
 ) -> list[dict[str, Any]]:
+    """Freeze a round's generator columns (:func:`select_round_columns`)."""
+    return (await select_round_columns(session, settings)).columns
+
+
+async def select_round_columns(
+    session: AsyncSession, settings: GeneratorCompetitionSettings
+) -> ColumnSelection:
     """Freeze a round's generator columns, counted first.
 
     Counted columns go to the best qualified generators by latest round
@@ -379,14 +399,17 @@ async def select_columns(
     to the public default generator (each default column runs on its own
     column seed, so the default can fill several without repeating cases).
     Challenger columns go to qualified generators that have never been
-    scored, oldest qualification first, then to the next-best scored ones. A
-    generator whose column in an earlier round is still in flight is skipped
-    as a challenger: that round is already measuring it, and a void round
-    returns a never-scored one to its place in the queue.
+    scored, in challenger queue order (:mod:`generator_challenger_queue`:
+    template families interleaved, oldest qualification first within a
+    family position), then to the next-best scored ones. A generator whose
+    column in an earlier round is still in flight is skipped as a
+    challenger: that round is already measuring it, and a void round returns
+    a never-scored one to its place in the queue.
     One column per owner, so a miner with several hotkeys holds one column.
     """
     qualified = await _qualified_generators(session)
     in_flight = await _in_flight_submissions(session)
+    queue = challenger_queue(qualified, in_flight)
     scored = sorted(
         (row for row in qualified if row.round_score is not None),
         key=lambda row: (
@@ -421,7 +444,7 @@ async def select_columns(
     challengers = settings.challenger_columns
     before = len(columns)
     take(
-        [row for row in fresh if row.submission_id not in in_flight],
+        [entry.row for entry in queue if entry.in_flight_round is None],
         challengers,
         counted=False,
     )
@@ -430,7 +453,7 @@ async def select_columns(
         challengers - (len(columns) - before),
         counted=False,
     )
-    return columns
+    return ColumnSelection(columns=columns, queue=queue)
 
 
 # A panel agent the round lane can lease: a finalized agent with a screened

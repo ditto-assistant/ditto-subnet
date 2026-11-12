@@ -634,6 +634,28 @@ export const roundBenchContractPreviewSchema = z.object({
   scorer_grading_versions: z.array(z.number().int()).nullable().optional().default(null),
 })
 
+// One never-scored qualified miner generator in challenger pick order
+// (Platform GeneratorChallengerQueueEntry). Template families are interleaved:
+// family_position counts the family's scored or in-flight members plus its
+// unmeasured members ahead of this one.
+const challengerQueueEntrySchema = z.object({
+  queue_position: z.number().int().nullable(),
+  submission_id: uuid,
+  miner_hotkey: z.string(),
+  owner_key: z.string(),
+  module: z.string(),
+  file_count: z.number().int(),
+  size_bytes: z.number().int(),
+  qualified_at: z.string().nullable(),
+  family: z.string(),
+  family_size: z.number().int(),
+  family_measured: z.number().int(),
+  family_position: z.number().int(),
+  status: z.enum(['challenger', 'counted', 'in_flight', 'owner_has_column', 'waiting']),
+  column_id: z.string().nullable().optional().default(null),
+  in_flight_round: z.number().int().nullable().optional().default(null),
+})
+
 export const generatorRoundPreviewSchema = z.object({
   schedule: roundScheduleSchema,
   columns: z.array(columnSlotSchema),
@@ -643,6 +665,8 @@ export const generatorRoundPreviewSchema = z.object({
   blockers: z.array(z.string()),
   skipped_panel_agents: z.array(skippedPanelAgentSchema).optional().default([]),
   bench_contract: roundBenchContractPreviewSchema.nullable().optional().default(null),
+  // Absent from a Platform that predates the challenger queue.
+  challenger_queue: z.array(challengerQueueEntrySchema).optional().default([]),
 })
 
 export const generatorRoundLoopSchema = z.object({
