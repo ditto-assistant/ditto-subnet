@@ -513,8 +513,14 @@ class GeneratorChallengerQueueEntry(RoundModel):
     novelty: float | None = None
     """Share of its probe cases (case fingerprints on the epoch's shared probe
     seed) that no measured generator and no generator ahead of it emitted;
-    within a family position the queue orders by this, highest first. ``None``
-    while it is in flight."""
+    within a family position the queue orders by this after the pre-screen
+    result. ``None`` while it is in flight."""
+    prescreen_index: int | None = None
+    """Its latest pre-screen batch, if any (``list_generator_prescreens``)."""
+    prescreen_score: float | None = None
+    """Its column score there once the batch scored. Within a family position
+    a positive score goes first (best first), then the unscreened, then a
+    zero."""
     status: ChallengerQueueStatus
     """What a round opened now would do with it: a ``challenger`` or
     ``counted`` column, skip it while ``in_flight``, skip it because its owner

@@ -25439,6 +25439,10 @@ export interface components {
             novelty?: number | null;
             /** Owner Key */
             owner_key: string;
+            /** Prescreen Index */
+            prescreen_index?: number | null;
+            /** Prescreen Score */
+            prescreen_score?: number | null;
             /** Qualified At */
             qualified_at: string | null;
             /** Queue Position */

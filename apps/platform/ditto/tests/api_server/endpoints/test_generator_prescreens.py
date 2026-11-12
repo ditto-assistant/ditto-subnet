@@ -49,6 +49,7 @@ from ditto.tests.api_server.endpoints.test_generator_competition import (
 # The round tests' autouse stand-in for a round-capable validator fleet; a
 # batch freezes a bench contract the same way a round does.
 from ditto.tests.api_server.endpoints.test_generator_rounds import (  # noqa: F401
+    _ROUNDS_URL,
     _VALIDATOR,
     _advance,
     _apply_settings,
@@ -473,6 +474,73 @@ class TestPrescreenScoring:
                 assert sub.round_score is None
             verdicts = (await session.scalars(select(GeneratorRoundCaseVerdict))).all()
             assert verdicts == []
+
+    async def test_the_best_prescreen_score_takes_the_challenger_column(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Pre-screens promote the best mini-scorer: after a batch scores the
+        older generator 0.1 and the newer 0.2, the newer one takes the
+        challenger column, which by qualification order the older would have."""
+        _install(app, session_maker)
+        await _enable(client, counted_columns=1, challenger_columns=1)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = await _seed_queue(session_maker)
+        scored = await _seed_generator(
+            session_maker,
+            hotkey="5Prescreen-scored",
+            owner="coldkey:scored",
+            salt="scored",
+        )
+        async with session_maker() as session, session.begin():
+            row = await session.get(GeneratorSubmission, scored)
+            assert row is not None
+            row.module = "example.com/scored"
+            row.round_score = 0.5
+            row.round_scored_index = 1
+
+        async def challenger() -> list[str]:
+            preview = await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)
+            assert preview.status_code == 200, preview.text
+            return [
+                c["submission_id"]
+                for c in preview.json()["columns"]
+                if not c["counted"]
+            ]
+
+        assert await challenger() == [str(ids["a"])]
+        await _tick(session_maker)
+        [batch] = await _batches(session_maker)
+        work = await _lease(client)
+        assert work is not None
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work),
+        )
+        assert resp.status_code == 200, resp.text
+        await _report_panel(session_maker, batch.prescreen_index)
+        work = await _lease(client)
+        assert work is not None and work["kind"] == "score"
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-score",
+            headers=_SCORER,
+            json=_matrix_score(work),
+        )
+        assert resp.status_code == 200, resp.text
+
+        assert await challenger() == [str(ids["b"])]
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        queue = {e["submission_id"]: e for e in preview["challenger_queue"]}
+        assert queue[str(ids["b"])]["prescreen_score"] == pytest.approx(0.2)
+        assert queue[str(ids["b"])]["prescreen_index"] == batch.prescreen_index
+        assert queue[str(ids["b"])]["queue_position"] == 1
+        assert queue[str(ids["a"])]["queue_position"] == 2
+        assert queue[str(ids["c"])]["prescreen_score"] is None
 
     async def test_a_failing_column_scores_zero_and_is_not_rejected(
         self,

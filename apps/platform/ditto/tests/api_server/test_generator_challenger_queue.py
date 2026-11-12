@@ -25,6 +25,7 @@ def _gen(
     files: int = 46,
     size: int = 200_000,
     score: float | None = None,
+    prescreen: float | None = None,
 ) -> GeneratorSubmission:
     qualified = _NOW + timedelta(minutes=minutes)
     return GeneratorSubmission(
@@ -38,6 +39,7 @@ def _gen(
         submitted_at=qualified - timedelta(minutes=1),
         round_score=score,
         round_scored_index=None if score is None else 1,
+        prescreen_score=prescreen,
     )
 
 
@@ -249,3 +251,28 @@ def test_an_in_flight_entry_counts_its_family_members_queued_ahead() -> None:
         ("kin3", 2),
         ("kin1", 3),
     ]
+
+
+def test_prescreen_results_promote_within_a_family_position() -> None:
+    """A positive pre-screen score goes first (best first), then the
+    generators not pre-screened yet, then one whose pre-screen scored zero."""
+    unscreened = _gen("unscreened", owner="u", minutes=0, module="u")
+    good = _gen("good", owner="g", minutes=1, module="g", prescreen=0.3)
+    best = _gen("best", owner="b", minutes=2, module="b", prescreen=0.6)
+    failed = _gen("failed", owner="f", minutes=3, module="f", prescreen=0.0)
+    assert _order([unscreened, good, best, failed]) == [
+        "best",
+        "good",
+        "unscreened",
+        "failed",
+    ]
+
+
+def test_family_position_still_comes_before_a_prescreen_score() -> None:
+    """A batch of builds that all pre-screen well still cannot take every
+    challenger column: a measured family's next build waits behind another
+    family's first."""
+    measured = _gen("measured", owner="k", minutes=-60, module="k", score=0.2)
+    sibling = _gen("sibling", owner="k", minutes=0, module="k2", prescreen=0.9)
+    newcomer = _gen("newcomer", owner="n", minutes=5, module="n")
+    assert _order([measured, sibling, newcomer]) == ["newcomer", "sibling"]

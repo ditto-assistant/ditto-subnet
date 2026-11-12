@@ -284,8 +284,11 @@ opens, once it is scored or void.
     within 1%). Families are interleaved: a family's next unmeasured build
     waits until every other family has been measured as often, so one
     coldkey's batch of near-identical builds no longer holds a challenger
-    column every round. Within a family position the queue takes the highest
-    `novelty` first: the share of a generator's probe cases (its case
+    column every round. Within a family position a pre-screen result comes
+    first (`prescreen_score`: a positive score, best first, then generators
+    not pre-screened yet, then a zero), which is how pre-screens promote the
+    best mini-scorers into challenger columns. Then the queue takes the
+    highest `novelty`: the share of a generator's probe cases (its case
     fingerprints on the epoch's shared probe seed) that no measured generator
     and no generator ahead of it emitted. A partial or mosaic copy of measured
     cases, or a twin of a build already ahead, waits behind new cases.

@@ -12,8 +12,12 @@ build competes with every other family's next build: its position is how
 many of its members are already measured (scored, or holding a column in a
 round still in flight) plus its members placed ahead of it in the queue.
 
-Within a position, the more novel generator goes first, then the earlier
-qualification. Novelty is the share of a generator's probe cases (its case
+Within a position, a generator's pre-screen result comes first
+(:func:`prescreen_tier`: the best positive pre-screen scores, then the
+unscreened, then a zero), then the more novel generator, then the earlier
+qualification. That is how a pre-screen promotes the best mini-scorers into
+the challenger columns while family positions keep one batch of builds from
+taking them all. Novelty is the share of a generator's probe cases (its case
 fingerprints on the probe seed every generator of the epoch shares) that no
 measured generator and no generator ahead of it in the queue emitted. The
 probe copy check already rejects a generator reproducing half or more of one
@@ -109,6 +113,17 @@ def template_families(rows: Iterable[GeneratorSubmission]) -> dict[UUID, str]:
     }
 
 
+def prescreen_tier(score: float | None) -> int:
+    """Where a pre-screen result places a generator within its family
+    position: a positive pre-screen score first (best first), then a
+    generator not pre-screened yet, then one whose pre-screen scored zero
+    (its column failed or measured nothing). With the lane off nobody has a
+    score, so the order is the novelty order."""
+    if score is None:
+        return 1
+    return 0 if score > 0 else 2
+
+
 @dataclass(frozen=True)
 class QueueEntry:
     """One never-scored generator's place in the challenger queue."""
@@ -181,9 +196,12 @@ def challenger_queue(
         total = len(cases[submission_id])
         return unseen[submission_id] / total if total else 1.0
 
-    def rank(row: GeneratorSubmission) -> tuple[int, float, tuple]:
+    def rank(row: GeneratorSubmission) -> tuple[int, int, float, float, tuple]:
+        score = row.prescreen_score
         return (
             placed.get(families[row.submission_id], 0),
+            prescreen_tier(score),
+            -(score or 0.0),
             -novelty(row.submission_id),
             _qualified_key(row),
         )
