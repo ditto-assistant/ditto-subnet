@@ -1998,6 +1998,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/prescreens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin List Prescreens
+         * @description Pre-screen batches, newest first, without their datasets.
+         */
+        get: operations["admin_list_prescreens_api_v1_admin_generator_competition_prescreens_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/probe": {
         parameters: {
             query?: never;
@@ -12972,6 +12992,15 @@ export interface components {
             status: "queued" | "leased" | "running" | "succeeded" | "incomplete" | "skipped";
             /** Unmetered */
             unmetered: boolean;
+        };
+        /** AdminGeneratorPrescreenListResponse */
+        AdminGeneratorPrescreenListResponse: {
+            /** Counts By Status */
+            counts_by_status: {
+                [key: string]: number;
+            };
+            /** Prescreens */
+            prescreens: components["schemas"]["GeneratorPrescreenView"][];
         };
         /** AdminGeneratorProbeResponse */
         AdminGeneratorProbeResponse: {
@@ -25535,6 +25564,26 @@ export interface components {
              */
             panel_size: number;
             /**
+             * Prescreen Cases
+             * @default 16
+             */
+            prescreen_cases: number;
+            /**
+             * Prescreen Columns
+             * @default 4
+             */
+            prescreen_columns: number;
+            /**
+             * Prescreen Enabled
+             * @default false
+             */
+            prescreen_enabled: boolean;
+            /**
+             * Prescreen Panel Size
+             * @default 3
+             */
+            prescreen_panel_size: number;
+            /**
              * Privacy Window Rounds
              * @default 6
              */
@@ -25910,6 +25959,52 @@ export interface components {
             champion: boolean;
             /** Owner Key */
             owner_key: string;
+        };
+        /**
+         * GeneratorPrescreenView
+         * @description One pre-screen batch (``ditto.api_server.generator_prescreens``): a few
+         *     never-scored generators on a small panel, never paid, only ordering the
+         *     challenger queue.
+         */
+        GeneratorPrescreenView: {
+            /** Bench Version */
+            bench_version: number;
+            /** Cases Per Column */
+            cases_per_column: number;
+            /** Closed At */
+            closed_at?: string | null;
+            /** Columns */
+            columns: components["schemas"]["GeneratorRoundColumnSlot"][];
+            /** Dataset Sha256 */
+            dataset_sha256?: string | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Lease Attempts
+             * @default 0
+             */
+            lease_attempts: number;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Panel */
+            panel: components["schemas"]["GeneratorRoundPanelSlot"][];
+            /** Prescreen Index */
+            prescreen_index: number;
+            /** Settings Revision */
+            settings_revision: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "generating" | "running" | "scoring" | "scored" | "void";
+            /** Void Reason */
+            void_reason?: string | null;
         };
         /**
          * GeneratorProbeEpochView
@@ -52225,6 +52320,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GeneratorFrontierAuditListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_prescreens_api_v1_admin_generator_competition_prescreens_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorPrescreenListResponse"];
                 };
             };
             /** @description Validation Error */

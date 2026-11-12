@@ -218,6 +218,41 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('lists pre-screen batches from Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const batch = {
+      prescreen_index: 1099511627776, status: 'generating',
+      opened_at: '2026-11-12T06:00:00Z', expires_at: '2026-11-12T09:00:00Z',
+      settings_revision: 14, cases_per_column: 16, bench_version: 18,
+      columns: [{
+        column_id: 'c0', submission_id: SUBMISSION, miner_hotkey: submission.miner_hotkey,
+        owner_key: 'coldkey:abc', source_sha256: 'cd'.repeat(32), counted: false, public_default: false,
+      }],
+      panel: [{ agent_id: RUN, owner_key: 'coldkey:panel', champion: true, reference: false }],
+      lease_attempts: 0,
+    }
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = url.replace('https://platform-api.heyditto.ai', '')
+      if (path !== '/api/v1/admin/generator-competition/prescreens?limit=20&offset=0') {
+        return new Response('not found', { status: 404 })
+      }
+      return Response.json({ prescreens: [batch], counts_by_status: { generating: 1 } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await client.callTool({ name: 'list_generator_prescreens', arguments: {} })))
+        .toMatchObject({
+          counts_by_status: { generating: 1 },
+          prescreens: [{ prescreen_index: 1099511627776, status: 'generating', void_reason: null, columns: [{ counted: false }] }],
+        })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('refuses a malformed hotkey filter before calling Platform', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const fetchMock = vi.fn()

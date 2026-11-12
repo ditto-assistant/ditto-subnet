@@ -539,6 +539,36 @@ class AdminGeneratorRoundPreview(RoundModel):
     a round opened now would do with it."""
 
 
+PrescreenStatus = Literal["generating", "running", "scoring", "scored", "void"]
+
+
+class GeneratorPrescreenView(RoundModel):
+    """One pre-screen batch (``ditto.api_server.generator_prescreens``): a few
+    never-scored generators on a small panel, never paid, only ordering the
+    challenger queue."""
+
+    prescreen_index: int
+    """At or above ``PRESCREEN_INDEX_BASE`` (2**40), apart from round indexes."""
+    status: PrescreenStatus
+    opened_at: datetime
+    expires_at: datetime
+    """A batch not scored by then is void and its generators re-queued."""
+    closed_at: datetime | None = None
+    settings_revision: int
+    cases_per_column: int
+    bench_version: int
+    columns: list[GeneratorRoundColumnSlot]
+    panel: list[GeneratorRoundPanelSlot]
+    dataset_sha256: str | None = None
+    lease_attempts: int = 0
+    void_reason: str | None = None
+
+
+class AdminGeneratorPrescreenListResponse(RoundModel):
+    prescreens: list[GeneratorPrescreenView]
+    counts_by_status: dict[str, int]
+
+
 class GeneratorRoundSkipView(RoundModel):
     """One round skipped because it would only repeat the last scored round."""
 

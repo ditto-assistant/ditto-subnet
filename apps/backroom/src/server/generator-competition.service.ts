@@ -10,6 +10,8 @@ import {
   generatorRoundTickSchema,
   generatorScorerStatusSchema,
   listGeneratorRoundsInputSchema,
+  generatorPrescreenListSchema,
+  listGeneratorPrescreensInputSchema,
   registerDefaultGeneratorInputSchema,
   defaultGeneratorUploadResponseSchema,
   tickGeneratorRoundsInputSchema,
@@ -323,6 +325,13 @@ export async function listGeneratorRounds(rawInput: unknown) {
   const { limit, offset } = listGeneratorRoundsInputSchema.parse(rawInput)
   return generatorRoundListSchema.parse(
     await platformAdminRequest(`${BASE}/rounds?limit=${limit}&offset=${offset}`),
+  )
+}
+
+export async function listGeneratorPrescreens(rawInput: unknown) {
+  const { limit, offset } = listGeneratorPrescreensInputSchema.parse(rawInput)
+  return generatorPrescreenListSchema.parse(
+    await platformAdminRequest(`${BASE}/prescreens?limit=${limit}&offset=${offset}`),
   )
 }
 

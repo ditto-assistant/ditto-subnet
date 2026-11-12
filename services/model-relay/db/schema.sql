@@ -4371,6 +4371,94 @@ ALTER SEQUENCE public.generator_operator_actions_id_seq OWNED BY public.generato
 
 
 --
+-- Name: generator_prescreen_attempts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_prescreen_attempts (
+    prescreen_index bigint NOT NULL,
+    agent_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    ticket_deadline timestamp with time zone NOT NULL,
+    slot_id text NOT NULL,
+    status text NOT NULL,
+    detail text,
+    issued_at timestamp with time zone NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT ck_generator_prescreen_attempts_generator_prescreen_att_4823 CHECK ((status = ANY (ARRAY['leased'::text, 'completed'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: generator_prescreen_results; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_prescreen_results (
+    prescreen_index bigint NOT NULL,
+    agent_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    ticket_deadline timestamp with time zone NOT NULL,
+    run_id text NOT NULL,
+    results jsonb NOT NULL,
+    answered integer NOT NULL,
+    faulted integer NOT NULL,
+    signature text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: generator_prescreens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_prescreens (
+    prescreen_index bigint NOT NULL,
+    status text NOT NULL,
+    seed text NOT NULL,
+    settings_revision integer NOT NULL,
+    cases_per_column integer NOT NULL,
+    bench_version integer NOT NULL,
+    columns jsonb NOT NULL,
+    panel jsonb NOT NULL,
+    opened_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    lease_id uuid,
+    lease_expires_at timestamp with time zone,
+    lease_attempts integer DEFAULT 0 NOT NULL,
+    generation jsonb,
+    dataset_sha256 text,
+    dataset_bytes bytea,
+    column_cases jsonb,
+    score jsonb,
+    scorer_version text,
+    closed_at timestamp with time zone,
+    void_reason text,
+    CONSTRAINT ck_generator_prescreens_generator_prescreens_cases_check CHECK (((cases_per_column >= 8) AND (cases_per_column <= 80))),
+    CONSTRAINT ck_generator_prescreens_generator_prescreens_index_check CHECK ((prescreen_index >= '1099511627776'::bigint)),
+    CONSTRAINT ck_generator_prescreens_generator_prescreens_status_check CHECK ((status = ANY (ARRAY['generating'::text, 'running'::text, 'scoring'::text, 'scored'::text, 'void'::text]))),
+    CONSTRAINT ck_generator_prescreens_generator_prescreens_void_reason_check CHECK (((status = 'void'::text) = (void_reason IS NOT NULL)))
+);
+
+
+--
+-- Name: generator_prescreens_prescreen_index_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.generator_prescreens_prescreen_index_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: generator_prescreens_prescreen_index_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.generator_prescreens_prescreen_index_seq OWNED BY public.generator_prescreens.prescreen_index;
+
+
+--
 -- Name: generator_probe_epochs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4700,6 +4788,8 @@ CREATE TABLE public.generator_submissions (
     round_score double precision,
     round_scored_index bigint,
     name text,
+    prescreen_score double precision,
+    prescreen_index bigint,
     CONSTRAINT ck_generator_submissions_generator_submissions_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT ck_generator_submissions_generator_submissions_digest_check CHECK (((source_sha256 ~ '^[0-9a-f]{64}$'::text) AND (tree_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_generator_submissions_generator_submissions_lease_check CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((lease_id IS NULL) = (lease_run_id IS NULL)))),
@@ -8087,6 +8177,13 @@ ALTER TABLE ONLY public.generator_operator_actions ALTER COLUMN id SET DEFAULT n
 
 
 --
+-- Name: generator_prescreens prescreen_index; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_prescreens ALTER COLUMN prescreen_index SET DEFAULT nextval('public.generator_prescreens_prescreen_index_seq'::regclass);
+
+
+--
 -- Name: generator_probe_epochs epoch; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -10085,6 +10182,30 @@ ALTER TABLE ONLY public.generator_competition_settings_revisions
 
 ALTER TABLE ONLY public.generator_operator_actions
     ADD CONSTRAINT pk_generator_operator_actions PRIMARY KEY (id);
+
+
+--
+-- Name: generator_prescreen_attempts pk_generator_prescreen_attempts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_prescreen_attempts
+    ADD CONSTRAINT pk_generator_prescreen_attempts PRIMARY KEY (prescreen_index, agent_id, validator_hotkey, ticket_deadline);
+
+
+--
+-- Name: generator_prescreen_results pk_generator_prescreen_results; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_prescreen_results
+    ADD CONSTRAINT pk_generator_prescreen_results PRIMARY KEY (prescreen_index, agent_id);
+
+
+--
+-- Name: generator_prescreens pk_generator_prescreens; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_prescreens
+    ADD CONSTRAINT pk_generator_prescreens PRIMARY KEY (prescreen_index);
 
 
 --
@@ -12380,6 +12501,13 @@ CREATE INDEX generator_case_verdicts_fingerprint_idx ON public.generator_case_ve
 --
 
 CREATE INDEX generator_operator_actions_subject_idx ON public.generator_operator_actions USING btree (subject, created_at);
+
+
+--
+-- Name: generator_prescreens_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_prescreens_status_idx ON public.generator_prescreens USING btree (status);
 
 
 --
@@ -15358,6 +15486,22 @@ ALTER TABLE ONLY public.emission_eligibility_shadow_records
 
 ALTER TABLE ONLY public.generator_case_verdicts
     ADD CONSTRAINT fk_generator_case_verdicts_run_id_generator_runs FOREIGN KEY (run_id) REFERENCES public.generator_runs(run_id) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_prescreen_attempts fk_generator_prescreen_attempts_prescreen_index_generat_ff7b; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_prescreen_attempts
+    ADD CONSTRAINT fk_generator_prescreen_attempts_prescreen_index_generat_ff7b FOREIGN KEY (prescreen_index) REFERENCES public.generator_prescreens(prescreen_index) ON DELETE CASCADE;
+
+
+--
+-- Name: generator_prescreen_results fk_generator_prescreen_results_prescreen_index_generato_9426; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_prescreen_results
+    ADD CONSTRAINT fk_generator_prescreen_results_prescreen_index_generato_9426 FOREIGN KEY (prescreen_index) REFERENCES public.generator_prescreens(prescreen_index) ON DELETE CASCADE;
 
 
 --

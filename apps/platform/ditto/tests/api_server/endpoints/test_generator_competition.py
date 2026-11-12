@@ -103,6 +103,10 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "frontier_audit_cases": 3,
         "frontier_audit_grace_hours": 24,
         "frontier_oracle_timeout_hours": 12,
+        "prescreen_enabled": False,
+        "prescreen_cases": 16,
+        "prescreen_panel_size": 3,
+        "prescreen_columns": 4,
     }
     base.update(overrides)
     return base
