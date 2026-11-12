@@ -27,6 +27,13 @@ for arg in "$@"; do
   esac
 done
 
+# Fail before the costly work if results could not be published at the end.
+mkdir -p "$out"
+if [[ ! -w "$out" ]]; then
+  echo "OUT_DIR is not writable: $out" >&2
+  exit 2
+fi
+
 uv run --script "$here/python/export_adapter_fixture.py" --out "$fixture"
 (cd "$here/go" && go build -o "$bin/ckks" ./cmd/ckks && go build -o "$bin/storage" ./cmd/storage)
 
@@ -52,6 +59,5 @@ if (( with_chain )); then
   uv run --script "$here/python/sn118_chain_snapshot.py" > "$stage/sn118-chain-snapshot.json"
 fi
 
-mkdir -p "$out"
 cp "$stage"/*.json "$out"/
 echo "results in $out"
