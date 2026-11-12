@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.481.0 (2026-11-12)
+
+### Features
+
+- **platform**: Run pre-screen panels on validators (SN-474)
+  ([#3513](https://github.com/ditto-assistant/ditto-subnet/pull/3513),
+  [`4d9b8d8`](https://github.com/ditto-assistant/ditto-subnet/commit/4d9b8d821abf7b481f0a040751f46054c52757ab))
+
+- **platform,backroom**: Promote pre-screened generators (SN-474)
+  ([#3514](https://github.com/ditto-assistant/ditto-subnet/pull/3514),
+  [`3c98759`](https://github.com/ditto-assistant/ditto-subnet/commit/3c9875976b52296a76320058d0947fbc98d855e2))
+
+
 ## v0.480.0 (2026-11-12)
 
 ### Features
