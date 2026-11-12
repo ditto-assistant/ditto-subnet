@@ -543,7 +543,7 @@ describe('generator competition MCP tools', () => {
             {
               queue_position: 1, submission_id: SUBMISSION, miner_hotkey: '5Kin', owner_key: 'coldkey:kin',
               module: 'kinbind', file_count: 46, size_bytes: 200_032, qualified_at: '2026-11-11T14:59:38Z',
-              family: SUBMISSION, family_size: 12, family_measured: 2, family_position: 2, status: 'waiting',
+              family: SUBMISSION, family_size: 12, family_measured: 2, family_position: 2, novelty: 0, status: 'waiting',
             },
             {
               queue_position: null, submission_id: RUN, miner_hotkey: '5Dr', owner_key: 'coldkey:dr',
@@ -626,8 +626,8 @@ describe('generator competition MCP tools', () => {
             previous_version: 13, min_round_validators: 3, scorer_grading_versions: [13, 14],
           },
           challenger_queue: [
-            { submission_id: SUBMISSION, family_position: 2, status: 'waiting', column_id: null, in_flight_round: null },
-            { queue_position: null, status: 'in_flight', in_flight_round: 26114 },
+            { submission_id: SUBMISSION, family_position: 2, novelty: 0, status: 'waiting', column_id: null, in_flight_round: null },
+            { queue_position: null, status: 'in_flight', in_flight_round: 26114, novelty: null },
           ],
         })
       expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))

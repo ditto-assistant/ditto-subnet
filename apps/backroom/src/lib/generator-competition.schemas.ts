@@ -637,7 +637,9 @@ export const roundBenchContractPreviewSchema = z.object({
 // One never-scored qualified miner generator in challenger pick order
 // (Platform GeneratorChallengerQueueEntry). Template families are interleaved:
 // family_position counts the family's scored or in-flight members plus its
-// unmeasured members ahead of this one.
+// members ahead of this one. Within a position the queue takes the highest
+// novelty: the share of its probe cases no measured generator and no
+// generator ahead of it emitted.
 const challengerQueueEntrySchema = z.object({
   queue_position: z.number().int().nullable(),
   submission_id: uuid,
@@ -651,6 +653,8 @@ const challengerQueueEntrySchema = z.object({
   family_size: z.number().int(),
   family_measured: z.number().int(),
   family_position: z.number().int(),
+  // Absent from a Platform that predates novelty ordering; null in flight.
+  novelty: z.number().min(0).max(1).nullable().optional().default(null),
   status: z.enum(['challenger', 'counted', 'in_flight', 'owner_has_column', 'waiting']),
   column_id: z.string().nullable().optional().default(null),
   in_flight_round: z.number().int().nullable().optional().default(null),

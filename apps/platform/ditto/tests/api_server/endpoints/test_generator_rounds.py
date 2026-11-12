@@ -71,14 +71,16 @@ from ditto.db.models import (
     Agent,
     BannedHotkey,
     GeneratorOperatorAction,
+    GeneratorProbeResult,
     GeneratorRound,
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
+    GeneratorRun,
     GeneratorSubmission,
     ProviderOutageCircuit,
     ValidatorTicket,
 )
-from ditto.db.queries.generator import claimed_fingerprints
+from ditto.db.queries.generator import claimed_fingerprints, current_probe_epoch
 from ditto.db.queries.provider_outages import park_scoring_leases
 from ditto.tests.api_server.conftest import answer_registration_from_neurons
 from ditto.tests.api_server.endpoints.test_generator_competition import (
@@ -1693,6 +1695,87 @@ class TestChallengerQueue:
         } == {4}
         # The scored generator and the public default are never in the queue.
         assert str(ids["scored"]) not in {entry["submission_id"] for entry in queue}
+
+    async def test_a_partial_probe_copy_waits_behind_new_cases(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Within one family position the queue takes the generator whose
+        current-epoch probe cases are new over one that half copies a scored
+        generator's, though the copy qualified first."""
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=1, challenger_columns=1)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        names = ("scored", "partial", "novel")
+        ids = {
+            name: await _seed_generator(
+                session_maker, hotkey=f"5Gen-{name}", owner=f"coldkey:{name}", salt=name
+            )
+            for name in names
+        }
+        probes = {
+            "scored": ["m1", "m2", "m3", "m4"],
+            "partial": ["m1", "m2", "p3", "p4"],
+            "novel": ["n1", "n2", "n3", "n4"],
+        }
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            epoch = await current_probe_epoch(session)
+            assert epoch is not None
+            for age, name in enumerate(reversed(names)):
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.module = f"example.com/{name}"
+                row.qualified_at = now - timedelta(hours=age + 1)
+                if name == "scored":
+                    row.round_score = 0.4
+                    row.round_scored_index = 1
+                run = GeneratorRun(
+                    run_id=uuid4(),
+                    submission_id=ids[name],
+                    attempt=1,
+                    seeds=["ab" * 32],
+                    probe_epoch=epoch.epoch,
+                    cases_per_seed=8,
+                    panel=[],
+                    settings_revision=1,
+                    status="qualified",
+                    outcome="qualified",
+                    leased_at=now,
+                    finished_at=now,
+                )
+                session.add(run)
+                await session.flush()
+                session.add(
+                    GeneratorProbeResult(
+                        submission_id=ids[name],
+                        epoch=epoch.epoch,
+                        run_id=run.run_id,
+                        fingerprints=[
+                            hashlib.sha256(tag.encode()).hexdigest()
+                            for tag in probes[name]
+                        ],
+                        recorded_at=now,
+                    )
+                )
+
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert [
+            column["submission_id"]
+            for column in preview["columns"]
+            if not column["counted"]
+        ] == [str(ids["novel"])]
+        assert [
+            (entry["submission_id"], entry["status"], entry["novelty"])
+            for entry in preview["challenger_queue"]
+        ] == [
+            (str(ids["novel"]), "challenger", 1.0),
+            (str(ids["partial"]), "waiting", 0.5),
+        ]
 
 
 class TestPanelFreshness:

@@ -508,8 +508,13 @@ class GeneratorChallengerQueueEntry(RoundModel):
     """Family members already scored or holding a column in a round in
     flight."""
     family_position: int
-    """Measured family members plus the family's unmeasured members ahead of
-    this one; the queue orders by this first."""
+    """Measured family members plus the family's members ahead of this one;
+    the queue orders by this first."""
+    novelty: float | None = None
+    """Share of its probe cases (case fingerprints on the epoch's shared probe
+    seed) that no measured generator and no generator ahead of it emitted;
+    within a family position the queue orders by this, highest first. ``None``
+    while it is in flight."""
     status: ChallengerQueueStatus
     """What a round opened now would do with it: a ``challenger`` or
     ``counted`` column, skip it while ``in_flight``, skip it because its owner

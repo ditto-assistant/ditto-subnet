@@ -133,6 +133,7 @@ from ditto.api_server.generator_scorer_capability import (
 from ditto.db.models import (
     Agent,
     BannedHotkey,
+    GeneratorProbeResult,
     GeneratorRound,
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
@@ -146,7 +147,7 @@ from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
     heartbeat_supports_version,
 )
-from ditto.db.queries.generator import claimed_fingerprints
+from ditto.db.queries.generator import claimed_fingerprints, current_probe_epoch
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -351,6 +352,28 @@ async def _in_flight_submissions(session: AsyncSession) -> dict[UUID, int]:
     return held
 
 
+async def _probe_fingerprints(
+    session: AsyncSession, rows: Sequence[GeneratorSubmission]
+) -> dict[UUID, list[str]]:
+    """Each generator's case fingerprints on the current probe seed."""
+    epoch = await current_probe_epoch(session, create=False)
+    if epoch is None or not rows:
+        return {}
+    return {
+        submission_id: list(fingerprints)
+        for submission_id, fingerprints in await session.execute(
+            select(
+                GeneratorProbeResult.submission_id, GeneratorProbeResult.fingerprints
+            ).where(
+                GeneratorProbeResult.epoch == epoch.epoch,
+                GeneratorProbeResult.submission_id.in_(
+                    [row.submission_id for row in rows]
+                ),
+            )
+        )
+    }
+
+
 async def public_default_generator(
     session: AsyncSession,
 ) -> GeneratorSubmission | None:
@@ -400,8 +423,9 @@ async def select_round_columns(
     column seed, so the default can fill several without repeating cases).
     Challenger columns go to qualified generators that have never been
     scored, in challenger queue order (:mod:`generator_challenger_queue`:
-    template families interleaved, oldest qualification first within a
-    family position), then to the next-best scored ones. A generator whose
+    template families interleaved, the most novel probe cases first within a
+    family position, then the oldest qualification), then to the next-best
+    scored ones. A generator whose
     column in an earlier round is still in flight is skipped as a
     challenger: that round is already measuring it, and a void round returns
     a never-scored one to its place in the queue.
@@ -409,7 +433,9 @@ async def select_round_columns(
     """
     qualified = await _qualified_generators(session)
     in_flight = await _in_flight_submissions(session)
-    queue = challenger_queue(qualified, in_flight)
+    queue = challenger_queue(
+        qualified, in_flight, await _probe_fingerprints(session, qualified)
+    )
     scored = sorted(
         (row for row in qualified if row.round_score is not None),
         key=lambda row: (

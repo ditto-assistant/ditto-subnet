@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 from uuid import NAMESPACE_URL, uuid5
 
 from ditto.api_server.generator_challenger_queue import (
     challenger_queue,
+    probe_novelty,
     same_template,
     template_families,
 )
@@ -137,3 +139,90 @@ def test_the_family_key_is_its_earliest_member_whatever_the_input_order() -> Non
     expected = str(rows[1].submission_id)
     for ordering in (rows, list(reversed(rows)), [rows[2], rows[0], rows[1]]):
         assert set(template_families(ordering).values()) == {expected}
+
+
+def _probe(*tags: str) -> list[str]:
+    return [hashlib.sha256(tag.encode()).hexdigest() for tag in tags]
+
+
+def test_within_a_position_the_more_novel_generator_goes_first() -> None:
+    """A partial copy of a measured generator's probe cases waits behind a
+    generator whose cases are new, even though it qualified first."""
+    measured = _gen("measured", owner="m", minutes=-60, module="m", score=0.3)
+    partial = _gen("partial", owner="p", minutes=0, module="p")
+    novel = _gen("novel", owner="n", minutes=10, module="n")
+    probes = {
+        measured.submission_id: _probe("m1", "m2", "m3", "m4"),
+        partial.submission_id: _probe("m1", "m2", "p3", "p4"),
+        novel.submission_id: _probe("n1", "n2", "n3", "n4"),
+    }
+    entries = challenger_queue([measured, partial, novel], {}, probes)
+    assert [(e.row.miner_hotkey[1:], e.novelty) for e in entries] == [
+        ("novel", 1.0),
+        ("partial", 0.5),
+    ]
+
+
+def test_a_mosaic_of_measured_cases_counts_as_known() -> None:
+    """Cases copied from two measured generators, each well under the probe
+    copy threshold, add up: novelty counts every known case."""
+    a = _gen("a", owner="a", minutes=-60, module="a", score=0.3)
+    b = _gen("b", owner="b", minutes=-50, module="b", score=0.2)
+    mosaic = _gen("mosaic", owner="x", minutes=0, module="x")
+    fresh = _gen("fresh", owner="y", minutes=10, module="y")
+    probes = {
+        a.submission_id: _probe("a1", "a2", "a3", "a4"),
+        b.submission_id: _probe("b1", "b2", "b3", "b4"),
+        mosaic.submission_id: _probe("a1", "a2", "b1", "x4"),
+        fresh.submission_id: _probe("y1", "y2", "y3", "y4"),
+    }
+    entries = challenger_queue([a, b, mosaic, fresh], {}, probes)
+    assert [(e.row.miner_hotkey[1:], e.novelty) for e in entries] == [
+        ("fresh", 1.0),
+        ("mosaic", 0.25),
+    ]
+
+
+def test_identical_builds_wait_behind_a_build_with_new_cases() -> None:
+    """One coldkey's identical builds emit one probe output (prod, Nov 11:
+    eight kinbind builds, pairwise probe overlap 1.0). Once one is ahead in
+    the queue the rest add nothing new, so a build with different cases from
+    the same owner goes first."""
+    kinbind1 = _gen("kinbind1", owner="kin", minutes=0, module="kinbind")
+    kinbind2 = _gen("kinbind2", owner="kin", minutes=1, module="kinbind")
+    kinlist = _gen("kinlist", owner="kin", minutes=2, module="kinlist", files=47)
+    probes = {
+        kinbind1.submission_id: _probe("k1", "k2"),
+        kinbind2.submission_id: _probe("k1", "k2"),
+        kinlist.submission_id: _probe("l1", "l2"),
+    }
+    entries = challenger_queue([kinbind1, kinbind2, kinlist], {}, probes)
+    assert [
+        (e.row.miner_hotkey[1:], e.family_position, e.novelty) for e in entries
+    ] == [("kinbind1", 0, 1.0), ("kinlist", 1, 1.0), ("kinbind2", 2, 0.0)]
+
+
+def test_family_position_still_comes_before_novelty() -> None:
+    """A wholly novel second build of a family waits behind another family's
+    first build, even one half made of known cases."""
+    measured = _gen("measured", owner="m", minutes=-60, module="m", score=0.3)
+    second = _gen("second", owner="m", minutes=0, module="m2")
+    head = _gen("head", owner="h", minutes=5, module="h")
+    probes = {
+        measured.submission_id: _probe("x1", "x2"),
+        second.submission_id: _probe("s1", "s2"),
+        head.submission_id: _probe("x1", "h2"),
+    }
+    entries = challenger_queue([measured, second, head], {}, probes)
+    assert [
+        (e.row.miner_hotkey[1:], e.family_position, e.novelty) for e in entries
+    ] == [
+        ("head", 0, 0.5),
+        ("second", 1, 1.0),
+    ]
+
+
+def test_a_generator_without_a_probe_result_counts_as_novel() -> None:
+    assert probe_novelty(None, {"a"}) == 1.0
+    assert probe_novelty([], {"a"}) == 1.0
+    assert probe_novelty(["a", "a", "b"], {"a"}) == 0.5
