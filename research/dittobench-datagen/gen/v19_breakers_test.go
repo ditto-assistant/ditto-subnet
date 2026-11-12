@@ -175,6 +175,12 @@ func TestV19ShortcutRulesLoseOnBreakerFamilies(t *testing.T) {
 // that keeps the bare task alone does not.
 func TestV19ConditionalNextGradesTheFullSentence(t *testing.T) {
 	t.Parallel()
+	oneWord := 0
+	defer func() {
+		if !t.Failed() && oneWord == 0 {
+			t.Fatal("no swept case accepts a one-word task synonym with its condition")
+		}
+	}()
 	for seed := int64(1); seed <= 20; seed++ {
 		for _, c := range v19Breakers(t, seed) {
 			if c.Family != universe.V19BreakerConditionalNext {
@@ -189,6 +195,17 @@ func TestV19ConditionalNextGradesTheFullSentence(t *testing.T) {
 			} {
 				if v := grade.Memory(mc, protocol.RunResponse{FinalText: reply}); v.Score != 1 {
 					t.Fatalf("seed %d: correct sentence %q scored %.3f %v", seed, reply, v.Score, v.Notes)
+				}
+			}
+			// Every accepted wording of the task, one-word synonyms included,
+			// passes when it keeps the condition.
+			for _, alt := range mc.AnswerItemAcceptAny[1] {
+				if len(strings.Fields(strings.TrimSuffix(alt, " "+f.Condition))) == 1 {
+					oneWord++
+				}
+				reply := fmt.Sprintf("%s will %s, by %s.", f.Who, alt, f.Channel)
+				if v := grade.Memory(mc, protocol.RunResponse{FinalText: reply}); v.Score != 1 {
+					t.Fatalf("seed %d: accepted wording %q scored %.3f %v", seed, reply, v.Score, v.Notes)
 				}
 			}
 			bare := fmt.Sprintf("%s will %s, by %s.", f.Who, f.Task, f.Channel)

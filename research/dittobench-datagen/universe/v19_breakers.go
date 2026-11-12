@@ -556,9 +556,11 @@ func (b *v19BreakerBuilder) nearTwin(ordinal, variant int) V19BreakerCase {
 		year := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 		born := [2]time.Time{year.AddDate(0, 0, 20+days[0]), year.AddDate(0, 0, 20+days[1])}
 		values = [2]string{born[0].Format("2006-01-02"), born[1].Format("2006-01-02")}
-		protect = []string{v19Date(born[0]), v19Date(born[1])}
-		notes[0] = fmt.Sprintf("%s's birthday is %s. %s is my %s; put it in the calendar.", asked, v19Date(born[0]), asked, strings.TrimPrefix(v19BreakerRelations[relations[0]], "my "))
-		notes[1] = fmt.Sprintf("Reminder: %s (%s) has a birthday on %s.", other, v19BreakerRelations[relations[1]], v19Date(born[1]))
+		// The notes carry the year, so a thread saved after the date still
+		// names the full date the claim grades.
+		protect = []string{v19DateYear(born[0]), v19DateYear(born[1])}
+		notes[0] = fmt.Sprintf("%s's birthday is %s. %s is my %s; put it in the calendar.", asked, v19DateYear(born[0]), asked, strings.TrimPrefix(v19BreakerRelations[relations[0]], "my "))
+		notes[1] = fmt.Sprintf("Reminder: %s (%s) has a birthday on %s.", other, v19BreakerRelations[relations[1]], v19DateYear(born[1]))
 		question = fmt.Sprintf("When is %s's birthday?", asked)
 		claim = v19DateClaim(born[0])
 	}
@@ -602,9 +604,7 @@ func (b *v19BreakerBuilder) conditionalNext(ordinal, variant int) V19BreakerCase
 	action := task.what + " " + condition
 	accept := []string{action, condition + ", " + task.what, condition + " " + task.what}
 	for _, alt := range task.accept {
-		if len(strings.Fields(alt)) > 1 {
-			accept = append(accept, alt+" "+condition)
-		}
+		accept = append(accept, alt+" "+condition)
 	}
 	question := b.pick(key("q"), []string{
 		fmt.Sprintf("What is the next step on %s: who does what, and how?", subject),
