@@ -285,7 +285,7 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"Rota update: %[3]s moves from %[1]s to %[2]s going forward.",
 		}), first, current, g.Subject)
 		m.DecoyClause = fmt.Sprintf("Separately, %s is %s's job.", g.Decoy, g.People[3])
-		m.Question = v13PersonalQuestion(seed, group, variant, []string{
+		m.askPersonal(d, V19PhrasePersonalChore, group, variant, []string{
 			"after the swap, who is on %[1]s now?",
 			"whose job is %[1]s these days?",
 			"who has %[1]s on the rota as it stands?",
@@ -315,7 +315,7 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"Update on the %[2]s for %[1]s — new date %[3]s, replacing the earlier booking.",
 		}), relation, g.Subject, v13CalendarProse(seed, "personal", group, fmt.Sprintf("p-appt-b-%d-%v", group, counter), date, false))
 		m.DecoyClause = fmt.Sprintf("Unrelated: %s's %s is on %s.", g.People[3], g.Decoy, v13CalendarProse(seed, "personal", group, fmt.Sprintf("p-appt-decoy-%d", group), g.Dates[3], false))
-		m.Question = v13PersonalQuestion(seed, group, variant, []string{
+		m.askPersonal(d, V19PhrasePersonalAppointment, group, variant, []string{
 			"when is %[1]s's %[2]s now?",
 			"what date did %[1]s's %[2]s end up on after the change?",
 			"which day is %[1]s's %[2]s, as it stands?",
@@ -348,7 +348,7 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"Revised %[1]s list — %[2]s is off it, %[3]s is on it.",
 		}), g.Subject, g.Items[drop], g.Added)
 		m.DecoyClause = fmt.Sprintf("Separately, %s's %s list is just a %s.", g.People[3], g.Decoy, g.DecoyItm)
-		m.Question = v13PersonalQuestion(seed, group, variant, []string{
+		m.askPersonal(d, V19PhrasePersonalSchoolList, group, variant, []string{
 			"what is on %[1]s's %[2]s list now?",
 			"after the school's change, what does %[1]s need for the %[2]s?",
 			"list everything currently required for %[1]s's %[2]s.",
@@ -396,7 +396,7 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"%[1]s messaged: the %[2]s plan is %[3]s as of today.",
 		}), relation, g.Subject, cls[currentClass].Canonical)
 		m.DecoyClause = fmt.Sprintf("Separately, %s's %s is %s.", g.People[3], g.Decoy, cls[g.Classes[3]].Canonical)
-		m.Question = v13PersonalQuestion(seed, group, variant, []string{
+		m.askPersonal(d, V19PhrasePersonalMilestone, group, variant, []string{
 			"what's the status of %[1]s's %[2]s now?",
 			"is %[1]s's %[2]s still on — what did it end up as?",
 			"where does %[1]s's %[2]s stand after the latest message?",
@@ -428,7 +428,7 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"Final call on %[1]s: %[2]s. Ignore what I said before.",
 		}), g.Subject, cls[currentClass].Canonical)
 		m.DecoyClause = fmt.Sprintf("Separately, for %s the plan is to %s.", g.Decoy, cls[g.Classes[3]].Canonical)
-		m.Question = v13PersonalQuestion(seed, group, variant, []string{
+		m.askPersonal(d, V19PhrasePersonalSubscription, group, variant, []string{
 			"what did we settle on doing about %[1]s before it renews?",
 			"what's the next action on %[1]s, as it stands?",
 			"remind me — what are we doing with %[1]s?",
@@ -460,7 +460,7 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"New plan for %[1]s — the %[2]s at %[3]s. Forget the original time.",
 		}), g.Subject, leg, v13TimeProse(seed, fmt.Sprintf("p-trip-b-%d-%v", group, counter), t))
 		m.DecoyClause = fmt.Sprintf("Separately, %s leaves at %s.", g.Decoy, v13TimeProse(seed, fmt.Sprintf("p-trip-decoy-%d", group), g.Times[3]))
-		m.Question = v13PersonalQuestion(seed, group, variant, []string{
+		m.askPersonal(d, V19PhrasePersonalDeparture, group, variant, []string{
 			"what time does our %[2]s for %[1]s leave now?",
 			"after the rebooking, when does the %[2]s for %[1]s depart?",
 			"which %[2]s time are we on for %[1]s?",
@@ -487,7 +487,7 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"Since last month %[2]s is the organiser of %[1]s; %[3]s stepped back.",
 		}), g.Subject, current, first)
 		m.DecoyClause = fmt.Sprintf("Separately, %s is run by %s.", g.Decoy, g.People[3])
-		m.Question = v13PersonalQuestion(seed, group, variant, []string{
+		m.askPersonal(d, V19PhrasePersonalClub, group, variant, []string{
 			"who runs %[1]s now?",
 			"who is organising %[1]s these days?",
 			"after the handover, who's in charge of %[1]s?",
@@ -646,6 +646,7 @@ func materializeV13PersonalCase(seed int64, group, variant int, groupID string, 
 		Facts:           append([]string(nil), m.Facts...),
 		Constraints:     append([]string(nil), m.Constraints...),
 		Operations:      append([]string(nil), m.Operations...),
+		phrase:          m.phrase,
 	}
 	provenance := V10CaseProvenance{
 		Revision:         V13PersonalProvenanceRevision,

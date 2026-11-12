@@ -205,6 +205,7 @@ func (w World) pureAbsencePlan(index, ordinal int) QuestionPlan {
 		fmt.Sprintf("Which work email did I save for %s at %s? They came up around the %s and I want to send a thank-you.", name, p.Employer, p.Context),
 		fmt.Sprintf("I need to reach %s at %s about the %s. Which email do I have on file for them?", name, p.Employer, p.Context),
 	}[ordinal%3]
+	question = w.v19Or(question, V19PhraseContactEmail, fmt.Sprintf("%s:%d:%d", oracleAbsencePure, index, ordinal), V19Slots{"name": name, "employer": p.Employer, "context": p.Context})
 	plan := QuestionPlan{
 		Case:            w.absenceCase(oracleAbsencePure, index, question, []string{p.Email, p.PreviousEmail}),
 		RequiredPairIDs: []string{p.IdentityPairID, p.WorkPairID, p.EmailPairID, p.CorrectionPairID},
@@ -238,6 +239,7 @@ func (w World) nearMissPlan(probeIndex int) QuestionPlan {
 		fmt.Sprintf("I want to loop in %s, the %s colleague of %s's I met around the %s. Which work email did I save for them?", probe.Name, p.Employer, p.Nickname, p.Context),
 		fmt.Sprintf("Remind me of the work address on file for %s — %s's colleague at %s who came up during the %s.", probe.Name, p.Nickname, p.Employer, p.Context),
 	}[probeIndex%3]
+	question = w.v19Or(question, V19PhraseContactColleagueEmail, fmt.Sprintf("%s:%d", oracleAbsenceNearMiss, probeIndex), V19Slots{"name": probe.Name, "employer": p.Employer, "nick": p.Nickname, "context": p.Context})
 	plan := QuestionPlan{
 		Case:            w.absenceCase(oracleAbsenceNearMiss, probeIndex, question, []string{p.Email, p.PreviousEmail}),
 		RequiredPairIDs: []string{probe.MentionPairID, p.IdentityPairID, p.WorkPairID, p.EmailPairID, p.CorrectionPairID},
@@ -262,7 +264,7 @@ func (w World) staleHandlePlan(probeIndex, ordinal int) QuestionPlan {
 	probe := w.Probes.Handles[probeIndex]
 	p := w.People[probe.Person]
 	plan := QuestionPlan{
-		Case:            w.absenceCase(oracleAbsenceStale, probeIndex, handleQuestion(p, ordinal), []string{probe.Handle}),
+		Case:            w.absenceCase(oracleAbsenceStale, probeIndex, w.v19HandleQuestion(p, oracleAbsenceStale, probeIndex, ordinal), []string{probe.Handle}),
 		RequiredPairIDs: []string{p.IdentityPairID, p.WorkPairID, probe.HandlePairID, probe.RemovalPairID},
 		Facts:           []string{"full identity", "relationship and event", "withdrawn handle", "removal instruction"},
 		Constraints:     []string{p.Name, p.Relation, p.Context},
@@ -287,7 +289,7 @@ func (w World) handleCurrentPlan(probeIndex, ordinal int) QuestionPlan {
 		}
 	}
 	return QuestionPlan{
-		Case:            memoryCase(w.Seed, oracleProbeHandleCurrent, probeIndex, handleQuestion(p, ordinal+1), probe.Handle, protocol.AnswerValue, distractors),
+		Case:            memoryCase(w.Seed, oracleProbeHandleCurrent, probeIndex, w.v19HandleQuestion(p, oracleProbeHandleCurrent, probeIndex, ordinal+1), probe.Handle, protocol.AnswerValue, distractors),
 		RequiredPairIDs: []string{p.IdentityPairID, p.WorkPairID, probe.HandlePairID},
 		Facts:           []string{"full identity", "relationship and event", "work context", "messaging handle"},
 		Constraints:     []string{p.Name, p.Relation, p.Context},
@@ -310,6 +312,7 @@ func (w World) falsePremisePlan(index, ordinal int) QuestionPlan {
 		fmt.Sprintf("For %s — the %s trip from %s — how long was the %s stay?", trip.Alias, trip.Purpose, trip.When, strings.TrimPrefix(other, "the ")),
 		fmt.Sprintf("Remind me how many days %s, our %s trip from %s, had us in %s.", trip.Alias, trip.Purpose, trip.When, other),
 	}[ordinal%3]
+	question = w.v19Or(question, V19PhraseTripLegDays, fmt.Sprintf("%s:%d:%d", oracleAbsenceFalsePremise, index, ordinal), V19Slots{"country": other, "alias": trip.Alias, "purpose": trip.Purpose, "when": trip.When})
 	// The original plan states every leg length verbatim; those are the values
 	// a lure-following reader borrows for the country that was never visited.
 	tempting := []string{}
@@ -338,6 +341,7 @@ func (w World) crossUserPlan(fact V13CrossUserFact, ordinal int) QuestionPlan {
 		fmt.Sprintf("I need to write to %s about the %s — the one at %s. Which work email do I have for them?", fact.Name, fact.Context, fact.Employer),
 		fmt.Sprintf("Which work email did I save for %s, the %s contact from the %s?", fact.Name, fact.Employer, fact.Context),
 	}[ordinal%3]
+	question = w.v19Or(question, V19PhraseContactEmail, fmt.Sprintf("%s:%d:%d", oracleAbsenceCrossUser, fact.Anchor, ordinal), V19Slots{"name": fact.Name, "employer": fact.Employer, "context": fact.Context})
 	plan := QuestionPlan{
 		Case:            w.absenceCase(oracleAbsenceCrossUser, fact.Anchor, question, []string{anchor.Email}),
 		RequiredPairIDs: []string{anchor.IdentityPairID, anchor.WorkPairID, anchor.CorrectionPairID},
@@ -358,6 +362,7 @@ func (w World) insufficientPlan(threadIndex int) QuestionPlan {
 		fmt.Sprintf("For the %s: after the partial payment we sent %s on %s, what balance remains?", thread.Alias, thread.Vendor, thread.InvoiceID),
 		fmt.Sprintf("Work out the outstanding balance on %s for the %s — %s's invoice — once our partial payment is subtracted.", thread.InvoiceID, thread.Alias, thread.Vendor),
 	}[threadIndex%3]
+	question = w.v19Or(question, V19PhraseBalanceUnpaid, fmt.Sprintf("%s:%d", oracleAbsenceInsufficient, threadIndex), V19Slots{"vendor": thread.Vendor, "alias": thread.Alias, "invoice": thread.InvoiceID})
 	plan := QuestionPlan{
 		Case:            w.absenceCase(oracleAbsenceInsufficient, threadIndex, question, []string{fmt.Sprintf("%d", thread.ApprovedCents)}),
 		RequiredPairIDs: []string{thread.ApprovalPairID, thread.PaymentPairID},
