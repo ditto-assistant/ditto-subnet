@@ -25,12 +25,25 @@ import (
 // RotateSeedForVersion and DatasetEpochForVersion already serve staged
 // versions with the same epoch and the same mixing function.
 
+// BenchVersionV19 is the GENERALIZATION contract (DITTO-2736): the v18 run with
+// its public datagen memory half hardened against template matching. It adds
+// shortcut-breaker families whose answers a rule keyed to the public
+// generator's own habits gets wrong, renders question wording from a seeded
+// phrase grammar instead of fixed lists, and moves composite weight from the
+// public datagen half to the held-out generator columns
+// (docs/bench-versions.md, "Bench v19"). Every lever is gated on
+// bench_version >= 19, so v2..v18 regenerate and re-score byte-identically.
+// Staged until the cross-layer PR supports it.
+const BenchVersionV19 = 19
+
+var datasetEpochV19 = time.Date(2027, 11, 1, 0, 0, 0, 0, time.UTC)
+
 // stagedBenchVersions are the generatable-but-unsupported contracts, in order.
 // Each is exactly one past the previous entry (or past the supported ceiling).
-// Empty while every generatable contract is supported: v16 (the dueling
-// contract) and v18 (the accuracy contract) were staged here and promoted into
-// epoch.go by the cross-layer PRs that raised the shared ceiling.
-var stagedBenchVersions []int
+// v16 (the dueling contract) and v18 (the accuracy contract) were staged here
+// and promoted into epoch.go by the cross-layer PRs that raised the shared
+// ceiling.
+var stagedBenchVersions = []int{BenchVersionV19}
 
 // StagedBenchVersions returns a copy of the staged versions.
 func StagedBenchVersions() []int {
@@ -69,6 +82,8 @@ func NewestGeneratableBenchVersion() int {
 // version; promotion moves the case into DatasetEpochForVersion.
 func stagedDatasetEpoch(version int) (time.Time, bool) {
 	switch version {
+	case BenchVersionV19:
+		return datasetEpochV19, true
 	default:
 		return time.Time{}, false
 	}

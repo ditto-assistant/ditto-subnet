@@ -1713,6 +1713,36 @@ For seed `123456789`, full profile, public surface salt 0,
 epoch `2027-10-01T00:00:00Z`. Contract tests: `gen/v18_contract_test.go`,
 `datagen/v18_test.go`, `services/dittobench-api/internal/scorer/v18_unlinked_reply_test.go`.
 
+## Bench v19 generalization contract (staged)
+
+Epic DITTO-2736. On v18 the public datagen memory half no longer ranks the top
+of the board: the top four agents score .955-.969 on it, a spread of .014. They
+reach that partly by keying routing regexes and prompt notes to this module's
+own question wording and data habits. Policy allows this (the I5 routed-guidance
+clarification of 2026-10-23), so v19 does not ban it. Instead, v19 makes it
+earn nothing.
+
+Each of these is gated on `bench_version >= 19`, so v2..v18 regenerate and
+re-score byte-identically:
+
+1. **Shortcut-breaker families** (DITTO-2737). The answer is wrong for a rule
+   built on a habit of this generator, and right for a general memory system.
+   The habits covered:
+   - trigger words in fact questions;
+   - late-recorded story changes;
+   - a company as the correct holder;
+   - near-twin people's names;
+   - next steps whose condition is part of the answer.
+2. **Seeded phrase grammar** (DITTO-2738). Question wording is composed per seed
+   from intent frames, synonym slots and clause order, not drawn from short
+   fixed lists.
+3. **Held-out weight** (DITTO-2739). The public datagen half's share of the
+   composite falls, and the generator columns' share rises.
+
+V19 keeps v18's run size (`ProfileForVersion`). It is staged in
+`protocol/staged.go`, epoch `2027-11-01T00:00:00Z`, until the cross-layer PR
+supports it. Its known vector is pinned once the datagen half is final.
+
 ## Bench v15 grading policy (shipped ahead of the generation contract)
 
 `grade.PolicyFloorV15` exists only as a grading-policy floor, as v13's grader floor once did; `protocol` gains `BenchVersionV15` only with the generation contract. It
