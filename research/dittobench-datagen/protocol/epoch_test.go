@@ -179,10 +179,17 @@ func TestStagedBenchVersionsAreGeneratableNotSupported(t *testing.T) {
 		t.Fatalf("v17 epoch = %s", got)
 	}
 	// v18 (the accuracy contract) left staging with the epoch it was staged with.
-	if !SupportedBenchVersion(BenchVersionV18) || StagedBenchVersion(BenchVersionV18) || NewestGeneratableBenchVersion() != BenchVersionV18 {
+	if !SupportedBenchVersion(BenchVersionV18) || StagedBenchVersion(BenchVersionV18) || NewestSupportedBenchVersion() != BenchVersionV18 {
 		t.Fatal("v18 must be supported and no longer staged")
 	}
 	if got, _ := DatasetEpochForVersion(BenchVersionV18); got.Format(time.RFC3339) != "2027-10-01T00:00:00Z" {
 		t.Fatalf("v18 epoch = %s", got)
+	}
+	// v19 (the generalization contract) is staged until the cross-layer PR.
+	if SupportedBenchVersion(BenchVersionV19) || !StagedBenchVersion(BenchVersionV19) || NewestGeneratableBenchVersion() != BenchVersionV19 {
+		t.Fatal("v19 must be staged, generatable and not supported")
+	}
+	if got, _ := DatasetEpochForVersion(BenchVersionV19); got.Format(time.RFC3339) != "2027-11-01T00:00:00Z" {
+		t.Fatalf("v19 epoch = %s", got)
 	}
 }
