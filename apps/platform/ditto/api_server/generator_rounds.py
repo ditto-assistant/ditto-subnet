@@ -327,6 +327,25 @@ async def _qualified_generators(session: AsyncSession) -> list[GeneratorSubmissi
     )
 
 
+# A round whose columns are frozen but that has not finished: a never-scored
+# generator in one of its columns has no round score yet.
+IN_FLIGHT_ROUND_STATUSES = ("generating", "running", "scoring")
+
+
+async def _in_flight_submissions(session: AsyncSession) -> set[UUID]:
+    """Miner generators holding a column in a round that has not finished."""
+    held: set[UUID] = set()
+    for columns in await session.scalars(
+        select(GeneratorRound.columns).where(
+            GeneratorRound.status.in_(IN_FLIGHT_ROUND_STATUSES)
+        )
+    ):
+        for column in columns or ():
+            if not column.get("public_default"):
+                held.add(UUID(column["submission_id"]))
+    return held
+
+
 async def public_default_generator(
     session: AsyncSession,
 ) -> GeneratorSubmission | None:
@@ -359,11 +378,15 @@ async def select_columns(
     score, then to qualified generators that have never held a column, then
     to the public default generator (each default column runs on its own
     column seed, so the default can fill several without repeating cases).
-    Challenger columns go to qualified generators that have never held a
-    column, oldest qualification first, then to the next-best scored ones.
+    Challenger columns go to qualified generators that have never been
+    scored, oldest qualification first, then to the next-best scored ones. A
+    never-scored generator whose column in an earlier round is still in
+    flight is skipped as a challenger: that round is already measuring it,
+    and a void round returns it to its place in the queue.
     One column per owner, so a miner with several hotkeys holds one column.
     """
     qualified = await _qualified_generators(session)
+    in_flight = await _in_flight_submissions(session)
     scored = sorted(
         (row for row in qualified if row.round_score is not None),
         key=lambda row: (
@@ -397,7 +420,11 @@ async def select_columns(
             columns.append(_column(len(columns), default, counted=True))
     challengers = settings.challenger_columns
     before = len(columns)
-    take(fresh, challengers, counted=False)
+    take(
+        [row for row in fresh if row.submission_id not in in_flight],
+        challengers,
+        counted=False,
+    )
     take(scored, challengers - (len(columns) - before), counted=False)
     return columns
 
