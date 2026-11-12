@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -24,12 +24,20 @@ from ditto.api_server.generator_prescreens import (
     PRESCREEN_INDEX_BASE,
     PRESCREEN_TTL,
     advance_prescreens,
+    close_prescreen_if_reported,
+    get_prescreen,
     seconds_until_epoch,
 )
 from ditto.api_server.generator_rounds import ChainPosition, GeneratorRoundLoop
-from ditto.db.models import GeneratorPrescreen, GeneratorSubmission
+from ditto.db.models import (
+    GeneratorPrescreen,
+    GeneratorPrescreenResult,
+    GeneratorRoundCaseVerdict,
+    GeneratorSubmission,
+)
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
+    _SCORER,
     _settings,
 )
 
@@ -38,7 +46,9 @@ from ditto.tests.api_server.endpoints.test_generator_competition import (
 from ditto.tests.api_server.endpoints.test_generator_rounds import (  # noqa: F401
     _advance,
     _apply_settings,
+    _generation,
     _install,
+    _matrix_score,
     _patch_panel,
     _seed_agent,
     _seed_generator,
@@ -339,3 +349,230 @@ def test_seconds_until_epoch_follows_the_chain_head() -> None:
         block=9_487_828,
     )
     assert seconds_until_epoch(no_prediction, 26291) is None
+
+
+_ROUND_WORK = "/api/v1/generator-scorer/round-work"
+
+
+async def _lease(client: httpx.AsyncClient) -> dict[str, Any] | None:
+    resp = await client.get(_ROUND_WORK, headers=_SCORER)
+    assert resp.status_code == 200, resp.text
+    return resp.json()["work"]
+
+
+async def _report_panel(
+    maker: async_sessionmaker[AsyncSession], index: int
+) -> GeneratorPrescreen:
+    """Every panel agent reports (the validator lane, in the next part), and
+    the batch moves to scoring."""
+    async with maker() as session, session.begin():
+        batch = await get_prescreen(session, index, for_update=True)
+        assert batch is not None and batch.status == "running"
+        case_ids = [
+            ref["case_id"]
+            for refs in (batch.column_cases or {}).values()
+            for ref in refs
+        ]
+        for rank, slot in enumerate(batch.panel):
+            session.add(
+                GeneratorPrescreenResult(
+                    prescreen_index=index,
+                    agent_id=UUID(slot["agent_id"]),
+                    validator_hotkey="5Validator",
+                    ticket_deadline=datetime.now(UTC) + timedelta(hours=1),
+                    run_id=str(uuid4()),
+                    results=[
+                        {"case_id": cid, "score": 1.0 if (i + rank) % 2 else 0.0}
+                        for i, cid in enumerate(case_ids)
+                    ],
+                    answered=len(case_ids),
+                    faulted=0,
+                    signature="ab" * 64,
+                )
+            )
+        await session.flush()
+        assert await close_prescreen_if_reported(session, batch)
+        return batch
+
+
+class TestPrescreenScoring:
+    async def test_the_scorer_generates_and_scores_a_batch(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A batch rides the round work protocol: its index is the work's
+        round_index, and its column scores become each generator's
+        prescreen_score. No case verdict is stored and no round score moves."""
+        _install(app, session_maker)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = await _seed_queue(session_maker)
+        await _tick(session_maker)
+        [batch] = await _batches(session_maker)
+
+        work = await _lease(client)
+        assert work is not None and work["kind"] == "generate"
+        assert work["round_index"] == batch.prescreen_index >= PRESCREEN_INDEX_BASE
+        assert work["cases_per_column"] == 16
+        assert work["bench_version"] == batch.bench_version
+        assert [c["submission_id"] for c in work["columns"]] == [
+            str(ids["a"]),
+            str(ids["b"]),
+        ]
+        assert await _lease(client) is None  # leased, and no other work
+        generated = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work),
+        )
+        assert generated.status_code == 200, generated.text
+        assert generated.json() == {
+            "round_index": batch.prescreen_index,
+            "status": "running",
+        }
+
+        await _report_panel(session_maker, batch.prescreen_index)
+        work = await _lease(client)
+        assert work is not None and work["kind"] == "score"
+        assert work["round_index"] == batch.prescreen_index
+        assert work["params"]["target_cases"] == 16
+        assert work["params"]["min_panel"] <= 3
+        assert [c["counted"] for c in work["matrix"]["columns"]] == [True, True]
+        assert len(work["matrix"]["agents"]) == 3
+        scored = await client.post(
+            "/api/v1/generator-scorer/round-score",
+            headers=_SCORER,
+            json=_matrix_score(work),
+        )
+        assert scored.status_code == 200, scored.text
+        assert scored.json()["status"] == "scored"
+
+        async with session_maker() as session:
+            row = await get_prescreen(session, batch.prescreen_index)
+            assert row is not None and row.status == "scored" and row.score
+            for name, score in (("a", 0.1), ("b", 0.2)):
+                sub = await session.get(GeneratorSubmission, ids[name])
+                assert sub is not None
+                assert sub.prescreen_index == batch.prescreen_index
+                assert sub.prescreen_score == pytest.approx(score)
+                assert sub.round_score is None
+            verdicts = (await session.scalars(select(GeneratorRoundCaseVerdict))).all()
+            assert verdicts == []
+
+    async def test_a_failing_column_scores_zero_and_is_not_rejected(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = await _seed_queue(session_maker)
+        await _tick(session_maker)
+        work = await _lease(client)
+        assert work is not None
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work, failing=frozenset({"c1"})),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "running"
+        async with session_maker() as session:
+            failed = await session.get(GeneratorSubmission, ids["b"])
+            assert failed is not None
+            assert failed.status == "active"
+            assert failed.prescreen_score == 0.0
+
+    async def test_round_work_comes_before_a_batch(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _enable(client, skip_unchanged_rounds=False)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        await _tick(session_maker)  # a batch opens while the lane is idle
+        await _advance(session_maker, 9)
+        await _advance(session_maker, 12)  # round 3 opens beside it
+        first = await _lease(client)
+        assert first is not None and first["round_index"] == 3
+        second = await _lease(client)
+        assert second is not None and second["round_index"] >= PRESCREEN_INDEX_BASE
+
+    async def test_scorer_faults_void_or_release_a_batch(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = await _seed_queue(session_maker)
+        await _tick(session_maker)
+        work = await _lease(client)
+        assert work is not None
+
+        def fault(kind: str, lease_id: str) -> dict[str, Any]:
+            return {
+                "work": "round",
+                "lease_id": lease_id,
+                "round_index": work["round_index"],
+                "error_kind": kind,
+                "detail": "docker daemon unavailable",
+                "scorer_version": "challenge-scorer/7",
+            }
+
+        released = await client.post(
+            "/api/v1/generator-scorer/fault",
+            headers=_SCORER,
+            json=fault("sandbox", work["lease_id"]),
+        )
+        assert released.status_code == 200, released.text
+        assert released.json()["action"] == "released"
+        again = await _lease(client)
+        assert again is not None and again["round_index"] == work["round_index"]
+
+        voided = await client.post(
+            "/api/v1/generator-scorer/fault",
+            headers=_SCORER,
+            json=fault("unsupported_request", again["lease_id"]),
+        )
+        assert voided.status_code == 200, voided.text
+        assert voided.json()["action"] == "voided"
+        [batch] = await _batches(session_maker)
+        assert batch.status == "void"
+        assert (batch.void_reason or "").startswith("infra:")
+        # Its generators go back to the queue unscreened.
+        indexes = await _prescreen_indexes(session_maker, ids)
+        assert indexes["a"] is None and indexes["b"] is None
+
+    async def test_a_lane_switched_off_leases_no_batch(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        await _tick(session_maker)
+        await _apply_settings(client, validator_rounds_enabled=True)
+        assert await _lease(client) is None
