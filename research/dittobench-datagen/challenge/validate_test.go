@@ -177,3 +177,29 @@ func TestGroundingReadsNumbersByThePackPolicy(t *testing.T) {
 		t.Fatalf("v13 grounding changed: %+v", r.Issues)
 	}
 }
+
+func TestV14ChecksUseTheGraderFold(t *testing.T) {
+	build := func(question string) Pack {
+		p := ReferencePack(5, testHotkey)
+		p.GradingBenchVersion = GradingBenchVersionV18
+		p.MemoryWaves[2].Pairs = append(p.MemoryWaves[2].Pairs, protocol.MemoryPair{
+			PairID: "door-code", SessionID: "s99", Timestamp: "2026-02-01T10:00:00Z",
+			Prompt:   "The new door code is \uff14\uff14\uff17\uff11 starting today.",
+			Response: "Noted.",
+		})
+		p.Cases = append(p.Cases, Case{
+			MemoryCase: protocol.MemoryCase{
+				ID: "door-pin", QuestionType: "single-session-user", Question: question,
+				ExpectedAnswer: "4471",
+			},
+			RunAfterWave: 2, EvidencePairIDs: []string{"door-code"},
+		})
+		return p
+	}
+	if r := Validate(build("What is the new door code?")); hasRule(r, "door-pin", "grounding") {
+		t.Fatalf("v18 grounding missed fullwidth digits the grader reads: %+v", r.Issues)
+	}
+	if r := Validate(build("Is the door code still \uff14\uff14\uff17\uff11?")); !hasRule(r, "door-pin", "answer_leak") {
+		t.Fatalf("v18 leak check missed fullwidth digits the grader reads: %+v", r.Issues)
+	}
+}
