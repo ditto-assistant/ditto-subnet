@@ -1,0 +1,14 @@
+{
+  "contract": "query-adapter/v1",
+  "kind": "synthetic-workload",
+  "name": "smoke",
+  "synthetic": true,
+  "users": [
+    {"user_ref": "syn-smoke-u00", "adapters": [{"version": 1, "seed": 100001}], "provision": [1], "authorized_version": 1}
+  ],
+  "requests": [
+    {"user_ref": "syn-smoke-u00", "query_seed": 500000},
+    {"user_ref": "syn-smoke-u00", "query_seed": 500001},
+    {"user_ref": "syn-smoke-u00", "query_seed": 500002}
+  ]
+}

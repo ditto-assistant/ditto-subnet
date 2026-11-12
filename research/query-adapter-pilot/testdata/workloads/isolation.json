@@ -1,0 +1,31 @@
+{
+  "contract": "query-adapter/v1",
+  "kind": "synthetic-workload",
+  "name": "isolation",
+  "synthetic": true,
+  "users": [
+    {"user_ref": "syn-isolation-u00", "adapters": [{"version": 1, "seed": 170001}, {"version": 2, "seed": 170002}], "provision": [1, 2], "authorized_version": 2},
+    {"user_ref": "syn-isolation-u01", "adapters": [{"version": 1, "seed": 170011}, {"version": 2, "seed": 170012}], "provision": [1, 2], "authorized_version": 2},
+    {"user_ref": "syn-isolation-u02", "adapters": [{"version": 1, "seed": 170021}, {"version": 2, "seed": 170022}], "provision": [1, 2], "authorized_version": 2}
+  ],
+  "requests": [
+    {"user_ref": "syn-isolation-u00", "query_seed": 570000},
+    {"user_ref": "syn-isolation-u01", "query_seed": 570000},
+    {"user_ref": "syn-isolation-u02", "query_seed": 570000},
+    {"user_ref": "syn-isolation-u00", "query_seed": 570001},
+    {"user_ref": "syn-isolation-u01", "query_seed": 570001},
+    {"user_ref": "syn-isolation-u02", "query_seed": 570001},
+    {"user_ref": "syn-isolation-u00", "query_seed": 570002},
+    {"user_ref": "syn-isolation-u01", "query_seed": 570002},
+    {"user_ref": "syn-isolation-u02", "query_seed": 570002},
+    {"user_ref": "syn-isolation-u00", "query_seed": 570003},
+    {"user_ref": "syn-isolation-u01", "query_seed": 570003},
+    {"user_ref": "syn-isolation-u02", "query_seed": 570003},
+    {"user_ref": "syn-isolation-u00", "query_seed": 570004},
+    {"user_ref": "syn-isolation-u01", "query_seed": 570004},
+    {"user_ref": "syn-isolation-u02", "query_seed": 570004},
+    {"user_ref": "syn-isolation-u00", "query_seed": 570005},
+    {"user_ref": "syn-isolation-u01", "query_seed": 570005},
+    {"user_ref": "syn-isolation-u02", "query_seed": 570005}
+  ]
+}

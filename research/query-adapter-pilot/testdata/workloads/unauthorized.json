@@ -1,0 +1,20 @@
+{
+  "contract": "query-adapter/v1",
+  "kind": "synthetic-workload",
+  "name": "unauthorized",
+  "synthetic": true,
+  "users": [
+    {"user_ref": "syn-unauthorized-u00", "adapters": [{"version": 1, "seed": 150001}], "provision": [1], "authorized_version": 1},
+    {"user_ref": "syn-unauthorized-u01", "adapters": [{"version": 1, "seed": 150011}], "provision": [1], "authorized_version": null}
+  ],
+  "requests": [
+    {"user_ref": "syn-unauthorized-u00", "query_seed": 550000},
+    {"user_ref": "syn-unauthorized-u01", "query_seed": 550001},
+    {"user_ref": "syn-unauthorized-u00", "query_seed": 550002},
+    {"user_ref": "syn-unauthorized-u01", "query_seed": 550003},
+    {"user_ref": "syn-unauthorized-u00", "query_seed": 550004},
+    {"user_ref": "syn-unauthorized-u01", "query_seed": 550005},
+    {"user_ref": "syn-unauthorized-u00", "query_seed": 550006},
+    {"user_ref": "syn-unauthorized-u01", "query_seed": 550007}
+  ]
+}
