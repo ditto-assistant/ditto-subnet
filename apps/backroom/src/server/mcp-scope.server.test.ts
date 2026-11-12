@@ -669,6 +669,32 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
   })
 
+  it('gates every generator source read on the artifact scope', async () => {
+    // Generator source is miner-submitted code like an agent tarball: the
+    // manifest, an excerpt and a search each disclose it.
+    const reads: Array<[string, Record<string, unknown>]> = [
+      ['list_generator_source_files', {}],
+      ['read_generator_source_file', { path: 'data/world1.json' }],
+      ['search_generator_source', { pattern: 'v3h1-q' }],
+    ]
+    for (const [name, args] of reads) {
+      const request = new Request('https://backroom.dittobench.ai/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: {
+            name,
+            arguments: { submissionId: '3b2d6a54-0f4c-4b3e-9a6e-2f2d0c1b9e11', ...args },
+          },
+        }),
+      })
+      expect(await callsWriteTool(request)).toBe(false)
+      expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
+    }
+  })
+
   it('leaves owner-link attestations on the ordinary read scope', async () => {
     // A signed owner link is identity metadata, not miner source. The artifact
     // scope exists for source (tarballs, file listings, diffs), so gating

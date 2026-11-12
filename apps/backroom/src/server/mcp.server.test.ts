@@ -547,6 +547,9 @@ describe('Backroom MCP tools', () => {
         'list_generator_submissions',
         'get_generator_submission',
         'get_generator_run',
+        'list_generator_source_files',
+        'read_generator_source_file',
+        'search_generator_source',
         'get_generator_probe',
         'rotate_generator_probe_seed',
         'list_generator_promotion_candidates',
@@ -1010,7 +1013,10 @@ describe('Backroom MCP tools', () => {
     // help) add 3,197 bytes; the catalog measures 235,662, under this bound.
     // The upload payment proof read (block hash and index, one-line summary,
     // detail in tool help) measures 236,751 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(237_250)
+    // The generator source trio (manifest, excerpt and search over one
+    // generator archive; one-line summaries, detail in tool help) measures
+    // 239,100 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(239_600)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1072,7 +1078,9 @@ describe('Backroom MCP tools', () => {
       // The combined catalog's descriptions measure 29,531 characters.
       // With the five one-line generator frontier summaries (401 chars) the
       // catalog measures 29,457, still under this bound.
-      29_600,
+      // The three one-line generator source summaries and the source pointer
+      // on get_generator_submission measure 29,886; keep about 200 chars.
+      30_100,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2147,6 +2155,8 @@ describe('Backroom MCP tools', () => {
       list_screening_submissions: { maxLimit: 200, maxDefault: 50 },
       search_submissions: { maxLimit: 200, maxDefault: 20 },
       search_screening_source: { maxLimit: 200, maxDefault: 50 },
+      list_generator_source_files: { maxLimit: 512, maxDefault: 512 },
+      search_generator_source: { maxLimit: 200, maxDefault: 50 },
       list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
       list_hotkey_bans: { maxLimit: 200, maxDefault: 50 },

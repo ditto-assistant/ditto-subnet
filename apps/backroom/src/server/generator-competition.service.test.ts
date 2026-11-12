@@ -149,6 +149,74 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('reads generator source only with the artifact scope, attributed to the operator', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const base = `/api/v1/admin/generator-competition/submissions/${SUBMISSION}`
+    const identity = { submission_id: SUBMISSION, source_sha256: 'cd'.repeat(32) }
+    const routes: Record<string, unknown> = {
+      [`${base}/source-files`]: {
+        ...identity, file_count: 2,
+        files: [{ path: 'data/world1.json', bytes: 58 }, { path: 'main.go', bytes: 40 }],
+        opaque_blobs: [], opaque_total: 0, truncated: false,
+      },
+      [`${base}/source-file?path=data%2Fworld1.json&start_line=1&end_line=400`]: {
+        ...identity, path: 'data/world1.json', total_lines: 1, start_line: 1, end_line: 1,
+        lines: [{ line: 1, text: '{"id": "v3h1-q1"}' }],
+      },
+      [`${base}/source-search?pattern=v3h1-q&mode=literal&ignore_case=false&context=0&limit=50&offset=0&path_glob=data%2F*.json`]: {
+        ...identity, pattern: 'v3h1-q', mode: 'literal', path_glob: 'data/*.json',
+        matches: [{ path: 'data/world1.json', line: 1, text: '{"id": "v3h1-q1"}', context_before: [], context_after: [] }],
+        match_count: 1, returned: 1, limit: 50, offset: 0, has_more: false,
+        files_searched: 1, files_matched: 1, opaque_skipped: 0, truncated: false,
+      },
+    }
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      const path = url.replace('https://platform-api.heyditto.ai', '')
+      if (!(path in routes)) return new Response('not found', { status: 404 })
+      return Response.json(routes[path])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const refused = await readOnly.client.callTool({
+        name: 'list_generator_source_files', arguments: { submissionId: SUBMISSION },
+      })
+      expect(refused.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await readOnly.client.close()
+      await readOnly.server.close()
+    }
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      expect(json(await client.callTool({
+        name: 'list_generator_source_files', arguments: { submissionId: SUBMISSION },
+      }))).toMatchObject({ ...identity, count: 2, has_more: false })
+      expect(json(await client.callTool({
+        name: 'read_generator_source_file', arguments: { submissionId: SUBMISSION, path: 'data/world1.json' },
+      }))).toMatchObject({ ...identity, path: 'data/world1.json', total_lines: 1 })
+      expect(json(await client.callTool({
+        name: 'search_generator_source',
+        arguments: { submissionId: SUBMISSION, pattern: 'v3h1-q', mode: 'literal', pathGlob: 'data/*.json' },
+      }))).toMatchObject({ ...identity, match_count: 1, has_more: false })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      // Platform audits every source read under this actor.
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(new Headers(init?.headers).get('X-Admin-Actor')).toBe(session.email)
+      }
+      const bad = await client.callTool({
+        name: 'read_generator_source_file', arguments: { submissionId: 'not-a-uuid', path: 'main.go' },
+      })
+      expect(bad.isError).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('refuses a malformed hotkey filter before calling Platform', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const fetchMock = vi.fn()

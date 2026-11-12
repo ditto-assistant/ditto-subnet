@@ -23,6 +23,11 @@ import {
   generatorRunIdInputSchema,
   generatorSettingsControlSchema,
   generatorSettingsRevisionSchema,
+  generatorSourceExcerptInputSchema,
+  generatorSourceExcerptSchema,
+  generatorSourceListingSchema,
+  generatorSourceSearchInputSchema,
+  generatorSourceSearchResultSchema,
   generatorSubmissionDetailSchema,
   generatorSubmissionIdInputSchema,
   generatorSubmissionListSchema,
@@ -46,9 +51,10 @@ import { PlatformAdminError, platformAdminRequest } from './ditto.server'
 
 // Shadow generator competition operator surface. Reads are plain admin GETs
 // over Platform's /admin/generator-competition endpoints plus the public
-// board. Generator source never crosses this boundary (Platform does not serve
-// it to admins), a run's seeds appear only after it finished, probe seeds are
-// never served at all, and a round's secret only after its privacy window.
+// board. Generator source crosses this boundary only through the source
+// reads below (artifact scope; Platform audits each one under the operator's
+// actor), a run's seeds appear only after it finished, probe seeds are never
+// served at all, and a round's secret only after its privacy window.
 
 const BASE = '/api/v1/admin/generator-competition'
 
@@ -146,6 +152,57 @@ export async function fetchGeneratorRun(rawInput: unknown) {
   const { runId } = generatorRunIdInputSchema.parse(rawInput)
   return generatorRunDetailSchema.parse(
     await platformAdminRequest(`${BASE}/runs/${encodeURIComponent(runId)}`),
+  )
+}
+
+export async function fetchGeneratorSourceFiles(rawInput: unknown, actor: string) {
+  const { submissionId } = generatorSubmissionIdInputSchema.parse(rawInput)
+  return generatorSourceListingSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/submissions/${encodeURIComponent(submissionId)}/source-files`,
+      { actor },
+    ),
+  )
+}
+
+export async function fetchGeneratorSourceExcerpt(rawInput: unknown, actor: string) {
+  const input = generatorSourceExcerptInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    path: input.path,
+    start_line: String(input.startLine),
+    end_line: String(input.endLine),
+  })
+  return generatorSourceExcerptSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/submissions/${encodeURIComponent(input.submissionId)}/source-file?${query}`,
+      { actor },
+    ),
+  )
+}
+
+// Paging is server-side, as for screening source: Platform scans the whole
+// archive, orders matches by (path, line) and returns the requested window.
+export async function searchGeneratorSource(
+  rawInput: unknown,
+  actor: string,
+  limit: number,
+  offset: number,
+) {
+  const input = generatorSourceSearchInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    pattern: input.pattern,
+    mode: input.mode,
+    ignore_case: String(input.ignoreCase),
+    context: String(input.context),
+    limit: String(limit),
+    offset: String(offset),
+  })
+  if (input.pathGlob) query.set('path_glob', input.pathGlob)
+  return generatorSourceSearchResultSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/submissions/${encodeURIComponent(input.submissionId)}/source-search?${query}`,
+      { actor },
+    ),
   )
 }
 

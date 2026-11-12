@@ -1,5 +1,12 @@
 import { z } from 'zod'
-import { auditReasonSchema } from './admin.schemas'
+import {
+  auditReasonSchema,
+  sourceExcerptInputSchema,
+  sourceExcerptSchema,
+  sourceListingSchema,
+  sourceSearchInputSchema,
+  sourceSearchResultSchema,
+} from './admin.schemas'
 
 // DittoBench generator competition. Miners submit CPU-only Go generator
 // source; the scorer qualifies it (build, valid packs on secret seeds,
@@ -370,6 +377,26 @@ export const listGeneratorSubmissionsInputSchema = z.object({
 
 export const generatorSubmissionIdInputSchema = z.object({ submissionId: uuid })
 export const generatorRunIdInputSchema = z.object({ runId: uuid })
+
+// Generator source reads use the screening source readers' bounded Platform
+// inspector and audit trail, keyed on the generator submission instead of an
+// agent, with the archive digest the miner signed (source_sha256).
+const generatorSourceIdentity = { submission_id: uuid, source_sha256: sha256 }
+export const generatorSourceExcerptInputSchema = sourceExcerptInputSchema
+  .omit({ agentId: true })
+  .extend({ submissionId: uuid })
+export const generatorSourceSearchInputSchema = sourceSearchInputSchema
+  .omit({ agentId: true })
+  .extend({ submissionId: uuid })
+export const generatorSourceListingSchema = sourceListingSchema
+  .omit({ agent_id: true, artifact_sha256: true })
+  .extend(generatorSourceIdentity)
+export const generatorSourceExcerptSchema = sourceExcerptSchema
+  .omit({ agent_id: true })
+  .extend(generatorSourceIdentity)
+export const generatorSourceSearchResultSchema = sourceSearchResultSchema
+  .omit({ agent_id: true, artifact_sha256: true })
+  .extend(generatorSourceIdentity)
 export const generatorPromotionInputSchema = z.object({
   limit: z.number().int().min(1).max(500).default(100),
   offset: z.number().int().min(0).default(0),
