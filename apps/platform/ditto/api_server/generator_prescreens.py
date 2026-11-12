@@ -363,8 +363,9 @@ async def build_prescreen_matrix(
         for column in row.columns
         if column["column_id"] in cases_by_column
     ]
+    # Keyed by UUID: a panel slot stores its agent id as text.
     results = {
-        str(result.agent_id): result
+        result.agent_id: result
         for result in await session.scalars(
             select(GeneratorPrescreenResult).where(
                 GeneratorPrescreenResult.prescreen_index == row.prescreen_index
@@ -377,10 +378,12 @@ async def build_prescreen_matrix(
             owner_key=slot["owner_key"],
             reference=bool(slot.get("reference", False)),
             champion=bool(slot.get("champion", False)),
-            results=[PanelCaseResult(**r) for r in results[slot["agent_id"]].results],
+            results=[
+                PanelCaseResult(**r) for r in results[UUID(slot["agent_id"])].results
+            ],
         )
         for slot in row.panel
-        if slot["agent_id"] in results
+        if UUID(slot["agent_id"]) in results
     ]
     claimed = await claimed_fingerprints(
         session,
@@ -633,7 +636,8 @@ async def record_prescreen_fault(
 ) -> GeneratorPrescreen:
     """Apply a scorer fault to a batch's current lease (caller commits): a
     request the scorer cannot serve voids it; a sandbox fault releases it."""
-    assert payload.round_index is not None
+    if payload.round_index is None:
+        raise RoundResultRejected("pre-screen fault names no batch")
     row = await get_prescreen(session, payload.round_index, for_update=True)
     if row is None:
         raise RoundResultRejected("pre-screen not found")
@@ -673,15 +677,15 @@ async def close_prescreen_if_reported(
     """Move a running batch to scoring once every panel agent reported."""
     if row.status != "running":
         return False
-    reported = {
-        str(agent_id)
-        for agent_id in await session.scalars(
+    reported = set(
+        await session.scalars(
             select(GeneratorPrescreenResult.agent_id).where(
                 GeneratorPrescreenResult.prescreen_index == row.prescreen_index
             )
         )
-    }
-    if not all(slot["agent_id"] in reported for slot in row.panel):
+    )
+    # A panel slot stores its agent id as text; compare as UUIDs.
+    if not all(UUID(slot["agent_id"]) in reported for slot in row.panel):
         return False
     row.status = "scoring"
     row.lease_id = None

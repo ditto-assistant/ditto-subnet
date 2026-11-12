@@ -561,6 +561,41 @@ class TestPrescreenScoring:
         indexes = await _prescreen_indexes(session_maker, ids)
         assert indexes["a"] is None and indexes["b"] is None
 
+    async def test_a_panel_id_in_another_text_form_still_counts_as_reported(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A batch compares panel agents to results as UUIDs, so a panel slot
+        whose id is stored as upper-case text still closes the batch."""
+        _install(app, session_maker)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        await _tick(session_maker)
+        work = await _lease(client)
+        assert work is not None
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work),
+        )
+        assert resp.status_code == 200, resp.text
+        [batch] = await _batches(session_maker)
+        async with session_maker() as session, session.begin():
+            row = await get_prescreen(session, batch.prescreen_index, for_update=True)
+            assert row is not None
+            row.panel = [
+                {**slot, "agent_id": slot["agent_id"].upper()} for slot in row.panel
+            ]
+        await _report_panel(session_maker, batch.prescreen_index)
+        work = await _lease(client)
+        assert work is not None and work["kind"] == "score"
+        assert len(work["matrix"]["agents"]) == 3
+
     async def test_a_lane_switched_off_leases_no_batch(
         self,
         app: FastAPI,
