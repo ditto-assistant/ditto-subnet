@@ -6452,7 +6452,8 @@ export interface paths {
         put?: never;
         /**
          * Post Round Results
-         * @description Store a round's generated dataset for the current generation lease.
+         * @description Store a round's (or a pre-screen batch's) generated dataset for the
+         *     current generation lease.
          */
         post: operations["post_round_results_api_v1_generator_scorer_round_results_post"];
         delete?: never;
@@ -6472,7 +6473,8 @@ export interface paths {
         put?: never;
         /**
          * Post Round Score
-         * @description Store a round's scored matrix for the current scoring lease.
+         * @description Store a round's (or a pre-screen batch's) scored matrix for the current
+         *     scoring lease.
          */
         post: operations["post_round_score_api_v1_generator_scorer_round_score_post"];
         delete?: never;
@@ -6490,7 +6492,8 @@ export interface paths {
         };
         /**
          * Lease Round
-         * @description Lease the oldest round needing generation or scoring, if any.
+         * @description Lease the oldest round needing generation or scoring, if any, else the
+         *     oldest pre-screen batch (its index rides in ``round_index``).
          *
          *     A generating round whose ``cases_per_column`` the polling scorer refuses
          *     is voided with an ``infra:`` reason instead of leased.
