@@ -11,7 +11,12 @@ from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.endpoints import validator as v
 from ditto.api_server.generator_frontier import is_oracle_run
 from ditto.api_server.generator_rounds import round_bench_version
-from ditto.db.models import GeneratorRound, PrivateBenchmarkDataset, ValidatorTicket
+from ditto.db.models import (
+    GeneratorPrescreen,
+    GeneratorRound,
+    PrivateBenchmarkDataset,
+    ValidatorTicket,
+)
 from ditto.db.queries.private_benchmark_datasets import (
     PrivateDatasetIdentity,
     find_private_dataset,
@@ -82,6 +87,30 @@ async def download_private_dataset(
                     GeneratorRound.status.in_(("running", "scored")),
                 )
             )
+            if round_row is None:
+                # A pre-screen batch's panel run reads the batch dataset while
+                # the batch runs, at the batch's frozen bench version.
+                batch = await session.scalar(
+                    select(GeneratorPrescreen).where(
+                        GeneratorPrescreen.dataset_sha256 == payload.dataset_sha256,
+                        GeneratorPrescreen.status == "running",
+                    )
+                )
+                if (
+                    batch is None
+                    or batch.dataset_bytes is None
+                    or ticket.bench_version != batch.bench_version
+                ):
+                    raise HTTPException(409, "generator round dataset is unavailable")
+                return Response(
+                    batch.dataset_bytes,
+                    media_type="application/octet-stream",
+                    headers={
+                        "Cache-Control": "no-store",
+                        "X-Content-Type-Options": "nosniff",
+                        "X-Dataset-SHA256": payload.dataset_sha256,
+                    },
+                )
             if (
                 round_row is None
                 or (

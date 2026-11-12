@@ -256,7 +256,10 @@ opens, once it is scored or void.
     opens only while no round and no other batch is in flight and the next
     round opens more than an hour later, and a batch not scored within an hour
     is void with its generators re-queued, so a batch always closes before the
-    next round opens. Its index
+    next round opens. A panel agent banned or held mid-batch is dropped
+    (`dropped_reason` on its slot) and its results are not scored; with fewer
+    eligible agents than the batch's scoring `min_panel` left, the batch is
+    void at once. Its index
     is at or above 2**40, apart from round indexes. A pre-screen is never paid
     and never on the ledger: it only orders the challenger queue. The lane
     ships off (`prescreen_enabled`) because it spends inference; enable it only
