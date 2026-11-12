@@ -253,12 +253,14 @@ describe('generator competition MCP tools', () => {
   it('admits challenger columns up to the round column capacity', () => {
     // Platform bounds counted plus challenger columns at 8 (MAX_ROUND_COLUMNS),
     // so a revision with three challengers beside five counted columns must
-    // parse on read and write.
-    for (const challengers of [0, 2, 3, 7]) {
-      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, challenger_columns: challengers }).success).toBe(true)
+    // parse on read and write. The field alone allows 7 (one counted column);
+    // the write refuses a pair above 8 (see the write-path test).
+    for (const challengers of [0, 2, 3]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, counted_columns: 5, challenger_columns: challengers }).success).toBe(true)
     }
+    expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, counted_columns: 1, challenger_columns: 7 }).success).toBe(true)
     for (const challengers of [-1, 8]) {
-      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, challenger_columns: challengers }).success).toBe(false)
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, counted_columns: 1, challenger_columns: challengers }).success).toBe(false)
     }
   })
 
