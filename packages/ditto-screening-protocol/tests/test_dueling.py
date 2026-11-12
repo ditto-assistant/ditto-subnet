@@ -18,6 +18,9 @@ from pydantic import ValidationError
 
 from ditto_screening_protocol.dueling import (
     DUELING_COLUMN_WEIGHT,
+    DUELING_DATAGEN_QUALIFIER_FLOOR,
+    DUELING_HELD_OUT_COLUMN_WEIGHT,
+    DUELING_HELD_OUT_MIN_BENCH_VERSION,
     DUELING_MIN_BENCH_VERSION,
     DUELING_SLICE_CASES_PER_COLUMN,
     DUELING_SLICE_COLUMNS,
@@ -26,8 +29,11 @@ from ditto_screening_protocol.dueling import (
     DuelingColumnAggregate,
     DuelingColumnPin,
     DuelingReport,
+    DuelingWeighting,
+    dueling_column_weight_for_version,
     dueling_composite,
     dueling_composite_stderr,
+    dueling_datagen_qualifier,
     is_dueling_bench_version,
     season_commitment,
     season_seed,
@@ -52,6 +58,9 @@ def test_contract_constants() -> None:
     assert DUELING_SLICE_COLUMNS == 5
     assert DUELING_SLICE_CASES_PER_COLUMN == 35
     assert DUELING_COLUMN_WEIGHT * DUELING_SLICE_COLUMNS == 0.5
+    assert DUELING_HELD_OUT_MIN_BENCH_VERSION == 19
+    assert DUELING_HELD_OUT_COLUMN_WEIGHT * DUELING_SLICE_COLUMNS == 0.75
+    assert DUELING_DATAGEN_QUALIFIER_FLOOR == 0.8
     assert DUELING_SLICE_CONTRACT == "dittobench-dueling-slice/v1"
     assert DUELING_SLICE_MODE == "dueling-slice-v1"
 
@@ -60,6 +69,19 @@ def test_dueling_bench_version_is_a_floor() -> None:
     assert not is_dueling_bench_version(DUELING_MIN_BENCH_VERSION - 1)
     assert is_dueling_bench_version(DUELING_MIN_BENCH_VERSION)
     assert is_dueling_bench_version(DUELING_MIN_BENCH_VERSION + 7)
+
+
+def test_weighting_is_a_version_floor() -> None:
+    for version in (16, 17, 18):
+        assert dueling_column_weight_for_version(version) == 0.1
+        for raw in (0.0, 0.3, 0.8, 1.0):
+            assert dueling_datagen_qualifier(version, raw) == 1.0
+    for version in (19, 23):
+        assert dueling_column_weight_for_version(version) == 0.15
+        assert dueling_datagen_qualifier(version, 0.0) == 0.0
+        assert dueling_datagen_qualifier(version, 0.4) == 0.5
+        assert dueling_datagen_qualifier(version, 0.8) == 1.0
+        assert dueling_datagen_qualifier(version, 0.95) == 1.0
 
 
 def test_season_vectors() -> None:
@@ -132,15 +154,32 @@ def test_slice_seed_refuses_bad_inputs() -> None:
 def test_composite_vectors_bit_for_bit() -> None:
     vectors = _load("dueling_composite_vectors.json")["composites"]
     assert len(vectors) >= 10
+    held_out = 0
     for v in vectors:
         columns = [DuelingColumnAggregate.model_validate(c) for c in v["columns"] or []]
         mask = frozenset(v["mask"] or [])
-        got = dueling_composite(v["datagen_raw"], v["datagen_gate"], columns, mask)
+        # A vector without a bench version is a bench 16 vector.
+        version = v.get("bench_version", DUELING_MIN_BENCH_VERSION)
+        weighting = DuelingWeighting.for_version(version, v["datagen_raw"])
+        if version >= DUELING_HELD_OUT_MIN_BENCH_VERSION:
+            held_out += 1
+            assert weighting.column_weight == v["column_weight"], v["name"]
+            qualifier = v["datagen_qualifier"]
+            assert _bits(weighting.qualifier) == _bits(qualifier), v["name"]
+        else:
+            assert "column_weight" not in v and "datagen_qualifier" not in v
+        got = dueling_composite(
+            weighting, v["datagen_raw"], v["datagen_gate"], columns, mask
+        )
         assert _bits(got) == _bits(v["composite"]), v["name"]
         se = dueling_composite_stderr(
-            v["datagen_stderr"], v["datagen_gate"], columns, mask
+            weighting, v["datagen_stderr"], v["datagen_gate"], columns, mask
         )
         assert _bits(se) == _bits(v["composite_stderr"]), v["name"]
+    # The bench 19 vectors cover the qualifier below 1 and at 1.
+    assert held_out >= 10
+    qualifiers = {v["datagen_qualifier"] for v in vectors if "datagen_qualifier" in v}
+    assert 1 in qualifiers and min(qualifiers) < 1
 
 
 def _report(**overrides: Any) -> dict[str, Any]:
@@ -202,6 +241,51 @@ def test_report_self_and_pair_masks() -> None:
     )
     # The empty owner key is never masked.
     assert report.composite(frozenset({""})) == report.composite(frozenset())
+    # Below bench 19 the qualifier is not on the wire and the dump omits it.
+    assert report.datagen_qualifier is None
+    assert "datagen_qualifier" not in report.model_dump(mode="json")
+    report.check_bench_version(18)
+    with pytest.raises(ValueError):
+        report.check_bench_version(19)
+
+
+def _v19_report(**overrides: Any) -> dict[str, Any]:
+    raw = overrides.pop("datagen_raw", 0.6)
+    fields: dict[str, Any] = {
+        "column_weight": 0.15,
+        "datagen_raw": raw,
+        "datagen_qualifier": dueling_datagen_qualifier(19, raw),
+    }
+    fields.update(overrides)
+    return _report(**fields)
+
+
+def test_v19_report_masks_and_qualifier() -> None:
+    report = DuelingReport.model_validate(_v19_report())
+    assert report.datagen_qualifier == pytest.approx(0.75)
+    report.check_bench_version(19)
+    with pytest.raises(ValueError):
+        report.check_bench_version(18)
+    # Self-mask drops c0: 0.75 x (0.4 x 0.6 + 0.15 x (0.25 + 1 + 0.5 + 0)).
+    assert report.self_composite() == pytest.approx(0.75 * (0.4 * 0.6 + 0.15 * 1.75))
+    # The paired dethrone mask returns c2's 0.15 to the datagen half too, and
+    # the qualifier still scales the whole composite.
+    paired = report.composite(frozenset({"coldkey:o1", "coldkey:o3"}))
+    assert paired == pytest.approx(0.75 * (0.55 * 0.6 + 0.15 * 0.75))
+    # Above the floor the qualifier is 1 and is still on the wire.
+    high = DuelingReport.model_validate(_v19_report(datagen_raw=0.9))
+    assert high.datagen_qualifier == 1.0
+    assert high.self_composite() == pytest.approx(0.4 * 0.9 + 0.15 * 1.75)
+    assert high.model_dump(mode="json")["datagen_qualifier"] == 1.0
+
+
+def test_v19_report_qualifier_must_match_its_datagen_half() -> None:
+    with pytest.raises(ValidationError):
+        DuelingReport.model_validate(_v19_report(datagen_qualifier=None))
+    with pytest.raises(ValidationError):
+        DuelingReport.model_validate(_v19_report(datagen_qualifier=1.0))
+    with pytest.raises(ValidationError):
+        DuelingReport.model_validate(_report(datagen_qualifier=1.0))
 
 
 def test_report_is_strict() -> None:
@@ -260,35 +344,40 @@ def test_column_pin_ownership() -> None:
     assert pin.source_sha256 == "ef" * 32
 
 
-_SCORER_REPORT_GOLDEN = (
-    _MONOREPO_ROOT
-    / "services/dittobench-api/cmd/dittobench-api/testdata/dueling_report_golden.json"
+_SCORER_TESTDATA = (
+    _MONOREPO_ROOT / "services/dittobench-api/cmd/dittobench-api/testdata"
 )
 
 
-def test_scorer_report_golden_round_trips() -> None:
+@pytest.mark.parametrize(
+    ("golden_name", "bench_version"),
+    [("dueling_report_golden.json", 16), ("dueling_report_golden_v19.json", 19)],
+)
+def test_scorer_report_golden_round_trips(golden_name: str, bench_version: int) -> None:
     """The ``details.dueling`` block dittobench-api emits parses as a
     :class:`DuelingReport` with exactly its fields, and refolds bit for bit.
 
-    The golden is written by ``go test ./cmd/dittobench-api -run
-    TestDuelingReportGolden -update-dueling-golden``.
+    The goldens are written by ``go test ./cmd/dittobench-api -run
+    TestDuelingReportGolden -update-dueling-golden``. The bench 16 golden
+    carries no ``datagen_qualifier``; the bench 19 golden does.
     """
-    golden = json.loads(_SCORER_REPORT_GOLDEN.read_text())
+    golden = json.loads((_SCORER_TESTDATA / golden_name).read_text())
     details = golden["details"]
-    assert set(details) == set(DuelingReport.model_fields)
+    fields = set(DuelingReport.model_fields)
+    if bench_version < DUELING_HELD_OUT_MIN_BENCH_VERSION:
+        fields.discard("datagen_qualifier")
+    assert set(details) == fields
     for column in details["columns"]:
         assert set(column) == set(DuelingColumnAggregate.model_fields)
     report = DuelingReport.model_validate(details)
+    report.check_bench_version(bench_version)
     assert report.model_dump(mode="json") == details
     assert _bits(report.self_composite()) == _bits(golden["self_composite"])
     assert _bits(report.composite(frozenset(golden["pair_mask"]))) == _bits(
         golden["pair_composite"]
     )
-    stderr = dueling_composite_stderr(
-        golden["datagen_stderr"],
-        report.datagen_gate,
-        report.columns,
-        frozenset({report.owner_key}),
+    stderr = report.composite_stderr_for(
+        golden["datagen_stderr"], frozenset({report.owner_key})
     )
     assert _bits(stderr) == _bits(report.composite_stderr)
     assert _bits(stderr) == _bits(golden["composite_stderr"])

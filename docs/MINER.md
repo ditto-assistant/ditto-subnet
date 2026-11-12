@@ -411,9 +411,15 @@ frequent harder versions, is the main defence against overfitting.
   practice key and model are not included in the submitted build context.
 - **Bench v16 (the dueling bench) is shipped and shadow-only.** A v16 run adds
   a generator slice (5 columns x 35 cases from the top generator-competition
-  miners) to a smaller datagen half and scores one composite. It sets no
-  weights until the operator activates it
-  ([`benchmark-v16-rollout.md`](benchmark-v16-rollout.md)). Rehearse it with
+  miners) to a smaller datagen half and scores one composite:
+  `gate x (0.5 x datagen + 0.1 x each column)`, your own coldkey's columns
+  masked. It sets no weights until the operator activates it
+  ([`benchmark-v16-rollout.md`](benchmark-v16-rollout.md)). Bench v19 is
+  staged, not active, and changes the split: each column weighs 0.15, so the
+  datagen half (and with it the tool half) shrinks to 25%, and a datagen
+  qualifier `min(1, datagen / 0.8)` scales the whole composite
+  ([dueling-bench.md](../research/dittobench-datagen/docs/dueling-bench.md)
+  section 9). `GET /api/v1/public/bench/config` says which version scores. Rehearse it with
   `uv run ditto practice --bench-version 16`, which builds a local slice from
   the public default generator only; live miner columns stay private until
   their source is released.

@@ -7,7 +7,8 @@ holds the run's ``priced_cost`` summary. This module turns both into
 ``get_agent_scores`` and the dashboard.
 
 Disclosure mirrors the Backroom canary read (``benchmark-canary.schemas.ts``):
-the datagen half, gate, column weight and each column's ``n``/``sum`` and
+the datagen half, gate, column weight, the bench v19+ datagen qualifier and
+each column's ``n``/``sum`` and
 substitution flag. The owner key, generator submission ids, ``sum_sq`` and the
 slice digest never leave this module; a column's ownership is reduced to
 whether it was self-masked for this agent. Nothing here feeds ranking, weights
@@ -21,7 +22,12 @@ import math
 
 from pydantic import ValidationError
 
-from ditto.api_models.public import PublicDuelingBreakdown, PublicDuelingColumn
+from ditto.api_models.public import (
+    DUELING_BREAKDOWN_FORMULA,
+    DUELING_HELD_OUT_BREAKDOWN_FORMULA,
+    PublicDuelingBreakdown,
+    PublicDuelingColumn,
+)
 from ditto.api_server.gate_evidence import stored_gate_evidence
 from ditto_screening_protocol.dueling import (
     DuelingReport,
@@ -48,6 +54,11 @@ def public_dueling_breakdown(
         report = DuelingReport.model_validate(dueling)
     except ValidationError:
         logger.warning("ignoring malformed stored scores.dueling")
+        return None
+    try:
+        report.check_bench_version(bench_version)
+    except ValueError:
+        logger.warning("ignoring stored scores.dueling of another bench version")
         return None
 
     weight = report.column_weight
@@ -93,11 +104,17 @@ def public_dueling_breakdown(
     )
     try:
         return PublicDuelingBreakdown(
+            formula=(
+                DUELING_BREAKDOWN_FORMULA
+                if report.datagen_qualifier is None
+                else DUELING_HELD_OUT_BREAKDOWN_FORMULA
+            ),
             season_id=report.season_id,
             season_index=report.season_index,
             datagen_raw=report.datagen_raw,
             datagen_gate=report.datagen_gate,
             column_weight=weight,
+            datagen_qualifier=report.datagen_qualifier,
             counted_columns=counted,
             datagen_share=_unit(share),
             generator_sum=_unit(generator),

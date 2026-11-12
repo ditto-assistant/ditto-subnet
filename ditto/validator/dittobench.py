@@ -315,12 +315,15 @@ def dueling_slice_from_lease(job: JobResponse) -> DuelingSlice | None:
     )
 
 
-def verify_dueling_report(report: ScoreReport, dueling_slice: DuelingSlice) -> None:
+def verify_dueling_report(
+    report: ScoreReport, dueling_slice: DuelingSlice, *, bench_version: int
+) -> None:
     """Refuse a dueling report that does not describe the forwarded slice.
 
     The scorer echoes the slice digest, owner and season in ``details.dueling``
-    (spec 7.5). A missing or contradicting block means the run did not score the
-    leased slice, so it must not be signed.
+    (spec 7.5), weighted for the lease's bench version (column weight 0.15 and
+    the datagen qualifier from v19). A missing or contradicting block means the
+    run did not score the leased slice, so it must not be signed.
     """
     details = report.details if isinstance(report.details, dict) else {}
     try:
@@ -339,6 +342,13 @@ def verify_dueling_report(report: ScoreReport, dueling_slice: DuelingSlice) -> N
             "scorer details.dueling does not match the leased slice",
             code="dueling_report_mismatch",
         )
+    try:
+        dueling.check_bench_version(bench_version)
+    except ValueError as exc:
+        raise ValidatorInfrastructureError(
+            "scorer details.dueling is not weighted for the leased bench version",
+            code="dueling_report_mismatch",
+        ) from exc
 
 
 # Terminal job states reported by dittobench-api's store.
@@ -1772,7 +1782,7 @@ class DittobenchClient:
             ticket_deadline=ticket_deadline,
         )
         if dueling_slice is not None:
-            verify_dueling_report(report, dueling_slice)
+            verify_dueling_report(report, dueling_slice, bench_version=bench_version)
         return report
 
     async def run_generator_round(

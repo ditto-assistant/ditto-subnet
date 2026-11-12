@@ -445,7 +445,11 @@ composite = gate x ((1 - w x |U|) x datagen_raw + w x sum_{c in U} col_c)
 with `w = 0.1`, `U` the columns not owned by `dueling_owner_key`, and `gate`
 the composite gate times the applied priced cost factor times the applied v9
 score-gate factor (`challenge.DuelingComposite`), quantized to micros like every v9+ composite.
-The report adds:
+From bench 19 `w = 0.15` and the whole composite is also multiplied by the
+datagen qualifier `q = min(1, datagen_raw / 0.8)`:
+`gate x q x ((1 - w x |U|) x datagen_raw + w x sum_{c in U} col_c)`
+(`challenge.DuelingWeightingForVersion`; `research/dittobench-datagen/docs/dueling-bench.md`
+section 9). The report adds:
 
 ```jsonc
 "details": {
@@ -460,6 +464,11 @@ The report adds:
   }
 }
 ```
+
+From bench 19 the block also carries `"datagen_qualifier"` (`q` above) and
+`"column_weight": 0.15`. Below bench 19 the field is absent, never `1` or
+`null`, so v16-v18 reports are byte-identical. `datagen_gate` never includes
+`q`.
 
 `composite_stderr` is the stratified standard error
 (`challenge.DuelingCompositeStderr`). Slice cases appear in `per_case` as

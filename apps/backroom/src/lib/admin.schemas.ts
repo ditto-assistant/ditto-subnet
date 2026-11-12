@@ -9780,6 +9780,8 @@ export const publicDuelingBreakdownSchema = z.object({
   datagen_raw: z.number().min(0).max(1),
   datagen_gate: z.number().min(0).max(1),
   column_weight: z.number().min(0).max(1),
+  // Bench v19+: min(1, datagen_raw / 0.8), a factor on the whole composite.
+  datagen_qualifier: z.number().min(0).max(1).nullish().default(null),
   counted_columns: z.number().int().nonnegative(),
   datagen_share: z.number().min(0).max(1),
   generator_sum: z.number().min(0).max(1),

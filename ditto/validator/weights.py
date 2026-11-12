@@ -39,7 +39,6 @@ from ditto.validator.crn import confirmation_seeds, crn_block_binding_active
 from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
 from ditto_screening_protocol.dueling import (
     DuelingReport,
-    dueling_composite,
     is_dueling_bench_version,
 )
 from ditto_screening_protocol.title_duel import (
@@ -726,9 +725,7 @@ def _record_masked_composite(
         or getattr(record, "bench_version", None) != _entry_version(entry)
     ):
         return None
-    value = dueling_composite(
-        report.datagen_raw, report.datagen_gate, report.columns, mask
-    )
+    value = report.composite(mask)
     if not math.isfinite(value) or not 0.0 <= value <= 1.0:
         return None
     return value
@@ -2277,9 +2274,7 @@ def _entry_duel_records(
             record, "bench_version", None
         ) != _entry_version(entry):
             continue
-        value = dueling_composite(
-            report.datagen_raw, report.datagen_gate, report.columns, mask
-        )
+        value = report.composite(mask)
         if not math.isfinite(value) or not 0.0 <= value <= 1.0:
             continue
         values.append(

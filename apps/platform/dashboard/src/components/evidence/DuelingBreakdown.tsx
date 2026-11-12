@@ -1,7 +1,8 @@
 // Bench v16+ dueling breakdown for one validator run. A v16 composite is
 // `gate x ((1 - w x |U|) x datagen + w x sum col)`: the datagen half plus five
 // pinned generator columns, the agent's own owner's columns masked, all times
-// the run's composite gate (which carries the priced-cost factor). Platform
+// the run's composite gate (which carries the priced-cost factor). From v19
+// w is 0.15 and the datagen qualifier q = min(1, datagen / 0.8) also scales it. Platform
 // projects these numbers from the stored aggregates; this panel only lays them
 // out so a miner can see each column and the cost factor behind the score.
 import { For, Show } from "solid-js";
@@ -46,6 +47,14 @@ export function DuelingBreakdownPanel(props: {
               <span>
                 gate <b data-dueling-metric="datagen_gate">{f4(b().datagen_gate)}</b>
               </span>
+              <Show when={typeof b().datagen_qualifier === "number"}>
+                <span>
+                  qualifier{" "}
+                  <b data-dueling-metric="datagen_qualifier">
+                    {f4(b().datagen_qualifier as number)}
+                  </b>
+                </span>
+              </Show>
               <span>
                 = <b data-dueling-metric="composite">{f4(b().composite)}</b>
               </span>

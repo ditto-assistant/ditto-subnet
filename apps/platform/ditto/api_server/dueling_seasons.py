@@ -2118,4 +2118,10 @@ def dueling_score_evidence(
         raise DuelingEvidenceRejected(
             "details.dueling owner_key is not the scored agent's owner"
         )
+    # Bench v19+ weights the columns at 0.15 and carries the datagen
+    # qualifier; a block weighted for another version is not this ticket's.
+    try:
+        report.check_bench_version(bench_version)
+    except ValueError as exc:
+        raise DuelingEvidenceRejected(str(exc)) from exc
     return season_id, report.model_dump(mode="json")

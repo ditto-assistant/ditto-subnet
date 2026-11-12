@@ -23203,7 +23203,12 @@ export interface components {
          * @description The ``details.dueling`` block of a bench >= 16 score report.
          *
          *     ``owner_key`` is the scored agent's owner; the reported composite is
-         *     :meth:`self_composite` (the agent's own columns masked).
+         *     :meth:`self_composite` (the agent's own columns masked). ``column_weight``
+         *     is the bench version's column weight; ``datagen_qualifier`` is present from
+         *     bench 19 only (``min(1, datagen_raw / 0.8)``) and omitted from the dump
+         *     below it, so a bench 16..18 block round-trips unchanged. The block carries
+         *     no bench version: a consumer that knows the row's version checks it with
+         *     :meth:`check_bench_version`.
          */
         DuelingReport: {
             /** Column Weight */
@@ -23214,6 +23219,8 @@ export interface components {
             composite_stderr: number;
             /** Datagen Gate */
             datagen_gate: number;
+            /** Datagen Qualifier */
+            datagen_qualifier?: number | null;
             /** Datagen Raw */
             datagen_raw: number;
             /** Owner Key */
@@ -33699,14 +33706,14 @@ export interface components {
         PublicDuelingBreakdown: {
             /**
              * Column Weight
-             * @description ``w``.
+             * @description ``w``: 0.1 on bench 16..18, 0.15 from 19.
              */
             column_weight: number;
             /** Columns */
             columns?: components["schemas"]["PublicDuelingColumn"][];
             /**
              * Composite
-             * @description ``datagen_gate x pre_gate_composite``, recomputed from the aggregates; it reproduces the signed composite.
+             * @description ``datagen_gate x pre_gate_composite`` (times ``datagen_qualifier`` from v19), recomputed from the aggregates; it reproduces the signed composite.
              */
             composite: number;
             /** Composite Stderr */
@@ -33721,6 +33728,11 @@ export interface components {
              * @description The run's whole composite gate (quality gates times the applied priced-cost factor).
              */
             datagen_gate: number;
+            /**
+             * Datagen Qualifier
+             * @description Bench v19+ only: ``q = min(1, datagen_raw / 0.8)``, which scales the whole composite so the public datagen half cannot be skipped. Omitted below v19.
+             */
+            datagen_qualifier?: number | null;
             /**
              * Datagen Raw
              * @description The datagen half's raw mean.

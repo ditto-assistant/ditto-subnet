@@ -95,6 +95,8 @@ const canaryDuelingSchema = z.object({
   datagen_raw: z.number().min(0).max(1),
   datagen_gate: z.number().min(0).max(1),
   column_weight: z.number().min(0).max(1),
+  // Bench v19+ only: min(1, datagen_raw / 0.8), a factor on the whole composite.
+  datagen_qualifier: z.number().min(0).max(1).optional(),
   composite_stderr: z.number().nonnegative().optional(),
   columns: z.array(duelingColumnAggregateSchema).max(16),
 })

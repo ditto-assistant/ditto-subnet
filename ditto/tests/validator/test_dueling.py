@@ -55,7 +55,7 @@ from ditto.validator.worker import ValidatorWorker
 from ditto_screening_protocol.dueling import (
     DuelingColumnAggregate,
     DuelingReport,
-    dueling_composite,
+    DuelingWeighting,
 )
 
 _VECTORS = (
@@ -78,7 +78,9 @@ def _report(
     means: tuple[float, ...],
     *,
     season: str = _SEASON,
+    bench_version: int = 16,
 ) -> DuelingReport:
+    weighting = DuelingWeighting.for_version(bench_version, datagen_raw)
     columns = [
         DuelingColumnAggregate(
             column_id=f"c{index}",
@@ -96,7 +98,8 @@ def _report(
         owner_key=owner,
         datagen_raw=datagen_raw,
         datagen_gate=1.0,
-        column_weight=0.1,
+        column_weight=weighting.column_weight,
+        datagen_qualifier=weighting.qualifier if bench_version >= 19 else None,
         columns=columns,
         composite_stderr=0.01,
     )
@@ -114,7 +117,13 @@ def _entry(
 ) -> Any:
     """A v16 row whose four confirmation seeds share the same column means."""
     reports = [
-        _report(owner, datagen_raw + noise, means, season=season or _SEASON)
+        _report(
+            owner,
+            datagen_raw + noise,
+            means,
+            season=season or _SEASON,
+            bench_version=bench_version,
+        )
         for noise in _NOISE
     ]
     history = [
@@ -149,10 +158,10 @@ _A_MEANS = (0.2, 0.6, 0.7, 0.7, 0.7)
 _B_MEANS = (0.2, 0.9, 0.75, 0.75, 0.75)
 
 
-def _pair() -> tuple[Any, Any]:
+def _pair(bench_version: int = 16) -> tuple[Any, Any]:
     return (
-        _entry(1, "coldkey:a", 0.80, _A_MEANS),
-        _entry(2, "coldkey:b", 0.84, _B_MEANS),
+        _entry(1, "coldkey:a", 0.80, _A_MEANS, bench_version=bench_version),
+        _entry(2, "coldkey:b", 0.84, _B_MEANS, bench_version=bench_version),
     )
 
 
@@ -170,6 +179,7 @@ def _vectors() -> list[dict[str, Any]]:
 @pytest.mark.parametrize("vector", _vectors(), ids=lambda vector: vector["name"])
 def test_fold_reproduces_the_shared_composite_vectors(vector: dict[str, Any]) -> None:
     """Spec phase-2 exit: pair-mask fold vectors match on Go and Python."""
+    version = vector.get("bench_version", 16)
     report = DuelingReport(
         season_id=_SEASON,
         season_index=1,
@@ -177,12 +187,16 @@ def test_fold_reproduces_the_shared_composite_vectors(vector: dict[str, Any]) ->
         owner_key="coldkey:subject",
         datagen_raw=vector["datagen_raw"],
         datagen_gate=vector["datagen_gate"],
-        column_weight=0.1,
+        column_weight=vector.get("column_weight", 0.1),
+        datagen_qualifier=vector.get("datagen_qualifier"),
         columns=[DuelingColumnAggregate(**column) for column in vector["columns"]],
         composite_stderr=vector["composite_stderr"],
     )
-    entry = SimpleNamespace(bench_version=16, dueling=report, dueling_season_id=_SEASON)
-    record = SimpleNamespace(bench_version=16, dueling=report)
+    report.check_bench_version(version)
+    entry = SimpleNamespace(
+        bench_version=version, dueling=report, dueling_season_id=_SEASON
+    )
+    record = SimpleNamespace(bench_version=version, dueling=report)
     folded = _record_masked_composite(
         cast(LedgerEntry, entry), record, frozenset(vector["mask"])
     )
@@ -192,8 +206,13 @@ def test_fold_reproduces_the_shared_composite_vectors(vector: dict[str, Any]) ->
 # --- pair-masked dethrone ----------------------------------------------------
 
 
-def test_pair_mask_decides_the_dethrone_not_the_self_masked_composite() -> None:
-    champion, challenger = _pair()
+@pytest.mark.parametrize("bench_version", [16, 19])
+def test_pair_mask_decides_the_dethrone_not_the_self_masked_composite(
+    bench_version: int,
+) -> None:
+    """At v19 the pair mask returns 0.15 per masked column to the datagen half
+    and the qualifier still scales every seed's composite."""
+    champion, challenger = _pair(bench_version)
     assert champion.composite > challenger.composite
 
     paired = _paired_dethrone(challenger, champion, KOTH_DETHRONE_Z)
@@ -207,12 +226,10 @@ def test_pair_mask_decides_the_dethrone_not_the_self_masked_composite() -> None:
     ):
         chall = chall_record.dueling
         champ = champ_record.dueling
-        chall_value = dueling_composite(
-            chall.datagen_raw, chall.datagen_gate, chall.columns, mask
-        )
-        champ_value = dueling_composite(
-            champ.datagen_raw, champ.datagen_gate, champ.columns, mask
-        )
+        chall_value = chall.composite(mask)
+        champ_value = champ.composite(mask)
+        weight = 0.15 if bench_version >= 19 else 0.1
+        assert chall.column_weight == champ.column_weight == weight
         expected_diffs.append(chall_value - champ_value)
         expected_champ.append(champ_value)
     assert mean_diff == sum(expected_diffs) / len(expected_diffs)
@@ -530,9 +547,11 @@ def test_a_report_must_echo_the_forwarded_slice() -> None:
     echoed = _report("coldkey:a", 0.8, _A_MEANS).model_copy(
         update={"slice_sha256": _SLICE_SHA}
     )
-    verify_dueling_report(_score_report(echoed.model_dump(mode="json")), dueling)
+    verify_dueling_report(
+        _score_report(echoed.model_dump(mode="json")), dueling, bench_version=16
+    )
     with pytest.raises(ValidatorInfrastructureError) as missing:
-        verify_dueling_report(_score_report(None), dueling)
+        verify_dueling_report(_score_report(None), dueling, bench_version=16)
     assert missing.value.code == "dueling_report_invalid"
     for wrong in (
         {"slice_sha256": "0" * 64},
@@ -541,8 +560,14 @@ def test_a_report_must_echo_the_forwarded_slice() -> None:
     ):
         report = echoed.model_copy(update=wrong).model_dump(mode="json")
         with pytest.raises(ValidatorInfrastructureError) as mismatch:
-            verify_dueling_report(_score_report(report), dueling)
+            verify_dueling_report(_score_report(report), dueling, bench_version=16)
         assert mismatch.value.code == "dueling_report_mismatch"
+    # A bench 16 block is not a bench 19 lease's report.
+    with pytest.raises(ValidatorInfrastructureError) as version:
+        verify_dueling_report(
+            _score_report(echoed.model_dump(mode="json")), dueling, bench_version=19
+        )
+    assert version.value.code == "dueling_report_mismatch"
 
 
 async def test_unleased_crn_rescore_never_runs_a_dueling_version() -> None:

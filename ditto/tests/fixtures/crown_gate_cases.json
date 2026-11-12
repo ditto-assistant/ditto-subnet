@@ -276,6 +276,93 @@
       "ungated_champion": "challenger",
       "gated_champion": "challenger",
       "work_cap_champion": "king"
+    },
+    {
+      "name": "v18: a memorized public half keeps the king at column weight 0.1",
+      "bench_version": 18,
+      "slice_owners": ["coldkey:king", "coldkey:challenger", "coldkey:x", "coldkey:y", ""],
+      "entries": [
+        {"name": "king", "stderr": 0.01, "minutes": 0, "owner_key": "coldkey:king", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.97, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.97, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.975, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.965, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.972, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "5": {"datagen_raw": 0.97, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "6": {"datagen_raw": 0.971, "means": [0.5, 0.5, 0.7, 0.7, 0.7]}
+         }},
+        {"name": "challenger", "stderr": 0.01, "minutes": 600, "owner_key": "coldkey:challenger", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.9, "means": [0.5, 0.5, 0.85, 0.85, 0.85]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.9, "means": [0.5, 0.5, 0.85, 0.85, 0.85]},
+           "2": {"datagen_raw": 0.905, "means": [0.5, 0.5, 0.85, 0.85, 0.85]},
+           "3": {"datagen_raw": 0.895, "means": [0.5, 0.5, 0.85, 0.85, 0.85]},
+           "4": {"datagen_raw": 0.902, "means": [0.5, 0.5, 0.85, 0.85, 0.85]}
+         }}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "king",
+      "gated_champion": "king"
+    },
+    {
+      "name": "v19: at column weight 0.15 the held-out columns, not a memorized public half, take the crown",
+      "bench_version": 19,
+      "slice_owners": ["coldkey:king", "coldkey:challenger", "coldkey:x", "coldkey:y", ""],
+      "entries": [
+        {"name": "king", "stderr": 0.01, "minutes": 0, "owner_key": "coldkey:king", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.97, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.97, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.975, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.965, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.972, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "5": {"datagen_raw": 0.97, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "6": {"datagen_raw": 0.971, "means": [0.5, 0.5, 0.7, 0.7, 0.7]}
+         }},
+        {"name": "challenger", "stderr": 0.01, "minutes": 600, "owner_key": "coldkey:challenger", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.9, "means": [0.5, 0.5, 0.85, 0.85, 0.85]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.9, "means": [0.5, 0.5, 0.85, 0.85, 0.85]},
+           "2": {"datagen_raw": 0.905, "means": [0.5, 0.5, 0.85, 0.85, 0.85]},
+           "3": {"datagen_raw": 0.895, "means": [0.5, 0.5, 0.85, 0.85, 0.85]},
+           "4": {"datagen_raw": 0.902, "means": [0.5, 0.5, 0.85, 0.85, 0.85]}
+         }}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "challenger",
+      "gated_champion": "challenger"
+    },
+    {
+      "name": "v19: the datagen qualifier keeps a challenger that skipped the public bench off the crown",
+      "bench_version": 19,
+      "slice_owners": ["coldkey:king", "coldkey:challenger", "coldkey:x", "coldkey:y", ""],
+      "entries": [
+        {"name": "king", "stderr": 0.01, "minutes": 0, "owner_key": "coldkey:king", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.85, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.85, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.855, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.845, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.852, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "5": {"datagen_raw": 0.85, "means": [0.5, 0.5, 0.7, 0.7, 0.7]},
+           "6": {"datagen_raw": 0.851, "means": [0.5, 0.5, 0.7, 0.7, 0.7]}
+         }},
+        {"name": "challenger", "stderr": 0.01, "minutes": 600, "owner_key": "coldkey:challenger", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.7, "means": [0.5, 0.5, 1.0, 1.0, 1.0]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.7, "means": [0.5, 0.5, 1.0, 1.0, 1.0]},
+           "2": {"datagen_raw": 0.705, "means": [0.5, 0.5, 1.0, 1.0, 1.0]},
+           "3": {"datagen_raw": 0.695, "means": [0.5, 0.5, 1.0, 1.0, 1.0]},
+           "4": {"datagen_raw": 0.702, "means": [0.5, 0.5, 1.0, 1.0, 1.0]}
+         }}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "king",
+      "gated_champion": "king"
     }
   ],
   "_duel_comment": "Protocol-35 title duel (docs/title-duels.md). Each entry's duel_seasons maps season_id -> {index, seeds}; confirmation_history is the entry's current season and duel_history every listed season. duel_champion folds with the gate plus duel_window; gate_champion folds with the protocol-34 gate alone. _stat is the independently computed duel statistic.",

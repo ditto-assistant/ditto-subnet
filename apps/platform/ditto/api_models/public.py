@@ -397,7 +397,13 @@ class PublicBenchmarkQualityFactor(BaseModel):
 
 
 DUELING_BREAKDOWN_FORMULA = "gate x ((1 - w x |U|) x datagen + w x sum col)"
-"""The bench v16+ dueling composite (``challenge.DuelingComposite``)."""
+"""The bench 16..18 dueling composite (``challenge.DuelingComposite``)."""
+
+DUELING_HELD_OUT_BREAKDOWN_FORMULA = (
+    "gate x q x ((1 - w x |U|) x datagen + w x sum col)"
+)
+"""The bench v19+ dueling composite: ``w = 0.15`` and the datagen qualifier
+``q = min(1, datagen / 0.8)`` (``challenge.DuelingComposite``)."""
 
 
 class PublicDuelingColumn(BaseModel):
@@ -474,7 +480,22 @@ class PublicDuelingBreakdown(BaseModel):
             ),
         ),
     ]
-    column_weight: Annotated[float, Field(ge=0.0, le=1.0, description="``w``.")]
+    column_weight: Annotated[
+        float,
+        Field(ge=0.0, le=1.0, description="``w``: 0.1 on bench 16..18, 0.15 from 19."),
+    ]
+    datagen_qualifier: Annotated[
+        float | None,
+        Field(
+            ge=0.0,
+            le=1.0,
+            description=(
+                "Bench v19+ only: ``q = min(1, datagen_raw / 0.8)``, which "
+                "scales the whole composite so the public datagen half cannot "
+                "be skipped. Omitted below v19."
+            ),
+        ),
+    ] = Field(default=None, exclude_if=lambda value: value is None)
     counted_columns: Annotated[
         int, Field(ge=0, description="``|U|``: columns not self-masked.")
     ]
@@ -496,7 +517,8 @@ class PublicDuelingBreakdown(BaseModel):
             ge=0.0,
             le=1.0,
             description=(
-                "``datagen_gate x pre_gate_composite``, recomputed from the "
+                "``datagen_gate x pre_gate_composite`` (times "
+                "``datagen_qualifier`` from v19), recomputed from the "
                 "aggregates; it reproduces the signed composite."
             ),
         ),

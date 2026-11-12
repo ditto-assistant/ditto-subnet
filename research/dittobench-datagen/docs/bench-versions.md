@@ -1737,7 +1737,13 @@ re-score byte-identically:
    from intent frames, synonym slots and clause order, not drawn from short
    fixed lists.
 3. **Held-out weight** (DITTO-2739). The public datagen half's share of the
-   composite falls, and the generator columns' share rises.
+   composite falls, and the generator columns' share rises: each counted column
+   weighs 0.15 (0.1 on 16..18), so five columns carry 75% and the datagen half
+   25%. A datagen qualifier `min(1, datagen_raw / 0.8)` scales the whole
+   composite, so the public bench cannot be skipped. `details.dueling` gains
+   `datagen_qualifier`. See [dueling-bench.md](dueling-bench.md) section 9,
+   including the tool-share tradeoff (about 12.5% of the composite) that must
+   be accepted before activation.
 
 V19 keeps v18's run size (`ProfileForVersion`). It is staged in
 `protocol/staged.go`, epoch `2027-11-01T00:00:00Z`, until the cross-layer PR

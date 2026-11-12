@@ -604,8 +604,9 @@ export interface DuelingColumn {
 }
 
 /** Bench v16+ dueling arithmetic, `gate x ((1 - w x |U|) x datagen + w x sum
- * col)`, projected by Platform from the stored aggregates and the priced-cost
- * gate evidence. Omitted below v16. Mirrors `PublicDuelingBreakdown`. */
+ * col)` (from v19 `gate x q x (...)` with w = 0.15), projected by Platform from
+ * the stored aggregates and the priced-cost gate evidence. Omitted below v16.
+ * Mirrors `PublicDuelingBreakdown`. */
 export interface DuelingBreakdown {
   formula: string;
   season_id: string;
@@ -613,6 +614,8 @@ export interface DuelingBreakdown {
   datagen_raw: number;
   datagen_gate: number;
   column_weight: number;
+  /** Bench v19+ only: `min(1, datagen_raw / 0.8)`. */
+  datagen_qualifier?: number | null;
   counted_columns: number;
   datagen_share: number;
   generator_sum: number;

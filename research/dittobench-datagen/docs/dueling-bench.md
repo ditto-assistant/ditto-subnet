@@ -474,7 +474,7 @@ cohort above 10 needs at least 4 epochs. At 25 it needs a longer season or
 - **Composite.** As in section 1. `composite_stderr` treats columns as strata:
   `SE_G^2 = (1/k^2) x sum_c(s_c^2 / n_c)` over the k unmasked columns, and
   `SE^2 = 0.25 x SE_datagen^2 + 0.25 x SE_G^2`. Both are then scaled by the
-  datagen gate, as today.
+  datagen gate, as today. Bench v19 reweights both halves (section 9).
 - **KOTH and crown.** The dethrone test is pair-masked (section 3). Generator
   cases are built to be discriminating, so composites will drop and spread
   out. `KOTH_MARGIN`, `KOTH_BAND_DECAY_START_COMPOSITE` and the statistical band
@@ -579,7 +579,9 @@ ships OFF and additive; nothing here changes v2-v15 bytes or behaviour.
   `protocol.DuelingMinBenchVersion = 16`; every dueling gate is a floor on it.
 - `protocol.DuelingSliceColumns = 5`, `protocol.DuelingSliceCasesPerColumn = 35`,
   `protocol.DuelingColumnWeight = 0.1`. Changing any of them is a new bench
-  version.
+  version. Bench v19 raises the column weight to 0.15 and adds the datagen
+  qualifier (section 9); every layer reads the weight through
+  `protocol.DuelingColumnWeightForVersion`.
 - `gen.ProfileForVersion(run_size, 16)` returns the **datagen half**:
   `full` is 50 tool + 125 memory (`small`/`medium` scale down the same way).
   The v16 datagen surface is the v15 surface plus section 8.1.
@@ -633,8 +635,9 @@ consumer dedupes identically.
 
 ### 7.3 Composite math (`challenge/dueling_score.go`, mirrored in Python)
 
-`DuelingComposite(datagenRaw, datagenGate, columns, mask)` implements section
-1 exactly: float64, columns in `column_id` order, no fused multiply-add
+`DuelingComposite(weighting, datagenRaw, datagenGate, columns, mask)`
+implements section 1 exactly, with `weighting =
+DuelingWeightingForVersion(bench_version, datagenRaw)` (section 9 from v19): float64, columns in `column_id` order, no fused multiply-add
 reordering. A column aggregate is `{column_id, owner_key, n, sum, sum_sq,
 substituted}`; `col_c = sum / n` (`n = 0` scores 0). Owner keys equal to `""`
 (public default or substituted) are never masked. Shared vectors live in
@@ -690,7 +693,8 @@ slice byte for byte.
   opaque ID nonce derived from `slice_seed`.
 - Gates, efficiency, outlier and canary checks see the datagen half only.
 - The report gains `details.dueling`: `{season_id, season_index,
-  slice_sha256, owner_key, datagen_raw, datagen_gate, column_weight, columns:
+  slice_sha256, owner_key, datagen_raw, datagen_gate, column_weight,
+  datagen_qualifier (v19+ only, section 9), columns:
   [{column_id, owner_key, submission_id, grading_bench_version, n, sum,
   sum_sq, substituted}], composite_stderr}`. `composite` is
   `composite(A, {owner(A)})`. Per-case rows for slice cases use
@@ -786,3 +790,86 @@ the queue-policy setting `previous_era_backfill` (`enabled: false`,
 best stranded agent per owner (one per coldkey, by previous-era composite),
 capped at `max_agents`, queued behind every current-era item. It ships **off**;
 enabling it is an operator decision.
+
+## 9. Bench v19 held-out weighting (DITTO-2739)
+
+Bench v19 (epic DITTO-2736) moves rank from the public datagen half to the
+held-out generator columns. Every change is gated on `bench_version >= 19`
+(`protocol.DuelingHeldOutMinBenchVersion`), so v16-v18 reports, composites and
+goldens are byte-identical.
+
+### 9.1 Why
+
+On v18 the public datagen half spreads the top four agents by only .014
+(.955-.969). The generator columns spread the same agents three to four times
+more. The public half is a fixed generator whose habits can be learned and
+memorized, and policy allows routing on its public phrasings (I5, 2026-10-23).
+The columns come from private miner generators whose cases stay secret until
+the source is released, so they cannot be memorized. v19 therefore lets the
+columns, not the public half, decide the order at the top.
+
+### 9.2 Formula
+
+```
+q         = min(1, datagen_raw / 0.80)                    # datagen qualifier
+composite = gate x q x ((1 - w x |U|) x datagen_raw + w x sum_{c in U} col_c)
+w         = 0.15                                          # 0.1 on 16..18
+```
+
+- **Column weight.** `protocol.DuelingColumnWeightForVersion(v)` is 0.1 for
+  16-18 and `DuelingHeldOutColumnWeight = 0.15` from 19. Five counted columns
+  carry 75% of the composite and the datagen half 25%. A masked column's weight
+  still returns to the datagen half: with the agent's own column masked the
+  datagen half carries 40%, and with both owners masked in the paired dethrone
+  test it carries 55%.
+- **Datagen qualifier.** `protocol.DuelingDatagenQualifier(v, raw) =
+  min(1, raw / DuelingDatagenQualifierFloor)`, with the floor at 0.80, and 1
+  below v19. Above the floor the public half adds only its 25% share. Below
+  it the whole composite is scaled down, the columns included, so an agent
+  cannot skip the public bench and live on the columns. `q` depends on the
+  datagen half alone, so every mask (self, pair) shares it.
+- **Where it lives.** `challenge.DuelingWeighting{ColumnWeight, Qualifier}`,
+  built by `challenge.DuelingWeightingForVersion(v, raw)`, is the first
+  argument of `DuelingComposite` and `DuelingCompositeStderr`. The product
+  is `float64(gate x q) x inner`; `gate x 1` is exact, so v16-v18 are
+  unchanged to the bit. `ditto_screening_protocol.dueling.DuelingWeighting`
+  mirrors it bit for bit (v19 vectors in
+  `challenge/testdata/dueling_composite_vectors.json`).
+
+### 9.3 Wire
+
+`details.dueling` carries `column_weight: 0.15` and a new
+`datagen_qualifier` field from v19. It is a pointer in Go and is omitted
+(`exclude_if None` in Python) below v19, so older reports and stored rows keep
+their bytes. `datagen_gate` stays the product of the gate factors and never
+absorbs `q`. `DuelingReport` accepts only the contract weights. At the 0.15
+weight it requires `datagen_qualifier` to equal `min(1, datagen_raw / 0.8)`
+bit for bit, and at 0.1 it refuses the field. Platform ingestion
+(`dueling_score_evidence`), the validator (`verify_dueling_report`) and the
+public breakdown each call `DuelingReport.check_bench_version` against the
+row's bench version. Every fold (validator `weights.py`, Platform `koth.py`)
+recomputes masks with `DuelingReport.composite(mask)`, which reads the
+report's own weighting, never a constant. The public breakdown adds
+`datagen_qualifier` and the formula
+`gate x q x ((1 - w x |U|) x datagen + w x sum col)` from v19.
+
+### 9.4 Standard error
+
+The stderr form is unchanged (section 4), with `w = 0.15` and scaled by
+`gate x q`. The error treats `q` as fixed, exactly as it treats the gate.
+Unmasked, it is `0.0625 x SE_datagen^2 + 0.5625 x SE_G^2`. A 35-case column
+has a per-column SE of about +-.07. At the top of the board, where the datagen
+half is precise, the column strata dominate, and composite SE rises from about
+.016 (v16-v18) to about .023 (v19). The KOTH band, which reads
+`composite_stderr`, widens with it. Recalibrate `KOTH_MARGIN` and the band cap
+on the v19 shadow distribution before activation.
+
+### 9.5 Tradeoff to accept before activation
+
+Every generator column today is memory-only, so the tool half lives only in the
+datagen half (50 tool + 125 memory cases, `0.5 x tool_mean + 0.5 x
+memory_mean`). With the datagen half at 25%, tool calling carries about 12.5%
+of the v19 composite, down from 25% on v16-v18. This must be accepted
+explicitly before v19 activates. The alternative is tool-bearing columns, which
+are a generator-pack contract change and are not part of this item.
+

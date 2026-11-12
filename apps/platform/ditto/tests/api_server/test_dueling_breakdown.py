@@ -18,10 +18,13 @@ from typing import Any
 
 import pytest
 
-from ditto.api_models.public import DUELING_BREAKDOWN_FORMULA
+from ditto.api_models.public import (
+    DUELING_BREAKDOWN_FORMULA,
+    DUELING_HELD_OUT_BREAKDOWN_FORMULA,
+)
 from ditto.api_server.dueling_breakdown import public_dueling_breakdown
 from ditto.api_server.endpoints import public as public_endpoint
-from ditto_screening_protocol.dueling import DuelingReport
+from ditto_screening_protocol.dueling import DuelingReport, dueling_datagen_qualifier
 
 OWNER = "5OwnerOfTheScoredAgentXXXXXXXXXXXXXXXXXXXXXXXX"
 RIVAL = "5RivalGeneratorOwnerXXXXXXXXXXXXXXXXXXXXXXXXXX"
@@ -147,6 +150,53 @@ def test_v16_breakdown_reproduces_the_signed_composite_with_self_mask() -> None:
     assert not any(by_id[c].self_masked for c in ("c0", "c2", "c3", "c4"))
 
 
+def v19_dueling_report(*, datagen_raw: float = 0.6) -> dict[str, Any]:
+    """The same slice at bench 19: w = 0.15 and the datagen qualifier."""
+    return {
+        **dueling_report(),
+        "datagen_raw": datagen_raw,
+        "column_weight": 0.15,
+        "datagen_qualifier": dueling_datagen_qualifier(19, datagen_raw),
+    }
+
+
+def test_v19_breakdown_applies_the_datagen_qualifier() -> None:
+    raw = v19_dueling_report()
+    breakdown = public_dueling_breakdown(
+        bench_version=19, dueling=raw, gate_evidence=priced_gate_evidence()
+    )
+    assert breakdown is not None
+    assert breakdown.formula == DUELING_HELD_OUT_BREAKDOWN_FORMULA
+    assert breakdown.column_weight == 0.15
+    assert breakdown.datagen_qualifier == pytest.approx(0.75)
+    assert breakdown.counted_columns == 4
+    assert breakdown.datagen_share == pytest.approx(0.4)
+    # 0.15 x (0.8 + 0.6 + 0.5 + 0.4): c1, the agent's own, is masked.
+    assert breakdown.generator_sum == pytest.approx(0.345)
+    assert breakdown.pre_gate_composite == pytest.approx(0.4 * 0.6 + 0.345)
+    # Bit for bit the reported composite, the qualifier included.
+    assert breakdown.composite == DuelingReport.model_validate(raw).self_composite()
+    assert breakdown.composite == pytest.approx(0.79832 * 0.75 * (0.24 + 0.345))
+    assert breakdown.model_dump(mode="json")["datagen_qualifier"] == pytest.approx(0.75)
+    # Above the 0.8 floor the qualifier is 1.
+    high = public_dueling_breakdown(
+        bench_version=19,
+        dueling=v19_dueling_report(datagen_raw=0.9),
+        gate_evidence=None,
+    )
+    assert high is not None and high.datagen_qualifier == 1.0
+    assert high.composite == pytest.approx(0.79832 * (0.4 * 0.9 + 0.345))
+
+
+def test_breakdown_below_v19_publishes_no_qualifier() -> None:
+    breakdown = public_dueling_breakdown(
+        bench_version=18, dueling=dueling_report(), gate_evidence=None
+    )
+    assert breakdown is not None
+    assert breakdown.formula == DUELING_BREAKDOWN_FORMULA
+    assert "datagen_qualifier" not in breakdown.model_dump(mode="json")
+
+
 def test_breakdown_masks_like_the_canary_read() -> None:
     breakdown = public_dueling_breakdown(
         bench_version=16, dueling=dueling_report(), gate_evidence=priced_gate_evidence()
@@ -188,6 +238,9 @@ def test_shadow_priced_cost_reports_a_neutral_applied_factor() -> None:
         (16, None, priced_gate_evidence()),
         (16, {"season_id": _SEASON}, None),
         (16, {**dueling_report(), "column_weight": 0.2}, None),
+        # A block weighted for another bench version than its row.
+        (19, dueling_report(), None),
+        (18, v19_dueling_report(), None),
     ],
 )
 def test_breakdown_fails_closed(
