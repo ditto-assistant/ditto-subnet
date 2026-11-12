@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.478.0 (2026-11-12)
+
+### Features
+
+- **platform,backroom**: Queue challengers by template family (SN-474)
+  ([#3507](https://github.com/ditto-assistant/ditto-subnet/pull/3507),
+  [`e6622a0`](https://github.com/ditto-assistant/ditto-subnet/commit/e6622a0a163152aebf77f9025a505af4e031d119))
+
+
 ## v0.477.1 (2026-11-12)
 
 ### Bug Fixes
