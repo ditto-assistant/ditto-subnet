@@ -78,6 +78,7 @@ from ditto.api_server.generator_frontier import (
     record_oracle_results,
 )
 from ditto.api_server.generator_prescreens import (
+    drop_ineligible_prescreen_agents,
     get_prescreen,
     is_prescreen_index,
     pending_prescreen_agents,
@@ -85,6 +86,7 @@ from ditto.api_server.generator_prescreens import (
     prescreen_for_dataset,
     record_prescreen_result,
     running_prescreen,
+    seated_panel,
     validate_prescreen_results,
 )
 from ditto.api_server.generator_rounds import (
@@ -472,6 +474,11 @@ async def _lease_prescreen_job(
         if left < round_lease_cutoff(case_count):
             # The run could not finish before the batch expires.
             return None
+        # A panel agent banned or held since the batch opened is dropped
+        # (never leased), which may void the batch or send it to scoring.
+        await drop_ineligible_prescreen_agents(session, row, now=now)
+        if row.status != "running":
+            return None
         slot = await v._idle_retest_slot(
             session,
             heartbeat=heartbeat,
@@ -563,6 +570,8 @@ async def _record_prescreen_score(
         raise HTTPException(409, "round lease names another bench version")
     if agent_id not in {UUID(slot["agent_id"]) for slot in row.panel}:
         raise HTTPException(409, "agent is not on this pre-screen's panel")
+    if agent_id not in {UUID(slot["agent_id"]) for slot in seated_panel(row)}:
+        raise HTTPException(409, "agent was dropped from this pre-screen's panel")
     try:
         validate_prescreen_results(row, payload.results)
     except RoundSubmissionRejected as exc:

@@ -52,6 +52,7 @@ from ditto.tests.api_server.endpoints.test_generator_rounds import (  # noqa: F4
     _VALIDATOR,
     _advance,
     _apply_settings,
+    _ban_agent,
     _generation,
     _install,
     _matrix_score,
@@ -401,7 +402,7 @@ async def _report_panel(
                 )
             )
         await session.flush()
-        assert await close_prescreen_if_reported(session, batch)
+        assert await close_prescreen_if_reported(session, batch, now=datetime.now(UTC))
         return batch
 
 
@@ -921,3 +922,186 @@ class TestPrescreenPanel:
             json=_signed_score(job, ["c0/k0"], 1.0),
         )
         assert late.status_code == 409
+
+
+async def _running_batch(
+    client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> tuple[GeneratorPrescreen, list[str]]:
+    """Open a batch and generate it, so its panel runs; with its case ids."""
+    await _tick(maker)
+    work = await _lease(client)
+    assert work is not None
+    resp = await client.post(
+        "/api/v1/generator-scorer/round-results",
+        headers=_SCORER,
+        json=_generation(work),
+    )
+    assert resp.status_code == 200, resp.text
+    [batch] = await _batches(maker)
+    case_ids = [
+        ref["case_id"] for refs in (batch.column_cases or {}).values() for ref in refs
+    ]
+    return batch, case_ids
+
+
+async def _run_next(client: httpx.AsyncClient, case_ids: list[str]) -> str:
+    """Lease the next panel run and report it; the agent id."""
+    resp = await _job(client)
+    assert resp.status_code == 200, resp.text
+    job = resp.json()
+    scored = await client.post(
+        f"/api/v1/validator/agent/{job['agent_id']}/generator-round-score",
+        json=_signed_score(job, case_ids, 1.0),
+    )
+    assert scored.status_code == 200, scored.text
+    assert scored.json()["accepted"] is True
+    return str(job["agent_id"])
+
+
+class TestPrescreenPanelChanges:
+    async def test_scoring_closes_a_lease_a_later_run_replaced(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A run whose ticket lapsed leaves its attempt leased while the agent
+        is leased again and reports. The batch closes that attempt when it
+        goes to scoring, as a round closes its leftover leases."""
+        _install(app, session_maker)
+        _patch_lane(monkeypatch)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        batch, case_ids = await _running_batch(client, session_maker)
+        lapsed = (await _job(client)).json()
+        async with session_maker() as session, session.begin():
+            ticket = await session.get(
+                ValidatorTicket,
+                (
+                    UUID(lapsed["agent_id"]),
+                    lapsed["bench_version"],
+                    _VALIDATOR.ss58_address,
+                ),
+            )
+            assert ticket is not None
+            ticket.deadline = datetime.now(UTC) - timedelta(minutes=1)
+
+        reported = [await _run_next(client, case_ids) for _ in range(3)]
+        assert lapsed["agent_id"] in reported
+        async with session_maker() as session:
+            row = await get_prescreen(session, batch.prescreen_index)
+            assert row is not None and row.status == "scoring"
+            attempts = (
+                await session.scalars(
+                    select(GeneratorPrescreenAttempt).order_by(
+                        GeneratorPrescreenAttempt.issued_at
+                    )
+                )
+            ).all()
+            assert [a.status for a in attempts] == [
+                "failed",
+                "completed",
+                "completed",
+                "completed",
+            ]
+            assert (attempts[0].detail or "").startswith("pre-screen closed")
+
+    async def test_an_agent_banned_mid_batch_no_longer_blocks_it(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A panel agent banned before its run is dropped when a validator asks
+        for work, and the batch goes to scoring on the agents still seated."""
+        _install(app, session_maker)
+        _patch_lane(monkeypatch)
+        await _enable(client, min_panel=2)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        batch, case_ids = await _running_batch(client, session_maker)
+        reported = {await _run_next(client, case_ids) for _ in range(2)}
+        [banned] = [
+            slot["agent_id"] for slot in batch.panel if slot["agent_id"] not in reported
+        ]
+        await _ban_agent(session_maker, UUID(banned))
+
+        assert (await _job(client)).status_code == 204
+        async with session_maker() as session:
+            row = await get_prescreen(session, batch.prescreen_index)
+            assert row is not None and row.status == "scoring"
+            dropped = {s["agent_id"] for s in row.panel if s.get("dropped_reason")}
+            assert dropped == {banned}
+        work = await _lease(client)
+        assert work is not None and work["kind"] == "score"
+        assert {a["agent_id"] for a in work["matrix"]["agents"]} == reported
+
+    async def test_an_agent_banned_after_its_run_never_reaches_the_matrix(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Closing drops a panel agent banned after it reported, as a round's
+        close does, so its results are not scored."""
+        _install(app, session_maker)
+        _patch_lane(monkeypatch)
+        await _enable(client, min_panel=2)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        batch, case_ids = await _running_batch(client, session_maker)
+        first = await _run_next(client, case_ids)
+        second = await _run_next(client, case_ids)
+        resp = await _job(client)
+        assert resp.status_code == 200, resp.text
+        job = resp.json()
+        await _ban_agent(session_maker, UUID(first))
+        scored = await client.post(
+            f"/api/v1/validator/agent/{job['agent_id']}/generator-round-score",
+            json=_signed_score(job, case_ids, 1.0),
+        )
+        assert scored.status_code == 200, scored.text
+
+        async with session_maker() as session:
+            row = await get_prescreen(session, batch.prescreen_index)
+            assert row is not None and row.status == "scoring"
+        work = await _lease(client)
+        assert work is not None and work["kind"] == "score"
+        assert {a["agent_id"] for a in work["matrix"]["agents"]} == {
+            second,
+            str(job["agent_id"]),
+        }
+
+    async def test_too_few_eligible_panel_agents_void_the_batch(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The round loop drops a banned panel agent too. Below the batch's
+        scoring min_panel (3 here) the batch is void at once, not at expiry,
+        and its generators return to the queue."""
+        _install(app, session_maker)
+        _patch_lane(monkeypatch)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = await _seed_queue(session_maker)
+        batch, _ = await _running_batch(client, session_maker)
+        await _ban_agent(session_maker, agents[0])
+
+        notes = await _tick(session_maker)
+        assert notes[-1] == f"prescreen {batch.prescreen_index}: void after panel drops"
+        [row] = await _batches(session_maker)
+        assert row.status == "void"
+        assert row.void_reason == "too few eligible panel agents remain"
+        indexes = await _prescreen_indexes(session_maker, ids)
+        assert indexes["a"] is None and indexes["b"] is None

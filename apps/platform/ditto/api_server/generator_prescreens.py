@@ -36,7 +36,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, select, text, true, update
 
 from ditto.api_models.generator import PanelCaseResult
 from ditto.api_models.generator_round_validator import accepted_grading_versions
@@ -62,6 +62,7 @@ from ditto.api_server.generator_rounds import (
     RoundResultRejected,
     RoundSubmissionRejected,
     choose_round_bench_version,
+    panel_ineligibility,
     round_case_id,
     round_column_seed,
     select_round_columns,
@@ -145,13 +146,30 @@ def _column(index: int, row: GeneratorSubmission) -> dict[str, Any]:
     }
 
 
+def seated_panel(row: GeneratorPrescreen) -> list[dict[str, Any]]:
+    """The batch's frozen panel minus agents dropped while it ran."""
+    return [slot for slot in row.panel if not slot.get("dropped_reason")]
+
+
 async def expire_prescreen_tickets(
-    session: AsyncSession, row: GeneratorPrescreen, *, now: datetime, detail: str
+    session: AsyncSession,
+    row: GeneratorPrescreen,
+    *,
+    now: datetime,
+    detail: str,
+    agent_ids: set[UUID] | None = None,
 ) -> int:
-    """Expire a closed batch's live panel tickets, revoke their inference, and
-    close their attempts (``generator_rounds.expire_round_tickets``'s twin)."""
+    """Expire a batch's live panel tickets, revoke their inference, and close
+    their attempts (``generator_rounds.expire_round_tickets``'s twin).
+
+    ``agent_ids`` limits this to those panel agents (a mid-batch drop)."""
     if row.dataset_sha256 is None:
         return 0
+    only = (
+        GeneratorPrescreenAttempt.agent_id.in_(agent_ids)
+        if agent_ids is not None
+        else true()
+    )
     from ditto.db.queries.inference import revoke_ticket_inference
 
     # Only tickets this batch's own leased attempts name (agent, validator,
@@ -177,6 +195,7 @@ async def expire_prescreen_tickets(
                 ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.dataset_sha256 == row.dataset_sha256,
+                only,
             )
             .with_for_update(of=ValidatorTicket)
         )
@@ -190,6 +209,7 @@ async def expire_prescreen_tickets(
         .where(
             GeneratorPrescreenAttempt.prescreen_index == row.prescreen_index,
             GeneratorPrescreenAttempt.status == "leased",
+            only,
         )
         .values(status="failed", detail=detail[:500], finished_at=now)
     )
@@ -325,9 +345,13 @@ async def open_prescreen(
 async def advance_prescreens(
     session: AsyncSession, *, now: datetime, next_round_in: float | None = None
 ) -> list[str]:
-    """Void expired batches, then open one if the lane is idle and the next
-    round is more than :data:`PRESCREEN_TTL` away (caller commits)."""
+    """Void expired batches, drop panel agents that became ineligible from the
+    running one, then open one if the lane is idle and the next round is more
+    than :data:`PRESCREEN_TTL` away (caller commits)."""
     notes = await void_expired_prescreens(session, now=now)
+    running = await running_prescreen(session, for_update=True)
+    if running is not None:
+        notes.extend(await drop_ineligible_prescreen_agents(session, running, now=now))
     resolved = await load_settings(session)
     opened = await open_prescreen(
         session, resolved=resolved, now=now, next_round_in=next_round_in
@@ -408,7 +432,7 @@ async def build_prescreen_matrix(
 
     Every column counts in its own matrix: a batch has no counted columns to
     rank agents by, and its agent standings are discarded. Only column scores
-    are kept.
+    are kept. A dropped panel agent's results never reach it.
     """
     cases_by_column: dict[str, list[dict[str, str]]] = row.column_cases or {}
     columns = [
@@ -440,7 +464,7 @@ async def build_prescreen_matrix(
                 PanelCaseResult(**r) for r in results[UUID(slot["agent_id"])].results
             ],
         )
-        for slot in row.panel
+        for slot in seated_panel(row)
         if UUID(slot["agent_id"]) in results
     ]
     claimed = await claimed_fingerprints(
@@ -723,12 +747,60 @@ async def record_prescreen_fault(
     return row
 
 
+async def _drop_ineligible(
+    session: AsyncSession, row: GeneratorPrescreen, *, now: datetime
+) -> dict[str, str]:
+    """Drop seated panel agents that can no longer run (banned or held since
+    the batch opened; caller commits), as a round does. A dropped agent keeps
+    its slot, marked with why and when, its live lease is expired, and it is
+    never leased or scored in this batch again."""
+    if row.status != "running":
+        return {}
+    # Canonical text, so a slot stored in another text form still matches.
+    seated = sorted({str(UUID(slot["agent_id"])) for slot in seated_panel(row)})
+    blocked = await panel_ineligibility(session, seated)
+    if not blocked:
+        return {}
+    row.panel = [
+        {
+            **slot,
+            "dropped_reason": blocked[str(UUID(slot["agent_id"]))],
+            "dropped_at": now.isoformat(),
+        }
+        if str(UUID(slot["agent_id"])) in blocked and not slot.get("dropped_reason")
+        else slot
+        for slot in row.panel
+    ]
+    await expire_prescreen_tickets(
+        session,
+        row,
+        now=now,
+        detail="panel agent dropped: no longer eligible",
+        agent_ids={UUID(agent_id) for agent_id in blocked},
+    )
+    return blocked
+
+
 async def close_prescreen_if_reported(
-    session: AsyncSession, row: GeneratorPrescreen
+    session: AsyncSession, row: GeneratorPrescreen, *, now: datetime
 ) -> bool:
-    """Move a running batch to scoring once every panel agent reported."""
+    """Settle a running batch, as ``generator_rounds.close_round`` does.
+
+    Panel agents that became ineligible are dropped first, so their results
+    never reach the matrix. With fewer than the batch's scoring ``min_panel``
+    still seated the batch is void; once every seated agent reported it moves
+    to scoring, closing any panel lease still open (a run of an agent that a
+    later run replaced). True once the batch left ``running``."""
     if row.status != "running":
         return False
+    await _drop_ineligible(session, row, now=now)
+    seated = seated_panel(row)
+    settings = await settings_at(session, row.settings_revision)
+    if len(seated) < int(prescreen_score_params(settings)["min_panel"]):
+        await void_prescreen(
+            session, row, "too few eligible panel agents remain", now=now
+        )
+        return True
     reported = set(
         await session.scalars(
             select(GeneratorPrescreenResult.agent_id).where(
@@ -737,13 +809,35 @@ async def close_prescreen_if_reported(
         )
     )
     # A panel slot stores its agent id as text; compare as UUIDs.
-    if not all(UUID(slot["agent_id"]) in reported for slot in row.panel):
+    if not all(UUID(slot["agent_id"]) in reported for slot in seated):
         return False
+    await expire_prescreen_tickets(
+        session, row, now=now, detail="pre-screen closed: every panel agent reported"
+    )
     row.status = "scoring"
     row.lease_id = None
     row.lease_expires_at = None
     await session.flush()
     return True
+
+
+async def drop_ineligible_prescreen_agents(
+    session: AsyncSession, row: GeneratorPrescreen, *, now: datetime
+) -> list[str]:
+    """Drop a running batch's panel agents that became ineligible, then void
+    it or send it to scoring as :func:`close_prescreen_if_reported` decides
+    (``generator_rounds.drop_ineligible_panel_agents``'s twin). Returns one
+    note per change."""
+    dropped = await _drop_ineligible(session, row, now=now)
+    if not dropped:
+        return []
+    notes = [
+        f"prescreen {row.prescreen_index}: dropped panel agent {agent_id} ({reason})"
+        for agent_id, reason in dropped.items()
+    ]
+    if await close_prescreen_if_reported(session, row, now=now):
+        notes.append(f"prescreen {row.prescreen_index}: {row.status} after panel drops")
+    return notes
 
 
 async def record_prescreen_score(
@@ -848,7 +942,8 @@ def prescreen_case_ids(row: GeneratorPrescreen) -> list[str]:
 async def pending_prescreen_agents(
     session: AsyncSession, row: GeneratorPrescreen, *, now: datetime
 ) -> list[UUID]:
-    """Panel agents with no accepted result and no live lease, panel order."""
+    """Seated panel agents with no accepted result and no live lease, in panel
+    order."""
     done = set(
         await session.scalars(
             select(GeneratorPrescreenResult.agent_id).where(
@@ -882,7 +977,7 @@ async def pending_prescreen_agents(
     )
     return [
         UUID(slot["agent_id"])
-        for slot in row.panel
+        for slot in seated_panel(row)
         if UUID(slot["agent_id"]) not in done and UUID(slot["agent_id"]) not in live
     ]
 
@@ -940,5 +1035,5 @@ async def record_prescreen_result(
         )
     )
     await session.flush()
-    await close_prescreen_if_reported(session, row)
+    await close_prescreen_if_reported(session, row, now=now)
     return True
