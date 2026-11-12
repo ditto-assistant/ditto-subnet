@@ -149,6 +149,7 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"v13ComputedQuestionTypes": poolcanary.Internal,
 			"v13InjectionMarkers":      poolcanary.Internal, // the fixed markers the pass looks for, not what it writes
 			"knownAnswerKinds":         poolcanary.Internal, // mix-audit tooling
+			"v19BreakerMix":            poolcanary.Internal, // mix-audit classification of the v19 breaker families
 
 			// Tables keyed by a closed enum. Each value is a grammar or form bank.
 			"v13DeclarativeAckGrammars": poolcanary.Keyed, // keyed by the three appearance settings

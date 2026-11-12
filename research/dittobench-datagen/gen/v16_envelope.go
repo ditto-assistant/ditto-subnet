@@ -96,6 +96,9 @@ func memoryEnvelopeForVersion(mem, benchVersion int) (V13MemoryEnvelope, bool) {
 		// never inherits the newest one through the floor below.
 		return V13MemoryEnvelope{}, false
 	}
+	if benchVersion >= protocol.BenchVersionV19 {
+		return v19EnvelopeFor(mem)
+	}
 	if benchVersion >= protocol.BenchVersionV18 {
 		return v18EnvelopeFor(mem)
 	}

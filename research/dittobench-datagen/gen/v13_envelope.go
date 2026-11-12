@@ -68,6 +68,9 @@ type V13MemoryEnvelope struct {
 	// solved (v18SaturatedStoryOracles) before the pure-money rotation trims
 	// an arc to its slot. Bench v18 only.
 	DropSaturatedStoryOracles bool
+	// Breakers is the v19 shortcut-breaker slot (gen/v19_envelope.go,
+	// universe/v19_breakers.go). Zero for every table through v18.
+	Breakers int
 }
 
 // storyPerArc is the number of oracles each asked story arc keeps.
@@ -90,7 +93,7 @@ func (e V13MemoryEnvelope) EnterpriseCount() int {
 // Total is the number of memory cases the envelope publishes.
 func (e V13MemoryEnvelope) Total() int {
 	return e.Story + e.OrdinaryWorld + e.BusinessPrograms + e.PersonalPrograms + e.Abstention +
-		e.RecordQuantity + e.Divergence + e.PointInTime + e.Integrity + e.Isolation
+		e.RecordQuantity + e.Divergence + e.PointInTime + e.Integrity + e.Isolation + e.Breakers
 }
 
 // Interim is the number of cases currently filled by the interim world fill.
@@ -124,6 +127,8 @@ func (e V13MemoryEnvelope) slot(name string) int {
 		return e.Integrity
 	case V13SlotIsolation:
 		return e.Isolation
+	case V19SlotBreakers:
+		return e.Breakers
 	}
 	return 0
 }
@@ -140,13 +145,15 @@ const (
 	V13SlotPointInTime      = "point-in-time"
 	V13SlotIntegrity        = "integrity"
 	V13SlotIsolation        = "isolation"
+	// V19SlotBreakers is empty in every table through v18.
+	V19SlotBreakers = "shortcut-breakers"
 )
 
 // V13SlotOrder is the published slot order for reports.
 var V13SlotOrder = []string{
 	V13SlotStory, V13SlotOrdinaryWorld, V13SlotBusinessPrograms, V13SlotPersonalPrograms,
 	V13SlotAbstention, V13SlotRecordQuantity, V13SlotDivergence, V13SlotPointInTime,
-	V13SlotIntegrity, V13SlotIsolation,
+	V13SlotIntegrity, V13SlotIsolation, V19SlotBreakers,
 }
 
 // v13InterimSlots are the slots whose dedicated generator has not landed. Remove
@@ -392,6 +399,15 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 		suite.FamilyCompilerCases++
 	}
 	suite.V13Slots[V13SlotRecordQuantity] = suite.FamilyCompilerCases
+	if envelope.Breakers > 0 {
+		breakers, pairs, err := v19BreakerCases(seed, world, envelope.Breakers, benchVersion)
+		if err != nil {
+			return MemorySuite{}, err
+		}
+		suite.Cases = append(suite.Cases, breakers...)
+		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, pairs...)
+		suite.V13Slots[V19SlotBreakers] = len(breakers)
+	}
 	suite.Cases = placeV13TwinPairs(seed, suite.Cases, append(decision, temporal...))
 	for i := range suite.Cases {
 		for _, id := range suite.Cases[i].RequiredPairIDs {
