@@ -219,6 +219,13 @@ paths = [
   "miners/dittobench-router-starter-kit/**",
 ]
 
+[components.query_adapter_pilot]
+description = "Synthetic-only per-user query adapter hosting pilot (not deployed)"
+paths = [
+  "research/query-adapter-pilot/**",
+  ".github/workflows/query-adapter-pilot-ci.yml",
+]
+
 [components.platform_api]
 description = "Subnet API, database migrations, relays, and control plane"
 depends_on = ["screening_protocol"]

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "query-adapter-pilot"
+version = "0.1.0"
+description = "Synthetic-only SN118 pilot: miner-hosted per-user Personal Query Adapter inference."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.14"
+dependencies = ["numpy>=2.0"]
+
+[project.scripts]
+query-adapter-pilot-miner = "query_adapter_pilot.miner.__main__:main"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.10",
+  "pytest>=8",
+  "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/query_adapter_pilot"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM"]
+# Weight names follow the source np.savez layout (W1, b1, W2, b2).
+ignore = ["N802", "N803", "N806"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
