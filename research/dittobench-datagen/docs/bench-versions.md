@@ -1743,6 +1743,67 @@ V19 keeps v18's run size (`ProfileForVersion`). It is staged in
 `protocol/staged.go`, epoch `2027-11-01T00:00:00Z`, until the cross-layer PR
 supports it. Its known vector is pinned once the datagen half is final.
 
+### Shortcut-breaker families (DITTO-2737)
+
+Released v18 agent sources encode five habits of this generator as rules. Each
+rule is correct on v18 data and wrong on the matching v19 family:
+
+| Family (`QuestionType`) | Rule it breaks | v19 records | Correct answer | Rule's answer |
+| --- | --- | --- | --- | --- |
+| `v19-breaker-trigger-fact` | `LESSON_RE`: a question saying lesson, teach, learn, moral or "stuck with me" is answered with the user's saying | a fact note (a pet's dose, a service due date, who taught a skill, the days to appeal a ticket), then a note with the user's proverb, "that one stuck with me" | the fact | the proverb (a distractor) |
+| `v19-breaker-late-recorded` | `DATED_NOTE`: go by the date a record was saved, not the dates it names | a work account's value on day S; a note saved on day R saying it changed "in effect from" E, with S < E < R | the new value, for an as-of date between E and R | the old value (a distractor) |
+| `v19-breaker-company-holder` | `HOLDER_CHECK`: a company is never the holder | a work item handed to a person, then "Org took over the item from the person and keeps it until ..." | the company | the person (a distractor) |
+| `v19-breaker-near-twin` | a typo budget: any word within 1-3 edits is the same name | two people one or two edits apart (Dan/Dana, Lena/Lana), each with an allergy, a new city or a birthday; the asked twin's note comes first | the asked twin's fact | the later twin's fact (a distractor) |
+| `v19-breaker-conditional-next` | `TASK_CHECK`: drop any time or condition from the task of a "person ; task ; channel" answer | "Next step on the work thread: Person will task condition, by channel" | person; task with its condition; channel | the bare task, which misses the action claim |
+
+All five families come from `universe.GenerateV19Breakers`
+(`universe/v19_breakers.go`). Each case is its own thread in its own session,
+so v19 adds no state to the v15 world and v2..v18 regenerate byte-identically.
+The draws are seeded per case. People and pets come from the `humandata` name
+banks, and organisations and cities from `publicdata`. No breaker name repeats a
+world person's first name or nickname. A near twin is at least two edits from
+every other name in the run except its twin, and every other breaker name is at
+least three edits from all the rest. That is a rule about people. The
+story subject-alias guarantee (4 edits) is unchanged. Every graded value
+appears in the case's records and never in its question, and the trigger word,
+names and dates are protected from typo noise.
+
+**Grading is unchanged.** Each case carries typed claims for the shipped v13+
+claim grader. The conditional-next action claim's expected phrase includes the
+condition, so "contains the expected phrase" still applies. The full sentence
+passes in either clause order ("Ana will send the revised quote before Friday,
+by email"; "before Friday, send the revised quote"). A reply without the
+condition misses a critical claim and scores 0. `grade/` has no v19 branch.
+
+**Table.** The full table stays at 125 memory cases, and the tool half is
+unchanged (`gen/v19_envelope.go`, slot `shortcut-breakers`):
+
+| Slot | v18 | v19 |
+| --- | ---: | ---: |
+| Story | 35 (7 arcs x 5) | 25 (5 arcs x 5) |
+| Shortcut breakers | 0 | 10 (2 per family) |
+| Every other slot | unchanged | unchanged |
+
+The slots come from story, the most saturated slot in the v17 evidence (six
+oracles averaged 0.96-0.99 per arc). Four of the five families also target
+rules that agents learned from story arcs. Per-family v18 means were not
+read for this move; the top four v18 agents score .921-.988 on the memory half.
+Business programs could not give slots: they move in four-case groups, and
+four fewer business cases put every seed under the 0.40 business floor (0.384).
+The late-recorded, company-holder and conditional-next threads are work
+records, so the mix audit counts them as business. Trigger-fact and near-twin
+are personal, and none of them joins the contacts sub-domain.
+`go run ./cmd/mixaudit -bench-version 19 -seeds 40 -gate` passes on all 40
+seeds (business 0.420, personal 0.580). Medium and small ask no breakers.
+
+**Regression.** `TestV19ShortcutRulesLoseOnBreakerFamilies`
+(`gen/v19_breakers_test.go`) writes each rule as a small Go answerer over the
+case's records, beside an oracle reader, and grades both with `grade.Memory`.
+Over 40 seeds (80 cases per family) the oracle scores 1.000 on every family
+and each rule scores 0.000 on its own. `TestV19ConditionalNextGradesTheFullSentence`
+pins the contains-phrase behaviour, and `TestV19MixGate` pins the gate and the
+slot counts.
+
 ## Bench v15 grading policy (shipped ahead of the generation contract)
 
 `grade.PolicyFloorV15` exists only as a grading-policy floor, as v13's grader floor once did; `protocol` gains `BenchVersionV15` only with the generation contract. It

@@ -125,6 +125,22 @@ func TestPoolCardinalityCanary(t *testing.T) {
 
 			// Absence false premises (v13_absence.go).
 			{Name: "countryPool", Size: len(countryPool), Role: "question cue (false-premise country)"},
+
+			// V19 shortcut breakers (v19_breakers.go, DITTO-2737). People,
+			// pets, companies and cities come from the humandata and
+			// publicdata banks.
+			{Name: "v19BreakerTwinNames", Size: len(v19BreakerTwinNames), Role: "question entity (near-twin person)"},
+			{Name: "v19BreakerHoldings", Size: len(v19BreakerHoldings), Role: "question entity (held item)"},
+			{Name: "v19BreakerRelations", Size: len(v19BreakerRelations), Role: "record surface (relation)"},
+			{Name: "v19BreakerAllergies", Size: len(v19BreakerAllergies), Role: "answer (allergy)"},
+			{Name: "v19BreakerMedicines", Size: len(v19BreakerMedicines), Role: "question cue (trigger-fact subject)"},
+			{Name: "v19BreakerServices", Size: len(v19BreakerServices), Role: "question cue (trigger-fact subject)"},
+			{Name: "v19BreakerSkills", Size: len(v19BreakerSkills), Role: "question cue (trigger-fact subject)"},
+			{Name: "v19BreakerPlaces", Size: len(v19BreakerPlaces), Role: "record surface (trigger-fact place)"},
+			{Name: "v19BreakerProjects", Size: len(v19BreakerProjects), Role: "question entity (next-step thread)"},
+			{Name: "v19BreakerConditions", Size: len(v19BreakerConditions), Role: "answer (next-step condition)"},
+			{Name: "v19BreakerFillers", Size: len(v19BreakerFillers), Role: "record surface"},
+			{Name: "v19BreakerResponses", Size: len(v19BreakerResponses), Role: "record surface"},
 		},
 
 		// Known-small scored pools when the canary landed (#492). Each value is
@@ -214,6 +230,8 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"V14Families":          poolcanary.Schema,
 			"v14RoleFamilies":      poolcanary.Schema,
 			"v18BusinessFamilies":  poolcanary.Schema,
+			"V19BreakerFamilies":   poolcanary.Schema,
+			"V19TriggerWords":      poolcanary.Internal, // typo-protection match set; the question frames carry the words
 			"v14RoleSlots":         poolcanary.Internal,
 			"V13PersonalDomains":   poolcanary.Schema,
 			"V13AbsenceFamilies":   poolcanary.Schema,
