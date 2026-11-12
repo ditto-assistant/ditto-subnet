@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.475.0 (2026-11-12)
+
+### Bug Fixes
+
+- **screener**: Bind four v13 charges to the evidence the policy requires
+  ([#3080](https://github.com/ditto-assistant/ditto-subnet/pull/3080),
+  [`deed7cc`](https://github.com/ditto-assistant/ditto-subnet/commit/deed7ccacf015c4760e3331bfa771d70b10d3697))
+
+### Features
+
+- **datagen**: Stage bench v19, the generalization contract
+  ([#3499](https://github.com/ditto-assistant/ditto-subnet/pull/3499),
+  [`e3ae98e`](https://github.com/ditto-assistant/ditto-subnet/commit/e3ae98e89024f826756d6eabc3d14a1d2efff088))
+
+
 ## v0.474.0 (2026-11-11)
 
 ### Bug Fixes
