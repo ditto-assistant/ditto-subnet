@@ -250,6 +250,18 @@ describe('generator competition MCP tools', () => {
     expect(preview.challenger_queue).toEqual([])
   })
 
+  it('admits challenger columns up to the round column capacity', () => {
+    // Platform bounds counted plus challenger columns at 8 (MAX_ROUND_COLUMNS),
+    // so a revision with three challengers beside five counted columns must
+    // parse on read and write.
+    for (const challengers of [0, 2, 3, 7]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, challenger_columns: challengers }).success).toBe(true)
+    }
+    for (const challengers of [-1, 8]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, challenger_columns: challengers }).success).toBe(false)
+    }
+  })
+
   it('refuses a run detail that serves seeds before the run reported', () => {
     const run = {
       summary: runSummary, submission_id: SUBMISSION, miner_hotkey: '5'.repeat(48),

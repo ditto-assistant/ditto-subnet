@@ -1484,6 +1484,36 @@ class TestRoundLifecycle:
         assert len(preview["columns"]) == 5 and len(preview["panel"]) == 3
 
 
+class TestChallengerColumns:
+    async def test_three_challengers_fill_an_eight_column_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Five counted columns plus three challengers freeze an 8-column
+        round; a ninth column is refused when the settings are written."""
+        _install(app, session_maker)
+        await _apply_settings(
+            client, counted_columns=5, challenger_columns=4, status=422
+        )
+        await _apply_settings(client, counted_columns=5, challenger_columns=3)
+        for index in range(9):
+            await _seed_generator(
+                session_maker,
+                hotkey=f"5ChallengerMiner{index}",
+                owner=f"coldkey:challenger-owner-{index}",
+                salt=f"challenger-{index}",
+            )
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        columns = preview["columns"]
+        assert [column["counted"] for column in columns] == [True] * 5 + [False] * 3
+        assert len({column["owner_key"] for column in columns}) == 8
+
+
 class TestChallengerQueue:
     async def test_a_challenger_still_in_flight_is_not_picked_again(
         self,

@@ -74,7 +74,9 @@ export const generatorCompetitionSettingsSchema = z.object({
   retry_backoff_seconds: z.number().int().min(60).max(86_400),
   epochs_per_round: z.number().int().min(1).max(48),
   counted_columns: z.number().int().min(1).max(6),
-  challenger_columns: z.number().int().min(0).max(2),
+  // Bounded by the round's column capacity (Platform MAX_ROUND_COLUMNS, 8):
+  // Platform refuses counted plus challenger columns above 8.
+  challenger_columns: z.number().int().min(0).max(7),
   reference_agent_ids: z.array(uuid).max(3),
   privacy_window_rounds: z.number().int().min(1).max(180),
   onchain_commitment: z.boolean(),
