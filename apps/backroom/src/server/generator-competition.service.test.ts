@@ -250,6 +250,20 @@ describe('generator competition MCP tools', () => {
     expect(preview.challenger_queue).toEqual([])
   })
 
+  it('admits challenger columns up to the round column capacity', () => {
+    // Platform bounds counted plus challenger columns at 8 (MAX_ROUND_COLUMNS),
+    // so a revision with three challengers beside five counted columns must
+    // parse on read and write. The field alone allows 7 (one counted column);
+    // the write refuses a pair above 8 (see the write-path test).
+    for (const challengers of [0, 2, 3]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, counted_columns: 5, challenger_columns: challengers }).success).toBe(true)
+    }
+    expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, counted_columns: 1, challenger_columns: 7 }).success).toBe(true)
+    for (const challengers of [-1, 8]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, counted_columns: 1, challenger_columns: challengers }).success).toBe(false)
+    }
+  })
+
   it('refuses a run detail that serves seeds before the run reported', () => {
     const run = {
       summary: runSummary, submission_id: SUBMISSION, miner_hotkey: '5'.repeat(48),
@@ -329,6 +343,20 @@ describe('generator competition MCP tools', () => {
       expect(JSON.stringify(shortSeason.content)).toContain('at least 2 epochs')
       expect(fetchMock).not.toHaveBeenCalled()
 
+      // A round holds at most eight columns; Backroom refuses more before Platform does.
+      const nineColumns = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, counted_columns: 5, challenger_columns: 4 },
+          reason: 'add a fourth challenger column',
+          confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(nineColumns.isError).toBe(true)
+      expect(JSON.stringify(nineColumns.content)).toContain('at most 8 columns')
+      expect(fetchMock).not.toHaveBeenCalled()
+
       // A canary shadow version needs dueling on.
       const shadowOff = await client.callTool({
         name: 'set_generator_competition_settings',
@@ -345,7 +373,11 @@ describe('generator competition MCP tools', () => {
 
       const applied = json(await client.callTool({
         name: 'set_generator_competition_settings',
-        arguments: { expectedRevision: 1, settings: { ...settings, upload_fee_required: true }, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, upload_fee_required: true, counted_columns: 5, challenger_columns: 3 },
+          reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
       })) as { revision: number }
       expect(applied.revision).toBe(2)
       expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -353,7 +385,7 @@ describe('generator competition MCP tools', () => {
       expect(settingsUrl).toContain('/api/v1/admin/generator-competition/settings')
       expect(JSON.parse(String(settingsInit.body))).toMatchObject({
         expected_revision: 1, scope: '*', actor: session.email, confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
-        settings: { upload_fee_required: true },
+        settings: { upload_fee_required: true, counted_columns: 5, challenger_columns: 3 },
       })
       expect(settingsInit.headers['X-Admin-Actor']).toBe(session.email)
 

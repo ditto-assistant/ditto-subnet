@@ -317,6 +317,27 @@ def test_cases_per_seed_reaches_the_pack_contract_cap() -> None:
             GeneratorCompetitionSettings.model_validate(_settings(cases_per_seed=bad))
 
 
+def test_challenger_columns_fill_the_round_column_capacity() -> None:
+    """Challengers are bounded by the round's eight columns, not a fixed two:
+    five counted columns leave room for three challengers and no more."""
+    settings = GeneratorCompetitionSettings.model_validate(
+        _settings(counted_columns=5, challenger_columns=3)
+    )
+    assert settings.counted_columns + settings.challenger_columns == 8
+    GeneratorCompetitionSettings.model_validate(
+        _settings(counted_columns=1, challenger_columns=7)
+    )
+    with pytest.raises(ValidationError, match="at most 8 columns"):
+        GeneratorCompetitionSettings.model_validate(
+            _settings(counted_columns=5, challenger_columns=4)
+        )
+    for bad in (-1, 8):
+        with pytest.raises(ValidationError):
+            GeneratorCompetitionSettings.model_validate(
+                _settings(counted_columns=1, challenger_columns=bad)
+            )
+
+
 class TestSettings:
     async def test_lane_ships_closed_and_writes_are_guarded(
         self,

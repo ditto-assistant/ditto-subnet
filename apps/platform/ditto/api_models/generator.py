@@ -35,6 +35,7 @@ from ditto.api_models.admin_quarantine import (
     AdminSourceLine,
     AdminSourceSearchMatch,
 )
+from ditto.api_models.generator_round_validator import MAX_ROUND_COLUMNS
 from ditto.api_models.name_claim import PublicNameHandle
 
 GENERATOR_SETTINGS_SCOPE = "*"
@@ -156,9 +157,11 @@ class GeneratorCompetitionSettings(BaseModel):
     """Generator columns every agent is compared on: the best qualified
     generators by latest round score, filled by the public default generator
     while too few qualify."""
-    challenger_columns: Annotated[int, Field(ge=0, le=2)] = 1
+    challenger_columns: Annotated[int, Field(ge=0, le=MAX_ROUND_COLUMNS - 1)] = 1
     """Extra columns for qualified generators that have never held a column.
-    They are scored as generators but never move an agent."""
+    They are scored as generators but never move an agent. Bounded by the
+    round's column capacity: counted plus challenger columns hold at most
+    ``MAX_ROUND_COLUMNS`` (8), so five counted columns leave room for three."""
     reference_agent_ids: Annotated[list[UUID], Field(max_length=3)] = Field(
         default_factory=list
     )
@@ -278,8 +281,8 @@ class GeneratorCompetitionSettings(BaseModel):
             raise ValueError("min_panel must not exceed the round panel size")
         if len(set(self.reference_agent_ids)) != len(self.reference_agent_ids):
             raise ValueError("reference_agent_ids must be unique")
-        if self.counted_columns + self.challenger_columns > 8:
-            raise ValueError("a round holds at most 8 columns")
+        if self.counted_columns + self.challenger_columns > MAX_ROUND_COLUMNS:
+            raise ValueError(f"a round holds at most {MAX_ROUND_COLUMNS} columns")
         return self
 
     def dueling_season_refusal(self) -> str | None:

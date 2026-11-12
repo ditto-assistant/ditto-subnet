@@ -22,6 +22,8 @@ const frontierState = z.enum(['oracle_pending', 'audit_pending', 'settled'])
 const ss58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/)
 
 export const GENERATOR_SETTINGS_SCOPE = '*'
+// Platform MAX_ROUND_COLUMNS: counted plus challenger columns in one round.
+export const MAX_ROUND_COLUMNS = 8
 export const PROBE_ROTATION_CONFIRMATION = 'ROTATE GENERATOR PROBE SEED'
 export const REJECT_GENERATOR_CONFIRMATION = 'REJECT GENERATOR SUBMISSION'
 export const REINSTATE_GENERATOR_CONFIRMATION = 'REINSTATE GENERATOR SUBMISSION'
@@ -74,7 +76,10 @@ export const generatorCompetitionSettingsSchema = z.object({
   retry_backoff_seconds: z.number().int().min(60).max(86_400),
   epochs_per_round: z.number().int().min(1).max(48),
   counted_columns: z.number().int().min(1).max(6),
-  challenger_columns: z.number().int().min(0).max(2),
+  // Bounded by the round's column capacity: counted plus challenger columns
+  // hold at most MAX_ROUND_COLUMNS (Platform refuses more; the write below
+  // checks it first).
+  challenger_columns: z.number().int().min(0).max(MAX_ROUND_COLUMNS - 1),
   reference_agent_ids: z.array(uuid).max(3),
   privacy_window_rounds: z.number().int().min(1).max(180),
   onchain_commitment: z.boolean(),
@@ -204,6 +209,15 @@ export const setGeneratorSettingsInputSchema = z
         code: 'custom',
         message: 'dueling_shadow_bench_version needs dueling_enabled',
         path: ['settings', 'dueling_shadow_bench_version'],
+      })
+    }
+    const columns = input.settings.counted_columns + input.settings.challenger_columns
+    if (columns > MAX_ROUND_COLUMNS) {
+      context.addIssue({
+        code: 'custom',
+        message: `a round holds at most ${MAX_ROUND_COLUMNS} columns: `
+          + `counted_columns + challenger_columns = ${columns}`,
+        path: ['settings', 'challenger_columns'],
       })
     }
   })
