@@ -1566,6 +1566,55 @@ class TestChallengerQueue:
         assert voided.status_code == 200, voided.text
         assert await challenger() == [str(first)]
 
+    async def test_a_scored_challenger_still_in_flight_is_not_picked_again(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With no never-scored generator left, challenger columns re-measure
+        the next-best scored generators. One whose challenger round is still
+        in flight is skipped there too, so the column goes to the next one."""
+        _install(app, session_maker)
+        await _apply_settings(
+            client,
+            counted_columns=1,
+            challenger_columns=1,
+            validator_rounds_enabled=True,
+            skip_unchanged_rounds=False,
+        )
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = {
+            name: await _seed_generator(
+                session_maker, hotkey=f"5Gen-{name}", owner=f"coldkey:{name}", salt=name
+            )
+            for name in ("top", "middle", "low")
+        }
+        async with session_maker() as session, session.begin():
+            for name, score in (("top", 0.6), ("middle", 0.4), ("low", 0.2)):
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.round_score = score
+                row.round_scored_index = 1
+
+        await _advance(session_maker, 9)  # commits round 3
+        await _advance(session_maker, 12)  # opens round 3
+        async with session_maker() as session:
+            opened = await get_round(session, 3)
+            assert opened is not None and opened.status == "generating"
+            assert [
+                (column["submission_id"], column["counted"])
+                for column in opened.columns or []
+            ] == [(str(ids["top"]), True), (str(ids["middle"]), False)]
+
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert [
+            (column["submission_id"], column["counted"])
+            for column in preview["columns"]
+        ] == [(str(ids["top"]), True), (str(ids["low"]), False)]
+
 
 class TestPanelFreshness:
     async def test_ineligible_ranked_agents_are_skipped_and_refilled_at_freeze(

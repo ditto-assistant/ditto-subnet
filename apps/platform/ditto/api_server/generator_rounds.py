@@ -380,9 +380,9 @@ async def select_columns(
     column seed, so the default can fill several without repeating cases).
     Challenger columns go to qualified generators that have never been
     scored, oldest qualification first, then to the next-best scored ones. A
-    never-scored generator whose column in an earlier round is still in
-    flight is skipped as a challenger: that round is already measuring it,
-    and a void round returns it to its place in the queue.
+    generator whose column in an earlier round is still in flight is skipped
+    as a challenger: that round is already measuring it, and a void round
+    returns a never-scored one to its place in the queue.
     One column per owner, so a miner with several hotkeys holds one column.
     """
     qualified = await _qualified_generators(session)
@@ -425,7 +425,11 @@ async def select_columns(
         challengers,
         counted=False,
     )
-    take(scored, challengers - (len(columns) - before), counted=False)
+    take(
+        [row for row in scored if row.submission_id not in in_flight],
+        challengers - (len(columns) - before),
+        counted=False,
+    )
     return columns
 
 
