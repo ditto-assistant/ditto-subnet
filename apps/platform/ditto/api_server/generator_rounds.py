@@ -313,9 +313,12 @@ class RoundActions:
 
 
 async def _qualified_generators(session: AsyncSession) -> list[GeneratorSubmission]:
+    # Column selection reads identity and scores only, never the archive bytes
+    # (up to 4 MiB each), so they stay unloaded.
     return list(
         await session.scalars(
             select(GeneratorSubmission)
+            .options(defer(GeneratorSubmission.source_bytes, raiseload=True))
             .where(
                 GeneratorSubmission.status == "active",
                 GeneratorSubmission.qualified_at.is_not(None),
@@ -348,13 +351,6 @@ async def _in_flight_submissions(session: AsyncSession) -> dict[UUID, int]:
     return held
 
 
-async def current_challenger_queue(session: AsyncSession) -> list[QueueEntry]:
-    """The challenger queue a round opened now would draw from."""
-    return challenger_queue(
-        await _qualified_generators(session), await _in_flight_submissions(session)
-    )
-
-
 async def public_default_generator(
     session: AsyncSession,
 ) -> GeneratorSubmission | None:
@@ -378,9 +374,24 @@ def _column(index: int, row: GeneratorSubmission, *, counted: bool) -> dict[str,
     }
 
 
+@dataclass(frozen=True)
+class ColumnSelection:
+    """A round's frozen columns and the challenger queue they were drawn from."""
+
+    columns: list[dict[str, Any]]
+    queue: list[QueueEntry]
+
+
 async def select_columns(
     session: AsyncSession, settings: GeneratorCompetitionSettings
 ) -> list[dict[str, Any]]:
+    """Freeze a round's generator columns (:func:`select_round_columns`)."""
+    return (await select_round_columns(session, settings)).columns
+
+
+async def select_round_columns(
+    session: AsyncSession, settings: GeneratorCompetitionSettings
+) -> ColumnSelection:
     """Freeze a round's generator columns, counted first.
 
     Counted columns go to the best qualified generators by latest round
@@ -442,7 +453,7 @@ async def select_columns(
         challengers - (len(columns) - before),
         counted=False,
     )
-    return columns
+    return ColumnSelection(columns=columns, queue=queue)
 
 
 # A panel agent the round lane can lease: a finalized agent with a screened

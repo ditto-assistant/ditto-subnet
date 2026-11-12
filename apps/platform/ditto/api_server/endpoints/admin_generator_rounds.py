@@ -92,7 +92,6 @@ from ditto.api_server.generator_rounds import (
     close_round,
     column_views,
     commitment_publication_views,
-    current_challenger_queue,
     expire_round_tickets,
     get_round,
     list_rounds,
@@ -104,7 +103,7 @@ from ditto.api_server.generator_rounds import (
     round_settings,
     round_summaries,
     round_summary,
-    select_columns,
+    select_round_columns,
     select_round_panel,
     skipped_round_views,
     standing_views,
@@ -304,8 +303,8 @@ async def admin_round_preview(
     """What a round opened now would freeze, and every reason it could not."""
     resolved = await load_settings(session)
     settings = resolved.settings
-    columns = await select_columns(session, settings)
-    queue = await current_challenger_queue(session)
+    selection = await select_round_columns(session, settings)
+    columns = selection.columns
     frozen = await select_round_panel(session, settings)
     panel, skipped = frozen.panel, frozen.skipped_references
     qualified = int(
@@ -393,7 +392,7 @@ async def admin_round_preview(
             min_round_validators=contract.min_round_validators,
             scorer_grading_versions=list(contract.scorer_grading_versions),
         ),
-        challenger_queue=_challenger_queue_view(queue, columns),
+        challenger_queue=_challenger_queue_view(selection.queue, columns),
     )
 
 
