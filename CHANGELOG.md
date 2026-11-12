@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.480.0 (2026-11-12)
+
+### Features
+
+- **platform**: Generate and score pre-screen batches (SN-474)
+  ([#3511](https://github.com/ditto-assistant/ditto-subnet/pull/3511),
+  [`1d918f3`](https://github.com/ditto-assistant/ditto-subnet/commit/1d918f3a3d5c3b9734b56e50ed7b193f7151dd12))
+
+- **platform,backroom**: Add generator pre-screen batches (SN-474)
+  ([#3510](https://github.com/ditto-assistant/ditto-subnet/pull/3510),
+  [`d93cd89`](https://github.com/ditto-assistant/ditto-subnet/commit/d93cd89c1ef7d35be3e9fbff98524c29330bf0dd))
+
+
 ## v0.479.0 (2026-11-12)
 
 ### Features
