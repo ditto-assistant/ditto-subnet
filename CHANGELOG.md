@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.479.0 (2026-11-12)
+
+### Features
+
+- **platform,backroom**: Let challenger_columns exceed 2 (SN-474)
+  ([#3505](https://github.com/ditto-assistant/ditto-subnet/pull/3505),
+  [`b5e3d7b`](https://github.com/ditto-assistant/ditto-subnet/commit/b5e3d7bb6742a3ca328c9d4051420a29b059d5a5))
+
+- **platform,backroom**: Order challengers by probe-case novelty (SN-474)
+  ([#3509](https://github.com/ditto-assistant/ditto-subnet/pull/3509),
+  [`46e8691`](https://github.com/ditto-assistant/ditto-subnet/commit/46e8691dd4ed2993dfb058eab043248ab924daf1))
+
+
 ## v0.478.0 (2026-11-12)
 
 ### Features
