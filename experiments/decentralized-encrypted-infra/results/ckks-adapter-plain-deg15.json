@@ -1,0 +1,112 @@
+{
+  "experiment": "sn473-ckks-adapter",
+  "synthetic": true,
+  "host": {
+    "go_version": "go1.27.3",
+    "goos": "darwin",
+    "goarch": "arm64",
+    "num_cpu": 14,
+    "gomaxprocs": 14,
+    "library": "github.com/tuneinsight/lattigo/v6 v6.2.0",
+    "started_at": "2026-11-12T02:07:27Z"
+  },
+  "mode": "plain",
+  "params": {
+    "log_n": 14,
+    "log_q": [
+      55,
+      45,
+      45,
+      45,
+      45,
+      45,
+      45
+    ],
+    "log_p": [
+      61
+    ],
+    "log_default_scale": 45,
+    "log_qp": 385.9999999086503,
+    "max_level": 6,
+    "slots_used": 1024,
+    "log_bsgs_ratio": 2
+  },
+  "gelu_degree": 15,
+  "gelu_interval_bound": 1.090444016456604,
+  "sizes": {
+    "galois_keys": 27,
+    "galois_keys_mib": 378.0325469970703,
+    "relin_key_mib": 14.001190185546875,
+    "input_ciphertext_kib": 1792.404296875,
+    "output_ciphertext_kib": 256.310546875,
+    "output_level": 0,
+    "plaintext_weights_f32_kib": 771.5,
+    "plaintext_query_f32_bytes": 3072
+  },
+  "setup": {
+    "keygen_ms": 451.808,
+    "weight_prep_ms": 69.752
+  },
+  "ditto_side": {
+    "encrypt": {
+      "n": 16,
+      "p50_ms": 2.350625,
+      "p95_ms": 2.37875,
+      "max_ms": 2.37875,
+      "mean_ms": 2.3528905625
+    },
+    "decrypt_decode_normalize": {
+      "n": 16,
+      "p50_ms": 0.132916,
+      "p95_ms": 0.174542,
+      "max_ms": 0.174542,
+      "mean_ms": 0.137005375
+    }
+  },
+  "miner_side_single_thread": {
+    "layer1_768x128": {
+      "n": 16,
+      "p50_ms": 123.457583,
+      "p95_ms": 127.657791,
+      "max_ms": 127.657791,
+      "mean_ms": 123.47694774999998
+    },
+    "gelu_poly": {
+      "n": 16,
+      "p50_ms": 40.261,
+      "p95_ms": 42.772167,
+      "max_ms": 42.772167,
+      "mean_ms": 40.2954558125
+    },
+    "layer2_128x768_residual": {
+      "n": 16,
+      "p50_ms": 19.724792,
+      "p95_ms": 20.504708,
+      "max_ms": 20.504708,
+      "mean_ms": 19.577973937500005
+    },
+    "total": {
+      "n": 16,
+      "p50_ms": 183.704625,
+      "p95_ms": 190.934666,
+      "max_ms": 190.934666,
+      "mean_ms": 183.35037749999998
+    }
+  },
+  "miner_throughput": {
+    "workers": 10,
+    "queries": 20,
+    "wall_ms": 421.928,
+    "queries_per_sec": 47.401377558926036
+  },
+  "plaintext_go_apply_us": 150.854375,
+  "parity": {
+    "vs_pilot_reference_min_cos": 0.9999999999999986,
+    "vs_pilot_reference_max_abs": 2.2884060507655235e-8,
+    "vs_go_float64_min_cos": 0.9999999999999986,
+    "vs_go_float64_max_abs": 1.3275705448151376e-10,
+    "pilot_bar_min_cos": 0.999999,
+    "pilot_bar_max_abs": 0.00001,
+    "passes_pilot_bar": true
+  }
+}

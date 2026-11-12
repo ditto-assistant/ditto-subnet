@@ -1,0 +1,45 @@
+{
+  "experiment": "sn473-tfhe-adapter",
+  "synthetic": true,
+  "host": {
+    "machine": "arm64",
+    "python": "3.11.15"
+  },
+  "library": "concrete-ml 1.9.0",
+  "n_bits": 6,
+  "rounding_threshold_bits": 6,
+  "float_torch_vs_pilot": [
+    0.9999998807907104,
+    2.2351741790771484e-08
+  ],
+  "compile_s": 0.6855077910004184,
+  "circuit": {
+    "size_of_secret_keys": 72712,
+    "size_of_bootstrap_keys": 470286336,
+    "size_of_keyswitch_keys": 353107968,
+    "size_of_inputs": 18432,
+    "size_of_outputs": 50337792,
+    "programmable_bootstrap_count": 1664,
+    "max_integer_bit_width": "unavailable: AttributeError",
+    "complexity": 1271898126720.0,
+    "p_error": 7.548438624329851e-13,
+    "global_p_error": 7.548438624329851e-13
+  },
+  "simulated_quantized_vs_pilot": [
+    0.998765538456635,
+    0.00511632146476456
+  ],
+  "keygen_s": 1.9496826670365408,
+  "execute_s_per_query": [
+    19.502516541047953,
+    20.256184207974
+  ],
+  "executed_vs_pilot": [
+    0.9989198003092739,
+    0.004670698246946723
+  ],
+  "pilot_bar": {
+    "min_cos": 0.999999,
+    "max_abs": 1e-05
+  }
+}

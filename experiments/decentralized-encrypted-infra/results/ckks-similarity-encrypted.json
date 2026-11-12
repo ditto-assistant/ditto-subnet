@@ -1,0 +1,77 @@
+{
+  "experiment": "sn473-ckks-similarity",
+  "synthetic": true,
+  "host": {
+    "go_version": "go1.27.3",
+    "goos": "darwin",
+    "goarch": "arm64",
+    "num_cpu": 14,
+    "gomaxprocs": 14,
+    "library": "github.com/tuneinsight/lattigo/v6 v6.2.0",
+    "started_at": "2026-11-12T02:07:46Z"
+  },
+  "mode": "encrypted",
+  "params": {
+    "log_n": 13,
+    "log_q": [
+      55,
+      40
+    ],
+    "log_p": [
+      61
+    ],
+    "log_default_scale": 40,
+    "log_qp": 155.99999980650813,
+    "max_level": 1,
+    "slots_used": 4096
+  },
+  "vectors_per_block": 4096,
+  "blocks": 3,
+  "sizes": {
+    "galois_keys": 62,
+    "galois_keys_mib": 46.51324462890625,
+    "query_ciphertext_kib": 256.326171875,
+    "score_ciphertext_kib": 128.310546875,
+    "block_plaintext_f32_mib": 12,
+    "block_held_by_miner_mib": 256.326171875,
+    "expansion_vs_f32": 21.360514322916668
+  },
+  "setup": {
+    "keygen_ms": 44.808,
+    "block_prep_ms_total": 1318.715
+  },
+  "ditto_side": {
+    "encrypt_query": {
+      "n": 8,
+      "p50_ms": 0.378834,
+      "p95_ms": 0.3885,
+      "max_ms": 0.3885,
+      "mean_ms": 0.379156375
+    },
+    "decrypt_scores_per_block": {
+      "n": 3,
+      "p50_ms": 0.121083,
+      "p95_ms": 0.13675,
+      "max_ms": 0.13675,
+      "mean_ms": 0.12540266666666666
+    }
+  },
+  "miner_per_block_single_thread": {
+    "n": 12,
+    "p50_ms": 119.683542,
+    "p95_ms": 135.015208,
+    "max_ms": 135.015208,
+    "mean_ms": 121.20233691666665
+  },
+  "miner_throughput": {
+    "workers": 10,
+    "block_evals": 20,
+    "wall_ms": 315.478,
+    "vectors_scored_per_sec": 259668.93953591943
+  },
+  "accuracy": {
+    "max_abs_score_err": 8.723930883247633e-9,
+    "top10_overlap": 1
+  },
+  "single_thread_ms_per_10k_vectors": 292.1961474609375
+}
