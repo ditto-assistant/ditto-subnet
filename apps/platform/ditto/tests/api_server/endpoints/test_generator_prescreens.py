@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import httpx
@@ -138,6 +139,30 @@ async def _enable(client: httpx.AsyncClient, **overrides: Any) -> None:
 
 
 class TestPrescreenBatches:
+    async def test_expired_batches_void_even_when_the_chain_is_unreadable(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The loop voids expired batches before it reads the chain, so a
+        chain outage never leaves a batch (and its panel tickets) open."""
+        chain = _install(app, session_maker)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        await _tick(session_maker)
+        chain.read_epoch_schedule = AsyncMock(side_effect=RuntimeError("rpc down"))
+        loop = GeneratorRoundLoop(app_state=app.state, session_maker=session_maker)
+        with pytest.raises(RuntimeError, match="rpc down"):
+            await loop.tick(
+                now=datetime.now(UTC) + PRESCREEN_TTL + timedelta(minutes=1)
+            )
+        [batch] = await _batches(session_maker)
+        assert batch.status == "void"
+
     async def test_a_batch_opens_from_the_queue_head_while_idle(
         self,
         app: FastAPI,

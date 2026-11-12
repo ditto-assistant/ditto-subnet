@@ -2942,10 +2942,11 @@ class GeneratorRoundLoop:
             # the competition off never strands an audit past its grace.
             for note in await self._settle_frontier(now):
                 actions.note(note)
+            # Expired pre-screens are voided first, whatever the mode and
+            # before any chain read, so a chain outage never strands a batch.
+            for note in await self._advance_prescreens(now, None):
+                actions.note(note)
             if resolved.settings.mode == "off":
-                # An expired pre-screen is voided whatever the mode.
-                for note in await self._advance_prescreens(now, None):
-                    actions.note(note)
                 self.schedule = GeneratorRoundSchedule(
                     mode="off", epochs_per_round=per, observed_at=now
                 )
