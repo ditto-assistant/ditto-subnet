@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.477.0 (2026-11-12)
+
+### Features
+
+- **platform,backroom**: Read generator source in Backroom (SN-474)
+  ([#3504](https://github.com/ditto-assistant/ditto-subnet/pull/3504),
+  [`f3540ac`](https://github.com/ditto-assistant/ditto-subnet/commit/f3540acd25b882602fef99d2c080c48c6d763829))
+
+
 ## v0.476.0 (2026-11-12)
 
 ### Features
