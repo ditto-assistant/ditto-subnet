@@ -478,6 +478,46 @@ class GeneratorRoundBenchContractPreview(RoundModel):
     advertised list, or v13 only when it advertised none)."""
 
 
+ChallengerQueueStatus = Literal[
+    "challenger", "counted", "in_flight", "owner_has_column", "waiting"
+]
+
+
+class GeneratorChallengerQueueEntry(RoundModel):
+    """One never-scored qualified miner generator in the challenger queue.
+
+    The public default generator is never in the queue: it only fills counted
+    columns no miner generator can fill.
+    """
+
+    queue_position: int | None
+    """1-based pick order; ``None`` while its column in an earlier round is in
+    flight (that round is already measuring it)."""
+    submission_id: UUID
+    miner_hotkey: str
+    owner_key: str
+    module: str
+    file_count: int
+    size_bytes: int
+    qualified_at: datetime | None
+    family: str
+    """The template family (one owner key, plus builds of one template under
+    other owners): the submission id of its earliest-qualified member."""
+    family_size: int
+    family_measured: int
+    """Family members already scored or holding a column in a round in
+    flight."""
+    family_position: int
+    """Measured family members plus the family's unmeasured members ahead of
+    this one; the queue orders by this first."""
+    status: ChallengerQueueStatus
+    """What a round opened now would do with it: a ``challenger`` or
+    ``counted`` column, skip it while ``in_flight``, skip it because its owner
+    already holds a column (``owner_has_column``), or leave it ``waiting``."""
+    column_id: str | None = None
+    in_flight_round: int | None = None
+
+
 class AdminGeneratorRoundPreview(RoundModel):
     """What a round opened now would freeze, and anything blocking it."""
 
@@ -489,6 +529,9 @@ class AdminGeneratorRoundPreview(RoundModel):
     blockers: list[str]
     skipped_panel_agents: list[GeneratorRoundSkippedAgent] = Field(default_factory=list)
     bench_contract: GeneratorRoundBenchContractPreview | None = None
+    challenger_queue: list[GeneratorChallengerQueueEntry] = Field(default_factory=list)
+    """Every never-scored qualified miner generator in pick order, with what
+    a round opened now would do with it."""
 
 
 class GeneratorRoundSkipView(RoundModel):

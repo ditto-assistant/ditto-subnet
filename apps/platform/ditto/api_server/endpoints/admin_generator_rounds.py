@@ -16,7 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -41,6 +41,8 @@ from ditto.api_models.generator_rounds import (
     AdminGeneratorRoundLeaseReleaseRequest,
     AdminGeneratorRoundListResponse,
     AdminGeneratorRoundPreview,
+    ChallengerQueueStatus,
+    GeneratorChallengerQueueEntry,
     GeneratorFrontierAuditDetail,
     GeneratorFrontierAuditListResponse,
     GeneratorFrontierAuditRuling,
@@ -61,6 +63,7 @@ from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_ath_rulings import ActorDep, actor_slug
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.generator_challenger_queue import QueueEntry
 from ditto.api_server.generator_competition import (
     InspectedUpload,
     UploadRejected,
@@ -89,6 +92,7 @@ from ditto.api_server.generator_rounds import (
     close_round,
     column_views,
     commitment_publication_views,
+    current_challenger_queue,
     expire_round_tickets,
     get_round,
     list_rounds,
@@ -249,6 +253,50 @@ async def admin_round_tick(
     return GeneratorRoundTickResponse(actions=actions.actions, schedule=loop.schedule)
 
 
+def _challenger_queue_view(
+    queue: list[QueueEntry], columns: list[dict[str, Any]]
+) -> list[GeneratorChallengerQueueEntry]:
+    """The challenger queue, each entry marked with what ``columns`` do."""
+    by_submission = {column["submission_id"]: column for column in columns}
+    owners = {column["owner_key"] for column in columns if not column["public_default"]}
+    view: list[GeneratorChallengerQueueEntry] = []
+    position = 0
+    for entry in queue:
+        row = entry.row
+        column = by_submission.get(str(row.submission_id))
+        if entry.in_flight_round is None:
+            position += 1
+        status: ChallengerQueueStatus
+        if column is not None:
+            status = "counted" if column["counted"] else "challenger"
+        elif entry.in_flight_round is not None:
+            status = "in_flight"
+        elif row.owner_key in owners:
+            status = "owner_has_column"
+        else:
+            status = "waiting"
+        view.append(
+            GeneratorChallengerQueueEntry(
+                queue_position=position if entry.in_flight_round is None else None,
+                submission_id=row.submission_id,
+                miner_hotkey=row.miner_hotkey,
+                owner_key=row.owner_key,
+                module=row.module,
+                file_count=row.file_count,
+                size_bytes=row.size_bytes,
+                qualified_at=row.qualified_at,
+                family=entry.family,
+                family_size=entry.family_size,
+                family_measured=entry.family_measured,
+                family_position=entry.family_position,
+                status=status,
+                column_id=column["column_id"] if column is not None else None,
+                in_flight_round=entry.in_flight_round,
+            )
+        )
+    return view
+
+
 @router.get("/rounds/preview", response_model=AdminGeneratorRoundPreview)
 async def admin_round_preview(
     request: Request, _admin: AdminDep, session: SessionDep
@@ -257,6 +305,7 @@ async def admin_round_preview(
     resolved = await load_settings(session)
     settings = resolved.settings
     columns = await select_columns(session, settings)
+    queue = await current_challenger_queue(session)
     frozen = await select_round_panel(session, settings)
     panel, skipped = frozen.panel, frozen.skipped_references
     qualified = int(
@@ -344,6 +393,7 @@ async def admin_round_preview(
             min_round_validators=contract.min_round_validators,
             scorer_grading_versions=list(contract.scorer_grading_versions),
         ),
+        challenger_queue=_challenger_queue_view(queue, columns),
     )
 
 

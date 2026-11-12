@@ -1615,6 +1615,85 @@ class TestChallengerQueue:
             for column in preview["columns"]
         ] == [(str(ids["top"]), True), (str(ids["low"]), False)]
 
+    async def test_template_families_share_the_challenger_queue(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Three owners' builds of one template no longer take both challenger
+        columns ahead of a distinct generator, and the preview shows the whole
+        queue with what a round would do with each entry."""
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=1, challenger_columns=2)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        layout = [
+            # name, owner, module, hours before now, scored
+            ("scored", "s", "example.com/scored", 6, True),
+            ("clone-a", "a", "example.com/clone", 5, False),
+            ("clone-b", "b", "example.com/clone", 4, False),
+            ("clone-c", "c", "example.com/clone", 3, False),
+            ("distinct", "x", "example.com/distinct", 2, False),
+            # Owner a's second generator: its family through the owner key.
+            ("second-a", "a", "example.com/other", 1, False),
+        ]
+        ids: dict[str, UUID] = {}
+        for name, owner, _, _, _ in layout:
+            ids[name] = await _seed_generator(
+                session_maker,
+                hotkey=f"5Gen-{name}",
+                owner=f"coldkey:{owner}",
+                salt=name,
+            )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for name, _, module, age, scored in layout:
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.module = module
+                row.qualified_at = now - timedelta(hours=age)
+                row.round_score = 0.3 if scored else None
+                row.round_scored_index = 1 if scored else None
+
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert [
+            (column["submission_id"], column["counted"])
+            for column in preview["columns"]
+        ] == [
+            (str(ids["scored"]), True),
+            (str(ids["clone-a"]), False),
+            (str(ids["distinct"]), False),
+        ]
+        queue = preview["challenger_queue"]
+        assert [
+            (
+                entry["submission_id"],
+                entry["queue_position"],
+                entry["status"],
+                entry["family_position"],
+            )
+            for entry in queue
+        ] == [
+            (str(ids["clone-a"]), 1, "challenger", 0),
+            (str(ids["distinct"]), 2, "challenger", 0),
+            (str(ids["clone-b"]), 3, "waiting", 1),
+            (str(ids["clone-c"]), 4, "waiting", 2),
+            (str(ids["second-a"]), 5, "owner_has_column", 3),
+        ]
+        clone_family = {
+            entry["family"]
+            for entry in queue
+            if entry["module"] != "example.com/distinct"
+        }
+        assert clone_family == {str(ids["clone-a"])}
+        assert {
+            entry["family_size"] for entry in queue if entry["family"] in clone_family
+        } == {4}
+        # The scored generator and the public default are never in the queue.
+        assert str(ids["scored"]) not in {entry["submission_id"] for entry in queue}
+
 
 class TestPanelFreshness:
     async def test_ineligible_ranked_agents_are_skipped_and_refilled_at_freeze(

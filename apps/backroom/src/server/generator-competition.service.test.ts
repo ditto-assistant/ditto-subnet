@@ -13,6 +13,7 @@ import { frontierRefusal } from './generator-competition.service'
 import {
   generatorFrontierAuditListSchema,
   generatorCompetitionSettingsSchema,
+  generatorRoundPreviewSchema,
   generatorRunDetailSchema,
 } from '../lib/generator-competition.schemas'
 
@@ -239,6 +240,14 @@ describe('generator competition MCP tools', () => {
     for (const cases of [7, 81]) {
       expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, cases_per_seed: cases }).success).toBe(false)
     }
+  })
+
+  it('reads a round preview from a Platform that predates the challenger queue', () => {
+    const preview = generatorRoundPreviewSchema.parse({
+      schedule: { mode: 'shadow', epochs_per_round: 4 }, columns: [], panel: [],
+      qualified_generators: 0, awaiting_qualification: 0, blockers: [],
+    })
+    expect(preview.challenger_queue).toEqual([])
   })
 
   it('refuses a run detail that serves seeds before the run reported', () => {
@@ -530,6 +539,19 @@ describe('generator competition MCP tools', () => {
             active_version: 14, bench_version: 13, reason: '2 validator(s) can run a 70-case round column at bench v14, below min_round_validators 3: rounds stay on v13 until a quorum can run v14',
             round_contracts: [13, 14], capable_validators: { 13: 3, 14: 2 }, previous_version: 13, min_round_validators: 3, scorer_grading_versions: [13, 14],
           },
+          challenger_queue: [
+            {
+              queue_position: 1, submission_id: SUBMISSION, miner_hotkey: '5Kin', owner_key: 'coldkey:kin',
+              module: 'kinbind', file_count: 46, size_bytes: 200_032, qualified_at: '2026-11-11T14:59:38Z',
+              family: SUBMISSION, family_size: 12, family_measured: 2, family_position: 2, status: 'waiting',
+            },
+            {
+              queue_position: null, submission_id: RUN, miner_hotkey: '5Dr', owner_key: 'coldkey:dr',
+              module: 'gen-v3h', file_count: 49, size_bytes: 486_590, qualified_at: '2026-11-11T23:35:47Z',
+              family: RUN, family_size: 1, family_measured: 1, family_position: 1, status: 'in_flight',
+              column_id: null, in_flight_round: 26114,
+            },
+          ],
         })
       }
       if (path.endsWith('/rounds/loop')) {
@@ -603,6 +625,10 @@ describe('generator competition MCP tools', () => {
             active_version: 14, bench_version: 13, round_contracts: [13, 14], capable_validators: { 13: 3, 14: 2 },
             previous_version: 13, min_round_validators: 3, scorer_grading_versions: [13, 14],
           },
+          challenger_queue: [
+            { submission_id: SUBMISSION, family_position: 2, status: 'waiting', column_id: null, in_flight_round: null },
+            { queue_position: null, status: 'in_flight', in_flight_round: 26114 },
+          ],
         })
       expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))
         .toMatchObject({ available: true, status: { ticks: 3 } })
