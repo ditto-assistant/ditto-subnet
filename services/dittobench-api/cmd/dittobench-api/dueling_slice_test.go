@@ -638,22 +638,22 @@ func duelingFixtureColumns() []protocol.DuelingColumnDetails {
 func TestDuelingCompositeMasksOnlyTheOwnerAndKeepsGatesOnDatagen(t *testing.T) {
 	half := scorer.DatagenHalf{Raw: 0.82, RawStderr: 0.021, Gate: 0.9}
 	cols := duelingFixtureColumns()
-	composite, stderr, err := duelingOrdinaryScore(half, cols, sliceTestOwner)
+	composite, stderr, err := duelingOrdinaryScore(protocol.DuelingMinBenchVersion, half, cols, sliceTestOwner)
 	if err != nil {
 		t.Fatal(err)
 	}
 	aggs := duelingAggregates(cols)
-	self := challenge.DuelingComposite(half.Raw, half.Gate, aggs, map[string]bool{sliceTestOwner: true})
+	self := challenge.DuelingComposite(challenge.DuelingWeightingForVersion(protocol.DuelingMinBenchVersion, half.Raw), half.Raw, half.Gate, aggs, map[string]bool{sliceTestOwner: true})
 	if composite != math.Round(self*1e6)/1e6 {
 		t.Fatalf("ordinary composite %v != self-masked %v", composite, self)
 	}
 	// The owner's column (a perfect 35/35) must not lift the owner's agent.
-	unmasked := challenge.DuelingComposite(half.Raw, half.Gate, aggs, nil)
+	unmasked := challenge.DuelingComposite(challenge.DuelingWeightingForVersion(protocol.DuelingMinBenchVersion, half.Raw), half.Raw, half.Gate, aggs, nil)
 	if !(unmasked > self) {
 		t.Fatalf("masking the owner's perfect column should lower the composite: masked %v unmasked %v", self, unmasked)
 	}
 	// An empty owner masks nothing: the public default columns always count.
-	if got, _, _ := duelingOrdinaryScore(half, cols, ""); got != math.Round(unmasked*1e6)/1e6 {
+	if got, _, _ := duelingOrdinaryScore(protocol.DuelingMinBenchVersion, half, cols, ""); got != math.Round(unmasked*1e6)/1e6 {
 		t.Fatalf("empty owner masked a column: %v vs %v", got, unmasked)
 	}
 	if stderr <= 0 {
@@ -663,12 +663,12 @@ func TestDuelingCompositeMasksOnlyTheOwnerAndKeepsGatesOnDatagen(t *testing.T) {
 	// the datagen gate in the report so the fold reproduces the composite.
 	slice := &duelingSlice{dataset: challenge.SliceDataset{SeasonID: sliceTestSeason, SeasonIndex: 3}, sha256: strings.Repeat("c", 64), ownerKey: sliceTestOwner}
 	v9 := &protocol.V9BaseDetails{AppliedGateFactorBPS: 5000}
-	details := duelingReportDetails(slice, half, nil, v9, cols)
+	details := duelingReportDetails(protocol.DuelingMinBenchVersion, slice, half, nil, v9, cols)
 	if details.DatagenGate != half.Gate*0.5 || details.DatagenRaw != half.Raw || details.ColumnWeight != protocol.DuelingColumnWeight {
 		t.Fatalf("details = %+v", details)
 	}
 	effective := float64((int64(math.Round(composite*1e6))*5000+5000)/10000) / 1e6
-	refold := challenge.DuelingComposite(details.DatagenRaw, details.DatagenGate, aggs, map[string]bool{details.OwnerKey: true})
+	refold := challenge.DuelingComposite(challenge.DuelingDetailsWeighting(*details), details.DatagenRaw, details.DatagenGate, aggs, map[string]bool{details.OwnerKey: true})
 	if math.Abs(refold-effective) > 1e-6 {
 		t.Fatalf("fold recomputes %v, report carries %v", refold, effective)
 	}
@@ -676,12 +676,60 @@ func TestDuelingCompositeMasksOnlyTheOwnerAndKeepsGatesOnDatagen(t *testing.T) {
 		t.Fatalf("details stderr %v vs reported %v", details.CompositeStderr, stderr*0.5)
 	}
 	// A token-efficiency multiplier joins the gate the same way.
-	scaled := duelingReportDetails(slice, half, &protocol.TokenEfficiency{Multiplier: 0.8}, v9, cols)
+	scaled := duelingReportDetails(protocol.DuelingMinBenchVersion, slice, half, &protocol.TokenEfficiency{Multiplier: 0.8}, v9, cols)
 	if scaled.DatagenGate != half.Gate*0.8*0.5 {
 		t.Fatalf("token-efficiency multiplier not carried: %v", scaled.DatagenGate)
 	}
-	if _, _, err := duelingOrdinaryScore(half, cols[:4], sliceTestOwner); err == nil {
+	if _, _, err := duelingOrdinaryScore(protocol.DuelingMinBenchVersion, half, cols[:4], sliceTestOwner); err == nil {
 		t.Fatal("a report with four columns was scored")
+	}
+}
+
+// Bench 19 weights each counted column at 0.15 and scales the whole composite
+// by the datagen qualifier; the report carries both, so the fold recomputes
+// the composite, and the stderr scales by the qualifier like the gate.
+func TestDuelingV19WeightingAndQualifier(t *testing.T) {
+	cols := duelingFixtureColumns()
+	aggs := duelingAggregates(cols)
+	slice := &duelingSlice{dataset: challenge.SliceDataset{SeasonID: sliceTestSeason, SeasonIndex: 3}, sha256: strings.Repeat("c", 64), ownerKey: sliceTestOwner}
+	for _, raw := range []float64{0.6, 0.92} {
+		half := scorer.DatagenHalf{Raw: raw, RawStderr: 0.021, Gate: 0.9}
+		composite, stderr, err := duelingOrdinaryScore(protocol.BenchVersionV19, half, cols, sliceTestOwner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := math.Min(1, raw/0.8)
+		w := 0.15
+		inner := raw
+		for _, c := range aggs {
+			if c.OwnerKey == sliceTestOwner {
+				continue
+			}
+			mean := 0.0
+			if c.N > 0 {
+				mean = c.Sum / float64(c.N)
+			}
+			inner += w * (mean - raw)
+		}
+		if want := 0.9 * q * inner; math.Abs(composite-want) > 1e-6 {
+			t.Fatalf("datagen %v: v19 composite %v, want %v", raw, composite, want)
+		}
+		details := duelingReportDetails(protocol.BenchVersionV19, slice, half, nil, &protocol.V9BaseDetails{AppliedGateFactorBPS: 10000}, cols)
+		if details.ColumnWeight != 0.15 || details.DatagenQualifier == nil || *details.DatagenQualifier != q || details.DatagenGate != half.Gate {
+			t.Fatalf("datagen %v: details = %+v", raw, details)
+		}
+		refold := challenge.DuelingComposite(challenge.DuelingDetailsWeighting(*details), details.DatagenRaw, details.DatagenGate, aggs, map[string]bool{details.OwnerKey: true})
+		if math.Abs(refold-composite) > 1e-6 || math.Abs(details.CompositeStderr-stderr) > 1e-6 {
+			t.Fatalf("datagen %v: fold %v/%v, report %v/%v", raw, refold, details.CompositeStderr, composite, stderr)
+		}
+	}
+	// Bench 18 reports carry no qualifier and weight 0.1.
+	v18 := duelingReportDetails(protocol.BenchVersionV18, slice, scorer.DatagenHalf{Raw: 0.6, RawStderr: 0.021, Gate: 0.9}, nil, nil, cols)
+	if v18.ColumnWeight != 0.1 || v18.DatagenQualifier != nil {
+		t.Fatalf("bench 18 details = %+v", v18)
+	}
+	if raw, _ := json.Marshal(v18); strings.Contains(string(raw), "datagen_qualifier") {
+		t.Fatal("a bench 18 report must not carry datagen_qualifier")
 	}
 }
 
@@ -689,13 +737,28 @@ func TestDuelingCompositeMasksOnlyTheOwnerAndKeepsGatesOnDatagen(t *testing.T) {
 // (packages/ditto-screening-protocol tests/test_dueling.py) parses with
 // DuelingReport and refolds bit for bit.
 func TestDuelingReportGolden(t *testing.T) {
-	half := scorer.DatagenHalf{Raw: 0.8123456789, RawStderr: 0.0173, Gate: 0.96}
+	// Bench 16 is the pre-v19 wire, unchanged; bench 19 adds the qualifier,
+	// below 1 here (a datagen half under the 0.8 floor).
+	for _, tc := range []struct {
+		benchVersion int
+		raw          float64
+		file         string
+	}{
+		{protocol.DuelingMinBenchVersion, 0.8123456789, "dueling_report_golden.json"},
+		{protocol.BenchVersionV19, 0.7123456789, "dueling_report_golden_v19.json"},
+	} {
+		t.Run(tc.file, func(t *testing.T) { checkDuelingReportGolden(t, tc.benchVersion, tc.raw, tc.file) })
+	}
+}
+
+func checkDuelingReportGolden(t *testing.T, benchVersion int, raw float64, file string) {
+	half := scorer.DatagenHalf{Raw: raw, RawStderr: 0.0173, Gate: 0.96}
 	cols := duelingFixtureColumns()
 	slice := &duelingSlice{
 		dataset: challenge.SliceDataset{SeasonID: sliceTestSeason, SeasonIndex: 26119},
 		sha256:  "3b1f4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70819", ownerKey: sliceTestOwner,
 	}
-	details := duelingReportDetails(slice, half, &protocol.TokenEfficiency{Multiplier: 1}, &protocol.V9BaseDetails{AppliedGateFactorBPS: 10000}, cols)
+	details := duelingReportDetails(benchVersion, slice, half, &protocol.TokenEfficiency{Multiplier: 1}, &protocol.V9BaseDetails{AppliedGateFactorBPS: 10000}, cols)
 	aggs := duelingAggregates(cols)
 	golden := struct {
 		Details         *protocol.DuelingDetails `json:"details"`
@@ -706,8 +769,8 @@ func TestDuelingReportGolden(t *testing.T) {
 		CompositeStderr float64                  `json:"composite_stderr"`
 	}{
 		Details:         details,
-		SelfComposite:   challenge.DuelingComposite(details.DatagenRaw, details.DatagenGate, aggs, map[string]bool{sliceTestOwner: true}),
-		PairComposite:   challenge.DuelingComposite(details.DatagenRaw, details.DatagenGate, aggs, map[string]bool{sliceTestOwner: true, "coldkey:owner-c0": true}),
+		SelfComposite:   challenge.DuelingComposite(challenge.DuelingDetailsWeighting(*details), details.DatagenRaw, details.DatagenGate, aggs, map[string]bool{sliceTestOwner: true}),
+		PairComposite:   challenge.DuelingComposite(challenge.DuelingDetailsWeighting(*details), details.DatagenRaw, details.DatagenGate, aggs, map[string]bool{sliceTestOwner: true, "coldkey:owner-c0": true}),
 		PairMask:        []string{sliceTestOwner, "coldkey:owner-c0"},
 		DatagenStderr:   half.RawStderr,
 		CompositeStderr: details.CompositeStderr,
@@ -717,7 +780,7 @@ func TestDuelingReportGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = append(got, '\n')
-	path := filepath.Join("testdata", "dueling_report_golden.json")
+	path := filepath.Join("testdata", file)
 	if *updateDuelingGolden {
 		if err := os.WriteFile(path, got, 0o644); err != nil {
 			t.Fatal(err)
@@ -736,6 +799,10 @@ func TestDuelingReportGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantKeys := []string{"column_weight", "columns", "composite_stderr", "datagen_gate", "datagen_raw", "owner_key", "season_id", "season_index", "slice_sha256"}
+	if protocol.DuelingHeldOutBenchVersion(benchVersion) {
+		wantKeys = append(wantKeys, "datagen_qualifier")
+		slices.Sort(wantKeys)
+	}
 	gotKeys := make([]string, 0, len(keys))
 	for k := range keys {
 		gotKeys = append(gotKeys, k)
@@ -854,7 +921,7 @@ func TestRunSizeJobRunsTheSliceAfterTheDatagenHalf(t *testing.T) {
 		t.Fatalf("details.priced_cost = %+v", report.Details.PricedCost)
 	}
 	aggs := duelingAggregates(d.Columns)
-	self := challenge.DuelingComposite(d.DatagenRaw, d.DatagenGate, aggs, map[string]bool{d.OwnerKey: true})
+	self := challenge.DuelingComposite(challenge.DuelingDetailsWeighting(*d), d.DatagenRaw, d.DatagenGate, aggs, map[string]bool{d.OwnerKey: true})
 	if math.Abs(report.Composite-self) > 1e-6 {
 		t.Fatalf("composite %v is not the self-masked dueling composite %v", report.Composite, self)
 	}

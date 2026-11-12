@@ -32,7 +32,12 @@ from ditto.validator.weights import (
     select_champion,
 )
 from ditto.validator.worker import _ledger_crown_gate
-from ditto_screening_protocol.dueling import DuelingColumnAggregate, DuelingReport
+from ditto_screening_protocol.dueling import (
+    DuelingColumnAggregate,
+    DuelingReport,
+    DuelingWeighting,
+    is_held_out_bench_version,
+)
 
 _CASES = json.loads(
     (Path(__file__).resolve().parents[1] / "fixtures/crown_gate_cases.json").read_text()
@@ -45,7 +50,11 @@ _LEGACY_CASES = [case for case in _CASES if case.get("bench_version", 14) < 16]
 def _dueling_report(
     case: dict[str, Any], spec: dict[str, Any], owner: str, season: str
 ) -> DuelingReport:
-    """A fixture report: 35 cases per column at the column's mean score."""
+    """A fixture report: 35 cases per column at the column's mean score,
+    weighted for the case's bench version (w = 0.15 and the qualifier from
+    v19)."""
+    version = case["bench_version"]
+    weighting = DuelingWeighting.for_version(version, spec["datagen_raw"])
     return DuelingReport(
         season_id=season,
         season_index=1,
@@ -53,7 +62,10 @@ def _dueling_report(
         owner_key=owner,
         datagen_raw=spec["datagen_raw"],
         datagen_gate=1.0,
-        column_weight=0.1,
+        column_weight=weighting.column_weight,
+        datagen_qualifier=(
+            weighting.qualifier if is_held_out_bench_version(version) else None
+        ),
         columns=[
             DuelingColumnAggregate(
                 column_id=f"c{index}",

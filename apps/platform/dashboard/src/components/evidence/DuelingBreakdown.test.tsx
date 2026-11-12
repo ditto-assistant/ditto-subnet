@@ -70,6 +70,25 @@ describe("DuelingBreakdownPanel", () => {
     expect(container.querySelector('[data-dueling-column="c2"]')?.textContent).toContain("v15");
   });
 
+  it("shows the v19 datagen qualifier only when the run carries one", () => {
+    const { container } = render(() => (
+      <DuelingBreakdownPanel
+        breakdown={{
+          ...breakdown,
+          formula: "gate x q x ((1 - w x |U|) x datagen + w x sum col)",
+          column_weight: 0.15,
+          datagen_qualifier: 0.75,
+        }}
+      />
+    ));
+    expect(container.querySelector('[data-dueling-metric="datagen_qualifier"]')?.textContent).toBe(
+      "0.7500",
+    );
+    cleanup();
+    const legacy = render(() => <DuelingBreakdownPanel breakdown={breakdown} />);
+    expect(legacy.container.querySelector('[data-dueling-metric="datagen_qualifier"]')).toBeNull();
+  });
+
   it("renders nothing below v16", () => {
     const { container } = render(() => <DuelingBreakdownPanel breakdown={undefined} />);
     expect(container.querySelector("[data-dueling-breakdown]")).toBeNull();

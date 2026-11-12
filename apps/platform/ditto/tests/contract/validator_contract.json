@@ -1804,6 +1804,19 @@
             "minimum": 0,
             "type": "number"
           },
+          "datagen_qualifier": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "datagen_raw": {
             "maximum": 1,
             "minimum": 0,
@@ -4179,6 +4192,19 @@
             "maximum": 1,
             "minimum": 0,
             "type": "number"
+          },
+          "datagen_qualifier": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "datagen_raw": {
             "maximum": 1,

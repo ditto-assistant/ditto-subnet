@@ -242,6 +242,21 @@ class LocalRehearsalTest(unittest.TestCase):
         self.assertIn("mean 0.000 over 0 cases", summary)
         self.assertIn("(substituted)", summary)
         self.assertIn("PUBLIC default generator", summary)
+        self.assertNotIn("datagen_qualifier", summary)
+        v19 = LOCAL.format_dueling_summary(
+            {
+                "details": {
+                    "dueling": {
+                        "datagen_raw": 0.6,
+                        "column_weight": 0.15,
+                        "datagen_qualifier": 0.75,
+                        "columns": [],
+                    }
+                }
+            }
+        )
+        self.assertIn("column_weight:       0.150", v19)
+        self.assertIn("datagen_qualifier:   0.750", v19)
         nulls = LOCAL.format_dueling_summary(
             {
                 "details": {

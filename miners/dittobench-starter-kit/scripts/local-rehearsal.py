@@ -596,6 +596,14 @@ def format_dueling_summary(report: dict[str, Any]) -> str:
         f"datagen_raw:         {float(dueling.get('datagen_raw') or 0):.3f}",
         f"datagen_gate:        {float(dueling.get('datagen_gate') or 0):.3f}",
         f"column_weight:       {float(dueling.get('column_weight') or 0):.3f}",
+    ]
+    if dueling.get("datagen_qualifier") is not None:
+        # Bench 19+: min(1, datagen_raw / 0.8) scales the whole composite.
+        lines.append(
+            f"datagen_qualifier:   {float(dueling['datagen_qualifier']):.3f}"
+            " (bench 19+: min(1, datagen_raw / 0.8))"
+        )
+    lines += [
         f"composite_stderr:    {float(dueling.get('composite_stderr') or 0):.3f}",
     ]
     for column in dueling.get("columns") or []:

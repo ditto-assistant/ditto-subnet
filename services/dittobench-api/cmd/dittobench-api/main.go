@@ -2614,7 +2614,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	}
 	if slice != nil {
 		datagenHalf = applyPricedCostToHalf(scorer.DatagenHalfForVersion(perCase, req.BenchVersion), pricedCost)
-		composite, stderr, err := duelingOrdinaryScore(datagenHalf, sliceResult.columns, slice.ownerKey)
+		composite, stderr, err := duelingOrdinaryScore(req.BenchVersion, datagenHalf, sliceResult.columns, slice.ownerKey)
 		if err != nil {
 			// CheckDuelingColumns names only column ids and statistics, never
 			// case text, so the cause is safe to persist.
@@ -2777,7 +2777,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	s.dispatchRouterShadow(ctx, harnessURL, req, runStart)
 
 	if slice != nil {
-		report.Details.Dueling = duelingReportDetails(slice, datagenHalf, report.Details.TokenEfficiency, report.Details.V9Base, sliceResult.columns)
+		report.Details.Dueling = duelingReportDetails(req.BenchVersion, slice, datagenHalf, report.Details.TokenEfficiency, report.Details.V9Base, sliceResult.columns)
 		log.Printf("run %s: dueling slice %s season=%s cases=%d datagen_raw=%.4f datagen_gate=%.4f",
 			runID, slice.sha256, slice.dataset.SeasonID, len(sliceResult.rows), datagenHalf.Raw, report.Details.Dueling.DatagenGate)
 	}

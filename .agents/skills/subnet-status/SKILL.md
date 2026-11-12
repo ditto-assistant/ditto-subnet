@@ -77,6 +77,13 @@ Add `--json` for the raw snapshot to script against.
   current epoch pin still pays it, and it keeps its pinned rank until the next
   pin. `expired` means it is listed unranked with its last valid score. It
   ranks again only once it has new scores from the current or previous season.
+- **The dueling split depends on the bench version that scores.** On bench
+  16-18 the composite is `0.5 x datagen + 0.1 x each counted generator column`.
+  Bench 19 is staged, not active, and changes it to `0.25 x datagen + 0.15 x
+  each column`, times a datagen qualifier `min(1, datagen / 0.8)`. A score's
+  `dueling_breakdown` shows its own `column_weight` and, from v19,
+  `datagen_qualifier`. Read the active version from `bench_config` before
+  quoting either split.
 - **The payout curve and the split are operator settings.** They can change
   between epochs. Re-run this before relying on a number. Changes to the
   curve take effect only once every validator runs the protocol that reads it.

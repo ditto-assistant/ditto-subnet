@@ -1108,6 +1108,49 @@ class TestDuelingLease:
                     owner_key="coldkey:a",
                 )
 
+    def test_score_evidence_is_weighted_for_the_ticket_version(self) -> None:
+        """Bench v19 stores its 0.15 weight and datagen qualifier; a block
+        weighted for another version than the ticket's is refused."""
+        season_id = uuid4()
+        sha = "ab" * 32
+        v16 = _report(season_id, sha)
+        v19 = {
+            "dueling": {
+                **v16["dueling"],
+                "datagen_raw": 0.6,
+                "column_weight": 0.15,
+                "datagen_qualifier": 0.6 / 0.8,
+            }
+        }
+        _, stored = dueling_score_evidence(
+            v19,
+            bench_version=19,
+            season_id=season_id,
+            slice_sha256=sha,
+            owner_key="coldkey:a",
+        )
+        assert stored is not None
+        assert stored["column_weight"] == 0.15
+        assert stored["datagen_qualifier"] == 0.6 / 0.8
+        # A v18 row stores no qualifier key at all: its bytes are unchanged.
+        _, legacy = dueling_score_evidence(
+            v16,
+            bench_version=18,
+            season_id=season_id,
+            slice_sha256=sha,
+            owner_key="coldkey:a",
+        )
+        assert legacy is not None and "datagen_qualifier" not in legacy
+        for details, version in ((v16, 19), (v19, 18)):
+            with pytest.raises(DuelingEvidenceRejected, match="weighting"):
+                dueling_score_evidence(
+                    details,
+                    bench_version=version,
+                    season_id=season_id,
+                    slice_sha256=sha,
+                    owner_key="coldkey:a",
+                )
+
 
 class TestShadowCanarySeasons:
     async def test_a_canary_version_gets_shadow_seasons_and_slices(

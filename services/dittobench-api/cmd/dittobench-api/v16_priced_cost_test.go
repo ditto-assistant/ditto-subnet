@@ -64,20 +64,20 @@ func TestPricedCostRidesInTheDuelingGate(t *testing.T) {
 	if priced.Raw != half.Raw || priced.Gate != half.Gate*scoregates.PricedCostMultiplier(summary) {
 		t.Fatalf("priced half = %+v", priced)
 	}
-	composite, _, err := duelingOrdinaryScore(priced, cols, sliceTestOwner)
+	composite, _, err := duelingOrdinaryScore(protocol.DuelingMinBenchVersion, priced, cols, sliceTestOwner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	unpriced, _, _ := duelingOrdinaryScore(half, cols, sliceTestOwner)
+	unpriced, _, _ := duelingOrdinaryScore(protocol.DuelingMinBenchVersion, half, cols, sliceTestOwner)
 	if math.Abs(composite-unpriced*0.6737) > 2e-6 {
 		t.Fatalf("composite %v is not the unpriced %v x 0.6737", composite, unpriced)
 	}
 	slice := &duelingSlice{dataset: challenge.SliceDataset{SeasonID: sliceTestSeason, SeasonIndex: 3}, sha256: strings.Repeat("c", 64), ownerKey: sliceTestOwner}
-	details := duelingReportDetails(slice, priced, nil, &protocol.V9BaseDetails{AppliedGateFactorBPS: 10000}, cols)
+	details := duelingReportDetails(protocol.DuelingMinBenchVersion, slice, priced, nil, &protocol.V9BaseDetails{AppliedGateFactorBPS: 10000}, cols)
 	if details.DatagenGate != priced.Gate || details.DatagenGate > 1 || details.DatagenGate <= 0 {
 		t.Fatalf("datagen_gate = %v", details.DatagenGate)
 	}
-	refold := challenge.DuelingComposite(details.DatagenRaw, details.DatagenGate, duelingAggregates(details.Columns), map[string]bool{details.OwnerKey: true})
+	refold := challenge.DuelingComposite(challenge.DuelingDetailsWeighting(*details), details.DatagenRaw, details.DatagenGate, duelingAggregates(details.Columns), map[string]bool{details.OwnerKey: true})
 	if math.Abs(refold-composite) > 1e-6 {
 		t.Fatalf("fold recomputes %v, report carries %v", refold, composite)
 	}

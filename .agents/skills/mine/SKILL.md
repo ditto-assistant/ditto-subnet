@@ -62,6 +62,13 @@ nothing on chain until the operator activates it
 run is a 175-case datagen half plus a 175-case generator slice (5 columns x 35,
 `composite = gate x (0.5 x datagen + 0.1 x each unmasked column)`; a column
 your own coldkey owns is masked and its 10% returns to the datagen half).
+Bench 19 (staged, **not active**) changes the split: each column weighs 0.15
+(the datagen half 25%), and a datagen qualifier `min(1, datagen / 0.8)` scales
+the whole composite, so skipping the public bench still costs you. Tool calling
+then carries about 12.5% of the composite. Check `subnet-status` for which
+version actually scores before tuning for either split
+([dueling-bench.md](../../../research/dittobench-datagen/docs/dueling-bench.md)
+section 9).
 `uv run ditto practice --bench-version 16` rehearses it: the runner builds a
 local slice with `challenge-scorer reproduce-slice` from the **public default
 generator only** (`miners/dittobench-generator-starter-kit` in all five

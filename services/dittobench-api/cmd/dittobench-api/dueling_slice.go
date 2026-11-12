@@ -355,10 +355,13 @@ func duelingSelfMask(ownerKey string) map[string]bool {
 }
 
 // duelingOrdinaryScore is the composite the datagen-only gate stack (v9 score
-// gates) then scales: gate_datagen x ((1 - w x |U|) x datagen + w x sum col_c)
-// with the composite gate alone, quantized to micros like every ordinary
-// composite. Every gate input is a datagen case: the generator slice lowers a
-// score through its column means, never through a gate.
+// gates) then scales: gate_datagen x q x ((1 - w x |U|) x datagen + w x sum
+// col_c) with the composite gate alone, quantized to micros like every
+// ordinary composite. w and q are the bench version's weighting
+// (challenge.DuelingWeightingForVersion: from bench 19 w = 0.15 and the datagen
+// qualifier q = min(1, datagen / 0.8)). Every gate input is a datagen case: the
+// generator slice lowers a score through its column means, never through a
+// gate.
 //
 // The stderr is deliberately at the composite gate only, like the composite:
 // applyV9BaseEvidence then scales both by the applied v9 factor
@@ -366,14 +369,15 @@ func duelingSelfMask(ownerKey string) map[string]bool {
 // signed effective_stderr_micros. DuelingCompositeStderr is linear in the
 // gate, so the result matches details.dueling.composite_stderr (computed with
 // the post-v9 gate) to within micro rounding.
-func duelingOrdinaryScore(half scorer.DatagenHalf, columns []protocol.DuelingColumnDetails, ownerKey string) (composite, stderr float64, err error) {
+func duelingOrdinaryScore(benchVersion int, half scorer.DatagenHalf, columns []protocol.DuelingColumnDetails, ownerKey string) (composite, stderr float64, err error) {
 	aggs := duelingAggregates(columns)
 	if err := challenge.CheckDuelingColumns(aggs); err != nil {
 		return 0, 0, err
 	}
+	weighting := challenge.DuelingWeightingForVersion(benchVersion, half.Raw)
 	mask := duelingSelfMask(ownerKey)
-	composite = challenge.DuelingComposite(half.Raw, half.Gate, aggs, mask)
-	stderr = challenge.DuelingCompositeStderr(half.RawStderr, half.Gate, aggs, mask)
+	composite = challenge.DuelingComposite(weighting, half.Raw, half.Gate, aggs, mask)
+	stderr = challenge.DuelingCompositeStderr(weighting, half.RawStderr, half.Gate, aggs, mask)
 	return math.Round(composite*1e6) / 1e6, math.Round(stderr*1e6) / 1e6, nil
 }
 
@@ -383,10 +387,13 @@ func duelingOrdinaryScore(half scorer.DatagenHalf, columns []protocol.DuelingCol
 // applyPricedCostToHalf),
 // the token-efficiency multiplier (always 1 under the v7+ quality-only
 // contract, carried so the identity holds by construction) and, from v9, the
-// applied score-gate factor of the signed base evidence. With it
-// the validator fold recomputes the composite under any owner mask; under the
-// self mask it reproduces the reported composite to within its micro rounding.
-func duelingReportDetails(slice *duelingSlice, half scorer.DatagenHalf, efficiency *protocol.TokenEfficiency, v9 *protocol.V9BaseDetails, columns []protocol.DuelingColumnDetails) *protocol.DuelingDetails {
+// applied score-gate factor of the signed base evidence. column_weight is the
+// bench version's column weight, and from bench 19 datagen_qualifier carries
+// the qualifier apart from the gate (absent below bench 19, so those reports
+// are unchanged). With them the validator fold recomputes the composite under
+// any owner mask; under the self mask it reproduces the reported composite to
+// within its micro rounding.
+func duelingReportDetails(benchVersion int, slice *duelingSlice, half scorer.DatagenHalf, efficiency *protocol.TokenEfficiency, v9 *protocol.V9BaseDetails, columns []protocol.DuelingColumnDetails) *protocol.DuelingDetails {
 	gate := half.Gate
 	if efficiency != nil {
 		gate = gate * efficiency.Multiplier
@@ -395,17 +402,23 @@ func duelingReportDetails(slice *duelingSlice, half scorer.DatagenHalf, efficien
 		gate = gate * (float64(v9.AppliedGateFactorBPS) / float64(scoregates.BasisPointScale))
 	}
 	aggs := duelingAggregates(columns)
-	return &protocol.DuelingDetails{
+	weighting := challenge.DuelingWeightingForVersion(benchVersion, half.Raw)
+	details := &protocol.DuelingDetails{
 		SeasonID:        slice.dataset.SeasonID,
 		SeasonIndex:     slice.dataset.SeasonIndex,
 		SliceSHA256:     slice.sha256,
 		OwnerKey:        slice.ownerKey,
 		DatagenRaw:      half.Raw,
 		DatagenGate:     gate,
-		ColumnWeight:    protocol.DuelingColumnWeight,
+		ColumnWeight:    weighting.ColumnWeight,
 		Columns:         columns,
-		CompositeStderr: challenge.DuelingCompositeStderr(half.RawStderr, gate, aggs, duelingSelfMask(slice.ownerKey)),
+		CompositeStderr: challenge.DuelingCompositeStderr(weighting, half.RawStderr, gate, aggs, duelingSelfMask(slice.ownerKey)),
 	}
+	if protocol.DuelingHeldOutBenchVersion(benchVersion) {
+		q := weighting.Qualifier
+		details.DatagenQualifier = &q
+	}
+	return details
 }
 
 // relayDatagenInterval is a dueling run's relay accounting up to the

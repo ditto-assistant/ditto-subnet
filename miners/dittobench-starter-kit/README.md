@@ -861,7 +861,11 @@ produces a container serving that protocol on :8080.
 > profile, with connector tools that no longer say whether they are linked)
 > plus a 175-case generator slice, 5 columns of 35 cases from the top
 > generator-competition miners, scored as one composite
-> (`0.5 x datagen + 0.1 per column`). Slice cases reach your harness as
+> (`0.5 x datagen + 0.1 per column`). Bench v19, staged and not active,
+> changes the split to `0.25 x datagen + 0.15 per column`, times a datagen
+> qualifier `min(1, datagen / 0.8)` so the public half cannot be skipped
+> ([dueling-bench.md](../../research/dittobench-datagen/docs/dueling-bench.md)
+> section 9). Slice cases reach your harness as
 > ordinary memory `/seed` and `/run` calls. This kit accepts `bench_version` 16
 > on `/run`. Rehearse it locally with
 > `uv run ditto practice --bench-version 16`: the rehearsal builds a local slice

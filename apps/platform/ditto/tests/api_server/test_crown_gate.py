@@ -33,7 +33,12 @@ from ditto.api_server.koth import (
     project_koth,
 )
 from ditto.api_server.ledger_pin import served_crown_gate
-from ditto_screening_protocol.dueling import DuelingColumnAggregate, DuelingReport
+from ditto_screening_protocol.dueling import (
+    DuelingColumnAggregate,
+    DuelingReport,
+    DuelingWeighting,
+    is_held_out_bench_version,
+)
 
 _FIXTURE = (
     Path(__file__).resolve().parents[5] / "ditto/tests/fixtures/crown_gate_cases.json"
@@ -48,6 +53,8 @@ def _dueling_report(
     case: dict[str, Any], spec: dict[str, Any], owner: str, season: str
 ) -> DuelingReport:
     """Mirror of the validator test's fixture report builder."""
+    version = case["bench_version"]
+    weighting = DuelingWeighting.for_version(version, spec["datagen_raw"])
     return DuelingReport(
         season_id=season,
         season_index=1,
@@ -55,7 +62,10 @@ def _dueling_report(
         owner_key=owner,
         datagen_raw=spec["datagen_raw"],
         datagen_gate=1.0,
-        column_weight=0.1,
+        column_weight=weighting.column_weight,
+        datagen_qualifier=(
+            weighting.qualifier if is_held_out_bench_version(version) else None
+        ),
         columns=[
             DuelingColumnAggregate(
                 column_id=f"c{index}",
