@@ -29,6 +29,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ditto.api_models.admin_quarantine import (
+    AdminOpaqueBlobEntry,
+    AdminSourceFileEntry,
+    AdminSourceLine,
+    AdminSourceSearchMatch,
+)
 from ditto.api_models.name_claim import PublicNameHandle
 
 GENERATOR_SETTINGS_SCOPE = "*"
@@ -772,6 +778,56 @@ class AdminGeneratorSubmissionDetail(GeneratorModel):
 class AdminGeneratorSubmissionListResponse(GeneratorModel):
     submissions: list[GeneratorSubmissionSummary]
     counts_by_status: dict[str, int]
+
+
+class AdminGeneratorSourceListing(GeneratorModel):
+    """Bounded file inventory of one generator's stored source archive."""
+
+    submission_id: UUID
+    source_sha256: str
+    file_count: int
+    files: list[AdminSourceFileEntry]
+    opaque_blobs: list[AdminOpaqueBlobEntry]
+    opaque_total: int
+    """Total unreadable members found; ``opaque_blobs`` shows at most 128."""
+
+    truncated: bool
+
+
+class AdminGeneratorSourceExcerpt(GeneratorModel):
+    """A bounded line range from one file of a generator's source archive."""
+
+    submission_id: UUID
+    source_sha256: str
+    path: str
+    total_lines: int
+    start_line: int
+    end_line: int
+    lines: list[AdminSourceLine]
+
+
+class AdminGeneratorSourceSearchResult(GeneratorModel):
+    """Regex/literal hits across one generator's readable source files."""
+
+    submission_id: UUID
+    source_sha256: str
+    pattern: str
+    mode: Literal["regex", "literal"]
+    path_glob: str | None = None
+    matches: list[AdminSourceSearchMatch]
+    match_count: int
+    """Matches the scan found. A lower bound when ``truncated``."""
+
+    returned: int
+    limit: int
+    offset: int
+    has_more: bool
+    files_searched: int
+    files_matched: int
+    opaque_skipped: int
+    """Members never searched because they are binary or oversized."""
+
+    truncated: bool
 
 
 class GeneratorProbeEpochView(GeneratorModel):

@@ -198,6 +198,11 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // A search returns the matching source lines themselves, so it discloses
   // exactly what an excerpt read does and gates identically.
   ['search_screening_source', BACKROOM_ARTIFACT_SCOPE],
+  // Generator source is miner-submitted code too, read through the same
+  // bounded inspector, so its manifest, excerpts and search gate the same.
+  ['list_generator_source_files', BACKROOM_ARTIFACT_SCOPE],
+  ['read_generator_source_file', BACKROOM_ARTIFACT_SCOPE],
+  ['search_generator_source', BACKROOM_ARTIFACT_SCOPE],
   // Copy-review diffs render miner source from two submissions side by side,
   // so they gate on the same dedicated artifact scope.
   ['get_copy_review_source_diff', BACKROOM_ARTIFACT_SCOPE],

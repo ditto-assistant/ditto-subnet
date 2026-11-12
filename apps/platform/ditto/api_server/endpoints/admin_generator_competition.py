@@ -4,18 +4,21 @@ Settings are append-only, whole-object revisions guarded by
 ``expected_revision`` and an exact confirmation phrase naming the mode.
 Submission and qualification-run detail expose the evaluation (build,
 per-seed validation, determinism, probe) and its outcome. Generator source is
-never served, a run's seeds are revealed only after it finished, and probe
-seeds are never served at all. Round control lives in
-``admin_generator_rounds``.
+served only through the bounded, audited source reads (manifest, line range,
+search), never in submission or run detail; a run's seeds are revealed only
+after it finished, and probe seeds are never served at all. Round control
+lives in ``admin_generator_rounds``.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +36,9 @@ from ditto.api_models.generator import (
     AdminGeneratorScorerStatus,
     AdminGeneratorSettingsRequest,
     AdminGeneratorSettingsResponse,
+    AdminGeneratorSourceExcerpt,
+    AdminGeneratorSourceListing,
+    AdminGeneratorSourceSearchResult,
     AdminGeneratorSubmissionActionRequest,
     AdminGeneratorSubmissionDetail,
     AdminGeneratorSubmissionListResponse,
@@ -44,6 +50,7 @@ from ditto.api_models.generator import (
     GeneratorSettingsRevision,
     generator_settings_confirmation,
 )
+from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.generator_competition import (
@@ -66,6 +73,14 @@ from ditto.api_server.generator_scorer_capability import (
     live_scorer,
     refusal,
 )
+from ditto.api_server.source_inspect import (
+    MAX_READ_LINES,
+    MAX_SEARCH_CONTEXT,
+    MAX_SEARCH_MATCHES,
+    MAX_SEARCH_PATTERN_CHARS,
+    SourceInspectError,
+    TarSourceInspector,
+)
 from ditto.db.models import GeneratorCompetitionSettingsRevision as RevisionRow
 from ditto.db.models import (
     GeneratorOperatorAction,
@@ -73,6 +88,12 @@ from ditto.db.models import (
     GeneratorRound,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
+)
+from ditto.db.queries.artifact_fetch_audit import (
+    ENDPOINT_ADMIN_GENERATOR_SOURCE_FILE,
+    ENDPOINT_ADMIN_GENERATOR_SOURCE_FILES,
+    ENDPOINT_ADMIN_GENERATOR_SOURCE_SEARCH,
+    record_artifact_fetch,
 )
 from ditto.db.queries.generator import (
     abandon_run,
@@ -394,6 +415,185 @@ async def admin_submission_detail(
         ],
         operator_ruling=ruling,
         reinstate_blockers=blockers,
+    )
+
+
+def _require_actor(x_admin_actor: str | None) -> str:
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= MAX_ACTOR_LENGTH:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    return x_admin_actor
+
+
+async def _source_inspector(
+    session: AsyncSession, submission_id: UUID
+) -> tuple[str, TarSourceInspector]:
+    """Open one generator's stored archive after re-checking its digest.
+
+    Returns the verified ``source_sha256`` and a bounded reader. The archive
+    is the exact upload the miner signed (at most 4 MiB), so the screening
+    source reader's bounds cover it.
+    """
+    row = await get_submission(session, submission_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown submission")
+    source = bytes(row.source_bytes)
+    source_sha256 = row.source_sha256
+
+    def _verify_and_open() -> TarSourceInspector:
+        # Hashing and archive characterization are CPU-bound over
+        # miner-supplied bytes; keep them off the event loop.
+        if hashlib.sha256(source).hexdigest() != source_sha256:
+            raise HTTPException(
+                status_code=502, detail="stored source does not match its digest"
+            )
+        return TarSourceInspector(source)
+
+    try:
+        return source_sha256, await asyncio.to_thread(_verify_and_open)
+    except SourceInspectError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get(
+    "/submissions/{submission_id}/source-files",
+    response_model=AdminGeneratorSourceListing,
+)
+async def admin_generator_source_files(
+    submission_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminGeneratorSourceListing:
+    """Audited, bounded file inventory of one generator's source archive."""
+    actor = _require_actor(x_admin_actor)
+    source_sha256, inspector = await _source_inspector(session, submission_id)
+    listing = await asyncio.to_thread(inspector.listing)
+    await record_artifact_fetch(
+        session,
+        agent_id=submission_id,
+        endpoint=ENDPOINT_ADMIN_GENERATOR_SOURCE_FILES,
+        requester_kind="admin",
+        requester_id=actor,
+        artifact_sha256=source_sha256,
+        source_ip=client_ip(request),
+        detail=request_detail(request),
+    )
+    return AdminGeneratorSourceListing(
+        submission_id=submission_id,
+        source_sha256=source_sha256,
+        **listing,  # type: ignore[arg-type]
+    )
+
+
+@router.get(
+    "/submissions/{submission_id}/source-file",
+    response_model=AdminGeneratorSourceExcerpt,
+)
+async def admin_generator_source_file(
+    submission_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    path: Annotated[str, Query(min_length=1, max_length=240)],
+    start_line: Annotated[int, Query(ge=1)] = 1,
+    end_line: Annotated[int, Query(ge=1)] = MAX_READ_LINES,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminGeneratorSourceExcerpt:
+    """Audited, bounded line excerpt from one generator source file.
+
+    A generator that ships hand-built cases (a JSON world file, an answer
+    table) can be audited here before any round runs it.
+    """
+    actor = _require_actor(x_admin_actor)
+    source_sha256, inspector = await _source_inspector(session, submission_id)
+    try:
+        excerpt = await asyncio.to_thread(inspector.read, path, start_line, end_line)
+    except SourceInspectError as error:
+        status = 404 if error.code == "file-not-found" else 422
+        raise HTTPException(status_code=status, detail=str(error)) from error
+    await record_artifact_fetch(
+        session,
+        agent_id=submission_id,
+        endpoint=ENDPOINT_ADMIN_GENERATOR_SOURCE_FILE,
+        requester_kind="admin",
+        requester_id=actor,
+        artifact_sha256=source_sha256,
+        source_ip=client_ip(request),
+        detail=request_detail(
+            request,
+            path=path,
+            start_line=excerpt["start_line"],
+            end_line=excerpt["end_line"],
+        ),
+    )
+    return AdminGeneratorSourceExcerpt(
+        submission_id=submission_id,
+        source_sha256=source_sha256,
+        **excerpt,  # type: ignore[arg-type]
+    )
+
+
+@router.get(
+    "/submissions/{submission_id}/source-search",
+    response_model=AdminGeneratorSourceSearchResult,
+)
+async def admin_generator_source_search(
+    submission_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    pattern: Annotated[str, Query(min_length=1, max_length=MAX_SEARCH_PATTERN_CHARS)],
+    mode: Literal["regex", "literal"] = "regex",
+    ignore_case: bool = False,
+    path_glob: Annotated[str | None, Query(max_length=240)] = None,
+    context: Annotated[int, Query(ge=0, le=MAX_SEARCH_CONTEXT)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_SEARCH_MATCHES)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminGeneratorSourceSearchResult:
+    """Audited grep across one generator's readable source, in one request.
+
+    Finds where a generator builds its cases or which data file holds a case
+    id, so the operator reads only the region a match names.
+    """
+    actor = _require_actor(x_admin_actor)
+    source_sha256, inspector = await _source_inspector(session, submission_id)
+    try:
+        found = await asyncio.to_thread(
+            inspector.search,
+            pattern,
+            mode=mode,
+            ignore_case=ignore_case,
+            path_glob=path_glob,
+            context=context,
+            limit=limit,
+            offset=offset,
+        )
+    except SourceInspectError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    await record_artifact_fetch(
+        session,
+        agent_id=submission_id,
+        endpoint=ENDPOINT_ADMIN_GENERATOR_SOURCE_SEARCH,
+        requester_kind="admin",
+        requester_id=actor,
+        artifact_sha256=source_sha256,
+        source_ip=client_ip(request),
+        # The pattern is recorded, as for screening source: the trail shows
+        # what an operator went looking for, not merely that they looked.
+        detail=request_detail(
+            request,
+            pattern=pattern,
+            mode=mode,
+            path_glob=path_glob,
+            match_count=found["match_count"],
+        ),
+    )
+    return AdminGeneratorSourceSearchResult(
+        submission_id=submission_id,
+        source_sha256=source_sha256,
+        **found,  # type: ignore[arg-type]
     )
 
 

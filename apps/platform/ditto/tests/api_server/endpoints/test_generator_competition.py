@@ -44,6 +44,7 @@ from ditto.api_models.generator import (
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.chain.models import NeuronInfo
 from ditto.db.models import (
+    ArtifactFetchAudit,
     GeneratorOperatorAction,
     GeneratorProbeEpoch,
     GeneratorRun,
@@ -1558,3 +1559,145 @@ class TestOperatorActions:
         async with session_maker() as session:
             row = await session.get(GeneratorSubmission, UUID(sub_id))
             assert row is not None and row.status == "rejected"
+
+
+_SOURCE_READER = {**_ADMIN, "X-Admin-Actor": "backroom:test"}
+_WORLD = b'{"cases": [{"id": "v3h1-q1", "question": "Which city?"}]}\n'
+
+
+def _world_archive() -> bytes:
+    """A generator that ships its cases as a data file, like a hand-built set."""
+    return _archive(
+        files={
+            "go.mod": b"module example.com/worlds\n\ngo 1.23\n",
+            "main.go": (
+                b'package main\n\nfunc main() {\n\tload("data/world1.json")\n}\n'
+            ),
+            "data/world1.json": _WORLD,
+            "data/table.bin": b"\x00\xff\x00\xff\x00",
+        }
+    )
+
+
+class TestSourceReads:
+    async def test_operator_reads_source_and_every_read_is_audited(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A generator's cases can be audited from its source before any round.
+
+        The manifest, an excerpt and a search each serve miner source to a
+        human, so each leaves an audit row naming the generator submission.
+        """
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _world_archive())
+        sub_id = accepted["submission_id"]
+        base = f"/api/v1/admin/generator-competition/submissions/{sub_id}"
+
+        listing = await client.get(f"{base}/source-files", headers=_SOURCE_READER)
+        assert listing.status_code == 200, listing.text
+        manifest = listing.json()
+        assert manifest["submission_id"] == sub_id
+        assert manifest["source_sha256"] == accepted["source_sha256"]
+        assert manifest["file_count"] == 4
+        assert [row["path"] for row in manifest["files"]] == [
+            "data/table.bin",
+            "data/world1.json",
+            "go.mod",
+            "main.go",
+        ]
+        assert manifest["opaque_blobs"] == [
+            {"path": "data/table.bin", "bytes": 5, "reason": "non_utf8"}
+        ]
+
+        excerpt = await client.get(
+            f"{base}/source-file",
+            params={"path": "data/world1.json"},
+            headers=_SOURCE_READER,
+        )
+        assert excerpt.status_code == 200, excerpt.text
+        assert excerpt.json()["lines"] == [
+            {"line": 1, "text": _WORLD.decode().rstrip("\n")}
+        ]
+
+        search = await client.get(
+            f"{base}/source-search",
+            params={"pattern": "v3h1-q", "mode": "literal"},
+            headers=_SOURCE_READER,
+        )
+        assert search.status_code == 200, search.text
+        found = search.json()
+        assert [(m["path"], m["line"]) for m in found["matches"]] == [
+            ("data/world1.json", 1)
+        ]
+        assert found["opaque_skipped"] == 1  # the binary member is never searched
+
+        async with session_maker() as session:
+            rows = (
+                await session.scalars(
+                    select(ArtifactFetchAudit).order_by(ArtifactFetchAudit.seq)
+                )
+            ).all()
+        assert [row.endpoint for row in rows] == [
+            "admin.list_generator_source_files",
+            "admin.read_generator_source_file",
+            "admin.search_generator_source",
+        ]
+        assert {str(row.agent_id) for row in rows} == {sub_id}
+        assert {row.requester_id for row in rows} == {"backroom:test"}
+        assert {row.artifact_sha256 for row in rows} == {accepted["source_sha256"]}
+        assert (rows[1].detail or {}).get("path") == "data/world1.json"
+        assert (rows[2].detail or {}).get("pattern") == "v3h1-q"
+
+    async def test_source_reads_are_guarded(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _world_archive())
+        sub_id = accepted["submission_id"]
+        base = f"/api/v1/admin/generator-competition/submissions/{sub_id}"
+
+        anonymous = await client.get(f"{base}/source-files")
+        assert anonymous.status_code == 401
+        unattributed = await client.get(f"{base}/source-files", headers=_ADMIN)
+        assert unattributed.status_code == 422
+        unknown = await client.get(
+            f"/api/v1/admin/generator-competition/submissions/{uuid4()}/source-files",
+            headers=_SOURCE_READER,
+        )
+        assert unknown.status_code == 404
+        missing = await client.get(
+            f"{base}/source-file", params={"path": "nope.go"}, headers=_SOURCE_READER
+        )
+        assert missing.status_code == 404
+        binary = await client.get(
+            f"{base}/source-file",
+            params={"path": "data/table.bin"},
+            headers=_SOURCE_READER,
+        )
+        assert binary.status_code == 422
+        bad_pattern = await client.get(
+            f"{base}/source-search", params={"pattern": "("}, headers=_SOURCE_READER
+        )
+        assert bad_pattern.status_code == 422
+
+        # Stored bytes that no longer match the signed digest are never served.
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, UUID(sub_id))
+            assert row is not None
+            tampered = bytearray(row.source_bytes)
+            tampered[-1] ^= 0xFF
+            row.source_bytes = bytes(tampered)
+            await session.commit()
+        refused = await client.get(f"{base}/source-files", headers=_SOURCE_READER)
+        assert refused.status_code == 502
+        async with session_maker() as session:
+            served = (await session.scalars(select(ArtifactFetchAudit))).all()
+        assert served == []  # a refused read leaves no "served" row

@@ -2520,6 +2520,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/source-file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Generator Source File
+         * @description Audited, bounded line excerpt from one generator source file.
+         *
+         *     A generator that ships hand-built cases (a JSON world file, an answer
+         *     table) can be audited here before any round runs it.
+         */
+        get: operations["admin_generator_source_file_api_v1_admin_generator_competition_submissions__submission_id__source_file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/source-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Generator Source Files
+         * @description Audited, bounded file inventory of one generator's source archive.
+         */
+        get: operations["admin_generator_source_files_api_v1_admin_generator_competition_submissions__submission_id__source_files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/source-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Generator Source Search
+         * @description Audited grep across one generator's readable source, in one request.
+         *
+         *     Finds where a generator builds its cases or which data file holds a case
+         *     id, so the operator reads only the region a match names.
+         */
+        get: operations["admin_generator_source_search_api_v1_admin_generator_competition_submissions__submission_id__source_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/github-links/{link_id}": {
         parameters: {
             query?: never;
@@ -13193,6 +13259,52 @@ export interface components {
             /** History */
             history: components["schemas"]["GeneratorSettingsRevision"][];
         };
+        /**
+         * AdminGeneratorSourceExcerpt
+         * @description A bounded line range from one file of a generator's source archive.
+         */
+        AdminGeneratorSourceExcerpt: {
+            /** End Line */
+            end_line: number;
+            /** Lines */
+            lines: components["schemas"]["AdminSourceLine"][];
+            /** Path */
+            path: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /** Start Line */
+            start_line: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Total Lines */
+            total_lines: number;
+        };
+        /**
+         * AdminGeneratorSourceListing
+         * @description Bounded file inventory of one generator's stored source archive.
+         */
+        AdminGeneratorSourceListing: {
+            /** File Count */
+            file_count: number;
+            /** Files */
+            files: components["schemas"]["AdminSourceFileEntry"][];
+            /** Opaque Blobs */
+            opaque_blobs: components["schemas"]["AdminOpaqueBlobEntry"][];
+            /** Opaque Total */
+            opaque_total: number;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Truncated */
+            truncated: boolean;
+        };
         /** AdminGeneratorSourceReleasesResponse */
         AdminGeneratorSourceReleasesResponse: {
             /** Counts */
@@ -13201,6 +13313,48 @@ export interface components {
             };
             /** Items */
             items: components["schemas"]["GeneratorSourceReleaseView"][];
+        };
+        /**
+         * AdminGeneratorSourceSearchResult
+         * @description Regex/literal hits across one generator's readable source files.
+         */
+        AdminGeneratorSourceSearchResult: {
+            /** Files Matched */
+            files_matched: number;
+            /** Files Searched */
+            files_searched: number;
+            /** Has More */
+            has_more: boolean;
+            /** Limit */
+            limit: number;
+            /** Match Count */
+            match_count: number;
+            /** Matches */
+            matches: components["schemas"]["AdminSourceSearchMatch"][];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "regex" | "literal";
+            /** Offset */
+            offset: number;
+            /** Opaque Skipped */
+            opaque_skipped: number;
+            /** Path Glob */
+            path_glob?: string | null;
+            /** Pattern */
+            pattern: string;
+            /** Returned */
+            returned: number;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Truncated */
+            truncated: boolean;
         };
         /**
          * AdminGeneratorSubmissionActionRequest
@@ -52917,6 +53071,120 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminGeneratorSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_generator_source_file_api_v1_admin_generator_competition_submissions__submission_id__source_file_get: {
+        parameters: {
+            query: {
+                path: string;
+                start_line?: number;
+                end_line?: number;
+            };
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSourceExcerpt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_generator_source_files_api_v1_admin_generator_competition_submissions__submission_id__source_files_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSourceListing"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_generator_source_search_api_v1_admin_generator_competition_submissions__submission_id__source_search_get: {
+        parameters: {
+            query: {
+                pattern: string;
+                mode?: "regex" | "literal";
+                ignore_case?: boolean;
+                path_glob?: string | null;
+                context?: number;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSourceSearchResult"];
                 };
             };
             /** @description Validation Error */

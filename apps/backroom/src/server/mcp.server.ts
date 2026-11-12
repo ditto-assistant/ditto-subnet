@@ -68,12 +68,15 @@ import {
   fetchGeneratorPromotionCandidates,
   fetchGeneratorRun,
   fetchGeneratorSettings,
+  fetchGeneratorSourceExcerpt,
+  fetchGeneratorSourceFiles,
   fetchGeneratorSubmission,
   listGeneratorSubmissions,
   rejectGenerator,
   reinstateGenerator,
   rescoreGenerator,
   rotateGeneratorProbe,
+  searchGeneratorSource,
   setGeneratorSettings,
   closeGeneratorRound,
   fetchGeneratorRound,
@@ -117,6 +120,7 @@ import {
   settleGeneratorFrontierInputSchema,
   generatorPromotionInputSchema,
   generatorRunIdInputSchema,
+  generatorSourceSearchInputSchema,
   generatorSubmissionIdInputSchema,
   listGeneratorSubmissionsInputSchema,
   rejectGeneratorInputSchema,
@@ -847,8 +851,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_generator_competition_settings: 'Read generator competition policy, mode and optional history.',
   set_generator_competition_settings: 'Write complete generator policy with CAS and APPLY GENERATOR COMPETITION {MODE}.',
   list_generator_submissions: 'Page generator submissions with latest run; filter hotkey/status.',
-  get_generator_submission: 'Read one generator submission, lease, runs and reinstate blockers (never source).',
+  get_generator_submission: 'Read one generator submission, lease, runs and reinstate blockers (source via list_generator_source_files).',
   get_generator_run: 'Read one qualification run: evaluation and outcome; seeds once finished.',
+  list_generator_source_files: 'Generator archive manifest; has_more/truncated means incomplete. Artifact scope.',
+  search_generator_source: 'Search generator source: regex/literal, pathGlob, context, has_more paging. Artifact scope.',
+  read_generator_source_file: 'Read generator source range (max 400 lines); locate via search_generator_source. Artifact scope.',
   get_generator_probe: 'Read probe epochs and probed counts; the probe seed is never served.',
   rotate_generator_probe_seed: 'Retire the probe seed; every active generator re-qualifies.',
   list_generator_promotion_candidates: 'Discriminating round cases, highest credit first.',
@@ -1815,7 +1822,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_submission', {
     title: 'Get generator submission',
-    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). For a rejected submission, operator_ruling says whether reject_generator_submission rejected it and reinstate_blockers lists every guard reinstate_generator_submission would refuse on (empty: it would proceed). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned. Requires backroom:read.',
+    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). For a rejected submission, operator_ruling says whether reject_generator_submission rejected it and reinstate_blockers lists every guard reinstate_generator_submission would refuse on (empty: it would proceed). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned here; read it with list_generator_source_files, search_generator_source and read_generator_source_file (artifact scope). Requires backroom:read.',
     inputSchema: generatorSubmissionIdInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorSubmission(input)))
 
@@ -1824,6 +1831,56 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'One qualification run: status (qualified, invalid, copy, abandoned) and outcome, settings revision, scorer version, the stored evaluation (sandbox, build result and binary SHA-256, per-seed pack SHA-256, validation summary with up to 50 issues, generation errors, durations, determinism, and the probe result without its seed), and the outcome summary (case and probe counts, or copy_of/overlap for a behavioral copy). seeds is null while the run is leased and the exact seeds once it finished, so an operator can regenerate the packs with `challenge rehearse`. Round results live on get_generator_round. Requires backroom:read.',
     inputSchema: generatorRunIdInputSchema.extend({ runId: sourceAgentId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorRun(input)))
+
+  // Generator source is miner-submitted code, so these gate on the same
+  // dedicated artifact scope as the screening source readers, and Platform
+  // audits every read under the operator's actor.
+  registerTool('list_generator_source_files', {
+    title: 'List generator source files',
+    description: 'Read the readable file manifest of one generator submission\'s stored source archive (the exact upload the miner signed; source_sha256 is its digest), in deterministic path order. Use it to audit a generator before or after it runs in a round: a hand-built case set usually ships as a data file (for example data/world1.json), and the manifest shows where. The default limit is the platform\'s own listing cap, so the default call returns the WHOLE manifest. `has_more` is the only field that reports MCP paging; `truncated` means the platform omitted paths before MCP paging, so no later offset can recover them. Unreadable binary or oversized `opaque_blobs` stay whole on every page. Works for any status, the public default included. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
+    inputSchema: {
+      submissionId: sourceAgentId(),
+      ...MCP_SOURCE_MANIFEST_PAGINATION_INPUT,
+    },
+    annotations: toolAnnotations('read'),
+  }, async ({ limit, offset, ...input }) =>
+    artifact(async () =>
+      compacted(
+        paginateLocalCollection(
+          await fetchGeneratorSourceFiles(input, props.session.email),
+          'files',
+          limit,
+          offset,
+        ),
+        { files: { pin: ['path'] }, opaque_blobs: { pin: ['path'] } },
+      ),
+    ))
+
+  registerTool('read_generator_source_file', {
+    title: 'Read generator source file',
+    description: 'Read a bounded line range (max 400 lines) from one file of a generator submission\'s source archive, for example to check a hand-built case file for well-formedness, answer leakage or contradictions before a round runs it. When you do not have a line number yet, call search_generator_source (a case id, a question phrase, a function name) instead of bisecting with 400-line windows. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
+    inputSchema: {
+      submissionId: sourceAgentId(),
+      path: z.string().min(1).max(240),
+      startLine: z.number().int().min(1).default(1),
+      endLine: z.number().int().min(1).default(400),
+    },
+    annotations: toolAnnotations('read'),
+  }, async (input) =>
+    artifact(() => fetchGeneratorSourceExcerpt(input, props.session.email)))
+
+  registerTool('search_generator_source', {
+    title: 'Search generator source',
+    description: 'Search one generator submission\'s readable source for a regex (mode=regex, the default) or an exact string (mode=literal), returning {path, line, text} for every match with optional context lines. Use it to find where the generator builds its cases, which data file holds a case id, or whether an answer string appears where it should not. Scope with pathGlob (`data/*.json`; a glob with no `/` also matches the basename), widen with context (0-5 lines each side). Matches are ordered by path then line, so paging is stable: `match_count` is the total the scan found, `has_more` reports the page boundary, and `truncated` means the scan hit its match cap and the totals are lower bounds. Binary and oversized members are never searched; `opaque_skipped` counts them. Requires the dedicated backroom:artifact:read scope because it returns miner source lines.',
+    inputSchema: { ...generatorSourceSearchInputSchema.shape, submissionId: sourceAgentId(), ...MCP_PAGINATION_INPUT },
+    annotations: toolAnnotations('read'),
+  }, async ({ limit, offset, ...input }) =>
+    artifact(async () =>
+      compacted(
+        await searchGeneratorSource(input, props.session.email, limit, offset),
+        { matches: { pin: ['path', 'line'] } },
+      ),
+    ))
 
   registerTool('get_generator_probe', {
     title: 'Get generator probe epochs',

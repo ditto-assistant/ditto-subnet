@@ -236,6 +236,15 @@ opens, once it is scored or void.
     `false`.
   - `list_generator_submissions` and `get_generator_submission` return
     identity, status, qualification and latest round score, never source.
+  - `list_generator_source_files`, `search_generator_source` and
+    `read_generator_source_file` (`backroom:artifact:read`) read one
+    generator's stored source archive, the exact upload the miner signed:
+    the manifest, a regex or literal search, and a bounded excerpt. They work
+    for any status, so a hand-built case file (for example `data/world1.json`)
+    can be audited before a round runs it. Platform re-checks the archive
+    against `source_sha256` and records every read in the artifact fetch
+    audit under the operator's actor, keyed on the generator submission id
+    (`get_artifact_fetch_audit`). See "Reading miner source".
   - `get_generator_run` returns a qualification run's evaluation. Seeds appear
     only after the run finished, so an operator can regenerate its packs.
   - `get_generator_probe` returns probe epochs. The probe seed is never served.
@@ -559,16 +568,18 @@ a scan that hit its own match cap — so no later offset recovers what it covers
 and any total it accompanies is a lower bound. The two are not interchangeable,
 and neither one substitutes for the other.
 
-Where the window is resolved differs by tool. `search_screening_source` pages on
-the platform, which holds the whole ordered match list, so the Worker must not
-re-slice a window it never had. A collection the platform returns whole is paged
-here by `paginateLocalCollection`, which is what emits `returned` and `has_more`.
+Where the window is resolved differs by tool. `search_screening_source` and
+`search_generator_source` page on the platform, which holds the whole ordered
+match list, so the Worker must not re-slice a window it never had. A collection
+the platform returns whole is paged here by `paginateLocalCollection`, which is
+what emits `returned` and `has_more`.
 
 Default page sizes are bounded so one call cannot flood model context, but a
 manifest an operator reads to decide *what exists* — today
-`list_screening_source_files` — defaults to the platform's whole listing rather
-than a page, because a row silently missing from page one is evidence the
-reviewer never learns to ask for. `mcp.server.test.ts` pins each tool's bound.
+`list_screening_source_files` and `list_generator_source_files` — defaults to
+the platform's whole listing rather than a page, because a row silently missing
+from page one is evidence the reviewer never learns to ask for.
+`mcp.server.test.ts` pins each tool's bound.
 
 ## Independent V13 replay process identity
 
@@ -820,6 +831,11 @@ hitting its own match cap, and the manifest returns whole by default so no path
 hides behind an offset. `opaque_skipped` counts the members no search can
 reach — a `.onnx` or `.bin` weights file is never searched, and a search that
 never opened one cannot clear it.
+
+Generator source has the same three tools, keyed on a generator submission id:
+`list_generator_source_files`, `search_generator_source` (a case id, a
+question phrase, or where the generator builds its pack) and
+`read_generator_source_file`. They follow the same order and paging rules.
 
 ## Unreleased-copy signal (shadow)
 
