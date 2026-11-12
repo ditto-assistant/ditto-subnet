@@ -2910,13 +2910,18 @@ class GeneratorRoundLoop:
             logger.exception("generator frontier settlement failed")
             return [f"frontier settlement failed: {type(exc).__name__}: {exc}"[:300]]
 
-    async def _advance_prescreens(self, now: datetime) -> list[str]:
-        """Void expired pre-screens and open one when idle; never raises."""
+    async def _advance_prescreens(
+        self, now: datetime, next_round_in: float | None
+    ) -> list[str]:
+        """Void expired pre-screens, and open one when idle and the next round
+        is far enough away (``next_round_in`` seconds); never raises."""
         from ditto.api_server.generator_prescreens import advance_prescreens
 
         try:
             async with self._session_maker() as session, session.begin():
-                return await advance_prescreens(session, now=now)
+                return await advance_prescreens(
+                    session, now=now, next_round_in=next_round_in
+                )
         except Exception as exc:  # noqa: BLE001 - never block round progress
             logger.exception("generator pre-screen tick failed")
             return [f"prescreen tick failed: {type(exc).__name__}: {exc}"[:300]]
@@ -2937,11 +2942,10 @@ class GeneratorRoundLoop:
             # the competition off never strands an audit past its grace.
             for note in await self._settle_frontier(now):
                 actions.note(note)
-            # Pre-screens run in their own transaction too: an expired batch
-            # is voided whatever the mode, and a failure never blocks rounds.
-            for note in await self._advance_prescreens(now):
-                actions.note(note)
             if resolved.settings.mode == "off":
+                # An expired pre-screen is voided whatever the mode.
+                for note in await self._advance_prescreens(now, None):
+                    actions.note(note)
                 self.schedule = GeneratorRoundSchedule(
                     mode="off", epochs_per_round=per, observed_at=now
                 )
@@ -2966,6 +2970,15 @@ class GeneratorRoundLoop:
                 )
             # advance_rounds already logged its own actions.
             actions.actions.extend(advanced.actions)
+            # Pre-screens run after the rounds, in their own transaction, so a
+            # round opened this tick blocks a batch and a pre-screen failure
+            # never rolls back round progress.
+            from ditto.api_server.generator_prescreens import seconds_until_epoch
+
+            for note in await self._advance_prescreens(
+                now, seconds_until_epoch(position, clock.next_round_epoch)
+            ):
+                actions.note(note)
             return actions
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"[:500]

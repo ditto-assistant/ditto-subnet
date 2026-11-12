@@ -15,9 +15,11 @@ no round code path ever reads one. Its index starts at
 validator wire protocols, which carry a round index, route a pre-screen
 without a release of either. Lifecycle: ``generating`` (columns and panel
 frozen) -> ``running`` -> ``scoring`` -> ``scored``, or ``void``. A batch
-opens only while no round is in flight and no other batch is, and one not
-scored within :data:`PRESCREEN_TTL` is void; its generators return to the
-queue unscreened.
+opens only while no round and no other batch is in flight, and only when the
+next round opens later than :data:`PRESCREEN_TTL` from now; one not scored
+within that TTL is void and its generators return to the queue unscreened.
+So a batch always closes before the next round opens: it never holds the
+panel or the scorer a round needs, and it never races a round's opening.
 
 The lane ships off (``prescreen_enabled``): it spends inference.
 """
@@ -33,6 +35,7 @@ from sqlalchemy import func, select, text, update
 
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import (
+    CHAIN_BLOCK_SECONDS,
     IN_FLIGHT_ROUND_STATUSES,
     choose_round_bench_version,
     select_round_columns,
@@ -44,6 +47,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from ditto.api_server.generator_competition import ResolvedSettings
+    from ditto.api_server.generator_rounds import ChainPosition
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +55,10 @@ logger = logging.getLogger(__name__)
 # index; the database pins it (``generator_prescreens_index_check``).
 PRESCREEN_INDEX_BASE = 1 << 40
 # A batch not scored this long after it opened is void: its generation or
-# panel never finished, and its generators return to the queue.
-PRESCREEN_TTL = timedelta(hours=3)
+# panel never finished, and its generators return to the queue. A batch opens
+# only when the next round opens later than this, so it always closes first.
+# A batch takes minutes (a few 16-case columns on three agents).
+PRESCREEN_TTL = timedelta(minutes=60)
 IN_FLIGHT_PRESCREEN_STATUSES = ("generating", "running", "scoring")
 # Serializes opening, so two ticks never open two batches at once.
 _OPEN_LOCK_KEY = 0x4750_5253_4352_4E01  # "GPRSCRN"
@@ -61,6 +67,20 @@ _OPEN_LOCK_KEY = 0x4750_5253_4352_4E01  # "GPRSCRN"
 def is_prescreen_index(index: int) -> bool:
     """Whether a round index on the wire names a pre-screen batch."""
     return index >= PRESCREEN_INDEX_BASE
+
+
+def seconds_until_epoch(position: ChainPosition, epoch: int) -> float | None:
+    """Estimated seconds from ``position`` until ``SubnetEpochIndex`` reaches
+    ``epoch``, by ``generator_rounds.round_seconds_left``'s arithmetic: the
+    next epoch fires at ``next_epoch_block`` and each further one adds
+    ``tempo`` blocks. None without a predicted next epoch block."""
+    if position.next_epoch_block is None:
+        return None
+    epochs_after_next = epoch - position.subnet_epoch_index - 1
+    if epochs_after_next < 0:
+        return 0.0
+    block = position.next_epoch_block + epochs_after_next * position.tempo
+    return float((block - position.block) * CHAIN_BLOCK_SECONDS)
 
 
 def _column(index: int, row: GeneratorSubmission) -> dict[str, Any]:
@@ -113,16 +133,23 @@ async def void_expired_prescreens(session: AsyncSession, *, now: datetime) -> li
 
 
 async def open_prescreen(
-    session: AsyncSession, *, resolved: ResolvedSettings, now: datetime
+    session: AsyncSession,
+    *,
+    resolved: ResolvedSettings,
+    now: datetime,
+    next_round_in: float | None,
 ) -> GeneratorPrescreen | None:
     """Open one batch when the lane is enabled and idle, else None (caller
-    commits)."""
+    commits). ``next_round_in`` is the seconds until the next round opens; a
+    batch needs more than :data:`PRESCREEN_TTL`, and none opens without it."""
     settings = resolved.settings
     if (
         settings.mode == "off"
         or not settings.prescreen_enabled
         or not settings.validator_rounds_enabled
         or not resolved.valid
+        or next_round_in is None
+        or next_round_in <= PRESCREEN_TTL.total_seconds()
     ):
         return None
     await session.execute(
@@ -192,12 +219,16 @@ async def open_prescreen(
     return prescreen
 
 
-async def advance_prescreens(session: AsyncSession, *, now: datetime) -> list[str]:
-    """Void expired batches, then open one if the lane is idle (caller
-    commits)."""
+async def advance_prescreens(
+    session: AsyncSession, *, now: datetime, next_round_in: float | None = None
+) -> list[str]:
+    """Void expired batches, then open one if the lane is idle and the next
+    round is more than :data:`PRESCREEN_TTL` away (caller commits)."""
     notes = await void_expired_prescreens(session, now=now)
     resolved = await load_settings(session)
-    opened = await open_prescreen(session, resolved=resolved, now=now)
+    opened = await open_prescreen(
+        session, resolved=resolved, now=now, next_round_in=next_round_in
+    )
     if opened is not None:
         notes.append(
             f"prescreen {opened.prescreen_index}: opened with "

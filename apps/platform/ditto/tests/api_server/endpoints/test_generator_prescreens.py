@@ -23,8 +23,9 @@ from ditto.api_server.generator_prescreens import (
     PRESCREEN_INDEX_BASE,
     PRESCREEN_TTL,
     advance_prescreens,
+    seconds_until_epoch,
 )
-from ditto.api_server.generator_rounds import GeneratorRoundLoop
+from ditto.api_server.generator_rounds import ChainPosition, GeneratorRoundLoop
 from ditto.db.models import GeneratorPrescreen, GeneratorSubmission
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
@@ -89,11 +90,20 @@ async def _seed_queue(maker: async_sessionmaker[AsyncSession]) -> dict[str, UUID
     return ids
 
 
+# The next round opens comfortably after a batch's TTL unless a test says not.
+_IDLE = 4 * 3600.0
+
+
 async def _tick(
-    maker: async_sessionmaker[AsyncSession], now: datetime | None = None
+    maker: async_sessionmaker[AsyncSession],
+    now: datetime | None = None,
+    *,
+    next_round_in: float | None = _IDLE,
 ) -> list[str]:
     async with maker() as session, session.begin():
-        return await advance_prescreens(session, now=now or datetime.now(UTC))
+        return await advance_prescreens(
+            session, now=now or datetime.now(UTC), next_round_in=next_round_in
+        )
 
 
 async def _batches(maker: async_sessionmaker[AsyncSession]) -> list[GeneratorPrescreen]:
@@ -200,6 +210,28 @@ class TestPrescreenBatches:
         assert await _tick(session_maker) == []
         assert await _batches(session_maker) == []
 
+    async def test_a_batch_opens_only_when_it_closes_before_the_next_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The next round is always committed one round ahead, so it cannot
+        be what blocks a batch. A batch opens only when that round opens
+        later than the batch's TTL, so the batch always closes first: it
+        never holds the panel a round needs or races the round's opening."""
+        _install(app, session_maker)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        ttl = PRESCREEN_TTL.total_seconds()
+        assert await _tick(session_maker, next_round_in=None) == []
+        assert await _tick(session_maker, next_round_in=ttl) == []
+        assert await _batches(session_maker) == []
+        assert "opened" in (await _tick(session_maker, next_round_in=ttl + 60))[-1]
+
     async def test_an_expired_batch_is_void_and_its_generators_requeue(
         self,
         app: FastAPI,
@@ -244,7 +276,7 @@ class TestPrescreenBatches:
         _patch_panel(monkeypatch, agents)
         await _seed_queue(session_maker)
         loop = GeneratorRoundLoop(app_state=app.state, session_maker=session_maker)
-        notes = await loop._advance_prescreens(datetime.now(UTC))
+        notes = await loop._advance_prescreens(datetime.now(UTC), _IDLE)
         assert len(notes) == 1 and "opened" in notes[0]
         assert len(await _batches(session_maker)) == 1
 
@@ -255,6 +287,30 @@ class TestPrescreenBatches:
         monkeypatch.setattr(
             "ditto.api_server.generator_prescreens.advance_prescreens", _fail
         )
-        assert await loop._advance_prescreens(datetime.now(UTC)) == [
+        assert await loop._advance_prescreens(datetime.now(UTC), _IDLE) == [
             "prescreen tick failed: RuntimeError: boom"
         ]
+
+
+def test_seconds_until_epoch_follows_the_chain_head() -> None:
+    """The next epoch fires at next_epoch_block; each further one adds tempo
+    blocks of 12 seconds (round_seconds_left's arithmetic)."""
+    head = ChainPosition(
+        subnet_epoch_index=26290,
+        last_epoch_block=9_487_700,
+        last_epoch_block_hash="0x" + "00" * 32,
+        tempo=360,
+        block=9_487_828,
+        next_epoch_block=9_488_061,
+    )
+    assert seconds_until_epoch(head, 26291) == (9_488_061 - 9_487_828) * 12
+    assert seconds_until_epoch(head, 26293) == (9_488_061 + 2 * 360 - 9_487_828) * 12
+    assert seconds_until_epoch(head, 26290) == 0.0
+    no_prediction = ChainPosition(
+        subnet_epoch_index=26290,
+        last_epoch_block=9_487_700,
+        last_epoch_block_hash="0x" + "00" * 32,
+        tempo=360,
+        block=9_487_828,
+    )
+    assert seconds_until_epoch(no_prediction, 26291) is None
