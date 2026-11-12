@@ -128,14 +128,6 @@ class QueueEntry:
     generator ahead of it; ``None`` while it is in flight."""
 
 
-def probe_novelty(fingerprints: Sequence[str] | None, known: set[str]) -> float:
-    """Share of ``fingerprints`` not in ``known``; 1.0 without a probe result."""
-    if not fingerprints:
-        return 1.0
-    unique = set(fingerprints)
-    return len(unique - known) / len(unique)
-
-
 def challenger_queue(
     qualified: Iterable[GeneratorSubmission],
     in_flight: Mapping[UUID, int],
@@ -171,18 +163,35 @@ def challenger_queue(
         ),
         key=_qualified_key,
     )
+    # Each candidate's distinct probe cases, how many of them are not known
+    # yet, and which candidates hold each case: a pick that makes cases known
+    # lowers only their holders' counts, so ranking never rescans a probe.
+    cases = {
+        row.submission_id: frozenset(probes.get(row.submission_id) or ())
+        for row in remaining
+    }
+    unseen = {submission_id: len(own - known) for submission_id, own in cases.items()}
+    holders: dict[str, list[UUID]] = {}
+    for submission_id, own in cases.items():
+        for fingerprint in own:
+            holders.setdefault(fingerprint, []).append(submission_id)
+
+    def novelty(submission_id: UUID) -> float:
+        # A generator without a probe result counts as wholly novel.
+        total = len(cases[submission_id])
+        return unseen[submission_id] / total if total else 1.0
+
+    def rank(row: GeneratorSubmission) -> tuple[int, float, tuple]:
+        return (
+            placed.get(families[row.submission_id], 0),
+            -novelty(row.submission_id),
+            _qualified_key(row),
+        )
+
     entries: list[QueueEntry] = []
     while remaining:
         # Greedy: the next pick depends on every pick before it, through its
         # family's count and the probe cases already known.
-        def rank(row: GeneratorSubmission) -> tuple[int, float, tuple]:
-            novelty = probe_novelty(probes.get(row.submission_id), known)
-            return (
-                placed.get(families[row.submission_id], 0),
-                -novelty,
-                _qualified_key(row),
-            )
-
         row = min(remaining, key=rank)
         remaining.remove(row)
         family = families[row.submission_id]
@@ -194,11 +203,14 @@ def challenger_queue(
                 family_measured=measured.get(family, 0),
                 family_position=placed.get(family, 0),
                 in_flight_round=None,
-                novelty=probe_novelty(probes.get(row.submission_id), known),
+                novelty=novelty(row.submission_id),
             )
         )
         placed[family] = placed.get(family, 0) + 1
-        known.update(probes.get(row.submission_id) or ())
+        for fingerprint in cases[row.submission_id] - known:
+            known.add(fingerprint)
+            for holder in holders[fingerprint]:
+                unseen[holder] -= 1
     for row in sorted(rows, key=_qualified_key):
         held = in_flight.get(row.submission_id)
         if row.round_score is None and held is not None:
@@ -209,7 +221,7 @@ def challenger_queue(
                     family=family,
                     family_size=size[family],
                     family_measured=measured.get(family, 0),
-                    family_position=measured.get(family, 0),
+                    family_position=placed.get(family, 0),
                     in_flight_round=held,
                 )
             )

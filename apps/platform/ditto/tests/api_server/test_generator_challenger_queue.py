@@ -8,7 +8,6 @@ from uuid import NAMESPACE_URL, uuid5
 
 from ditto.api_server.generator_challenger_queue import (
     challenger_queue,
-    probe_novelty,
     same_template,
     template_families,
 )
@@ -223,6 +222,30 @@ def test_family_position_still_comes_before_novelty() -> None:
 
 
 def test_a_generator_without_a_probe_result_counts_as_novel() -> None:
-    assert probe_novelty(None, {"a"}) == 1.0
-    assert probe_novelty([], {"a"}) == 1.0
-    assert probe_novelty(["a", "a", "b"], {"a"}) == 0.5
+    measured = _gen("measured", owner="m", minutes=-60, module="m", score=0.3)
+    unprobed = _gen("unprobed", owner="u", minutes=0, module="u")
+    repeats = _gen("repeats", owner="r", minutes=5, module="r")
+    probes = {
+        measured.submission_id: _probe("a", "b"),
+        # A repeated fingerprint counts once: half of its distinct cases are new.
+        repeats.submission_id: _probe("a", "a", "c"),
+    }
+    entries = challenger_queue([measured, unprobed, repeats], {}, probes)
+    assert [(e.row.miner_hotkey[1:], e.novelty) for e in entries] == [
+        ("unprobed", 1.0),
+        ("repeats", 0.5),
+    ]
+
+
+def test_an_in_flight_entry_counts_its_family_members_queued_ahead() -> None:
+    rows = [
+        _gen("kin1", owner="kin", minutes=0),
+        _gen("kin2", owner="kin", minutes=1),
+        _gen("kin3", owner="kin", minutes=2),
+    ]
+    entries = challenger_queue(rows, {rows[0].submission_id: 26113})
+    assert [(e.row.miner_hotkey[1:], e.family_position) for e in entries] == [
+        ("kin2", 1),
+        ("kin3", 2),
+        ("kin1", 3),
+    ]
