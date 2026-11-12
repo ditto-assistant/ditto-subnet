@@ -7,6 +7,7 @@ cover the lane's settings and the batch lifecycle Platform drives itself.
 
 from __future__ import annotations
 
+import base64
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock
@@ -20,6 +21,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.generator import GeneratorCompetitionSettings
+from ditto.api_models.private_dataset import PrivateDatasetRequest
+from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.generator_prescreens import (
     PRESCREEN_INDEX_BASE,
     PRESCREEN_TTL,
@@ -31,9 +34,11 @@ from ditto.api_server.generator_prescreens import (
 from ditto.api_server.generator_rounds import ChainPosition, GeneratorRoundLoop
 from ditto.db.models import (
     GeneratorPrescreen,
+    GeneratorPrescreenAttempt,
     GeneratorPrescreenResult,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
+    ValidatorTicket,
 )
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _ADMIN,
@@ -44,14 +49,19 @@ from ditto.tests.api_server.endpoints.test_generator_competition import (
 # The round tests' autouse stand-in for a round-capable validator fleet; a
 # batch freezes a bench contract the same way a round does.
 from ditto.tests.api_server.endpoints.test_generator_rounds import (  # noqa: F401
+    _VALIDATOR,
     _advance,
     _apply_settings,
     _generation,
     _install,
     _matrix_score,
+    _patch_lane,
     _patch_panel,
     _seed_agent,
     _seed_generator,
+    _signed_fail,
+    _signed_job,
+    _signed_score,
     round_capable_fleet,
 )
 
@@ -713,3 +723,201 @@ class TestPrescreenScoring:
         await _tick(session_maker)
         await _apply_settings(client, validator_rounds_enabled=True)
         assert await _lease(client) is None
+
+
+_JOB_URL = "/api/v1/validator/generator-round-job"
+
+
+async def _job(client: httpx.AsyncClient) -> httpx.Response:
+    return await client.post(
+        _JOB_URL,
+        headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+        json=_signed_job(),
+    )
+
+
+class TestPrescreenPanel:
+    async def test_validators_run_a_batch_panel_through_the_round_lane(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A batch's panel runs on round jobs whose round_index is the batch's:
+        the dataset downloads through the private dataset route, results must
+        cover the batch's cases, a failed lease returns the agent, and once
+        every panel agent reported the batch goes to the scorer."""
+        _install(app, session_maker)
+        _patch_lane(monkeypatch)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        ids = await _seed_queue(session_maker)
+        await _tick(session_maker)
+        work = await _lease(client)
+        assert work is not None
+        generated = _generation(work)
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
+        )
+        assert resp.status_code == 200, resp.text
+        [batch] = await _batches(session_maker)
+        case_ids = [
+            ref["case_id"]
+            for refs in (batch.column_cases or {}).values()
+            for ref in refs
+        ]
+
+        seen: set[str] = set()
+        for index in range(3):
+            resp = await _job(client)
+            assert resp.status_code == 200, resp.text
+            job = resp.json()
+            assert job["round_index"] == batch.prescreen_index
+            assert job["dataset_sha256"] == batch.dataset_sha256
+            assert job["case_count"] == len(case_ids) == 32
+            assert job["bench_version"] == batch.bench_version
+            assert job["agent_id"] not in seen
+            seen.add(job["agent_id"])
+            score_url = (
+                f"/api/v1/validator/agent/{job['agent_id']}/generator-round-score"
+            )
+            if index == 0:
+                download = PrivateDatasetRequest(
+                    validator_hotkey=_VALIDATOR.ss58_address,
+                    dataset_sha256=job["dataset_sha256"],
+                    deadline=datetime.fromisoformat(job["deadline"]),
+                    nonce=uuid4(),
+                    requested_at=datetime.now(UTC),
+                    signature="0" * 128,
+                )
+                download.signature = _VALIDATOR.sign(
+                    download.signing_message(UUID(job["agent_id"]))
+                ).hex()
+                body = await client.post(
+                    f"/api/v1/validator/agent/{job['agent_id']}/private-dataset",
+                    json=download.model_dump(mode="json"),
+                )
+                assert body.status_code == 200, body.text
+                assert body.content == base64.b64decode(generated["dataset_base64"])
+                partial = _signed_score(job, case_ids[:-1], 1.0)
+                assert (await client.post(score_url, json=partial)).status_code == 422
+                # A validator that cannot finish releases the lease, and the
+                # agent is leased again.
+                failed = await client.post(
+                    f"/api/v1/validator/agent/{job['agent_id']}/generator-round-fail",
+                    json=_signed_fail(job),
+                )
+                assert failed.status_code == 200, failed.text
+                assert failed.json()["released"] is True
+                resp = await _job(client)
+                assert resp.status_code == 200, resp.text
+                job = resp.json()
+                assert job["agent_id"] in seen
+            scored = await client.post(
+                score_url, json=_signed_score(job, case_ids, 1.0 - index * 0.4)
+            )
+            assert scored.status_code == 200, scored.text
+            assert scored.json()["accepted"] is True
+
+        async with session_maker() as session:
+            row = await get_prescreen(session, batch.prescreen_index)
+            assert row is not None and row.status == "scoring"
+            attempts = (
+                await session.scalars(
+                    select(GeneratorPrescreenAttempt).order_by(
+                        GeneratorPrescreenAttempt.issued_at
+                    )
+                )
+            ).all()
+            assert [a.status for a in attempts] == [
+                "failed",
+                "completed",
+                "completed",
+                "completed",
+            ]
+        assert (await _job(client)).status_code == 204
+
+        work = await _lease(client)
+        assert work is not None and work["kind"] == "score"
+        assert len(work["matrix"]["agents"]) == 3
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-score",
+            headers=_SCORER,
+            json=_matrix_score(work),
+        )
+        assert resp.status_code == 200, resp.text
+        async with session_maker() as session:
+            for name in ("a", "b"):
+                sub = await session.get(GeneratorSubmission, ids[name])
+                assert sub is not None and sub.prescreen_score is not None
+
+    async def test_no_batch_job_while_the_lane_is_off(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        _patch_lane(monkeypatch)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        await _tick(session_maker)
+        work = await _lease(client)
+        assert work is not None
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work),
+        )
+        assert resp.status_code == 200, resp.text
+        await _apply_settings(client, validator_rounds_enabled=True)
+        assert (await _job(client)).status_code == 204
+
+    async def test_a_void_batch_stops_its_panel_runs(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An expired batch expires its live panel tickets and closes their
+        attempts, so a validator stops spending inference on it."""
+        _install(app, session_maker)
+        _patch_lane(monkeypatch)
+        await _enable(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _seed_queue(session_maker)
+        await _tick(session_maker)
+        work = await _lease(client)
+        assert work is not None
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results",
+            headers=_SCORER,
+            json=_generation(work),
+        )
+        assert resp.status_code == 200, resp.text
+        job = (await _job(client)).json()
+
+        await _tick(
+            session_maker, datetime.now(UTC) + PRESCREEN_TTL + timedelta(minutes=1)
+        )
+        async with session_maker() as session:
+            ticket = await session.get(
+                ValidatorTicket,
+                (UUID(job["agent_id"]), job["bench_version"], _VALIDATOR.ss58_address),
+            )
+            assert ticket is not None and ticket.status == TicketStatus.EXPIRED
+            attempt = (await session.scalars(select(GeneratorPrescreenAttempt))).one()
+            assert attempt.status == "failed"
+            assert (attempt.detail or "").startswith("pre-screen void")
+        late = await client.post(
+            f"/api/v1/validator/agent/{job['agent_id']}/generator-round-score",
+            json=_signed_score(job, ["c0/k0"], 1.0),
+        )
+        assert late.status_code == 409

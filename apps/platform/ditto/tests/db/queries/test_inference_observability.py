@@ -599,6 +599,63 @@ async def test_round_cost_classification_is_version_scoped(
         assert rows[0]["purpose"] == "generator_round"
 
 
+async def test_prescreen_cost_classification_is_version_scoped(
+    session: AsyncSession,
+) -> None:
+    """Pre-screen panel runs are their own cost purpose, so the lane's
+    inference spend reads separately from rounds."""
+    from ditto.db.models import GeneratorPrescreen, GeneratorPrescreenAttempt
+    from ditto.db.queries.inference_costs import load_inference_grant_costs
+
+    now = datetime.now(UTC)
+    async with session.begin():
+        grant = await _grant(
+            session, validator_hotkey="prescreen-cost", now=now, bench_version=18
+        )
+        grant.created_at = now - timedelta(minutes=5)
+        batch = GeneratorPrescreen(
+            prescreen_index=1 << 40,
+            status="void",
+            seed="ab" * 32,
+            settings_revision=1,
+            cases_per_column=16,
+            bench_version=17,
+            columns=[],
+            panel=[],
+            opened_at=now,
+            expires_at=now,
+            void_reason="test fixture",
+        )
+        session.add(batch)
+        await session.flush()
+        session.add(
+            GeneratorPrescreenAttempt(
+                prescreen_index=1 << 40,
+                agent_id=grant.agent_id,
+                validator_hotkey=grant.validator_hotkey,
+                ticket_deadline=grant.ticket_deadline,
+                slot_id=grant.slot_id,
+                status="completed",
+                issued_at=now,
+                finished_at=now,
+            )
+        )
+        await session.flush()
+
+        async def read():
+            return await load_inference_grant_costs(
+                session, window_start=now - timedelta(hours=1), window_end=now
+            )
+
+        rows = await read()
+        assert rows[0]["purpose"] != "generator_prescreen"
+        batch.bench_version = 18
+        await session.flush()
+        rows = await read()
+        assert rows[0]["purpose"] == "generator_prescreen"
+        assert rows[0]["classification_basis"] == "prescreen_attempt"
+
+
 @pytest.mark.parametrize(
     "grant_us,receipt_us,expected",
     [
