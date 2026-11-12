@@ -1,0 +1,89 @@
+{
+  "experiment": "sn473-storage",
+  "synthetic": true,
+  "host": {
+    "go_version": "go1.27.3",
+    "goarch": "arm64",
+    "num_cpu": 14
+  },
+  "aes256gcm_seal": [
+    {
+      "goroutines": 1,
+      "mib": 64,
+      "mib_per_sec": 5547.634765917552
+    },
+    {
+      "goroutines": 10,
+      "mib": 64,
+      "mib_per_sec": 40492.71407952232
+    }
+  ],
+  "aes256gcm_open": [
+    {
+      "goroutines": 1,
+      "mib": 64,
+      "mib_per_sec": 7538.844411179293
+    },
+    {
+      "goroutines": 10,
+      "mib": 64,
+      "mib_per_sec": 37373.39761557723
+    }
+  ],
+  "reed_solomon": [
+    {
+      "k_data": 4,
+      "m_parity": 8,
+      "n_total": 12,
+      "expansion": 3,
+      "shard_kib": 16384,
+      "encode_input_mib_per_sec": 8196.458873627253,
+      "reconstruct_mib_per_sec_with_m_erasures": 13660.284414591979
+    },
+    {
+      "k_data": 10,
+      "m_parity": 20,
+      "n_total": 30,
+      "expansion": 3,
+      "shard_kib": 6553,
+      "encode_input_mib_per_sec": 11443.599838233988,
+      "reconstruct_mib_per_sec_with_m_erasures": 11176.355511835827
+    },
+    {
+      "k_data": 16,
+      "m_parity": 16,
+      "n_total": 32,
+      "expansion": 2,
+      "shard_kib": 4096,
+      "encode_input_mib_per_sec": 13310.196468378534,
+      "reconstruct_mib_per_sec_with_m_erasures": 12772.911209906031
+    },
+    {
+      "k_data": 29,
+      "m_parity": 51,
+      "n_total": 80,
+      "expansion": 2.7586206896551726,
+      "shard_kib": 2259,
+      "encode_input_mib_per_sec": 5825.960799931727,
+      "reconstruct_mib_per_sec_with_m_erasures": 5897.717362216422
+    }
+  ],
+  "merkle_sha256": {
+    "shard_mib": 16,
+    "leaves": 4096,
+    "leaf_bytes": 4096,
+    "build_ms": 7.307,
+    "proof_bytes_excluding_leaf": 384,
+    "prove_us": 0.138036,
+    "verify_us": 2.827302,
+    "response_bytes_including_leaf": 4480,
+    "sha256_mib_per_sec": 2189.4686830031137
+  },
+  "notes": [
+    "one 64 MiB synthetic object; AES-GCM seals 1 MiB chunks with unique 96-bit nonces",
+    "Reed-Solomon via github.com/klauspost/reedsolomon defaults (NEON on arm64)",
+    "reconstruct erases m shards, data shards first, then rebuilds the full set",
+    "Merkle leaves are 4 KiB; a storage-proof response is the leaf plus log2(leaves) sibling hashes"
+  ],
+  "elapsed_ns": 506248541
+}

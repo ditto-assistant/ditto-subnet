@@ -1,0 +1,36 @@
+{
+  "experiment": "sn473-sn118-chain-snapshot",
+  "rpc": "wss://entrypoint-finney.opentensor.ai:443",
+  "finalized_block": 9487564,
+  "raw": {
+    "MaxAllowedUids": 256,
+    "SubnetworkN": 256,
+    "MaxAllowedValidators": 64,
+    "Burn": 500000,
+    "MinBurn": 500000,
+    "ImmunityPeriod": 300,
+    "Tempo": 360,
+    "SubnetTAO": 4096071525421,
+    "SubnetAlphaIn": 1382820888238611,
+    "SubnetAlphaOutEmission": 1000000000,
+    "SubnetTaoInEmission": 73464,
+    "SubnetEpochConsensus": "Yuma",
+    "MechanismCountCurrent": 1,
+    "MechanismEmissionSplit": null,
+    "NetworkRegistrationAllowed": true,
+    "NetworkPowRegistrationAllowed": false,
+    "BurnIncreaseMult": {
+      "bits": 23242897532874035200
+    },
+    "BurnHalfLife": 360
+  },
+  "derived": {
+    "registration_burn_tao": 0.0005,
+    "pool_spot_tao_per_alpha": 0.002962112852256978,
+    "alpha_emission_per_block": 1.0,
+    "miner_alpha_per_day_if_fully_released": 2952.0,
+    "miner_tao_per_day_at_spot": 8.7441571398626,
+    "burn_increase_mult": 1.26,
+    "assumptions": "7200 blocks/day, 41% miner share, spot ignores slippage"
+  }
+}
