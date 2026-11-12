@@ -10,8 +10,18 @@ ahead of every generator that qualified after the batch's first build. On
 The queue instead interleaves template families. A family's next unmeasured
 build competes with every other family's next build: its position is how
 many of its members are already measured (scored, or holding a column in a
-round still in flight) plus the unmeasured members qualified before it.
-Within a position, the earlier qualification goes first.
+round still in flight) plus its members placed ahead of it in the queue.
+
+Within a position, the more novel generator goes first, then the earlier
+qualification. Novelty is the share of a generator's probe cases (its case
+fingerprints on the probe seed every generator of the epoch shares) that no
+measured generator and no generator ahead of it in the queue emitted. The
+probe copy check already rejects a generator reproducing half or more of one
+other owner's probe cases; novelty also ranks a partial copy, or a mosaic of
+several generators' cases, behind a generator whose cases are new. It is
+computed on emitted cases, not source, so padding an archive cannot raise
+it. The queue is built greedily, so a generator ahead of another counts
+toward the other's family position and novelty.
 
 A family is the generators under common control (one owner key), joined
 with every generator built from the same template under another owner: the
@@ -25,7 +35,7 @@ drops a generator.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -110,57 +120,109 @@ class QueueEntry:
     family_measured: int
     """Members scored or holding a column in a round still in flight."""
     family_position: int
-    """Measured members plus this family's unmeasured members ahead of it."""
+    """Measured members plus this family's members ahead of it in the queue."""
     in_flight_round: int | None
     """The unfinished round this generator holds a column in, if any."""
+    novelty: float | None = None
+    """Share of its probe cases new to every measured generator and every
+    generator ahead of it; ``None`` while it is in flight."""
 
 
 def challenger_queue(
     qualified: Iterable[GeneratorSubmission],
     in_flight: Mapping[UUID, int],
+    probes: Mapping[UUID, Sequence[str]] | None = None,
 ) -> list[QueueEntry]:
     """Every never-scored generator in ``qualified``, in challenger pick order.
 
     ``qualified`` is every qualified miner generator, scored ones included
-    (they count toward their family's measured members). ``in_flight`` maps a
-    generator holding a column in an unfinished round to that round. Those
-    generators are already being measured: they come last, unpickable, and
-    count as measured for their family.
+    (they count toward their family's measured members and their probe cases
+    are known). ``in_flight`` maps a generator holding a column in an
+    unfinished round to that round. Those generators are already being
+    measured: they come last, unpickable, and count as measured. ``probes``
+    maps a generator to its current-epoch probe fingerprints.
     """
     rows = list(qualified)
+    probes = probes or {}
     families = template_families(rows)
     size: dict[str, int] = {}
     measured: dict[str, int] = {}
+    known: set[str] = set()
     for row in rows:
         family = families[row.submission_id]
         size[family] = size.get(family, 0) + 1
         if row.round_score is not None or row.submission_id in in_flight:
             measured[family] = measured.get(family, 0) + 1
-    waiting: dict[str, int] = {}
+            known.update(probes.get(row.submission_id) or ())
+    placed = dict(measured)
+    remaining = sorted(
+        (
+            row
+            for row in rows
+            if row.round_score is None and row.submission_id not in in_flight
+        ),
+        key=_qualified_key,
+    )
+    # Each candidate's distinct probe cases, how many of them are not known
+    # yet, and which candidates hold each case: a pick that makes cases known
+    # lowers only their holders' counts, so ranking never rescans a probe.
+    cases = {
+        row.submission_id: frozenset(probes.get(row.submission_id) or ())
+        for row in remaining
+    }
+    unseen = {submission_id: len(own - known) for submission_id, own in cases.items()}
+    holders: dict[str, list[UUID]] = {}
+    for submission_id, own in cases.items():
+        for fingerprint in own:
+            holders.setdefault(fingerprint, []).append(submission_id)
+
+    def novelty(submission_id: UUID) -> float:
+        # A generator without a probe result counts as wholly novel.
+        total = len(cases[submission_id])
+        return unseen[submission_id] / total if total else 1.0
+
+    def rank(row: GeneratorSubmission) -> tuple[int, float, tuple]:
+        return (
+            placed.get(families[row.submission_id], 0),
+            -novelty(row.submission_id),
+            _qualified_key(row),
+        )
+
     entries: list[QueueEntry] = []
-    for row in sorted(rows, key=_qualified_key):
-        if row.round_score is not None:
-            continue
+    while remaining:
+        # Greedy: the next pick depends on every pick before it, through its
+        # family's count and the probe cases already known.
+        row = min(remaining, key=rank)
+        remaining.remove(row)
         family = families[row.submission_id]
-        held = in_flight.get(row.submission_id)
-        position = measured.get(family, 0) + waiting.get(family, 0)
-        if held is None:
-            waiting[family] = waiting.get(family, 0) + 1
         entries.append(
             QueueEntry(
                 row=row,
                 family=family,
                 family_size=size[family],
                 family_measured=measured.get(family, 0),
-                family_position=position,
-                in_flight_round=held,
+                family_position=placed.get(family, 0),
+                in_flight_round=None,
+                novelty=novelty(row.submission_id),
             )
         )
-    return sorted(
-        entries,
-        key=lambda entry: (
-            entry.in_flight_round is not None,
-            entry.family_position,
-            _qualified_key(entry.row),
-        ),
-    )
+        placed[family] = placed.get(family, 0) + 1
+        for fingerprint in cases[row.submission_id] - known:
+            known.add(fingerprint)
+            for holder in holders[fingerprint]:
+                unseen[holder] -= 1
+    for row in sorted(rows, key=_qualified_key):
+        held = in_flight.get(row.submission_id)
+        if row.round_score is None and held is not None:
+            family = families[row.submission_id]
+            entries.append(
+                QueueEntry(
+                    row=row,
+                    family=family,
+                    family_size=size[family],
+                    family_measured=measured.get(family, 0),
+                    family_position=placed.get(family, 0),
+                    in_flight_round=held,
+                )
+            )
+    return entries

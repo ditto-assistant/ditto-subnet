@@ -25403,6 +25403,8 @@ export interface components {
             miner_hotkey: string;
             /** Module */
             module: string;
+            /** Novelty */
+            novelty?: number | null;
             /** Owner Key */
             owner_key: string;
             /** Qualified At */

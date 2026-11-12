@@ -268,7 +268,13 @@ opens, once it is scored or void.
     within 1%). Families are interleaved: a family's next unmeasured build
     waits until every other family has been measured as often, so one
     coldkey's batch of near-identical builds no longer holds a challenger
-    column every round. A generator whose column in an earlier round is
+    column every round. Within a family position the queue takes the highest
+    `novelty` first: the share of a generator's probe cases (its case
+    fingerprints on the epoch's shared probe seed) that no measured generator
+    and no generator ahead of it emitted. A partial or mosaic copy of measured
+    cases, or a twin of a build already ahead, waits behind new cases.
+    Novelty is computed on emitted cases, not source, so padding an archive
+    cannot raise it. A generator whose column in an earlier round is
     still in flight is skipped as a challenger. The grouping only orders the
     queue; it never rejects a generator. The public default generator is
     never in the queue.
