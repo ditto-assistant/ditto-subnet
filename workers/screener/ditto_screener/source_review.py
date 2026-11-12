@@ -92,8 +92,11 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
-    if policy_version == 13:
-        return "source-review-v42-policy-v13"
+    if policy_version in {13, 14}:
+        # Policy 14 reviews with the policy-13 text (_POLICY_TAILS[14]), so it
+        # shares the counter. The suffix still names the policy: Platform
+        # accepts a fan-out final review only when it matches the report's.
+        return f"source-review-v42-policy-v{policy_version}"
     return f"source-review-v24-policy-v{policy_version}"
 
 

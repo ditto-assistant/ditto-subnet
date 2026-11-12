@@ -4073,7 +4073,46 @@ def test_policy_v13_binds_the_two_security_charges_to_their_defining_element() -
     # never leaves the request.
     assert "crosses no" not in v13
     assert _prompt_revision(13) == "source-review-v42-policy-v13"
+    assert _prompt_revision(14) == "source-review-v42-policy-v14"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
+
+
+def test_prompt_revision_names_its_policy_and_moves_with_the_shared_text() -> None:
+    """An L1 label names its own policy and moves with the text it reviews by.
+
+    Platform accepts a fan-out final review only when its prompt_revision
+    fullmatches ``source-review-v<N>-policy-v<policy>`` for the report's policy
+    (``apps/platform/ditto/api_server/endpoints/screener.py``), so a policy that
+    reuses another's text cannot reuse its label: a policy-14 review labelled
+    ``-policy-v13`` would be refused. It shares the counter instead. Policy 14
+    reviews with the policy-13 tail, so when that text changes both labels have
+    to move, or policy-14 findings under the new text read in audits exactly
+    like those under the old.
+    """
+    import re
+
+    from ditto_screener.source_review import (
+        _POLICY_TAILS,
+        _prompt_revision,
+        _source_review_system_prompt,
+    )
+
+    versions = sorted(_POLICY_TAILS)
+    assert 14 in versions
+    for version in versions:
+        assert re.fullmatch(
+            rf"source-review-v[0-9]+-policy-v{version}", _prompt_revision(version)
+        ), version
+
+    def counter(version: int) -> str:
+        return _prompt_revision(version).split("-policy-v")[0]
+
+    for left in versions:
+        for right in versions:
+            if _source_review_system_prompt(left) == _source_review_system_prompt(
+                right
+            ):
+                assert counter(left) == counter(right), (left, right)
 
 
 async def test_v13_clears_the_requests_own_stdout_but_not_a_leaking_log_sink(
