@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.476.0 (2026-11-12)
+
+### Features
+
+- **bench**: Bench v19 held-out composite weight and datagen qualifier (DITTO-2739)
+  ([#3501](https://github.com/ditto-assistant/ditto-subnet/pull/3501),
+  [`1af7576`](https://github.com/ditto-assistant/ditto-subnet/commit/1af7576847986cbce3fffa72c3e3dbf78d672fd1))
+
+- **datagen**: Bench v19 seeded question phrase grammar (DITTO-2738)
+  ([#3502](https://github.com/ditto-assistant/ditto-subnet/pull/3502),
+  [`7355ee5`](https://github.com/ditto-assistant/ditto-subnet/commit/7355ee53919a058e6ea5931e5681e11479cfb653))
+
+- **datagen**: Bench v19 shortcut-breaker families (DITTO-2737)
+  ([#3500](https://github.com/ditto-assistant/ditto-subnet/pull/3500),
+  [`5bf69aa`](https://github.com/ditto-assistant/ditto-subnet/commit/5bf69aa366d59927bea47c385cbe72b61c442208))
+
+
 ## v0.475.0 (2026-11-12)
 
 ### Bug Fixes
