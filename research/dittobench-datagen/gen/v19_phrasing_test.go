@@ -12,10 +12,12 @@ import (
 // v19RephrasedQuestionType reports whether the v19 phrase grammar
 // (universe/v19_phrasing.go) words a question type: story oracles, business
 // and personal programs, the abstention probes with their decision twins,
-// and the isolation contact twin.
+// the ordinary contact, trip and outstanding-balance questions, and the
+// isolation contact twin.
 func v19RephrasedQuestionType(qt string) bool {
 	return strings.HasPrefix(qt, "world-story-") || strings.HasPrefix(qt, QTAbsence) ||
-		qt == universe.V13ProgramQuestionType || qt == universe.V13PersonalQuestionType || qt == "world-isolation-contact-current"
+		qt == universe.V13ProgramQuestionType || qt == universe.V13PersonalQuestionType || qt == "world-isolation-contact-current" ||
+		strings.HasPrefix(qt, "world-contact-") || strings.HasPrefix(qt, "world-trip-") || strings.Contains(qt, "outstanding")
 }
 
 // The grammar reaches the full v19 dataset and changes only the wording: a
