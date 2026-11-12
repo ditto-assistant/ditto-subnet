@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.477.1 (2026-11-12)
+
+### Bug Fixes
+
+- **platform**: Don't re-pick an in-flight challenger (SN-474)
+  ([#3506](https://github.com/ditto-assistant/ditto-subnet/pull/3506),
+  [`fedaa76`](https://github.com/ditto-assistant/ditto-subnet/commit/fedaa764afa674226d0daae5f0a58b43ca710441))
+
+
 ## v0.477.0 (2026-11-12)
 
 ### Features

@@ -486,7 +486,7 @@ wheels = [
 
 [[package]]
 name = "ditto"
-version = "0.477.0"
+version = "0.477.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
