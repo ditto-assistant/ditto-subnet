@@ -677,6 +677,11 @@ const challengerQueueEntrySchema = z.object({
   family_position: z.number().int(),
   // Absent from a Platform that predates novelty ordering; null in flight.
   novelty: z.number().min(0).max(1).nullable().optional().default(null),
+  // Its latest pre-screen batch and its column score there once scored.
+  // Within a family position a positive score goes first (best first), then
+  // the unscreened, then a zero. Absent from a Platform without pre-screens.
+  prescreen_index: z.number().int().nullable().optional().default(null),
+  prescreen_score: z.number().nullable().optional().default(null),
   status: z.enum(['challenger', 'counted', 'in_flight', 'owner_has_column', 'waiting']),
   column_id: z.string().nullable().optional().default(null),
   in_flight_round: z.number().int().nullable().optional().default(null),

@@ -293,6 +293,8 @@ def _challenger_queue_view(
                 family_measured=entry.family_measured,
                 family_position=entry.family_position,
                 novelty=None if entry.novelty is None else round(entry.novelty, 4),
+                prescreen_index=row.prescreen_index,
+                prescreen_score=row.prescreen_score,
                 status=status,
                 column_id=column["column_id"] if column is not None else None,
                 in_flight_round=entry.in_flight_round,
