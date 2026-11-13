@@ -168,7 +168,7 @@ record_deploy_state() {
 # restores the checkout to what is actually running, so the git layer stops
 # claiming a deploy that did not happen.
 on_deploy_exit() {
-  local code="$1" rolled_back="no" head_now
+  local code="$1" rolled_back="no" head_now edge_reinstall=""
   set +e
   trap - EXIT
   [ -n "$health_snapshot" ] && rm -f "$health_snapshot"
@@ -199,8 +199,13 @@ on_deploy_exit() {
       rolled_back="yes"
       if [ "$deploy_synced" -eq 1 ]; then
         echo "    re-syncing dependencies for the restored revision" >&2
-        uv sync --reinstall-package ditto-screening-protocol \
-          --reinstall-package ditto-edge-protocol >/dev/null 2>&1 || \
+        # A revision from before SN-481 locks no edge package to reinstall.
+        if grep -q '^name = "ditto-edge-protocol"$' uv.lock 2>/dev/null; then
+          edge_reinstall="--reinstall-package ditto-edge-protocol"
+        fi
+        # shellcheck disable=SC2086
+        uv sync --reinstall-package ditto-screening-protocol $edge_reinstall \
+          >/dev/null 2>&1 || \
           echo "    WARNING: uv sync failed after rollback; run 'uv sync' by hand" >&2
       fi
     else

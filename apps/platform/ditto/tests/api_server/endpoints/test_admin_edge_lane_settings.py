@@ -137,6 +137,45 @@ async def test_incoherent_policies_are_refused(
     assert response.status_code == 422, response.text
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reason", "  short   "),
+        ("reason", " \t\n" * 4),
+        ("actor", "    "),
+        ("actor", " " + "a" * 121 + " "),
+    ],
+)
+async def test_padded_audit_text_is_refused_before_the_insert(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    field: str,
+    value: str,
+) -> None:
+    _install(app, session_maker)
+    response = await client.post(
+        _URL, headers=_HEADERS, json={**_payload(), field: value}
+    )
+    # A validation error, not a retryable "changed concurrently" conflict.
+    assert response.status_code == 422, response.text
+    effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
+    assert effective["revision"] == 0
+
+
+async def test_audit_text_is_stored_trimmed(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    payload = {**_payload(), "reason": "  open the shadow lane \n", "actor": " ops "}
+    applied = await client.post(_URL, headers=_HEADERS, json=payload)
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["reason"] == "open the shadow lane"
+    assert applied.json()["actor"] == "ops"
+
+
 async def test_admin_token_is_required(
     app: FastAPI,
     client: httpx.AsyncClient,

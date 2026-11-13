@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from ditto_edge_protocol.limits import GIB, MAX_OBJECT_BYTES_CEILING, MIB
 from ditto_edge_protocol.settings import LaneSettings
@@ -125,8 +125,12 @@ class AdminEdgeLaneSettingsRequest(BaseModel):
     scope: str = "*"
     expected_revision: Annotated[int, Field(ge=0)]
     settings: EdgeLaneSettings
-    reason: Annotated[str, Field(min_length=8)]
-    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    # Stripped before the length checks, matching the table's trim() checks:
+    # padding must not pass here and then fail the insert as a conflict.
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
+    actor: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+    ] = "admin_api"
     confirmation: str
 
 

@@ -10,6 +10,8 @@ from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[3]
 
 # The revision the fake checkout resolves to, and the (older) revision the
@@ -671,6 +673,35 @@ def test_update_rolls_the_checkout_back_when_a_migration_fails(
     assert record["stage"] == "migrate"
     assert record["target_commit"] == TARGET_SHA
     assert record["rolled_back"] == "yes"
+
+
+@pytest.mark.parametrize("edge_locked", [True, False])
+def test_rollback_reinstalls_the_edge_package_only_when_the_lock_has_it(
+    tmp_path: Path, edge_locked: bool
+) -> None:
+    """A revision from before SN-481 locks no ditto-edge-protocol to reinstall."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    lock = 'name = "ditto-screening-protocol"\n'
+    if edge_locked:
+        lock += 'name = "ditto-edge-protocol"\n'
+    (repo / "uv.lock").write_text(lock)
+    result, _, _, _ = _run_update(
+        tmp_path,
+        gcloud_source="exit 1\n",
+        # Record every call; fail `uv run alembic upgrade head` to force a rollback.
+        uv_source=(
+            f'printf "%s\\n" "uv $*" >> "{repo}/uv-actions.log"\n'
+            'if [ "${1:-}" = "run" ]; then exit 1; fi\n'
+        ),
+        health_commit=RUNNING_SHA,
+    )
+
+    assert result.returncode != 0
+    assert _deploy_record(tmp_path)["rolled_back"] == "yes"
+    resync = (repo / "uv-actions.log").read_text().splitlines()[-1]
+    assert resync.startswith("uv sync --reinstall-package ditto-screening-protocol")
+    assert ("--reinstall-package ditto-edge-protocol" in resync) is edge_locked
 
 
 def test_update_leaves_the_checkout_in_place_once_pm2_has_restarted(

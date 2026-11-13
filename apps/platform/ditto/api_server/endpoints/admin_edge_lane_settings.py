@@ -127,8 +127,8 @@ async def create_settings_revision(
             scope=payload.scope,
             settings=settings.model_dump(mode="json"),
             checksum=_checksum(settings),
-            reason=payload.reason.strip(),
-            actor=payload.actor.strip(),
+            reason=payload.reason,
+            actor=payload.actor,
         )
         await session.commit()
     except IntegrityError as error:
