@@ -28,6 +28,7 @@ from ditto.db.models import (
     EdgeAssignment,
     EdgeChallengeSlot,
     EdgeLedgerWindow,
+    EdgeObject,
     EdgeRequestNonce,
 )
 from ditto_edge_protocol import paths
@@ -846,6 +847,15 @@ async def test_due_slots_go_out_before_redeliveries(
     node = Node(lane)
     await node.enroll()
     await node.step()
+    # Keep the window's own randomly timed slots out of the way of this test.
+    async with lane.session_maker() as session, session.begin():
+        for slot in await session.scalars(
+            select(EdgeChallengeSlot).where(
+                EdgeChallengeSlot.node_id == node.key.node_id,
+                EdgeChallengeSlot.state == "scheduled",
+            )
+        ):
+            slot.due_at = lane.clock.now + timedelta(hours=1)
     body = PollRequest(protocol="edge/v1", free_bytes=GIB).model_dump_json().encode()
 
     async def due_now(count: int) -> None:
@@ -916,3 +926,160 @@ async def test_a_span_lapsed_at_an_earlier_poll_reopens_with_its_fill_history(
         )
     assert reopened is not None and reopened.fill_count == fills > 0
     assert reopened.acked_at is not None
+
+
+async def _open_spans(lane: Lane, node: Node) -> list[EdgeAssignment]:
+    async with lane.session_maker() as session:
+        return list(
+            await session.scalars(
+                select(EdgeAssignment).where(
+                    EdgeAssignment.node_id == node.key.node_id,
+                    EdgeAssignment.released_at.is_(None),
+                )
+            )
+        )
+
+
+async def test_a_download_that_fails_records_no_fill(lane: Lane) -> None:
+    await lane.settings(replicas=1)
+    digest = await lane.ingest(_blob(1))
+    lane.storage.objects.clear()  # storage lost the bytes; the cache is empty too
+    node = Node(lane)
+    await node.enroll()
+    poll = await node.step()
+    assert [a.digest for a in poll.assignments] == [digest]
+    assert digest not in node.store
+    (span,) = await _open_spans(lane, node)
+    assert span.fill_count == 0 and span.last_filled_at is None
+
+
+async def test_an_ingest_that_loses_the_race_answers_with_the_stored_row(
+    lane: Lane,
+) -> None:
+    await lane.settings()
+    data = _blob(3)
+    put = lane.storage.put_object
+
+    async def racing_put(*, key: str, body: bytes, content_type: str) -> None:
+        # Another ingest records the same bytes, then revokes them, meanwhile.
+        await put(key=key, body=body, content_type=content_type)
+        async with lane.session_maker() as session, session.begin():
+            session.add(
+                EdgeObject(
+                    digest=digest_of(body),
+                    size_bytes=len(body),
+                    media_type="text/plain",
+                    source="synthetic:other",
+                    storage_key=key,
+                    created_by="other",
+                    revoked_at=lane.clock.now,
+                    revoke_reason="the owner unpublished it (other)",
+                )
+            )
+
+    lane.storage.put_object = racing_put  # type: ignore[method-assign]
+    payload = {
+        "data_b64": base64.b64encode(data).decode(),
+        "media_type": "text/markdown",
+        "source": "synthetic:mine",
+    }
+    revoked = await lane.client.post(
+        "/api/v1/admin/edge/objects", headers=_ADMIN, json=payload
+    )
+    assert revoked.status_code == 409, revoked.text
+    async with lane.session_maker() as session, session.begin():
+        stored = await session.get(EdgeObject, digest_of(data))
+        assert stored is not None
+        stored.revoked_at = None
+        stored.revoke_reason = None
+        await session.delete(stored)
+
+    async def racing_live_put(*, key: str, body: bytes, content_type: str) -> None:
+        await put(key=key, body=body, content_type=content_type)
+        async with lane.session_maker() as session, session.begin():
+            session.add(
+                EdgeObject(
+                    digest=digest_of(body),
+                    size_bytes=len(body),
+                    media_type="text/plain",
+                    source="synthetic:other",
+                    storage_key=key,
+                    created_by="other",
+                )
+            )
+
+    lane.storage.put_object = racing_live_put  # type: ignore[method-assign]
+    stored_wins = await lane.client.post(
+        "/api/v1/admin/edge/objects", headers=_ADMIN, json=payload
+    )
+    assert stored_wins.status_code == 200, stored_wins.text
+    assert stored_wins.json()["created"] is False
+    assert stored_wins.json()["media_type"] == "text/plain"
+
+
+async def test_status_has_a_window_summary_before_any_slot_is_due(lane: Lane) -> None:
+    await lane.settings()
+    await lane.ingest(_blob(1))
+    node = Node(lane)
+    await node.enroll()
+    await node.step()
+    async with lane.session_maker() as session, session.begin():
+        for slot in await session.scalars(
+            select(EdgeChallengeSlot).where(
+                EdgeChallengeSlot.node_id == node.key.node_id
+            )
+        ):
+            slot.state = "scheduled"
+            slot.outcome = "pending"
+            slot.challenge_id = None
+            slot.due_at = lane.clock.now + timedelta(seconds=60)
+    status = await node.send("GET", paths.STATUS)
+    assert status.status_code == 200, status.text
+    assert status.json()["current_window"] == {
+        "window_index": int(lane.clock.now.timestamp() // WINDOW),
+        "scheduled": 0,
+        "passed": 0,
+        "missed": 0,
+        "failed": 0,
+    }
+
+
+async def test_window_length_is_frozen_while_a_window_is_unscored(lane: Lane) -> None:
+    await lane.settings()
+    await lane.ingest(_blob(1))
+    node = Node(lane)
+    await node.enroll()
+    await node.step()
+    longer = await lane.settings(window_seconds=600)
+    assert longer.status_code == 409, longer.text
+    assert "window_seconds cannot change" in longer.text
+    assert (await lane.settings(replicas=3)).status_code == 200
+
+
+async def test_a_retired_node_coming_back_counts_against_the_cap(lane: Lane) -> None:
+    await lane.settings(max_nodes=1)
+    first, second = Node(lane), Node(lane)
+    assert (await first.enroll()).status_code == 200
+    assert (await first.send("POST", paths.LEAVE, b"{}")).status_code == 204
+    assert (await second.enroll()).status_code == 200
+    back = await first.enroll()
+    assert back.status_code == 503 and back.json()["error_code"] == 6002
+
+
+async def test_a_span_the_node_released_starts_its_fill_history_fresh(
+    lane: Lane,
+) -> None:
+    await lane.settings(replicas=1)
+    await lane.ingest(_blob(1))
+    node = Node(lane)
+    await node.enroll()
+    await lane.run([node], 2 * POLL)
+    assert (await node.send("POST", paths.LEAVE, b"{}")).status_code == 204
+    node.store.clear()
+    node.leases.clear()
+    node.acked.clear()
+    assert (await node.enroll()).status_code == 200
+    await node.step()
+    (span,) = await _open_spans(lane, node)
+    # It deleted the bytes when it left: only the new download counts.
+    assert span.fill_count == 1 and span.acked_at is not None

@@ -317,23 +317,27 @@ async def enroll(
     quota = min(request.quota_bytes, settings.node_quota_cap_bytes)
     platform = request.platform.model_dump(mode="json")
     node = existing
-    if node is None:
-        # Admit one new node at a time: two enrollments must not both take the
-        # last slot, and the same key enrolling twice must not insert twice.
+    if node is None or node.status == "retired":
+        # Admit one node at a time: two enrollments must not both take the last
+        # slot, the same key enrolling twice must not insert twice, and a
+        # retired node coming back takes a slot like a new one.
         await session.execute(
             select(
                 func.pg_advisory_xact_lock(func.hashtextextended(ADMISSION_LOCK_KEY, 0))
             )
         )
-        node = await session.get(EdgeNode, node_id)
+        node = await session.get(EdgeNode, node_id, populate_existing=True)
+        if node is None or node.status == "retired":
+            enrolled = await session.scalar(
+                select(func.count())
+                .select_from(EdgeNode)
+                .where(EdgeNode.status != "retired")
+            )
+            if (enrolled or 0) >= settings.max_nodes:
+                raise EdgeLaneError(
+                    503, ERROR_CODE_EDGE_LANE_FULL, "the edge lane is full"
+                )
     if node is None:
-        enrolled = await session.scalar(
-            select(func.count())
-            .select_from(EdgeNode)
-            .where(EdgeNode.status != "retired")
-        )
-        if (enrolled or 0) >= settings.max_nodes:
-            raise EdgeLaneError(503, ERROR_CODE_EDGE_LANE_FULL, "the edge lane is full")
         node = EdgeNode(
             node_id=node_id,
             public_key_hex=request.public_key_hex,
@@ -694,7 +698,12 @@ async def _place(
 async def _latest_fills(
     session: AsyncSession, node_id: str, digests: list[str]
 ) -> dict[str, tuple[int, datetime | None]]:
-    """Per object, the fill count and last fill of this node's latest closed span."""
+    """Per object, the fill history of this node's latest span, if it lapsed.
+
+    A span closed at its lapse has ``released_at`` equal to its lease expiry;
+    only that path writes it. A span the node released starts fresh, because
+    the node deleted the bytes.
+    """
     if not digests:
         return {}
     rows = await session.execute(
@@ -702,6 +711,7 @@ async def _latest_fills(
             EdgeAssignment.digest,
             EdgeAssignment.fill_count,
             EdgeAssignment.last_filled_at,
+            EdgeAssignment.released_at == EdgeAssignment.lease_expires_at,
         )
         .where(
             EdgeAssignment.node_id == node_id,
@@ -713,7 +723,8 @@ async def _latest_fills(
     )
     return {
         digest: (fill_count, last_filled_at)
-        for digest, fill_count, last_filled_at in rows.tuples().all()
+        for digest, fill_count, last_filled_at, lapsed in rows.tuples().all()
+        if lapsed
     }
 
 
@@ -792,19 +803,17 @@ async def poll(
 # -- fill, acknowledge, answer, status, leave ---------------------------------
 
 
-async def record_fill(
-    session: AsyncSession, *, node: EdgeNode | None, digest: str, now: datetime
+async def fill_target(
+    session: AsyncSession, *, node: EdgeNode | None, digest: str
 ) -> EdgeObject:
-    """Log one download by this node and return the object to stream."""
+    """The object this node may download: assigned to it and not revoked."""
     node = require_active(node)
     span = await session.scalar(
-        select(EdgeAssignment)
-        .where(
+        select(EdgeAssignment.id).where(
             EdgeAssignment.node_id == node.node_id,
             EdgeAssignment.digest == digest,
             EdgeAssignment.released_at.is_(None),
         )
-        .with_for_update()
     )
     if span is None:
         raise EdgeLaneError(
@@ -813,9 +822,22 @@ async def record_fill(
     obj = await session.get(EdgeObject, digest)
     if obj is None or obj.revoked_at is not None:
         raise EdgeLaneError(410, ERROR_CODE_EDGE_REVOKED, "object revoked")
-    span.fill_count += 1
-    span.last_filled_at = now
     return obj
+
+
+async def record_fill(
+    session: AsyncSession, *, node_id: str, digest: str, now: datetime
+) -> None:
+    """Log one completed download on the node's open span for the object."""
+    await session.execute(
+        update(EdgeAssignment)
+        .where(
+            EdgeAssignment.node_id == node_id,
+            EdgeAssignment.digest == digest,
+            EdgeAssignment.released_at.is_(None),
+        )
+        .values(fill_count=EdgeAssignment.fill_count + 1, last_filled_at=now)
+    )
 
 
 async def acknowledge(
@@ -957,14 +979,15 @@ async def status(
             select(EdgeChallengeSlot).where(
                 EdgeChallengeSlot.node_id == node.node_id,
                 EdgeChallengeSlot.window_index == index,
-                EdgeChallengeSlot.state != "scheduled",
             )
         )
     )
     summary = None
-    if slots:
+    if slots:  # the window is scheduled, even if nothing is due yet
         outcomes: list[str] = []
         for slot in slots:
+            if slot.state == "scheduled":
+                continue
             outcome = slot.outcome
             if (
                 outcome == "pending"

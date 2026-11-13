@@ -416,12 +416,25 @@ async def ingest(
             .on_conflict_do_nothing()
             .returning(EdgeObject.digest)
         )
+        if created is None:
+            # Another ingest recorded these bytes first: answer with its row.
+            stored = await session.get(EdgeObject, digest, populate_existing=True)
+            if stored is None or stored.revoked_at is not None:
+                raise HTTPException(
+                    status_code=409, detail="a revoked digest stays revoked"
+                )
+            return EdgeObjectIngestResponse(
+                digest=digest,
+                size_bytes=stored.size_bytes,
+                media_type=stored.media_type,
+                created=False,
+            )
     logger.info("edge lane object %s ingested by %s", digest, payload.actor)
     return EdgeObjectIngestResponse(
         digest=digest,
         size_bytes=len(data),
         media_type=payload.media_type,
-        created=created is not None,
+        created=True,
     )
 
 

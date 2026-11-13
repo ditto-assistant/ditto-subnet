@@ -289,11 +289,14 @@ async def fill(
             body=b"",
             now=now,
         )
-        obj = await edge_lane.record_fill(
-            session, node=auth.node, digest=digest, now=now
-        )
+        obj = await edge_lane.fill_target(session, node=auth.node, digest=digest)
         size = obj.size_bytes
     data = await load_object_bytes(request, storage, digest, size)
+    # Only a download that succeeded counts as a fill.
+    async with session.begin():
+        await edge_lane.record_fill(
+            session, node_id=auth.node_id, digest=digest, now=now
+        )
     return Response(
         content=data,
         media_type="application/octet-stream",
