@@ -389,13 +389,16 @@ data "aws_iam_policy_document" "apply" {
   # RunInstances also authorizes the image and the network interface it
   # creates. Images come only from the publishers modules/compute/aws resolves
   # through SSM: Debian (136693071363) and Canonical (099720109477).
+  # ec2:Owner can be the alias "amazon" even when DescribeImages returns a
+  # numeric publisher ID. ResourceAccount compares the actual owning account
+  # and preserves this two-publisher boundary without admitting all Amazon AMIs.
   statement {
     sid       = "LaunchPublishedImages"
     actions   = ["ec2:RunInstances"]
     resources = ["arn:aws:ec2:${local.region}::image/*"]
     condition {
       test     = "StringEquals"
-      variable = "ec2:Owner"
+      variable = "aws:ResourceAccount"
       values   = ["136693071363", "099720109477"]
     }
   }
