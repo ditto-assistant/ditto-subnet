@@ -4062,19 +4062,20 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List Ditto Edge nodes',
       description:
-        'List Ditto Edge shadow lane nodes (SN-481), most recent poll first: one page of limit (default 50) from offset, over the first 1000 nodes Platform returns (count is that total, has_more says whether another page follows). Each node has its id (edn_ plus 32 hex, from the Ed25519 device key), operator (the bound hotkey, else the node id), client name and version, self-reported platform labels (shown, never scored), status (active, suspended, retired), quota, enrollment and last poll, held objects and bytes under a live lease, and the latest scored window. Requires backroom:read and changes nothing.',
+        'List Ditto Edge shadow lane nodes (SN-481), most recent poll first: one page of limit (default 50) from offset, over the first 1000 nodes Platform returns (count is that total, has_more says whether another page of them follows, and may_be_truncated is true when the 1000-node cap of Platform was reached, so more nodes may exist beyond it). Each node has its id (edn_ plus 32 hex, from the Ed25519 device key), operator (the bound hotkey, else the node id), client name and version, self-reported platform labels (shown, never scored), status (active, suspended, retired), quota, enrollment and last poll, held objects and bytes under a live lease, and the latest scored window. Requires backroom:read and changes nothing.',
       inputSchema: MCP_PAGINATION_INPUT,
       annotations: toolAnnotations('read'),
     },
-    async ({ limit, offset }) =>
-      result(
-        paginateLocalCollection(
-          await listEdgeLaneNodes({ limit: EDGE_LANE_NODES_CAP }),
-          'nodes',
-          limit,
-          offset,
-        ),
-      ),
+    async ({ limit, offset }) => {
+      const listing = await listEdgeLaneNodes({ limit: EDGE_LANE_NODES_CAP })
+      return result({
+        ...paginateLocalCollection(listing, 'nodes', limit, offset),
+        // A full window may be the whole lane or only its most recently
+        // polled part: say it may be cut, never that it is.
+        platform_cap: EDGE_LANE_NODES_CAP,
+        may_be_truncated: listing.nodes.length >= EDGE_LANE_NODES_CAP,
+      })
+    },
   )
 
   registerTool(

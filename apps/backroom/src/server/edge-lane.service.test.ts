@@ -200,7 +200,14 @@ describe('Ditto Edge shadow lane tools', () => {
         await client.callTool({ name: 'list_edge_lane_nodes', arguments: { limit: 1 } }),
       )
       expect((nodes.nodes as Array<{ node_id: string }>)[0].node_id).toBe(NODE)
-      expect(nodes).toMatchObject({ count: 1, returned: 1, limit: 1, offset: 0, has_more: false })
+      expect(nodes).toMatchObject({
+        count: 1,
+        returned: 1,
+        limit: 1,
+        offset: 0,
+        has_more: false,
+        may_be_truncated: false,
+      })
 
       const ledger = json(
         await client.callTool({
@@ -219,6 +226,35 @@ describe('Ditto Edge shadow lane tools', () => {
       )
       // Reads only: Backroom never writes to the lane.
       expect(fetchMock.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET')).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('says a node listing at the platform cap may be cut short', async () => {
+    const node = (responses['/api/v1/admin/edge/nodes'] as { nodes: Array<Record<string, unknown>> })
+      .nodes[0]
+    stubPlatform({
+      '/api/v1/admin/edge/nodes': {
+        nodes: Array.from({ length: 1000 }, (_, index) => ({
+          ...node,
+          node_id: `edn_${index.toString(16).padStart(32, '0')}`,
+        })),
+      },
+    })
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const last = json(
+        await client.callTool({ name: 'list_edge_lane_nodes', arguments: { limit: 200, offset: 800 } }),
+      )
+      // The last local page ends the window, but not necessarily the lane.
+      expect(last).toMatchObject({
+        count: 1000,
+        has_more: false,
+        platform_cap: 1000,
+        may_be_truncated: true,
+      })
     } finally {
       await client.close()
       await server.close()
