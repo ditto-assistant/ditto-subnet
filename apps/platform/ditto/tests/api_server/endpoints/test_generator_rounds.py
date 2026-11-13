@@ -1528,7 +1528,9 @@ class TestChallengerQueue:
         being measured there. The next round's challenger column goes to the
         next generator in the queue instead of re-running it (round 26100
         re-ran 6208f7cc because 26099 scored seven minutes after 26100 opened).
-        A void round measured nothing, so it puts the generator back first."""
+        A void round measured nothing, so it puts the generator back first.
+        Both generators are one miner's, so the family takes one column a
+        round."""
         _install(app, session_maker)
         await _apply_settings(
             client,
@@ -1546,7 +1548,7 @@ class TestChallengerQueue:
             session_maker, hotkey="5GenFirst", owner="coldkey:first", salt="first"
         )
         second = await _seed_generator(
-            session_maker, hotkey="5GenSecond", owner="coldkey:second", salt="second"
+            session_maker, hotkey="5GenSecond", owner="coldkey:first", salt="second"
         )
         now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
@@ -1726,6 +1728,87 @@ class TestChallengerQueue:
         # The scored generator and the public default are never in the queue.
         assert str(ids["scored"]) not in {entry["submission_id"] for entry in queue}
 
+    async def test_every_waiting_family_gets_a_column_next_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A generator qualified before a round opens is measured in it: each
+        waiting template family takes one challenger column past
+        challenger_columns, up to the round's eight columns. A family's other
+        builds wait, and challenger_columns 0 still seats none."""
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=1, challenger_columns=1)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        layout = [
+            # name, owner, module, hours before now, scored
+            ("scored", "s", "example.com/scored", 7, True),
+            ("clone-a", "a", "example.com/clone", 6, False),
+            ("clone-b", "b", "example.com/clone", 5, False),
+            ("distinct", "x", "example.com/distinct", 4, False),
+            ("solo", "y", "example.com/solo", 3, False),
+            ("batch-1", "z", "example.com/batch-1", 2, False),
+            ("batch-2", "z", "example.com/batch-2", 1, False),
+        ]
+        ids: dict[str, UUID] = {}
+        for name, owner, _, _, _ in layout:
+            ids[name] = await _seed_generator(
+                session_maker,
+                hotkey=f"5Gen-{name}",
+                owner=f"coldkey:{owner}",
+                salt=name,
+            )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for name, _, module, age, scored in layout:
+                row = await session.get(GeneratorSubmission, ids[name])
+                assert row is not None
+                row.module = module
+                row.qualified_at = now - timedelta(hours=age)
+                row.round_score = 0.3 if scored else None
+                row.round_scored_index = 1 if scored else None
+
+        async def columns() -> list[tuple[str, bool]]:
+            preview = await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)
+            assert preview.status_code == 200, preview.text
+            return [
+                (column["submission_id"], column["counted"])
+                for column in preview.json()["columns"]
+            ]
+
+        assert await columns() == [
+            (str(ids["scored"]), True),
+            (str(ids["clone-a"]), False),
+            (str(ids["distinct"]), False),
+            (str(ids["solo"]), False),
+            (str(ids["batch-1"]), False),
+        ]
+
+        # Five counted columns leave room for three challengers: the fourth
+        # waiting family is measured next round.
+        await _apply_settings(client, counted_columns=5, challenger_columns=1)
+        for index in range(4):
+            extra = await _seed_generator(
+                session_maker,
+                hotkey=f"5Gen-top-{index}",
+                owner=f"coldkey:top-{index}",
+                salt=f"top-{index}",
+            )
+            async with session_maker() as session, session.begin():
+                row = await session.get(GeneratorSubmission, extra)
+                assert row is not None
+                row.module = f"example.com/top-{index}"
+                row.qualified_at = now - timedelta(hours=8)
+                row.round_score = 0.5
+                row.round_scored_index = 1
+        assert [counted for _, counted in await columns()] == [True] * 5 + [False] * 3
+
+        await _apply_settings(client, counted_columns=1, challenger_columns=0)
+        assert [counted for _, counted in await columns()] == [True]
+
     async def test_a_partial_probe_copy_waits_behind_new_cases(
         self,
         app: FastAPI,
@@ -1735,7 +1818,8 @@ class TestChallengerQueue:
     ) -> None:
         """Within one family position the queue takes the generator whose
         current-epoch probe cases are new over one that half copies a scored
-        generator's, though the copy qualified first."""
+        generator's, though the copy qualified first. Both families are
+        seated; the novel one takes the first challenger column."""
         _install(app, session_maker)
         await _apply_settings(client, counted_columns=1, challenger_columns=1)
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
@@ -1798,13 +1882,13 @@ class TestChallengerQueue:
             column["submission_id"]
             for column in preview["columns"]
             if not column["counted"]
-        ] == [str(ids["novel"])]
+        ] == [str(ids["novel"]), str(ids["partial"])]
         assert [
             (entry["submission_id"], entry["status"], entry["novelty"])
             for entry in preview["challenger_queue"]
         ] == [
             (str(ids["novel"]), "challenger", 1.0),
-            (str(ids["partial"]), "waiting", 0.5),
+            (str(ids["partial"]), "challenger", 0.5),
         ]
 
 

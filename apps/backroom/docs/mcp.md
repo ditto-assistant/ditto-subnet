@@ -294,7 +294,11 @@ opens, once it is scored or void.
     cases, or a twin of a build already ahead, waits behind new cases.
     Novelty is computed on emitted cases, not source, so padding an archive
     cannot raise it. A generator whose column in an earlier round is
-    still in flight is skipped as a challenger. The grouping only orders the
+    still in flight is skipped as a challenger. While `challenger_columns` is
+    above zero, every family with a build waiting gets one challenger column,
+    past `challenger_columns` up to the round's 8 columns, so a generator
+    qualified before a round opens is measured in that round unless the round
+    is full; queue order decides who waits then. The grouping only orders the
     queue; it never rejects a generator. The public default generator is
     never in the queue.
   - `list_generator_rounds`, `get_generator_round`, `preview_generator_round`
