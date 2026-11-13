@@ -15,6 +15,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +34,7 @@ from ditto.api_server.edge_lane_settings import (
     settings_from_row,
 )
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.db.models import EdgeChallengeSlot, EdgeWindowClosure
 from ditto.db.models import EdgeLaneSettingsRevision as RevisionRow
 from ditto.db.queries.edge_lane_settings import (
     GLOBAL_SCOPE,
@@ -120,6 +122,20 @@ async def create_settings_revision(
             ),
         )
     settings = payload.settings
+    current = settings_from_row(latest)
+    if settings.window_seconds != current.window_seconds and await _unscored_window(
+        session
+    ):
+        # A slot's window index means nothing under another window length, so
+        # an unscored window would be scored against the wrong hours.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "window_seconds cannot change while a challenge window is "
+                "unscored: turn the lane off, wait for its last window to close, "
+                "read the ledger to score it, then change window_seconds"
+            ),
+        )
     try:
         row = await insert_edge_lane_settings_revision(
             session,
@@ -147,3 +163,17 @@ async def create_settings_revision(
         row.reason,
     )
     return _revision(row)
+
+
+async def _unscored_window(session: AsyncSession) -> bool:
+    """Whether any challenge window still waits for its ledger rows."""
+    window = await session.scalar(
+        select(EdgeChallengeSlot.window_index)
+        .where(
+            ~select(EdgeWindowClosure.window_index)
+            .where(EdgeWindowClosure.window_index == EdgeChallengeSlot.window_index)
+            .exists()
+        )
+        .limit(1)
+    )
+    return window is not None

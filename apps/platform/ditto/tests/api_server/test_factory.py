@@ -135,7 +135,11 @@ class TestCreateApiServer:
         visit(schema, "openapi")
         # Receipt selectors and exact manual custody envelopes carry bounded
         # transport annotations, not extensive source/policy review evidence.
+        # An edge node's leave note is node-supplied edge/v1 wire text, not
+        # operator evidence.
         assert bounded == [
+            "openapi.paths./api/v1/edge/nodes/me/leave.post.requestBody.content"
+            ".application/json.schema.reason=200",
             "openapi.components.schemas.ManualBatchRequest.reason=240",
             "openapi.components.schemas.ManualPreviewInput.reason=240",
             "openapi.components.schemas.ManualRequest.reason=240",

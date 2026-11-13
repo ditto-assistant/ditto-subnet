@@ -1739,6 +1739,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/edge/ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ledger */
+        get: operations["ledger_api_v1_admin_edge_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/edge/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Nodes */
+        get: operations["nodes_api_v1_admin_edge_nodes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/edge/objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Objects */
+        get: operations["objects_api_v1_admin_edge_objects_get"];
+        put?: never;
+        /** Ingest */
+        post: operations["ingest_api_v1_admin_edge_objects_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/edge/objects/{digest}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke */
+        post: operations["revoke_api_v1_admin_edge_objects__digest__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/edge/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Overview */
+        get: operations["overview_api_v1_admin_edge_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/efficiency-bonus-settings": {
         parameters: {
             query?: never;
@@ -6339,6 +6425,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/edge/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge */
+        post: operations["acknowledge_api_v1_edge_ack_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/challenges/{challenge_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Answer */
+        post: operations["answer_api_v1_edge_challenges__challenge_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enroll */
+        post: operations["enroll_api_v1_edge_nodes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/nodes/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Node Status */
+        get: operations["node_status_api_v1_edge_nodes_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/nodes/me/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Leave */
+        post: operations["leave_api_v1_edge_nodes_me_leave_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/objects/{digest}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fill */
+        get: operations["fill_api_v1_edge_objects__digest__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Poll */
+        post: operations["poll_api_v1_edge_poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/feedback-track/contributions": {
         parameters: {
             query?: never;
@@ -10513,6 +10718,13 @@ export interface components {
              * @constant
              */
             upstream_requests: 0;
+        };
+        /** AckResponse */
+        AckResponse: {
+            /** Accepted */
+            accepted: number;
+            /** Ignored */
+            ignored: number;
         };
         /** ActivateV13ScorerCohortRequest */
         ActivateV13ScorerCohortRequest: {
@@ -17796,6 +18008,14 @@ export interface components {
             /** Reliability Provider Order */
             reliability_provider_order: string[];
         };
+        /**
+         * AnswerResponse
+         * @description Receipt only. Platform never tells a node whether an answer passed.
+         */
+        AnswerResponse: {
+            /** Received */
+            received: boolean;
+        };
         /** AppliedScreenerReviewSettings */
         AppliedScreenerReviewSettings: {
             /** Checksum */
@@ -18050,6 +18270,20 @@ export interface components {
              * @description Expected SHA-256 of the tarball, lowercase hex.
              */
             sha256: string;
+        };
+        /**
+         * Assignment
+         * @description One object the node should hold until its lease lapses.
+         */
+        Assignment: {
+            /** Digest */
+            digest: string;
+            /** Lease Expires At */
+            lease_expires_at: number;
+            /** Media Type */
+            media_type: string;
+            /** Size Bytes */
+            size_bytes: number;
         };
         /**
          * AthReviewQueueSlo
@@ -20564,6 +20798,34 @@ export interface components {
             observed_at: string;
             /** Provider */
             provider: string;
+        };
+        /**
+         * Challenge
+         * @description Prove possession of a byte range, or return it.
+         *
+         *     ``possession`` asks for ``sha256(nonce || bytes[offset:offset+length])``;
+         *     ``retrieval`` asks for the exact bytes. A challenge for a digest the node
+         *     was told to revoke is an ordinary possession challenge: the only correct
+         *     answer is a refusal.
+         */
+        Challenge: {
+            /** Challenge Id */
+            challenge_id: string;
+            /** Deadline At */
+            deadline_at: number;
+            /** Digest */
+            digest: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "possession" | "retrieval";
+            /** Length */
+            length: number;
+            /** Nonce Hex */
+            nonce_hex?: string | null;
+            /** Offset */
+            offset: number;
         };
         /** ClaControl */
         ClaControl: {
@@ -24030,6 +24292,50 @@ export interface components {
         DuelingWorkResponse: {
             work?: components["schemas"]["DuelingWork"] | null;
         };
+        /** EdgeLaneOverview */
+        EdgeLaneOverview: {
+            /** Active Object Bytes */
+            active_object_bytes: number;
+            /** Current Window Index */
+            current_window_index: number;
+            /** Held Assignments */
+            held_assignments: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /** Nodes Active */
+            nodes_active: number;
+            /** Nodes Live */
+            nodes_live: number;
+            /** Nodes Retired */
+            nodes_retired: number;
+            /** Nodes Suspended */
+            nodes_suspended: number;
+            /** Objects Active */
+            objects_active: number;
+            /** Objects Revoked */
+            objects_revoked: number;
+            /** Open Assignments */
+            open_assignments: number;
+            /**
+             * Payouts
+             * @default none
+             * @constant
+             */
+            payouts: "none";
+            /** Recent Windows */
+            recent_windows: components["schemas"]["EdgeWindowRow"][];
+            /** Settings Revision */
+            settings_revision: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
         /**
          * EdgeLaneSettings
          * @description The complete lane policy (one revision = the whole object).
@@ -24147,6 +24453,199 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["EdgeLaneSettings"];
+        };
+        /** EdgeLedgerResponse */
+        EdgeLedgerResponse: {
+            /** Closed Now */
+            closed_now: number[];
+            /** Rows */
+            rows: components["schemas"]["EdgeLedgerRow"][];
+        };
+        /** EdgeLedgerRow */
+        EdgeLedgerRow: {
+            /** Availability */
+            availability: number;
+            /**
+             * Computed At
+             * Format: date-time
+             */
+            computed_at: string;
+            /** Eligible */
+            eligible: boolean;
+            /** Failed */
+            failed: number;
+            /** Held Gib Hours */
+            held_gib_hours: number;
+            /** Hypothetical Share */
+            hypothetical_share: number;
+            /** Missed */
+            missed: number;
+            /** Node Id */
+            node_id: string;
+            /** Operator */
+            operator: string;
+            /** Passed */
+            passed: number;
+            /** Reasons */
+            reasons: string[];
+            /** Refilled */
+            refilled: number;
+            /** Refused */
+            refused: number;
+            /** Revocation Checks */
+            revocation_checks: number;
+            /** Revocation Violations */
+            revocation_violations: number;
+            /** Scheduled */
+            scheduled: number;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Verified Units */
+            verified_units: number;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+            /** Window Index */
+            window_index: number;
+        };
+        /** EdgeNodeRow */
+        EdgeNodeRow: {
+            /** Client Name */
+            client_name: string;
+            /** Client Version */
+            client_version: string;
+            /**
+             * Enrolled At
+             * Format: date-time
+             */
+            enrolled_at: string;
+            /** Held Bytes */
+            held_bytes: number;
+            /** Held Objects */
+            held_objects: number;
+            /** Hotkey Ss58 */
+            hotkey_ss58: string | null;
+            /** Last Poll At */
+            last_poll_at: string | null;
+            latest_window: components["schemas"]["EdgeLedgerRow"] | null;
+            /** Node Id */
+            node_id: string;
+            /** Operator */
+            operator: string;
+            /** Platform */
+            platform: {
+                [key: string]: unknown;
+            };
+            /** Quota Bytes */
+            quota_bytes: number;
+            /** Status */
+            status: string;
+        };
+        /** EdgeNodesResponse */
+        EdgeNodesResponse: {
+            /** Nodes */
+            nodes: components["schemas"]["EdgeNodeRow"][];
+        };
+        /**
+         * EdgeObjectIngestRequest
+         * @description Add one public object to the lane. Admin only, shadow test data.
+         */
+        EdgeObjectIngestRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Data B64 */
+            data_b64: string;
+            /** Media Type */
+            media_type: string;
+            /** Source */
+            source: string;
+        };
+        /** EdgeObjectIngestResponse */
+        EdgeObjectIngestResponse: {
+            /** Created */
+            created: boolean;
+            /** Digest */
+            digest: string;
+            /** Media Type */
+            media_type: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
+        /** EdgeObjectRevokeRequest */
+        EdgeObjectRevokeRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Reason */
+            reason: string;
+        };
+        /** EdgeObjectRevokeResponse */
+        EdgeObjectRevokeResponse: {
+            /** Digest */
+            digest: string;
+            /** Newly Revoked */
+            newly_revoked: boolean;
+            /** Revoke Reason */
+            revoke_reason: string;
+            /**
+             * Revoked At
+             * Format: date-time
+             */
+            revoked_at: string;
+        };
+        /** EdgeObjectRow */
+        EdgeObjectRow: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Digest */
+            digest: string;
+            /** Holders */
+            holders: number;
+            /** Media Type */
+            media_type: string;
+            /** Revoke Reason */
+            revoke_reason: string | null;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Source */
+            source: string;
+        };
+        /** EdgeObjectsResponse */
+        EdgeObjectsResponse: {
+            /** Objects */
+            objects: components["schemas"]["EdgeObjectRow"][];
+        };
+        /** EdgeWindowRow */
+        EdgeWindowRow: {
+            /**
+             * Closed At
+             * Format: date-time
+             */
+            closed_at: string;
+            /** Eligible Nodes */
+            eligible_nodes: number;
+            /** Node Count */
+            node_count: number;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Verified Units */
+            verified_units: number;
+            /** Window Index */
+            window_index: number;
         };
         /** EffectiveBurnSettings */
         EffectiveBurnSettings: {
@@ -25107,6 +25606,19 @@ export interface components {
              * @constant
              */
             version: 2;
+        };
+        /** EnrollResponse */
+        EnrollResponse: {
+            limits: components["schemas"]["LaneLimits"];
+            /** Node Id */
+            node_id: string;
+            /** Server Time */
+            server_time: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "suspended" | "retired";
         };
         /**
          * EvalPricingResponse
@@ -29505,6 +30017,27 @@ export interface components {
             target_node_id: string;
         };
         /**
+         * LaneLimits
+         * @description The slice of lane settings a node needs to behave.
+         */
+        LaneLimits: {
+            /** Challenge Deadline Seconds */
+            challenge_deadline_seconds: number;
+            /** Lease Seconds */
+            lease_seconds: number;
+            /** Max Object Bytes */
+            max_object_bytes: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /** Node Quota Cap Bytes */
+            node_quota_cap_bytes: number;
+            /** Poll Interval Seconds */
+            poll_interval_seconds: number;
+        };
+        /**
          * LedgerEntry
          * @description One miner's best eligible score, returned by ``GET /scoring/scores``.
          *
@@ -31004,6 +31537,35 @@ export interface components {
             proof: components["schemas"]["NameClaimProof"];
         };
         /**
+         * NodeStatusResponse
+         * @description What the node's own status screen shows (Desktop, CLI).
+         */
+        NodeStatusResponse: {
+            current_window?: components["schemas"]["WindowSummary"] | null;
+            /** Held Bytes */
+            held_bytes: number;
+            /** Held Objects */
+            held_objects: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /** Node Id */
+            node_id: string;
+            /**
+             * Payouts
+             * @default none
+             * @constant
+             */
+            payouts: "none";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "suspended" | "retired";
+        };
+        /**
          * ObservedComponentIdentity
          * @description Identity actually observed from a live component, never a copied pin.
          */
@@ -31836,6 +32398,27 @@ export interface components {
             reveal_round: number;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /** PollResponse */
+        PollResponse: {
+            /** Assignments */
+            assignments: components["schemas"]["Assignment"][];
+            /** Challenges */
+            challenges: components["schemas"]["Challenge"][];
+            limits: components["schemas"]["LaneLimits"];
+            /** Next Poll Seconds */
+            next_poll_seconds: number;
+            /** Revocations */
+            revocations: string[];
+            /** Server Time */
+            server_time: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "suspended" | "retired";
+            /** Window Index */
+            window_index: number;
         };
         /**
          * PrevGenCarryoverSettings
@@ -47879,6 +48462,19 @@ export interface components {
              */
             vector_digest: string;
         };
+        /** WindowSummary */
+        WindowSummary: {
+            /** Failed */
+            failed: number;
+            /** Missed */
+            missed: number;
+            /** Passed */
+            passed: number;
+            /** Scheduled */
+            scheduled: number;
+            /** Window Index */
+            window_index: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -52034,6 +52630,210 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EdgeLaneSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ledger_api_v1_admin_edge_ledger_get: {
+        parameters: {
+            query?: {
+                window_index?: number | null;
+                node_id?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeLedgerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    nodes_api_v1_admin_edge_nodes_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeNodesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    objects_api_v1_admin_edge_objects_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeObjectsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_api_v1_admin_edge_objects_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EdgeObjectIngestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeObjectIngestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_api_v1_admin_edge_objects__digest__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EdgeObjectRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeObjectRevokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    overview_api_v1_admin_edge_overview_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeLaneOverview"];
                 };
             };
             /** @description Validation Error */
@@ -60868,6 +61668,312 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    acknowledge_api_v1_edge_ack_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Held
+                     * @default []
+                     */
+                    held?: string[];
+                    /**
+                     * Released
+                     * @default []
+                     */
+                    released?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AckResponse"];
+                };
+            };
+        };
+    };
+    answer_api_v1_edge_challenges__challenge_id__post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path: {
+                challenge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Data B64 */
+                    data_b64?: string | null;
+                    /**
+                     * Outcome
+                     * @enum {string}
+                     */
+                    outcome: "proof" | "bytes" | "refused";
+                    /** Proof Hex */
+                    proof_hex?: string | null;
+                    /** Refusal */
+                    refusal?: ("revoked" | "not_held" | "busy") | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnswerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enroll_api_v1_edge_nodes_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * ClientInfo
+                     * @description Which node implementation is talking. A label, never a scoring input.
+                     */
+                    client: {
+                        /** Name */
+                        name: string;
+                        /** Version */
+                        version: string;
+                    };
+                    hotkey_binding?: {
+                        /** Hotkey Ss58 */
+                        hotkey_ss58: string;
+                        /** Issued At */
+                        issued_at: number;
+                        /** Signature Hex */
+                        signature_hex: string;
+                    } | null;
+                    /**
+                     * NodePlatform
+                     * @description What the node says about its machine.
+                     *
+                     *     Self-reported, so it is shown to operators and never scored: a root-owned
+                     *     box can report anything about itself.
+                     */
+                    platform?: {
+                        /**
+                         * Arch
+                         * @default
+                         */
+                        arch?: string;
+                        /** Memory Gb */
+                        memory_gb?: number | null;
+                        /**
+                         * Model
+                         * @default
+                         */
+                        model?: string;
+                        /**
+                         * Os
+                         * @default
+                         */
+                        os?: string;
+                    };
+                    /**
+                     * Protocol
+                     * @constant
+                     */
+                    protocol: "edge/v1";
+                    /** Public Key Hex */
+                    public_key_hex: string;
+                    /** Quota Bytes */
+                    quota_bytes: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollResponse"];
+                };
+            };
+        };
+    };
+    node_status_api_v1_edge_nodes_me_get: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeStatusResponse"];
+                };
+            };
+        };
+    };
+    leave_api_v1_edge_nodes_me_leave_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Reason
+                     * @default
+                     */
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    fill_api_v1_edge_objects__digest__get: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path: {
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The object's bytes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_api_v1_edge_poll_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Free Bytes */
+                    free_bytes: number;
+                    /**
+                     * Protocol
+                     * @constant
+                     */
+                    protocol: "edge/v1";
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PollResponse"];
                 };
             };
         };
