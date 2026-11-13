@@ -133,7 +133,7 @@ def test_apply_role_ec2_mutation_is_tag_scoped() -> None:
         '"aws:ResourceTag/stack"',
         '"aws:RequestTag/stack"',
         '"ec2:CreateAction"',
-        '"ec2:Owner"',
+        '"aws:ResourceAccount"',
     )
     unbounded = {_sid(s) for s in ec2 if not any(bound in s for bound in bounds)}
     assert unbounded == {"RevokeUntaggedDefaultRules", "LaunchNetworkInterface"}
