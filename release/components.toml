@@ -44,6 +44,7 @@ ignored_paths = [
   "infra/**",
   "scripts/check_netns_incompatible.py",
   "scripts/test-coding-hosted-connectivity-kernel.py", # CI-only synthetic namespace test
+  "scripts/test-sandbox-firewall.sh", # Manual isolated DinD firewall regression probe
   "scripts/gen_validator_contract.py",
   "scripts/generate_confirmation_installation.py",
   "scripts/run-validator.sh",
@@ -144,6 +145,7 @@ description = "Validator sandbox Docker daemon image"
 paths = [
   "Dockerfile.sandbox-docker",
   "scripts/sandbox-docker-entrypoint.sh",
+  "scripts/sandbox-dockerd-wrapper.sh",
 ]
 
 [components.dittobench_api]

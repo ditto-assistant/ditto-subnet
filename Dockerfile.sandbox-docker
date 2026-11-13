@@ -2,5 +2,6 @@ FROM docker.io/library/docker:29-dind@sha256:9e79b879b177fbd72c34376a3dd3d91747d
 
 RUN apk add --no-cache curl socat
 COPY scripts/sandbox-docker-entrypoint.sh /usr/local/bin/sandbox-docker-entrypoint
+COPY --chmod=0755 scripts/sandbox-dockerd-wrapper.sh /usr/local/sbin/dockerd
 
 ENTRYPOINT ["sandbox-docker-entrypoint"]

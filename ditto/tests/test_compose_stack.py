@@ -53,9 +53,14 @@ def test_sandbox_image_pins_compatible_rootful_dind_and_installs_guard_tools() -
 def test_sandbox_health_reports_the_isolated_daemon() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
-    probe = " ".join(sandbox["healthcheck"]["test"])
-    assert "docker info" in probe
-    assert "docker info >/dev/null 2>&1" in probe
+    assert sandbox["healthcheck"]["test"] == [
+        "CMD",
+        "/usr/local/sbin/dockerd",
+        "--ditto-healthcheck",
+    ]
+    wrapper = (COMPOSE_PATH.parent / "scripts/sandbox-dockerd-wrapper.sh").read_text()
+    assert "docker info >/dev/null 2>&1" in wrapper
+    assert 'test -f "$ready"' in wrapper
 
 
 def test_pylon_must_accept_connections_before_validator_starts() -> None:
@@ -244,6 +249,7 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
+    firewall = (COMPOSE_PATH.parent / "scripts/sandbox-dockerd-wrapper.sh").read_text()
 
     assert set(sandbox["volumes"]) == {
         "sandbox-docker-rootful-data-v2:/var/lib/docker",
@@ -254,33 +260,42 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     # `docker system prune` also removes unused networks, which would delete the
     # idle ditto-sandbox bridge between benchmarks and break every harness run.
     # Reclaim containers, images, and build cache explicitly; never system-prune.
-    assert "docker system prune" not in entrypoint
-    assert "docker network prune" not in entrypoint
-    assert "docker container prune --force" in entrypoint
-    assert "docker image prune --all --force --filter 'until=24h'" in entrypoint
-    assert "docker builder prune --all --force" in entrypoint
-    assert "docker volume prune --all --force" in entrypoint
-    assert "sleep 21600" in entrypoint
+    assert "docker system prune" not in firewall
+    assert "docker network prune" not in firewall
+    assert "docker container prune --force" in firewall
+    assert "docker image prune --all --force --filter 'until=24h'" in firewall
+    assert "docker builder prune --all --force" in firewall
+    assert "docker volume prune --all --force" in firewall
+    assert "sleep 21600" in firewall
     assert "--feature containerd-snapshotter=false" in entrypoint
     assert "--label io.heyditto.dittobench.isolated=true" in entrypoint
-    assert entrypoint.index("ensure_sandbox_network") < entrypoint.index(
+    assert firewall.index("ensure_sandbox_network") < firewall.index(
         "docker container prune --force"
     )
-    assert "--dport 11436 -j ACCEPT" in entrypoint
-    assert '--dport "$openrouter_shim_port" -j ACCEPT' in entrypoint
-    assert "--dport 11434 -j ACCEPT" not in entrypoint
-    assert "--dport 11435 -j ACCEPT" not in entrypoint
+    assert "--dport 11436 -j ACCEPT" in firewall
+    assert "--dport $openrouter_shim_port -j ACCEPT" in firewall
+    assert "--dport 11434 -j ACCEPT" not in firewall
+    assert "--dport 11435 -j ACCEPT" not in firewall
 
 
 def test_sandbox_egress_policy_installs_before_dockerd_starts() -> None:
     entrypoint = SANDBOX_ENTRYPOINT_PATH.read_text()
+    wrapper = (COMPOSE_PATH.parent / "scripts/sandbox-dockerd-wrapper.sh").read_text()
+    dockerfile = (COMPOSE_PATH.parent / "Dockerfile.sandbox-docker").read_text()
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
 
-    policy_install = "iptables -I DOCKER-USER 1 -i ditto-sandbox0"
-    daemon_start = "exec dockerd-entrypoint.sh"
-    assert policy_install in entrypoint
-    assert daemon_start in entrypoint
-    assert entrypoint.index(policy_install) < entrypoint.index(daemon_start)
-    assert "docker network prune" not in entrypoint
+    assert "exec dockerd-entrypoint.sh dockerd" in entrypoint
+    assert "scripts/sandbox-dockerd-wrapper.sh /usr/local/sbin/dockerd" in dockerfile
+    assert wrapper.rindex("install_firewall initial\n") < wrapper.index(
+        'exec /usr/local/bin/dockerd "$@"'
+    )
+    assert compose["services"]["sandbox-docker"]["healthcheck"]["test"] == [
+        "CMD",
+        "/usr/local/sbin/dockerd",
+        "--ditto-healthcheck",
+    ]
+    assert "iptables-restore --wait 5 --noflush" in wrapper
+    assert "iptables -F DITTO-SANDBOX-EGRESS" not in wrapper
 
 
 def test_sandbox_daemon_api_listens_on_loopback_only() -> None:
@@ -384,19 +399,20 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
+    firewall = (COMPOSE_PATH.parent / "scripts/sandbox-dockerd-wrapper.sh").read_text()
     assert "su-exec rootless" not in entrypoint
-    assert "DITTO-SANDBOX-EGRESS" in entrypoint
-    assert "--dport 11436 -j ACCEPT" in entrypoint
-    assert '--dport "$openrouter_shim_port" -j ACCEPT' in entrypoint
-    assert "--dport 11434 -j ACCEPT" not in entrypoint
-    assert "--dport 11435 -j ACCEPT" not in entrypoint
-    assert "ditto-sandbox-deny" in entrypoint
+    assert "DITTO-SANDBOX-EGRESS" in firewall
+    assert "--dport 11436 -j ACCEPT" in firewall
+    assert "--dport $openrouter_shim_port -j ACCEPT" in firewall
+    assert "--dport 11434 -j ACCEPT" not in firewall
+    assert "--dport 11435 -j ACCEPT" not in firewall
+    assert "ditto-sandbox-deny" in firewall
     # Denied egress must fail fast: a silent DROP costs a full SYN timeout per
     # connect (~53 s of dead time per benchmark check), which burns the whole
     # ticket and starves the scoring slot. The allowlist is unchanged.
-    assert "-j DROP" not in entrypoint
-    assert "-p tcp -j REJECT --reject-with tcp-reset" in entrypoint
-    assert "-j REJECT --reject-with icmp-port-unreachable" in entrypoint
+    assert "-j DROP" not in firewall
+    assert "-p tcp -j REJECT --reject-with tcp-reset" in firewall
+    assert "-j REJECT --reject-with icmp-port-unreachable" in firewall
     assert "/var/run/docker.sock" not in COMPOSE_PATH.read_text()
 
 
@@ -408,6 +424,7 @@ def test_hardcoded_openrouter_https_is_shimmed_into_the_bound_broker() -> None:
     entrypoint = (
         COMPOSE_PATH.parent / "scripts/sandbox-docker-entrypoint.sh"
     ).read_text()
+    firewall = (COMPOSE_PATH.parent / "scripts/sandbox-dockerd-wrapper.sh").read_text()
 
     ca_path = "/var/lib/dittobench-openrouter-shim/ca-bundle.pem"
     assert scorer["environment"]["DITTOBENCH_OPENROUTER_SHIM_CA_BUNDLE_PATH"] == ca_path
@@ -423,10 +440,9 @@ def test_hardcoded_openrouter_https_is_shimmed_into_the_bound_broker() -> None:
 
     # Only host-local port 443 is redirected. Public HTTPS is still rejected;
     # Docker's per-run /etc/hosts entry makes openrouter.ai the one local name.
-    assert "-m addrtype --dst-type LOCAL -p tcp --dport 443" in entrypoint
-    assert '-j REDIRECT --to-ports "$openrouter_shim_port"' in entrypoint
-    assert "-t nat -I PREROUTING 1 -i 'dtj+'" in entrypoint
-    assert "-t nat -I PREROUTING 1 -i ditto-sandbox0" in entrypoint
+    assert "-m addrtype --dst-type LOCAL -p tcp --dport 443" in firewall
+    assert "-j REDIRECT --to-ports $openrouter_shim_port" in firewall
+    assert 'iptables -w 5 -t nat -I PREROUTING "$position" -i "$bridge"' in firewall
 
 
 def test_screened_image_capability_is_enabled_without_a_global_requirement() -> None:
