@@ -8,6 +8,7 @@ and bounded response sizes.
 
 from __future__ import annotations
 
+import json
 import time
 import urllib.error
 import urllib.parse
@@ -39,12 +40,28 @@ _MAX_JSON_BYTES = 4 * 1024 * 1024
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
+LANE_OFF_CODE = 6001
+"""Platform's error-envelope code for a lane that is off."""
+
+
 class TransportError(RuntimeError):
     """Platform refused a request or could not be reached."""
 
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, *, lane_off: bool = False) -> None:
         super().__init__(f"{status}: {message}")
         self.status = status
+        self.lane_off = lane_off
+        """Platform said the lane is off: its kill switch, not a fault."""
+
+
+def _lane_off(status: int, detail: str) -> bool:
+    if status != 503:
+        return False
+    try:
+        envelope = json.loads(detail)
+    except ValueError:
+        return False
+    return isinstance(envelope, dict) and envelope.get("error_code") == LANE_OFF_CODE
 
 
 def _encode(model: BaseModel) -> bytes:
@@ -106,7 +123,9 @@ class HttpTransport:
                 data: bytes = response.read(limit + 1)
         except urllib.error.HTTPError as exc:
             detail = exc.read(2048).decode("utf-8", "replace")
-            raise TransportError(exc.code, detail) from exc
+            raise TransportError(
+                exc.code, detail, lane_off=_lane_off(exc.code, detail)
+            ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise TransportError(0, str(exc)) from exc
         if len(data) > limit:
@@ -174,13 +193,17 @@ class LocalTransport:
                 method=method, path=path, headers=signed.as_dict(), body=body
             )
         except CoordinatorError as exc:
-            raise TransportError(_STATUS.get(exc.code, 400), str(exc)) from exc
+            raise TransportError(
+                _STATUS.get(exc.code, 400), str(exc), lane_off=exc.code == "lane_off"
+            ) from exc
 
     def _call(self, fn: Callable[[], ModelT], model: type[ModelT]) -> ModelT:
         try:
             result = fn()
         except CoordinatorError as exc:
-            raise TransportError(_STATUS.get(exc.code, 400), str(exc)) from exc
+            raise TransportError(
+                _STATUS.get(exc.code, 400), str(exc), lane_off=exc.code == "lane_off"
+            ) from exc
         # Round-trip through JSON so the node sees exactly what HTTP delivers.
         return model.model_validate_json(result.model_dump_json())
 
@@ -201,7 +224,9 @@ class LocalTransport:
         try:
             return self.coordinator.fill(node_id, digest)
         except CoordinatorError as exc:
-            raise TransportError(_STATUS.get(exc.code, 400), str(exc)) from exc
+            raise TransportError(
+                _STATUS.get(exc.code, 400), str(exc), lane_off=exc.code == "lane_off"
+            ) from exc
 
     def ack(self, request: AckRequest) -> AckResponse:
         body = _encode(request)
@@ -228,4 +253,6 @@ class LocalTransport:
         try:
             self.coordinator.leave(node_id, LeaveRequest.model_validate_json(body))
         except CoordinatorError as exc:
-            raise TransportError(_STATUS.get(exc.code, 400), str(exc)) from exc
+            raise TransportError(
+                _STATUS.get(exc.code, 400), str(exc), lane_off=exc.code == "lane_off"
+            ) from exc

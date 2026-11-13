@@ -34,6 +34,7 @@ from typing import Protocol
 from ditto_edge_protocol.limits import MAX_ACK_ITEMS, PROTOCOL
 from ditto_edge_protocol.proofs import ProofError, digest_of, possession_proof
 from ditto_edge_protocol.store import ObjectStore
+from ditto_edge_protocol.transport import TransportError
 from ditto_edge_protocol.wire import (
     AckRequest,
     AckResponse,
@@ -84,7 +85,19 @@ class StepReport:
     answered: int = 0
     refused: int = 0
     rejected_fills: int = 0
+    failed_answers: int = 0
+    """Answers Platform did not take. It re-sends them until their deadline."""
     next_poll_seconds: int = 30
+
+
+def _ends_step(exc: TransportError) -> bool:
+    """Errors that end a step: no network, refused auth, or the lane is off.
+
+    Any other failure is about one object or one answer. The step goes on:
+    Platform re-sends a pending challenge, and the next poll lists the object
+    again.
+    """
+    return exc.status in (0, 401, 403) or exc.lane_off
 
 
 class EdgeNode:
@@ -129,9 +142,16 @@ class EdgeNode:
 
     def step(self) -> StepReport:
         report = StepReport()
-        response = self.transport.poll(
-            PollRequest(protocol=PROTOCOL, free_bytes=self.free_bytes())
-        )
+        try:
+            response = self.transport.poll(
+                PollRequest(protocol=PROTOCOL, free_bytes=self.free_bytes())
+            )
+        except TransportError as exc:
+            if exc.lane_off:
+                # The operator's kill switch. Revocations cannot reach this node
+                # while the lane is off, so it holds nothing until it reopens.
+                self._drop_cache()
+            raise
         self.limits = response.limits
         report.next_poll_seconds = response.next_poll_seconds
 
@@ -144,7 +164,12 @@ class EdgeNode:
             report.answered += 1
             if answer.outcome == "refused":
                 report.refused += 1
-            self.transport.answer(challenge.challenge_id, answer)
+            try:
+                self.transport.answer(challenge.challenge_id, answer)
+            except TransportError as exc:
+                if _ends_step(exc):
+                    raise
+                report.failed_answers += 1
 
         listed: set[str] = set()
         for assignment in response.assignments:
@@ -159,12 +184,19 @@ class EdgeNode:
                 self._acked.discard(assignment.digest)
             self._leases[assignment.digest] = assignment.lease_expires_at
             if not self.store.has(assignment.digest):
-                if self._fill(assignment):
+                try:
+                    filled = self._fill(assignment)
+                except TransportError as exc:
+                    if _ends_step(exc):
+                        raise
+                    filled = False  # one object Platform cannot serve now
+                if filled:
                     report.filled.append(assignment.digest)
                 else:
                     report.rejected_fills += 1
 
-        now = self.clock()
+        # Leases are Platform's, so they expire by Platform's clock.
+        now = response.server_time
         for digest in self.store.digests() - listed:
             if self._leases.get(digest, 0) <= now:
                 self.store.delete(digest)
@@ -185,6 +217,12 @@ class EdgeNode:
             self.transport.ack(AckRequest(held=held_part, released=released_part))
             self._acked.update(held_part)
         return report
+
+    def _drop_cache(self) -> None:
+        for digest in self.store.digests():
+            self.store.delete(digest)
+        self._leases.clear()
+        self._acked.clear()
 
     def _revoke(self, digest: str) -> None:
         self.store.delete(digest)

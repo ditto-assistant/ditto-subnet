@@ -570,13 +570,14 @@ class Coordinator:
                 lease_expires_at=now + settings.lease_seconds,
             )
             if current is not None:
-                # This node downloaded these bytes before, so the fill history
-                # carries over: bytes it kept can be acknowledged without a
-                # second download. The closed span stays in history for the
-                # ledger.
-                span.fill_count = current.fill_count
-                span.last_filled_at = current.last_filled_at
-                self.history.append(current)
+                if _lapsed(current):
+                    # The node never said it deleted these bytes, so the fill
+                    # history carries over: bytes it kept can be acknowledged
+                    # without a second download. A span it released starts
+                    # fresh, because it deleted them.
+                    span.fill_count = current.fill_count
+                    span.last_filled_at = current.last_filled_at
+                self.history.append(current)  # the ledger still scores it
             self.assignments[(node.node_id, digest)] = span
             listed.add(digest)
             if not reopened:
@@ -813,6 +814,14 @@ class Coordinator:
                 del self.slots[key]
         self.ledger.extend(rows)
         return rows
+
+
+def _lapsed(span: _Assignment) -> bool:
+    """Closed at its lease's lapse rather than released by the node.
+
+    Only the lapse path sets ``released_at`` to the lease expiry itself.
+    """
+    return span.released_at is not None and span.released_at == span.lease_expires_at
 
 
 def _wire(challenge: _Challenge) -> Challenge:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 
 import pytest
 
@@ -362,8 +363,9 @@ def test_a_span_replaced_after_release_still_counts_in_its_window(lane: Lane) ->
     lane.run([node], 600)
     spans = _spans(lane, node)
     assert spans and all(len(each) == 2 for each in spans.values())
-    # The reopened spans keep the fill history and add the new download.
-    assert all(each[-1].fill_count == each[0].fill_count + 1 for each in spans.values())
+    # The node released its bytes when it left, so each reopened span starts
+    # its fill history over and counts only the new download.
+    assert all(each[-1].fill_count == 1 for each in spans.values())
     lane.clock.advance(2 * 3600)
     lane.coordinator.close_windows()
     window_start = START
@@ -680,3 +682,96 @@ def test_concurrent_answers_keep_the_first_outcome(
     first.join()
     second.join()
     assert lane.coordinator.challenges[challenge.challenge_id].outcome == "passed"
+
+
+def test_an_unlisted_object_expires_by_platform_time_not_the_node_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lane = Lane(_settings(replicas=1))
+    obj = synthetic_objects(1, seed=3)[0]
+    digest = lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    # This node's clock runs 1000 s ahead of Platform's.
+    node = lane.node(clock=lambda: lane.clock() + 1000)
+    node.step()
+    assert node.store.has(digest)
+    poll = node.transport.poll
+
+    def poll_without_it(request: PollRequest) -> PollResponse:
+        return poll(request).model_copy(update={"assignments": []})
+
+    monkeypatch.setattr(node.transport, "poll", poll_without_it)
+    lane.clock.advance(30)
+    node.step()
+    # Its lease (900 s) is still live by Platform's clock: keep the bytes.
+    assert node.store.has(digest)
+
+
+def test_one_object_platform_cannot_serve_does_not_stop_the_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lane = Lane(_settings(replicas=1))
+    digests = [
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+        for obj in synthetic_objects(3, seed=3)
+    ]
+    node = lane.node()
+    fill = node.transport.fill
+
+    def fill_or_fail(digest: str) -> bytes:
+        if digest == digests[0]:
+            raise TransportError(503, "object storage is unavailable")
+        return fill(digest)
+
+    monkeypatch.setattr(node.transport, "fill", fill_or_fail)
+    report = node.step()
+    assert report.rejected_fills == 1
+    assert sorted(report.filled) == sorted(digests[1:])
+    spans = lane.coordinator.assignments
+    assert all(spans[(node.node_id, d)].acked_at is not None for d in digests[1:])
+
+
+def test_a_failed_answer_is_counted_and_the_step_goes_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lane = Lane(_settings(challenges_per_window=40, min_challenges=6))
+    for obj in synthetic_objects(4, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    lane.run([node], 300)
+
+    def answer_fails(_challenge_id: str, _answer: ChallengeAnswer) -> object:
+        raise TransportError(503, "object storage is unavailable")
+
+    monkeypatch.setattr(node.transport, "answer", answer_fails)
+    report = node.step()
+    while not report.answered:
+        lane.clock.advance(30)
+        report = node.step()
+    assert report.failed_answers == report.answered
+
+    def answer_refused(_challenge_id: str, _answer: ChallengeAnswer) -> object:
+        raise TransportError(401, "unknown node")
+
+    monkeypatch.setattr(node.transport, "answer", answer_refused)
+    lane.clock.advance(5)
+    with pytest.raises(TransportError):
+        node.step()  # pending challenges are re-sent; a refused auth ends the step
+
+
+def test_a_lane_turned_off_drops_the_cache() -> None:
+    from ditto_edge_protocol.transport import _lane_off
+
+    lane = Lane(_settings(replicas=1))
+    for obj in synthetic_objects(3, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    node.step()
+    assert len(node.store.digests()) == 3
+    lane.coordinator.settings = replace(lane.coordinator.settings, mode="off")
+    with pytest.raises(TransportError) as raised:
+        node.step()
+    assert raised.value.lane_off
+    assert node.store.digests() == set()
+    # Platform's envelope marks it over HTTP; a storage 503 is not the switch.
+    assert _lane_off(503, '{"error_code": 6001, "message": "the edge lane is off"}')
+    assert not _lane_off(503, '{"error_code": 6008}')
