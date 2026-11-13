@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from ditto_edge_protocol.dryrun import DryRunConfig, run_dry_run
+from ditto_edge_protocol.sources import PublicState, SourceObject, synthetic_objects
+
+
+def test_default_dry_run_catches_every_adversary_and_fails_no_honest_node() -> None:
+    report = run_dry_run(DryRunConfig(), synthetic_objects(40, seed=0))
+    verdict = report["verdict"]
+    assert verdict["pass"] is True
+    assert verdict["honest_false_fail_rate"] == 0.0
+    assert verdict["adversaries_caught"] == {
+        "lazy": True,
+        "keeps_revoked": True,
+        "tamper": True,
+    }
+    assert verdict["part_time_paid_less"] is True
+    assert verdict["revocation_within_bound"] is True
+    assert report["payouts"] == "none"
+    assert report["weight_eligible"] is False
+    assert all(
+        window["weight_eligible"] is False
+        for node in report["nodes"]
+        for window in node["windows"]
+    )
+    by_behavior = {node["behavior"]: node for node in report["nodes"]}
+    assert "integrity_failure" in by_behavior["tamper"]["reasons"]
+    assert "revocation_violation" in by_behavior["keeps_revoked"]["reasons"]
+    lazy_rows = by_behavior["lazy"]["windows"]
+    assert sum(row["refilled"] for row in lazy_rows) > 0
+    assert by_behavior["lazy"]["verified_units"] == 0.0
+
+
+def test_dry_run_is_deterministic_for_a_seed() -> None:
+    objects = synthetic_objects(12, seed=5)
+    config = DryRunConfig(honest_nodes=3, windows=2, seed=9)
+    assert run_dry_run(config, objects) == run_dry_run(config, objects)
+
+
+class _Unpublishing:
+    """A public source where one share is unpublished from the second window."""
+
+    def __init__(self, share_id: str) -> None:
+        self.share_id = share_id
+        self.checks = 0
+
+    def state(self, share_id: str) -> PublicState:
+        self.checks += 1
+        if share_id == self.share_id and self.checks > 1:
+            return "unpublished"
+        return "public"
+
+
+def test_an_unpublished_share_is_revoked_and_released_within_the_bound() -> None:
+    objects = synthetic_objects(10, seed=1) + [
+        SourceObject(
+            b"a public memory, published then unpublished",
+            "text/markdown",
+            "share:abc123",
+        )
+    ]
+    source = _Unpublishing("abc123")
+    report = run_dry_run(
+        DryRunConfig(
+            honest_nodes=3,
+            part_time_nodes=0,
+            adversaries=(),
+            windows=3,
+            revoke_fraction=0,
+        ),
+        objects,
+        public_source=source,
+    )
+    assert report["objects"]["public_shares"] == 1
+    assert report["objects"]["revoked_unpublished"] == 1
+    revocation = report["revocation"]
+    assert revocation["honest_not_released"] == 0
+    assert revocation["max_release_seconds"] is not None
+    assert revocation["max_release_seconds"] <= revocation["bound_seconds"]
