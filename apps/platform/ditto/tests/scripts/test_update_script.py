@@ -676,6 +676,33 @@ def test_update_rolls_the_checkout_back_when_a_migration_fails(
 
 
 @pytest.mark.parametrize("edge_locked", [True, False])
+def test_deploy_reinstalls_the_edge_package_only_when_the_lock_has_it(
+    tmp_path: Path, edge_locked: bool
+) -> None:
+    """Deploying a revision from before SN-481 must not ask for the edge package."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    lock = 'name = "ditto-screening-protocol"\n'
+    if edge_locked:
+        lock += 'name = "ditto-edge-protocol"\n'
+    (repo / "uv.lock").write_text(lock)
+    result, _, _, _ = _run_update(
+        tmp_path,
+        gcloud_source="exit 1\n",
+        uv_source=f'printf "%s\\n" "uv $*" >> "{repo}/uv-actions.log"\n',
+    )
+
+    assert result.returncode == 0, result.stderr
+    sync = next(
+        line
+        for line in (repo / "uv-actions.log").read_text().splitlines()
+        if line.startswith("uv sync")
+    )
+    assert sync.startswith("uv sync --reinstall-package ditto-screening-protocol")
+    assert ("--reinstall-package ditto-edge-protocol" in sync) is edge_locked
+
+
+@pytest.mark.parametrize("edge_locked", [True, False])
 def test_rollback_reinstalls_the_edge_package_only_when_the_lock_has_it(
     tmp_path: Path, edge_locked: bool
 ) -> None:

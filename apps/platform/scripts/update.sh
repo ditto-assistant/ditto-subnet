@@ -294,8 +294,13 @@ echo "    single head: $migration_head"
 
 deploy_stage="sync"
 echo "==> syncing dependencies"
-uv sync --reinstall-package ditto-screening-protocol \
-  --reinstall-package ditto-edge-protocol
+# A revision from before SN-481 locks no edge package to reinstall.
+edge_reinstall=""
+if grep -q '^name = "ditto-edge-protocol"$' uv.lock 2>/dev/null; then
+  edge_reinstall="--reinstall-package ditto-edge-protocol"
+fi
+# shellcheck disable=SC2086
+uv sync --reinstall-package ditto-screening-protocol $edge_reinstall
 deploy_synced=1
 
 deploy_stage="dashboard-build"

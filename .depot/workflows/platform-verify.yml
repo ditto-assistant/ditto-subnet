@@ -182,8 +182,13 @@ jobs:
       - name: Set up Python 3.12
         run: uv python install 3.12
 
+      # Rebuild the path dependencies: a cached build of either package would
+      # test the previous contract instead of this commit's.
       - name: Install dependencies
-        run: uv sync --locked --group dev --group browser --python 3.12
+        run: >-
+          uv sync --locked --group dev --group browser --python 3.12
+          --reinstall-package ditto-screening-protocol
+          --reinstall-package ditto-edge-protocol
 
       - name: Install Chromium for the GitHub OAuth browser regression
         # The conftest pins the browser regression to shard 0.
