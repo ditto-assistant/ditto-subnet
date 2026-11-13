@@ -23,7 +23,8 @@
     - name: Add the pinned Google Cloud apt key
       ansible.builtin.get_url:
         url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
-        dest: /usr/share/keyrings/google-cloud.gpg
+        # The pinned download is ASCII armored; apt requires the .asc suffix.
+        dest: /usr/share/keyrings/google-cloud.asc
         mode: "0644"
         checksum: "sha256:{{ screener_fleet_google_cloud_apt_key_sha256 }}"
 
@@ -34,7 +35,7 @@
         uris: https://packages.cloud.google.com/apt
         suites: [cloud-sdk]
         components: [main]
-        signed_by: /usr/share/keyrings/google-cloud.gpg
+        signed_by: /usr/share/keyrings/google-cloud.asc
         state: present
 
     - name: Install the Google Cloud CLI
