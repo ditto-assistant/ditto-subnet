@@ -98,6 +98,24 @@ def test_pending_after_close_counts_as_missed_and_void_is_ignored() -> None:
     assert score.scheduled == 4
 
 
+@pytest.mark.parametrize(
+    ("purpose", "outcome"),
+    [
+        ("revoked", "passed"),
+        ("revoked", "failed"),
+        ("possession", "violation"),
+        ("retrieval", "refused_ok"),
+    ],
+)
+def test_impossible_outcomes_raise_instead_of_miscounting(
+    purpose: str, outcome: str
+) -> None:
+    # A revoked slot that fell back to a possession challenge must be recorded
+    # as the possession challenge it became, not dropped from the window.
+    with pytest.raises(ValueError, match="cannot end"):
+        _score(_obs("passed", 5) + _obs(outcome, 1, purpose))
+
+
 def test_too_few_challenges_and_nothing_held() -> None:
     score = _score(_obs("passed", 2), holds=[])
     assert score.reasons == ("too_few_challenges", "nothing_held")

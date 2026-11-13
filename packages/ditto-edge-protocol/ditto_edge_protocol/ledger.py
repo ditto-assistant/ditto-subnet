@@ -26,6 +26,11 @@ from ditto_edge_protocol.limits import GIB
 
 _PRECISION = 9
 _COUNTED = frozenset({"passed", "failed", "missed", "refilled", "refused", "pending"})
+_ALLOWED: dict[str, frozenset[str]] = {
+    "possession": _COUNTED | {"void"},
+    "retrieval": _COUNTED | {"void"},
+    "revoked": frozenset({"refused_ok", "violation", "missed", "pending", "void"}),
+}
 
 
 @dataclass(frozen=True)
@@ -82,7 +87,17 @@ def score_window(
     Call it only after the window and every answer deadline in it have
     passed. A slot still ``pending`` then never got an answer and counts as
     missed.
+
+    An outcome that cannot follow from its purpose (a ``revoked`` slot that
+    ``passed``, a possession slot that is a ``violation``) raises
+    ``ValueError``: it means the caller recorded the slot's purpose instead of
+    the challenge actually asked, and silently dropping it would miscount.
     """
+    for observation in observations:
+        if observation.outcome not in _ALLOWED.get(observation.purpose, frozenset()):
+            raise ValueError(
+                f"a {observation.purpose} slot cannot end {observation.outcome!r}"
+            )
     passed = failed = missed = refilled = refused = 0
     revocation_checks = violations = 0
     for observation in observations:
