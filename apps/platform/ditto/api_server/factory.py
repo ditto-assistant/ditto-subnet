@@ -49,6 +49,7 @@ from ditto.api_server.dashboard_seo import (
 )
 from ditto.api_server.datapipeline import create_generator
 from ditto.api_server.ditto_link import DittoLinkClient
+from ditto.api_server.edge_lane_settings import EdgeLaneSettingsResolver
 from ditto.api_server.efficiency import EfficiencyStateMaterializer
 from ditto.api_server.efficiency_settings import (
     DEFAULT_SETTINGS_TTL_SECONDS,
@@ -74,6 +75,7 @@ from ditto.api_server.endpoints import (
     admin_copy_review_router,
     admin_database_backup_router,
     admin_dueling_router,
+    admin_edge_lane_settings_router,
     admin_efficiency_bonus_settings_router,
     admin_emission_allocation_router,
     admin_emission_eligibility_router,
@@ -670,6 +672,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Served on the scoring ledger, so a change reaches the fleet on its next
     # poll instead of on a validator release.
     app.state.burn_settings = BurnSettingsResolver()
+    # Ditto Edge shadow lane policy (SN-481). Off by default; no mode reaches
+    # weights or emissions.
+    app.state.edge_lane_settings = EdgeLaneSettingsResolver()
     # Operator-owned per-track emission split (memory / generator). Unset by
     # default, so the ledger omits it and validators keep their compiled split.
     app.state.track_share_settings = TrackShareSettingsResolver()
@@ -882,6 +887,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_claim_provenance_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
+    app.include_router(admin_edge_lane_settings_router, prefix="/api/v1")
     app.include_router(admin_track_share_settings_router, prefix="/api/v1")
     app.include_router(admin_emission_allocation_router, prefix="/api/v1")
     app.include_router(admin_emission_eligibility_router, prefix="/api/v1")

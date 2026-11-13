@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -773,6 +773,28 @@ wheels = [
 ]
 
 [[package]]
+name = "ditto-edge-protocol"
+version = "0.1.0"
+source = { directory = "../../packages/ditto-edge-protocol" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=50.0.0" },
+    { name = "pydantic", specifier = ">=2.12" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.10" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = ">=0.6" },
+]
+
+[[package]]
 name = "ditto-platform"
 version = "0.0.1"
 source = { editable = "." }
@@ -786,6 +808,7 @@ dependencies = [
     { name = "bittensor" },
     { name = "bittensor-pylon-client" },
     { name = "cryptography" },
+    { name = "ditto-edge-protocol" },
     { name = "ditto-screening-protocol" },
     { name = "fastapi" },
     { name = "filelock" },
@@ -830,6 +853,7 @@ requires-dist = [
     { name = "bittensor", specifier = ">=10.2.1" },
     { name = "bittensor-pylon-client", git = "https://github.com/bittensor-church/bittensor-pylon?subdirectory=pylon_client" },
     { name = "cryptography", specifier = ">=50.0.0" },
+    { name = "ditto-edge-protocol", directory = "../../packages/ditto-edge-protocol" },
     { name = "ditto-screening-protocol", directory = "../../packages/ditto-screening-protocol" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "filelock", specifier = ">=4.2.1" },
