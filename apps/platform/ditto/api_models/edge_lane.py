@@ -141,3 +141,157 @@ class AdminEdgeLaneSettingsResponse(BaseModel):
     history: list[EdgeLaneSettingsRevision]
     default: EdgeLaneSettings
     effective: EffectiveEdgeLaneSettings
+
+
+# -- operator reads and writes ------------------------------------------------
+
+
+class EdgeObjectIngestRequest(BaseModel):
+    """Add one public object to the lane. Admin only, shadow test data."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    data_b64: Annotated[str, Field(min_length=4)]
+    media_type: Annotated[str, Field(min_length=1, max_length=100)]
+    source: Annotated[str, Field(min_length=1, max_length=200)]
+    """Operator-side provenance, e.g. ``share:<id>`` or ``synthetic:3``. Never
+    sent to nodes."""
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+
+
+class EdgeObjectIngestResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    digest: str
+    size_bytes: int
+    media_type: str
+    created: bool
+    """False when the same bytes were already in the lane."""
+
+
+class EdgeObjectRevokeRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+
+
+class EdgeObjectRevokeResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    digest: str
+    revoked_at: datetime
+    revoke_reason: str
+    newly_revoked: bool
+
+
+class EdgeObjectRow(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    digest: str
+    size_bytes: int
+    media_type: str
+    source: str
+    created_by: str
+    created_at: datetime
+    revoked_at: datetime | None
+    revoke_reason: str | None
+    holders: int
+    """Acknowledged, open spans: nodes that hold it now."""
+
+
+class EdgeLedgerRow(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    window_index: int
+    node_id: str
+    operator: str
+    scheduled: int
+    passed: int
+    failed: int
+    missed: int
+    refilled: int
+    refused: int
+    revocation_checks: int
+    revocation_violations: int
+    held_gib_hours: float
+    availability: float
+    eligible: bool
+    verified_units: float
+    hypothetical_share: float
+    """What this node would receive of an Edge track share. Shadow only."""
+    reasons: list[str]
+    settings_revision: int
+    weight_eligible: Literal[False]
+    computed_at: datetime
+
+
+class EdgeNodeRow(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    node_id: str
+    operator: str
+    hotkey_ss58: str | None
+    client_name: str
+    client_version: str
+    platform: dict[str, object]
+    """Self-reported machine labels. Shown, never scored."""
+    status: str
+    quota_bytes: int
+    enrolled_at: datetime
+    last_poll_at: datetime | None
+    held_objects: int
+    held_bytes: int
+    latest_window: EdgeLedgerRow | None
+
+
+class EdgeWindowRow(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    window_index: int
+    settings_revision: int
+    node_count: int
+    eligible_nodes: int
+    verified_units: float
+    closed_at: datetime
+
+
+class EdgeLaneOverview(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    mode: EdgeLaneMode
+    settings_revision: int
+    weight_eligible: Literal[False] = False
+    payouts: Literal["none"] = "none"
+    nodes_active: int
+    nodes_live: int
+    """Active nodes that polled within one lease."""
+    nodes_suspended: int
+    nodes_retired: int
+    objects_active: int
+    objects_revoked: int
+    active_object_bytes: int
+    open_assignments: int
+    held_assignments: int
+    current_window_index: int
+    recent_windows: list[EdgeWindowRow]
+
+
+class EdgeNodesResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    nodes: list[EdgeNodeRow]
+
+
+class EdgeObjectsResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    objects: list[EdgeObjectRow]
+
+
+class EdgeLedgerResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    rows: list[EdgeLedgerRow]
+    closed_now: list[int]
+    """Windows this read scored for the first time (insert-once)."""

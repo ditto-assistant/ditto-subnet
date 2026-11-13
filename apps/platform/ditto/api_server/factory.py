@@ -49,6 +49,7 @@ from ditto.api_server.dashboard_seo import (
 )
 from ditto.api_server.datapipeline import create_generator
 from ditto.api_server.ditto_link import DittoLinkClient
+from ditto.api_server.edge_lane import ObjectBytesCache
 from ditto.api_server.edge_lane_settings import EdgeLaneSettingsResolver
 from ditto.api_server.efficiency import EfficiencyStateMaterializer
 from ditto.api_server.efficiency_settings import (
@@ -154,6 +155,7 @@ from ditto.api_server.endpoints import (
     validator_private_dataset,
     validator_router,
 )
+from ditto.api_server.endpoints import edge as edge_endpoints
 from ditto.api_server.endpoints import screener as screener_endpoints
 from ditto.api_server.endpoints import upload as upload_endpoints
 from ditto.api_server.endpoints import validator as validator_endpoints
@@ -163,9 +165,11 @@ from ditto.api_server.endpoints.admin_benchmark_canary import (
 from ditto.api_server.endpoints.admin_conversation import (
     router as admin_conversation_router,
 )
+from ditto.api_server.endpoints.admin_edge_lane import router as admin_edge_lane_router
 from ditto.api_server.endpoints.admin_operator_diagnostic import (
     router as admin_operator_diagnostic_router,
 )
+from ditto.api_server.endpoints.edge import router as edge_router
 from ditto.api_server.endpoints.screener_conversation import (
     router as screener_conversation_router,
 )
@@ -313,6 +317,13 @@ def _request_body_route_limits() -> tuple[tuple[str, int], ...]:
             validator_endpoints.WEIGHT_RECEIPT_MAX_BYTES,
         ),
         (r"/api/v1/screener/heartbeat", screener_endpoints.HEARTBEAT_MAX_BYTES),
+        # Ditto Edge node protocol (SN-481): small signed control documents,
+        # and challenge answers of at most one 256 KiB range.
+        (r"/api/v1/edge/challenges/[^/]+", edge_endpoints.ANSWER_MAX_BYTES),
+        (
+            r"/api/v1/edge/(?:nodes|nodes/me/leave|poll|ack)",
+            edge_endpoints.CONTROL_MAX_BYTES,
+        ),
     )
 
 
@@ -675,6 +686,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Ditto Edge shadow lane policy (SN-481). Off by default; no mode reaches
     # weights or emissions.
     app.state.edge_lane_settings = EdgeLaneSettingsResolver()
+    app.state.edge_object_cache = ObjectBytesCache()
     # Operator-owned per-track emission split (memory / generator). Unset by
     # default, so the ledger omits it and validators keep their compiled split.
     app.state.track_share_settings = TrackShareSettingsResolver()
@@ -888,6 +900,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_claim_provenance_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_edge_lane_settings_router, prefix="/api/v1")
+    app.include_router(admin_edge_lane_router, prefix="/api/v1")
+    app.include_router(edge_router, prefix="/api/v1")
     app.include_router(admin_track_share_settings_router, prefix="/api/v1")
     app.include_router(admin_emission_allocation_router, prefix="/api/v1")
     app.include_router(admin_emission_eligibility_router, prefix="/api/v1")
