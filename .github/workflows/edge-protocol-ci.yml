@@ -2,6 +2,11 @@ name: Ditto Edge protocol CI
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - packages/ditto-edge-protocol/**
+      - .github/workflows/edge-protocol-ci.yml
   pull_request:
     paths:
       - packages/ditto-edge-protocol/**

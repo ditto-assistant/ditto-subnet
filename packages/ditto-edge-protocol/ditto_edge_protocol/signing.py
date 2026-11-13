@@ -130,21 +130,43 @@ class DeviceKey:
         return self._key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
 
     @classmethod
+    def load(cls, path: Path) -> DeviceKey:
+        """Read the hex seed at ``path``; a malformed file is a ``SignatureError``."""
+        try:
+            text = path.read_text(encoding="ascii").strip()
+        except UnicodeDecodeError as exc:
+            raise SignatureError(f"{path} does not hold a 32-byte hex seed") from exc
+        if _HEX_KEY.fullmatch(text) is None:
+            raise SignatureError(f"{path} does not hold a 32-byte hex seed")
+        return cls.from_seed(bytes.fromhex(text))
+
+    @classmethod
     def load_or_create(cls, path: Path) -> DeviceKey:
         """Read the seed at ``path``, creating it (mode 0600) if absent.
 
-        The file holds the raw seed as hex. It never leaves the machine.
+        The file holds the raw seed as hex and never leaves the machine. A new
+        seed is written and fsynced to a private temporary file first, then
+        published with a hard link that never overwrites. A crash therefore
+        never leaves a half-written seed, and when two processes race to
+        create one, both end up with the winner's key.
         """
         if path.exists():
-            text = path.read_text(encoding="ascii").strip()
-            if _HEX_KEY.fullmatch(text) is None:
-                raise SignatureError(f"{path} does not hold a 32-byte hex seed")
-            return cls.from_seed(bytes.fromhex(text))
+            return cls.load(path)
         key = cls.generate()
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="ascii") as handle:
-            handle.write(key.seed().hex() + "\n")
+        temp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="ascii") as handle:
+                handle.write(key.seed().hex() + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temp, path)
+            except FileExistsError:
+                return cls.load(path)
+        finally:
+            temp.unlink(missing_ok=True)
         return key
 
     def sign(self, message: bytes) -> str:
@@ -209,4 +231,6 @@ def binding_message(*, node_id: str, hotkey_ss58: str, issued_at: int) -> bytes:
     """What an SN118 hotkey signs (sr25519) to vouch for a device key."""
     if not node_id.startswith("edn_") or ":" in hotkey_ss58:
         raise SignatureError("malformed node id or hotkey")
+    if not node_id.isascii() or not hotkey_ss58.isascii():
+        raise SignatureError("node id and hotkey must be ascii")
     return f"{BIND_DOMAIN}:{node_id}:{hotkey_ss58}:{issued_at}".encode("ascii")

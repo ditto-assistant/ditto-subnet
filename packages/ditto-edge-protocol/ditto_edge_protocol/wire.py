@@ -13,12 +13,21 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from ditto_edge_protocol.limits import (
     MAX_ACK_ITEMS,
     MAX_ASSIGNMENTS_PER_POLL,
+    MAX_CHALLENGES_PER_POLL,
     MAX_OBJECT_BYTES_CEILING,
+    MAX_POSSESSION_RANGE,
     MAX_RETRIEVAL_RANGE,
     MEDIA_TYPES,
 )
@@ -140,6 +149,18 @@ class Challenge(_Wire):
     length: Annotated[int, Field(ge=1, le=MAX_RETRIEVAL_RANGE)]
     deadline_at: int
 
+    @model_validator(mode="after")
+    def _answerable(self) -> Challenge:
+        """A possession challenge needs a nonce and a range a proof may hash."""
+        if self.kind == "possession":
+            if self.nonce_hex is None:
+                raise ValueError("a possession challenge carries a nonce")
+            if self.length > MAX_POSSESSION_RANGE:
+                raise ValueError(
+                    f"a possession range is at most {MAX_POSSESSION_RANGE} bytes"
+                )
+        return self
+
 
 class PollRequest(_Wire):
     protocol: Literal["edge/v1"]
@@ -158,7 +179,7 @@ class PollResponse(_Wire):
     stays until its lease lapses, then is deleted."""
     revocations: Annotated[list[Digest], Field(max_length=MAX_ASSIGNMENTS_PER_POLL)]
     """Delete these now and refuse every later challenge for them."""
-    challenges: list[Challenge]
+    challenges: Annotated[list[Challenge], Field(max_length=MAX_CHALLENGES_PER_POLL)]
     next_poll_seconds: Annotated[int, Field(ge=1)]
 
 

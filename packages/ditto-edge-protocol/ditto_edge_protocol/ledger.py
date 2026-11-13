@@ -173,11 +173,22 @@ def hypothetical_shares(units: Mapping[str, float]) -> dict[str, float]:
     """Each node's share of the window's verified units, summing to 1 or 0.
 
     A shadow read-out only: what a node would receive of an Edge track share.
+    Shares are rounded to 9 places, and the rounding residual goes to the
+    largest share (ties broken by key), so the shares sum to exactly 1 at that
+    precision whatever order the input arrives in.
     """
     total = sum(value for value in units.values() if value > 0)
     if total <= 0:
         return dict.fromkeys(units, 0.0)
-    return {
+    shares = {
         key: round(value / total, _PRECISION) if value > 0 else 0.0
         for key, value in units.items()
     }
+    residual = round(1.0 - sum(shares.values()), _PRECISION)
+    if residual:
+        largest = max(
+            (key for key, share in shares.items() if share > 0),
+            key=lambda key: (shares[key], key),
+        )
+        shares[largest] = round(shares[largest] + residual, _PRECISION)
+    return shares

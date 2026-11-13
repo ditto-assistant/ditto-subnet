@@ -40,6 +40,9 @@ MAX_ACK_ITEMS: Final = 512
 MAX_ASSIGNMENTS_PER_POLL: Final = 1024
 """Assignments one poll response may list."""
 
+MAX_CHALLENGES_PER_POLL: Final = 128
+"""Challenges one poll response may carry; a window holds at most 120 slots."""
+
 MEDIA_TYPES: Final = frozenset(
     {
         "application/json",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import stat
+import threading
 from pathlib import Path
 
 import pytest
@@ -169,6 +170,32 @@ def test_load_or_create_refuses_a_corrupt_seed(tmp_path: Path) -> None:
         DeviceKey.load_or_create(path)
 
 
+def test_load_or_create_refuses_a_non_ascii_seed(tmp_path: Path) -> None:
+    path = tmp_path / "device.key"
+    path.write_bytes(b"\xff\xfe not hex")
+    with pytest.raises(SignatureError):
+        DeviceKey.load_or_create(path)
+
+
+def test_concurrent_creators_all_end_up_with_one_key(tmp_path: Path) -> None:
+    path = tmp_path / "keys" / "device.key"
+    barrier = threading.Barrier(8)
+    found: list[str] = []
+
+    def create() -> None:
+        barrier.wait()
+        found.append(DeviceKey.load_or_create(path).node_id)
+
+    threads = [threading.Thread(target=create) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(set(found)) == 1
+    assert found[0] == DeviceKey.load(path).node_id
+    assert sorted(p.name for p in path.parent.iterdir()) == ["device.key"]
+
+
 def test_from_seed_requires_32_bytes() -> None:
     with pytest.raises(SignatureError):
         DeviceKey.from_seed(b"short")
@@ -183,3 +210,7 @@ def test_binding_message_layout() -> None:
         binding_message(node_id="node", hotkey_ss58="5Abc", issued_at=9)
     with pytest.raises(SignatureError):
         binding_message(node_id="edn_" + "0" * 32, hotkey_ss58="5A:bc", issued_at=9)
+    with pytest.raises(SignatureError, match="ascii"):
+        binding_message(node_id="edn_" + "0" * 32, hotkey_ss58="5Äbc", issued_at=9)
+    with pytest.raises(SignatureError, match="ascii"):
+        binding_message(node_id="edn_ü", hotkey_ss58="5Abc", issued_at=9)

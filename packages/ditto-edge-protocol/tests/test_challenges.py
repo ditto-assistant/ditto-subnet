@@ -251,6 +251,25 @@ def test_revoked_objects_must_be_refused() -> None:
     )
 
 
+def test_a_late_proof_for_revoked_content_is_still_a_violation() -> None:
+    revoked = DrawnChallenge(
+        purpose="revoked",
+        kind="possession",
+        digest=digest_of(DATA),
+        offset=0,
+        length=64,
+        nonce_hex=NONCE,
+    )
+    proof = possession_proof(nonce_hex=NONCE, data=DATA, offset=0, length=64)
+    late = {"answered_at": 161.0}
+    assert (
+        _judge(revoked, ChallengeAnswer(outcome="proof", proof_hex=proof), **late)
+        == "violation"
+    )
+    refusal = ChallengeAnswer(outcome="refused", refusal="revoked")
+    assert _judge(revoked, refusal, **late) == "missed"
+
+
 def test_judging_a_nonceless_possession_challenge_is_a_verifier_bug() -> None:
     broken = DrawnChallenge(
         purpose="possession",

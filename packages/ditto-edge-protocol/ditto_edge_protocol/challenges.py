@@ -192,11 +192,17 @@ def judge_answer(
     ``data`` is the canonical object; ``last_filled_at`` is when this node last
     downloaded it. A correct answer that needed a download after the
     challenge went out is ``refilled``, not ``passed``.
+
+    For a revoked object, anything but a refusal is a ``violation`` however
+    late it arrives: answering at all claims the node still holds it. A late
+    refusal is only ``missed``.
     """
+    if challenge.purpose == "revoked":
+        if answer.outcome != "refused":
+            return "violation"
+        return "refused_ok" if answered_at <= deadline_at else "missed"
     if answered_at > deadline_at:
         return "missed"
-    if challenge.purpose == "revoked":
-        return "refused_ok" if answer.outcome == "refused" else "violation"
     if answer.outcome == "refused":
         return "refused"
     correct = False

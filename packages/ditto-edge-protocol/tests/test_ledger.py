@@ -142,3 +142,13 @@ def test_hypothetical_shares_normalize_positive_units() -> None:
     }
     assert hypothetical_shares({"a": 0.0}) == {"a": 0.0}
     assert hypothetical_shares({}) == {}
+
+
+def test_hypothetical_shares_sum_to_exactly_one_in_any_order() -> None:
+    equal = hypothetical_shares({"a": 1.0, "b": 1.0, "c": 1.0})
+    assert round(sum(equal.values()), 9) == 1.0
+    # The residual lands on one deterministic key whatever the input order.
+    assert equal == hypothetical_shares({"c": 1.0, "a": 1.0, "b": 1.0})
+    assert equal["c"] == 0.333333334
+    sevenths = hypothetical_shares({f"n{i}": 1.0 for i in range(7)})
+    assert round(sum(sevenths.values()), 9) == 1.0

@@ -3,7 +3,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from ditto_edge_protocol.limits import MAX_ACK_ITEMS, MAX_OBJECT_BYTES_CEILING
+from ditto_edge_protocol.limits import (
+    MAX_ACK_ITEMS,
+    MAX_CHALLENGES_PER_POLL,
+    MAX_OBJECT_BYTES_CEILING,
+    MAX_POSSESSION_RANGE,
+    MAX_RETRIEVAL_RANGE,
+)
 from ditto_edge_protocol.wire import (
     AckRequest,
     Assignment,
@@ -12,6 +18,7 @@ from ditto_edge_protocol.wire import (
     EnrollRequest,
     LaneLimits,
     NodeStatusResponse,
+    PollResponse,
 )
 
 DIGEST = "ab" * 32
@@ -96,6 +103,57 @@ def test_challenge_ids_and_nonces_are_strict_hex() -> None:
             offset=0,
             length=1,
             deadline_at=1,
+        )
+
+
+def _challenge(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "challenge_id": "0f" * 16,
+        "kind": "possession",
+        "digest": DIGEST,
+        "nonce_hex": "aa" * 32,
+        "offset": 0,
+        "length": 1,
+        "deadline_at": 1,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_possession_challenges_need_a_nonce_and_a_provable_range() -> None:
+    with pytest.raises(ValidationError, match="nonce"):
+        Challenge.model_validate(_challenge(nonce_hex=None))
+    with pytest.raises(ValidationError, match="possession range"):
+        Challenge.model_validate(_challenge(length=MAX_POSSESSION_RANGE + 1))
+    Challenge.model_validate(_challenge(length=MAX_POSSESSION_RANGE))
+    Challenge.model_validate(
+        _challenge(kind="retrieval", nonce_hex=None, length=MAX_RETRIEVAL_RANGE)
+    )
+
+
+def test_poll_responses_bound_their_challenges() -> None:
+    limits = {
+        "mode": "shadow",
+        "poll_interval_seconds": 30,
+        "lease_seconds": 900,
+        "max_object_bytes": 10,
+        "node_quota_cap_bytes": 10,
+        "challenge_deadline_seconds": 60,
+    }
+    response: dict[str, object] = {
+        "server_time": 1,
+        "window_index": 1,
+        "status": "active",
+        "limits": limits,
+        "assignments": [],
+        "revocations": [],
+        "next_poll_seconds": 30,
+    }
+    at_limit = [_challenge()] * MAX_CHALLENGES_PER_POLL
+    PollResponse.model_validate({**response, "challenges": at_limit})
+    with pytest.raises(ValidationError):
+        PollResponse.model_validate(
+            {**response, "challenges": [*at_limit, _challenge()]}
         )
 
 
