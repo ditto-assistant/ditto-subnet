@@ -31,7 +31,15 @@ Decide on three things:
 3. Who builds and measures the image?
 
 The rest of the protocol only needs "a measured image that binds a runtime
-key". §4.3 and Phase 3 change with this choice; §4.5 and §6 do not.
+key". The parts that change with this choice are:
+- §4.3;
+- the attestation-specific pieces of §6: the `runtime_attestation` entry in
+  §6.1, the boot step in §6.4, and the attestation check in §6.5 step 2.
+  These are written as a per-platform union, with the AWS branch worked
+  through and the GCP branch to be completed in item 21;
+- Phase 3.
+
+§4.5 and the rest of §6 do not change.
 
 **Gate B: go or no-go after Phase 0 and Phase 1.** Proposed thresholds:
 - `rescore` reproduces the signed composite and report byte for byte on
@@ -755,8 +763,19 @@ into every epoch pin:
 - `scoring_program_ids`: Ziren program or verifying-key hashes allowed for
   each `bench_version`. Built reproducibly from `scorecore` at a reviewed
   revision.
-- `runtime_measurements`: allowed `{PCR4, PCR7, PCR12}` sets for the Attestable
-  AMI, released through the same signed release graph as validator stacks.
+- `runtime_attestation`: the Gate A platform and its allowed reference
+  measurements, released through the same signed release graph as validator
+  stacks. It is a tagged union:
+  - `aws-nitrotpm`: allowed `{PCR4, PCR7, PCR12}` sets for the Attestable AMI.
+    The trust root is the AWS Nitro attestation PKI.
+  - `gcp-confidential-space`: the allowed workload `image_digest` and launch
+    policy claims. The trust root is Google's attestation token issuer.
+  - `gcp-confidential-vm`: the allowed launch measurements and the
+    hardware-vendor root.
+
+  Only the branch chosen at Gate A is ever enabled. The two GCP branches name
+  claims at the level of detail this doc has verified; item 21 fills in the
+  exact fields and how each one binds the runtime key before Phase 3.
 - `route_profiles`: allowed inference route profile ids. These already exist
   as reviewed identities, e.g. `openrouter-route-6a097486af3c178d-v1`.
 - `config_digest`: the canonical posture and config set (claim provenance,
@@ -911,9 +930,14 @@ the hashes against the journal.
 ### 6.4 Proof pipeline
 
 1. **Register.** Platform appends the attempt leaf and returns a receipt.
-2. **Boot.** The runner boots from the Attestable AMI and generates `K`. It
-   obtains a NitroTPM attestation document binding `K`'s public key and
-   publishes it once per boot.
+2. **Boot.** The runner boots from the measured image of the Gate A platform
+   and generates `K`. It obtains that platform's attestation binding `K`'s
+   public key and publishes it once per boot:
+   - on AWS, a NitroTPM attestation document with `K` in its `public_key`
+     field;
+   - on GCP, a Confidential Space attestation token or a Confidential VM
+     report, with `K` bound through a nonce or custom claim. The exact binding
+     is confirmed in item 21.
 3. **Run.** The runner pulls the screened image `I` by digest and verifies the
    lease. It derives `s_j` from the beacon and generates `D(s_j)`, or verifies
    private bytes against the pin. Execution is as today: sandbox, broker,
@@ -937,9 +961,14 @@ For each new statement (cached by digest):
 
 1. Policy check: `scoring_program_id`, measurements, `route_profile` and
    `config_digest` are in the pinned policy for `bench_version`.
-2. Attestation: verify the COSE_Sign1 P-384 chain to the AWS Nitro root and
-   the PCR set, then check that the document binds `runtime_key`. This is
-   cached per boot key, so it costs milliseconds per boot *(inferred)*.
+2. Attestation: verify the evidence under the policy's `runtime_attestation`
+   branch, then check that it binds `runtime_key`. The result is cached per
+   boot key.
+   - `aws-nitrotpm`: the COSE_Sign1 P-384 chain to the AWS Nitro root, and the
+     PCR set. This costs milliseconds per boot *(inferred)*.
+   - GCP branches: the token or report signature against the pinned root, and
+     the workload digest or measurements. The cost is **unknown** until
+     item 21.
 3. Statement signature under `runtime_key`.
 4. Seed: run all six §4.5 anchor checks against the validator's **own** chain
    node. This closes G1 and G7. Reject on any mismatch. The seven bullets
@@ -1113,7 +1142,9 @@ Order of work:
 - **Items 9–11 and 20** (Phase 2) are a **frozen sketch** until Gate B passes;
   their acceptance criteria are revisited against the measured numbers. Item 8
   fixes a real gap today and can ship on its own.
-- **Items 12–15** also wait on the Gate A platform decision.
+- **Items 12–15** also wait on the Gate A platform decision. **Items 13–15**
+  additionally wait on Gate B, because they build on the frozen Phase 2
+  items: 13 depends on 10, and 14 depends on 9–13.
 - **Items 16–18** wait on Gate C.
 
 | # | Summary | Acceptance | Depends | Size |
@@ -1130,7 +1161,7 @@ Order of work:
 | 10 | Public attempt log | Append-only Merkle log of issuance, attempt, terminal-commitment and terminal leaves; inclusion proofs served per leaf; public read API; Backroom read tool; aborted-attempt leaves | — | M |
 | 11 | Per-epoch chain anchor | One `commitments` write per epoch with the epoch root; anchor hotkey decided; monitor for missed anchors | 10 | S |
 | 12 | Attested hosted runner on the Gate A platform | Reproducible image (scorer + sandbox-docker + broker), with reference measurements published by release. On AWS: an Attestable AMI with PCRs and an AWS Terraform stack. On GCP: a Confidential Space or Confidential VM image with its digest or measurements in the existing GCP stacks. Either way through protected plan/apply | 1, 21 | L |
-| 13 | Runtime key, RunStatement v1 and FailureStatement | Key generated in the runner and bound by the NitroTPM document. Statement and failure schemas, both signed by `K`; failure class decided by runtime code. The runner commits `SHA-256(record)` to the log and waits for the receipt before releasing any terminal record. Test: Platform cannot obtain the record before the commitment exists | 2, 10, 12 | M |
+| 13 | Runtime key, RunStatement v1 and FailureStatement | Key generated in the runner and bound by the Gate A platform's attestation, under the policy's `runtime_attestation` branch: a NitroTPM document on AWS, or a Confidential Space token or Confidential VM report on GCP. Statement and failure schemas, both signed by `K`; failure class decided by runtime code. The runner commits `SHA-256(record)` to the log and waits for the receipt before releasing any terminal record. Test: Platform cannot obtain the record before the commitment exists | 2, 10, 12 | M |
 | 14 | Hosted shadow lane | Platform issues hosted replicates beside validator runs, `shadow_only`; distribution comparison report per agent | 9–13 | L |
 | 15 | Validator verify-and-sign (shadow) | New heartbeat protocol; the full §6.5 check including step 7's attempt policy; signoff submission; forced-invalid canaries. Negative vectors: a signed RunStatement relabelled as a failure; `aborted` after a terminal commitment; a commitment stamped after `deadline_block`; both a commitment and an `aborted` for one attempt; a committed record never revealed; attempt `a > 1 + max_retries`; a terminal leaf whose digest does not match its commitment; a committed RunStatement whose dataset hash does not regenerate (must quarantine). Positive vector: an abort at `a = 1` followed by a scored `a = 2` with `max_retries = 1` | 6, 7, 13 | M |
 | 16 | Activation policy and ledger `proof_ref` | Deterministic exclusion rule; `fleet_ready`, no force; rollback path tested | 14, 15 | M |
