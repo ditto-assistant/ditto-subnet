@@ -24,7 +24,7 @@ These have the same name and meaning on every provider that supports them.
 | Input | Meaning |
 |---|---|
 | `subnetwork` | Subnet to attach. GCP: self-link or name (empty uses `default`). AWS: subnet ID (required). |
-| `assign_public_ip` | Attach a public IPv4. Ingress stays closed either way. |
+| `assign_public_ip` | Attach a public IPv4. AWS sets this at launch; changing it later requires an explicit reviewed replacement. Ingress stays closed either way. |
 | `boot_disk_gb` | Root volume size in GB. |
 | `boot_disk_type` | Native disk type (`pd-balanced`; `gp3`). |
 | `deletion_protection` | GCE deletion protection / EC2 API termination protection. Default `true`; a retirement flips it in its own reviewed plan first. |
@@ -66,6 +66,10 @@ arm64.
 - AWS exposes `instance_initiated_shutdown_behavior` (default `stop`). A host
   that powers itself off when idle keeps its root volume and identity and can
   be started again; `terminate` would delete it.
+- AWS releases ephemeral public IPv4 addresses on stop. The instance module
+  ignores later changes to the launch-time public-IP association flag so a
+  stopped host is preserved; this does not attach a static address or keep
+  billing for an ephemeral address while it sleeps.
 - Hetzner hosts are converged by Ansible against a static inventory. They are
   not a Terraform module; the same Ansible role runs there with a `file` or
   X.509-federated secret source.
