@@ -64,3 +64,25 @@ def test_directory_store_ignores_foreign_files_and_wipes(tmp_path: Path) -> None
     assert store.digests() == {DIGEST}
     store.wipe()
     assert store.digests() == set()
+
+
+def test_reopening_sweeps_only_stale_fill_temporaries(tmp_path: Path) -> None:
+    import os
+    import time
+
+    root = tmp_path / "objects"
+    store = DirectoryStore(root)
+    data = b"public bytes"
+    digest = digest_of(data)
+    store.put(digest, data)
+    shard = store.root / digest[:2]
+    crashed = shard / ".fill-crashed"
+    in_flight = shard / ".fill-in-flight"
+    crashed.write_bytes(b"x" * 10)
+    in_flight.write_bytes(b"y" * 10)
+    old = time.time() - 2 * 3600
+    os.utime(crashed, (old, old))
+    reopened = DirectoryStore(root)
+    assert not crashed.exists()
+    assert in_flight.exists()
+    assert reopened.read(digest) == data

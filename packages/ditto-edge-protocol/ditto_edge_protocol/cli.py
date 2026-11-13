@@ -14,6 +14,7 @@ import argparse
 import contextlib
 import json
 import logging
+import math
 import os
 import platform
 import signal
@@ -112,6 +113,18 @@ def _cmd_leave(args: argparse.Namespace) -> int:
     return 0
 
 
+def _quota_gb(value: str) -> float:
+    try:
+        quota = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a number: {value!r}") from exc
+    if not math.isfinite(quota) or quota < 0:
+        raise argparse.ArgumentTypeError(
+            "the quota is a finite number of GB, 0 or more"
+        )
+    return quota
+
+
 def _share_ids(args: argparse.Namespace) -> list[str]:
     ids = list(args.share_id or [])
     if args.share_ids_file is not None:
@@ -190,7 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
         cmd.add_argument("--api-url", default=DEFAULT_API)
         cmd.add_argument("--key", type=Path, default=DEFAULT_HOME / "device.key")
         cmd.add_argument("--store", type=Path, default=DEFAULT_HOME / "objects")
-        cmd.add_argument("--quota-gb", type=float, default=2.0)
+        cmd.add_argument("--quota-gb", type=_quota_gb, default=2.0)
         cmd.set_defaults(func=func)
 
     dry = sub.add_parser("dry-run", help="simulate the lane in one process")

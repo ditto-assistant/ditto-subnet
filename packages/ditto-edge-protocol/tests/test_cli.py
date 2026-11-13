@@ -120,3 +120,23 @@ def test_node_run_still_creates_its_key(
             ]
         )
     assert key_path.is_file()
+
+
+@pytest.mark.parametrize("quota", ["-1", "nan", "inf", "lots"])
+def test_node_commands_refuse_an_invalid_quota(tmp_path: Path, quota: str) -> None:
+    key_path = tmp_path / "device.key"
+    with pytest.raises(SystemExit) as raised:
+        main(
+            [
+                "node",
+                "run",
+                "--key",
+                str(key_path),
+                "--store",
+                str(tmp_path / "objects"),
+                "--quota-gb",
+                quota,
+            ]
+        )
+    assert raised.value.code == 2
+    assert not key_path.exists()

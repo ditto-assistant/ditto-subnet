@@ -10,7 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ditto_edge_protocol.ledger import LedgerParams
-from ditto_edge_protocol.limits import GIB, MAX_OBJECT_BYTES_CEILING, MIB
+from ditto_edge_protocol.limits import (
+    GIB,
+    MAX_CHALLENGES_PER_POLL,
+    MAX_OBJECT_BYTES_CEILING,
+    MIB,
+)
 from ditto_edge_protocol.wire import LaneLimits, LaneMode
 
 
@@ -84,6 +89,13 @@ class LaneSettings:
         for ok, message in checks:
             if not ok:
                 raise ValueError(message)
+        # Every slot that can be due at one poll must fit in one response.
+        live = self.challenges_per_window * (self.late_slot_windows + 1)
+        if live > MAX_CHALLENGES_PER_POLL:
+            raise ValueError(
+                "challenges_per_window over the windows grace spans exceeds "
+                f"{MAX_CHALLENGES_PER_POLL} challenges per poll"
+            )
 
     @property
     def grace_seconds(self) -> int:

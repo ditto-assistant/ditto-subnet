@@ -156,3 +156,18 @@ def test_identical_shares_are_revoked_once_every_one_is_unpublished() -> None:
     assert report["objects"]["public_shares"] == 2
     assert report["objects"]["revoked_unpublished"] == 1
     assert source.checked == {"first", "second"}
+
+
+def test_a_run_that_exercised_no_check_cannot_pass() -> None:
+    objects = synthetic_objects(12, seed=2)
+    unchallenged = run_dry_run(
+        DryRunConfig(honest_nodes=3, part_time_nodes=0, adversaries=(), windows=3),
+        objects,
+    )
+    assert unchallenged["verdict"]["adversaries_caught"] == {}
+    assert unchallenged["verdict"]["pass"] is False
+    unrevoked = run_dry_run(
+        DryRunConfig(honest_nodes=3, windows=3, revoke_fraction=0), objects
+    )
+    assert unrevoked["verdict"]["revocation_within_bound"] is None
+    assert unrevoked["verdict"]["pass"] is False

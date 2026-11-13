@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -62,12 +63,39 @@ class MemoryStore:
         return sum(len(data) for data in self._objects.values())
 
 
+_TEMP_PREFIX = ".fill-"
+STALE_TEMP_SECONDS = 3600.0
+"""A fill writes for seconds. A temporary this old lost its writer to a crash."""
+
+
 class DirectoryStore:
     """Objects at ``root/<first two hex>/<digest>``."""
 
     def __init__(self, root: Path) -> None:
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root = root.resolve()
+        self.sweep_stale_temporaries()
+
+    def sweep_stale_temporaries(self, *, older_than: float = STALE_TEMP_SECONDS) -> int:
+        """Delete fill temporaries a crash left behind; return how many.
+
+        Only old ones go: a young temporary may belong to a write in flight.
+        """
+        cutoff = time.time() - older_than
+        removed = 0
+        for shard in self.root.iterdir():
+            if not shard.is_dir() or len(shard.name) != 2:
+                continue
+            for entry in shard.iterdir():
+                if not entry.name.startswith(_TEMP_PREFIX):
+                    continue
+                try:
+                    if entry.stat().st_mtime < cutoff:
+                        entry.unlink()
+                        removed += 1
+                except FileNotFoundError:
+                    continue
+        return removed
 
     def _path(self, digest: str) -> Path:
         if _DIGEST.fullmatch(digest) is None:
@@ -87,7 +115,7 @@ class DirectoryStore:
         _check(digest, data)
         target = self._path(digest)
         target.parent.mkdir(exist_ok=True, mode=0o700)
-        fd, temp = tempfile.mkstemp(dir=target.parent, prefix=".fill-")
+        fd, temp = tempfile.mkstemp(dir=target.parent, prefix=_TEMP_PREFIX)
         try:
             with os.fdopen(fd, "wb") as handle:
                 handle.write(data)
@@ -123,3 +151,4 @@ class DirectoryStore:
         """Delete every stored object (leaving the network)."""
         for digest in self.digests():
             self.delete(digest)
+        self.sweep_stale_temporaries()

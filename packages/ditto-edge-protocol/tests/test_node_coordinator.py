@@ -17,7 +17,14 @@ from ditto_edge_protocol.signing import DeviceKey
 from ditto_edge_protocol.sources import synthetic_objects
 from ditto_edge_protocol.store import MemoryStore
 from ditto_edge_protocol.transport import LocalTransport, TransportError
-from ditto_edge_protocol.wire import AckRequest, AckResponse, ClientInfo, PollRequest
+from ditto_edge_protocol.wire import (
+    AckRequest,
+    AckResponse,
+    Assignment,
+    ClientInfo,
+    PollRequest,
+    PollResponse,
+)
 
 START = 1_763_000_000.0 // 3600 * 3600
 
@@ -193,7 +200,7 @@ def test_status_reports_held_bytes_and_no_payouts(lane: Lane) -> None:
 
 
 def test_live_status_does_not_count_a_pending_challenge_as_missed() -> None:
-    lane = Lane(_settings(challenges_per_window=120, min_challenges=6))
+    lane = Lane(_settings(challenges_per_window=60, min_challenges=6))
     for obj in synthetic_objects(4, seed=3):
         lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
     node = lane.node()
@@ -418,3 +425,163 @@ def test_acknowledgements_stay_within_the_item_limit(
     }
     assert all(spans[d].acked_at is not None for d in digests)
     assert all(spans[d].released_at is not None for d in revoked)
+
+
+def test_a_nonce_is_accepted_once_even_across_threads() -> None:
+    import threading
+    import time
+
+    lane = Lane(_settings())
+    node = lane.node()
+    body = PollRequest(protocol="edge/v1", free_bytes=GIB).model_dump_json().encode()
+    transport = node.transport
+    assert isinstance(transport, LocalTransport)
+    signed_headers = transport.key.sign_request(
+        method="POST", path=paths.POLL, body=body, timestamp=int(lane.clock.now)
+    ).as_dict()
+
+    class SlowSeen(dict[tuple[str, str], float]):
+        """Widens the gap between the replay check and the insert."""
+
+        def __contains__(self, key: object) -> bool:
+            found = super().__contains__(key)
+            time.sleep(0.05)
+            return found
+
+    lane.coordinator._nonces.seen = SlowSeen(lane.coordinator._nonces.seen)
+    accepted: list[str] = []
+    refused: list[CoordinatorError] = []
+
+    def attempt() -> None:
+        try:
+            accepted.append(
+                lane.coordinator.authenticate(
+                    method="POST", path=paths.POLL, headers=signed_headers, body=body
+                )
+            )
+        except CoordinatorError as exc:
+            refused.append(exc)
+
+    threads = [threading.Thread(target=attempt) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(accepted) == 1 and len(refused) == 3
+
+
+def test_header_names_match_case_insensitively() -> None:
+    lane = Lane(_settings())
+    node = lane.node()
+    transport = node.transport
+    assert isinstance(transport, LocalTransport)
+    body = PollRequest(protocol="edge/v1", free_bytes=GIB).model_dump_json().encode()
+    signed = transport.key.sign_request(
+        method="POST", path=paths.POLL, body=body, timestamp=int(lane.clock.now)
+    ).as_dict()
+    lowered = {name.lower(): value for name, value in signed.items()}
+    assert (
+        lane.coordinator.authenticate(
+            method="POST", path=paths.POLL, headers=lowered, body=body
+        )
+        == node.node_id
+    )
+
+
+def test_an_unanswered_challenge_is_sent_again_until_its_deadline() -> None:
+    lane = Lane(_settings(challenges_per_window=60, min_challenges=6))
+    for obj in synthetic_objects(4, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    lane.run([node], 300)
+    request = PollRequest(protocol="edge/v1", free_bytes=GIB)
+    # Poll without answering, as if every answer or response were lost.
+    first = node.transport.poll(request)
+    while not first.challenges:
+        lane.clock.advance(30)
+        first = node.transport.poll(request)
+    sent = {c.challenge_id for c in first.challenges}
+    lane.clock.advance(10)
+    again = {c.challenge_id for c in node.transport.poll(request).challenges}
+    assert sent <= again
+    answered = first.challenges[0]
+    node.transport.answer(answered.challenge_id, node.answer_for(answered))
+    lane.clock.advance(10)
+    after_answer = {c.challenge_id for c in node.transport.poll(request).challenges}
+    assert answered.challenge_id not in after_answer
+    assert sent - {answered.challenge_id} <= after_answer
+    lane.clock.advance(lane.coordinator.settings.challenge_deadline_seconds)
+    late = {c.challenge_id for c in node.transport.poll(request).challenges}
+    assert not sent & late
+    passed = lane.coordinator.challenges[answered.challenge_id]
+    assert passed.outcome == "passed"
+
+
+def test_a_poll_never_issues_more_challenges_than_one_response_carries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ditto_edge_protocol.coordinator as coordinator_module
+
+    monkeypatch.setattr(coordinator_module, "MAX_CHALLENGES_PER_POLL", 2)
+    lane = Lane(_settings(challenges_per_window=60, min_challenges=6))
+    for obj in synthetic_objects(4, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    assert node.node_id is not None
+    lane.run([node], 120)
+    window = int(lane.clock.now // 3600)
+    schedule = lane.coordinator.slots[(node.node_id, window)]
+    targets = [slot for slot in schedule if slot.state == "scheduled"][:5]
+    assert len(targets) == 5
+    for slot in targets:
+        slot.due_at = lane.clock.now - 1
+    # The excess stays scheduled, never marked issued without being sent.
+    assert node.step().answered == 2
+    assert [slot.state for slot in targets].count("issued") == 2
+    assert [slot.state for slot in targets].count("scheduled") == 3
+    node.step()
+    node.step()
+    assert all(slot.state == "issued" for slot in targets)
+
+
+def test_settings_refuse_more_due_slots_than_one_poll_carries() -> None:
+    with pytest.raises(ValueError, match="challenges per poll"):
+        _settings(challenges_per_window=120)
+    assert _settings(challenges_per_window=64).late_slot_windows == 1
+
+
+def test_scored_windows_drop_their_slot_schedules(lane: Lane) -> None:
+    node = lane.node()
+    lane.run([node], 3 * 3600)
+    scored = lane.coordinator._scored_windows
+    assert scored
+    assert not any(index in scored for _, index in lane.coordinator.slots)
+
+
+def test_a_revoked_digest_listed_again_leaves_no_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lane = Lane(_settings(replicas=1))
+    obj = synthetic_objects(1, seed=3)[0]
+    digest = lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    node.step()
+    assert node.store.has(digest)
+    lane.coordinator.revoke(digest, "unpublished")
+    poll = node.transport.poll
+
+    def poll_listing_it_anyway(request: PollRequest) -> PollResponse:
+        # A confused Platform revokes the digest and lists it in one response.
+        response = poll(request)
+        listed = Assignment(
+            digest=digest,
+            size_bytes=len(obj.data),
+            media_type=obj.media_type,
+            lease_expires_at=response.server_time + 900,
+        )
+        return response.model_copy(update={"assignments": [listed]})
+
+    monkeypatch.setattr(node.transport, "poll", poll_listing_it_anyway)
+    node.step()
+    assert not node.store.has(digest)
+    assert digest not in node._leases

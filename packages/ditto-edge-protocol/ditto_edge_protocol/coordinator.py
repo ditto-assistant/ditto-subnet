@@ -10,10 +10,12 @@ Server-side rules, per poll:
 1. **Schedule.** The node's first poll of a window draws that window's
    challenge slots (:func:`~ditto_edge_protocol.challenges.schedule_window`).
    Slots already more than ``grace`` in the past are missed.
-2. **Due slots.** A due slot within ``grace`` is issued. The challenge targets
-   an acknowledged object, or a recently revoked one for a ``revoked`` slot.
-   With nothing to challenge, the slot is void. A slot older than ``grace`` is
-   missed.
+2. **Due slots.** A challenge issued earlier and still unanswered is sent
+   again until its deadline, so a lost poll response or a failed answer costs
+   a node nothing. A due slot within ``grace`` is then issued, up to one poll's
+   challenge limit. The challenge targets an acknowledged object, or a
+   recently revoked one for a ``revoked`` slot. With nothing to challenge, the
+   slot is void. A slot older than ``grace`` is missed.
 3. **Placement.** The node gets new objects up to its quota, least-replicated
    first; replica counts include live leases only.
 4. **Leases and revocations.** Every unrevoked assignment gets a fresh lease,
@@ -28,6 +30,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from random import Random, SystemRandom
@@ -49,7 +52,11 @@ from ditto_edge_protocol.ledger import (
     hypothetical_shares,
     score_window,
 )
-from ditto_edge_protocol.limits import MAX_ASSIGNMENTS_PER_POLL, MEDIA_TYPES
+from ditto_edge_protocol.limits import (
+    MAX_ASSIGNMENTS_PER_POLL,
+    MAX_CHALLENGES_PER_POLL,
+    MEDIA_TYPES,
+)
 from ditto_edge_protocol.placement import (
     PlacementNode,
     PlacementObject,
@@ -162,15 +169,21 @@ class LedgerRow:
 @dataclass
 class _NonceLog:
     seen: dict[tuple[str, str], float] = field(default_factory=dict)
+    lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
 
     def consume(self, node_id: str, nonce: str, now: float, horizon: float) -> bool:
-        if len(self.seen) > 50_000:
-            self.seen = {k: t for k, t in self.seen.items() if now - t < horizon}
-        key = (node_id, nonce)
-        if key in self.seen:
-            return False
-        self.seen[key] = now
-        return True
+        # One check-and-insert at a time: two requests carrying the same nonce
+        # must never both be accepted, whichever threads serve them.
+        with self.lock:
+            if len(self.seen) > 50_000:
+                self.seen = {k: t for k, t in self.seen.items() if now - t < horizon}
+            key = (node_id, nonce)
+            if key in self.seen:
+                return False
+            self.seen[key] = now
+            return True
 
 
 class Coordinator:
@@ -201,6 +214,8 @@ class Coordinator:
         ledger counts every span a node held, not just the latest."""
         self.slots: dict[tuple[str, int], list[_Slot]] = {}
         self.challenges: dict[str, _Challenge] = {}
+        self._outstanding: dict[str, list[str]] = {}
+        """Per node, issued challenges that may still be undecided."""
         self.ledger: list[LedgerRow] = []
         self._scored_windows: set[int] = set()
         self._nonces = _NonceLog()
@@ -215,13 +230,15 @@ class Coordinator:
         Enrollment is self-certifying: the key travels in the body and must
         hash to the claimed node id. Every other path needs an enrolled node.
         """
-        node_id = headers.get(HEADER_NODE, "")
+        # Header names are case-insensitive in HTTP.
+        lowered = {key.lower(): value for key, value in headers.items()}
+        node_id = lowered.get(HEADER_NODE.lower(), "")
         try:
-            timestamp = int(headers.get(HEADER_TIMESTAMP, ""))
+            timestamp = int(lowered.get(HEADER_TIMESTAMP.lower(), ""))
         except ValueError as exc:
             raise CoordinatorError("unauthorized", "missing timestamp") from exc
-        nonce = headers.get(HEADER_NONCE, "")
-        signature = headers.get(HEADER_SIGNATURE, "")
+        nonce = lowered.get(HEADER_NONCE.lower(), "")
+        signature = lowered.get(HEADER_SIGNATURE.lower(), "")
         if path == paths.ENROLL:
             try:
                 public_key = json.loads(body)["public_key_hex"]
@@ -394,13 +411,24 @@ class Coordinator:
             for back in range(settings.late_slot_windows, 0, -1)
             for slot in self.slots.get((node_id, index - back), [])
         ] + schedule
-        issued: list[Challenge] = []
+        # Challenges issued earlier and still undecided go out again until
+        # their deadline. Answering twice changes nothing: the first decides.
+        outstanding = [
+            self.challenges[challenge_id]
+            for challenge_id in self._outstanding.get(node_id, [])
+            if self.challenges[challenge_id].outcome == "pending"
+            and self.challenges[challenge_id].deadline_at > now
+        ]
+        self._outstanding[node_id] = [c.challenge_id for c in outstanding]
+        issued = [_wire(c) for c in outstanding[:MAX_CHALLENGES_PER_POLL]]
         for slot in due:
             if slot.state != "scheduled" or slot.due_at > now:
                 continue
             if now - slot.due_at > settings.grace_seconds:
                 slot.state = "missed"
                 continue
+            if len(issued) >= MAX_CHALLENGES_PER_POLL:
+                break  # the rest stay scheduled for the next poll
             drawn = draw_challenge(
                 purpose=slot.purpose,
                 held=self._held(node_id, now),
@@ -414,29 +442,19 @@ class Coordinator:
             # A revoked slot with nothing revoked to ask about becomes a possession
             # challenge; the ledger must count it as what was actually asked.
             slot.purpose = drawn.purpose
-            challenge_id = self.nonce(16).hex()
-            deadline = now + settings.challenge_deadline_seconds
-            self.challenges[challenge_id] = _Challenge(
-                challenge_id=challenge_id,
+            challenge = _Challenge(
+                challenge_id=self.nonce(16).hex(),
                 node_id=node_id,
                 window_index=index,
                 drawn=drawn,
                 issued_at=now,
-                deadline_at=deadline,
+                deadline_at=now + settings.challenge_deadline_seconds,
             )
+            self.challenges[challenge.challenge_id] = challenge
+            self._outstanding.setdefault(node_id, []).append(challenge.challenge_id)
             slot.state = "issued"
-            slot.challenge_id = challenge_id
-            issued.append(
-                Challenge(
-                    challenge_id=challenge_id,
-                    kind=drawn.kind,
-                    digest=drawn.digest,
-                    nonce_hex=drawn.nonce_hex,
-                    offset=drawn.offset,
-                    length=drawn.length,
-                    deadline_at=int(deadline),
-                )
-            )
+            slot.challenge_id = challenge.challenge_id
+            issued.append(_wire(challenge))
         return issued
 
     def _live_nodes(self, node: _Node, now: float) -> list[PlacementNode]:
@@ -754,8 +772,24 @@ class Coordinator:
                     )
                 )
             self._scored_windows.add(index)
+            # A scored window's slots are past grace and never read again.
+            for key in [key for key in self.slots if key[1] == index]:
+                del self.slots[key]
         self.ledger.extend(rows)
         return rows
+
+
+def _wire(challenge: _Challenge) -> Challenge:
+    drawn = challenge.drawn
+    return Challenge(
+        challenge_id=challenge.challenge_id,
+        kind=drawn.kind,
+        digest=drawn.digest,
+        nonce_hex=drawn.nonce_hex,
+        offset=drawn.offset,
+        length=drawn.length,
+        deadline_at=int(challenge.deadline_at),
+    )
 
 
 def _earliest(*values: float | None) -> float | None:

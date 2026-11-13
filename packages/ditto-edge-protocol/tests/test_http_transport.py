@@ -51,7 +51,7 @@ def _server(coordinator: Coordinator) -> ThreadingHTTPServer:
             path = self.path
             try:
                 node_id = coordinator.authenticate(
-                    method=method, path=path, headers=dict(self.headers), body=body
+                    method=method, path=path, headers=self.headers, body=body
                 )
                 if path == paths.ENROLL:
                     out = coordinator.enroll(EnrollRequest.model_validate_json(body))

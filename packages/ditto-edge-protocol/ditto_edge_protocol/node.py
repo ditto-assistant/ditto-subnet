@@ -149,6 +149,8 @@ class EdgeNode:
         listed: set[str] = set()
         for assignment in response.assignments:
             listed.add(assignment.digest)
+            if assignment.digest in self._revoked:
+                continue
             previous = self._leases.get(assignment.digest)
             if previous is not None and previous <= response.server_time:
                 # The lease lapsed, by Platform's clock, before this poll. Platform
@@ -156,8 +158,6 @@ class EdgeNode:
                 # acknowledgement even though the bytes never left the disk.
                 self._acked.discard(assignment.digest)
             self._leases[assignment.digest] = assignment.lease_expires_at
-            if assignment.digest in self._revoked:
-                continue
             if not self.store.has(assignment.digest):
                 if self._fill(assignment):
                     report.filled.append(assignment.digest)

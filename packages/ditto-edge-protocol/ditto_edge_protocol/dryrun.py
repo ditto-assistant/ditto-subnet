@@ -423,10 +423,18 @@ def _report(
                 if honest_units and part_time_units
                 else None
             ),
-            "revocation_within_bound": late_holders == 0
-            and all(latency <= bound for latency in latencies),
+            # None when no honest holder released a revocation: nothing to judge.
+            "revocation_within_bound": (
+                late_holders == 0 and all(latency <= bound for latency in latencies)
+                if latencies or late_holders
+                else None
+            ),
+            # A pass needs both checks exercised: with no adversary caught or
+            # no release measured, it would be vacuous.
             "pass": false_fail_rate == 0.0
+            and bool(caught)
             and all(caught.values())
+            and bool(latencies)
             and late_holders == 0
             and all(latency <= bound for latency in latencies),
         },
