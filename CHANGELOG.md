@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.483.0 (2026-11-13)
+
+### Continuous Integration
+
+- **infra**: Plan and apply the AWS roots through the protected infra workflow
+  ([#3471](https://github.com/ditto-assistant/ditto-subnet/pull/3471),
+  [`c663745`](https://github.com/ditto-assistant/ditto-subnet/commit/c663745436291f635f400e68b3ee60529716b60a))
+
+### Features
+
+- **backroom**: Add Ditto Edge shadow lane read tools (SN-481)
+  ([#3522](https://github.com/ditto-assistant/ditto-subnet/pull/3522),
+  [`b5ffd88`](https://github.com/ditto-assistant/ditto-subnet/commit/b5ffd88732bc72419942e1863d8d7887ff2d6682))
+
+- **edge-protocol**: Add the reference Mac node, coordinator and dry run (SN-481)
+  ([#3518](https://github.com/ditto-assistant/ditto-subnet/pull/3518),
+  [`42f4692`](https://github.com/ditto-assistant/ditto-subnet/commit/42f4692f4064d3e1b143dfbed915da97a2987530))
+
+- **platform**: Add the Ditto Edge shadow lane schema and settings (SN-481)
+  ([#3520](https://github.com/ditto-assistant/ditto-subnet/pull/3520),
+  [`8f12a3d`](https://github.com/ditto-assistant/ditto-subnet/commit/8f12a3da39df6d266d2a3501572efc321aab8c0f))
+
+- **platform**: Serve the Ditto Edge node protocol and shadow ledger (SN-481)
+  ([#3521](https://github.com/ditto-assistant/ditto-subnet/pull/3521),
+  [`0612502`](https://github.com/ditto-assistant/ditto-subnet/commit/061250250c0d680c700d2ac62ecf7fbb8bfffa37))
+
+
 ## v0.482.0 (2026-11-13)
 
 ### Documentation
