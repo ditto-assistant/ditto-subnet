@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.483.1 (2026-11-13)
+
+### Bug Fixes
+
+- **platform**: Never close a dueling season into no open season (SN-476)
+  ([#3537](https://github.com/ditto-assistant/ditto-subnet/pull/3537),
+  [`8dadc19`](https://github.com/ditto-assistant/ditto-subnet/commit/8dadc1998c22b90c377d7928e45023a169c65a5f))
+
+
 ## v0.483.0 (2026-11-13)
 
 ### Continuous Integration
