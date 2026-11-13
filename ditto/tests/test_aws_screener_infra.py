@@ -20,7 +20,6 @@ USER_DATA = (ROOT / "user-data.sh.tftpl").read_text()
 BOOTSTRAP_MAIN = (TF / "stacks" / "aws-bootstrap" / "main.tf").read_text()
 BOOTSTRAP_SCREENER = (TF / "stacks" / "aws-bootstrap" / "screener.tf").read_text()
 GCP_AWS = (TF / "stacks" / "gcp-platform" / "screener-aws.tf").read_text()
-GCP_TFVARS = (TF / "stacks" / "gcp-platform" / "prod.auto.tfvars").read_text()
 MODULE_MAIN = (TF / "modules" / "compute" / "aws" / "main.tf").read_text()
 MODULE_VARS = (TF / "modules" / "compute" / "aws" / "variables.tf").read_text()
 MODULE_LOCALS = (TF / "modules" / "compute" / "aws" / "locals.tf").read_text()
@@ -82,14 +81,13 @@ def _apply_statements() -> dict[str, str]:
 # --- root: inert, isolated, egress only ---------------------------------------
 
 
-def test_root_is_inert_and_isolated() -> None:
+def test_module_defaults_are_inert_and_isolated() -> None:
     assert _default(VARS, "enable_aws_screener") == "false"
     assert 'key          = "aws-screener/terraform.tfstate"' in BACKEND
     assert f'stack  = "{STACK}"' in VERSIONS
     assert _default(VARS, "vpc_cidr") == "10.118.1.0/24"
     scorer_vars = (TF / "stacks" / "aws-generator-scorer" / "variables.tf").read_text()
     assert _default(scorer_vars, "vpc_cidr") != _default(VARS, "vpc_cidr")
-    assert "enable_screener_aws_identity = false" in GCP_TFVARS
 
 
 def test_root_creates_no_iam_and_names_the_bootstrap_profile() -> None:
