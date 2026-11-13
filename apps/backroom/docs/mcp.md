@@ -298,7 +298,8 @@ opens, once it is scored or void.
     above zero, every family with a build waiting gets one challenger column,
     past `challenger_columns` up to the round's 8 columns, so a generator
     qualified before a round opens is measured in that round unless the round
-    is full; queue order decides who waits then. The grouping only orders the
+    is full; queue order decides who waits then. Spare challenger columns go
+    on down the queue, then re-measure scored generators. The grouping only orders the
     queue; it never rejects a generator. The public default generator is
     never in the queue.
   - `list_generator_rounds`, `get_generator_round`, `preview_generator_round`

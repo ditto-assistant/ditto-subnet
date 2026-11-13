@@ -164,8 +164,8 @@ class GeneratorCompetitionSettings(BaseModel):
     ``MAX_ROUND_COLUMNS`` (8), so five counted columns leave room for three.
     This is the minimum a round seats: above zero, every template family with
     a never-scored generator waiting gets one challenger column, up to that
-    capacity, and spare challenger columns re-measure scored generators. Zero
-    turns challenger columns off."""
+    capacity. Spare challenger columns go on down the challenger queue, then
+    re-measure scored generators. Zero turns challenger columns off."""
     reference_agent_ids: Annotated[list[UUID], Field(max_length=3)] = Field(
         default_factory=list
     )

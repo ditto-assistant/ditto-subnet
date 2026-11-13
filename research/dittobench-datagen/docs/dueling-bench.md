@@ -145,10 +145,10 @@ strong new generator does not wait a day:
 
 1. **Qualify.** The upload passes probe qualification (generator-competition.md
    "Qualification").
-2. **Next round.** It takes the next round's challenger column
-   (`challenger_columns`, which goes to qualified generators that never held a
-   column), or a counted column if one is free. `select_columns` already does
-   this. The round opens at the next epoch boundary and is scored when it
+2. **Next round.** It takes a challenger column in the next round, or a
+   counted column if one is free. `challenger_columns` is a minimum: every
+   template family with a never-scored generator waiting gets one challenger
+   column, up to the round's 8 columns. `select_columns` already does this. The round opens at the next epoch boundary and is scored when it
    closes.
 3. **Next season boundary.** If that scored column meets eligibility rules 2-3
    and its ledger score places it in the top 5 eligible owners, it is pinned at

@@ -76,9 +76,10 @@ export const generatorCompetitionSettingsSchema = z.object({
   retry_backoff_seconds: z.number().int().min(60).max(86_400),
   epochs_per_round: z.number().int().min(1).max(48),
   counted_columns: z.number().int().min(1).max(6),
-  // Bounded by the round's column capacity: counted plus challenger columns
-  // hold at most MAX_ROUND_COLUMNS (Platform refuses more; the write below
-  // checks it first).
+  // The minimum a round seats: above 0, every waiting template family gets a
+  // challenger column up to MAX_ROUND_COLUMNS. The setting is still bounded by
+  // that capacity: counted plus challenger columns hold at most
+  // MAX_ROUND_COLUMNS (Platform refuses more; the write below checks it first).
   challenger_columns: z.number().int().min(0).max(MAX_ROUND_COLUMNS - 1),
   reference_agent_ids: z.array(uuid).max(3),
   privacy_window_rounds: z.number().int().min(1).max(180),

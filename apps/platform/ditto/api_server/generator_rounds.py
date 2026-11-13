@@ -477,8 +477,9 @@ async def select_round_columns(
     if challengers:
         # The next-round guarantee: every template family with a generator
         # waiting for its first measurement gets one challenger column, past
-        # challenger_columns if need be, up to MAX_COLUMNS. One family's batch
-        # of builds still drains one column per round.
+        # challenger_columns if need be, up to MAX_COLUMNS. Spare challenger
+        # columns then go on down the queue (an owner still holds one column),
+        # so a family's second build is seated only when no family waits.
         heads: dict[str, GeneratorSubmission] = {}
         for entry in waiting:
             if entry.row.owner_key not in used_owners:

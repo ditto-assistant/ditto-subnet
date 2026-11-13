@@ -1738,7 +1738,8 @@ class TestChallengerQueue:
         """A generator qualified before a round opens is measured in it: each
         waiting template family takes one challenger column past
         challenger_columns, up to the round's eight columns. A family's other
-        builds wait, and challenger_columns 0 still seats none."""
+        builds wait for spare challenger room, an owner never holds two
+        columns, and challenger_columns 0 still seats none."""
         _install(app, session_maker)
         await _apply_settings(client, counted_columns=1, challenger_columns=1)
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
@@ -1785,6 +1786,18 @@ class TestChallengerQueue:
             (str(ids["distinct"]), False),
             (str(ids["solo"]), False),
             (str(ids["batch-1"]), False),
+        ]
+
+        # A spare challenger column goes on down the queue: the clone family's
+        # second build, under another owner, is seated; batch-2 is owner z's.
+        await _apply_settings(client, counted_columns=1, challenger_columns=5)
+        assert await columns() == [
+            (str(ids["scored"]), True),
+            (str(ids["clone-a"]), False),
+            (str(ids["distinct"]), False),
+            (str(ids["solo"]), False),
+            (str(ids["batch-1"]), False),
+            (str(ids["clone-b"]), False),
         ]
 
         # Five counted columns leave room for three challengers: the fourth
