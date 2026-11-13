@@ -12,6 +12,9 @@ dependencies = [
     "cryptography>=50.0.0",
 ]
 
+[project.scripts]
+ditto-edge = "ditto_edge_protocol.cli:main"
+
 [dependency-groups]
 dev = [
     "mypy>=1.10",

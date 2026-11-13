@@ -20,6 +20,54 @@ This package holds the parts every implementation must agree on:
 | `paths` | Platform endpoint paths, which nodes sign exactly. |
 | `vectors` | Conformance vectors (`testdata/conformance_v1.json`) that the Desktop helper must reproduce byte for byte. |
 
+It also ships the runtime the contract is proven with:
+
+| Module | What it does |
+|---|---|
+| `node` | The reference node: poll, revoke, answer from disk only, fill and verify, expire, acknowledge. The Desktop helper ports this order. |
+| `store` | Digest-verified object stores: in-memory, and an atomic 0600 directory store. |
+| `settings` | Lane tunables with shadow defaults (Platform mirrors these). |
+| `coordinator` | Platform's lane rules in memory: enrollment, signed-request checks, rendezvous placement, secret challenge slots, revocation, insert-once ledger. |
+| `transport` | Signed HTTPS to Platform (stdlib, no proxies or redirects), or in-process to a coordinator with the same signatures and JSON. |
+| `sources` | Synthetic objects shaped like production's mix, and anonymous reads of real public shares from `share.heyditto.ai`. |
+| `dryrun` | The whole lane in one process: honest, part-time and adversarial nodes over several windows, with a pass/fail verdict. |
+| `cli` | `ditto-edge keygen`, `ditto-edge node run/status/leave`, and `ditto-edge dry-run`. |
+
+## Run a node on a Mac mini (headless)
+
+```sh
+uv run ditto-edge keygen                      # creates ~/.ditto-edge/device.key (0600)
+uv run ditto-edge node run --quota-gb 2       # outbound HTTPS only; Ctrl-C to stop
+uv run ditto-edge node leave                  # releases everything and deletes the cache
+```
+
+The node needs no wallet and no TAO. Platform refuses enrollment while the lane
+is `off`. In `shadow` it measures the node, and nothing pays.
+
+## Dry run against prod-shaped traffic
+
+```sh
+# Synthetic objects shaped like production's public-content mix:
+uv run ditto-edge dry-run --windows 4 --synthetic 40 --out report.json
+
+# Real public shares, read anonymously from share.heyditto.ai and rechecked
+# every window (an unpublished share is revoked and measured):
+uv run ditto-edge dry-run --share-id <id> --share-id <id> --recheck-public
+```
+
+It runs honest nodes, a part-time node, and three adversaries:
+- `lazy` holds nothing and re-downloads to answer;
+- `keeps_revoked` ignores revocations;
+- `tamper` corrupts answers.
+
+The run exits 0 when all of these hold:
+- no honest window fails;
+- every adversary is caught;
+- every online honest node releases revoked objects within one lease plus one
+  poll.
+
+It needs no deployment, no secret and no admin write.
+
 ## Shadow boundary
 
 - `LaneMode` is `off` or `shadow`. There is no `enforce`. Leaving shadow needs
