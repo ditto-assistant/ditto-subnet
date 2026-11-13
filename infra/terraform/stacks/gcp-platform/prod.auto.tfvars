@@ -44,9 +44,9 @@ enable_screener_fleet_dev_host = false
 # pool, provider, service account, and one-secret grants on routine plans.
 enable_screener_fleet_x509_identity       = true
 enable_screener_fleet_x509_node2_identity = false
-# The on-demand EC2 screener's WIF pool, review-key grants and empty
-# registration-grant secret stay absent until a reviewed enablement.
-enable_screener_aws_identity = false
+# DITTO-2594: the on-demand EC2 screener's WIF pool, review-key grants and
+# registration-grant secret are enabled through the protected apply workflow.
+enable_screener_aws_identity = true
 
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6

@@ -18,6 +18,8 @@ mock_provider "aws" {
 }
 
 variables {
+  # Tests choose their enablement explicitly, independent of production intent.
+  enable_aws_screener             = false
   screener_fleet_release_sha      = "0123456789abcdef0123456789abcdef01234567"
   screener_fleet_builder_image    = "ghcr.io/ditto-assistant/submission-builder@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   screener_fleet_aws_wif_provider = "projects/123456789012/locations/global/workloadIdentityPools/screener-aws/providers/aws-ec2"
@@ -25,7 +27,7 @@ variables {
   screener_fleet_idle_exit_seconds = 900
 }
 
-run "merging_creates_nothing" {
+run "explicitly_disabled_creates_nothing" {
   command = plan
   variables {
     screener_fleet_release_sha      = ""
@@ -38,7 +40,7 @@ run "merging_creates_nothing" {
       length(aws_vpc.screener) + length(module.screener) + length(data.aws_iam_instance_profile.node) +
       length(aws_vpc_security_group_egress_rule.screener)
     ) == 0
-    error_message = "The root must create nothing until enable_aws_screener is set."
+    error_message = "The disabled root must create nothing."
   }
   assert {
     condition     = output.screener_instance_id == "" && output.screener_vpc_id == ""
@@ -83,7 +85,7 @@ run "enabling_requires_release_inputs" {
   expect_failures = [aws_vpc.screener]
 }
 
-run "merging_needs_no_idle_exit_setting" {
+run "disabled_needs_no_idle_exit_setting" {
   command = plan
   variables {
     screener_fleet_idle_exit_seconds = null
