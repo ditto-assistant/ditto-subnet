@@ -1,0 +1,333 @@
+{
+  "date": "2026-11-13",
+  "currency": "USD",
+  "region": "us-east-1",
+  "hours": 730,
+  "taxes_discounts_credits": "excluded",
+  "rates": {
+    "aurora_standard_acu_hour": {
+      "usd": 0.12,
+      "unit": "ACU-Hr",
+      "sku": "AVKW7ZJP8D72HNQC",
+      "description": "USD 0.12 per Aurora Capacity Unit hour running Aurora PostgreSQL Serverless v2",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "ServerlessV2",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "aurora_io_optimized_acu_hour": {
+      "usd": 0.16,
+      "unit": "ACU-Hr",
+      "sku": "KG668U3YXJQ6YH9Y",
+      "description": "USD 0.16 per Aurora Capacity Unit hour running Aurora PostgreSQL Serverless v2 IO-Optimized",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "ServerlessV2",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "rds_single_hour": {
+      "usd": 0.168,
+      "unit": "Hrs",
+      "sku": "SHZU9RWDC2H76ATX",
+      "description": "$ 0.168 per RDS db.m7g.large Single-AZ instance hour (or partial hour) running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "instanceType": "db.m7g.large",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "rds_multi_hour": {
+      "usd": 0.337,
+      "unit": "Hrs",
+      "sku": "Z8HB5KU2V54F7ATT",
+      "description": "$ 0.337 per RDS db.m7g.large Multi-AZ instance hour (or partial hour) running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "instanceType": "db.m7g.large",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "rds_single_gp3_gib_month": {
+      "usd": 0.115,
+      "unit": "GB-Mo",
+      "sku": "KYVYY29G957PKY3B",
+      "description": "$0.115 per GB-month of provisioned GP3 storage running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Database Storage",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "rds_multi_gp3_gib_month": {
+      "usd": 0.23,
+      "unit": "GB-Mo",
+      "sku": "J7S7KD4WFDNQWKNX",
+      "description": "$0.23 per GB-month of provisioned GP3 storage for Multi-AZ deployments running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Database Storage",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "aurora_standard_gib_month": {
+      "usd": 0.1,
+      "unit": "GB-Mo",
+      "sku": "7GYUVAA992PFJPCB",
+      "description": "$0.10 per GB-month of consumed storage (Aurora PostgreSQL)",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Database Storage",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "aurora_io_optimized_gib_month": {
+      "usd": 0.225,
+      "unit": "GB-Mo",
+      "sku": "5YXZF9S373QUR5VW",
+      "description": "USD 0.225 per GB-month of I/O-Optimized consumed storage (Aurora PostgreSQL)",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Database Storage",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "aurora_io_operation": {
+      "usd": 2e-07,
+      "unit": "IOs",
+      "sku": "7JDSZP38DMKT9B86",
+      "description": "$0.20 per 1 million I/O requests (Aurora PostgreSQL)",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "System Operation",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "rds_backup_gib_month": {
+      "usd": 0.095,
+      "unit": "GB-Mo",
+      "sku": "6W8ECRFVDATCER7J",
+      "description": "$0.095 per additional GB-month of backup storage exceeding free allocation running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Storage Snapshot",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "aurora_backup_gib_month": {
+      "usd": 0.021,
+      "unit": "GB-Mo",
+      "sku": "AYEW6PNFPJSSTGH7",
+      "description": "USD 0.021 per GB-month of backup storage exceeding free allocation for Aurora PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Storage Snapshot",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "fargate_vcpu_hour": {
+      "usd": 0.04048,
+      "unit": "hours",
+      "sku": "8CESGAFWKAJ98PME",
+      "description": "AWS Fargate - vCPU - US East (N.Virginia)",
+      "publication_date": "2026-11-11T23:46:23Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "usagetype": "USE1-Fargate-vCPU-Hours:perCPU"
+      }
+    },
+    "fargate_gib_hour": {
+      "usd": 0.004445,
+      "unit": "hours",
+      "sku": "PBZNQUSEXZUC34C9",
+      "description": "AWS Fargate - Memory  - US East (N.Virginia)",
+      "publication_date": "2026-11-11T23:46:23Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "usagetype": "USE1-Fargate-GB-Hours"
+      }
+    },
+    "alb_hour": {
+      "usd": 0.0225,
+      "unit": "Hrs",
+      "sku": "37CUWUT8GSNQEPUV",
+      "description": "$0.0225 per Application LoadBalancer-hour (or partial hour)",
+      "publication_date": "2026-11-11T15:36:21Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "usagetype": "LoadBalancerUsage",
+        "operation": "LoadBalancing:Application"
+      }
+    },
+    "alb_lcu_hour": {
+      "usd": 0.008,
+      "unit": "LCU-Hrs",
+      "sku": "P2XGEJ8N3KU52WA8",
+      "description": "$0.008 per used Application load balancer capacity unit-hour (or partial hour)",
+      "publication_date": "2026-11-11T15:36:21Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "usagetype": "LCUUsage",
+        "operation": "LoadBalancing:Application"
+      }
+    },
+    "nat_hour": {
+      "usd": 0.045,
+      "unit": "Hrs",
+      "sku": "M2YSHUBETB3JX4M4",
+      "description": "$0.045 per NAT Gateway Hour",
+      "publication_date": "2026-11-10T17:38:52Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "NAT Gateway"
+      }
+    },
+    "nat_gb": {
+      "usd": 0.045,
+      "unit": "GB",
+      "sku": "59S5R83GFPUAGVR5",
+      "description": "$0.045 per GB Data Processed by NAT Gateways",
+      "publication_date": "2026-11-10T17:38:52Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "NAT Gateway"
+      }
+    },
+    "dms_single_hour": {
+      "usd": 0.0745,
+      "unit": "Hrs",
+      "sku": "6C9V98X23AWXWUMW",
+      "description": "$0.0745 per On Demand DMS t3.medium Instance Hour",
+      "publication_date": "2026-11-11T15:36:42Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "instanceType": "t3.medium"
+      }
+    },
+    "di_vcpu_hour": {
+      "usd": 0.0125,
+      "source": "https://aws.amazon.com/cloudwatch/pricing/",
+      "observed_date": "2026-11-13"
+    },
+    "di_acu_hour": {
+      "usd": 0.003125,
+      "source": "https://aws.amazon.com/cloudwatch/pricing/",
+      "observed_date": "2026-11-13"
+    },
+    "public_ipv4_hour": {
+      "usd": 0.005,
+      "source": "https://aws.amazon.com/vpc/pricing/",
+      "observed_date": "2026-11-13"
+    },
+    "internet_egress_gb": {
+      "usd": 0.09,
+      "source": "https://aws.amazon.com/ec2/pricing/on-demand/",
+      "observed_date": "2026-11-13"
+    },
+    "cross_az_side_gb": {
+      "usd": 0.01,
+      "source": "https://aws.amazon.com/rds/pricing/",
+      "observed_date": "2026-11-13"
+    }
+  },
+  "tasks": [
+    {
+      "name": "api",
+      "count": 2,
+      "vcpu": 1,
+      "gib": 3
+    },
+    {
+      "name": "relay",
+      "count": 2,
+      "vcpu": 0.5,
+      "gib": 1
+    },
+    {
+      "name": "singleton",
+      "count": 1,
+      "vcpu": 0.5,
+      "gib": 2
+    },
+    {
+      "name": "pylon",
+      "count": 2,
+      "vcpu": 0.25,
+      "gib": 1
+    }
+  ],
+  "allowances": {
+    "durable_trace_spool": 30,
+    "logs_and_enhanced_monitoring": 20,
+    "secrets": 8,
+    "kms": 2,
+    "metrics_alarms": 4,
+    "ecr": 1,
+    "staging_and_jobs": 2
+  },
+  "traffic_scenarios": {
+    "low": {
+      "out_gb": 100,
+      "nat_gb": 250,
+      "cross_az_gb": 1000,
+      "lcu": 1
+    },
+    "planning": {
+      "out_gb": 1000,
+      "nat_gb": 2500,
+      "cross_az_gb": 5000,
+      "lcu": 4
+    },
+    "high": {
+      "out_gb": 2000,
+      "nat_gb": 5000,
+      "cross_az_gb": 10000,
+      "lcu": 8
+    }
+  },
+  "db": {
+    "storage_gib": 50,
+    "excess_backup_gib": 50,
+    "aurora_billable_io": 50000000,
+    "rds_di_monitored_vcpu": 2
+  },
+  "assumptions": [
+    "Rates are on-demand list prices, not an account invoice.",
+    "RDS Multi-AZ compute and storage SKU rates already include the standby; do not double them.",
+    "RDS DI models one 2-vCPU DB instance; reserve another $18.25/month if the final billing configuration meters additional CPUs.",
+    "Aurora HA includes a billed reader in another AZ, with the same assumed average ACUs as writer.",
+    "GCP guest I/O and network metrics are not AWS billable metering; traffic and Aurora IO remain scenarios.",
+    "Cross-AZ rate models the RDS/compute path at one charged side per byte; double this component if both sides are chargeable for a final path.",
+    "Existing GCP GCS, Hippius, model inference, validators, screeners, DNS plan, support and engineering labor are not in this AWS footprint."
+  ]
+}
