@@ -255,6 +255,11 @@ describe('Ditto Edge shadow lane tools', () => {
         platform_cap: 1000,
         may_be_truncated: true,
       })
+      // Fields every row shares move to nodes_shared; each row keeps its id.
+      expect(last.nodes_shared).toMatchObject({ status: 'active', client_name: 'ditto-desktop' })
+      const rows = last.nodes as Array<Record<string, unknown>>
+      expect(rows).toHaveLength(200)
+      expect(rows[0]).toEqual({ node_id: `edn_${(800).toString(16).padStart(32, '0')}` })
     } finally {
       await client.close()
       await server.close()

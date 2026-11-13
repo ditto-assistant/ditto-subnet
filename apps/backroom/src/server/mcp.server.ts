@@ -4068,13 +4068,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async ({ limit, offset }) => {
       const listing = await listEdgeLaneNodes({ limit: EDGE_LANE_NODES_CAP })
-      return result({
-        ...paginateLocalCollection(listing, 'nodes', limit, offset),
-        // A full window may be the whole lane or only its most recently
-        // polled part: say it may be cut, never that it is.
-        platform_cap: EDGE_LANE_NODES_CAP,
-        may_be_truncated: listing.nodes.length >= EDGE_LANE_NODES_CAP,
-      })
+      return result(
+        compacted(
+          {
+            ...paginateLocalCollection(listing, 'nodes', limit, offset),
+            // A full window may be the whole lane or only its most recently
+            // polled part: say it may be cut, never that it is.
+            platform_cap: EDGE_LANE_NODES_CAP,
+            may_be_truncated: listing.nodes.length >= EDGE_LANE_NODES_CAP,
+          },
+          { nodes: { pin: ['node_id'] } },
+        ),
+      )
     },
   )
 
@@ -4087,7 +4092,12 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       inputSchema: edgeLaneLedgerInputSchema,
       annotations: toolAnnotations('read'),
     },
-    async (input) => result(await fetchEdgeLaneLedger(input)),
+    async (input) =>
+      result(
+        compacted(await fetchEdgeLaneLedger(input), {
+          rows: { pin: ['window_index', 'node_id'] },
+        }),
+      ),
   )
 
   registerTool(
