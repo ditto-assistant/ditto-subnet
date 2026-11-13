@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.484.0 (2026-11-13)
+
+### Features
+
+- **infra**: Enable the on-demand AWS screener deployment
+  ([#3538](https://github.com/ditto-assistant/ditto-subnet/pull/3538),
+  [`1619555`](https://github.com/ditto-assistant/ditto-subnet/commit/1619555319f10b1c00c0d1699d35e3b69616383e))
+
+- **platform,backroom**: Seat every waiting generator family next round (SN-480)
+  ([#3536](https://github.com/ditto-assistant/ditto-subnet/pull/3536),
+  [`1675bb3`](https://github.com/ditto-assistant/ditto-subnet/commit/1675bb320a9315f89e7bf351e85bd8548cea66b3))
+
+
 ## v0.483.1 (2026-11-13)
 
 ### Bug Fixes
