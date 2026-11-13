@@ -9,6 +9,75 @@ Goal: run scored DittoBench evaluations on infrastructure we operate (AWS was
 the example given) and give validators a compact proof object that they verify
 and sign. Validators would stop running the bench.
 
+## Decision gates (read first)
+
+Some of the protocol detail below, especially §4.5 and the Phase 2 tickets,
+is ahead of the numbers that decide whether any of it is worth building. Three
+gates set the order of work. Each is Peyton's call. The thresholds are
+**proposals to confirm**, not measurements.
+
+**Gate A: attestation platform, before Phase 2 and Phase 3 start.** There are
+two options:
+- **AWS:** EC2 with NitroTPM and an Attestable AMI that we build and measure
+  ourselves, plus a new AWS Terraform stack.
+- **GCP**, where all subnet infrastructure already lives: Confidential Space,
+  whose token attests a container digest, or a Confidential VM.
+
+Decide on three things:
+1. Can our runtime run inside the option at all? The runtime is a scorer plus
+   a nested Docker sandbox that runs miner containers. This is **unknown** for
+   Confidential Space, whose workload is a single container.
+2. What does a hosted run cost on each? This is **unknown** today (§8).
+3. Who builds and measures the image?
+
+The rest of the protocol only needs "a measured image that binds a runtime
+key". §4.3 and Phase 3 change with this choice; §4.5 and §6 do not.
+
+**Gate B: go or no-go after Phase 0 and Phase 1.** Proposed thresholds:
+- `rescore` reproduces the signed composite and report byte for byte on
+  **100%** of at least 50 recent v17 production runs. Any unexplained mismatch
+  stops the work until it is fixed, because a proof of the wrong function is
+  worthless.
+- The Ziren journal equals native `rescore` on the PoC witness.
+- **Proving cost per run** is at most 10% of a typical run's inference cost.
+  For scale: on 2026-11-07 the public leaderboard showed about $0.46 per run
+  for the rank-1 agent, which puts the budget around $0.05.
+- **Proving wall-clock** is at most 30 minutes per replicate on one GPU host,
+  so proofs do not materially delay finalization.
+- **Validator verification** takes at most 1 s of CPU and 1 MB of download per
+  statement.
+- The proof's zero-knowledge property is established for private witnesses.
+  Otherwise private-witness runs stay out of scope.
+
+If proving misses its cost or time thresholds, fall back to §4.2b, where
+validators re-grade public witnesses natively, and keep the attestation and
+commitment layers. That defers zk proving, not the whole design.
+
+Until Gate B passes, §4.5 and the Phase 2 tickets (items 9–11 and 20) are a
+**frozen sketch**. No further protocol detail goes into them; they are
+revisited against the measured numbers.
+
+**Gate C: activation, Phase 3 → Phase 4.** Activation is a governance
+change, not only a verification change. Validators stop scoring and become
+verifiers, and Ditto becomes the operator of scoring. Before Peyton approves
+it, the Phase 3 shadow lane must show (proposed):
+- at least 4 weeks of hosted replicates beside validator runs, for every
+  scored agent;
+- agreement between hosted and validator composites: for at least 95% of
+  agents the paired difference sits inside the existing `KOTH_DETHRONE_Z`
+  band, and the mean paired difference shows no systematic bias (its
+  confidence interval includes 0);
+- zero verifier disagreements across the fleet, with every forced-invalid
+  canary caught;
+- a measured hosted cost per run, accepted against today's validator cost;
+- independent audits (§4.6) of every crown-moving decision during the shadow
+  period;
+- written answers to open questions 1 and 2, and to 3 (audit budget), 4
+  (signoff quorum) and 6 (operator-affiliated agents).
+
+Peyton's activation decision is recorded with that evidence. Rollback stays
+"re-enable validator leases".
+
 ## Recommendation in five lines
 
 1. **Fix the inputs before the run.** The miner makes an on-chain commitment to
@@ -17,10 +86,12 @@ and sign. Validators would stop running the bench.
    block Platform picks, and no Platform-assigned value feeds the seed.
    Pre-register every attempt in an append-only log and anchor its root on
    chain once per epoch, so runs cannot be rerolled silently.
-2. **Attest the execution.** Run the scorer, sandbox and inference broker in an
-   EC2 instance attested by NitroTPM and built from an Attestable AMI. The
-   runtime key bound to that attestation signs a run statement. The statement
-   binds the screened image, scorer, seed, dataset and witness root.
+2. **Attest the execution.** Run the scorer, sandbox and inference broker in a
+   measured image whose attestation binds a runtime key. On AWS that is an EC2
+   instance with NitroTPM and an Attestable AMI; on GCP, Confidential Space or
+   a Confidential VM. The platform is Gate A and is decided first. The runtime
+   key signs a run statement that binds the screened image, scorer, seed,
+   dataset and witness root.
 3. **Prove the deterministic part.** A Go-native zkVM (ZKM Ziren) proves the
    judge-free grader and aggregation over the committed witness. Validators
    verify the proof, the attestation and the log inclusion in milliseconds,
@@ -267,7 +338,7 @@ program. It is not the end state.
 | **AWS Nitro Enclaves** | Poor | No external networking (vsock to the parent only), no persistent storage, no GPU, CPU and memory carved from the parent. Our runtime is Docker-in-Docker with a broker and a network-attached relay. No extra charge beyond EC2. Attestation is a COSE_Sign1 ECDSA P-384 document chained to the AWS Nitro root, with PCR0/1/2 (image, kernel, app), PCR3 (IAM role), PCR4 (instance), PCR8 (signing cert). Debug mode yields all-zero PCRs |
 | **EC2 instance attestation (NitroTPM + Attestable AMI)** | **Good** | GA 2025-09-23 in all commercial Regions, including GPU instances. The NitroTPM document is signed by the Nitro Hypervisor and binds a caller-supplied public key. PCR4, PCR12 and PCR7 validate an Attestable AMI whose boot chain refuses unmeasured binaries. Linux only. Pricing is not stated in the announcement (**unknown**) |
 | AMD SEV-SNP on EC2 | Unnecessary | Memory confidentiality from AWS, which we do not need. m6a/c6a/r6a only, +10% of On-Demand, two Regions with shared tenancy, cannot combine with Nitro Enclaves |
-| GCP Confidential Space | Alternative | Attestation token carries `submods.container.image_digest`. That is a closer match to "this container ran" than an AMI measurement. Relevant because subnet infrastructure is GCP today (`infra/terraform/stacks/*` has no AWS stack). See open question 1 |
+| GCP Confidential Space | Alternative | Attestation token carries `submods.container.image_digest`. That is a closer match to "this container ran" than an AMI measurement. Relevant because subnet infrastructure is GCP today (`infra/terraform/stacks/*` has no AWS stack). **Unknown:** whether its single workload container can host our nested Docker sandbox. A GCP Confidential VM running a measured image is the fallback, and its attestation details have not been researched for this doc. This is decided at Gate A (open question 1) |
 | **zk-wrapping the attestation** | Not needed | Automata's verifier costs 390.6 M cycles on RISC Zero (285.6 M on SP1) with no cert cache, and 66.1 M (49.5 M) with five certs cached. On-chain verify is 257,741 gas on RISC Zero and 220,333 on SP1. Useful only for EVM verification. Our validators are off-chain and can check P-384 natively |
 
 A TEE proves **code identity at boot**. It does not prove correct output. That
@@ -305,6 +376,11 @@ measurement. That still proves only that our code ran, and it needs a bench
 bump.
 
 ### 4.5 Commit-reveal with a randomness beacon
+
+> **Status: frozen sketch.** No further detail is added here until Gate B (the
+> Phase 1 measurements) passes; the section is then revisited against the
+> numbers. It is detailed because review rounds stress-tested it, not because
+> it is ready to build.
 
 The current design already makes the seed postdate the miner's commit
 (`seed-and-scoring.md`). The problems are gaps G1–G3 and G7: *who picks the
@@ -983,10 +1059,10 @@ stay separate.
 | Phase | Deliverable | Exit evidence |
 | --- | --- | --- |
 | **0: witness and purity** (no runtime behaviour change) | Extract `scorecore` as a pure package. Replace environment posture reads with an explicit `Config`. Define the scoring witness v1. Add a `rescore` CLI. Audit float determinism | `rescore(witness)` is byte-equal to the signed composite and report on ≥ 50 recent v17 production runs (operator-run against the private bucket); golden vectors unchanged for v2–v17; no `os.Getenv`, clock or network in `scorecore` (enforced by test) |
-| **1: PoC**: prove the scoring step | Build `scorecore` as a Ziren guest. Execute one public practice-run witness, then prove and verify it | Measured cycles, prover hardware, wall-clock, proof size, verify time, ZK property; journal equals native `rescore` |
+| **1: PoC**: prove the scoring step | Build `scorecore` as a Ziren guest. Execute one public practice-run witness, then prove and verify it | Measured cycles, prover hardware, wall-clock, proof size, verify time, ZK property; journal equals native `rescore`. **Gate B** go or no-go against the thresholds above |
 | **2: commitments** (also improves today's system) | Validators verify the seed block against their own chain node (G1). Anchor commitment extrinsic in the miner CLI and payment verifier (G7). Read and pin Subtensor's timestamp skew bound `S`. Beacon seed v2 as a new `seed_scope`. Attempt log, including issuance leaves, with public read API and Backroom read tool. Per-epoch chain anchor | Log inclusion proofs verify; anchor-check and seed v2 vectors pinned in Go and Python, including negative vectors (wrong signer, missing remark, earlier match, reused anchor, `Δ < Δ_min`); anchor visible on chain |
-| **3: hosted shadow** | Attestable AMI runner (AWS Terraform module), runtime key and RunStatement. Hosted replicates run **beside** validator runs. Validators verify in shadow (new heartbeat protocol). Canaries | Hosted and validator composite distributions compared per agent; 0 verifier disagreements across the fleet; `shadow_only=true`, `weight_eligible=false` |
-| **4: activation** (owner decision) | Proof-referenced ledger entries; validators stop leasing routine scoring tickets; audits on crown-moving decisions | `fleet_ready` at 100%; rollback means re-enabling validator leases (code path kept) |
+| **3: hosted shadow** (after Gates A and B) | Attested runner on the Gate A platform: an Attestable AMI plus an AWS Terraform stack, or a GCP Confidential Space or VM image in the existing GCP stacks. Runtime key and RunStatement. Hosted replicates run **beside** validator runs. Validators verify in shadow (new heartbeat protocol). Canaries | The **Gate C** criteria: agreement within the band for ≥ 95% of agents with no systematic bias, 0 verifier disagreements, every canary caught, measured hosted cost, every crown-moving decision audited, written answers to the open questions; `shadow_only=true`, `weight_eligible=false` |
+| **4: activation** (owner decision; a governance change) | Proof-referenced ledger entries; validators stop leasing routine scoring tickets and become verifiers, which makes Ditto the operator of scoring; audits on crown-moving decisions | Peyton's recorded Gate C approval; `fleet_ready` at 100%; rollback means re-enabling validator leases (code path kept) |
 | 5: optional | Self-hosted gpt-oss-20b in an attested GPU instance (needs a bench bump); threshold key custody for private datasets; zk-wrapped attestation only if an EVM consumer appears | Separate designs |
 
 ### PoC scope (Phase 1)
@@ -1031,6 +1107,15 @@ Proving needs a GPU host, and none was used for this document.
 
 Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 
+Order of work:
+- **Items 1–7 and 21 come first.** They produce the Gate A and Gate B
+  evidence.
+- **Items 9–11 and 20** (Phase 2) are a **frozen sketch** until Gate B passes;
+  their acceptance criteria are revisited against the measured numbers. Item 8
+  fixes a real gap today and can ship on its own.
+- **Items 12–15** also wait on the Gate A platform decision.
+- **Items 16–18** wait on Gate C.
+
 | # | Summary | Acceptance | Depends | Size |
 | --- | --- | --- | --- | --- |
 | 1 | Extract `scorecore`: pure DittoBench scoring package | v13 claim provenance, catalog gate, v16 priced cost, twin post-pass and aggregation live in one package with explicit `Config`; `go test ./...` green; report bytes unchanged on golden vectors v2–v17; a test forbids environment, clock and network imports | — | L |
@@ -1044,7 +1129,7 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 9 | Beacon seed derivation v2 (`seed_scope: beacon-v2`) | drand quicknet BLS verification in Go and Python; shared vectors; the rule is "first round ≥ anchor block timestamp + Δ"; validator code rejects `Δ < Δ_min` (with `S` read from the Subtensor runtime and pinned); no Platform-assigned input; retries reuse the seed | 8, 20 | M |
 | 10 | Public attempt log | Append-only Merkle log of issuance, attempt, terminal-commitment and terminal leaves; inclusion proofs served per leaf; public read API; Backroom read tool; aborted-attempt leaves | — | M |
 | 11 | Per-epoch chain anchor | One `commitments` write per epoch with the epoch root; anchor hotkey decided; monitor for missed anchors | 10 | S |
-| 12 | Attestable AMI hosted runner | Reproducible image (scorer + sandbox-docker + broker); reference PCRs published by release; AWS Terraform module through protected plan/apply | 1 | L |
+| 12 | Attested hosted runner on the Gate A platform | Reproducible image (scorer + sandbox-docker + broker), with reference measurements published by release. On AWS: an Attestable AMI with PCRs and an AWS Terraform stack. On GCP: a Confidential Space or Confidential VM image with its digest or measurements in the existing GCP stacks. Either way through protected plan/apply | 1, 21 | L |
 | 13 | Runtime key, RunStatement v1 and FailureStatement | Key generated in the runner and bound by the NitroTPM document. Statement and failure schemas, both signed by `K`; failure class decided by runtime code. The runner commits `SHA-256(record)` to the log and waits for the receipt before releasing any terminal record. Test: Platform cannot obtain the record before the commitment exists | 2, 10, 12 | M |
 | 14 | Hosted shadow lane | Platform issues hosted replicates beside validator runs, `shadow_only`; distribution comparison report per agent | 9–13 | L |
 | 15 | Validator verify-and-sign (shadow) | New heartbeat protocol; the full §6.5 check including step 7's attempt policy; signoff submission; forced-invalid canaries. Negative vectors: a signed RunStatement relabelled as a failure; `aborted` after a terminal commitment; a commitment stamped after `deadline_block`; both a commitment and an `aborted` for one attempt; a committed record never revealed; attempt `a > 1 + max_retries`; a terminal leaf whose digest does not match its commitment; a committed RunStatement whose dataset hash does not regenerate (must quarantine). Positive vector: an abort at `a = 1` followed by a scored `a = 2` with `max_retries = 1` | 6, 7, 13 | M |
@@ -1053,15 +1138,18 @@ Epic: DITTO-2543. Sizes are rough: S ≤ 2 days, M ≤ 1 week, L > 1 week.
 | 18 | Dispute workflow | Quarantine and re-prove tools; owner-gated witness access | 15 | M |
 | 19 | Article and X draft (after the Phase 1 numbers) | Per the feature-article convention; owner Peyton | 6 | S |
 | 20 | Anchor commitment extrinsic | The miner CLI submits `utility.batch_all[transfer_keep_alive, system.remark(C)]` (a remark alone for credits). The payment verifier accepts and verifies the batch and records `(anchor_block_hash, anchor_extrinsic_index)`. Issuance leaves are logged with `expires_block ≤ issued_block + W`. A shared Go/Python anchor-check library covers all six §4.5 checks, including the anchored issuance inclusion proof and the fixed-window first-match scan by `(block, index)` from `anchor − W` through the anchor block's lower indices, with negative vectors: post-dated issuance; an unanchored leaf; an earlier commitment in an earlier block; an earlier commitment at a lower index in the anchor block; a token expired at the anchor; `delta_s` ≠ the pinned Δ; a credit authorization in two issuance leaves; one anchor cited by two tickets; a first `C` extrinsic before the logged `issued_block` (burns and flags); `owner_coldkey` no longer owning the hotkey at the candidate block. Also positive vectors: a foreign-signed `remark(C)` ahead of the real anchor is ignored and does not burn the token; three replicates and an authorized retry sharing one anchor. The forfeited-anchor path is logged and never re-credits | 10, 11 | M |
+| 21 | Gate A spike: attestation platform | For EC2 (NitroTPM + Attestable AMI) and for GCP (Confidential Space, then Confidential VM): (a) can a scorer plus a nested Docker sandbox running miner containers run inside it with deny-all miner egress? (b) a measured cost per hosted run at today's slot density; (c) who builds and measures the image, and how validators get the reference measurements; (d) the attestation verification path validators would run. Output: a one-page comparison and Peyton's recorded decision | — | M |
+| 22 | Gate C evidence report | The shadow-lane report Peyton reviews before activation: per-agent paired hosted vs validator composites against the `KOTH_DETHRONE_Z` band, bias interval, verifier disagreements, canary catch rate, hosted cost per run, audit coverage of crown-moving decisions, and the written answers to open questions 1–4 and 6 | 14, 15, 17 | M |
 
 ---
 
 ## 10. Open questions for Peyton
 
-1. **AWS or GCP?** Subnet infrastructure is GCP and Cloudflare today, with no
-   AWS stack in `infra/terraform`. GCP Confidential Space attests a container
-   digest directly. AWS needs an Attestable AMI, built and measured by us. Is
-   AWS a requirement or an example?
+1. **AWS or GCP? (Gate A, decided first.)** Subnet infrastructure is GCP and
+   Cloudflare today, with no AWS stack in `infra/terraform`. GCP Confidential
+   Space attests a container digest directly. AWS needs an Attestable AMI,
+   built and measured by us. Is AWS a requirement or an example? Item 21
+   gathers the runtime-fit and cost evidence for this choice.
 2. **Inference trust.** Is it acceptable that inference integrity stays
    "Platform relay + provider" (as today, unprovable)? Or should we fund
    self-hosted gpt-oss-20b in an attested GPU instance? That changes the
