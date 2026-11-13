@@ -55,6 +55,13 @@ import {
   setBountyPayoutPolicy,
 } from './bounty.service'
 import {
+  fetchEdgeLaneLedger,
+  fetchEdgeLaneOverview,
+  fetchEdgeLaneSettings,
+  listEdgeLaneNodes,
+} from './edge-lane.service'
+import { edgeLaneLedgerInputSchema } from '../lib/edge-lane.schemas'
+import {
   fetchDuelingSeason,
   listDuelingSlices,
   listGeneratorSourceReleases,
@@ -545,6 +552,10 @@ const MCP_PAGINATION_INPUT = {
   offset: z.number().int().min(0).default(0),
 }
 
+// Platform's Ditto Edge node read takes a limit only (at most 1000), so the
+// tool reads that window and pages it locally.
+const EDGE_LANE_NODES_CAP = 1000
+
 // The platform caps a source listing at 512 rows (MAX_LISTING_FILES), so a
 // default of that size returns every path the platform was willing to hand
 // over. A source manifest is the reviewer's map of what exists inside a
@@ -1005,6 +1016,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Set burn/payout curve; an allocation owns burn once set. MOVES TAO. See tool help.',
   get_burn_settings:
     'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
+  get_edge_lane_settings: 'Ditto Edge shadow lane policy (off|shadow), revision; history opt-in.',
+  get_edge_lane_overview: 'Ditto Edge shadow lane: mode, nodes, objects, recent windows; pays nothing.',
+  list_edge_lane_nodes: 'Ditto Edge nodes: status, held bytes, last poll, latest window.',
+  get_edge_lane_ledger: 'Ditto Edge shadow ledger by window/node; scores closed windows first.',
   get_track_share_settings:
     'Read per-track emission split, what validators fold now, v33 gate, generator mode; history opt-in.',
   set_track_share_settings:
@@ -4011,6 +4026,67 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_edge_lane_settings',
+    {
+      title: 'Get Ditto Edge lane settings',
+      description:
+        'Read the Ditto Edge shadow lane policy (SN-481): mode (off, the default, refuses every node request; shadow runs the lane and measures opt-in Mac nodes into a ledger that pays nothing), the node cap, replicas per object, object and per-node byte caps, the total ingest budget, lease, poll, challenge deadline and window lengths, challenges per window with their retrieval and revoked shares, the eligibility minimum and availability floor, the placement rate and the revocation lookback. Returns the governing revision (0 means the built-in default, mode=off), whether it comes from a stored revision, the resolver TTL, the default, and effective.weight_eligible, which is always false. History is newest-first and opt-in with historyLimit (default 0). Opening the lane is a settings write that Backroom does not offer. Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(await fetchEdgeLaneSettings(), historyLimit, historyOffset),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
+    'get_edge_lane_overview',
+    {
+      title: 'Get Ditto Edge lane overview',
+      description:
+        'Read the Ditto Edge shadow lane at a glance (SN-481): mode and settings revision; nodes active, live (polled within a lease), suspended and retired; objects active and revoked and their bytes; open and acknowledged (held) assignments; the current window index; and recently scored windows with node counts, eligible nodes and verified units. weight_eligible is always false and payouts is always none: the lane reaches no weights, emissions or track shares. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchEdgeLaneOverview()),
+  )
+
+  registerTool(
+    'list_edge_lane_nodes',
+    {
+      title: 'List Ditto Edge nodes',
+      description:
+        'List Ditto Edge shadow lane nodes (SN-481), most recent poll first: one page of limit (default 50) from offset, over the first 1000 nodes Platform returns (count is that total, has_more says whether another page follows). Each node has its id (edn_ plus 32 hex, from the Ed25519 device key), operator (the bound hotkey, else the node id), client name and version, self-reported platform labels (shown, never scored), status (active, suspended, retired), quota, enrollment and last poll, held objects and bytes under a live lease, and the latest scored window. Requires backroom:read and changes nothing.',
+      inputSchema: MCP_PAGINATION_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset }) =>
+      result(
+        paginateLocalCollection(
+          await listEdgeLaneNodes({ limit: EDGE_LANE_NODES_CAP }),
+          'nodes',
+          limit,
+          offset,
+        ),
+      ),
+  )
+
+  registerTool(
+    'get_edge_lane_ledger',
+    {
+      title: 'Get Ditto Edge shadow ledger',
+      description:
+        'Read Ditto Edge shadow ledger rows (SN-481), newest window first, filtered by windowIndex or nodeId (edn_...), up to limit (default 200). Each row is one node in one window: scheduled, passed, failed, missed, refilled (re-downloaded to answer) and refused challenges, revocation checks and violations, held GiB-hours, availability, eligible with the reasons it is not (too_few_challenges, integrity_failure, revocation_violation, availability_below_floor, nothing_held), verified units, the hypothetical share, the settings revision and weight_eligible, always false. Before answering, Platform scores any window that has closed since the last poll (closed_now lists them): the same insert-once scoring a node poll runs, which never rewrites a scored row and pays nothing. Requires backroom:read.',
+      inputSchema: edgeLaneLedgerInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchEdgeLaneLedger(input)),
   )
 
   registerTool(
