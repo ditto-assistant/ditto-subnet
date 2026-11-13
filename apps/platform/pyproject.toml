@@ -72,7 +72,7 @@ dev = [
 # Real-Chromium OAuth regression only. Outside `dev` so the production
 # `uv sync` in scripts/update.sh never installs a browser driver.
 browser = [
-    "playwright==1.63.0",
+    "playwright==1.65.0",
 ]
 
 [tool.hatch.build.targets.wheel]
