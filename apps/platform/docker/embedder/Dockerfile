@@ -23,7 +23,7 @@
 # proposes digest and tag updates for review.
 
 # --- stage 1: fetch the weights with the HF CLI (not present in the TEI image) ---
-FROM python:3.11-slim@sha256:b7a9e5f6a93d6d4a31f129bbd4bdee69efccb6ded0fb230d78aafaf37af98377 AS fetch
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS fetch
 
 ARG MODEL_ID=jinaai/jina-embeddings-v2-base-code
 ARG MODEL_REVISION=main
