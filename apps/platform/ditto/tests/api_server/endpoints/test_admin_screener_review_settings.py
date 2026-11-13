@@ -239,6 +239,42 @@ async def test_stale_parent_and_duplicate_model_chain_are_rejected(
     assert duplicate.status_code == 422
 
 
+async def test_gpt61_sol_review_chain_is_accepted(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, settings_maker)
+    payload = _payload("*", "enforce")
+    settings = payload["settings"]
+    assert isinstance(settings, dict)
+    settings.update(
+        l2_model="openai/gpt-6.1-sol",
+        l2_fallback_models=["openai/gpt-6.1-terra", "z-ai/glm-5.2"],
+        l3_model="openai/gpt-6.1-sol",
+        timeout_seconds=2_700,
+    )
+    response = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=payload,
+    )
+    assert response.status_code == 200, response.text
+    applied = response.json()["settings"]
+    assert applied["l2_model"] == "openai/gpt-6.1-sol"
+    assert applied["l2_fallback_models"] == ["openai/gpt-6.1-terra", "z-ai/glm-5.2"]
+    assert applied["l3_model"] == "openai/gpt-6.1-sol"
+
+    settings["source_review_model"] = "openai/gpt-6.1-luna"
+    payload["expected_revision"] = response.json()["revision"]
+    rejected = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=payload,
+    )
+    assert rejected.status_code == 422
+
+
 async def test_admin_read_is_authenticated_and_history_is_append_only(
     app: FastAPI,
     client: httpx.AsyncClient,

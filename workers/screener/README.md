@@ -254,8 +254,8 @@ Required values are supplied through the production host's protected
   A source hold before runtime leaves these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
 - `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`;
-  `openai/gpt-6.1-terra` is also accepted (Platform revisions may select it
-  for L2 and L3); legacy
+  `openai/gpt-6.1-terra` and `openai/gpt-6.1-sol` are also accepted (Platform
+  revisions may select either for L2 and L3); legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
   `SCREENER_L2_FALLBACK_MODELS` is the ordered OpenRouter model-failover chain
   (`z-ai/glm-5.2` by default). A fallback is used only after a
@@ -265,7 +265,7 @@ Required values are supplied through the production host's protected
   active while making the L2 result authoritative. Platform review-settings
   revisions can change this between leases without a worker restart.
 - `SCREENER_L3_REVIEW_MODEL`: defaults to `openai/gpt-6-sol` (or
-  `openai/gpt-6.1-terra`); both layers use
+  `openai/gpt-6.1-terra` / `openai/gpt-6.1-sol`); both layers use
   OpenRouter ZDR routing and deny data collection.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built
   `ditto-screener-l2-analyzer:active` image.
