@@ -1,0 +1,409 @@
+{
+  "date": "2026-11-13",
+  "currency": "USD",
+  "region": "us-east-1",
+  "hours": 730,
+  "scope": "One public amd64 app VM plus private managed PostgreSQL; planning only",
+  "taxes_discounts_credits": "excluded; internet free allowance deliberately not assumed",
+  "rates": {
+    "aurora_standard_acu_hour": {
+      "usd": 0.12,
+      "unit": "ACU-Hr",
+      "sku": "AVKW7ZJP8D72HNQC",
+      "description": "USD 0.12 per Aurora Capacity Unit hour running Aurora PostgreSQL Serverless v2",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "ServerlessV2",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "aurora_io_optimized_acu_hour": {
+      "usd": 0.16,
+      "unit": "ACU-Hr",
+      "sku": "KG668U3YXJQ6YH9Y",
+      "description": "USD 0.16 per Aurora Capacity Unit hour running Aurora PostgreSQL Serverless v2 IO-Optimized",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "ServerlessV2",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "aurora_standard_gib_month": {
+      "usd": 0.1,
+      "unit": "GB-Mo",
+      "sku": "7GYUVAA992PFJPCB",
+      "description": "$0.10 per GB-month of consumed storage (Aurora PostgreSQL)",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Database Storage",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "aurora_io_optimized_gib_month": {
+      "usd": 0.225,
+      "unit": "GB-Mo",
+      "sku": "5YXZF9S373QUR5VW",
+      "description": "USD 0.225 per GB-month of I/O-Optimized consumed storage (Aurora PostgreSQL)",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Database Storage",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "aurora_io_operation": {
+      "usd": 2e-07,
+      "unit": "IOs",
+      "sku": "7JDSZP38DMKT9B86",
+      "description": "$0.20 per 1 million I/O requests (Aurora PostgreSQL)",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "System Operation",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "aurora_backup_gib_month": {
+      "usd": 0.021,
+      "unit": "GB-Mo",
+      "sku": "AYEW6PNFPJSSTGH7",
+      "description": "USD 0.021 per GB-month of backup storage exceeding free allocation for Aurora PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Storage Snapshot",
+        "databaseEngine": "Aurora PostgreSQL"
+      }
+    },
+    "rds_single_hour": {
+      "usd": 0.168,
+      "unit": "Hrs",
+      "sku": "SHZU9RWDC2H76ATX",
+      "description": "$ 0.168 per RDS db.m7g.large Single-AZ instance hour (or partial hour) running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "instanceType": "db.m7g.large",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "rds_multi_hour": {
+      "usd": 0.337,
+      "unit": "Hrs",
+      "sku": "Z8HB5KU2V54F7ATT",
+      "description": "$ 0.337 per RDS db.m7g.large Multi-AZ instance hour (or partial hour) running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "instanceType": "db.m7g.large",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "rds_single_gp3_gib_month": {
+      "usd": 0.115,
+      "unit": "GB-Mo",
+      "sku": "KYVYY29G957PKY3B",
+      "description": "$0.115 per GB-month of provisioned GP3 storage running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Database Storage",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "rds_multi_gp3_gib_month": {
+      "usd": 0.23,
+      "unit": "GB-Mo",
+      "sku": "J7S7KD4WFDNQWKNX",
+      "description": "$0.23 per GB-month of provisioned GP3 storage for Multi-AZ deployments running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Database Storage",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "rds_backup_gib_month": {
+      "usd": 0.095,
+      "unit": "GB-Mo",
+      "sku": "6W8ECRFVDATCER7J",
+      "description": "$0.095 per additional GB-month of backup storage exceeding free allocation running PostgreSQL",
+      "publication_date": "2026-11-12T22:34:41Z",
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "productFamily": "Storage Snapshot",
+        "databaseEngine": "PostgreSQL"
+      }
+    },
+    "di_vcpu_hour": {
+      "usd": 0.0125,
+      "source": "https://aws.amazon.com/cloudwatch/pricing/",
+      "observed_date": "2026-11-13"
+    },
+    "di_acu_hour": {
+      "usd": 0.003125,
+      "source": "https://aws.amazon.com/cloudwatch/pricing/",
+      "observed_date": "2026-11-13"
+    },
+    "public_ipv4_hour": {
+      "usd": 0.005,
+      "source": "https://aws.amazon.com/vpc/pricing/",
+      "observed_date": "2026-11-13"
+    },
+    "internet_egress_gb": {
+      "usd": 0.09,
+      "source": "https://aws.amazon.com/ec2/pricing/on-demand/",
+      "observed_date": "2026-11-13"
+    },
+    "ec2_m6i_xlarge_hour": {
+      "sku": "2UVH39HPDNC399X4",
+      "usd": 0.192,
+      "unit": "Hrs",
+      "description": "$0.192 per On Demand Linux m6i.xlarge Instance Hour",
+      "publication_date": "2026-11-10T17:38:52Z",
+      "attributes": {
+        "enhancedNetworkingSupported": "Yes",
+        "intelTurboAvailable": "Yes",
+        "memory": "16 GiB",
+        "dedicatedEbsThroughput": "Up to 10000 Mbps",
+        "vcpu": "4",
+        "classicnetworkingsupport": "false",
+        "capacitystatus": "Used",
+        "locationType": "AWS Region",
+        "storage": "EBS only",
+        "instanceFamily": "General purpose",
+        "operatingSystem": "Linux",
+        "intelAvx2Available": "Yes",
+        "instanceFamilyCategory": "General Purpose",
+        "regionCode": "us-east-1",
+        "physicalProcessor": "Intel Xeon 8375C (Ice Lake)",
+        "clockSpeed": "3.5 GHz",
+        "ecu": "NA",
+        "networkPerformance": "Up to 12500 Megabit",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "gpuMemory": "NA",
+        "dedicatedEbsThroughputDescription": "1250 Mbps",
+        "vpcnetworkingsupport": "true",
+        "instanceType": "m6i.xlarge",
+        "tenancy": "Shared",
+        "usagetype": "BoxUsage:m6i.xlarge",
+        "normalizationSizeFactor": "8",
+        "intelAvxAvailable": "Yes",
+        "processorFeatures": "Intel AVX; Intel AVX2; Intel AVX512; Intel Turbo",
+        "servicecode": "AmazonEC2",
+        "licenseModel": "No License required",
+        "currentGeneration": "Yes",
+        "preInstalledSw": "NA",
+        "location": "US East (N. Virginia)",
+        "processorArchitecture": "64-bit",
+        "marketoption": "OnDemand",
+        "operation": "RunInstances",
+        "availabilityzone": "NA"
+      },
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "instanceType": "m6i.xlarge",
+        "productFamily": "Compute Instance",
+        "operatingSystem": "Linux",
+        "tenancy": "Shared",
+        "preInstalledSw": "NA",
+        "capacitystatus": "Used",
+        "operation": "RunInstances"
+      }
+    },
+    "ec2_t3a_xlarge_hour": {
+      "sku": "F7Y95HABXHUJF4C7",
+      "usd": 0.1504,
+      "unit": "Hrs",
+      "description": "$0.1504 per On Demand Linux t3a.xlarge Instance Hour",
+      "publication_date": "2026-11-10T17:38:52Z",
+      "attributes": {
+        "enhancedNetworkingSupported": "Yes",
+        "intelTurboAvailable": "No",
+        "memory": "16 GiB",
+        "dedicatedEbsThroughput": "Up to 2780 Mbps",
+        "vcpu": "4",
+        "classicnetworkingsupport": "false",
+        "capacitystatus": "Used",
+        "locationType": "AWS Region",
+        "storage": "EBS only",
+        "instanceFamily": "General purpose",
+        "operatingSystem": "Linux",
+        "intelAvx2Available": "No",
+        "instanceFamilyCategory": "General Purpose",
+        "regionCode": "us-east-1",
+        "physicalProcessor": "AMD EPYC 7571",
+        "clockSpeed": "2.5 GHz",
+        "ecu": "NA",
+        "networkPerformance": "Up to 5 Gigabit",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "gpuMemory": "NA",
+        "dedicatedEbsThroughputDescription": "695 Mbps",
+        "vpcnetworkingsupport": "true",
+        "instanceType": "t3a.xlarge",
+        "tenancy": "Shared",
+        "usagetype": "BoxUsage:t3a.xlarge",
+        "normalizationSizeFactor": "8",
+        "intelAvxAvailable": "No",
+        "processorFeatures": "AVX; AVX2; AMD Turbo",
+        "servicecode": "AmazonEC2",
+        "licenseModel": "No License required",
+        "currentGeneration": "Yes",
+        "preInstalledSw": "NA",
+        "location": "US East (N. Virginia)",
+        "processorArchitecture": "64-bit",
+        "marketoption": "OnDemand",
+        "operation": "RunInstances",
+        "availabilityzone": "NA"
+      },
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "instanceType": "t3a.xlarge",
+        "productFamily": "Compute Instance",
+        "operatingSystem": "Linux",
+        "tenancy": "Shared",
+        "preInstalledSw": "NA",
+        "capacitystatus": "Used",
+        "operation": "RunInstances"
+      }
+    },
+    "app_gp3_gib_month": {
+      "sku": "JG3KUJMBRGHV3N8G",
+      "usd": 0.08,
+      "unit": "GB-Mo",
+      "description": "$0.08 per GB-month of General Purpose (gp3) provisioned storage - US East (N. Virginia)",
+      "publication_date": "2026-11-10T17:38:52Z",
+      "attributes": {
+        "maxThroughputvolume": "2000 MiB/s",
+        "volumeType": "General Purpose",
+        "maxIopsvolume": "80000",
+        "usagetype": "EBS:VolumeUsage.gp3",
+        "locationType": "AWS Region",
+        "maxVolumeSize": "64 TiB",
+        "storageMedia": "SSD-backed",
+        "regionCode": "us-east-1",
+        "servicecode": "AmazonEC2",
+        "volumeApiName": "gp3",
+        "location": "US East (N. Virginia)",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": ""
+      },
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "usagetype": "EBS:VolumeUsage.gp3"
+      }
+    },
+    "app_snapshot_gib_month": {
+      "sku": "7U7TWP44UP36AT3R",
+      "usd": 0.05,
+      "unit": "GB-Mo",
+      "description": "$0.05 per GB-Month of snapshot data stored - US East (Northern Virginia)",
+      "publication_date": "2026-11-10T17:38:52Z",
+      "attributes": {
+        "storageMedia": "Amazon S3",
+        "regionCode": "us-east-1",
+        "servicecode": "AmazonEC2",
+        "usagetype": "EBS:SnapshotUsage",
+        "locationType": "AWS Region",
+        "location": "US East (N. Virginia)",
+        "servicename": "Amazon Elastic Compute Cloud",
+        "operation": ""
+      },
+      "source": "AWS Price List Query API",
+      "filters": {
+        "location": "US East (N. Virginia)",
+        "usagetype": "EBS:SnapshotUsage"
+      }
+    }
+  },
+  "app": {
+    "default_rate": "ec2_m6i_xlarge_hour",
+    "vcpu": 4,
+    "memory_gib": 16,
+    "gp3_gib": 100,
+    "incremental_snapshot_gib": 50,
+    "public_ipv4_count": 1
+  },
+  "allowances": {
+    "cloudwatch_logs_metrics_alarms": 8,
+    "secrets_and_requests": 2
+  },
+  "traffic_scenarios": {
+    "light": {
+      "internet_out_gb": 100
+    },
+    "planning": {
+      "internet_out_gb": 300
+    },
+    "high": {
+      "internet_out_gb": 1000
+    }
+  },
+  "db": {
+    "storage_gib": 50,
+    "excess_backup_gib": 50,
+    "aurora_billable_io": 50000000,
+    "rds_di_monitored_vcpu": 2
+  },
+  "aurora_profiles": {
+    "paused": {
+      "average_acu": 0,
+      "advanced": false,
+      "io": 0
+    },
+    "warm_floor_0_5": {
+      "average_acu": 0.5,
+      "advanced": false
+    },
+    "lean_average_1": {
+      "average_acu": 1,
+      "advanced": false
+    },
+    "lean_average_2": {
+      "average_acu": 2,
+      "advanced": false
+    },
+    "insights_average_2": {
+      "average_acu": 2,
+      "advanced": true
+    },
+    "insights_average_4": {
+      "average_acu": 4,
+      "advanced": true
+    }
+  },
+  "one_time": {
+    "rehearsal_allowance_usd": 150,
+    "optional_cdc_incremental_usd": 150
+  },
+  "assumptions": [
+    "RDS default is Single-AZ db.m7g.large; source-class memory retained and no CPU credit charge.",
+    "All Aurora profiles contain one writer and zero readers. A single writer has distributed durable storage but no warm compute failover reader.",
+    "Cheap Aurora uses slow-statement logs and pg_stat_statements with basic CloudWatch metrics; Advanced/Performance Insights is reserved for the >=2-ACU profiles.",
+    "Aurora warm floor is a cost floor, not evidence that Platform can run at that size. Current CPU, connections and cache can prevent scaling to the floor.",
+    "Paused profile assumes no user connections or work; current persistent pools/background traffic prevent that condition without deliberate changes.",
+    "App and active DB writer are pinned to the same AZ, use private addresses and have no NAT or cross-AZ data path in the base design.",
+    "RDS subnet group still includes private subnets in two AZs; empty subnets alone do not create a second DB or gateway bill.",
+    "t3a.xlarge alternative assumes zero surplus CPU credits. Validate 40% baseline and measure real credits before choosing it.",
+    "RDS Multi-AZ SKU rates include the standby; the optional upgrade does not make the single app VM highly available.",
+    "EBS and database backup budgets are assumed chargeable GiB-month beyond applicable free/included allowances.",
+    "Existing GCP dev/shared DB, rollback hold, object stores, screener/validator compute, private trace sinks, inference providers and engineering labor remain outside this new AWS footprint."
+  ]
+}
