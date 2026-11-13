@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import socketserver
+import threading
+from collections.abc import Iterator
+
 import pytest
 
 from ditto_edge_protocol.limits import MEDIA_TYPES
@@ -118,3 +122,119 @@ def test_share_ids_are_path_escaped_and_https_is_required() -> None:
     assert source.requested == [f"{SHARE}/s/..%2Fadmin%3Fx"]
     with pytest.raises(ValueError):
         PublicShareSource(share_base="http://share.example.test")
+
+
+class _Canned(socketserver.ThreadingTCPServer):
+    """A loopback server that answers each path with fixed raw bytes."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self) -> None:
+        self.responses: dict[str, bytes] = {}
+        self.hits: list[str] = []
+        super().__init__(("127.0.0.1", 0), _CannedHandler)
+
+    @property
+    def base(self) -> str:
+        return f"http://127.0.0.1:{self.server_address[1]}"
+
+
+class _CannedHandler(socketserver.BaseRequestHandler):
+    server: _Canned
+
+    def handle(self) -> None:
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = self.request.recv(4096)
+            if not chunk:
+                return
+            head += chunk
+        path = head.split(b" ", 2)[1].decode()
+        self.server.hits.append(path)
+        self.request.sendall(
+            self.server.responses.get(
+                path, b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+            )
+        )
+
+
+@pytest.fixture
+def canned() -> Iterator[_Canned]:
+    server = _Canned()
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class _LoopbackSource(PublicShareSource):
+    """The real opener and ``_get``, pointed at a loopback test server."""
+
+    def __init__(self, base: str) -> None:
+        super().__init__(share_base=SHARE, artifact_hosts=(ORIGIN,), max_bytes=1024)
+        self.share_base = base
+        self.base = base
+
+    def _allowed(self, url: str) -> bool:
+        return url.startswith(self.base + "/")
+
+
+def test_redirects_are_never_followed(canned: _Canned) -> None:
+    canned.responses["/s/moved"] = (
+        b"HTTP/1.1 302 Found\r\n"
+        + f"Location: {canned.base}/elsewhere\r\n".encode()
+        + b"Content-Length: 0\r\n\r\n"
+    )
+    canned.responses["/elsewhere"] = (
+        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecret"
+    )
+    source = _LoopbackSource(canned.base)
+    assert source._get(f"{canned.base}/s/moved", 1024) == (302, b"", "")
+    assert source.state("moved") == "unknown"
+    assert source.fetch("moved") is None
+    assert "/elsewhere" not in canned.hits
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(b"NOT-HTTP\r\n\r\n", id="bad-status-line"),
+        pytest.param(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\nabc",
+            id="truncated-chunk",
+        ),
+    ],
+)
+def test_protocol_errors_read_as_no_answer(canned: _Canned, raw: bytes) -> None:
+    canned.responses["/s/broken"] = raw
+    source = _LoopbackSource(canned.base)
+    assert source._get(f"{canned.base}/s/broken", 1024) == (0, b"", "")
+    assert source.state("broken") == "unknown"
+    assert list(source.fetch_many(["broken"])) == [("broken", None)]
+
+
+def test_a_refused_connection_reads_as_no_answer(canned: _Canned) -> None:
+    base = canned.base
+    canned.shutdown()
+    canned.server_close()
+    source = _LoopbackSource(base)
+    assert source.state("gone") == "unknown"
+    assert source.fetch("gone") is None
+
+
+def test_a_malformed_link_on_the_page_is_skipped() -> None:
+    page = _page(f'<a href="https://[broken/x">x</a><img src="{CAP}">')
+    source = _FakeSource(
+        {
+            f"{SHARE}/s/m": (200, page, "text/html"),
+            CAP: (200, b"\x89PNG", "image/png"),
+        }
+    )
+    obj = source.fetch("m")
+    assert obj is not None and obj.data == b"\x89PNG"

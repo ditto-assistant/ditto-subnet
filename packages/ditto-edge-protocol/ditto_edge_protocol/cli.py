@@ -51,8 +51,18 @@ def _machine() -> NodePlatform:
     )
 
 
-def _node(args: argparse.Namespace) -> EdgeNode:
-    key = DeviceKey.load_or_create(args.key)
+def _existing_key(args: argparse.Namespace) -> DeviceKey | None:
+    """The key of an enrolled node. A new key would be a different node."""
+    if not args.key.is_file():
+        print(
+            f"device key not found: {args.key}; create it with `ditto-edge keygen`",
+            file=sys.stderr,
+        )
+        return None
+    return DeviceKey.load(args.key)
+
+
+def _node(args: argparse.Namespace, key: DeviceKey) -> EdgeNode:
     transport = HttpTransport(api_url=args.api_url, key=key)
     config = NodeConfig(
         public_key_hex=key.public_key_hex,
@@ -72,7 +82,7 @@ def _cmd_keygen(args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    node = _node(args)
+    node = _node(args, DeviceKey.load_or_create(args.key))
     stop = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stop.set())
@@ -86,12 +96,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    print(_node(args).transport.status().model_dump_json(indent=2))
+    key = _existing_key(args)
+    if key is None:
+        return 2
+    print(_node(args, key).transport.status().model_dump_json(indent=2))
     return 0
 
 
 def _cmd_leave(args: argparse.Namespace) -> int:
-    _node(args).leave(reason="operator left")
+    key = _existing_key(args)
+    if key is None:
+        return 2
+    _node(args, key).leave(reason="operator left")
     print("left the lane and deleted the local cache")
     return 0
 
@@ -107,9 +123,22 @@ def _share_ids(args: argparse.Namespace) -> list[str]:
 
 
 def _cmd_dry_run(args: argparse.Namespace) -> int:
+    adversaries = tuple(
+        name for name in (a.strip() for a in args.adversaries.split(",")) if name
+    )
+    unknown = sorted(set(adversaries) - set(ADVERSARIES))
+    if unknown:
+        print(
+            f"unknown adversaries {unknown}; choose from {list(ADVERSARIES)}",
+            file=sys.stderr,
+        )
+        return 2
+    share_ids = _share_ids(args)
+    if args.recheck_public and not share_ids:
+        print("--recheck-public needs --share-id or --share-ids-file", file=sys.stderr)
+        return 2
     objects: list[SourceObject] = synthetic_objects(args.synthetic, seed=args.seed)
     source = None
-    share_ids = _share_ids(args)
     if share_ids:
         source = PublicShareSource(share_base=args.share_base)
         for share_id, obj in source.fetch_many(share_ids):
@@ -120,14 +149,6 @@ def _cmd_dry_run(args: argparse.Namespace) -> int:
                 )
             else:
                 objects.append(obj)
-    adversaries = tuple(a for a in args.adversaries.split(",") if a)
-    unknown = sorted(set(adversaries) - set(ADVERSARIES))
-    if unknown:
-        print(
-            f"unknown adversaries {unknown}; choose from {list(ADVERSARIES)}",
-            file=sys.stderr,
-        )
-        return 2
     config = DryRunConfig(
         honest_nodes=args.honest,
         part_time_nodes=args.part_time,

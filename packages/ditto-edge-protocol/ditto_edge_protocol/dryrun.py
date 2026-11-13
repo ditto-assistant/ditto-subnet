@@ -11,8 +11,8 @@ challenges and ledger rules. The run:
   ignores revocations; ``tamper`` corrupts answers. ``part_time`` is an honest
   node that is offline half of every window;
 - revokes part of the corpus mid-run. Real shares are also rechecked
-  anonymously at every window boundary, and one that stopped being public is
-  revoked;
+  anonymously at every window boundary, and an object is revoked once every
+  share that published its bytes stopped being public;
 - reports the ledger per node, which adversaries were caught and how,
   revocation latency, and the honest false-fail rate.
 
@@ -178,11 +178,13 @@ def run_dry_run(
     clock = SimClock(start)
     coordinator = Coordinator(settings, clock=clock, rng=rng, nonce=rng.randbytes)
 
-    labels: dict[str, str] = {}
+    # Several shares with identical bytes ingest as one digest; keep them all.
+    labels: dict[str, list[str]] = {}
     for obj in objects:
-        labels[coordinator.ingest(obj.data, obj.media_type, source=obj.label)] = (
-            obj.label
-        )
+        digest = coordinator.ingest(obj.data, obj.media_type, source=obj.label)
+        names = labels.setdefault(digest, [])
+        if obj.label not in names:
+            names.append(obj.label)
 
     honest: list[Behavior] = ["honest"] * config.honest_nodes
     part_time: list[Behavior] = ["part_time"] * config.part_time_nodes
@@ -248,12 +250,21 @@ def run_dry_run(
             for digest in sorted(targets):
                 revoke(digest, "dry-run revocation")
         if public_source is not None and step_index % ticks_per_window == 0:
-            for digest, label in labels.items():
+            for digest, names in labels.items():
+                shares = [
+                    name.removeprefix("share:")
+                    for name in names
+                    if name.startswith("share:")
+                ]
+                # The bytes stay public while any share still publishes them,
+                # and a revoked digest never comes back, so revoke only once
+                # every share for this digest reads as unpublished.
                 if (
-                    label.startswith("share:")
+                    shares
                     and coordinator.objects[digest].revoked_at is None
-                    and public_source.state(label.removeprefix("share:"))
-                    == "unpublished"
+                    and all(
+                        public_source.state(share) == "unpublished" for share in shares
+                    )
                 ):
                     revoke(digest, "source unpublished")
         clock.advance(tick / 2)
@@ -268,7 +279,7 @@ def _report(
     coordinator: Coordinator,
     sims: list[_SimNode],
     revocations: list[_Revocation],
-    labels: dict[str, str],
+    labels: dict[str, list[str]],
 ) -> dict[str, Any]:
     by_node: dict[str, list[LedgerRow]] = {}
     for row in coordinator.ledger:
@@ -385,7 +396,7 @@ def _report(
             "ingested": len(coordinator.objects),
             "bytes": sum(len(o.data) for o in coordinator.objects.values()),
             "public_shares": sum(
-                label.startswith("share:") for label in labels.values()
+                name.startswith("share:") for names in labels.values() for name in names
             ),
             "revoked": len(revocations),
             "revoked_unpublished": sum(

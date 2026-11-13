@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import random
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
 from ditto_edge_protocol import paths
-from ditto_edge_protocol.coordinator import Coordinator, CoordinatorError
+from ditto_edge_protocol.coordinator import Coordinator, CoordinatorError, _Assignment
 from ditto_edge_protocol.dryrun import SimClock
 from ditto_edge_protocol.limits import GIB
 from ditto_edge_protocol.node import EdgeNode, NodeConfig
@@ -17,7 +17,7 @@ from ditto_edge_protocol.signing import DeviceKey
 from ditto_edge_protocol.sources import synthetic_objects
 from ditto_edge_protocol.store import MemoryStore
 from ditto_edge_protocol.transport import LocalTransport, TransportError
-from ditto_edge_protocol.wire import ClientInfo, PollRequest
+from ditto_edge_protocol.wire import AckRequest, AckResponse, ClientInfo, PollRequest
 
 START = 1_763_000_000.0 // 3600 * 3600
 
@@ -42,7 +42,9 @@ class Lane:
             settings, clock=self.clock, rng=self.rng, nonce=self.rng.randbytes
         )
 
-    def node(self, quota: int = GIB) -> EdgeNode:
+    def node(
+        self, quota: int = GIB, clock: Callable[[], float] | None = None
+    ) -> EdgeNode:
         key = DeviceKey.from_seed(self.rng.randbytes(32))
         node = EdgeNode(
             transport=LocalTransport(coordinator=self.coordinator, key=key),
@@ -52,7 +54,7 @@ class Lane:
                 quota_bytes=quota,
                 client=ClientInfo(name="test", version="1"),
             ),
-            clock=self.clock,
+            clock=clock if clock is not None else self.clock,
         )
         node.enroll()
         return node
@@ -246,3 +248,170 @@ def test_a_slot_due_just_before_a_window_edge_is_still_issued() -> None:
     node.step()
     assert int(lane.clock.now // 3600) == window + 1
     assert late.state == "issued"
+
+
+def test_a_slot_is_issued_when_grace_spans_more_than_one_window() -> None:
+    settings = _settings(
+        window_seconds=300,
+        poll_interval_seconds=200,
+        challenges_per_window=6,
+        min_challenges=3,
+    )
+    assert settings.grace_seconds > settings.window_seconds
+    assert settings.late_slot_windows == 2
+    lane = Lane(settings)
+    for obj in synthetic_objects(4, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    assert node.node_id is not None
+    lane.run([node], 1200)
+    node.step()
+    window = int(lane.clock.now // 300)
+    late = lane.coordinator.slots[(node.node_id, window)][-1]
+    late.state = "scheduled"
+    late.challenge_id = None
+    late.due_at = (window + 1) * 300 - 5  # due 5 s before its window ends
+    # The node skips the next window entirely and returns two windows on, still
+    # inside grace: the slot is two windows old and must be issued.
+    lane.clock.advance(late.due_at + settings.grace_seconds - 5 - lane.clock.now)
+    node.step()
+    assert int(lane.clock.now // 300) == window + 2
+    assert late.state == "issued"
+
+
+def _spans(lane: Lane, node: EdgeNode) -> dict[str, list[_Assignment]]:
+    by_digest: dict[str, list[_Assignment]] = {}
+    for a in [*lane.coordinator.history, *lane.coordinator.assignments.values()]:
+        if a.node_id == node.node_id:
+            by_digest.setdefault(a.digest, []).append(a)
+    return by_digest
+
+
+def test_a_lapsed_lease_closes_at_the_lapse_and_reopens_without_a_download() -> None:
+    # One new placement per poll: reopening what a node still holds must not be
+    # rationed like a download, or a node back from sleep would drop its cache.
+    lane = Lane(_settings(replicas=1, max_new_assignments_per_poll=1))
+    for obj in synthetic_objects(6, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    assert node.node_id is not None
+    lane.run([node], 600)
+    assert len(node.store.digests()) == 6
+    lease_end = {
+        a.digest: a.lease_expires_at
+        for a in lane.coordinator.assignments.values()
+        if a.node_id == node.node_id
+    }
+    # Asleep past the lease: Platform hears nothing until the node returns.
+    lane.clock.advance(lane.coordinator.settings.lease_seconds + 600)
+    returned_at = lane.clock.now
+    report = node.step()
+    assert report.filled == []
+    assert len(node.store.digests()) == 6
+    old_spans = {
+        a.digest: a for a in lane.coordinator.history if a.node_id == node.node_id
+    }
+    assert old_spans.keys() == lease_end.keys()
+    for digest, end in lease_end.items():
+        old = old_spans[digest]
+        new = lane.coordinator.assignments[(node.node_id, digest)]
+        # The old span ends at the lapse and the new one starts at the fresh
+        # acknowledgement, so nothing credits the time the node was away.
+        assert old.released_at == end
+        assert new.released_at is None
+        assert new.acked_at is not None and new.acked_at > returned_at
+        assert new.fill_count == old.fill_count
+
+
+def test_a_node_with_a_slow_clock_still_reacknowledges_a_reopened_span() -> None:
+    lane = Lane(_settings(replicas=1))
+    for obj in synthetic_objects(4, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node(clock=lambda: lane.clock() - 120)
+    lane.run([node], 300)
+    lease_end = max(
+        a.lease_expires_at
+        for a in lane.coordinator.assignments.values()
+        if a.node_id == node.node_id
+    )
+    # Past the lease by Platform's clock, still before it by the node's.
+    lane.clock.advance(lease_end + 10 - lane.clock.now)
+    node.step()
+    spans = [
+        a for a in lane.coordinator.assignments.values() if a.node_id == node.node_id
+    ]
+    assert len(spans) == 4
+    assert all(a.acked_at is not None and a.acked_at > lease_end for a in spans)
+
+
+def test_a_span_replaced_after_release_still_counts_in_its_window(lane: Lane) -> None:
+    node = lane.node()
+    lane.run([node], 600)
+    left_at = lane.clock.now
+    node.leave("restart")
+    lane.clock.advance(60)
+    node.enroll()
+    lane.run([node], 600)
+    spans = _spans(lane, node)
+    assert spans and all(len(each) == 2 for each in spans.values())
+    lane.clock.advance(2 * 3600)
+    lane.coordinator.close_windows()
+    window_start = START
+    window_end = START + 3600
+    row = next(
+        r
+        for r in lane.coordinator.ledger
+        if r.node_id == node.node_id and r.window_index == int(START // 3600)
+    )
+    held_seconds = {"earlier": 0.0, "later": 0.0}
+    for each in spans.values():
+        for a in each:
+            assert a.acked_at is not None
+            end = a.released_at if a.released_at is not None else a.lease_expires_at
+            size = len(lane.coordinator.objects[a.digest].data)
+            part = "earlier" if a.acked_at < left_at else "later"
+            held_seconds[part] += size * (
+                min(end, window_end) - max(a.acked_at, window_start)
+            )
+    expected = (held_seconds["earlier"] + held_seconds["later"]) / GIB / 3600
+    assert held_seconds["earlier"] > 0 and held_seconds["later"] > 0
+    assert row.score.held_gib_hours == pytest.approx(expected, abs=1e-5)
+
+
+def test_acknowledgements_stay_within_the_item_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ditto_edge_protocol.node as node_module
+
+    monkeypatch.setattr(node_module, "MAX_ACK_ITEMS", 3)
+    lane = Lane(_settings(replicas=1))
+    digests = sorted(
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+        for obj in synthetic_objects(8, seed=3)
+    )
+    node = lane.node()
+    sent: list[AckRequest] = []
+    ack = node.transport.ack
+
+    def record(request: AckRequest) -> AckResponse:
+        sent.append(request)
+        return ack(request)
+
+    monkeypatch.setattr(node.transport, "ack", record)
+    node.step()
+    assert sorted(d for r in sent for d in r.held) == digests
+    revoked = digests[:7]
+    for digest in revoked:
+        lane.coordinator.revoke(digest, "unpublished")
+    lane.clock.advance(30)
+    node.step()
+    assert sorted(d for r in sent for d in r.released) == revoked
+    assert len(sent) == 6
+    assert all(len(r.held) <= 3 and len(r.released) <= 3 for r in sent)
+    spans = {
+        a.digest: a
+        for a in lane.coordinator.assignments.values()
+        if a.node_id == node.node_id
+    }
+    assert all(spans[d].acked_at is not None for d in digests)
+    assert all(spans[d].released_at is not None for d in revoked)

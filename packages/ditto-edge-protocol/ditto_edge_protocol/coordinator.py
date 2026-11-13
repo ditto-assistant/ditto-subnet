@@ -195,6 +195,10 @@ class Coordinator:
         self.nodes: dict[str, _Node] = {}
         self.objects: dict[str, _Object] = {}
         self.assignments: dict[tuple[str, str], _Assignment] = {}
+        """The latest span per node and object, open or closed."""
+        self.history: list[_Assignment] = []
+        """Earlier, closed spans that a later one superseded. Kept so the
+        ledger counts every span a node held, not just the latest."""
         self.slots: dict[tuple[str, int], list[_Slot]] = {}
         self.challenges: dict[str, _Challenge] = {}
         self.ledger: list[LedgerRow] = []
@@ -382,10 +386,14 @@ class Coordinator:
                 )
             ]
             self.slots[(node_id, index)] = schedule
-        # A slot due in the last moments of the previous window is still live
-        # within grace: a node polling just past the boundary must get it, or
-        # an online node would miss late slots at every window edge.
-        due = [*self.slots.get((node_id, index - 1), []), *schedule]
+        # A slot due late in an earlier window stays live within grace: a node
+        # polling just past a boundary must get it, or an online node would
+        # miss late slots at every window edge. Grace can span several windows.
+        due = [
+            slot
+            for back in range(settings.late_slot_windows, 0, -1)
+            for slot in self.slots.get((node_id, index - back), [])
+        ] + schedule
         issued: list[Challenge] = []
         for slot in due:
             if slot.state != "scheduled" or slot.due_at > now:
@@ -450,15 +458,31 @@ class Coordinator:
         """Assign this node its rendezvous share and return the digests to list.
 
         Objects the node no longer holds a top rank for are simply not listed:
-        their leases lapse, the node deletes them, and they are marked
-        released here once the lapse has passed.
+        their leases lapse and the node deletes them. A span whose lease lapsed
+        (the node stopped polling) closes at the lapse, so the gap is never
+        counted as held. If the object is still the node's, a new span opens
+        that carries the fill history, and the node acknowledges it again.
         """
         settings = self.settings
+        # Acknowledged spans that lapse at this poll. The node has not polled
+        # since the lapse, so it has not deleted their bytes: they still count
+        # toward its quota, and reopening one needs no download.
+        lapsed: set[str] = set()
+        for a in self.assignments.values():
+            if (
+                a.node_id == node.node_id
+                and a.released_at is None
+                and self.objects[a.digest].revoked_at is None
+                and a.lease_expires_at <= now
+            ):
+                a.released_at = a.lease_expires_at
+                if a.acked_at is not None:
+                    lapsed.add(a.digest)
         held_bytes = sum(
             len(self.objects[a.digest].data)
             for a in self.assignments.values()
             if a.node_id == node.node_id
-            and a.released_at is None
+            and (a.released_at is None or a.digest in lapsed)
             and a.acked_at is not None
             and self.objects[a.digest].revoked_at is None
         )
@@ -488,25 +512,26 @@ class Coordinator:
             if current is not None and current.released_at is None:
                 listed.add(digest)
                 continue
-            if created >= settings.max_new_assignments_per_poll:
+            # Only a span that needs a download counts against the cap.
+            reopened = digest in lapsed
+            if not reopened and created >= settings.max_new_assignments_per_poll:
                 continue
-            self.assignments[(node.node_id, digest)] = _Assignment(
+            span = _Assignment(
                 node_id=node.node_id,
                 digest=digest,
                 assigned_at=now,
                 lease_expires_at=now + settings.lease_seconds,
             )
+            if current is not None:
+                # The closed span stays in history for the ledger, and its fill
+                # history carries over: this node downloaded these bytes once.
+                span.fill_count = current.fill_count
+                span.last_filled_at = current.last_filled_at
+                self.history.append(current)
+            self.assignments[(node.node_id, digest)] = span
             listed.add(digest)
-            created += 1
-        for a in self.assignments.values():
-            if (
-                a.node_id == node.node_id
-                and a.released_at is None
-                and a.digest not in listed
-                and self.objects[a.digest].revoked_at is None
-                and a.lease_expires_at <= now
-            ):
-                a.released_at = a.lease_expires_at
+            if not reopened:
+                created += 1
         return listed
 
     def poll(self, node_id: str, request: PollRequest) -> PollResponse:
@@ -703,7 +728,7 @@ class Coordinator:
                             a.lease_expires_at if a.lease_expires_at <= now else None,
                         ),
                     )
-                    for a in self.assignments.values()
+                    for a in [*self.history, *self.assignments.values()]
                     if a.node_id == node_id and a.acked_at is not None
                 ]
                 scores[node_id] = score_window(

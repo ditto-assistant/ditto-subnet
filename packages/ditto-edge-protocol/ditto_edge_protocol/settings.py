@@ -90,6 +90,11 @@ class LaneSettings:
         """How late a node may poll for a due slot and still be challenged."""
         return 2 * self.poll_interval_seconds + 5
 
+    @property
+    def late_slot_windows(self) -> int:
+        """How many earlier windows can hold a slot still live within grace."""
+        return -(-self.grace_seconds // self.window_seconds)
+
     def limits(self) -> LaneLimits:
         return LaneLimits(
             mode=self.mode,

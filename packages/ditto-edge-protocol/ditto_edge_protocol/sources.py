@@ -10,16 +10,17 @@ then takes the public bytes from the page:
   on the isolated artifact origin (``a.dittousercontent.com``), which it
   fetches right away.
 
-It only ever contacts those two hosts, and it keeps only the bytes and a media
-type. Titles, usernames and the rest of the page stay on this side, and only
-the share id travels on, as an operator label. A share that is no longer
-public answers 401 (sign-in required) or 404, which is how the dry run detects
-an unpublish.
+It only ever contacts those two hosts and never follows a redirect, and it
+keeps only the bytes and a media type. Titles, usernames and the rest of the
+page stay on this side, and only the share id travels on, as an operator
+label. A share that is no longer public answers 401 (sign-in required) or 404,
+which is how the dry run detects an unpublish.
 """
 
 from __future__ import annotations
 
 import hashlib
+import http.client
 import random
 import urllib.error
 import urllib.request
@@ -115,6 +116,17 @@ class _SharePage(HTMLParser):
 PublicState = Literal["public", "unpublished", "unknown"]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect, so no hop can leave the https host allowlist.
+
+    The refused redirect surfaces as its 3xx status, which reads as unknown:
+    neither public nor unpublished.
+    """
+
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
 class PublicShareSource:
     """Anonymous, read-only reads of public shares from the production share host."""
 
@@ -134,12 +146,19 @@ class PublicShareSource:
         self.artifact_hosts = frozenset(artifact_hosts)
         self.max_bytes = max_bytes
         self.timeout = timeout_seconds
-        # No cookie jar, no proxy, no credentials: an anonymous visitor.
-        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        # No cookie jar, no proxy, no credentials: an anonymous visitor. No
+        # redirects either: _get checks the host of the only URL it fetches.
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirect()
+        )
+
+    def _allowed(self, url: str) -> bool:
+        parts = urlsplit(url)
+        return parts.scheme == "https" and parts.hostname in self.allowed_hosts
 
     def _get(self, url: str, limit: int) -> tuple[int, bytes, str]:
-        parts = urlsplit(url)
-        if parts.scheme != "https" or parts.hostname not in self.allowed_hosts:
+        """``(status, body, content type)``; status 0 when nothing answered."""
+        if not self._allowed(url):
             return 0, b"", ""
         request = urllib.request.Request(
             url, headers={"Accept": "*/*", "User-Agent": "ditto-edge-dry-run/1"}
@@ -150,16 +169,17 @@ class PublicShareSource:
                 return response.status, data, response.headers.get("Content-Type", "")
         except urllib.error.HTTPError as exc:
             return exc.code, b"", ""
+        except (http.client.HTTPException, OSError):
+            # Refused, timed out, truncated or malformed: no answer, so one bad
+            # response never aborts a dry run or reads as an unpublish.
+            return 0, b"", ""
 
     def _page_url(self, share_id: str) -> str:
         return f"{self.share_base}/s/{quote(share_id, safe='')}"
 
     def state(self, share_id: str) -> PublicState:
         """Whether the share is still public, as an anonymous visitor sees it."""
-        try:
-            status, _, _ = self._get(self._page_url(share_id), 4 * MIB)
-        except (urllib.error.URLError, TimeoutError, OSError):
-            return "unknown"
+        status, _, _ = self._get(self._page_url(share_id), 4 * MIB)
         if status == 200:
             return "public"
         # 403 is left unknown: a WAF or bot wall can answer 403 for a share that
@@ -183,8 +203,12 @@ class PublicShareSource:
                 return SourceObject(data, "text/markdown", label)
             return None
         for link in page.links:
-            url = urljoin(page_url, link)
-            if urlsplit(url).hostname not in self.artifact_hosts:
+            try:
+                url = urljoin(page_url, link)
+                host = urlsplit(url).hostname
+            except ValueError:  # a malformed link on the page
+                continue
+            if host not in self.artifact_hosts:
                 continue
             status, data, content_type = self._get(url, self.max_bytes)
             if status == 200 and data and len(data) <= self.max_bytes:
@@ -195,7 +219,4 @@ class PublicShareSource:
         self, share_ids: list[str]
     ) -> Iterator[tuple[str, SourceObject | None]]:
         for share_id in share_ids:
-            try:
-                yield share_id, self.fetch(share_id)
-            except (urllib.error.URLError, TimeoutError, OSError):
-                yield share_id, None
+            yield share_id, self.fetch(share_id)

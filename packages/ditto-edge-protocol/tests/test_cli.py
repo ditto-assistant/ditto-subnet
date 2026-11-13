@@ -40,3 +40,83 @@ def test_dry_run_rejects_unknown_adversaries(
 ) -> None:
     assert main(["dry-run", "--adversaries", "lazy,wizard"]) == 2
     assert "wizard" in capsys.readouterr().err
+
+
+def test_dry_run_trims_adversary_names(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "report.json"
+    code = main(
+        [
+            "dry-run",
+            "--windows",
+            "3",
+            "--synthetic",
+            "20",
+            "--adversaries",
+            "lazy, , tamper ",
+            "--out",
+            str(out),
+        ]
+    )
+    capsys.readouterr()
+    assert code == 0
+    assert json.loads(out.read_text())["config"]["adversaries"] == ["lazy", "tamper"]
+
+
+def test_recheck_public_without_share_ids_is_refused(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["dry-run", "--recheck-public"]) == 2
+    assert "--share-id" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["status", "leave"])
+def test_status_and_leave_never_create_a_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    key_path = tmp_path / "missing.key"
+    code = main(
+        [
+            "node",
+            command,
+            "--key",
+            str(key_path),
+            "--store",
+            str(tmp_path / "objects"),
+            "--api-url",
+            "http://127.0.0.1:9",
+        ]
+    )
+    assert code == 2
+    assert not key_path.exists()
+    assert "ditto-edge keygen" in capsys.readouterr().err
+
+
+def test_node_run_still_creates_its_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import signal
+
+    from ditto_edge_protocol.node import EdgeNode
+
+    def stop_before_enrolling(_node: EdgeNode) -> None:
+        raise RuntimeError("stop before any request")
+
+    monkeypatch.setattr(signal, "signal", lambda *_: None)
+    monkeypatch.setattr(EdgeNode, "enroll", stop_before_enrolling)
+    key_path = tmp_path / "device.key"
+    with pytest.raises(RuntimeError, match="stop before any request"):
+        main(
+            [
+                "node",
+                "run",
+                "--key",
+                str(key_path),
+                "--store",
+                str(tmp_path / "objects"),
+                "--api-url",
+                "http://127.0.0.1:9",
+            ]
+        )
+    assert key_path.is_file()

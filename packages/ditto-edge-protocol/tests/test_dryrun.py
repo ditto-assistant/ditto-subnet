@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from ditto_edge_protocol.dryrun import DryRunConfig, run_dry_run
@@ -107,3 +109,50 @@ def test_a_window_shorter_than_one_poll_is_refused() -> None:
     )
     with pytest.raises(ValueError, match="poll interval"):
         run_dry_run(DryRunConfig(settings=settings), synthetic_objects(4))
+
+
+class _States:
+    """A public source with fixed states that records every check."""
+
+    def __init__(self, states: dict[str, PublicState]) -> None:
+        self.states = states
+        self.checked: set[str] = set()
+
+    def state(self, share_id: str) -> PublicState:
+        self.checked.add(share_id)
+        return self.states.get(share_id, "public")
+
+
+def _two_shares_one_digest(source: _States) -> dict[str, Any]:
+    same = b"the same public note, shared twice"
+    objects = synthetic_objects(6, seed=1) + [
+        SourceObject(same, "text/markdown", "share:first"),
+        SourceObject(same, "text/markdown", "share:second"),
+    ]
+    return run_dry_run(
+        DryRunConfig(
+            honest_nodes=2,
+            part_time_nodes=0,
+            adversaries=(),
+            windows=2,
+            revoke_fraction=0,
+        ),
+        objects,
+        public_source=source,
+    )
+
+
+def test_identical_shares_keep_every_label_and_stay_while_one_is_public() -> None:
+    source = _States({"first": "unpublished"})
+    report = _two_shares_one_digest(source)
+    assert report["objects"]["public_shares"] == 2
+    assert report["objects"]["revoked_unpublished"] == 0
+    assert source.checked == {"first", "second"}
+
+
+def test_identical_shares_are_revoked_once_every_one_is_unpublished() -> None:
+    source = _States({"first": "unpublished", "second": "unpublished"})
+    report = _two_shares_one_digest(source)
+    assert report["objects"]["public_shares"] == 2
+    assert report["objects"]["revoked_unpublished"] == 1
+    assert source.checked == {"first", "second"}

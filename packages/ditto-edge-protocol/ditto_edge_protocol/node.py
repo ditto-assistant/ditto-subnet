@@ -31,7 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from ditto_edge_protocol.limits import PROTOCOL
+from ditto_edge_protocol.limits import MAX_ACK_ITEMS, PROTOCOL
 from ditto_edge_protocol.proofs import ProofError, digest_of, possession_proof
 from ditto_edge_protocol.store import ObjectStore
 from ditto_edge_protocol.wire import (
@@ -149,6 +149,12 @@ class EdgeNode:
         listed: set[str] = set()
         for assignment in response.assignments:
             listed.add(assignment.digest)
+            previous = self._leases.get(assignment.digest)
+            if previous is not None and previous <= response.server_time:
+                # The lease lapsed, by Platform's clock, before this poll. Platform
+                # closed that span and opened a new one, which needs a fresh
+                # acknowledgement even though the bytes never left the disk.
+                self._acked.discard(assignment.digest)
             self._leases[assignment.digest] = assignment.lease_expires_at
             if assignment.digest in self._revoked:
                 continue
@@ -172,9 +178,12 @@ class EdgeNode:
             if digest not in self._acked and self.store.has(digest)
         )
         released = sorted(set(report.released))
-        if held or released:
-            self.transport.ack(AckRequest(held=held, released=released))
-            self._acked.update(held)
+        # One acknowledgement carries at most MAX_ACK_ITEMS of each list.
+        for start in range(0, max(len(held), len(released)), MAX_ACK_ITEMS):
+            held_part = held[start : start + MAX_ACK_ITEMS]
+            released_part = released[start : start + MAX_ACK_ITEMS]
+            self.transport.ack(AckRequest(held=held_part, released=released_part))
+            self._acked.update(held_part)
         return report
 
     def _revoke(self, digest: str) -> None:
