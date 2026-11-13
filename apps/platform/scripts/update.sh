@@ -199,7 +199,8 @@ on_deploy_exit() {
       rolled_back="yes"
       if [ "$deploy_synced" -eq 1 ]; then
         echo "    re-syncing dependencies for the restored revision" >&2
-        uv sync --reinstall-package ditto-screening-protocol >/dev/null 2>&1 || \
+        uv sync --reinstall-package ditto-screening-protocol \
+          --reinstall-package ditto-edge-protocol >/dev/null 2>&1 || \
           echo "    WARNING: uv sync failed after rollback; run 'uv sync' by hand" >&2
       fi
     else
@@ -288,7 +289,8 @@ echo "    single head: $migration_head"
 
 deploy_stage="sync"
 echo "==> syncing dependencies"
-uv sync --reinstall-package ditto-screening-protocol
+uv sync --reinstall-package ditto-screening-protocol \
+  --reinstall-package ditto-edge-protocol
 deploy_synced=1
 
 deploy_stage="dashboard-build"

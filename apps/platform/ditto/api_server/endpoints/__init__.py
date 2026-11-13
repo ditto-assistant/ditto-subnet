@@ -50,6 +50,9 @@ from ditto.api_server.endpoints.admin_database_backup import (
 from ditto.api_server.endpoints.admin_dueling import (
     router as admin_dueling_router,
 )
+from ditto.api_server.endpoints.admin_edge_lane_settings import (
+    router as admin_edge_lane_settings_router,
+)
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
 )
@@ -239,6 +242,7 @@ __all__ = [
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
+    "admin_edge_lane_settings_router",
     "admin_track_share_settings_router",
     "admin_emission_allocation_router",
     "admin_emission_eligibility_router",

@@ -125,6 +125,7 @@ jobs:
         run: >-
           uv sync --locked --group dev --group browser --python 3.12
           --reinstall-package ditto-screening-protocol
+          --reinstall-package ditto-edge-protocol
 
       # Run from apps/platform: the script bootstraps sys.path itself but
       # still needs the Platform dependency set, so a repo-root invocation

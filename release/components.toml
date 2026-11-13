@@ -228,7 +228,7 @@ paths = [
 
 [components.platform_api]
 description = "Subnet API, database migrations, relays, and control plane"
-depends_on = ["screening_protocol"]
+depends_on = ["screening_protocol", "edge_protocol"]
 paths = [
   "apps/platform/alembic/**",
   "apps/platform/ditto/**",

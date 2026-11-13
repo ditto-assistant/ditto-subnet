@@ -319,6 +319,11 @@ def test_deploy_reinstalls_embedded_protocol_before_migrations() -> None:
     command = "uv sync --reinstall-package ditto-screening-protocol"
     assert updater.count(command) == 2
     assert updater.index(command) < updater.index("uv run alembic upgrade head")
+    # The Ditto Edge contract is a path dependency too (SN-481): a stale built
+    # copy would serve the previous lane rules after a deploy.
+    edge = "--reinstall-package ditto-edge-protocol"
+    assert updater.count(edge) == 2
+    assert updater.index(edge) < updater.index("uv run alembic upgrade head")
 
 
 def test_update_loads_taostats_key_without_logging_value(tmp_path: Path) -> None:

@@ -153,12 +153,18 @@ def test_generator_starter_kit_change_is_shadow_only(components, ignored_paths) 
         ".github/workflows/edge-protocol-ci.yml",
     ],
 )
-def test_edge_protocol_change_is_shadow_only(
+def test_edge_protocol_change_reverifies_its_platform_consumer(
     components, ignored_paths, path: str
 ) -> None:
-    # Nothing deployed consumes the Ditto Edge contract yet (SN-481), so it
-    # must not rebuild the validator stack or redeploy Platform on its own.
-    assert selected(components, ignored_paths, path) == {"edge_protocol"}
+    # Platform serves the Ditto Edge shadow lane (SN-481) on this contract, so
+    # a contract change must re-verify and release Platform (and Backroom,
+    # which reads its API). No validator consumes it: the stack never rebuilds.
+    assert selected(components, ignored_paths, path) == {
+        "edge_protocol",
+        "platform_api",
+        "platform",
+        "backroom",
+    }
     assert root_verification(components, ignored_paths, path) == "none"
 
 

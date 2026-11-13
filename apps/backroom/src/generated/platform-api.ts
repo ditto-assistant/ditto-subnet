@@ -1721,6 +1721,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/edge-lane-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_admin_edge_lane_settings_get"];
+        put?: never;
+        /** Create Settings Revision */
+        post: operations["create_settings_revision_api_v1_admin_edge_lane_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/efficiency-bonus-settings": {
         parameters: {
             query?: never;
@@ -12680,6 +12698,35 @@ export interface components {
             sample_truncated: boolean;
             /** Total */
             total: number;
+        };
+        /** AdminEdgeLaneSettingsRequest */
+        AdminEdgeLaneSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["EdgeLaneSettings"];
+        };
+        /** AdminEdgeLaneSettingsResponse */
+        AdminEdgeLaneSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["EdgeLaneSettingsRevision"][];
+            default: components["schemas"]["EdgeLaneSettings"];
+            effective: components["schemas"]["EffectiveEdgeLaneSettings"];
+            /** History */
+            history: components["schemas"]["EdgeLaneSettingsRevision"][];
         };
         /**
          * AdminEfficiencyBonusSettingsRequest
@@ -23983,6 +24030,124 @@ export interface components {
         DuelingWorkResponse: {
             work?: components["schemas"]["DuelingWork"] | null;
         };
+        /**
+         * EdgeLaneSettings
+         * @description The complete lane policy (one revision = the whole object).
+         *
+         *     Mirrors :class:`ditto_edge_protocol.settings.LaneSettings` field for field,
+         *     and validates by building one, so Platform can never accept a policy the
+         *     shared lane rules would refuse. ``max_total_object_bytes`` is
+         *     Platform-only: it bounds what operators may ingest into object storage.
+         */
+        EdgeLaneSettings: {
+            /**
+             * Availability Floor
+             * @default 0.8
+             */
+            availability_floor: number;
+            /**
+             * Challenge Deadline Seconds
+             * @default 60
+             */
+            challenge_deadline_seconds: number;
+            /**
+             * Challenges Per Window
+             * @default 6
+             */
+            challenges_per_window: number;
+            /**
+             * Lease Seconds
+             * @default 900
+             */
+            lease_seconds: number;
+            /**
+             * Max New Assignments Per Poll
+             * @default 16
+             */
+            max_new_assignments_per_poll: number;
+            /**
+             * Max Nodes
+             * @default 100
+             */
+            max_nodes: number;
+            /**
+             * Max Object Bytes
+             * @default 8388608
+             */
+            max_object_bytes: number;
+            /**
+             * Max Total Object Bytes
+             * @default 1073741824
+             */
+            max_total_object_bytes: number;
+            /**
+             * Min Challenges
+             * @default 3
+             */
+            min_challenges: number;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /**
+             * Node Quota Cap Bytes
+             * @default 2147483648
+             */
+            node_quota_cap_bytes: number;
+            /**
+             * Poll Interval Seconds
+             * @default 30
+             */
+            poll_interval_seconds: number;
+            /**
+             * Replicas
+             * @default 3
+             */
+            replicas: number;
+            /**
+             * Retrieval Share
+             * @default 0.2
+             */
+            retrieval_share: number;
+            /**
+             * Revoked Lookback Seconds
+             * @default 86400
+             */
+            revoked_lookback_seconds: number;
+            /**
+             * Revoked Share
+             * @default 0.15
+             */
+            revoked_share: number;
+            /**
+             * Window Seconds
+             * @default 3600
+             */
+            window_seconds: number;
+        };
+        /** EdgeLaneSettingsRevision */
+        EdgeLaneSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["EdgeLaneSettings"];
+        };
         /** EffectiveBurnSettings */
         EffectiveBurnSettings: {
             /** Checksum */
@@ -24206,6 +24371,29 @@ export interface components {
              * @default false
              */
             tie_weighting_fleet_ready: boolean;
+        };
+        /** EffectiveEdgeLaneSettings */
+        EffectiveEdgeLaneSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Max Age Seconds */
+            max_age_seconds: number;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["EdgeLaneSettings"];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
         };
         /**
          * EffectiveEfficiencyBonusSettings
@@ -51780,6 +51968,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DatabaseBackupStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_edge_lane_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminEdgeLaneSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_edge_lane_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminEdgeLaneSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeLaneSettingsRevision"];
                 };
             };
             /** @description Validation Error */

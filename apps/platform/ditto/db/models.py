@@ -15398,3 +15398,310 @@ class UnreleasedCopySettingsRevision(Base):
         ),
         UniqueConstraint("parent_revision", name="unreleased_copy_settings_parent_key"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Ditto Edge shadow lane (SN-481). Opt-in Mac nodes hold public,
+# content-addressed objects that Platform assigns and challenges. Shadow only:
+# every ledger row is weight_eligible = false by constraint.
+# ---------------------------------------------------------------------------
+
+
+class EdgeLaneSettingsRevision(Base):
+    """Append-only operator policy for the Ditto Edge shadow lane."""
+
+    __tablename__ = "edge_lane_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="edge_lane_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="edge_lane_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "parent_revision >= 0", name="edge_lane_settings_parent_revision_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="edge_lane_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="edge_lane_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "scope", "parent_revision", name="edge_lane_settings_scope_parent_key"
+        ),
+    )
+
+
+class EdgeLaneState(Base):
+    """The lane's one row of secret state: the rendezvous placement salt.
+
+    The salt keeps nodes from grinding device keys to land on objects they
+    want. It is created once, never served, and changing it reshuffles every
+    placement.
+    """
+
+    __tablename__ = "edge_lane_state"
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    placement_salt: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("id = 1", name="edge_lane_state_singleton_check"),
+        CheckConstraint(
+            "length(placement_salt) = 32", name="edge_lane_state_salt_length_check"
+        ),
+    )
+
+
+class EdgeNode(Base):
+    """One enrolled device, identified by its Ed25519 device key."""
+
+    __tablename__ = "edge_nodes"
+
+    node_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    public_key_hex: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    operator: Mapped[str] = mapped_column(Text, nullable=False)
+    """The bound SN118 hotkey when its binding verified, else the node id."""
+    hotkey_ss58: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_name: Mapped[str] = mapped_column(Text, nullable=False)
+    client_version: Mapped[str] = mapped_column(Text, nullable=False)
+    platform: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Self-reported machine labels. Shown to operators, never scored."""
+    quota_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    strikes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    enrolled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_poll_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint("node_id ~ '^edn_[0-9a-f]{32}$'", name="edge_nodes_id_check"),
+        CheckConstraint(
+            "public_key_hex ~ '^[0-9a-f]{64}$'", name="edge_nodes_public_key_check"
+        ),
+        CheckConstraint(
+            "status IN ('active', 'suspended', 'retired')",
+            name="edge_nodes_status_check",
+        ),
+        CheckConstraint("quota_bytes >= 0", name="edge_nodes_quota_check"),
+        Index("edge_nodes_last_poll_idx", "last_poll_at"),
+    )
+
+
+class EdgeRequestNonce(Base):
+    """Single-use request nonces, consumed by an atomic insert."""
+
+    __tablename__ = "edge_request_nonces"
+
+    node_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text, primary_key=True)
+    seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (Index("edge_request_nonces_seen_idx", "seen_at"),)
+
+
+class EdgeObject(Base):
+    """A public, content-addressed object an operator ingested for the lane."""
+
+    __tablename__ = "edge_objects"
+
+    digest: Mapped[str] = mapped_column(Text, primary_key=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    media_type: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    """Operator-side provenance (a share id, ``synthetic:N``). Never sent to nodes."""
+    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    revoke_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("digest ~ '^[0-9a-f]{64}$'", name="edge_objects_digest_check"),
+        CheckConstraint("size_bytes > 0", name="edge_objects_size_check"),
+        CheckConstraint(
+            "(revoked_at IS NULL) = (revoke_reason IS NULL)",
+            name="edge_objects_revoke_reason_check",
+        ),
+    )
+
+
+class EdgeAssignment(Base):
+    """One node holding one object over one span of time.
+
+    A node may be assigned the same object again after a release, so history
+    is a row per span. At most one span per node and object is open.
+    """
+
+    __tablename__ = "edge_assignments"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    fill_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_filled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    acked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    released_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["node_id"], ["edge_nodes.node_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["digest"], ["edge_objects.digest"]),
+        CheckConstraint("fill_count >= 0", name="edge_assignments_fill_count_check"),
+        Index(
+            "edge_assignments_open_key",
+            "node_id",
+            "digest",
+            unique=True,
+            postgresql_where=text("released_at IS NULL"),
+        ),
+        Index("edge_assignments_digest_idx", "digest"),
+        Index("edge_assignments_node_idx", "node_id", "released_at"),
+    )
+
+
+class EdgeChallengeSlot(Base):
+    """One secret challenge slot in one node's ledger window.
+
+    A slot is drawn ``scheduled``. When it comes due it becomes ``issued``,
+    with the challenge filled in, or ``missed`` (the node was away) or
+    ``void`` (nothing to ask about). ``purpose`` is what was actually asked:
+    a revoked slot with nothing revoked to ask about is recorded as the
+    possession challenge it became.
+    """
+
+    __tablename__ = "edge_challenge_slots"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    window_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    due_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default="scheduled")
+    challenge_id: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    range_offset: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    range_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    nonce_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issued_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    deadline_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    outcome: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    answered_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["node_id"], ["edge_nodes.node_id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "purpose IN ('possession', 'retrieval', 'revoked')",
+            name="edge_challenge_slots_purpose_check",
+        ),
+        CheckConstraint(
+            "state IN ('scheduled', 'issued', 'missed', 'void')",
+            name="edge_challenge_slots_state_check",
+        ),
+        CheckConstraint(
+            "outcome IN ('pending', 'passed', 'failed', 'missed', 'refilled', "
+            "'refused', 'refused_ok', 'violation', 'void')",
+            name="edge_challenge_slots_outcome_check",
+        ),
+        CheckConstraint(
+            "(state = 'issued') = (challenge_id IS NOT NULL)",
+            name="edge_challenge_slots_issued_check",
+        ),
+        Index("edge_challenge_slots_node_window_idx", "node_id", "window_index"),
+        Index("edge_challenge_slots_window_idx", "window_index"),
+    )
+
+
+class EdgeWindowClosure(Base):
+    """Marks one ledger window scored. Insert-once, alongside its rows."""
+
+    __tablename__ = "edge_window_closures"
+
+    window_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    closed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class EdgeLedgerWindow(Base):
+    """One node's score for one closed window. Hypothetical, never paid."""
+
+    __tablename__ = "edge_ledger_windows"
+
+    window_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    node_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    operator: Mapped[str] = mapped_column(Text, nullable=False)
+    scheduled: Mapped[int] = mapped_column(Integer, nullable=False)
+    passed: Mapped[int] = mapped_column(Integer, nullable=False)
+    failed: Mapped[int] = mapped_column(Integer, nullable=False)
+    missed: Mapped[int] = mapped_column(Integer, nullable=False)
+    refilled: Mapped[int] = mapped_column(Integer, nullable=False)
+    refused: Mapped[int] = mapped_column(Integer, nullable=False)
+    revocation_checks: Mapped[int] = mapped_column(Integer, nullable=False)
+    revocation_violations: Mapped[int] = mapped_column(Integer, nullable=False)
+    held_gib_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    availability: Mapped[float] = mapped_column(Float, nullable=False)
+    eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    verified_units: Mapped[float] = mapped_column(Float, nullable=False)
+    hypothetical_share: Mapped[float] = mapped_column(Float, nullable=False)
+    reasons: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["window_index"], ["edge_window_closures.window_index"]),
+        # The shadow pin. Paying from this lane takes a migration that drops it.
+        CheckConstraint(
+            "weight_eligible = false", name="edge_ledger_windows_shadow_only_check"
+        ),
+        Index("edge_ledger_windows_node_idx", "node_id", "window_index"),
+    )
