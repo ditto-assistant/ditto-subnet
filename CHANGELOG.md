@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.484.1 (2026-11-13)
+
+### Bug Fixes
+
+- **infra**: Match AMI publisher accounts in EC2 launch policy
+  ([#3539](https://github.com/ditto-assistant/ditto-subnet/pull/3539),
+  [`b8c7b6a`](https://github.com/ditto-assistant/ditto-subnet/commit/b8c7b6a3f71f145a6317e7400d155965de0437a7))
+
+- **infra**: Unblock AWS screener bootstrap and configure wake target
+  ([#3540](https://github.com/ditto-assistant/ditto-subnet/pull/3540),
+  [`3187eca`](https://github.com/ditto-assistant/ditto-subnet/commit/3187ecad0cc0e884c185d101ec130530a1eb12a5))
+
+- **screener**: Restore rootless Docker after host wake
+  ([#3541](https://github.com/ditto-assistant/ditto-subnet/pull/3541),
+  [`2eea657`](https://github.com/ditto-assistant/ditto-subnet/commit/2eea657cd74243f3e4a2902589474f31a6ba85d6))
+
+
 ## v0.484.0 (2026-11-13)
 
 ### Features
