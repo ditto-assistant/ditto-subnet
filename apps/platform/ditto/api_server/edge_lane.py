@@ -486,9 +486,29 @@ async def _issue_due(
         )
     )
     grace = timedelta(seconds=lane.grace_seconds)
+    # Challenges issued earlier and still undecided go out again until their
+    # deadline, so a lost poll response or a failed answer costs a node
+    # nothing. Answering twice changes nothing: the first answer decides. A
+    # live one was issued within grace of its slot and a deadline ago at most.
+    reach = -(
+        -(lane.grace_seconds + settings.challenge_deadline_seconds)
+        // settings.window_seconds
+    )
+    outstanding = await session.scalars(
+        select(EdgeChallengeSlot)
+        .where(
+            EdgeChallengeSlot.node_id == node_id,
+            EdgeChallengeSlot.window_index >= index - reach,
+            EdgeChallengeSlot.state == "issued",
+            EdgeChallengeSlot.outcome == "pending",
+            EdgeChallengeSlot.deadline_at > now,
+        )
+        .order_by(EdgeChallengeSlot.issued_at, EdgeChallengeSlot.id)
+        .limit(MAX_CHALLENGES_PER_POLL)
+    )
+    issued: list[Challenge] = [_wire(slot) for slot in outstanding]
     held: list[Held] | None = None
     revoked: list[Held] | None = None
-    issued: list[Challenge] = []
     for slot in [*late, *slots]:
         if slot.state != "scheduled" or slot.due_at > now:
             continue
@@ -528,18 +548,30 @@ async def _issue_due(
         slot.nonce_hex = drawn.nonce_hex
         slot.issued_at = now
         slot.deadline_at = deadline
-        issued.append(
-            Challenge(
-                challenge_id=challenge_id,
-                kind=drawn.kind,
-                digest=drawn.digest,
-                nonce_hex=drawn.nonce_hex,
-                offset=drawn.offset,
-                length=drawn.length,
-                deadline_at=int(_ts(deadline)),
-            )
-        )
+        issued.append(_wire(slot))
     return issued
+
+
+def _wire(slot: EdgeChallengeSlot) -> Challenge:
+    """The challenge an issued slot carries, as the node receives it."""
+    if (
+        slot.challenge_id is None
+        or slot.kind is None
+        or slot.digest is None
+        or slot.range_offset is None
+        or slot.range_length is None
+        or slot.deadline_at is None
+    ):  # pragma: no cover - an issued slot always carries its challenge
+        raise RuntimeError(f"issued edge challenge slot {slot.id} is incomplete")
+    return Challenge(
+        challenge_id=slot.challenge_id,
+        kind=slot.kind,  # type: ignore[arg-type]
+        digest=slot.digest,
+        nonce_hex=slot.nonce_hex,
+        offset=slot.range_offset,
+        length=slot.range_length,
+        deadline_at=int(_ts(slot.deadline_at)),
+    )
 
 
 async def _place(

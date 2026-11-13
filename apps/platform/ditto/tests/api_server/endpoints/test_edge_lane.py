@@ -750,3 +750,43 @@ async def test_openapi_documents_signed_headers_bodies_and_binary_fills(
             assert operation["requestBody"]["required"] is True, path
     fill = spec["paths"]["/api/v1/edge/objects/{digest}"]["get"]["responses"]["200"]
     assert list(fill["content"]) == ["application/octet-stream"]
+
+
+async def test_an_unanswered_challenge_is_sent_again_until_its_deadline(
+    lane: Lane,
+) -> None:
+    await lane.settings(challenges_per_window=12, min_challenges=3, replicas=1)
+    await lane.ingest(_blob(1))
+    node = Node(lane)
+    await node.enroll()
+    await lane.run([node], 2 * POLL)
+    body = PollRequest(protocol="edge/v1", free_bytes=GIB).model_dump_json().encode()
+
+    async def poll() -> PollResponse:
+        response = await node.send("POST", paths.POLL, body)
+        assert response.status_code == 200, response.text
+        return PollResponse.model_validate_json(response.content)
+
+    # Poll without answering, as if every answer or response were lost.
+    first = await poll()
+    while not first.challenges:
+        lane.clock.advance(POLL)
+        first = await poll()
+    sent = {c.challenge_id for c in first.challenges}
+    lane.clock.advance(5)
+    assert sent <= {c.challenge_id for c in (await poll()).challenges}
+    answered = first.challenges[0]
+    reply = await node.send(
+        "POST",
+        paths.answer_path(answered.challenge_id),
+        node._answer(answered, node.store.get(answered.digest))
+        .model_dump_json(exclude_none=True)
+        .encode(),
+    )
+    assert reply.is_success, reply.text
+    lane.clock.advance(5)
+    after = {c.challenge_id for c in (await poll()).challenges}
+    assert answered.challenge_id not in after
+    assert sent - {answered.challenge_id} <= after
+    lane.clock.advance(20)  # past the 20 s deadline
+    assert not sent & {c.challenge_id for c in (await poll()).challenges}
