@@ -10,7 +10,7 @@ reads the same API with `ditto bounty list` and `ditto bounty show`.
 moves. The board, the CLI and the API mark every rehearsal fee, refund and
 award as simulated. Live funding is a separate, later decision.
 
-The rules behind this guide are in [bounty-claims.md](bounty-claims.md).
+The rules behind this guide are in [bounty-specification.md](bounty-specification.md) and [bounty-claims.md](bounty-claims.md).
 
 ## Questions
 
