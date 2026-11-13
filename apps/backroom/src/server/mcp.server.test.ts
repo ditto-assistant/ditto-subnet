@@ -592,6 +592,10 @@ describe('Backroom MCP tools', () => {
         'admit_stranded_submission',
         'get_stranded_admissions',
         'get_burn_settings',
+        'get_edge_lane_settings',
+        'get_edge_lane_overview',
+        'list_edge_lane_nodes',
+        'get_edge_lane_ledger',
         'get_track_share_settings',
         'get_emission_allocation',
         'get_copy_court_settings',
@@ -1019,7 +1023,10 @@ describe('Backroom MCP tools', () => {
     // 239,100 bytes; keep about 0.5 KB.
     // The pre-screen batch list (two paging inputs, one-line summary, detail
     // in tool help) measures 239,927 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(240_450)
+    // The four Ditto Edge shadow lane reads (settings, overview, nodes,
+    // ledger; one-line summaries, detail in tool help) measure 241,967 bytes;
+    // keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(242_450)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1083,7 +1090,9 @@ describe('Backroom MCP tools', () => {
       // catalog measures 29,457, still under this bound.
       // The three one-line generator source summaries and the source pointer
       // on get_generator_submission measure 29,886; keep about 200 chars.
-      30_100,
+      // The four one-line Ditto Edge shadow lane reads (SN-481) measure
+      // 30,227; keep about 200 chars.
+      30_430,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

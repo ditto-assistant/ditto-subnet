@@ -900,6 +900,27 @@ and earlier flags stay on the review list. `get_copy_court_settings` also
 returns the posture, coverage and top flags under `unreleased_copy`. Design and calibration live in
 `apps/platform/docs/unreleased-copy-signal.md`.
 
+## Ditto Edge shadow lane (SN-481)
+
+Opt-in Mac nodes hold content-addressed public objects and answer Platform's
+challenges, measured into a ledger that pays nothing. Four tools read it; all
+need `backroom:read` and none writes:
+
+- `get_edge_lane_settings` returns the policy (`mode` is `off` or `shadow`),
+  the governing revision and the default, with opt-in history. Opening the lane
+  is a Platform settings write that Backroom does not offer.
+- `get_edge_lane_overview` returns node and object counts, assignments and the
+  recently scored windows.
+- `list_edge_lane_nodes` pages Platform's capped read of up to 1000 nodes,
+  most recent poll first. `may_be_truncated` is true when that read came back
+  full, so more nodes may exist beyond it.
+- `get_edge_lane_ledger(windowIndex?, nodeId?)` returns one row per node and
+  window. Platform first scores any window that has closed since the last poll,
+  the same insert-once scoring a node poll runs; `closed_now` lists them.
+
+Every response pins `weight_eligible` to `false`. A row claiming otherwise is
+a tool error, never data.
+
 ## Competition improvement metrics
 
 `get_competition_improvement_metrics(benchVersion?, since?)` reads the hourly
