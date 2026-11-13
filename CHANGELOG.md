@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.482.0 (2026-11-13)
+
+### Documentation
+
+- **design**: Rank miner-hostable workloads and pick Ditto Edge (SN-481)
+  ([#3516](https://github.com/ditto-assistant/ditto-subnet/pull/3516),
+  [`26d46cf`](https://github.com/ditto-assistant/ditto-subnet/commit/26d46cff8e6df289962eca27a2fbb12aa61cee42))
+
+### Features
+
+- **edge-protocol**: Add the Ditto Edge edge/v1 contract (SN-481)
+  ([#3517](https://github.com/ditto-assistant/ditto-subnet/pull/3517),
+  [`ee760c3`](https://github.com/ditto-assistant/ditto-subnet/commit/ee760c3294bb45b5bf285dce85e2df7a3d1e4f0a))
+
+
 ## v0.481.1 (2026-11-13)
 
 ### Bug Fixes
