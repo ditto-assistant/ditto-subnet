@@ -222,6 +222,15 @@ def served_rank_shares(served: dict[str, Any]) -> list[float] | None:
     return shares
 
 
+def served_unfilled_burn(served: dict[str, Any]) -> bool:
+    """Whether a pin froze the protocol-36 unfilled-slot burn.
+
+    Only the exact marker ``"burn"`` counts, as on the validator wire, so a
+    malformed value folds the renormalising pre-36 rule on every side.
+    """
+    return served.get("unfilled_share_mode") == "burn"
+
+
 def served_crown_gate(served: dict[str, Any]) -> CrownGate | None:
     """The protocol-34 crown rules frozen with a pin, or ``None`` for none.
 
@@ -340,6 +349,7 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         statistical_band_mode=served.get("statistical_band_mode"),
         crown_gate=crown_gate_marker(served_crown_gate(served)),
         rank_shares=served_rank_shares(served),
+        unfilled_share_mode="burn" if served_unfilled_burn(served) else None,
         count=len(pin.entries),
         generated_at=pin.pinned_at,
         stale=stale,
@@ -580,8 +590,12 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
         ceiling_band_clamp=clamp,
         statistical_band_cap=statistical_cap,
         rank_shares=served_rank_shares(served),
+        burn_unfilled=served_unfilled_burn(served),
     )
-    total = sum(allocation.shares)
+    # Under the protocol-36 burn the unfilled tail of the curve stays in the
+    # denominator, so shares sum below one and the remainder is what the
+    # validator burns -- the same prescription a provisional incumbent gets.
+    total = sum(allocation.shares) + allocation.unfilled_share
     if total <= 0.0:
         return None
     shares: dict[str, float] = {}
@@ -1079,6 +1093,10 @@ def build_pin_draft(
     rank_shares = getattr(snapshot, "rank_shares", None)
     if rank_shares is not None:
         served["rank_shares"] = [float(share) for share in rank_shares]
+    # Keyed only when the protocol-36 unfilled-slot burn is served, so every pin
+    # taken without it keeps its digest byte for byte.
+    if getattr(snapshot, "unfilled_share_mode", None) == "burn":
+        served["unfilled_share_mode"] = "burn"
     # Keyed only when a fleet-ready split is served, so every pin taken without
     # one keeps its digest byte for byte.
     track_shares = getattr(snapshot, "track_shares_bps", None)
@@ -1316,6 +1334,7 @@ __all__ = [
     "pin_provisional_incumbent",
     "served_crown_gate",
     "served_rank_shares",
+    "served_unfilled_burn",
     "served_track_shares",
     "ledger_digest",
     "response_from_pin",

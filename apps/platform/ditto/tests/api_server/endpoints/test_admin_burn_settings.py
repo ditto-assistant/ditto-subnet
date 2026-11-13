@@ -305,3 +305,74 @@ async def test_an_unreadable_latest_revision_is_never_carried_as_a_clear(
     explicit = _payload(expected_revision=1, burn_share=0.1)
     explicit["settings"] = {"burn_share": 0.1, "rank_shares": _CURVE}
     assert (await client.post(_URL, headers=_HEADERS, json=explicit)).status_code == 200
+
+
+async def test_unfilled_burn_is_off_by_default_and_absent_from_stored_json() -> None:
+    from ditto.api_models.burn_settings import BurnSettings
+
+    assert BurnSettings().burn_unfilled_rank_shares is False
+    # Excluded while off, so every existing revision and checksum is unchanged.
+    assert BurnSettings().model_dump(mode="json") == {"burn_share": 0.0}
+    assert BurnSettings(burn_unfilled_rank_shares=True).model_dump(mode="json") == {
+        "burn_share": 0.0,
+        "burn_unfilled_rank_shares": True,
+    }
+    with pytest.raises(ValueError):
+        BurnSettings.model_validate(
+            {"burn_share": 0.0, "burn_unfilled_rank_shares": "yes"}
+        )
+
+
+async def test_unfilled_burn_is_a_versioned_audited_setting_carried_by_other_writes(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, settings_maker)
+    on = _payload(burn_share=0.0)
+    on["settings"] = {"burn_share": 0.0, "burn_unfilled_rank_shares": True}
+    on["reason"] = "burn rank slots nobody fills after the fleet reports 36"
+    first = await client.post(_URL, headers=_HEADERS, json=on)
+    assert first.status_code == 200, first.text
+    assert first.json()["settings"] == {
+        "burn_share": 0.0,
+        "burn_unfilled_rank_shares": True,
+    }
+
+    # The console dial posts burn_share alone; that must not switch the burn off.
+    burn_only = await client.post(
+        _URL, headers=_HEADERS, json=_payload(expected_revision=1, burn_share=0.1)
+    )
+    assert burn_only.status_code == 200, burn_only.text
+    assert burn_only.json()["settings"] == {
+        "burn_share": 0.1,
+        "burn_unfilled_rank_shares": True,
+    }
+
+    body = (await client.get(_URL, headers=_HEADERS)).json()
+    assert body["effective"]["settings"]["burn_unfilled_rank_shares"] is True
+    # No live v36 weight setter: configured, not served.
+    assert body["effective"]["unfilled_burn_served"] is False
+    assert [r["revision"] for r in body["history"]] == [2, 1]
+    assert body["history"][1]["settings"]["burn_unfilled_rank_shares"] is True
+
+    off = _payload(expected_revision=2, burn_share=0.1)
+    off["settings"] = {"burn_share": 0.1, "burn_unfilled_rank_shares": False}
+    reset = await client.post(_URL, headers=_HEADERS, json=off)
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["settings"] == {"burn_share": 0.1}
+    after = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
+    assert after["unfilled_burn_served"] is False
+
+
+async def test_off_reports_not_served_and_a_default_revision_stays_byte_identical(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, settings_maker)
+    written = await client.post(_URL, headers=_HEADERS, json=_payload())
+    assert written.status_code == 200, written.text
+    assert written.json()["settings"] == {"burn_share": 0.25}
+    effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
+    assert effective["unfilled_burn_served"] is False

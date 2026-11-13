@@ -1,0 +1,366 @@
+{
+  "_comment": "Protocol 36 (docs/bench-bump-readmission.md, Phase 3). One board per case, folded by the validator (ditto/tests/validator/test_unfilled_burn.py) and the Platform projection (apps/platform/ditto/tests/api_server/test_unfilled_burn.py). 'off' is each recipient's share of the miner pool under the renormalising protocol-35 fold, 'on' under unfilled_share_mode=burn; burned_on is the share of the miner pool the burn takes. Computed with exact fractions from the curve, not by running either fold.",
+  "cases": [
+    {
+      "name": "a full board of five",
+      "entries": [
+        {
+          "name": "m1",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 0
+        },
+        {
+          "name": "m2",
+          "composite": 0.85,
+          "stderr": 0.01,
+          "minutes": 1
+        },
+        {
+          "name": "m3",
+          "composite": 0.8,
+          "stderr": 0.01,
+          "minutes": 2
+        },
+        {
+          "name": "m4",
+          "composite": 0.75,
+          "stderr": 0.01,
+          "minutes": 3
+        },
+        {
+          "name": "m5",
+          "composite": 0.7,
+          "stderr": 0.01,
+          "minutes": 4
+        }
+      ],
+      "tie_pooling": false,
+      "rank_shares": null,
+      "mode": "ranked",
+      "off": {
+        "hotkey-m1": 0.65,
+        "hotkey-m2": 0.14,
+        "hotkey-m3": 0.1,
+        "hotkey-m4": 0.07,
+        "hotkey-m5": 0.04
+      },
+      "on": {
+        "hotkey-m1": 0.65,
+        "hotkey-m2": 0.14,
+        "hotkey-m3": 0.1,
+        "hotkey-m4": 0.07,
+        "hotkey-m5": 0.04
+      },
+      "burned_on": 0.0
+    },
+    {
+      "name": "four agents burn exactly rank 5",
+      "entries": [
+        {
+          "name": "m1",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 0
+        },
+        {
+          "name": "m2",
+          "composite": 0.85,
+          "stderr": 0.01,
+          "minutes": 1
+        },
+        {
+          "name": "m3",
+          "composite": 0.8,
+          "stderr": 0.01,
+          "minutes": 2
+        },
+        {
+          "name": "m4",
+          "composite": 0.75,
+          "stderr": 0.01,
+          "minutes": 3
+        }
+      ],
+      "tie_pooling": false,
+      "rank_shares": null,
+      "mode": "ranked",
+      "off": {
+        "hotkey-m1": 0.677083333333,
+        "hotkey-m2": 0.145833333333,
+        "hotkey-m3": 0.104166666667,
+        "hotkey-m4": 0.072916666667
+      },
+      "on": {
+        "hotkey-m1": 0.65,
+        "hotkey-m2": 0.14,
+        "hotkey-m3": 0.1,
+        "hotkey-m4": 0.07
+      },
+      "burned_on": 0.04
+    },
+    {
+      "name": "three agents burn ranks 4 and 5",
+      "entries": [
+        {
+          "name": "m1",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 0
+        },
+        {
+          "name": "m2",
+          "composite": 0.85,
+          "stderr": 0.01,
+          "minutes": 1
+        },
+        {
+          "name": "m3",
+          "composite": 0.8,
+          "stderr": 0.01,
+          "minutes": 2
+        }
+      ],
+      "tie_pooling": false,
+      "rank_shares": null,
+      "mode": "ranked",
+      "off": {
+        "hotkey-m1": 0.730337078652,
+        "hotkey-m2": 0.157303370787,
+        "hotkey-m3": 0.112359550562
+      },
+      "on": {
+        "hotkey-m1": 0.65,
+        "hotkey-m2": 0.14,
+        "hotkey-m3": 0.1
+      },
+      "burned_on": 0.11
+    },
+    {
+      "name": "two agents burn ranks 3 to 5",
+      "entries": [
+        {
+          "name": "m1",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 0
+        },
+        {
+          "name": "m2",
+          "composite": 0.85,
+          "stderr": 0.01,
+          "minutes": 1
+        }
+      ],
+      "tie_pooling": false,
+      "rank_shares": null,
+      "mode": "ranked",
+      "off": {
+        "hotkey-m1": 0.822784810127,
+        "hotkey-m2": 0.177215189873
+      },
+      "on": {
+        "hotkey-m1": 0.65,
+        "hotkey-m2": 0.14
+      },
+      "burned_on": 0.21
+    },
+    {
+      "name": "one agent takes only the champion share",
+      "entries": [
+        {
+          "name": "m1",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 0
+        }
+      ],
+      "tie_pooling": false,
+      "rank_shares": null,
+      "mode": "ranked",
+      "off": {
+        "hotkey-m1": 1.0
+      },
+      "on": {
+        "hotkey-m1": 0.65
+      },
+      "burned_on": 0.35
+    },
+    {
+      "name": "operator curve, three agents",
+      "entries": [
+        {
+          "name": "m1",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 0
+        },
+        {
+          "name": "m2",
+          "composite": 0.85,
+          "stderr": 0.01,
+          "minutes": 1
+        },
+        {
+          "name": "m3",
+          "composite": 0.8,
+          "stderr": 0.01,
+          "minutes": 2
+        }
+      ],
+      "tie_pooling": false,
+      "rank_shares": [
+        0.5,
+        0.2,
+        0.13,
+        0.1,
+        0.07
+      ],
+      "mode": "ranked",
+      "off": {
+        "hotkey-m1": 0.602409638554,
+        "hotkey-m2": 0.240963855422,
+        "hotkey-m3": 0.156626506024
+      },
+      "on": {
+        "hotkey-m1": 0.5,
+        "hotkey-m2": 0.2,
+        "hotkey-m3": 0.13
+      },
+      "burned_on": 0.17
+    },
+    {
+      "name": "pooled tie keeps occupied slots only",
+      "entries": [
+        {
+          "name": "m1",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 0
+        },
+        {
+          "name": "m2",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 1
+        },
+        {
+          "name": "m3",
+          "composite": 0.8,
+          "stderr": 0.01,
+          "minutes": 2
+        },
+        {
+          "name": "m4",
+          "composite": 0.75,
+          "stderr": 0.01,
+          "minutes": 3
+        }
+      ],
+      "tie_pooling": true,
+      "rank_shares": null,
+      "mode": "ranked",
+      "off": {
+        "hotkey-m1": 0.411458333333,
+        "hotkey-m2": 0.411458333333,
+        "hotkey-m3": 0.104166666667,
+        "hotkey-m4": 0.072916666667
+      },
+      "on": {
+        "hotkey-m1": 0.395,
+        "hotkey-m2": 0.395,
+        "hotkey-m3": 0.1,
+        "hotkey-m4": 0.07
+      },
+      "burned_on": 0.04
+    },
+    {
+      "name": "four exactly tied agents pool to one quarter of the occupied slots",
+      "entries": [
+        {
+          "name": "m1",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 0
+        },
+        {
+          "name": "m2",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 1
+        },
+        {
+          "name": "m3",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 2
+        },
+        {
+          "name": "m4",
+          "composite": 0.9,
+          "stderr": 0.01,
+          "minutes": 3
+        }
+      ],
+      "tie_pooling": true,
+      "rank_shares": null,
+      "mode": "ranked",
+      "off": {
+        "hotkey-m1": 0.25,
+        "hotkey-m2": 0.25,
+        "hotkey-m3": 0.25,
+        "hotkey-m4": 0.25
+      },
+      "on": {
+        "hotkey-m1": 0.24,
+        "hotkey-m2": 0.24,
+        "hotkey-m3": 0.24,
+        "hotkey-m4": 0.24
+      },
+      "burned_on": 0.04
+    },
+    {
+      "name": "score-ceiling joint crown has no unfilled slot",
+      "entries": [
+        {
+          "name": "m1",
+          "composite": 0.996348,
+          "stderr": 0.01,
+          "minutes": 0
+        },
+        {
+          "name": "m2",
+          "composite": 0.997012,
+          "stderr": 0.01,
+          "minutes": 2
+        },
+        {
+          "name": "m3",
+          "composite": 0.997012,
+          "stderr": 0.01,
+          "minutes": 3
+        },
+        {
+          "name": "m4",
+          "composite": 0.997012,
+          "stderr": 0.01,
+          "minutes": 4
+        }
+      ],
+      "tie_pooling": true,
+      "rank_shares": null,
+      "mode": "score_ceiling_pool",
+      "off": {
+        "hotkey-m2": 0.333333333333,
+        "hotkey-m3": 0.333333333333,
+        "hotkey-m4": 0.333333333333
+      },
+      "on": {
+        "hotkey-m2": 0.333333333333,
+        "hotkey-m3": 0.333333333333,
+        "hotkey-m4": 0.333333333333
+      },
+      "burned_on": 0.0
+    }
+  ]
+}

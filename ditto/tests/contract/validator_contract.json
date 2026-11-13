@@ -6506,6 +6506,18 @@
         ],
         "default": null
       },
+      "unfilled_share_mode": {
+        "anyOf": [
+          {
+            "const": "burn",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "v9_confirmation_mode": {
         "anyOf": [
           {

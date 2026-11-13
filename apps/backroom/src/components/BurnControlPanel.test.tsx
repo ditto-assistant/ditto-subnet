@@ -31,6 +31,7 @@ const control = (burn_share: number, overrides: Record<string, unknown> = {}) =>
       max_burn_share: 1,
       live_validator_count: 4,
       rank_shares_served: false,
+      unfilled_burn_served: false,
       ...overrides,
     },
   }) as BurnSettingsControl
@@ -141,5 +142,34 @@ describe('BurnControlPanel', () => {
       burn_share: 0.25,
       rank_shares: curve,
     })
+  })
+
+  it('shows the unfilled-slot burn and leaves it to the server on a burn-only write', async () => {
+    const burning = control(0, {
+      settings: { burn_share: 0, burn_unfilled_rank_shares: true },
+      unfilled_burn_served: false,
+    })
+    render(<BurnControlPanel initialState={burning} readOnly={false} />)
+    expect(screen.getByText('Burn · waiting for protocol 36')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /Burn 25%/ }))
+    fireEvent.change(screen.getByLabelText('Operator reason'), {
+      target: { value: 'owner-approved burn for the treasury window' },
+    })
+    fireEvent.change(screen.getByLabelText(new RegExp(BURN_CONFIRMATION)), {
+      target: { value: BURN_CONFIRMATION },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply burn' }))
+
+    await waitFor(() => expect(updateBurnSettings).toHaveBeenCalledTimes(1))
+    // Omitted, so Platform carries the current value rather than switching it off.
+    expect(updateBurnSettings.mock.calls[0][0].data.settings).not.toHaveProperty(
+      'burn_unfilled_rank_shares',
+    )
+  })
+
+  it('reads as renormalised while the unfilled-slot burn is off', () => {
+    render(<BurnControlPanel initialState={control(0)} readOnly={false} />)
+    expect(screen.getByText('Renormalised (off)')).toBeTruthy()
   })
 })

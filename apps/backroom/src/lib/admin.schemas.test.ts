@@ -5877,3 +5877,28 @@ describe('publicDethroneDecisionSchema', () => {
     expect(parsed.method).toBe('duel')
   })
 })
+
+describe('burn settings unfilled-slot burn (protocol 36)', () => {
+  it('is optional, boolean and survives parsing so the read tool reports it', async () => {
+    const { burnSettingsSchema, burnSettingsWriteSchema, effectiveBurnSettingsSchema } =
+      await import('./admin.schemas')
+    expect(burnSettingsSchema.parse({ burn_share: 0 })).toEqual({ burn_share: 0 })
+    expect(
+      burnSettingsSchema.parse({ burn_share: 0, burn_unfilled_rank_shares: true }),
+    ).toEqual({ burn_share: 0, burn_unfilled_rank_shares: true })
+    expect(
+      burnSettingsWriteSchema.safeParse({ burn_share: 0, burn_unfilled_rank_shares: 'yes' })
+        .success,
+    ).toBe(false)
+    const effective = effectiveBurnSettingsSchema.parse({
+      revision: 1,
+      scope: '*',
+      settings: { burn_share: 0 },
+      checksum: '',
+      source: 'default',
+      max_age_seconds: 5,
+      miner_emission_share: 1,
+    })
+    expect(effective.unfilled_burn_served).toBeNull()
+  })
+})

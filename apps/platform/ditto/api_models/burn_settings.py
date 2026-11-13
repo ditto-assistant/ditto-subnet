@@ -53,6 +53,9 @@ RANK_SHARES_SLOTS = 5
 RANK_SHARES_PROTOCOL = 31
 """Validator heartbeat protocol that folds a served ``rank_shares`` curve."""
 
+UNFILLED_BURN_PROTOCOL = 36
+"""Validator heartbeat protocol that burns rank slots no agent fills."""
+
 
 def curve_increases(shares: tuple[float, ...] | None) -> bool:
     """True when a lower slot would be paid more than the one above it."""
@@ -100,6 +103,26 @@ class BurnSettings(BaseModel):
     permissive so a stored revision can never fail into the default policy.
     Omitting it on a write keeps the current curve; an explicit ``null``
     clears it.
+    """
+
+    burn_unfilled_rank_shares: Annotated[
+        bool,
+        Field(default=False, exclude_if=lambda value: value is False),
+    ] = False
+    """Burn the rank slots no eligible agent fills (protocol 36).
+
+    ``False`` (the default) keeps today's fold: a short board renormalises, so
+    four agents split the whole memory pool 0.65/0.14/0.10/0.07 over 0.96 and a
+    lone champion takes all of it. ``True`` keeps every slot at its fixed
+    ``rank_shares`` fraction of the miner pool and burns the slots nobody fills:
+    four agents leave rank 5's share burning, and a lone champion takes only its
+    champion share. It applies to the memory track's curve only, on top of
+    ``burn_share`` (which burns first, off the whole pool) and the track split.
+    Served on the scoring ledger only once every recently-live weight setter
+    reports protocol 36. Omitting it on a write keeps the current value.
+
+    Excluded from the stored JSON while ``False``, so every existing revision
+    and its checksum are unchanged.
     """
 
     @field_validator("rank_shares")
@@ -158,6 +181,11 @@ class EffectiveBurnSettings(BaseModel):
     """Whether the configured curve is on the scoring ledger now: True only
     when a curve is set and every recently-live weight setter reports protocol
     31. ``None`` when fleet readiness could not be read."""
+
+    unfilled_burn_served: bool | None = None
+    """Whether the unfilled-slot burn is on the scoring ledger now: True only
+    when the setting is on and every recently-live weight setter reports
+    protocol 36. ``None`` when fleet readiness could not be read."""
 
     live_validator_count: int | None = None
     """Validators that have heartbeated recently enough to be folding weights.

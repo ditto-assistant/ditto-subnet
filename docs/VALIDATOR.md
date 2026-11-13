@@ -860,6 +860,27 @@ the gate, and only after every recently-live weight setter reports protocol
 disabled` is the exact rollback. Both folds call the shared arithmetic and run
 the shared `crown_gate_cases.json` duel cases.
 
+### Unfilled rank slots burn (protocol 36)
+
+Today a board with fewer than five paid agents renormalises: four agents split
+the whole memory pool 0.677/0.146/0.104/0.073 and a lone champion takes all of
+it. With `burn_unfilled_rank_shares` on in the burn settings, a served ledger
+carries `unfilled_share_mode: "burn"` and the fold keeps every slot at its fixed
+`rank_shares` fraction of the memory pool. A slot with no eligible agent burns:
+four agents leave rank 5's 4% burning and a lone champion keeps 65%. Tie pooling
+still averages only occupied slots, the score-ceiling joint crown has no unfilled
+slot, and the unfilled tail is reported under `UNPAID_SHARE_KEY` with any
+provisional incumbent's share, so it burns through the existing
+`split_unpaid_share` and cap path with `burn_share` and the track split applied
+multiplicatively.
+
+Platform serves the marker only when the setting is on and every recently-live
+weight setter reports protocol 36. A requester below 36 gets 428 while a pinned
+burn is served, and the stale path refuses rather than replays it. Setting it to
+false is the exact rollback. Both folds run the shared
+`ditto/tests/fixtures/unfilled_burn_cases.json`. Design, interactions, rollout
+and the slot-filling risk are in `docs/unfilled-rank-burn.md`.
+
 ### Continual retest seed budget
 
 Platform owns how many shared seeds the continual retest lane buys. Each round

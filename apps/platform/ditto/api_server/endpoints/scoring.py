@@ -39,7 +39,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import ConfirmationScoreRecord, LedgerEntry, LedgerResponse
-from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL, BurnSettings
+from ditto.api_models.burn_settings import (
+    RANK_SHARES_PROTOCOL,
+    UNFILLED_BURN_PROTOCOL,
+    BurnSettings,
+)
 from ditto.api_models.continual_retest_settings import (
     CROWN_DUEL_PROTOCOL,
     CROWN_DUEL_SEASONS,
@@ -208,6 +212,11 @@ _CROWN_DUEL_PROTOCOL = CROWN_DUEL_PROTOCOL
 # payout curve. Withheld until every recently-live weight setter reports it, or
 # a mixed fleet would fold two curves in one epoch.
 _RANK_SHARES_PROTOCOL = RANK_SHARES_PROTOCOL
+# The first validator protocol that burns the rank slots no agent fills. A
+# protocol-35 validator renormalises the occupied slots and would fold a
+# different vector from the same ledger, so the marker is withheld until every
+# recently-live weight setter reports it.
+_UNFILLED_BURN_PROTOCOL = UNFILLED_BURN_PROTOCOL
 # The first validator protocol that pays the generator track a served
 # ``track_shares_bps`` share. A protocol-32 validator folds the generator in
 # shadow and would burn that share, so the map is withheld until every
@@ -262,6 +271,9 @@ class _LedgerSnapshot:
     rank_shares: tuple[float, ...] | None = None
     """The operator payout curve served to the fleet, or ``None`` for the frozen
     curve. Replayed on the stale path like ``burn_share``."""
+    unfilled_share_mode: Literal["burn"] | None = None
+    """The protocol-36 marker served to the fleet, or ``None`` for the
+    renormalising fold. Replayed on the stale path like ``rank_shares``."""
     track_shares_bps: dict[str, int] | None = None
     """The operator per-track split served to the fleet, or ``None`` to omit it
     (validators fold their compiled memory-only split). Replayed on the stale
@@ -331,6 +343,7 @@ class _LedgerContext:
     reward_eligibility_fleet_ready: bool = False
     rank_shares_fleet_ready: bool = False
     track_shares_fleet_ready: bool = False
+    unfilled_burn_fleet_ready: bool = False
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -562,6 +575,14 @@ async def resolve_ledger_context(
             session, minimum_protocol=_TRACK_SHARES_PROTOCOL, now=now
         )
     )
+    # Read only while the burn is switched on: off is the default and serves
+    # nothing whatever the fleet runs.
+    unfilled_burn_fleet_ready = (
+        policy.burn.burn_unfilled_rank_shares
+        and await live_weight_setter_fleet_supports_protocol(
+            session, minimum_protocol=_UNFILLED_BURN_PROTOCOL, now=now
+        )
+    )
     crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
         minimum_protocol=_CROWN_INCUMBENT_PROTOCOL,
@@ -589,6 +610,7 @@ async def resolve_ledger_context(
         reward_eligibility_fleet_ready=reward_eligibility_fleet_ready,
         rank_shares_fleet_ready=rank_shares_fleet_ready,
         track_shares_fleet_ready=track_shares_fleet_ready,
+        unfilled_burn_fleet_ready=unfilled_burn_fleet_ready,
     )
 
 
@@ -672,6 +694,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         rank_shares=(
             list(snapshot.rank_shares) if snapshot.rank_shares is not None else None
         ),
+        unfilled_share_mode=snapshot.unfilled_share_mode,
         count=len(snapshot.entries),
         generated_at=snapshot.generated_at,
         stale=False,
@@ -1331,6 +1354,12 @@ async def materialize_ledger_snapshot(
             if ledger_context.rank_shares_fleet_ready
             else None
         ),
+        unfilled_share_mode=(
+            "burn"
+            if burn_settings.burn_unfilled_rank_shares
+            and ledger_context.unfilled_burn_fleet_ready
+            else None
+        ),
         track_shares_bps=(
             dict(ledger_context.policy.track_shares.track_shares_bps)
             if ledger_context.track_shares_fleet_ready
@@ -1367,6 +1396,7 @@ async def materialize_ledger_snapshot(
             "reward_eligibility": ledger_context.reward_eligibility_fleet_ready,
             "rank_shares": ledger_context.rank_shares_fleet_ready,
             "track_shares": ledger_context.track_shares_fleet_ready,
+            "unfilled_burn": ledger_context.unfilled_burn_fleet_ready,
         },
     )
 
@@ -1512,7 +1542,9 @@ async def _require_statistical_cap_requester(
         ledger.crown_gate is not None
         and ledger.crown_gate.duel_window_pairs is not None
     )
-    if not capped and not curved and not split and not gated:
+    # And the unfilled-slot burn: a sub-36 rejoiner renormalises the board.
+    burned = ledger.unfilled_share_mode == "burn"
+    if not capped and not curved and not split and not gated and not burned:
         return ledger
     heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
     seen_at = heartbeat.seen_at if heartbeat is not None else None
@@ -1548,6 +1580,13 @@ async def _require_statistical_cap_requester(
         raise HTTPException(
             status_code=428,
             detail="validator protocol 35 is required for the pinned title duel",
+        )
+    if burned and protocol < _UNFILLED_BURN_PROTOCOL:
+        raise HTTPException(
+            status_code=428,
+            detail=(
+                "validator protocol 36 is required for the pinned unfilled-slot burn"
+            ),
         )
     return ledger
 
@@ -1949,6 +1988,11 @@ def _serve_last_known(
         raise HTTPException(
             status_code=503,
             detail="scoring ledger unavailable; cannot verify protocol-33 requester",
+        ) from error
+    if snapshot is not None and getattr(snapshot, "unfilled_share_mode", None):
+        raise HTTPException(
+            status_code=503,
+            detail="scoring ledger unavailable; cannot verify protocol-36 requester",
         ) from error
     if snapshot is None:
         logger.warning(
