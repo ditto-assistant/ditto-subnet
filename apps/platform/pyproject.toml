@@ -39,7 +39,7 @@ dependencies = [
     # vendors (v0.21.2): another grammar emits different node types and
     # silently splits the comparison pool.
     "tree-sitter>=0.25,<0.27",
-    "tree-sitter-rust==0.21.2",
+    "tree-sitter-rust==0.24.2",
     "numpy>=2.0",
 ]
 
