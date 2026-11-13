@@ -3284,6 +3284,10 @@ class BuildGate:
         os.close(fd)
         os.unlink(iid_path)
         args = [
+            # Debian 12's Docker CLI does not delegate `docker build` to
+            # Buildx, even when the plugin is installed. Select it explicitly
+            # so --load and the other BuildKit options work on both hosts.
+            "buildx",
             "build",
             # The screener immediately inspects, runs, and exports this image
             # through the local daemon. Buildx can otherwise leave a successful

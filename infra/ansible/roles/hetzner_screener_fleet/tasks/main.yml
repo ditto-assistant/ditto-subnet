@@ -116,6 +116,32 @@
     state: present
   when: ansible_facts['distribution_major_version'] == '13'
 
+# Bookworm's docker.io package contains the engine and CLI but no Buildx.
+# Install only the plugin from Docker's signed repository; keep the existing
+# distribution daemon and rootless configuration intact.
+- name: Add the pinned Docker apt key for Debian 12 Buildx
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /usr/share/keyrings/docker.asc
+    mode: "0644"
+    checksum: "sha256:{{ docker_apt_key_sha256 }}"
+  when: ansible_facts['distribution_major_version'] == '12'
+
+- name: Add the Docker repository for Debian 12 Buildx
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable"
+    filename: ditto-buildx
+    state: present
+  when: ansible_facts['distribution_major_version'] == '12'
+
+- name: Install the Docker Buildx plugin on Debian 12
+  ansible.builtin.apt:
+    name: docker-buildx-plugin
+    state: present
+    update_cache: true
+    install_recommends: false
+  when: ansible_facts['distribution_major_version'] == '12'
+
 - name: Ensure the dedicated screener service group
   ansible.builtin.group:
     name: "{{ screener_fleet_group }}"
