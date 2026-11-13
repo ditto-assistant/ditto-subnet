@@ -90,6 +90,14 @@ def new_nonce() -> str:
     return secrets.token_hex(NONCE_BYTES)
 
 
+def _fsync_directory(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 @dataclass(frozen=True)
 class SignedHeaders:
     node_id: str
@@ -165,6 +173,10 @@ class DeviceKey:
                 os.link(temp, path)
             except FileExistsError:
                 return cls.load(path)
+            # The contents were fsynced; the new directory entry must be too,
+            # or a power loss could drop it and the next start would mint a new
+            # identity for this machine.
+            _fsync_directory(path.parent)
         finally:
             temp.unlink(missing_ok=True)
         return key

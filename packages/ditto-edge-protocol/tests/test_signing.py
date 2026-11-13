@@ -170,6 +170,20 @@ def test_load_or_create_refuses_a_corrupt_seed(tmp_path: Path) -> None:
         DeviceKey.load_or_create(path)
 
 
+def test_a_new_seed_syncs_its_directory_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_edge_protocol.signing as signing
+
+    synced: list[Path] = []
+    monkeypatch.setattr(signing, "_fsync_directory", synced.append)
+    path = tmp_path / "keys" / "device.key"
+    DeviceKey.load_or_create(path)
+    assert synced == [path.parent]
+    DeviceKey.load_or_create(path)
+    assert synced == [path.parent]  # loading an existing seed writes nothing
+
+
 def test_load_or_create_refuses_a_non_ascii_seed(tmp_path: Path) -> None:
     path = tmp_path / "device.key"
     path.write_bytes(b"\xff\xfe not hex")
