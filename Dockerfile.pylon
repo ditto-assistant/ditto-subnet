@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 ARG PYLON_BASE_IMAGE=docker.io/backenddevelopersltd/bittensor-pylon@sha256:d7389e6132dac49cb1acad68184fd6c3759592e2e494afdb732fd8f7a3f6349a
-FROM ${PYLON_BASE_IMAGE}
+FROM ${PYLON_BASE_IMAGE} AS pylon-build
 
 # The base image's system and Certifi stores trust a root with compromised
 # intermediate CA keys, and its AnyIO uses IDNA 2003 for TLS hostname checks.
@@ -114,6 +114,40 @@ RUN /app/pylon_service/.venv/bin/python /tmp/pylon-epoch/patch_epoch_schedule.py
       /tmp/pylon-epoch \
       /tmp/ditto-screening-protocol \
       /tmp/turbobt
+
+# The service starts from its installed Python environment and does not use
+# SSH. Debian 13's openssh-client remains vulnerable to CVE-2026-60002; remove
+# the optional Git-recommended client only after all build-time installs.
+# This intentionally removes SSH-based Git and debugging from this image.
+# uv's disposable archive cache retains superseded wheels; clear it after
+# installation, then check the installed environment remains consistent.
+RUN test "$PATH" = "/root/.cargo/bin:/app/pylon_service/.venv/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    && test "$GPG_KEY" = "7169605F62C751356D054A26A821E680E5FA6305" \
+    && test "$PYTHON_VERSION" = "3.13.14" \
+    && test "$PYTHON_SHA256" = "639e43243c620a308f968213df9e00f2f8f62332f7adbaa7a7eeb9783057c690" \
+    && test "$TZ" = "UTC" \
+    && test "$PYLON_OTEL_SERVICE_VERSION" = "2.3.2" \
+    && dpkg --purge openssh-client \
+    && rm -rf /root/.cache/uv \
+    && uv pip check --python /app/pylon_service/.venv/bin/python \
+    && test -z "$(dpkg --audit)" \
+    && ! command -v ssh \
+    && git --version
+
+# Publish only the cleaned filesystem, so deleted OpenSSH binaries do not
+# remain recoverable in inherited layers. These settings reproduce the pinned
+# upstream image's runtime configuration; verify them when changing the base.
+FROM scratch
+COPY --from=pylon-build / /
+ENV PATH=/root/.cargo/bin:/app/pylon_service/.venv/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305 \
+    PYTHON_VERSION=3.13.14 \
+    PYTHON_SHA256=639e43243c620a308f968213df9e00f2f8f62332f7adbaa7a7eeb9783057c690 \
+    TZ=UTC \
+    PYLON_OTEL_SERVICE_VERSION=2.3.2
+WORKDIR /app
+EXPOSE 8000
+CMD ["pylon_service/.venv/bin/python", "-m", "pylon_service.uvicorn_entrypoint"]
 
 LABEL io.heyditto.validator.pylon-base-version="2.3.2" \
       io.heyditto.validator.epoch-schedule="subtensor-stateful-epochs-v1" \
