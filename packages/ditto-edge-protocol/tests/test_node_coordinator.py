@@ -229,3 +229,20 @@ def test_a_poll_never_renews_more_than_it_lists(
         if a.node_id == node.node_id and a.released_at is None
     ]
     assert len(open_spans) == 3
+
+
+def test_a_slot_due_just_before_a_window_edge_is_still_issued() -> None:
+    lane = Lane(_settings(challenges_per_window=6, min_challenges=3))
+    for obj in synthetic_objects(4, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    lane.run([node], 3600 - 30)  # the last poll lands 30 s before the edge
+    window = int(lane.clock.now // 3600)
+    late = lane.coordinator.slots[(node.node_id, window)][-1]
+    late.state = "scheduled"
+    late.challenge_id = None
+    late.due_at = lane.clock.now + 10  # due 20 s before the window ends
+    lane.clock.advance(45)  # the first poll of the next window, inside grace
+    node.step()
+    assert int(lane.clock.now // 3600) == window + 1
+    assert late.state == "issued"

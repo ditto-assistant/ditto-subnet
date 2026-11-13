@@ -295,8 +295,10 @@ def _report(
             None,
         )
         if sim.behavior == "honest":
-            # The first window includes enrollment and initial fills.
-            for row in rows[1:]:
+            # The first window includes enrollment and initial fills, and the
+            # last one ends with the run: slots due after its final poll are
+            # never asked. Judge the windows in between.
+            for row in rows[1:-1]:
                 honest_windows += 1
                 honest_failures += not row.score.eligible
         if sim.behavior in ADVERSARIES:

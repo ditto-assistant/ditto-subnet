@@ -382,8 +382,12 @@ class Coordinator:
                 )
             ]
             self.slots[(node_id, index)] = schedule
+        # A slot due in the last moments of the previous window is still live
+        # within grace: a node polling just past the boundary must get it, or
+        # an online node would miss late slots at every window edge.
+        due = [*self.slots.get((node_id, index - 1), []), *schedule]
         issued: list[Challenge] = []
-        for slot in schedule:
+        for slot in due:
             if slot.state != "scheduled" or slot.due_at > now:
                 continue
             if now - slot.due_at > settings.grace_seconds:
