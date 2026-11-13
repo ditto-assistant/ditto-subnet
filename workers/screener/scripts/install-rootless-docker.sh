@@ -154,8 +154,14 @@ systemctl disable --now "$SCREENER_ROOTLESS_UNIT" >/dev/null 2>&1 || true
 rm -f "/etc/systemd/system/${SCREENER_ROOTLESS_UNIT}.service"
 systemctl daemon-reload
 # Stopping the legacy system unit removes its RuntimeDirectory. Recreate the
-# shared socket directory only after that teardown has completed.
-install -d -o "$EXECUTOR_USER" -g "$EXECUTOR_GROUP" -m 0750 "$runtime_dir"
+# shared socket directory only after that teardown has completed. It lives on
+# /run, so tmpfiles must also recreate it before lingering user services start
+# on every boot; the unprivileged executor cannot create a directory in /run.
+install -d -o root -g root -m 0755 /etc/tmpfiles.d
+printf 'd %s 0750 %s %s -\n' "$runtime_dir" "$EXECUTOR_USER" "$EXECUTOR_GROUP" \
+  | install -o root -g root -m 0644 /dev/stdin \
+      /etc/tmpfiles.d/ditto-screener-docker.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/ditto-screener-docker.conf
 user_systemctl=(
   runuser -u "$EXECUTOR_USER" -- env
   "HOME=$EXECUTOR_HOME"
