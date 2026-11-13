@@ -66,6 +66,11 @@ resource "aws_instance" "this" {
       # The image is chosen at create time; in-place apt upgrades must not
       # force a replacement. Re-imaging is a manual decision.
       ami,
+      # AWS releases the ephemeral public IP on stop; the provider then reads
+      # this launch-time flag as false. Reconcile must preserve the enrolled
+      # instance while asleep. Changing this setting requires an explicit,
+      # reviewed replacement, just like changing its create-time image.
+      associate_public_ip_address,
       # cloud-init user data runs once. Editing it would stop the instance.
       user_data,
     ]
