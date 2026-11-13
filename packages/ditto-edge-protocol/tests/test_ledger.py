@@ -75,6 +75,15 @@ def test_revocation_checks_do_not_count_toward_availability() -> None:
     assert score.eligible
 
 
+def test_revocation_checks_count_toward_the_minimum() -> None:
+    # Two possession passes alone would be too few; two refused revoked
+    # objects show the node was online and honest for the rest.
+    score = _score(_obs("passed", 2) + _obs("refused_ok", 2, "revoked"))
+    assert score.scheduled == 2
+    assert score.eligible
+    assert score.reasons == ()
+
+
 def test_a_missed_revocation_check_is_a_miss_not_a_violation() -> None:
     score = _score(_obs("passed", 4) + _obs("missed", 1, "revoked"))
     assert score.revocation_violations == 0

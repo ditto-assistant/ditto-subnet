@@ -111,7 +111,9 @@ def score_window(
     held = round(_held_gib_hours(holds, window_start, window_end), _PRECISION)
 
     reasons: list[str] = []
-    if scheduled < params.min_challenges:
+    # A correctly refused revocation check also proves the node was there to
+    # answer, so it counts toward the minimum, though not toward availability.
+    if scheduled + revocation_checks < params.min_challenges:
         reasons.append("too_few_challenges")
     if failed:
         reasons.append("integrity_failure")
