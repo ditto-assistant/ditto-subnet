@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.481.1 (2026-11-13)
+
+### Bug Fixes
+
+- **datagen**: Read numbers by the pack policy in grounding checks
+  ([#3515](https://github.com/ditto-assistant/ditto-subnet/pull/3515),
+  [`c685de5`](https://github.com/ditto-assistant/ditto-subnet/commit/c685de518588332818978f9b8ce21aa774549408))
+
+
 ## v0.481.0 (2026-11-12)
 
 ### Features
