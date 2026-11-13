@@ -102,8 +102,19 @@ jobs:
       - name: Set up Python 3.12
         run: uv python install 3.12
 
+      # Rebuild the path dependencies before any check reads them: uv resolves
+      # ditto-screening-protocol and ditto-edge-protocol from a built copy, and
+      # a stale copy makes mypy and the confirmation-asset check below validate
+      # the previous contract instead of this commit's. The confirmation
+      # release assets are read at runtime by Platform's profile installer, the
+      # Go runtime factory, and a docker-compose SHA256 pin, so drift between
+      # the generator's constants and the checked-in bytes breaks confirmation
+      # everywhere at once.
       - name: Install dependencies
-        run: uv sync --locked --group dev --group browser --python 3.12
+        run: >-
+          uv sync --locked --group dev --group browser --python 3.12
+          --reinstall-package ditto-screening-protocol
+          --reinstall-package ditto-edge-protocol
 
       - name: ruff format check
         run: uv run ruff format --check .
@@ -113,19 +124,6 @@ jobs:
 
       - name: mypy
         run: uv run mypy ditto/
-
-      # The generated confirmation release assets are read at runtime by
-      # Platform's profile installer, the Go runtime factory, and a
-      # docker-compose SHA256 pin, so drift between the generator's constants
-      # and the checked-in bytes breaks confirmation everywhere at once. The
-      # reinstall is required: uv resolves ditto-screening-protocol from a
-      # built copy of the path dependency, and a stale copy makes the check
-      # validate the previous contract instead of this commit's.
-      - name: Rebuild the screening protocol path dependency
-        run: >-
-          uv sync --locked --group dev --group browser --python 3.12
-          --reinstall-package ditto-screening-protocol
-          --reinstall-package ditto-edge-protocol
 
       # Run from apps/platform: the script bootstraps sys.path itself but
       # still needs the Platform dependency set, so a repo-root invocation
