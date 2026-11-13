@@ -256,7 +256,6 @@ async def poll(request: Request, session: SessionDep) -> PollResponse:
             request=_parse(PollRequest, body),
             now=now,
         )
-        await edge_lane.prune_nonces(session, now=now)
         return response
 
 
@@ -310,6 +309,7 @@ async def fill(
 async def acknowledge(request: Request, session: SessionDep) -> AckResponse:
     body = await request.body()
     now = edge_now(request)
+    edge_lane.require_shadow((await _settings(request)).settings)
     async with session.begin():
         auth = await edge_lane.authenticate(
             session,
@@ -334,6 +334,7 @@ async def answer(
 ) -> AnswerResponse:
     body = await request.body()
     now = edge_now(request)
+    edge_lane.require_shadow((await _settings(request)).settings)
     async with session.begin():
         auth = await edge_lane.authenticate(
             session,

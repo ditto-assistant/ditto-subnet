@@ -24,7 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.edge_lane import ObjectBytesCache
 from ditto.api_server.storage import ObjectDownloadFailedError
-from ditto.db.models import EdgeAssignment, EdgeChallengeSlot, EdgeLedgerWindow
+from ditto.db.models import (
+    EdgeAssignment,
+    EdgeChallengeSlot,
+    EdgeLedgerWindow,
+    EdgeRequestNonce,
+)
 from ditto_edge_protocol import paths
 from ditto_edge_protocol.limits import GIB
 from ditto_edge_protocol.proofs import digest_of, possession_proof
@@ -790,3 +795,124 @@ async def test_an_unanswered_challenge_is_sent_again_until_its_deadline(
     assert sent - {answered.challenge_id} <= after
     lane.clock.advance(20)  # past the 20 s deadline
     assert not sent & {c.challenge_id for c in (await poll()).challenges}
+
+
+async def test_ack_and_answer_are_refused_once_the_lane_is_off(lane: Lane) -> None:
+    await lane.settings()
+    await lane.ingest(_blob(1))
+    node = Node(lane)
+    await node.enroll()
+    await lane.run([node], 2 * POLL)
+    await lane.settings(mode="off")
+    ack = await node.send(
+        "POST", paths.ACK, AckRequest(held=[], released=[]).model_dump_json().encode()
+    )
+    assert ack.status_code == 503 and ack.json()["error_code"] == 6001
+    answer = await node.send(
+        "POST",
+        paths.answer_path("ab" * 16),
+        ChallengeAnswer(outcome="refused", refusal="busy").model_dump_json().encode(),
+    )
+    assert answer.status_code == 503 and answer.json()["error_code"] == 6001
+
+
+async def test_every_signed_request_prunes_expired_nonces(lane: Lane) -> None:
+    await lane.settings()
+    node = Node(lane)
+    await node.enroll()
+    async with lane.session_maker() as session, session.begin():
+        session.add(
+            EdgeRequestNonce(
+                node_id=node.key.node_id,
+                nonce="cd" * 16,
+                seen_at=lane.clock.now - timedelta(hours=1),
+            )
+        )
+    status = await node.send("GET", paths.STATUS)
+    assert status.status_code == 200, status.text
+    async with lane.session_maker() as session:
+        stale = await session.get(EdgeRequestNonce, (node.key.node_id, "cd" * 16))
+    assert stale is None
+
+
+async def test_due_slots_go_out_before_redeliveries(
+    lane: Lane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto.api_server.edge_lane as lane_module
+
+    monkeypatch.setattr(lane_module, "MAX_CHALLENGES_PER_POLL", 2)
+    await lane.settings(challenges_per_window=6, min_challenges=3, replicas=1)
+    await lane.ingest(_blob(1))
+    node = Node(lane)
+    await node.enroll()
+    await node.step()
+    body = PollRequest(protocol="edge/v1", free_bytes=GIB).model_dump_json().encode()
+
+    async def due_now(count: int) -> None:
+        window = int(lane.clock.now.timestamp() // WINDOW)
+        async with lane.session_maker() as session, session.begin():
+            for _ in range(count):
+                session.add(
+                    EdgeChallengeSlot(
+                        node_id=node.key.node_id,
+                        window_index=window,
+                        due_at=lane.clock.now - timedelta(seconds=1),
+                        purpose="possession",
+                        state="scheduled",
+                        outcome="pending",
+                    )
+                )
+
+    async def poll() -> set[str]:
+        response = await node.send("POST", paths.POLL, body)
+        assert response.status_code == 200, response.text
+        return {
+            c.challenge_id
+            for c in PollResponse.model_validate_json(response.content).challenges
+        }
+
+    await due_now(2)
+    unanswered = await poll()
+    assert len(unanswered) == 2
+    await due_now(2)
+    lane.clock.advance(2)
+    # The newly due pair fills the poll; the unanswered pair waits its turn.
+    assert not await poll() & unanswered
+    lane.clock.advance(2)
+    assert await poll() & unanswered
+
+
+async def test_a_span_lapsed_at_an_earlier_poll_reopens_with_its_fill_history(
+    lane: Lane,
+) -> None:
+    await lane.settings(replicas=1)
+    digest = await lane.ingest(_blob(1))
+    node = Node(lane)
+    await node.enroll()
+    await lane.run([node], 3 * POLL)
+    # An earlier poll closed the span at its lapse without listing it again,
+    # and this node (its clock behind) kept the bytes past that lease.
+    gone = lane.clock.now - timedelta(seconds=1)
+    async with lane.session_maker() as session, session.begin():
+        span = await session.scalar(
+            select(EdgeAssignment).where(
+                EdgeAssignment.node_id == node.key.node_id,
+                EdgeAssignment.released_at.is_(None),
+            )
+        )
+        assert span is not None
+        span.lease_expires_at = span.released_at = gone
+        fills = span.fill_count
+    node.leases[digest] = int(gone.timestamp())
+    before = node.fills
+    await node.step()
+    assert node.fills == before
+    async with lane.session_maker() as session:
+        reopened = await session.scalar(
+            select(EdgeAssignment).where(
+                EdgeAssignment.node_id == node.key.node_id,
+                EdgeAssignment.released_at.is_(None),
+            )
+        )
+    assert reopened is not None and reopened.fill_count == fills > 0
+    assert reopened.acked_at is not None

@@ -251,6 +251,8 @@ async def authenticate(
     )
     if inserted is None:
         raise _unauthorized("nonce replayed")
+    # Every signed request, not only polls, keeps the nonce table bounded.
+    await prune_nonces(session, now=now)
     return Authenticated(node_id=node_id, node=node)
 
 
@@ -490,11 +492,12 @@ async def _issue_due(
     # deadline, so a lost poll response or a failed answer costs a node
     # nothing. Answering twice changes nothing: the first answer decides. A
     # live one was issued within grace of its slot and a deadline ago at most.
+    # Due slots come first, so a redelivery never pushes one past grace.
     reach = -(
         -(lane.grace_seconds + settings.challenge_deadline_seconds)
         // settings.window_seconds
     )
-    outstanding = await session.scalars(
+    earlier = await session.scalars(
         select(EdgeChallengeSlot)
         .where(
             EdgeChallengeSlot.node_id == node_id,
@@ -506,7 +509,8 @@ async def _issue_due(
         .order_by(EdgeChallengeSlot.issued_at, EdgeChallengeSlot.id)
         .limit(MAX_CHALLENGES_PER_POLL)
     )
-    issued: list[Challenge] = [_wire(slot) for slot in outstanding]
+    redeliver = [_wire(slot) for slot in earlier]
+    issued: list[Challenge] = []
     held: list[Held] | None = None
     revoked: list[Held] | None = None
     for slot in [*late, *slots]:
@@ -549,7 +553,7 @@ async def _issue_due(
         slot.issued_at = now
         slot.deadline_at = deadline
         issued.append(_wire(slot))
-    return issued
+    return issued + redeliver[: MAX_CHALLENGES_PER_POLL - len(issued)]
 
 
 def _wire(slot: EdgeChallengeSlot) -> Challenge:
@@ -644,6 +648,7 @@ async def _place(
         max_object_bytes=settings.max_object_bytes,
     )
     listed: set[str] = set()
+    to_open: list[str] = []
     created = 0
     for digest in desired:
         if len(listed) >= MAX_ASSIGNMENTS_PER_POLL:
@@ -651,26 +656,65 @@ async def _place(
         if digest in open_spans:
             listed.add(digest)
             continue
-        previous = lapsed.get(digest)
         # Only a span that needs a download counts against the cap.
-        reopened = previous is not None and previous.fill_count > 0
+        reopened = digest in lapsed and lapsed[digest].fill_count > 0
         if not reopened and created >= settings.max_new_assignments_per_poll:
             continue
+        to_open.append(digest)
+        listed.add(digest)
+        if not reopened:
+            created += 1
+    # This node may have downloaded these bytes before: a new span carries the
+    # fill history of its latest span, so bytes it kept can be acknowledged
+    # without a second download.
+    fills = await _latest_fills(
+        session, node.node_id, [digest for digest in to_open if digest not in lapsed]
+    )
+    for digest in to_open:
+        previous = lapsed.get(digest)
+        fill_count, last_filled_at = (
+            (previous.fill_count, previous.last_filled_at)
+            if previous is not None
+            else fills.get(digest, (0, None))
+        )
         span = EdgeAssignment(
             node_id=node.node_id,
             digest=digest,
             assigned_at=now,
             lease_expires_at=now + lease,
-            fill_count=previous.fill_count if previous is not None else 0,
-            last_filled_at=previous.last_filled_at if previous is not None else None,
+            fill_count=fill_count,
+            last_filled_at=last_filled_at,
         )
         session.add(span)
         open_spans[digest] = span
-        listed.add(digest)
-        if not reopened:
-            created += 1
     await session.flush()
     return listed
+
+
+async def _latest_fills(
+    session: AsyncSession, node_id: str, digests: list[str]
+) -> dict[str, tuple[int, datetime | None]]:
+    """Per object, the fill count and last fill of this node's latest closed span."""
+    if not digests:
+        return {}
+    rows = await session.execute(
+        select(
+            EdgeAssignment.digest,
+            EdgeAssignment.fill_count,
+            EdgeAssignment.last_filled_at,
+        )
+        .where(
+            EdgeAssignment.node_id == node_id,
+            EdgeAssignment.digest.in_(digests),
+            EdgeAssignment.released_at.is_not(None),
+        )
+        .distinct(EdgeAssignment.digest)
+        .order_by(EdgeAssignment.digest, EdgeAssignment.id.desc())
+    )
+    return {
+        digest: (fill_count, last_filled_at)
+        for digest, fill_count, last_filled_at in rows.tuples().all()
+    }
 
 
 async def poll(
