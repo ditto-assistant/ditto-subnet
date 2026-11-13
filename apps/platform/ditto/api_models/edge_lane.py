@@ -146,17 +146,29 @@ class AdminEdgeLaneSettingsResponse(BaseModel):
 # -- operator reads and writes ------------------------------------------------
 
 
+INGEST_MAX_OBJECT_BYTES = 16 * MIB
+"""The largest object admin ingest takes, whatever the lane allows. The body
+is read in full before the admin check, so it stays near the upload cap."""
+INGEST_B64_MAX_CHARS = 4 * -(-INGEST_MAX_OBJECT_BYTES // 3)
+
+AuditActor = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+]
+
+
 class EdgeObjectIngestRequest(BaseModel):
     """Add one public object to the lane. Admin only, shadow test data."""
 
     model_config = ConfigDict(extra="ignore", strict=True)
 
-    data_b64: Annotated[str, Field(min_length=4)]
+    data_b64: Annotated[str, Field(min_length=4, max_length=INGEST_B64_MAX_CHARS)]
     media_type: Annotated[str, Field(min_length=1, max_length=100)]
-    source: Annotated[str, Field(min_length=1, max_length=200)]
+    source: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ]
     """Operator-side provenance, e.g. ``share:<id>`` or ``synthetic:3``. Never
     sent to nodes."""
-    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    actor: AuditActor = "admin_api"
 
 
 class EdgeObjectIngestResponse(BaseModel):
@@ -172,8 +184,9 @@ class EdgeObjectIngestResponse(BaseModel):
 class EdgeObjectRevokeRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
-    reason: Annotated[str, Field(min_length=8)]
-    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    # Unbounded like every operator reason: audit evidence is never truncated.
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
+    actor: AuditActor = "admin_api"
 
 
 class EdgeObjectRevokeResponse(BaseModel):

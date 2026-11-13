@@ -13,7 +13,7 @@ nodes are measured into a ledger that pays nothing.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, TypeVar
+from typing import Annotated, Any, TypeVar
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ValidationError
@@ -35,6 +35,12 @@ from ditto.api_server.edge_lane_settings import (
 from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
 from ditto.db.models import EdgeObject
 from ditto_edge_protocol import paths
+from ditto_edge_protocol.signing import (
+    HEADER_NODE,
+    HEADER_NONCE,
+    HEADER_SIGNATURE,
+    HEADER_TIMESTAMP,
+)
 from ditto_edge_protocol.wire import (
     AckRequest,
     AckResponse,
@@ -59,6 +65,51 @@ ANSWER_MAX_BYTES = 400 * 1024
 """Body cap for a challenge answer: a 256 KiB range, base64, plus JSON."""
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+def _inline(schema: dict[str, Any]) -> dict[str, Any]:
+    """A JSON schema with its ``$defs`` references inlined, for openapi_extra."""
+    defs = schema.pop("$defs", {})
+
+    def resolve(node: Any) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/$defs/"):
+                return resolve(defs[ref.removeprefix("#/$defs/")])
+            return {key: resolve(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [resolve(value) for value in node]
+        return node
+
+    resolved: dict[str, Any] = resolve(schema)
+    return resolved
+
+
+def _signed(body: type[BaseModel] | None = None) -> dict[str, Any]:
+    """OpenAPI for a signed edge/v1 route: its four headers and JSON body.
+
+    The handler reads both itself, because it authenticates before it parses
+    and the signature covers the body's exact bytes. This only documents them.
+    """
+    extra: dict[str, Any] = {
+        "parameters": [
+            {
+                "name": name,
+                "in": "header",
+                "required": True,
+                "schema": {"type": "string"},
+            }
+            for name in (HEADER_NODE, HEADER_TIMESTAMP, HEADER_NONCE, HEADER_SIGNATURE)
+        ]
+    }
+    if body is not None:
+        extra["requestBody"] = {
+            "required": True,
+            "content": {
+                "application/json": {"schema": _inline(body.model_json_schema())}
+            },
+        }
+    return extra
 
 
 def _parse(model: type[ModelT], body: bytes) -> ModelT:
@@ -106,7 +157,11 @@ async def load_object_bytes(
     return data
 
 
-@router.post(paths.ENROLL.removeprefix("/api/v1/edge"), response_model=EnrollResponse)
+@router.post(
+    paths.ENROLL.removeprefix("/api/v1/edge"),
+    response_model=EnrollResponse,
+    openapi_extra=_signed(EnrollRequest),
+)
 async def enroll(request: Request, session: SessionDep) -> EnrollResponse:
     body = await request.body()
     now = edge_now(request)
@@ -131,7 +186,9 @@ async def enroll(request: Request, session: SessionDep) -> EnrollResponse:
 
 
 @router.get(
-    paths.STATUS.removeprefix("/api/v1/edge"), response_model=NodeStatusResponse
+    paths.STATUS.removeprefix("/api/v1/edge"),
+    response_model=NodeStatusResponse,
+    openapi_extra=_signed(),
 )
 async def node_status(request: Request, session: SessionDep) -> NodeStatusResponse:
     now = edge_now(request)
@@ -150,7 +207,11 @@ async def node_status(request: Request, session: SessionDep) -> NodeStatusRespon
         )
 
 
-@router.post(paths.LEAVE.removeprefix("/api/v1/edge"), status_code=204)
+@router.post(
+    paths.LEAVE.removeprefix("/api/v1/edge"),
+    status_code=204,
+    openapi_extra=_signed(LeaveRequest),
+)
 async def leave(request: Request, session: SessionDep) -> Response:
     body = await request.body()
     now = edge_now(request)
@@ -168,7 +229,11 @@ async def leave(request: Request, session: SessionDep) -> Response:
     return Response(status_code=204)
 
 
-@router.post(paths.POLL.removeprefix("/api/v1/edge"), response_model=PollResponse)
+@router.post(
+    paths.POLL.removeprefix("/api/v1/edge"),
+    response_model=PollResponse,
+    openapi_extra=_signed(PollRequest),
+)
 async def poll(request: Request, session: SessionDep) -> PollResponse:
     body = await request.body()
     now = edge_now(request)
@@ -195,7 +260,21 @@ async def poll(request: Request, session: SessionDep) -> PollResponse:
         return response
 
 
-@router.get("/objects/{digest}")
+@router.get(
+    "/objects/{digest}",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "The object's bytes.",
+            "content": {
+                "application/octet-stream": {
+                    "schema": {"type": "string", "format": "binary"}
+                }
+            },
+        }
+    },
+    openapi_extra=_signed(),
+)
 async def fill(
     digest: str, request: Request, session: SessionDep, storage: StorageDep
 ) -> Response:
@@ -223,7 +302,11 @@ async def fill(
     )
 
 
-@router.post(paths.ACK.removeprefix("/api/v1/edge"), response_model=AckResponse)
+@router.post(
+    paths.ACK.removeprefix("/api/v1/edge"),
+    response_model=AckResponse,
+    openapi_extra=_signed(AckRequest),
+)
 async def acknowledge(request: Request, session: SessionDep) -> AckResponse:
     body = await request.body()
     now = edge_now(request)
@@ -241,7 +324,11 @@ async def acknowledge(request: Request, session: SessionDep) -> AckResponse:
         )
 
 
-@router.post("/challenges/{challenge_id}", response_model=AnswerResponse)
+@router.post(
+    "/challenges/{challenge_id}",
+    response_model=AnswerResponse,
+    openapi_extra=_signed(ChallengeAnswer),
+)
 async def answer(
     challenge_id: str, request: Request, session: SessionDep, storage: StorageDep
 ) -> AnswerResponse:
@@ -260,12 +347,16 @@ async def answer(
         pending = await edge_lane.pending_answer(
             session, node=auth.node, challenge_id=challenge_id
         )
+        size = 0
         if pending is not None:
             obj = await session.get(EdgeObject, pending.challenge.digest)
             size = obj.size_bytes if obj is not None else 0
-            data = await load_object_bytes(
-                request, storage, pending.challenge.digest, size
-            )
+    if pending is not None:
+        # Download with no transaction open, so a slow storage read holds no
+        # connection and no slot lock. The answer is judged at its arrival
+        # time, and only a still-pending slot records it.
+        data = await load_object_bytes(request, storage, pending.challenge.digest, size)
+        async with session.begin():
             await edge_lane.record_answer(
                 session, pending=pending, data=data, answer=parsed, now=now
             )

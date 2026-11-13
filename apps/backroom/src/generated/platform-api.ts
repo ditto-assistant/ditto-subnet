@@ -61675,11 +61675,31 @@ export interface operations {
     acknowledge_api_v1_edge_ack_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Held
+                     * @default []
+                     */
+                    held?: string[];
+                    /**
+                     * Released
+                     * @default []
+                     */
+                    released?: string[];
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -61695,13 +61715,34 @@ export interface operations {
     answer_api_v1_edge_challenges__challenge_id__post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
             path: {
                 challenge_id: string;
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Data B64 */
+                    data_b64?: string | null;
+                    /**
+                     * Outcome
+                     * @enum {string}
+                     */
+                    outcome: "proof" | "bytes" | "refused";
+                    /** Proof Hex */
+                    proof_hex?: string | null;
+                    /** Refusal */
+                    refusal?: ("revoked" | "not_held" | "busy") | null;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -61726,11 +61767,74 @@ export interface operations {
     enroll_api_v1_edge_nodes_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * ClientInfo
+                     * @description Which node implementation is talking. A label, never a scoring input.
+                     */
+                    client: {
+                        /** Name */
+                        name: string;
+                        /** Version */
+                        version: string;
+                    };
+                    hotkey_binding?: {
+                        /** Hotkey Ss58 */
+                        hotkey_ss58: string;
+                        /** Issued At */
+                        issued_at: number;
+                        /** Signature Hex */
+                        signature_hex: string;
+                    } | null;
+                    /**
+                     * NodePlatform
+                     * @description What the node says about its machine.
+                     *
+                     *     Self-reported, so it is shown to operators and never scored: a root-owned
+                     *     box can report anything about itself.
+                     */
+                    platform?: {
+                        /**
+                         * Arch
+                         * @default
+                         */
+                        arch?: string;
+                        /** Memory Gb */
+                        memory_gb?: number | null;
+                        /**
+                         * Model
+                         * @default
+                         */
+                        model?: string;
+                        /**
+                         * Os
+                         * @default
+                         */
+                        os?: string;
+                    };
+                    /**
+                     * Protocol
+                     * @constant
+                     */
+                    protocol: "edge/v1";
+                    /** Public Key Hex */
+                    public_key_hex: string;
+                    /** Quota Bytes */
+                    quota_bytes: number;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -61746,7 +61850,12 @@ export interface operations {
     node_status_api_v1_edge_nodes_me_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -61766,11 +61875,26 @@ export interface operations {
     leave_api_v1_edge_nodes_me_leave_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Reason
+                     * @default
+                     */
+                    reason?: string;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             204: {
@@ -61784,7 +61908,12 @@ export interface operations {
     fill_api_v1_edge_objects__digest__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
             path: {
                 digest: string;
             };
@@ -61792,13 +61921,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The object's bytes. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/octet-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -61815,11 +61944,28 @@ export interface operations {
     poll_api_v1_edge_poll_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "X-Ditto-Edge-Node": string;
+                "X-Ditto-Edge-Timestamp": string;
+                "X-Ditto-Edge-Nonce": string;
+                "X-Ditto-Edge-Signature": string;
+            };
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Free Bytes */
+                    free_bytes: number;
+                    /**
+                     * Protocol
+                     * @constant
+                     */
+                    protocol: "edge/v1";
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

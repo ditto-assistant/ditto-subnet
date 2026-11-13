@@ -155,6 +155,7 @@ from ditto.api_server.endpoints import (
     validator_private_dataset,
     validator_router,
 )
+from ditto.api_server.endpoints import admin_edge_lane as admin_edge_lane_endpoints
 from ditto.api_server.endpoints import edge as edge_endpoints
 from ditto.api_server.endpoints import screener as screener_endpoints
 from ditto.api_server.endpoints import upload as upload_endpoints
@@ -324,6 +325,7 @@ def _request_body_route_limits() -> tuple[tuple[str, int], ...]:
             r"/api/v1/edge/(?:nodes|nodes/me/leave|poll|ack)",
             edge_endpoints.CONTROL_MAX_BYTES,
         ),
+        (r"/api/v1/admin/edge/objects", admin_edge_lane_endpoints.INGEST_MAX_BYTES),
     )
 
 

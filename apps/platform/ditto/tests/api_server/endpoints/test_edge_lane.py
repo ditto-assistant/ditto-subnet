@@ -7,8 +7,9 @@ cross ledger windows.
 
 from __future__ import annotations
 
+import asyncio
 import base64
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -16,7 +17,8 @@ from typing import Any
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.dependencies import get_session, get_storage_client
@@ -62,12 +64,16 @@ class Clock:
 class FakeStorage:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
+        self.on_get: Callable[[], Awaitable[None]] | None = None
+        """Runs inside every download, while the caller awaits it."""
 
     async def put_object(self, *, key: str, body: bytes, content_type: str) -> None:
         del content_type
         self.objects[key] = body
 
     async def get_object(self, *, key: str, max_bytes: int) -> bytes:
+        if self.on_get is not None:
+            await self.on_get()
         if key not in self.objects:
             raise ObjectDownloadFailedError(key)
         return self.objects[key][:max_bytes]
@@ -167,6 +173,7 @@ class Node:
     leases: dict[str, int] = field(default_factory=dict)
     revoked: set[str] = field(default_factory=set)
     acked: set[str] = field(default_factory=set)
+    fills: int = 0
 
     async def send(self, method: str, path: str, body: bytes = b"") -> httpx.Response:
         signed = self.key.sign_request(
@@ -192,6 +199,7 @@ class Node:
         return await self.send("POST", paths.ENROLL, body.encode())
 
     async def fill(self, digest: str) -> bytes | None:
+        self.fills += 1
         response = await self.send("GET", paths.object_path(digest))
         return response.content if response.status_code == 200 else None
 
@@ -215,13 +223,19 @@ class Node:
                 answer = self._answer(challenge, data)
             else:
                 answer = self._answer(challenge, data)
-            await self.send(
+            answered = await self.send(
                 "POST",
                 paths.answer_path(challenge.challenge_id),
                 answer.model_dump_json(exclude_none=True).encode(),
             )
+            assert answered.is_success, answered.text
         held: list[str] = []
         for assignment in poll.assignments:
+            previous = self.leases.get(assignment.digest)
+            if previous is not None and previous <= poll.server_time:
+                # As the reference node does: the lease lapsed by Platform's
+                # clock, so Platform reopened the span and wants a fresh ack.
+                self.acked.discard(assignment.digest)
             self.leases[assignment.digest] = assignment.lease_expires_at
             if assignment.digest in self.store or assignment.digest in self.revoked:
                 continue
@@ -519,3 +533,220 @@ async def test_status_reports_held_bytes_and_no_payouts(lane: Lane) -> None:
         PollRequest(protocol="edge/v1", free_bytes=0).model_dump_json().encode(),
     )
     assert after.status_code == 403 and after.json()["error_code"] == 6003
+
+
+async def test_a_lapsed_lease_closes_at_the_lapse_and_reopens_from_disk(
+    lane: Lane,
+) -> None:
+    # One new placement per poll: reopening what a node still holds must not
+    # be rationed like a download, or a node back from sleep drops its cache.
+    await lane.settings(replicas=1, max_new_assignments_per_poll=1)
+    digests = {await lane.ingest(_blob(index)) for index in range(3)}
+    node = Node(lane)
+    await node.enroll()
+    await lane.run([node], 6 * POLL)
+    assert set(node.store) == digests
+    fills = node.fills
+    async with lane.session_maker() as session:
+        lease_end = {
+            span.digest: span.lease_expires_at
+            for span in await session.scalars(
+                select(EdgeAssignment).where(EdgeAssignment.released_at.is_(None))
+            )
+        }
+    assert set(lease_end) == digests
+    lane.clock.advance(120 + 60)  # asleep past the 120 s lease
+    returned_at = lane.clock.now
+    await node.step()
+    assert node.fills == fills
+    async with lane.session_maker() as session:
+        spans = list(
+            await session.scalars(select(EdgeAssignment).order_by(EdgeAssignment.id))
+        )
+    for digest, end in lease_end.items():
+        rows = [span for span in spans if span.digest == digest]
+        lapsed = [span for span in rows if span.released_at == end]
+        reopened = [span for span in rows if span.released_at is None]
+        # The old span ends at the lapse and the new one starts at the fresh
+        # acknowledgement, so nothing credits the time the node was away.
+        assert len(lapsed) == 1 and len(reopened) == 1
+        assert reopened[0].acked_at is not None
+        assert reopened[0].acked_at > returned_at
+        assert reopened[0].fill_count == lapsed[0].fill_count > 0
+
+
+async def test_a_slot_is_issued_when_grace_spans_more_than_one_window(
+    lane: Lane,
+) -> None:
+    # A 200 s poll gives 405 s of grace: more than the 300 s window.
+    await lane.settings(poll_interval_seconds=200, lease_seconds=900)
+    await lane.ingest(_blob(1))
+    node = Node(lane)
+    await node.enroll()
+    await node.step()
+    lane.clock.advance(200)
+    await node.step()
+    window = int(lane.clock.now.timestamp() // WINDOW)
+    due = datetime.fromtimestamp((window + 1) * WINDOW - 5, UTC)
+    async with lane.session_maker() as session, session.begin():
+        slot = EdgeChallengeSlot(
+            node_id=node.key.node_id,
+            window_index=window,
+            due_at=due,
+            purpose="possession",
+            state="scheduled",
+            outcome="pending",
+        )
+        session.add(slot)
+        await session.flush()
+        slot_id = slot.id
+    # The node skips the next window entirely and returns two windows on,
+    # still inside grace: the slot is two windows old and must be issued.
+    lane.clock.now = due + timedelta(seconds=400)
+    await node.step()
+    assert int(lane.clock.now.timestamp() // WINDOW) == window + 2
+    async with lane.session_maker() as session:
+        issued = await session.get(EdgeChallengeSlot, slot_id)
+    assert issued is not None and issued.state == "issued"
+
+
+async def test_concurrent_enrollments_never_exceed_max_nodes(lane: Lane) -> None:
+    await lane.settings(max_nodes=1)
+    responses = await asyncio.gather(*(Node(lane).enroll() for _ in range(4)))
+    assert sorted(r.status_code for r in responses) == [200, 503, 503, 503]
+    assert all(
+        r.json()["error_code"] == 6002 for r in responses if r.status_code == 503
+    )
+
+
+async def test_concurrent_ingests_never_exceed_the_total_budget(lane: Lane) -> None:
+    await lane.settings(max_total_object_bytes=6000)
+
+    async def ingest(index: int) -> httpx.Response:
+        return await lane.client.post(
+            "/api/v1/admin/edge/objects",
+            headers=_ADMIN,
+            json={
+                "data_b64": base64.b64encode(_blob(index)).decode(),
+                "media_type": "text/markdown",
+                "source": f"synthetic:{index}",
+            },
+        )
+
+    responses = await asyncio.gather(*(ingest(index) for index in range(4)))
+    assert sorted(r.status_code for r in responses) == [200, 409, 409, 409]
+    objects = (
+        await lane.client.get("/api/v1/admin/edge/objects", headers=_ADMIN)
+    ).json()["objects"]
+    assert sum(int(o["size_bytes"]) for o in objects) <= 6000
+
+
+async def test_answers_download_with_no_slot_lock_held(lane: Lane) -> None:
+    await lane.settings(challenges_per_window=12, min_challenges=3, replicas=1)
+    await lane.ingest(_blob(1))
+    node = Node(lane)
+    await node.enroll()
+    locked_out: list[str] = []
+
+    async def try_every_pending_slot() -> None:
+        # Another connection must be able to lock every pending slot while a
+        # download runs: the answer path holds no transaction across it.
+        async with lane.session_maker() as session:
+            try:
+                await session.execute(
+                    text(
+                        "SELECT id FROM edge_challenge_slots "
+                        "WHERE outcome = 'pending' FOR UPDATE NOWAIT"
+                    )
+                )
+            except DBAPIError as exc:
+                locked_out.append(str(exc.orig))
+            finally:
+                await session.rollback()
+
+    lane.storage.on_get = try_every_pending_slot
+    answered = 0
+    for _ in range(WINDOW // POLL):
+        # An empty cache sends every answer to storage.
+        lane.app.state.edge_object_cache = ObjectBytesCache()
+        answered += len((await node.step()).challenges)
+        lane.clock.advance(POLL)
+    assert answered > 0
+    assert locked_out == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("reason", "  short   "), ("reason", " \t\n" * 4), ("actor", "   ")],
+)
+async def test_revocation_audit_text_is_trimmed_before_its_checks(
+    lane: Lane, field: str, value: str
+) -> None:
+    await lane.settings()
+    digest = await lane.ingest(_blob(1))
+    payload = {"reason": "the owner unpublished it", "actor": "test", field: value}
+    response = await lane.client.post(
+        f"/api/v1/admin/edge/objects/{digest}/revoke", headers=_ADMIN, json=payload
+    )
+    assert response.status_code == 422, response.text
+    trimmed = await lane.client.post(
+        f"/api/v1/admin/edge/objects/{digest}/revoke",
+        headers=_ADMIN,
+        json={"reason": "  the owner unpublished it \n", "actor": " ops "},
+    )
+    assert trimmed.status_code == 200, trimmed.text
+    assert trimmed.json()["revoke_reason"] == "the owner unpublished it (ops)"
+
+
+async def test_ingest_bodies_are_capped_before_parsing(lane: Lane) -> None:
+    from ditto.api_server.endpoints.admin_edge_lane import INGEST_MAX_BYTES
+
+    await lane.settings()
+    response = await lane.client.post(
+        "/api/v1/admin/edge/objects",
+        headers={**_ADMIN, "Content-Type": "application/json"},
+        content=b"{" + b" " * INGEST_MAX_BYTES + b"}",
+    )
+    assert response.status_code == 413
+    blank = await lane.client.post(
+        "/api/v1/admin/edge/objects",
+        headers=_ADMIN,
+        json={"data_b64": "aGVsbG8=", "media_type": "text/plain", "source": "   "},
+    )
+    assert blank.status_code == 422
+
+
+async def test_openapi_documents_signed_headers_bodies_and_binary_fills(
+    app: FastAPI,
+) -> None:
+    spec = app.openapi()
+    enroll = spec["paths"][paths.ENROLL]["post"]
+    headers = {
+        p["name"]: p["required"] for p in enroll["parameters"] if p["in"] == "header"
+    }
+    assert headers == {
+        "X-Ditto-Edge-Node": True,
+        "X-Ditto-Edge-Timestamp": True,
+        "X-Ditto-Edge-Nonce": True,
+        "X-Ditto-Edge-Signature": True,
+    }
+    body = enroll["requestBody"]["content"]["application/json"]["schema"]
+    assert "public_key_hex" in body["required"]
+    # Nested models are inlined, so the schema needs no extra components.
+    assert body["properties"]["client"]["properties"]["name"]["type"] == "string"
+    assert "$ref" not in str(body)
+    for path, method in (
+        (paths.POLL, "post"),
+        (paths.ACK, "post"),
+        (paths.LEAVE, "post"),
+        (paths.STATUS, "get"),
+        ("/api/v1/edge/objects/{digest}", "get"),
+        ("/api/v1/edge/challenges/{challenge_id}", "post"),
+    ):
+        operation = spec["paths"][path][method]
+        names = {p["name"] for p in operation["parameters"] if p["in"] == "header"}
+        assert "X-Ditto-Edge-Signature" in names, path
+        if method == "post":
+            assert operation["requestBody"]["required"] is True, path
+    fill = spec["paths"]["/api/v1/edge/objects/{digest}"]["get"]["responses"]["200"]
+    assert list(fill["content"]) == ["application/octet-stream"]

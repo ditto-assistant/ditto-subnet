@@ -14,6 +14,8 @@ so the two cannot disagree about what a node earned:
 Concurrency:
 
 * A poll locks its node row, so one node's polls run one at a time.
+* New nodes are admitted under a transaction lock, so the lane never takes
+  more than ``max_nodes``.
 * A request nonce is consumed by an atomic insert.
 * A window is scored by whichever caller first inserts its closure row,
   inside the transaction that writes its ledger rows.
@@ -105,6 +107,7 @@ BINDING_MAX_AGE = timedelta(days=30)
 NONCE_RETENTION = timedelta(minutes=10)
 MAX_WINDOWS_PER_CLOSE = 24
 OBJECT_KEY_PREFIX = "edge-objects/"
+ADMISSION_LOCK_KEY = "ditto:edge-lane-admission:v1"
 
 
 class EdgeLaneError(Exception):
@@ -313,6 +316,15 @@ async def enroll(
     platform = request.platform.model_dump(mode="json")
     node = existing
     if node is None:
+        # Admit one new node at a time: two enrollments must not both take the
+        # last slot, and the same key enrolling twice must not insert twice.
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(func.hashtextextended(ADMISSION_LOCK_KEY, 0))
+            )
+        )
+        node = await session.get(EdgeNode, node_id)
+    if node is None:
         enrolled = await session.scalar(
             select(func.count())
             .select_from(EdgeNode)
@@ -456,22 +468,24 @@ async def _issue_due(
             session.add(row)
             slots.append(row)
         await session.flush()
-    # A slot due in the last moments of the previous window is still live
-    # within grace: a node polling just past the boundary must get it, or an
-    # online node would miss late slots at every window edge.
+    # A slot due late in an earlier window stays live within grace: a node
+    # polling just past a boundary must get it, or an online node would miss
+    # late slots at every window edge. Grace can span several windows.
+    lane = settings.lane()
     late = list(
         await session.scalars(
             select(EdgeChallengeSlot)
             .where(
                 EdgeChallengeSlot.node_id == node_id,
-                EdgeChallengeSlot.window_index == index - 1,
+                EdgeChallengeSlot.window_index >= index - lane.late_slot_windows,
+                EdgeChallengeSlot.window_index < index,
                 EdgeChallengeSlot.state == "scheduled",
                 EdgeChallengeSlot.due_at <= now,
             )
             .order_by(EdgeChallengeSlot.due_at)
         )
     )
-    grace = timedelta(seconds=settings.lane().grace_seconds)
+    grace = timedelta(seconds=lane.grace_seconds)
     held: list[Held] | None = None
     revoked: list[Held] | None = None
     issued: list[Challenge] = []
@@ -539,8 +553,10 @@ async def _place(
 ) -> set[str]:
     """Open this node's rendezvous share; return the digests to list.
 
-    Objects the node no longer ranks for are not listed: their leases lapse,
-    the node deletes them, and their spans close at the lapse.
+    Objects the node no longer ranks for are not listed: their leases lapse
+    and the node deletes them. A span whose lease lapsed (the node stopped
+    polling) closes at the lapse, so the gap is never credited. If the object
+    is still the node's, a new span opens and the node acknowledges it again.
     """
     lease = timedelta(seconds=settings.lease_seconds)
     live_rows = await session.execute(
@@ -559,19 +575,30 @@ async def _place(
         PlacementObject(digest, size, _ts(created))
         for digest, size, created in object_rows.all()
     ]
-    open_spans = {
-        span.digest: span
-        for span in await session.scalars(
-            select(EdgeAssignment).where(
-                EdgeAssignment.node_id == node.node_id,
-                EdgeAssignment.released_at.is_(None),
-            )
-        )
-    }
     sizes = {obj.digest: obj.size_bytes for obj in objects}
+    # Spans of revoked objects stay open until the node confirms the deletion.
+    # Any other span whose lease lapsed closes at the lapse. The node has not
+    # polled since, so it has not deleted those bytes: reopening one carries
+    # its fill history and needs no download, and acknowledged ones still
+    # count toward the node's quota.
+    open_spans: dict[str, EdgeAssignment] = {}
+    lapsed: dict[str, EdgeAssignment] = {}
+    for span in await session.scalars(
+        select(EdgeAssignment).where(
+            EdgeAssignment.node_id == node.node_id,
+            EdgeAssignment.released_at.is_(None),
+        )
+    ):
+        if span.digest in sizes and span.lease_expires_at <= now:
+            span.released_at = span.lease_expires_at
+            lapsed[span.digest] = span
+        else:
+            open_spans[span.digest] = span
+    # Close before reopening: one open span per node and object.
+    await session.flush()
     held_bytes = sum(
         sizes.get(digest, 0)
-        for digest, span in open_spans.items()
+        for digest, span in [*open_spans.items(), *lapsed.items()]
         if span.acked_at is not None
     )
     quota = min(node.quota_bytes, held_bytes + request.free_bytes)
@@ -592,37 +619,24 @@ async def _place(
         if digest in open_spans:
             listed.add(digest)
             continue
-        if created >= settings.max_new_assignments_per_poll:
+        previous = lapsed.get(digest)
+        # Only a span that needs a download counts against the cap.
+        reopened = previous is not None and previous.fill_count > 0
+        if not reopened and created >= settings.max_new_assignments_per_poll:
             continue
         span = EdgeAssignment(
             node_id=node.node_id,
             digest=digest,
             assigned_at=now,
             lease_expires_at=now + lease,
-            fill_count=0,
+            fill_count=previous.fill_count if previous is not None else 0,
+            last_filled_at=previous.last_filled_at if previous is not None else None,
         )
         session.add(span)
         open_spans[digest] = span
         listed.add(digest)
-        created += 1
-    revoked = {
-        digest
-        for (digest,) in (
-            await session.execute(
-                select(EdgeObject.digest).where(
-                    EdgeObject.digest.in_(list(open_spans)),
-                    EdgeObject.revoked_at.is_not(None),
-                )
-            )
-        ).all()
-    }
-    for digest, span in open_spans.items():
-        if (
-            digest not in listed
-            and digest not in revoked
-            and span.lease_expires_at <= now
-        ):
-            span.released_at = span.lease_expires_at
+        if not reopened:
+            created += 1
     await session.flush()
     return listed
 

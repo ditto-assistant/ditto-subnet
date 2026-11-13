@@ -24,6 +24,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.edge_lane import (
+    INGEST_B64_MAX_CHARS,
+    INGEST_MAX_OBJECT_BYTES,
     EdgeLaneOverview,
     EdgeLedgerResponse,
     EdgeLedgerRow,
@@ -62,6 +64,11 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
 LimitQuery = Annotated[int, Query(ge=1, le=1000)]
+
+INGEST_MAX_BYTES = INGEST_B64_MAX_CHARS + 64 * 1024
+"""Body cap for an ingest: the largest object it takes, base64, plus its JSON
+fields. Enforced before the body is read."""
+INGEST_LOCK_KEY = "ditto:edge-lane-ingest:v1"
 
 
 def _ledger_row(row: EdgeLedgerWindow) -> EdgeLedgerRow:
@@ -347,10 +354,10 @@ async def ingest(
         data = base64.b64decode(payload.data_b64, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise HTTPException(status_code=422, detail="data_b64 is not base64") from exc
-    if not 0 < len(data) <= settings.max_object_bytes:
+    limit = min(settings.max_object_bytes, INGEST_MAX_OBJECT_BYTES)
+    if not 0 < len(data) <= limit:
         raise HTTPException(
-            status_code=413,
-            detail=f"objects are 1..{settings.max_object_bytes} bytes in this lane",
+            status_code=413, detail=f"objects are 1..{limit} bytes in this lane"
         )
     digest = digest_of(data)
     async with session.begin():
@@ -380,15 +387,31 @@ async def ingest(
     key = edge_lane.object_key(digest)
     await storage.put_object(key=key, body=data, content_type=payload.media_type)
     async with session.begin():
+        # The budget check above is advisory. This one is decisive: ingests
+        # record one at a time, so concurrent ones cannot overrun the budget.
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(func.hashtextextended(INGEST_LOCK_KEY, 0))
+            )
+        )
+        active_bytes = await session.scalar(
+            select(func.coalesce(func.sum(EdgeObject.size_bytes), 0)).where(
+                EdgeObject.revoked_at.is_(None), EdgeObject.digest != digest
+            )
+        )
+        if int(active_bytes or 0) + len(data) > settings.max_total_object_bytes:
+            raise HTTPException(
+                status_code=409, detail="the lane's total object budget is full"
+            )
         created = await session.scalar(
             insert(EdgeObject)
             .values(
                 digest=digest,
                 size_bytes=len(data),
                 media_type=payload.media_type,
-                source=payload.source.strip(),
+                source=payload.source,
                 storage_key=key,
-                created_by=payload.actor.strip(),
+                created_by=payload.actor,
             )
             .on_conflict_do_nothing()
             .returning(EdgeObject.digest)
@@ -417,9 +440,7 @@ async def revoke(
             raise HTTPException(status_code=404, detail="unknown object")
         newly = obj.revoked_at is None
         revoked_at = obj.revoked_at or now
-        reason = obj.revoke_reason or (
-            f"{payload.reason.strip()} ({payload.actor.strip()})"
-        )
+        reason = obj.revoke_reason or f"{payload.reason} ({payload.actor})"
         obj.revoked_at = revoked_at
         obj.revoke_reason = reason
     logger.warning("edge lane object %s revoked by %s", digest, payload.actor)
