@@ -145,6 +145,23 @@ def test_generator_starter_kit_change_is_shadow_only(components, ignored_paths) 
     ) == {"dittobench_generator_starter_kit"}
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "packages/ditto-edge-protocol/ditto_edge_protocol/ledger.py",
+        "packages/ditto-edge-protocol/testdata/conformance_v1.json",
+        ".github/workflows/edge-protocol-ci.yml",
+    ],
+)
+def test_edge_protocol_change_is_shadow_only(
+    components, ignored_paths, path: str
+) -> None:
+    # Nothing deployed consumes the Ditto Edge contract yet (SN-481), so it
+    # must not rebuild the validator stack or redeploy Platform on its own.
+    assert selected(components, ignored_paths, path) == {"edge_protocol"}
+    assert root_verification(components, ignored_paths, path) == "none"
+
+
 def test_coding_datagen_change_is_shadow_only(components, ignored_paths) -> None:
     assert selected(
         components,

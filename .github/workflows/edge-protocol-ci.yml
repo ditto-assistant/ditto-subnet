@@ -1,0 +1,51 @@
+name: Ditto Edge protocol CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - packages/ditto-edge-protocol/**
+      - .github/workflows/edge-protocol-ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-protocol-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: packages/ditto-edge-protocol
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - name: Check out the pull request source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Sync the locked environment
+        run: uv sync --locked --python ${{ matrix.python }}
+
+      - name: Format, lint and type-check
+        run: |
+          uv run --no-sync ruff format --check .
+          uv run --no-sync ruff check .
+          uv run --no-sync mypy ditto_edge_protocol
+
+      - name: Conformance vectors are current
+        run: uv run --no-sync python -m ditto_edge_protocol.vectors --check testdata/conformance_v1.json
+
+      - name: Tests
+        run: uv run --no-sync pytest -q

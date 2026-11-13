@@ -219,6 +219,13 @@ paths = [
   "miners/dittobench-router-starter-kit/**",
 ]
 
+[components.edge_protocol]
+description = "Shadow-only Ditto Edge (edge/v1) contract, conformance vectors and ledger rules"
+paths = [
+  "packages/ditto-edge-protocol/**",
+  ".github/workflows/edge-protocol-ci.yml",
+]
+
 [components.platform_api]
 description = "Subnet API, database migrations, relays, and control plane"
 depends_on = ["screening_protocol"]
