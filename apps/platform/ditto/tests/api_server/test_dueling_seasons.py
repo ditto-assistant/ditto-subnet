@@ -3095,6 +3095,7 @@ class TestSeasonHandoff:
                 **(season.detail or {}),
                 "close_deferral": {
                     "first_deferred_at": datetime.now(UTC).isoformat(),
+                    "open": True,
                     "at_round": 11,
                     "rounds": dueling_mod.MAX_DEFERRED_ROUNDS,
                     "reason": "earlier",
@@ -3107,3 +3108,70 @@ class TestSeasonHandoff:
             f"season ended (successor not ready after "
             f"{dueling_mod.MAX_DEFERRED_ROUNDS} deferred round(s)"
         )
+
+
+class TestSeasonHandoffWithIdleExtension:
+    async def test_an_idle_extension_ends_the_deferral_episode(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Defer, battery passes, idle-extend, defer again: the cap counts the
+        second wait from one, so quiet periods never accumulate toward it."""
+        _install(app, session_maker)
+        await _open_lane(client, epochs_per_round=_EPOCHS, dueling_enabled=True)
+        _active(monkeypatch, 16)
+        cohort = [await _seed_agent(session_maker, 1)]
+
+        async def _cohort(*_args: Any) -> tuple[list[UUID], str]:
+            return list(cohort), "continual_cohort"
+
+        async def _queue(*_args: Any, **_kwargs: Any) -> dict:
+            return {"queued": 0}
+
+        import ditto.db.queries.score_retests as retests_mod
+
+        monkeypatch.setattr(dueling_mod, "_rotation_cohort", _cohort)
+        monkeypatch.setattr(retests_mod, "queue_dueling_rotation_retests", _queue)
+        await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:a", salt="a"
+        )
+        await _scored_round(session_maker, [(miner, 0.4, 0.1)])
+        await _tick(session_maker, _ROUND * _EPOCHS + 1)
+        assert await _pass_batteries(client) == 1
+        await _tick(session_maker, 11 * _EPOCHS)
+        await _open_round(session_maker, 12)
+
+        # Round 12: season 12's battery is pending, so the close defers.
+        await _tick(session_maker, 12 * _EPOCHS)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        first = (seasons[11].detail or {})["close_deferral"]
+        assert first["open"] is True and first["rounds"] == 1
+
+        # Mid-round the battery passes on the same pins: idle, so season 11
+        # extends instead of handing over, and the episode ends.
+        assert await _pass_batteries(client) == 1
+        notes = await _tick(session_maker, 12 * _EPOCHS + 1)
+        assert any("season 11 v16: extended to round 13 (idle" in n for n in notes)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "open"
+        assert (seasons[11].detail or {})["close_deferral"]["open"] is False
+
+        # Round 13: the next successor's battery is pending again. A new
+        # episode starts at one, not two.
+        await _tick(session_maker, 13 * _EPOCHS)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        second = (seasons[11].detail or {})["close_deferral"]
+        assert seasons[11].status == "open"
+        assert second["open"] is True and second["rounds"] == 1
+        assert second["episodes"] == 2 and second["episode_start_round"] == 13
+        assert second["first_deferred_at"] == first["first_deferred_at"]

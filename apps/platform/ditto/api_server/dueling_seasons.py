@@ -1162,6 +1162,11 @@ def _extend(
         recent=history[-MAX_RECORDED_IDLE_EXTENSIONS:],
     )
     detail[IDLE_EXTENSIONS_KEY] = record
+    deferral = detail.get(CLOSE_DEFERRAL_KEY)
+    if isinstance(deferral, dict) and deferral.get("open"):
+        # The season reached a scheduled close again: a later deferral is a
+        # new episode, and the cap counts per episode.
+        detail[CLOSE_DEFERRAL_KEY] = {**deferral, "open": False}
     season.detail = detail
 
 
@@ -1233,8 +1238,11 @@ async def successor_blocker(
 
 
 def _deferred_rounds(season: DuelingSeason) -> int:
+    """Rounds the current deferral episode has waited (0 outside one)."""
     record = (season.detail or {}).get(CLOSE_DEFERRAL_KEY)
-    return int(record.get("rounds") or 0) if isinstance(record, dict) else 0
+    if not isinstance(record, dict) or not record.get("open"):
+        return 0
+    return int(record.get("rounds") or 0)
 
 
 def _defer_close(
@@ -1242,18 +1250,28 @@ def _defer_close(
 ) -> bool:
     """Record that ``season``'s due close waits for its successor; True when
     the record changed. Written only when the reason or round changes, so a
-    tick loop does not churn."""
+    tick loop does not churn.
+
+    ``rounds`` counts the current episode, which an idle extension ends
+    (:func:`_extend`), so :data:`MAX_DEFERRED_ROUNDS` bounds one continuous
+    wait, not a season's lifetime. ``first_deferred_at`` is kept across
+    episodes: it is the duel-seed exposure stamp."""
     detail = dict(season.detail or {})
     record = dict(detail.get(CLOSE_DEFERRAL_KEY) or {})
-    if record.get("reason") == why and record.get("at_round") == current:
+    episode = bool(record.get("open"))
+    if episode and record.get("reason") == why and record.get("at_round") == current:
         return False
+    new_round = not episode or record.get("at_round") != current
     record.update(
         first_deferred_at=record.get("first_deferred_at") or now.isoformat(),
         last_deferred_at=now.isoformat(),
+        open=True,
+        episode_start_round=(record.get("episode_start_round") if episode else current),
         at_round=current,
         reason=why[:500],
-        rounds=int(record.get("rounds") or 0)
-        + (1 if record.get("at_round") != current else 0),
+        rounds=(int(record.get("rounds") or 0) if episode else 0)
+        + (1 if new_round else 0),
+        episodes=int(record.get("episodes") or 0) + (0 if episode else 1),
     )
     detail[CLOSE_DEFERRAL_KEY] = record
     season.detail = detail
@@ -1271,6 +1289,11 @@ async def _settle_successor_at_anchor(
     )
 
     if ANCHOR_PASSED_KEY in (successor.detail or {}):
+        return
+    # A validator's commitment report locks the same row and may flip it to
+    # published; lock it here so the settle never overwrites that.
+    await session.refresh(successor, with_for_update=True)
+    if successor.status != "committed" or ANCHOR_PASSED_KEY in (successor.detail or {}):
         return
     successor.detail = {**(successor.detail or {}), ANCHOR_PASSED_KEY: now.isoformat()}
     if successor.commitment_publication != "pending":
@@ -1366,7 +1389,12 @@ async def advance_seasons(
                 # Closing now would leave the version with no open season, and
                 # every v16+ lease is refused until one opens. Keep serving
                 # this season's set until the successor can take over.
-                if successor is not None and successor.status == "committed":
+                if (
+                    successor is not None
+                    and successor.status == "committed"
+                    and await _anchor(session, current, clock.first_epoch, position)
+                    is not None
+                ):
                     await _settle_successor_at_anchor(session, successor, now=now)
                 if _defer_close(season, why=blocker, current=current, now=now):
                     logger.warning(
