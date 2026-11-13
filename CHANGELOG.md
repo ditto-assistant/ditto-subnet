@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.484.2 (2026-11-13)
+
+### Bug Fixes
+
+- **infra**: Pin the AWS bootstrap to the repaired release
+  ([#3542](https://github.com/ditto-assistant/ditto-subnet/pull/3542),
+  [`9b2b4fe`](https://github.com/ditto-assistant/ditto-subnet/commit/9b2b4fecb4e0b39794754c539c377ddca97afed8))
+
+- **infra**: Preserve stopped AWS instances during reconciliation
+  ([#3543](https://github.com/ditto-assistant/ditto-subnet/pull/3543),
+  [`38a0153`](https://github.com/ditto-assistant/ditto-subnet/commit/38a015318e6ebd91db31928d8648adc630024abc))
+
+- **screener**: Use Buildx on Debian 12
+  ([#3544](https://github.com/ditto-assistant/ditto-subnet/pull/3544),
+  [`5e3386b`](https://github.com/ditto-assistant/ditto-subnet/commit/5e3386b4399836ee8d74fd9af9b4172eba278a19))
+
+
 ## v0.484.1 (2026-11-13)
 
 ### Bug Fixes
