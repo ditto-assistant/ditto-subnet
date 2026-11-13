@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getJSON, poolMap, postJSON } from "./api";
+import { authJSON, getJSON, HTTPError, poolMap, postJSON } from "./api";
 
 type FetchFn = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -29,6 +29,17 @@ function stubFetch(impl: FetchFn) {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe("authJSON", () => {
+  it("preserves an error's HTTP status and the server's recovery message", async () => {
+    stubFetch(() =>
+      Promise.resolve(jsonResponse({ detail: "Try again" }, { ok: false, status: 503 })),
+    );
+    const error = await authJSON("/me/example").catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(HTTPError);
+    expect(error).toMatchObject({ status: 503, message: "Try again" });
+  });
 });
 
 describe("getJSON", () => {

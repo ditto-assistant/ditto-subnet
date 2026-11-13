@@ -6,7 +6,7 @@ import { HandleBadge } from "../components/ui/HandleBadge";
 import { MinerAvatar } from "../components/ui/MinerAvatar";
 import { API_BASE } from "../lib/config";
 import { SubmissionDownload } from "../components/account/SubmissionDownload";
-import { authJSON, postJSON } from "../lib/api";
+import { authJSON, HTTPError, postJSON } from "../lib/api";
 import { copyText } from "../lib/copy";
 import { dashboardHref, fullEntityHref, spaHref, spaQuery } from "../lib/router";
 import {
@@ -105,6 +105,7 @@ interface DittoLinkAttempt {
   ditto_email?: string | null;
   miner_hotkey?: string | null;
   link?: DittoLinkView | null;
+  github_proof_attempt_id?: string | null;
 }
 
 interface MinerSubmission {
@@ -582,6 +583,87 @@ function AccountPanel(): JSX.Element {
   const [dittoNotice, setDittoNotice] = createSignal(readDittoResult());
   const [dittoBusy, setDittoBusy] = createSignal(false);
   const [dittoAttempt, setDittoAttempt] = createSignal<DittoLinkAttempt | null>(null);
+  let dittoLinkGeneration = 0;
+  const proofHintKey = () =>
+    "ditto.miner.ditto-proof.v1:" + API_BASE + ":" + (minerSession()?.hotkey ?? "");
+
+  function clearProofHint(key = proofHintKey()): void {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Storage is optional; the server remains the source of truth.
+    }
+  }
+
+  function retainProofHint(attempt: DittoLinkAttempt): void {
+    const subject = attempt.link?.ditto_user_id ?? attempt.ditto_user_id;
+    if (attempt.status !== "linked" || !attempt.github_proof_attempt_id || !subject) return;
+    try {
+      localStorage.setItem(
+        proofHintKey(),
+        JSON.stringify({ attemptId: attempt.github_proof_attempt_id, subject }),
+      );
+    } catch {
+      // A blocked browser store must not turn a saved pairing into a failure.
+    }
+  }
+
+  async function restoreProofHint(
+    link: DittoLinkView,
+    key: string,
+    generation: number,
+  ): Promise<void> {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      let record: { attemptId?: unknown; subject?: unknown } | null;
+      try {
+        record = JSON.parse(raw);
+      } catch {
+        clearProofHint(key);
+        return;
+      }
+      if (
+        !record ||
+        record.subject !== link.ditto_user_id ||
+        typeof record.attemptId !== "string"
+      ) {
+        clearProofHint(key);
+        return;
+      }
+      // An attempt ID is a recovery hint, never authorization. Revalidate it
+      // with the current hotkey session, including its server-side expiry.
+      const proof = await authJSON<{ status: string }>(
+        "/me/github-link/attempts/" + encodeURIComponent(record.attemptId),
+        { headers: sessionAuthHeader() },
+      );
+      if (
+        generation !== dittoLinkGeneration ||
+        key !== proofHintKey() ||
+        dittoLink()?.link?.ditto_user_id !== link.ditto_user_id
+      )
+        return;
+      if (proof.status !== "accepted" && proof.status !== "linked") {
+        clearProofHint(key);
+        return;
+      }
+      setDittoAttempt({
+        attempt_id: record.attemptId,
+        status: "linked",
+        github_proof_attempt_id: record.attemptId,
+      });
+    } catch (err) {
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
+      if (
+        err instanceof HTTPError &&
+        (err.status === 404 || err.status === 410 || err.status === 422)
+      ) {
+        clearProofHint(key);
+      }
+      // Keep the non-authoritative hint when the service is unavailable.
+      // A later visit can retry; no command is shown without verification.
+    }
+  }
 
   createEffect(() => {
     void loadMe();
@@ -593,12 +675,16 @@ function AccountPanel(): JSX.Element {
   /** The callback only parks who signed in on Ditto; the pairing with this
    * hotkey is written when the signed-in miner confirms it here. */
   async function loadDittoAttempt(attemptId: string): Promise<void> {
+    const generation = dittoLinkGeneration;
+    const key = proofHintKey();
     try {
       const attempt = await authJSON<DittoLinkAttempt>(
         "/me/ditto-link/attempts/" + encodeURIComponent(attemptId),
         { headers: sessionAuthHeader() },
       );
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       setDittoAttempt(attempt);
+      retainProofHint(attempt);
       if (attempt.status === "identity_verified") {
         setDittoNotice({
           ok: true,
@@ -616,6 +702,7 @@ function AccountPanel(): JSX.Element {
         });
       }
     } catch (err) {
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       setDittoAttempt(null);
       setDittoNotice({
         ok: false,
@@ -627,6 +714,8 @@ function AccountPanel(): JSX.Element {
   async function confirmDittoLink(): Promise<void> {
     const attempt = dittoAttempt();
     if (!attempt) return;
+    const generation = dittoLinkGeneration;
+    const key = proofHintKey();
     setDittoBusy(true);
     setError("");
     try {
@@ -634,10 +723,14 @@ function AccountPanel(): JSX.Element {
         "/me/ditto-link/attempts/" + encodeURIComponent(attempt.attempt_id) + "/confirm",
         { method: "POST", headers: sessionAuthHeader() },
       );
-      setDittoAttempt(null);
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
+      dittoLinkGeneration++;
+      setDittoAttempt(confirmed.github_proof_attempt_id ? confirmed : null);
+      retainProofHint(confirmed);
       setDittoNotice({ ok: confirmed.status === "linked", text: "Ditto account linked." });
       await loadDittoLink();
     } catch (err) {
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       setError(err instanceof Error ? err.message : "Could not confirm the Ditto link.");
     } finally {
       setDittoBusy(false);
@@ -650,11 +743,22 @@ function AccountPanel(): JSX.Element {
   }
 
   async function loadDittoLink(): Promise<void> {
+    const key = proofHintKey();
+    const generation = dittoLinkGeneration;
     try {
-      setDittoLink(
-        await authJSON<DittoLinkStatus>("/me/ditto-link", { headers: sessionAuthHeader() }),
-      );
+      const status = await authJSON<DittoLinkStatus>("/me/ditto-link", {
+        headers: sessionAuthHeader(),
+      });
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
+      setDittoLink(status);
+      if (!status.link) {
+        clearProofHint(key);
+        if (dittoAttempt()?.status === "linked") setDittoAttempt(null);
+      } else if (!dittoAttempt() && !dittoNotice()?.attempt) {
+        await restoreProofHint(status.link, key, generation);
+      }
     } catch {
+      if (generation !== dittoLinkGeneration || key !== proofHintKey()) return;
       // An older Platform has no link endpoint; the card simply stays hidden.
       setDittoLink(null);
     }
@@ -680,11 +784,15 @@ function AccountPanel(): JSX.Element {
   }
 
   async function unlinkDitto(): Promise<void> {
+    const proofKey = proofHintKey();
     setDittoBusy(true);
     setDittoNotice(null);
     setError("");
     try {
       await authJSON<unknown>("/me/ditto-link", { method: "DELETE", headers: sessionAuthHeader() });
+      dittoLinkGeneration++;
+      setDittoAttempt(null);
+      clearProofHint(proofKey);
       setSaved("Ditto account unlinked.");
       await loadDittoLink();
     } catch (err) {
@@ -936,14 +1044,33 @@ function AccountPanel(): JSX.Element {
                 )}
               </Show>
               <Show
+                when={
+                  dittoAttempt()?.status === "linked" && dittoAttempt()?.github_proof_attempt_id
+                }
+              >
+                {(attemptId) => (
+                  <div>
+                    <p>
+                      GitHub is connected through your Ditto account. If you need a miner GitHub
+                      proof, finish the hotkey signature in your terminal:
+                    </p>
+                    <code>ditto link-github --ditto-attempt {attemptId()}</code>
+                    <p class="muted">
+                      This uses the same sign-in. Existing signed proofs and their history remain
+                      available.
+                    </p>
+                  </div>
+                )}
+              </Show>
+              <Show
                 when={status().link}
                 fallback={
                   <>
                     <p class="muted">
-                      Sign in with Ditto to attach your Ditto account to this hotkey. The link lets
-                      DittoBench attribute Router inference to your consenting account and credit
-                      Feedback Track contributions to it. Nothing is signed and no TAO moves; the
-                      hotkey is proven by this session, the account by Ditto.
+                      Connect Ditto to attach your account and reuse its GitHub connection. The link
+                      lets DittoBench attribute Router inference to your consenting account and
+                      credit Feedback Track contributions to it. No TAO moves. A GitHub miner proof
+                      still needs your hotkey signature; the account is verified by Ditto.
                     </p>
                     <Show
                       when={status().enabled}
@@ -954,7 +1081,7 @@ function AccountPanel(): JSX.Element {
                         disabled={dittoBusy()}
                         onClick={() => void startDittoLink()}
                       >
-                        Sign in with Ditto
+                        Connect Ditto
                       </button>
                     </Show>
                     <p class="muted">

@@ -59,6 +59,7 @@ from ditto.api_server.no_store import no_store
 from ditto.chain import ChainError
 from ditto.db.integrity import unique_violation
 from ditto.db.models import (
+    MinerDittoLinkAttempt,
     MinerGithubActionNonce,
     MinerGithubLink,
     MinerGithubLinkAttempt,
@@ -235,6 +236,17 @@ async def start_link(
                 MinerGithubLinkAttempt.status.in_(
                     ("pending", "identity_verified", "accepted")
                 ),
+                # A matching server-generated Ditto attempt ID is the existing
+                # provenance marker. Those rows did not start direct OAuth.
+                ~select(MinerDittoLinkAttempt.attempt_id)
+                .where(
+                    MinerDittoLinkAttempt.attempt_id
+                    == MinerGithubLinkAttempt.attempt_id,
+                    MinerDittoLinkAttempt.miner_hotkey == MinerGithubLinkAttempt.hotkey,
+                    MinerDittoLinkAttempt.session_id
+                    == MinerGithubLinkAttempt.session_id,
+                )
+                .exists(),
             )
         )
         if pending and pending >= 5:
@@ -546,7 +558,16 @@ async def attempt_status(
         miner, _ = await resolve_miner_session(request, session)
         require_scope(miner, "read")
         attempt = await session.get(MinerGithubLinkAttempt, attempt_id)
-        if attempt is None or attempt.session_id != miner.session_id:
+        paired = (
+            await session.get(MinerDittoLinkAttempt, attempt_id)
+            if attempt is not None
+            else None
+        )
+        if (
+            attempt is None
+            or attempt.netuid != request.app.state.config.chain.netuid
+            or not _attempt_owned_by_miner(attempt, miner, paired)
+        ):
             raise HTTPException(404, "unknown GitHub link attempt")
         expired = attempt.expires_at <= datetime.now(UTC) and attempt.status not in (
             "linked",
@@ -618,6 +639,27 @@ async def _authorize_action(
     return miner
 
 
+def _attempt_owned_by_miner(
+    attempt: MinerGithubLinkAttempt,
+    miner: MinerSession,
+    paired: MinerDittoLinkAttempt | None,
+) -> bool:
+    if attempt.hotkey != miner.miner_hotkey:
+        return False
+    if attempt.session_id == miner.session_id:
+        return True
+    # Dashboard and CLI issue separate live sessions for the same hotkey.
+    # Only a completed, explicitly accepted Ditto pairing may cross that
+    # boundary. Direct GitHub OAuth attempts remain session-bound.
+    return (
+        paired is not None
+        and paired.session_id == attempt.session_id
+        and paired.miner_hotkey == miner.miner_hotkey
+        and paired.status == "linked"
+        and paired.user_accepted_at is not None
+    )
+
+
 async def _approved_attempt(
     session: AsyncSession,
     body: GithubLinkRequest,
@@ -632,10 +674,13 @@ async def _approved_attempt(
         with_for_update=for_update,
         populate_existing=True,
     )
+    ditto_attempt = await session.get(
+        MinerDittoLinkAttempt, body.link_attempt_id, populate_existing=True
+    )
     if (
         attempt is None
-        or attempt.session_id != miner.session_id
         or attempt.netuid != body.netuid
+        or not _attempt_owned_by_miner(attempt, miner, ditto_attempt)
     ):
         raise HTTPException(404, "unknown GitHub link attempt")
     if (
@@ -650,6 +695,13 @@ async def _approved_attempt(
         raise HTTPException(
             409, "the exact GitHub identity must be approved before signing"
         )
+    if ditto_attempt is not None and (
+        ditto_attempt.status != "linked"
+        or ditto_attempt.session_id != attempt.session_id
+        or ditto_attempt.miner_hotkey != body.hotkey
+        or ditto_attempt.user_accepted_at is None
+    ):
+        raise HTTPException(409, "confirm the Ditto account pairing before signing")
     return attempt
 
 
@@ -699,8 +751,20 @@ async def confirm(
     session: SessionDep,
     _authorization: Annotated[str | None, Header(alias="authorization")] = None,
 ) -> GithubLinkView:
-    # Disabling linking stops new links, including already approved attempts.
-    _client(request)
+    # Each OAuth source owns its enable gate, including approved attempts.
+    # GITHUB_LINK_ENABLED controls direct GitHub OAuth, while Ditto-derived
+    # proofs require DITTO_LINK_ENABLED and never use the direct OAuth app.
+    # The exact attempt and miner signature are still verified in both phases.
+    github = getattr(request.app.state, "github_link", None)
+    ditto = getattr(request.app.state, "ditto_link", None)
+    if (github is None or not github.enabled) and (ditto is None or not ditto.enabled):
+        _client(request)
+    paired = await session.get(MinerDittoLinkAttempt, body.link_attempt_id)
+    await session.rollback()
+    if paired is None:
+        _client(request)
+    elif ditto is None or not ditto.enabled:
+        raise HTTPException(503, "Ditto linking is not configured on this deployment")
     now = datetime.now(UTC)
     try:
         async with session.begin():

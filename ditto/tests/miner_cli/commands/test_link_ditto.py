@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import io
+import json
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
+
+import pytest
 
 from ditto.api_models.miner_ditto_link import (
     MinerDittoLinkAttemptResponse,
@@ -11,6 +15,7 @@ from ditto.api_models.miner_ditto_link import (
     MinerDittoLinkStartResponse,
     MinerDittoLinkView,
 )
+from ditto.miner_cli.__main__ import _build_parser
 from ditto.miner_cli.commands.link_ditto import run
 from ditto.miner_cli.errors import LoginRequiredError
 
@@ -28,6 +33,9 @@ def _args(**overrides: object) -> argparse.Namespace:
         "network": "local",
         "chain_endpoint": None,
         "verbose": False,
+        "coldkey_name": "miner",
+        "hotkey_name": "default",
+        "expect_github_id": None,
     }
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -76,6 +84,39 @@ def test_link_requires_a_saved_session(capsys) -> None:
     ):
         assert run(_args()) == 1
     assert "not signed in" in capsys.readouterr().err
+
+
+def test_expected_github_id_uses_the_signed_proof_validator() -> None:
+    parser = _build_parser()
+    for value in (1, 2**53 - 1):
+        assert (
+            parser.parse_args(
+                ["link-ditto", "--expect-github-id", str(value)]
+            ).expect_github_id
+            == value
+        )
+    for invalid_value in ("0", "-1", "octocat", str(2**53)):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["link-ditto", "--expect-github-id", invalid_value])
+
+
+def test_interactive_json_keeps_confirmation_prompt_on_stderr(capsys) -> None:
+    attempt_id = uuid4()
+    client = _client(attempt_id, statuses=[_authenticated(attempt_id)])
+    # Exercise real input(): a mocked input() would hide its stdout prompt.
+    with (
+        patch(
+            "ditto.miner_cli.commands.link_ditto.load_miner_session",
+            return_value=SESSION,
+        ),
+        patch("ditto.miner_cli.commands.link_ditto.ApiClient", return_value=client),
+        patch("sys.stdin", io.StringIO("y\n")),
+        patch("sys.stdin.isatty", return_value=True),
+    ):
+        assert run(_args(json=True)) == 0
+    output = capsys.readouterr()
+    assert json.loads(output.out)["ditto_user_id"] == "ditto-user-1"
+    assert "Link hotkey" in output.err
 
 
 def test_link_prints_the_consent_url_then_confirms_the_pairing(capsys) -> None:

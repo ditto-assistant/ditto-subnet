@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { syncFromLocation } from "../stores/routeStore";
 import { clearMinerSession, minerSession } from "../stores/sessionStore";
+import { API_BASE } from "../lib/config";
 import { ReviewsPage } from "./ReviewsPage";
 
 const memory = new Map<string, string>();
@@ -616,7 +617,7 @@ describe("Ditto account link", () => {
       return found as HTMLElement;
     });
     const button = Array.from(card.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Sign in with Ditto"),
+      b.textContent?.includes("Connect Ditto"),
     );
     expect(button).toBeTruthy();
     fireEvent.click(button!);
@@ -634,76 +635,293 @@ describe("Ditto account link", () => {
     expect(new Headers(start?.init?.headers).get("authorization")).toBe("Bearer ditto_ms_abc");
   });
 
-  it("asks the miner to confirm the pairing, then shows the link and can unlink", async () => {
+  it.each([
+    { failFirstUnlink: false, proofStatus: "accepted" },
+    { failFirstUnlink: true, proofStatus: "accepted" },
+    { failFirstUnlink: false, proofStatus: "expired" },
+    { failFirstUnlink: false, proofStatus: "missing" },
+    { failFirstUnlink: false, proofStatus: "gone" },
+    { failFirstUnlink: false, proofStatus: "malformed" },
+  ])(
+    "restores only live proof hints and clears on successful unlink: %j",
+    async ({ failFirstUnlink, proofStatus }) => {
+      await signIn();
+      history.replaceState(null, "", "/#/reviews?ditto=confirm&attempt=att-1");
+      syncFromLocation();
+      let linked: { ditto_user_id: string; ditto_email: string; linked_via: string } | null = null;
+      const confirms: string[] = [];
+      let unlinkFailed = false;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.endsWith("/me")) return Response.json(me);
+          if (url.endsWith("/me/github-link/attempts/proof-1"))
+            return Response.json(
+              { status: proofStatus },
+              {
+                status:
+                  proofStatus === "missing"
+                    ? 404
+                    : proofStatus === "gone"
+                      ? 410
+                      : proofStatus === "malformed"
+                        ? 422
+                        : 200,
+              },
+            );
+          if (url.endsWith("/me/ditto-link/attempts/att-1/confirm") && init?.method === "POST") {
+            confirms.push(new Headers(init.headers).get("authorization") || "");
+            linked = {
+              ditto_user_id: "ditto-user-1",
+              ditto_email: "miner@example.com",
+              linked_via: "dashboard",
+            };
+            return Response.json({
+              attempt_id: "att-1",
+              status: "linked",
+              link: linked,
+              github_proof_attempt_id: "proof-1",
+            });
+          }
+          if (url.endsWith("/me/ditto-link/attempts/att-1"))
+            return Response.json({
+              attempt_id: "att-1",
+              status: linked ? "linked" : "authenticated",
+              ditto_user_id: "ditto-user-1",
+              ditto_email: "miner@example.com",
+              miner_hotkey: session.hotkey,
+            });
+          if (url.endsWith("/me/ditto-link") && init?.method === "DELETE") {
+            if (failFirstUnlink && !unlinkFailed) {
+              unlinkFailed = true;
+              return Response.json({ detail: "Try again" }, { status: 503 });
+            }
+            linked = null;
+            return new Response(null, { status: 204 });
+          }
+          if (url.endsWith("/me/ditto-link"))
+            return Response.json({
+              enabled: true,
+              link: linked
+                ? { miner_hotkey: session.hotkey, created_at: "2026-09-12T12:00:00Z", ...linked }
+                : null,
+            });
+          return new Response("[]", { status: 200 });
+        }),
+      );
+      render(() => <ReviewsPage />);
+      const confirmCard = await waitFor(() => {
+        const found = document.querySelector('[data-testid="ditto-link-confirm"]');
+        expect(found).toBeTruthy();
+        return found as HTMLElement;
+      });
+      expect(confirmCard.textContent).toContain("miner@example.com");
+      expect(confirmCard.textContent).toContain(session.hotkey);
+      // Nothing is linked until the miner confirms.
+      expect(document.body.textContent).not.toContain("Unlink Ditto account");
+      const confirm = Array.from(confirmCard.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Confirm link"),
+      );
+      fireEvent.click(confirm!);
+      await waitFor(() => {
+        expect(document.body.textContent).toContain("Ditto account linked.");
+        expect(document.body.textContent).toContain("Unlink Ditto account");
+      });
+      expect(confirms).toEqual(["Bearer ditto_ms_abc"]);
+      expect(location.hash).not.toContain("attempt=");
+      expect(document.body.textContent).toContain("--ditto-attempt proof-1");
+      expect([...memory.values()].some((value) => value.includes("proof-1"))).toBe(true);
+      cleanup();
+      render(() => <ReviewsPage />);
+      await waitFor(() =>
+        expect([...memory.values()].some((value) => value.includes("proof-1"))).toBe(
+          proofStatus === "accepted",
+        ),
+      );
+      if (proofStatus === "accepted") {
+        await waitFor(() => expect(document.body.textContent).toContain("--ditto-attempt proof-1"));
+      } else {
+        expect(document.body.textContent).not.toContain("--ditto-attempt proof-1");
+      }
+      const unlink = Array.from(document.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Unlink Ditto account"),
+      );
+      fireEvent.click(unlink!);
+      if (failFirstUnlink) {
+        await waitFor(() => expect(document.body.textContent).toContain("Try again"));
+        expect(document.body.textContent).toContain("--ditto-attempt proof-1");
+        fireEvent.click(unlink!);
+      }
+      await waitFor(() => {
+        expect(document.body.textContent).toContain("Ditto account unlinked.");
+        expect(document.body.textContent).toContain("Connect Ditto");
+        expect(document.body.textContent).not.toContain("--ditto-attempt proof-1");
+        expect([...memory.values()].some((value) => value.includes("proof-1"))).toBe(false);
+      });
+    },
+  );
+
+  it.each(["proof", "attempt", "attempt-error"])(
+    "does not restore in-flight %s after successful unlink",
+    async (mode) => {
+      await signIn();
+      if (mode !== "proof") {
+        history.replaceState(null, "", "/#/reviews?ditto=confirm&attempt=att-1");
+        syncFromLocation();
+      }
+      const key = "ditto.miner.ditto-proof.v1:" + API_BASE + ":" + session.hotkey;
+      localStorage.setItem(key, JSON.stringify({ attemptId: "proof-1", subject: "ditto-user-1" }));
+      let finishProof!: (response: Response) => void;
+      let failProof!: (reason: Error) => void;
+      let finishStatus!: (response: Response) => void;
+      let proofRequested = false;
+      let unlinked = false;
+      const proof = new Promise<Response>((resolve, reject) => {
+        finishProof = resolve;
+        failProof = reject;
+      });
+      const status = new Promise<Response>((resolve) => {
+        finishStatus = resolve;
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          if (url.endsWith("/me")) return Response.json(me);
+          if (
+            (mode === "proof" && url.endsWith("/me/github-link/attempts/proof-1")) ||
+            (mode !== "proof" && url.endsWith("/me/ditto-link/attempts/att-1"))
+          ) {
+            proofRequested = true;
+            return proof;
+          }
+          if (url.endsWith("/me/ditto-link") && init?.method === "DELETE") {
+            unlinked = true;
+            return new Response(null, { status: 204 });
+          }
+          if (url.endsWith("/me/ditto-link")) {
+            if (unlinked) return status;
+            return Response.json({
+              enabled: true,
+              link: {
+                ditto_user_id: "ditto-user-1",
+                ditto_email: "miner@example.com",
+                linked_via: "dashboard",
+                miner_hotkey: session.hotkey,
+                created_at: "2026-09-12T12:00:00Z",
+              },
+            });
+          }
+          return Response.json([]);
+        }),
+      );
+      render(() => <ReviewsPage />);
+      await waitFor(() => expect(proofRequested).toBe(true));
+      const unlink = await waitFor(() => {
+        const button = Array.from(document.querySelectorAll("button")).find((b) =>
+          b.textContent?.includes("Unlink Ditto account"),
+        );
+        expect(button).toBeTruthy();
+        return button!;
+      });
+      fireEvent.click(unlink!);
+      await waitFor(() => expect(document.body.textContent).toContain("Ditto account unlinked."));
+      if (mode === "attempt-error") failProof(new Error("stale attempt failure"));
+      else
+        finishProof(
+          Response.json(
+            mode === "proof"
+              ? { status: "accepted" }
+              : {
+                  attempt_id: "att-1",
+                  status: "linked",
+                  github_proof_attempt_id: "proof-1",
+                  ditto_user_id: "ditto-user-1",
+                },
+          ),
+        );
+      // Flush the response and Solid updates while the status refresh is held.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(document.body.textContent).not.toContain("--ditto-attempt proof-1");
+      expect(document.body.textContent).not.toContain("Ditto account linked.");
+      expect(document.body.textContent).not.toContain("stale attempt failure");
+      expect(localStorage.getItem(key)).toBeNull();
+      finishStatus(Response.json({ enabled: true, link: null }));
+      await waitFor(() => expect(document.body.textContent).toContain("Connect Ditto"));
+      expect(document.body.textContent).not.toContain("--ditto-attempt proof-1");
+    },
+  );
+
+  it("keeps a confirmed proof when an earlier unlinked status arrives late", async () => {
     await signIn();
     history.replaceState(null, "", "/#/reviews?ditto=confirm&attempt=att-1");
     syncFromLocation();
-    let linked: { ditto_user_id: string; ditto_email: string; linked_via: string } | null = null;
-    const confirms: string[] = [];
+    let finishStatus!: (response: Response) => void;
+    const staleStatus = new Promise<Response>((resolve) => {
+      finishStatus = resolve;
+    });
+    let confirmed = false;
+    let statusRequests = 0;
+    const link = {
+      ditto_user_id: "ditto-user-1",
+      ditto_email: "miner@example.com",
+      linked_via: "dashboard",
+      miner_hotkey: session.hotkey,
+      created_at: "2026-09-12T12:00:00Z",
+    };
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url.endsWith("/me")) return Response.json(me);
         if (url.endsWith("/me/ditto-link/attempts/att-1/confirm") && init?.method === "POST") {
-          confirms.push(new Headers(init.headers).get("authorization") || "");
-          linked = {
-            ditto_user_id: "ditto-user-1",
-            ditto_email: "miner@example.com",
-            linked_via: "dashboard",
-          };
-          return Response.json({ attempt_id: "att-1", status: "linked", link: linked });
+          confirmed = true;
+          return Response.json({
+            attempt_id: "att-1",
+            status: "linked",
+            link,
+            github_proof_attempt_id: "proof-1",
+          });
         }
         if (url.endsWith("/me/ditto-link/attempts/att-1"))
           return Response.json({
             attempt_id: "att-1",
-            status: linked ? "linked" : "authenticated",
-            ditto_user_id: "ditto-user-1",
-            ditto_email: "miner@example.com",
+            status: "authenticated",
+            ditto_user_id: link.ditto_user_id,
+            ditto_email: link.ditto_email,
             miner_hotkey: session.hotkey,
           });
-        if (url.endsWith("/me/ditto-link") && init?.method === "DELETE") {
-          linked = null;
-          return new Response(null, { status: 204 });
+        if (url.endsWith("/me/ditto-link")) {
+          statusRequests++;
+          if (statusRequests === 1) return staleStatus;
+          return Response.json({ enabled: true, link: confirmed ? link : null });
         }
-        if (url.endsWith("/me/ditto-link"))
-          return Response.json({
-            enabled: true,
-            link: linked
-              ? { miner_hotkey: session.hotkey, created_at: "2026-09-12T12:00:00Z", ...linked }
-              : null,
-          });
-        return new Response("[]", { status: 200 });
+        return Response.json([]);
       }),
     );
     render(() => <ReviewsPage />);
-    const confirmCard = await waitFor(() => {
-      const found = document.querySelector('[data-testid="ditto-link-confirm"]');
-      expect(found).toBeTruthy();
-      return found as HTMLElement;
+    await waitFor(() => expect(statusRequests).toBe(1));
+    // A same-hotkey session refresh starts a second status load while the first
+    // request is still in flight. Only that second response can enable the card.
+    const { setMinerSession } = await import("../stores/sessionStore");
+    setMinerSession({ ...session, token: "ditto_ms_refreshed" });
+    const confirm = await waitFor(() => {
+      const button = Array.from(document.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Confirm link"),
+      );
+      expect(button).toBeTruthy();
+      return button!;
     });
-    expect(confirmCard.textContent).toContain("miner@example.com");
-    expect(confirmCard.textContent).toContain(session.hotkey);
-    // Nothing is linked until the miner confirms.
-    expect(document.body.textContent).not.toContain("Unlink Ditto account");
-    const confirm = Array.from(confirmCard.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Confirm link"),
-    );
-    fireEvent.click(confirm!);
+    fireEvent.click(confirm);
     await waitFor(() => {
-      expect(document.body.textContent).toContain("Ditto account linked.");
+      expect(document.body.textContent).toContain("--ditto-attempt proof-1");
       expect(document.body.textContent).toContain("Unlink Ditto account");
     });
-    expect(confirms).toEqual(["Bearer ditto_ms_abc"]);
-    expect(location.hash).not.toContain("attempt=");
-    const unlink = Array.from(document.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Unlink Ditto account"),
-    );
-    fireEvent.click(unlink!);
-    await waitFor(() => {
-      expect(document.body.textContent).toContain("Ditto account unlinked.");
-      expect(document.body.textContent).toContain("Sign in with Ditto");
-    });
+    finishStatus(Response.json({ enabled: true, link: null }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.body.textContent).toContain("--ditto-attempt proof-1");
+    expect([...memory.values()].some((value) => value.includes("proof-1"))).toBe(true);
   });
 
   it("explains when linking is not enabled on this deployment", async () => {

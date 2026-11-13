@@ -21,8 +21,11 @@ function readTimeoutMs(path: string): number {
 }
 
 export class HTTPError extends Error {
-  constructor(public readonly status: number) {
-    super("HTTP " + status);
+  constructor(
+    public readonly status: number,
+    message?: string,
+  ) {
+    super(message ?? "HTTP " + status);
     this.name = "HTTPError";
   }
 }
@@ -98,7 +101,7 @@ export async function authJSON<T>(
     clearTimeout(to);
   }
   const data: unknown = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(errorDetail(data, response.status));
+  if (!response.ok) throw new HTTPError(response.status, errorDetail(data, response.status));
   return data as T;
 }
 

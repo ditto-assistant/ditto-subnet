@@ -1,11 +1,11 @@
 """``ditto link-ditto``: attach your Ditto account to this hotkey.
 
 Signing in with Ditto happens in a browser on dittobench.ai's OpenID flow; the
-CLI only starts the attempt under the miner session ``ditto login`` created
-(that session is the hotkey proof), opens the consent URL, and waits for the
-Platform to confirm the link. No key material, TAO, or Ditto credentials pass
-through this command, and the Ditto user id is whatever the Platform verified
-from Ditto's signed id_token — never something the CLI asserts.
+CLI starts the attempt under the miner session ``ditto login`` created, opens
+the consent URL, and confirms the Ditto pairing. It reuses the GitHub identity
+consented in Ditto and signs the existing miner proof locally when no matching
+proof exists. No TAO or provider credentials pass through this command. The
+Ditto user id comes from the verified id_token, never from the CLI.
 
 Subcommands:
 
@@ -14,6 +14,8 @@ Subcommands:
 - ``link-ditto unlink``   revoke the link (the Ditto account keeps its own data)
 
 Exit codes: 0 linked / shown / revoked; 1 not signed in, refused, or timed out.
+A saved Ditto link returns 0 even if its optional GitHub proof is incomplete;
+the warning gives a retry command and existing signed proofs stay in place.
 """
 
 from __future__ import annotations
@@ -21,15 +23,19 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
+import shlex
 import sys
 import time
 import webbrowser
+from uuid import UUID
 
 from ditto.api_models.miner_ditto_link import (
     MinerDittoLinkStartRequest,
     MinerDittoLinkView,
 )
 from ditto.miner_cli.api_client import ApiClient
+from ditto.miner_cli.commands.link_github import _github_user_id
 from ditto.miner_cli.errors import ApiResponseError, LoginRequiredError
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.preferences import load_miner_session
@@ -49,8 +55,8 @@ def add_subparser(
         description=(
             "Start a Sign in with Ditto round trip for the hotkey of your saved "
             "miner session, open the consent page in a browser, and wait for the "
-            "Platform to record the verified link. Nothing is signed and no TAO "
-            "moves."
+            "Platform to record the verified link. Reuse your Ditto GitHub "
+            "connection and sign its miner proof locally if needed. No TAO moves."
         ),
         parents=parents or [],
     )
@@ -71,6 +77,23 @@ def add_subparser(
         ),
     )
     parser.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    parser.add_argument(
+        "--wallet.name",
+        "--coldkey",
+        dest="coldkey_name",
+        default=os.environ.get("WALLET_NAME"),
+    )
+    parser.add_argument(
+        "--wallet.hotkey",
+        "--hotkey",
+        dest="hotkey_name",
+        default=os.environ.get("HOTKEY_NAME"),
+    )
+    parser.add_argument(
+        "--expect-github-id",
+        type=_github_user_id,
+        help="Expected numeric GitHub id; required with --yes for the signed proof.",
+    )
     parser.add_argument(
         "--yes",
         action="store_true",
@@ -118,10 +141,12 @@ def _print_link(link: MinerDittoLinkView | None, *, as_json: bool) -> None:
     )
 
 
-def _confirm_pairing(*, hotkey: str, who: str, skip: bool) -> bool:
+def _confirm_pairing(
+    *, hotkey: str, who: str, skip: bool, as_json: bool = False
+) -> bool:
     """Ask before writing the link. ``--yes`` skips the question; a non-TTY
     without ``--yes`` refuses, because silence must never mean consent."""
-    print(f"Ditto signed in as {who}.")
+    print(f"Ditto signed in as {who}.", file=sys.stderr if as_json else sys.stdout)
     if skip:
         return True
     if not sys.stdin.isatty():
@@ -132,10 +157,90 @@ def _confirm_pairing(*, hotkey: str, who: str, skip: bool) -> bool:
         )
         return False
     try:
-        answer = input(f"Link hotkey {hotkey} to {who}? [y/N] ").strip().lower()
+        with contextlib.redirect_stdout(sys.stderr if as_json else sys.stdout):
+            answer = input(f"Link hotkey {hotkey} to {who}? [y/N] ").strip().lower()
     except EOFError:
         return False
     return answer in ("y", "yes")
+
+
+def _proof_incomplete(args: argparse.Namespace) -> None:
+    retry = ["ditto", "--network", args.network, "link-ditto"]
+    for option, value in (
+        ("--wallet.name", args.coldkey_name),
+        ("--wallet.hotkey", args.hotkey_name),
+        ("--expect-github-id", args.expect_github_id),
+    ):
+        if value is not None:
+            retry.extend((option, str(value)))
+    print(
+        "Your Ditto account is linked. The GitHub miner proof is incomplete; "
+        "existing signed proofs are retained. Retry the connection with: "
+        + shlex.join(retry),
+        file=sys.stderr,
+    )
+
+
+def _finish_github_proof(
+    client: ApiClient,
+    args: argparse.Namespace,
+    *,
+    token: str,
+    hotkey: str,
+    attempt_id: UUID,
+) -> None:
+    """A proof failure must not undo or misreport the saved Ditto link."""
+    from ditto.miner_cli.commands import link_github
+
+    try:
+        proof = client.get_github_link_attempt(token=token, attempt_id=attempt_id)
+        existing = client.get_github_link(token=token).link
+        if existing is not None and (
+            existing.github_user_id,
+            existing.github_login,
+        ) == (proof.github_user_id, proof.github_login):
+            print("Your matching signed GitHub proof is retained.", file=sys.stderr)
+            return
+        if proof.github_user_id is not None:
+            assigned = client.get_github_account_link(
+                token=token, github_user_id=proof.github_user_id
+            ).link
+            if assigned is not None and assigned.hotkey != hotkey:
+                print(
+                    "Ditto is linked for Router attribution. Your GitHub "
+                    f"bounty identity remains on {assigned.hotkey}; "
+                    "its existing proof is retained.",
+                    file=sys.stderr,
+                )
+                return
+        if proof.status in ("failed", "expired"):
+            _proof_incomplete(args)
+            return
+        with contextlib.redirect_stdout(sys.stderr if args.json else sys.stdout):
+            result = link_github.run(
+                argparse.Namespace(
+                    network=args.network,
+                    github_command="link",
+                    ditto_attempt=attempt_id,
+                    coldkey_name=args.coldkey_name,
+                    hotkey_name=args.hotkey_name,
+                    key_kind="hotkey",
+                    no_browser=True,
+                    wait=600,
+                    yes=args.yes,
+                    expect_github_id=args.expect_github_id,
+                    json=False,
+                )
+            )
+    except (LoginRequiredError, ApiResponseError, ValueError) as exc:
+        print(f"GitHub miner proof could not be completed: {exc}", file=sys.stderr)
+        if isinstance(exc, LoginRequiredError):
+            print("Run `ditto login` again before retrying the proof.", file=sys.stderr)
+        _proof_incomplete(args)
+        return
+    if result != 0:
+        # The proof can expire between this command's read and the signer's read.
+        _proof_incomplete(args)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -164,8 +269,9 @@ def run(args: argparse.Namespace) -> int:
             started = client.start_ditto_link(
                 token=token, body=MinerDittoLinkStartRequest(client="cli")
             )
-            print(f"Sign in with Ditto to link {hotkey}:")
-            print(started.authorize_url)
+            output = sys.stderr if as_json else sys.stdout
+            print(f"Sign in with Ditto to link {hotkey}:", file=output)
+            print(started.authorize_url, file=output)
             if not args.no_browser:
                 # A headless box has no browser; the printed URL is the fallback.
                 with contextlib.suppress(Exception):
@@ -183,7 +289,8 @@ def run(args: argparse.Namespace) -> int:
                     # THIS hotkey on the page Ditto sent them to.
                     print(
                         "Ditto verified the sign-in. In the browser, approve linking "
-                        f"hotkey {hotkey} to your Ditto account, then return here."
+                        f"hotkey {hotkey} to your Ditto account, then return here.",
+                        file=output,
                     )
                     told_accept = True
                 if attempt.status == "authenticated":
@@ -195,7 +302,9 @@ def run(args: argparse.Namespace) -> int:
                         or attempt.ditto_user_id
                         or "unknown account"
                     )
-                    if not _confirm_pairing(hotkey=hotkey, who=who, skip=args.yes):
+                    if not _confirm_pairing(
+                        hotkey=hotkey, who=who, skip=args.yes, as_json=as_json
+                    ):
                         print(
                             "not linked (the sign-in expires on its own)",
                             file=sys.stderr,
@@ -206,6 +315,14 @@ def run(args: argparse.Namespace) -> int:
                     )
                 if attempt.status == "linked":
                     _print_link(attempt.link, as_json=as_json)
+                    if attempt.github_proof_attempt_id is not None:
+                        _finish_github_proof(
+                            client,
+                            args,
+                            token=token,
+                            hotkey=hotkey,
+                            attempt_id=attempt.github_proof_attempt_id,
+                        )
                     return 0
                 if attempt.status in ("failed", "expired"):
                     print(

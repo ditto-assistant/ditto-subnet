@@ -35,6 +35,7 @@ from ditto.api_server.github_link import (
 )
 from ditto.chain.models import BlockInfo
 from ditto.db.models import (
+    MinerDittoLinkAttempt,
     MinerGithubActionNonce,
     MinerGithubLink,
     MinerGithubLinkAttempt,
@@ -1997,6 +1998,58 @@ async def test_bounty_identity_rechecks_link_after_network_io(
         release.set()
         with pytest.raises(BountyIdentityRejected, match="changed during verification"):
             await asyncio.wait_for(task, 10)
+
+
+@pytest.mark.parametrize("proof_status", ["identity_verified", "accepted"])
+async def test_ditto_provenance_does_not_consume_direct_attempt_cap(
+    app, client, session_maker, proof_status
+):
+    setup(app, session_maker)
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    token = await _sign_in(client, alice)
+    auth = {"authorization": f"Bearer {token}"}
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        miner = await session.scalar(
+            select(MinerSession).where(MinerSession.miner_hotkey == alice.ss58_address)
+        )
+        for i in range(5):
+            attempt_id = uuid4()
+            session.add(
+                MinerDittoLinkAttempt(
+                    attempt_id=attempt_id,
+                    miner_hotkey=alice.ss58_address,
+                    session_id=miner.session_id,
+                    state_hash=f"{i:064x}",
+                    nonce="fixture-nonce",
+                    code_verifier="v" * 43,
+                    client="cli",
+                    status="authenticated",
+                    ditto_user_id="ditto-user-1",
+                    created_at=now,
+                    expires_at=now + timedelta(minutes=10),
+                )
+            )
+            session.add(
+                MinerGithubLinkAttempt(
+                    attempt_id=attempt_id,
+                    netuid=118,
+                    hotkey=alice.ss58_address,
+                    session_id=miner.session_id,
+                    launch_hash=uuid4().hex,
+                    status=proof_status,
+                    github_user_id=100,
+                    github_login="miner-fixture",
+                    created_at=now,
+                    expires_at=now + timedelta(minutes=10),
+                )
+            )
+    # Direct starts have no OAuth state yet either; null state is not provenance.
+    for _ in range(5):
+        started = await client.post("/api/v1/me/github-link/start", headers=auth)
+        assert started.status_code == 200, started.text
+    limited = await client.post("/api/v1/me/github-link/start", headers=auth)
+    assert limited.status_code == 429, limited.text
 
 
 async def test_start_prunes_abandoned_attempts_without_touching_links(
