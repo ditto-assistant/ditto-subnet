@@ -287,7 +287,7 @@ async def test_starter_kit_skill_symlink_is_still_rejected_before_docker(
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert result.detail.startswith("error[SCR-ARCHIVE-003]"), result.detail
-    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
 
 
 @pytest.mark.integration

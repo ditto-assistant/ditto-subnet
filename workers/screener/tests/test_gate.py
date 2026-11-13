@@ -1566,7 +1566,7 @@ async def test_static_malicious_preflight_quarantines_before_docker(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
     assert "/var/run/docker.sock" not in str(result.finding)
@@ -1600,7 +1600,7 @@ async def test_static_preflight_v2_enforce_keeps_reachable_causal_quarantine(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v2"
 
@@ -1663,7 +1663,7 @@ async def test_mechanical_lane_rejects_static_malicious_source_before_docker(
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert result.reason_code == "static-malicious-source"
-    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert "src/main.rs:" in result.detail
     assert "/var/run/docker.sock" not in result.detail
     assert "static-source safety reject" in caplog.text
@@ -1698,7 +1698,7 @@ async def test_mechanical_lane_rejects_v2_reachable_causal_match(
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert result.reason_code == "static-malicious-source"
-    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert "app.py:" in result.detail
 
 
@@ -1756,7 +1756,7 @@ async def test_static_preflight_v2_enforce_reviews_unresolved_v1_before_build(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
 
@@ -1788,7 +1788,7 @@ async def test_static_preflight_v2_enforce_reviews_helper_before_build(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
 
@@ -1867,7 +1867,7 @@ async def test_static_preflight_audit_failure_is_explicit_retryable_infrastructu
     assert [evidence.code for evidence in result.evidence] == [
         "static-preflight-audit-failed"
     ]
-    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run", "exec"} for call in calls)
     assert destination.read_text() == "unchanged\n"
 
 
@@ -2035,7 +2035,7 @@ async def test_v13_uncertified_static_preflight_low_holds_before_build(
         )
     assert result.outcome == ScreeningOutcome.QUARANTINE
     assert result.evidence[0].code == "source-review-clearance-unproven"
-    assert not any(call[:2] == ["buildx", "build"] for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 async def test_v13_l4_cleared_static_lead_continues_to_build(
@@ -2448,7 +2448,9 @@ async def test_policy_only_rescreen_starts_source_review_without_runtime(
 
     assert result.outcome == ScreeningOutcome.PASS
     assert events == ["review_started", "review_finished"]
-    assert not any(call[0] in {"buildx", "run", "exec"} for call in docker_calls)
+    assert not any(
+        call[0] in {"build", "buildx", "run", "exec"} for call in docker_calls
+    )
 
 
 async def test_source_only_fixture_builds_and_reviews_without_serving(
@@ -2862,7 +2864,7 @@ async def test_sha_mismatch_is_deterministic_and_cleans_temp_file(
         result = await _screen(gate, "00" * 32)
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "sha256 mismatch" in result.detail
-    assert not any(call[:2] == ["buildx", "build"] for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
     assert not artifact_path.exists()
 
 
@@ -2879,7 +2881,7 @@ async def test_container_contract_failure_is_terminal_reject(
         "error[SCR-CONTRACT-001]: Dockerfile is missing from the archive root"
     )
     assert "help:" in result.detail
-    assert not any(call[:2] == ["buildx", "build"] for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 @pytest.mark.parametrize("entitlement", ["--network=host", "--security=insecure"])
@@ -2900,7 +2902,7 @@ async def test_container_contract_rejects_insecure_build_entitlements(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "SCR-CONTRACT-004" in result.detail
-    assert not any(call[:2] == ["buildx", "build"] for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 async def test_rootless_executor_policy_fails_closed_before_download(
@@ -2923,7 +2925,7 @@ async def test_rootless_executor_policy_fails_closed_before_download(
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "executor-isolation-unavailable"
     assert calls[0] == ["info", "--format", "{{json .SecurityOptions}}"]
-    assert not any(call[0] in {"buildx", "run"} for call in calls)
+    assert not any(call[0] in {"build", "buildx", "run"} for call in calls)
     assert not any(call[:2] == ["network", "create"] for call in calls)
 
 
@@ -3026,7 +3028,7 @@ async def test_container_contract_rejects_noncanonical_member_alias(
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "non-canonical path" in result.detail
-    assert not any(call[:2] == ["buildx", "build"] for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 async def test_container_contract_rejects_member_flood_before_build(
@@ -3048,7 +3050,7 @@ async def test_container_contract_rejects_member_flood_before_build(
     assert _MAX_ARCHIVE_MEMBERS == 20_000
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "too many members" in result.detail
-    assert not any(call[:2] == ["buildx", "build"] for call in calls)
+    assert not any(call[0] in {"build", "buildx"} for call in calls)
 
 
 async def test_prebuilt_binary_entrypoint_is_advisory_quarantine(
@@ -3359,7 +3361,7 @@ async def test_expired_lease_budget_short_circuits_before_download(
         )
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert "lease budget exhausted" in result.detail
-    assert not any(args and args[:2] == ["buildx", "build"] for args in calls)
+    assert not any(args and args[0] in {"build", "buildx"} for args in calls)
 
 
 async def test_gateway_start_failure_is_retryable_infrastructure(
