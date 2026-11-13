@@ -346,7 +346,7 @@
       - image
       - inspect
       - --format
-      - '{{ index .Config.Labels "ai.heyditto.screener.sha" }}'
+      - '{% raw %}{{ index .Config.Labels "ai.heyditto.screener.sha" }}{% endraw %}'
       - ditto-screener-l2-analyzer:active
   become_user: "{{ screener_fleet_user }}"
   environment:
