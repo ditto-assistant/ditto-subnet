@@ -10,7 +10,7 @@
     "postinstall": "node ./scripts/force-patched-transitives.mjs"
   },
   "dependencies": {
-    "openclaw": "2026.7.33"
+    "openclaw": "2026.11.1"
   },
   "overrides": {
     "@modelcontextprotocol/sdk": "1.32.0",
