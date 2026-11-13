@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from ditto_edge_protocol.dryrun import DryRunConfig, run_dry_run
+from ditto_edge_protocol.settings import LaneSettings
 from ditto_edge_protocol.sources import PublicState, SourceObject, synthetic_objects
 
 
@@ -77,3 +80,30 @@ def test_an_unpublished_share_is_revoked_and_released_within_the_bound() -> None
     assert revocation["honest_not_released"] == 0
     assert revocation["max_release_seconds"] is not None
     assert revocation["max_release_seconds"] <= revocation["bound_seconds"]
+
+
+def test_part_time_comparison_is_none_without_both_groups() -> None:
+    report = run_dry_run(
+        DryRunConfig(honest_nodes=2, part_time_nodes=0, adversaries=(), windows=2),
+        synthetic_objects(8, seed=2),
+    )
+    assert report["verdict"]["part_time_paid_less"] is None
+
+
+def test_every_instance_of_a_repeated_adversary_must_be_caught() -> None:
+    report = run_dry_run(
+        DryRunConfig(honest_nodes=3, adversaries=("tamper", "tamper"), windows=3),
+        synthetic_objects(16, seed=4),
+    )
+    tamper_nodes = [n for n in report["nodes"] if n["behavior"] == "tamper"]
+    assert len(tamper_nodes) == 2
+    caught_all = all(n["first_flagged_window"] is not None for n in tamper_nodes)
+    assert report["verdict"]["adversaries_caught"]["tamper"] is caught_all
+
+
+def test_a_window_shorter_than_one_poll_is_refused() -> None:
+    settings = LaneSettings(
+        mode="shadow", window_seconds=300, poll_interval_seconds=600, lease_seconds=1200
+    )
+    with pytest.raises(ValueError, match="poll interval"):
+        run_dry_run(DryRunConfig(settings=settings), synthetic_objects(4))

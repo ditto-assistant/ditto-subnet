@@ -209,6 +209,8 @@ def run_dry_run(
 
     tick = settings.poll_interval_seconds
     ticks_per_window = settings.window_seconds // tick
+    if ticks_per_window == 0:
+        raise ValueError("a dry run needs at least one poll interval per window")
     total_ticks = config.windows * ticks_per_window
     revoke_tick = total_ticks // 2
     revocations: list[_Revocation] = []
@@ -298,7 +300,10 @@ def _report(
                 honest_windows += 1
                 honest_failures += not row.score.eligible
         if sim.behavior in ADVERSARIES:
-            caught[sim.behavior] = first_caught is not None
+            # Several instances of one behavior pass only if every one is caught.
+            caught[sim.behavior] = caught.get(sim.behavior, True) and (
+                first_caught is not None
+            )
         nodes.append(
             {
                 "node_id": node_id,
@@ -399,8 +404,12 @@ def _report(
         "verdict": {
             "honest_false_fail_rate": false_fail_rate,
             "adversaries_caught": caught,
-            "part_time_paid_less": not honest_units
-            or all(units < min(honest_units) for units in part_time_units),
+            # None when there is no pair to compare, rather than a vacuous True.
+            "part_time_paid_less": (
+                all(units < min(honest_units) for units in part_time_units)
+                if honest_units and part_time_units
+                else None
+            ),
             "revocation_within_bound": late_holders == 0
             and all(latency <= bound for latency in latencies),
             "pass": false_fail_rate == 0.0

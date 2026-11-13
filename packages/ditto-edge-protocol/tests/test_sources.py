@@ -97,7 +97,13 @@ def test_gated_missing_and_too_large_shares_yield_nothing() -> None:
 
 @pytest.mark.parametrize(
     ("status", "expected"),
-    [(200, "public"), (401, "unpublished"), (404, "unpublished"), (500, "unknown")],
+    [
+        (200, "public"),
+        (401, "unpublished"),
+        (404, "unpublished"),
+        (403, "unknown"),
+        (500, "unknown"),
+    ],
 )
 def test_state_reads_publication_like_an_anonymous_visitor(
     status: int, expected: str

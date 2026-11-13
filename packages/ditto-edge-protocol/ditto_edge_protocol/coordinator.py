@@ -475,6 +475,11 @@ class Coordinator:
         listed: set[str] = set()
         created = 0
         for digest in desired:
+            # A poll lists at most MAX_ASSIGNMENTS_PER_POLL objects. Anything
+            # beyond it is neither listed nor renewed, so it lapses instead of
+            # holding a lease the node never hears about.
+            if len(listed) >= MAX_ASSIGNMENTS_PER_POLL:
+                break
             current = self.assignments.get((node.node_id, digest))
             if current is not None and current.released_at is None:
                 listed.add(digest)
@@ -607,11 +612,16 @@ class Coordinator:
         summary = None
         schedule = self.slots.get((node_id, index))
         if schedule is not None:
-            outcomes = [
-                self._slot_outcome(slot)
-                for slot in schedule
-                if slot.state != "scheduled"
-            ]
+            outcomes: list[Outcome] = []
+            for slot in schedule:
+                if slot.state == "scheduled":
+                    continue
+                outcome = self._slot_outcome(slot)
+                if outcome == "pending" and slot.challenge_id is not None:
+                    # Still inside its deadline: due, but not yet decided.
+                    deadline = self.challenges[slot.challenge_id].deadline_at
+                    outcome = "missed" if now > deadline else "pending"
+                outcomes.append(outcome)
             counted = [o for o in outcomes if o != "void"]
             summary = WindowSummary(
                 window_index=index,
@@ -643,9 +653,13 @@ class Coordinator:
     # -- ledger ---------------------------------------------------------------
 
     def _slot_outcome(self, slot: _Slot) -> Outcome:
+        """The slot's outcome, leaving an unanswered challenge ``pending``.
+
+        The ledger counts ``pending`` as missed once a window closes; a live
+        status read must not, while the deadline is still running.
+        """
         if slot.state == "issued" and slot.challenge_id is not None:
-            outcome = self.challenges[slot.challenge_id].outcome
-            return "missed" if outcome == "pending" else outcome
+            return self.challenges[slot.challenge_id].outcome
         if slot.state == "void":
             return "void"
         return "missed"

@@ -17,7 +17,7 @@ from ditto_edge_protocol.signing import DeviceKey
 from ditto_edge_protocol.sources import synthetic_objects
 from ditto_edge_protocol.store import MemoryStore
 from ditto_edge_protocol.transport import LocalTransport, TransportError
-from ditto_edge_protocol.wire import ClientInfo
+from ditto_edge_protocol.wire import ClientInfo, PollRequest
 
 START = 1_763_000_000.0 // 3600 * 3600
 
@@ -188,3 +188,44 @@ def test_status_reports_held_bytes_and_no_payouts(lane: Lane) -> None:
     assert status.held_bytes == node.store.used_bytes()
     assert status.payouts == "none"
     assert status.current_window is not None
+
+
+def test_live_status_does_not_count_a_pending_challenge_as_missed() -> None:
+    lane = Lane(_settings(challenges_per_window=120, min_challenges=6))
+    for obj in synthetic_objects(4, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    lane.run([node], 300)
+    # Poll without answering: issue whatever is due, then read status at once.
+    lane.clock.advance(60)
+    response = node.transport.poll(PollRequest(protocol="edge/v1", free_bytes=GIB))
+    assert response.challenges
+    summary = node.transport.status().current_window
+    assert summary is not None
+    pending = len(response.challenges)
+    decided = summary.passed + summary.missed + summary.failed
+    assert summary.scheduled - decided >= pending
+    # Past the deadline, the same unanswered challenges read as missed.
+    lane.clock.advance(lane.coordinator.settings.challenge_deadline_seconds + 1)
+    later = node.transport.status().current_window
+    assert later is not None and later.missed >= pending
+
+
+def test_a_poll_never_renews_more_than_it_lists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ditto_edge_protocol.coordinator as coordinator_module
+
+    monkeypatch.setattr(coordinator_module, "MAX_ASSIGNMENTS_PER_POLL", 3)
+    lane = Lane(_settings(replicas=1, max_new_assignments_per_poll=16))
+    for obj in synthetic_objects(8, seed=6):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    response = node.transport.poll(PollRequest(protocol="edge/v1", free_bytes=GIB))
+    assert len(response.assignments) == 3
+    open_spans = [
+        a
+        for a in lane.coordinator.assignments.values()
+        if a.node_id == node.node_id and a.released_at is None
+    ]
+    assert len(open_spans) == 3

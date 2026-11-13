@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -35,6 +36,7 @@ from ditto_edge_protocol.wire import (
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 _MAX_JSON_BYTES = 4 * 1024 * 1024
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 class TransportError(RuntimeError):
@@ -66,10 +68,11 @@ class HttpTransport:
         clock: Callable[[], float] = time.time,
     ) -> None:
         base = api_url.rstrip("/")
-        loopback = base.startswith(
-            ("http://127.0.0.1", "http://localhost", "http://[::1]")
-        )
-        if not (base.startswith("https://") or loopback):
+        parts = urllib.parse.urlsplit(base)
+        # Compare the parsed hostname exactly: a prefix test would accept
+        # http://127.0.0.1.attacker.example and send it signed plaintext.
+        loopback = parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS
+        if not ((parts.scheme == "https" and parts.hostname) or loopback):
             raise ValueError(
                 "Platform must be reached over https (http only on loopback)"
             )

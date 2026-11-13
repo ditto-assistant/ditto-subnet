@@ -162,7 +162,9 @@ class PublicShareSource:
             return "unknown"
         if status == 200:
             return "public"
-        if status in (401, 403, 404, 410):
+        # 403 is left unknown: a WAF or bot wall can answer 403 for a share that
+        # is still public, and a false unpublish would revoke a live object.
+        if status in (401, 404, 410):
             return "unpublished"
         return "unknown"
 

@@ -149,7 +149,27 @@ def test_http_errors_surface_with_their_status(
     assert raised.value.status == 401
 
 
-def test_plain_http_is_refused_off_loopback() -> None:
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://platform.example.test",
+        "http://127.0.0.1.attacker.example",
+        "http://localhostly.example",
+        "ftp://127.0.0.1",
+        "https://",
+    ],
+)
+def test_plain_http_is_refused_off_loopback(url: str) -> None:
     with pytest.raises(ValueError):
-        HttpTransport(api_url="http://platform.example.test", key=DeviceKey.generate())
+        HttpTransport(api_url=url, key=DeviceKey.generate())
+
+
+@pytest.mark.parametrize(
+    "url", ["http://127.0.0.1:8000", "http://localhost:8000", "http://[::1]:8000"]
+)
+def test_loopback_http_is_allowed(url: str) -> None:
+    HttpTransport(api_url=url, key=DeviceKey.generate())
+
+
+def test_https_is_always_allowed() -> None:
     HttpTransport(api_url="https://platform-api.heyditto.ai", key=DeviceKey.generate())
