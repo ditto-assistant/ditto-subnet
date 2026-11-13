@@ -43,6 +43,8 @@ Environment=SCREENER_PROBE_REVIEW_KEY_FILE={{ screener_fleet_probe_review_key_fi
 Environment=SCREENER_CONVERSATION_OPENROUTER_KEY_FILE={{ screener_fleet_conversation_key_file }}
 Environment=SCREENER_CONVERSATION_SPOOL_DIR={{ screener_fleet_state_dir }}/workers/%i/conversation
 {% endif %}
+# Fail before claiming miner work if the trusted build dependency is absent.
+ExecStartPre=/usr/bin/docker buildx version
 ExecStart={{ screener_fleet_active_worker_venv }}/bin/{{ 'ditto-screener-replay' if screener_fleet_replay_worker_enabled else 'ditto-screener' }}
 {# The release updater depends on Restart=always: it SIGTERMs each worker's
    main process and lets systemd start it again on the activated release.

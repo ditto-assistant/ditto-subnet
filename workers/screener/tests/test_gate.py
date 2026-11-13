@@ -818,7 +818,7 @@ def _ok_run(calls: list[list[str]] | None = None) -> Callable[..., Any]:
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
         if calls is not None:
             calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -936,7 +936,7 @@ async def test_running_build_observes_lease_renewal_and_absolute_cap(
 
     async def run(args: list[str], **kwargs: Any) -> tuple[int, str]:
         nonlocal original_expiry
-        if args[0] != "build":
+        if args[:2] != ["buildx", "build"]:
             return await ok_run(args, **kwargs)
         assert kwargs["timeout"] == cap_seconds
         assert kwargs["deadline"] is deadline
@@ -1312,7 +1312,7 @@ async def test_publish_failure_demotes_pass_with_dedicated_reason(
     saved_archive, _, _ = _oci_image_save_archive()
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             _write_iidfile(args)
@@ -1353,7 +1353,7 @@ async def test_publish_platform_outage_is_fleet_infra(
     saved_archive, _, _ = _oci_image_save_archive()
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             _write_iidfile(args)
@@ -1398,7 +1398,7 @@ async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             _write_iidfile(args)
@@ -1431,7 +1431,9 @@ async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(
     assert result.outcome == ScreeningOutcome.PASS
     assert [image.image_ref for image in published] == [f"ditto-screen/{_AGENT}:latest"]
     assert [image.image_id for image in published] == [config_id]
-    assert any(call[0] == "build" and attempt_ref in call for call in calls)
+    assert any(
+        call[:2] == ["buildx", "build"] and attempt_ref in call for call in calls
+    )
     assert ["rmi", "-f", attempt_ref] in calls
 
 
@@ -1564,7 +1566,7 @@ async def test_static_malicious_preflight_quarantines_before_docker(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
     assert "/var/run/docker.sock" not in str(result.finding)
@@ -1598,7 +1600,7 @@ async def test_static_preflight_v2_enforce_keeps_reachable_causal_quarantine(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v2"
 
@@ -1630,7 +1632,7 @@ async def test_static_preflight_v2_enforce_does_not_hold_excluded_local_helper(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.PASS
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_mechanical_lane_rejects_static_malicious_source_before_docker(
@@ -1661,7 +1663,7 @@ async def test_mechanical_lane_rejects_static_malicious_source_before_docker(
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert result.reason_code == "static-malicious-source"
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
     assert "src/main.rs:" in result.detail
     assert "/var/run/docker.sock" not in result.detail
     assert "static-source safety reject" in caplog.text
@@ -1696,7 +1698,7 @@ async def test_mechanical_lane_rejects_v2_reachable_causal_match(
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert result.reason_code == "static-malicious-source"
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
     assert "app.py:" in result.detail
 
 
@@ -1729,7 +1731,7 @@ async def test_mechanical_lane_passes_excluded_local_helper(
         )
 
     assert result.outcome == ScreeningOutcome.PASS
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_static_preflight_v2_enforce_reviews_unresolved_v1_before_build(
@@ -1754,7 +1756,7 @@ async def test_static_preflight_v2_enforce_reviews_unresolved_v1_before_build(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
 
@@ -1786,7 +1788,7 @@ async def test_static_preflight_v2_enforce_reviews_helper_before_build(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
     assert result.finding is not None
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
 
@@ -1822,7 +1824,7 @@ async def test_static_preflight_v2_shadow_clears_excluded_helper_and_journals_de
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.PASS
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
     record = json.loads(audit_path.read_text())
     assert record["mode"] == "shadow"
     assert record["legacy_decisive"] is False
@@ -1865,7 +1867,7 @@ async def test_static_preflight_audit_failure_is_explicit_retryable_infrastructu
     assert [evidence.code for evidence in result.evidence] == [
         "static-preflight-audit-failed"
     ]
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert not any(call[0] in {"buildx", "run", "exec"} for call in calls)
     assert destination.read_text() == "unchanged\n"
 
 
@@ -2000,7 +2002,7 @@ async def test_l3_cleared_static_lead_can_continue_to_build(
     assert result.outcome == ScreeningOutcome.PASS
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_v13_uncertified_static_preflight_low_holds_before_build(
@@ -2033,7 +2035,7 @@ async def test_v13_uncertified_static_preflight_low_holds_before_build(
         )
     assert result.outcome == ScreeningOutcome.QUARANTINE
     assert result.evidence[0].code == "source-review-clearance-unproven"
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_v13_l4_cleared_static_lead_continues_to_build(
@@ -2067,7 +2069,7 @@ async def test_v13_l4_cleared_static_lead_continues_to_build(
     assert result.reason_code == "source-review-awaiting-v13-verification"
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_static_preflight_reports_source_review_before_build(
@@ -2220,7 +2222,7 @@ async def test_source_review_starts_only_after_build_and_health(
     events: list[str] = []
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             events.append("build_finished")
@@ -2380,7 +2382,7 @@ async def test_slow_build_does_not_age_out_a_receipt_fresh_v13_lease(
     ok_run = _ok_run()
 
     async def slow_build(args: list[str], **kwargs: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             clock[0] += 400
         return await ok_run(args, **kwargs)
 
@@ -2446,7 +2448,7 @@ async def test_policy_only_rescreen_starts_source_review_without_runtime(
 
     assert result.outcome == ScreeningOutcome.PASS
     assert events == ["review_started", "review_finished"]
-    assert not any(call[0] in {"build", "run", "exec"} for call in docker_calls)
+    assert not any(call[0] in {"buildx", "run", "exec"} for call in docker_calls)
 
 
 async def test_source_only_fixture_builds_and_reviews_without_serving(
@@ -2477,7 +2479,7 @@ async def test_source_only_fixture_builds_and_reviews_without_serving(
     assert result.outcome == ScreeningOutcome.PASS
     assert events == ["review_started", "review_finished"]
     assert built_images == ["sha256:" + "34" * 32]
-    assert any(call[0] == "build" for call in docker_calls)
+    assert any(call[:2] == ["buildx", "build"] for call in docker_calls)
     assert not any(
         call[0] in {"create", "run", "start", "exec"} for call in docker_calls
     )
@@ -2571,7 +2573,7 @@ async def test_source_review_is_not_started_when_the_build_fails(
     reviewer = _StubReviewer(events)
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return 1, "error[E0308]: mismatched types"
@@ -2666,7 +2668,7 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     runtime_network = networks[0]
     assert runtime_network[-1].startswith("ditto-screen-")
     assert "--internal" in runtime_network
-    build = next(call for call in calls if call[0] == "build")
+    build = next(call for call in calls if call[:2] == ["buildx", "build"])
     assert "--load" in build
     assert build[build.index("--network") + 1] == "default"
     assert {"--memory", "8g", "--memory-swap", "--cpu-quota", "--shm-size"} <= set(
@@ -2761,7 +2763,7 @@ async def test_unloaded_buildx_result_is_retryable_infrastructure(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
             return 0, "build completed"
@@ -2773,7 +2775,7 @@ async def test_unloaded_buildx_result_is_retryable_infrastructure(
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
-    build = next(call for call in calls if call[0] == "build")
+    build = next(call for call in calls if call[:2] == ["buildx", "build"])
     assert "--load" in build
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "docker-build-infrastructure"
@@ -2788,7 +2790,7 @@ async def test_lost_buildkit_session_is_retryable_infrastructure(
     async def session_lost(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             return 1, (
                 "ERROR: failed to solve: rpc error: code = Unknown desc = no "
@@ -2818,7 +2820,7 @@ async def test_build_uses_daemon_image_id_resolved_from_unique_tag(
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             Path(args[args.index("--iidfile") + 1]).write_text(build_result_id)
             return 0, "build completed"
@@ -2860,7 +2862,7 @@ async def test_sha_mismatch_is_deterministic_and_cleans_temp_file(
         result = await _screen(gate, "00" * 32)
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "sha256 mismatch" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[:2] == ["buildx", "build"] for call in calls)
     assert not artifact_path.exists()
 
 
@@ -2877,7 +2879,7 @@ async def test_container_contract_failure_is_terminal_reject(
         "error[SCR-CONTRACT-001]: Dockerfile is missing from the archive root"
     )
     assert "help:" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 @pytest.mark.parametrize("entitlement", ["--network=host", "--security=insecure"])
@@ -2898,7 +2900,7 @@ async def test_container_contract_rejects_insecure_build_entitlements(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "SCR-CONTRACT-004" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_rootless_executor_policy_fails_closed_before_download(
@@ -2921,7 +2923,7 @@ async def test_rootless_executor_policy_fails_closed_before_download(
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "executor-isolation-unavailable"
     assert calls[0] == ["info", "--format", "{{json .SecurityOptions}}"]
-    assert not any(call[0] in {"build", "run"} for call in calls)
+    assert not any(call[0] in {"buildx", "run"} for call in calls)
     assert not any(call[:2] == ["network", "create"] for call in calls)
 
 
@@ -3006,7 +3008,7 @@ async def test_container_contract_is_language_neutral(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.PASS
-    build = next(call for call in calls if call[0] == "build")
+    build = next(call for call in calls if call[:2] == ["buildx", "build"])
     assert build[build.index("--memory") + 1] == "8g"
     assert build[build.index("--memory-swap") + 1] == "8g"
 
@@ -3024,7 +3026,7 @@ async def test_container_contract_rejects_noncanonical_member_alias(
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "non-canonical path" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_container_contract_rejects_member_flood_before_build(
@@ -3046,7 +3048,7 @@ async def test_container_contract_rejects_member_flood_before_build(
     assert _MAX_ARCHIVE_MEMBERS == 20_000
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
     assert "too many members" in result.detail
-    assert not any(call[0] == "build" for call in calls)
+    assert not any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_prebuilt_binary_entrypoint_is_advisory_quarantine(
@@ -3076,7 +3078,7 @@ async def test_prebuilt_binary_entrypoint_is_advisory_quarantine(
         item.code == "image-binding-heuristic" and item.module_id == "stable-core"
         for item in result.evidence
     )
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 def test_image_binding_escalation_preserves_review_and_policy_identity() -> None:
@@ -3200,7 +3202,7 @@ async def test_build_only_skips_image_binding_advisory_and_passes(
     assert result.outcome == ScreeningOutcome.PASS
     assert result.submits_verdict
     # It still builds the image (that is the whole point of a build-only pass).
-    assert any(call[0] == "build" for call in calls)
+    assert any(call[:2] == ["buildx", "build"] for call in calls)
 
 
 async def test_screen_decision_binds_the_claimed_policy_version(
@@ -3229,7 +3231,7 @@ async def test_build_and_health_failures_are_deterministic(
     async def build_failure(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return 1, "error[E0432]: unresolved import"
@@ -3244,7 +3246,7 @@ async def test_build_and_health_failures_are_deterministic(
     async def unhealthy(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -3281,7 +3283,7 @@ async def test_exited_harness_fails_health_immediately_with_retained_logs(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -3319,7 +3321,7 @@ async def test_image_declared_volume_is_rejected_before_runtime(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
         calls.append(args)
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -3357,7 +3359,7 @@ async def test_expired_lease_budget_short_circuits_before_download(
         )
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert "lease budget exhausted" in result.detail
-    assert not any(args and args[0] == "build" for args in calls)
+    assert not any(args and args[:2] == ["buildx", "build"] for args in calls)
 
 
 async def test_gateway_start_failure_is_retryable_infrastructure(
@@ -3368,7 +3370,7 @@ async def test_gateway_start_failure_is_retryable_infrastructure(
     async def no_daemon(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build" and stdin is not None:
+        if args[:2] == ["buildx", "build"] and stdin is not None:
             stdin.read()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
@@ -3411,7 +3413,7 @@ async def test_docker_daemon_build_failure_is_retryable_infrastructure(
     async def no_daemon(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return 1, "Cannot connect to the Docker daemon"
@@ -3449,7 +3451,7 @@ async def test_transient_build_failures_are_retryable_infrastructure(
     async def transient_failure(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return 1, failure
@@ -3472,7 +3474,7 @@ async def test_signal_interrupted_build_is_retryable_infrastructure(
     async def interrupted(
         args: list[str], *, stdin: Any = None, **_: Any
     ) -> tuple[int, str]:
-        if args[0] == "build":
+        if args[:2] == ["buildx", "build"]:
             if stdin is not None:
                 stdin.read()
             return exit_code, "step 3/9"

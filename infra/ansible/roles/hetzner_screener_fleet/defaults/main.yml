@@ -1,4 +1,8 @@
 ---
+# Docker Release (CE deb), fingerprint 9DC8 5822 9FC7 DD38 854A E2D8
+# 8D81 803C 0EBF CD88. Keep aligned with test_docker_apt_key_pin.py.
+docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
+
 screener_fleet_node_id: subnet-screener-1
 screener_fleet_runtime_enabled: true
 screener_fleet_environment: prod

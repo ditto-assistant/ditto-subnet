@@ -27,7 +27,12 @@ backlog → controller starts EC2 (wake role, keyless) → worker enrolls/refres
   `SCREENER_NODE_REAUTH_MAX_DORMANCY_SECONDS` (30 days). A node asleep longer
   must re-enroll (step 4 below).
 - **Releases.** The signed pull updater runs 1 minute after every boot, so a
-  woken node adopts the current release before its first claim.
+  woken node adopts the current release after startup. Workers can claim on
+  the persisted release before that update finishes; keep the first-boot pin
+  valid and verify the reported release before opening admission after repair.
+  Debian 12 installs Buildx separately from the signed Docker apt repository;
+  the worker invokes `docker buildx build` explicitly and refuses to start
+  without the plugin, while retaining the distribution rootless daemon.
 
 Cost guards, so nobody has to watch it:
 
