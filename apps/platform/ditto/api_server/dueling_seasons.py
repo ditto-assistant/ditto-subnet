@@ -37,7 +37,12 @@ with generator rounds and spans ``rounds_per_season`` of them. The lifecycle
    rollout's desired version catches up its ranked quorum agents instead,
    so the rollout's activation count does not collapse at the boundary.
 4. **Close.** At ``closes_at_round`` (or on an audited rotation), or as soon
-   as its bench version is neither active nor rolling out. Disabling dueling
+   as its bench version is neither active nor rolling out. A due close waits
+   while the committed successor cannot open yet (:func:`successor_blocker`,
+   e.g. its default-generator battery is still running): every v16+ lease
+   needs an open season, so the old set keeps serving and the successor opens
+   mid-round the tick it is ready. If the round passes, the successor voids
+   and the next boundary tries a fresh one. Disabling dueling
    commits no new season but lets the open one finish. With
    ``skip_unchanged_rounds``, an *idle* boundary extends the open season by
    ``rounds_per_season`` instead (:func:`idle_season_extension`): the next
@@ -130,7 +135,7 @@ if TYPE_CHECKING:
         GeneratorScorerFault,
     )
     from ditto.api_server.generator_competition import ResolvedSettings
-    from ditto.api_server.generator_rounds import ChainPosition
+    from ditto.api_server.generator_rounds import ChainPosition, RoundClock
 
 logger = logging.getLogger(__name__)
 
@@ -1040,16 +1045,25 @@ def _pin_identity(columns: Any) -> list[list[Any]]:
 
 
 def season_first_extended_at(season: DuelingSeason | None) -> datetime | None:
-    """When ``season`` was first extended as idle, if ever."""
-    record = ((season.detail or {}) if season is not None else {}).get(
-        IDLE_EXTENSIONS_KEY
-    )
-    first = record.get("first_extended_at") if isinstance(record, dict) else None
-    if not isinstance(first, str):
-        return None
-    # Always aware: it is compared with TIMESTAMPTZ columns (Agent.created_at).
-    parsed = datetime.fromisoformat(first)
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    """When ``season`` first ran past its scheduled close, if ever: extended
+    as idle, or its close deferred for a successor (both keep its duel seeds
+    public longer than one season)."""
+    detail = (season.detail or {}) if season is not None else {}
+    stamps: list[datetime] = []
+    for key, field in (
+        (IDLE_EXTENSIONS_KEY, "first_extended_at"),
+        (CLOSE_DEFERRAL_KEY, "first_deferred_at"),
+    ):
+        record = detail.get(key)
+        first = record.get(field) if isinstance(record, dict) else None
+        if not isinstance(first, str):
+            continue
+        # Always aware: it is compared with TIMESTAMPTZ columns (Agent.created_at).
+        parsed = datetime.fromisoformat(first)
+        stamps.append(
+            parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        )
+    return min(stamps) if stamps else None
 
 
 async def idle_season_extension(
@@ -1148,7 +1162,151 @@ def _extend(
         recent=history[-MAX_RECORDED_IDLE_EXTENSIONS:],
     )
     detail[IDLE_EXTENSIONS_KEY] = record
+    deferral = detail.get(CLOSE_DEFERRAL_KEY)
+    if isinstance(deferral, dict) and deferral.get("open"):
+        # The season reached a scheduled close again: a later deferral is a
+        # new episode, and the cap counts per episode.
+        detail[CLOSE_DEFERRAL_KEY] = {**deferral, "open": False}
     season.detail = detail
+
+
+CLOSE_DEFERRAL_KEY = "close_deferral"
+"""``DuelingSeason.detail`` key: a due close held for an unready successor."""
+MAX_DEFERRED_ROUNDS = 6
+"""Rounds a due close may wait for a successor (about a day at 4.8h rounds).
+Past it the season closes as before: a successor that cannot open for a day
+is an operator problem, and reveals and source releases must not wait on it
+indefinitely."""
+ANCHOR_PASSED_KEY = "anchor_passed_at"
+"""``DuelingSeason.detail`` key on a committed successor whose anchor block
+exists while the season before it is held open: a commitment published from
+then on proves nothing, so publication is settled and republish refused."""
+
+
+async def successor_blocker(
+    session: AsyncSession,
+    season: DuelingSeason,
+    *,
+    target: DuelingTarget,
+    clock: RoundClock,
+    position: ChainPosition,
+) -> tuple[str | None, DuelingSeason | None]:
+    """Why the season that should follow the due ``season`` cannot open at
+    this position (None when it can, or when ``season`` should close
+    regardless), and that successor if one is committed.
+
+    Every v16+ lease needs an open season of its version
+    (:func:`resolve_dueling_slice`). Closing a due season before its
+    successor can open leaves the version with none, and validators are
+    refused until a later boundary: on 2026-11-12 the successor's default
+    generator battery finished 46 minutes after the boundary, the successor
+    was voided, and canonical scoring stalled for 4.8 hours (SN-476). The
+    checks mirror what step 3 of :func:`advance_seasons` and :func:`_open`
+    would void the successor for. A dueling target that is blocked or moved
+    to another version closes the season as before.
+    """
+    if target.blocked is not None or target.bench_version != season.bench_version:
+        return None, None
+    current = clock.current
+    successor = await session.scalar(
+        select(DuelingSeason).where(
+            DuelingSeason.bench_version == season.bench_version,
+            DuelingSeason.status == "committed",
+            DuelingSeason.season_index == current,
+        )
+    )
+    if successor is None:
+        return f"no season is committed for round {current}", None
+    if successor.shadow != target.shadow:
+        return "the committed successor's contract changed before it opened", successor
+    committed_epoch = int((successor.detail or {}).get("committed_epoch_index", -1))
+    if committed_epoch >= clock.first_epoch:
+        return "the committed successor was committed after its anchor block", successor
+    if await _anchor(session, current, clock.first_epoch, position) is None:
+        return "the successor's opening epoch was missed", successor
+    scored = await session.scalar(
+        select(func.count())
+        .select_from(GeneratorRound)
+        .where(GeneratorRound.status == "scored")
+    )
+    if not scored:
+        return "no generator round has been scored yet", successor
+    _columns, fallback = await freeze_columns(session, successor)
+    if isinstance(fallback, str):
+        return fallback, successor
+    return None, successor
+
+
+def _deferred_rounds(season: DuelingSeason) -> int:
+    """Rounds the current deferral episode has waited (0 outside one)."""
+    record = (season.detail or {}).get(CLOSE_DEFERRAL_KEY)
+    if not isinstance(record, dict) or not record.get("open"):
+        return 0
+    return int(record.get("rounds") or 0)
+
+
+def _defer_close(
+    season: DuelingSeason, *, why: str, current: int, now: datetime
+) -> bool:
+    """Record that ``season``'s due close waits for its successor; True when
+    the record changed. Written only when the reason or round changes, so a
+    tick loop does not churn.
+
+    ``rounds`` counts the current episode, which an idle extension ends
+    (:func:`_extend`), so :data:`MAX_DEFERRED_ROUNDS` bounds one continuous
+    wait, not a season's lifetime. ``first_deferred_at`` is kept across
+    episodes: it is the duel-seed exposure stamp."""
+    detail = dict(season.detail or {})
+    record = dict(detail.get(CLOSE_DEFERRAL_KEY) or {})
+    episode = bool(record.get("open"))
+    if episode and record.get("reason") == why and record.get("at_round") == current:
+        return False
+    new_round = not episode or record.get("at_round") != current
+    record.update(
+        first_deferred_at=record.get("first_deferred_at") or now.isoformat(),
+        last_deferred_at=now.isoformat(),
+        open=True,
+        episode_start_round=(record.get("episode_start_round") if episode else current),
+        at_round=current,
+        reason=why[:500],
+        rounds=(int(record.get("rounds") or 0) if episode else 0)
+        + (1 if new_round else 0),
+        episodes=int(record.get("episodes") or 0) + (0 if episode else 1),
+    )
+    detail[CLOSE_DEFERRAL_KEY] = record
+    season.detail = detail
+    return True
+
+
+async def _settle_successor_at_anchor(
+    session: AsyncSession, successor: DuelingSeason, *, now: datetime
+) -> None:
+    """The successor's anchor block exists while it waits: settle its
+    on-chain commitment publication now, exactly as opening would, so no
+    claim is offered and no confirmation counts after the anchor."""
+    from ditto.api_server.dueling_season_commitments import (
+        season_commitment_confirmations,
+    )
+
+    if ANCHOR_PASSED_KEY in (successor.detail or {}):
+        return
+    # A validator's commitment report locks the same row and may flip it to
+    # published; lock it here so the settle never overwrites that.
+    await session.refresh(successor, with_for_update=True)
+    if successor.status != "committed" or ANCHOR_PASSED_KEY in (successor.detail or {}):
+        return
+    successor.detail = {**(successor.detail or {}), ANCHOR_PASSED_KEY: now.isoformat()}
+    if successor.commitment_publication != "pending":
+        return
+    if await season_commitment_confirmations(session, successor.id) > 0:
+        successor.commitment_publication = "published"
+        successor.commitment_error = None
+    else:
+        successor.commitment_publication = "failed"
+        successor.commitment_error = (
+            "no validator confirmed the on-chain commitment before the "
+            "season's anchor block"
+        )
 
 
 async def advance_seasons(
@@ -1216,10 +1374,59 @@ async def advance_seasons(
                     f"extended to round {season.closes_at_round} ({idle})"
                 )
                 continue
+            # An audited rotation keeps its promise to close at the boundary
+            # (an operator rotating out a bad generator wants it gone).
+            blocker, successor = (
+                await successor_blocker(
+                    session, season, target=target, clock=clock, position=position
+                )
+                if season.rotation_requested_at is None
+                else (None, None)
+            )
+            deferred = _deferred_rounds(season)
+            capped = blocker is not None and deferred >= MAX_DEFERRED_ROUNDS
+            if blocker is not None and not capped:
+                # Closing now would leave the version with no open season, and
+                # every v16+ lease is refused until one opens. Keep serving
+                # this season's set until the successor can take over.
+                if (
+                    successor is not None
+                    and successor.status == "committed"
+                    and await _anchor(session, current, clock.first_epoch, position)
+                    is not None
+                ):
+                    await _settle_successor_at_anchor(session, successor, now=now)
+                if _defer_close(season, why=blocker, current=current, now=now):
+                    logger.warning(
+                        "dueling season %s v%s: close deferred at round %s: %s",
+                        season.season_index,
+                        season.bench_version,
+                        current,
+                        blocker,
+                    )
+                    notes.append(
+                        f"season {season.season_index} v{season.bench_version}: "
+                        f"close deferred ({blocker})"
+                    )
+                continue
+            if capped:
+                logger.error(
+                    "dueling season %s v%s: successor still not ready after %s "
+                    "deferred round(s); closing with no successor: %s",
+                    season.season_index,
+                    season.bench_version,
+                    deferred,
+                    blocker,
+                )
             reason = (
                 f"rotated: {season.rotation_reason}"
                 if season.rotation_requested_at is not None
-                else "season ended"
+                else (
+                    f"season ended (successor not ready after {deferred} "
+                    f"deferred round(s): {blocker})"[:500]
+                    if capped
+                    else "season ended"
+                )
             )
         if reason is not None:
             _close(season, reason=reason, position=position, settings=settings, now=now)
@@ -1307,6 +1514,16 @@ async def advance_seasons(
             )
             .with_for_update()
         )
+        if (
+            live is not None
+            and live.closes_at_round is not None
+            and live.closes_at_round <= current
+            and committed is not None
+            and committed.season_index == current
+        ):
+            # The live season's close is deferred until this round's
+            # committed successor can open: keep it, it opens mid-round.
+            next_index = current
         if committed is not None and committed.season_index != next_index:
             _void(committed, f"season boundary moved to round {next_index}")
             notes.append(f"season {committed.season_index}: void (boundary moved)")

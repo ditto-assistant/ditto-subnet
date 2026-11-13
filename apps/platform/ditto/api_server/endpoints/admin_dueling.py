@@ -800,6 +800,15 @@ async def admin_republish_dueling_season_commitment(
             status_code=409,
             detail="a commitment published after the season opened proves nothing",
         )
+    if "anchor_passed_at" in (season.detail or {}):
+        # A successor held committed while its predecessor's close is
+        # deferred: its anchor block already exists.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "a commitment published after the season's anchor block proves nothing"
+            ),
+        )
     if season.commitment_publication == "published":
         raise HTTPException(
             status_code=409,
