@@ -795,7 +795,9 @@ async def admin_republish_dueling_season_commitment(
     )
     if season is None:
         raise HTTPException(status_code=404, detail="unknown dueling season")
-    if season.status != "committed":
+    if season.status != "committed" or "anchor_passed_at" in (season.detail or {}):
+        # A successor held committed past its anchor (its predecessor's
+        # close was deferred) is as good as opened for this purpose.
         raise HTTPException(
             status_code=409,
             detail="a commitment published after the season opened proves nothing",

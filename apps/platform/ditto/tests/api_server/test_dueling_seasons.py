@@ -356,6 +356,7 @@ class TestDuelingSeasons:
             epochs_per_round=_EPOCHS,
             dueling_enabled=True,
             privacy_window_rounds=6,
+            skip_unchanged_rounds=False,
         )
         _active(monkeypatch, 16)
         default = await _generator(
@@ -486,7 +487,9 @@ class TestDuelingSeasons:
         )
         assert again.status_code == 409
 
-        # 5. The season closes at its boundary and reveals after the window.
+        # 5. Once its successor can open, the season closes at its boundary
+        # and reveals after the window.
+        assert await _pass_batteries(client) == 1
         await _tick(session_maker, 12 * _EPOCHS)
         closed = next(s for s in await _seasons(session_maker) if s.season_index == 11)
         assert closed.status == "closed" and closed.reveal_at_epoch == 48 + 6
@@ -741,9 +744,9 @@ class TestIdleSeasonExtension:
                 session, bench_version=16, agent_ids=[incumbent, entrant]
             ) == frozenset({entrant})
         assert await _pass_batteries(client) == 1
-        await _tick(session_maker, 14 * _EPOCHS)
+        notes = await _tick(session_maker, 14 * _EPOCHS)
         seasons = {s.season_index: s for s in await _seasons(session_maker)}
-        assert seasons[11].status == "closed"
+        assert seasons[11].status == "closed", notes
         assert seasons[11].reveal_at_epoch == 14 * _EPOCHS + 6
         assert seasons[14].status == "open"
         assert queued == [opened.id, seasons[14].id]
@@ -2902,3 +2905,205 @@ def _uncommit(season: DuelingSeason) -> None:
     season.anchor_block = None
     season.anchor_block_hash = None
     season.season_seed = None
+
+
+async def _open_round(maker: async_sessionmaker[AsyncSession], index: int) -> None:
+    """An open generator round ``index`` with its open block: a season that
+    opens mid-round anchors on it."""
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        session.add(
+            GeneratorRound(
+                round_index=index,
+                status="running",
+                epochs_per_round=_EPOCHS,
+                first_epoch_index=index * _EPOCHS,
+                secret=b"\x03" * 32,
+                commitment="ef" * 32,
+                committed_at=now,
+                committed_epoch_index=index * _EPOCHS - 4,
+                commitment_publication="disabled",
+                open_epoch_index=index * _EPOCHS,
+                open_block=1000 + index * _EPOCHS * 360,
+                open_block_hash=_BLOCK,
+                opened_at=now,
+                seed="cd" * 32,
+                lease_attempts=0,
+            )
+        )
+
+
+class TestSeasonHandoff:
+    """SN-476: a due season never closes into a version with no open season."""
+
+    async def _season_11_open(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        # Idle extension has its own test; every boundary here rotates.
+        await _open_lane(
+            client,
+            epochs_per_round=_EPOCHS,
+            dueling_enabled=True,
+            skip_unchanged_rounds=False,
+        )
+        _active(monkeypatch, 16)
+        await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        miner = await _generator(
+            session_maker, hotkey=_MINER_KEY, owner="coldkey:a", salt="a"
+        )
+        await _scored_round(session_maker, [(miner, 0.4, 0.1)])
+        await _tick(session_maker, _ROUND * _EPOCHS + 1)
+        assert await _pass_batteries(client) == 1
+        await _tick(session_maker, 11 * _EPOCHS)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "open" and seasons[11].closes_at_round == 12
+        # Season 12 committed during round 11; its batteries have not run.
+        assert seasons[12].status == "committed"
+
+    async def test_a_pending_battery_defers_the_close_then_hands_over_mid_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await self._season_11_open(app, client, session_maker, monkeypatch)
+        await _open_round(session_maker, 12)
+
+        # The boundary arrives before season 12's default battery passed:
+        # season 11 keeps serving instead of closing into nothing.
+        notes = await _tick(session_maker, 12 * _EPOCHS)
+        assert any("season 11 v16: close deferred" in n for n in notes), notes
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "open"
+        assert seasons[12].status == "committed"
+        deferral = (seasons[11].detail or {})["close_deferral"]
+        assert deferral["at_round"] == 12 and deferral["rounds"] == 1
+        assert "public default generator" in deferral["reason"]
+        async with session_maker() as session:
+            live = await dueling_mod.open_season(session, 16)
+        assert live is not None and live.season_index == 11
+        # Season 12's anchor block exists: its on-chain commitment settles
+        # now, so nothing published from here on counts as pre-anchor.
+        assert "anchor_passed_at" in (seasons[12].detail or {})
+        assert seasons[12].commitment_publication != "pending"
+        # Its duel seeds stay public past the schedule: later uploads sit out.
+        assert dueling_mod.season_first_extended_at(seasons[11]) is not None
+        # A repeated tick at the same reason and round does not churn.
+        await _tick(session_maker, 12 * _EPOCHS + 1)
+        again = {s.season_index: s for s in await _seasons(session_maker)}
+        assert (again[11].detail or {})["close_deferral"] == deferral
+
+        # The battery lands mid-round: the next tick closes 11 and opens 12
+        # on round 12's open block.
+        assert await _pass_batteries(client) == 1
+        notes = await _tick(session_maker, 12 * _EPOCHS + 2)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "closed"
+        assert (seasons[11].detail or {})["close_reason"] == "season ended"
+        assert seasons[12].status == "open", notes
+        assert seasons[12].anchor_block == 1000 + 12 * _EPOCHS * 360
+        assert seasons[12].closes_at_round == 13
+        assert seasons[13].status == "committed"
+
+    async def test_a_round_that_ends_unready_keeps_the_season_until_a_fresh_one(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await self._season_11_open(app, client, session_maker, monkeypatch)
+        await _tick(session_maker, 12 * _EPOCHS)
+
+        # Round 13 starts with season 12 never ready: it voids, season 11
+        # stays open, and a fresh season commits for round 14.
+        notes = await _tick(session_maker, 13 * _EPOCHS)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "open", notes
+        assert seasons[12].status == "void"
+        assert seasons[14].status == "committed"
+        assert (seasons[11].detail or {})["close_deferral"]["rounds"] == 2
+        async with session_maker() as session:
+            window = await dueling_season_window(session, 16)
+        assert window is not None and window.current == seasons[11].id
+
+        # Its battery passes, and round 14's boundary hands over.
+        assert await _pass_batteries(client) >= 1
+        notes = await _tick(session_maker, 14 * _EPOCHS)
+        seasons = {s.season_index: s for s in await _seasons(session_maker)}
+        assert seasons[11].status == "closed", notes
+        assert seasons[14].status == "open"
+
+    async def _season_11(
+        self, maker: async_sessionmaker[AsyncSession]
+    ) -> DuelingSeason:
+        [season] = [s for s in await _seasons(maker) if s.season_index == 11]
+        return season
+
+    async def test_an_audited_rotation_still_closes_at_the_boundary(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await self._season_11_open(app, client, session_maker, monkeypatch)
+        async with session_maker() as session, session.begin():
+            season = await session.get(
+                DuelingSeason, (await self._season_11(session_maker)).id
+            )
+            assert season is not None
+            season.rotation_requested_at = datetime.now(UTC)
+            season.rotation_immediate = False
+            season.rotation_reason = "rotate out a bad generator"
+            season.rotation_actor = "backroom:test"
+        # Season 12's battery is still pending, but the operator asked.
+        await _tick(session_maker, 12 * _EPOCHS)
+        closed = await self._season_11(session_maker)
+        assert closed.status == "closed"
+        assert (closed.detail or {})["close_reason"] == (
+            "rotated: rotate out a bad generator"
+        )
+        assert "close_deferral" not in (closed.detail or {})
+
+    async def test_a_deferral_past_the_cap_closes_loudly(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await self._season_11_open(app, client, session_maker, monkeypatch)
+        async with session_maker() as session, session.begin():
+            season = await session.get(
+                DuelingSeason, (await self._season_11(session_maker)).id
+            )
+            assert season is not None
+            season.detail = {
+                **(season.detail or {}),
+                "close_deferral": {
+                    "first_deferred_at": datetime.now(UTC).isoformat(),
+                    "at_round": 11,
+                    "rounds": dueling_mod.MAX_DEFERRED_ROUNDS,
+                    "reason": "earlier",
+                },
+            }
+        await _tick(session_maker, 12 * _EPOCHS)
+        closed = await self._season_11(session_maker)
+        assert closed.status == "closed"
+        assert (closed.detail or {})["close_reason"].startswith(
+            f"season ended (successor not ready after "
+            f"{dueling_mod.MAX_DEFERRED_ROUNDS} deferred round(s)"
+        )
