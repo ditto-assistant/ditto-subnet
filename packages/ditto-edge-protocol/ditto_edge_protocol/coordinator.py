@@ -28,12 +28,14 @@ are insert-once.
 
 from __future__ import annotations
 
+import functools
 import json
 import secrets
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from random import Random, SystemRandom
+from typing import Concatenate, ParamSpec, TypeVar
 
 from ditto_edge_protocol import paths
 from ditto_edge_protocol.challenges import (
@@ -186,6 +188,23 @@ class _NonceLog:
             return True
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _serialized(
+    method: Callable[Concatenate[Coordinator, _P], _R],
+) -> Callable[Concatenate[Coordinator, _P], _R]:
+    """Run one coordinator operation at a time: requests may arrive on threads."""
+
+    def locked(self: Coordinator, /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    functools.update_wrapper(locked, method)
+    return locked
+
+
 class Coordinator:
     def __init__(
         self,
@@ -216,12 +235,14 @@ class Coordinator:
         self.challenges: dict[str, _Challenge] = {}
         self._outstanding: dict[str, list[str]] = {}
         """Per node, issued challenges that may still be undecided."""
+        self._lock = threading.RLock()
         self.ledger: list[LedgerRow] = []
         self._scored_windows: set[int] = set()
         self._nonces = _NonceLog()
 
     # -- authentication ---------------------------------------------------
 
+    @_serialized
     def authenticate(
         self, *, method: str, path: str, headers: Mapping[str, str], body: bytes
     ) -> str:
@@ -271,6 +292,7 @@ class Coordinator:
 
     # -- operator actions ---------------------------------------------------
 
+    @_serialized
     def ingest(self, data: bytes, media_type: str, source: str = "synthetic") -> str:
         if media_type not in MEDIA_TYPES:
             media_type = "application/octet-stream"
@@ -287,6 +309,7 @@ class Coordinator:
             )
         return digest
 
+    @_serialized
     def revoke(self, digest: str, reason: str) -> bool:
         obj = self.objects.get(digest)
         if obj is None or obj.revoked_at is not None:
@@ -309,6 +332,7 @@ class Coordinator:
             raise CoordinatorError("forbidden", f"node is {node.status}")
         return node
 
+    @_serialized
     def enroll(self, request: EnrollRequest) -> EnrollResponse:
         self._require_shadow()
         node_id = node_id_for(request.public_key_hex)
@@ -413,14 +437,15 @@ class Coordinator:
         ] + schedule
         # Challenges issued earlier and still undecided go out again until
         # their deadline. Answering twice changes nothing: the first decides.
-        outstanding = [
+        # Due slots come first, so a redelivery never pushes one past grace.
+        earlier = [
             self.challenges[challenge_id]
             for challenge_id in self._outstanding.get(node_id, [])
             if self.challenges[challenge_id].outcome == "pending"
             and self.challenges[challenge_id].deadline_at > now
         ]
-        self._outstanding[node_id] = [c.challenge_id for c in outstanding]
-        issued = [_wire(c) for c in outstanding[:MAX_CHALLENGES_PER_POLL]]
+        issued: list[Challenge] = []
+        fresh: list[str] = []
         for slot in due:
             if slot.state != "scheduled" or slot.due_at > now:
                 continue
@@ -451,10 +476,13 @@ class Coordinator:
                 deadline_at=now + settings.challenge_deadline_seconds,
             )
             self.challenges[challenge.challenge_id] = challenge
-            self._outstanding.setdefault(node_id, []).append(challenge.challenge_id)
+            fresh.append(challenge.challenge_id)
             slot.state = "issued"
             slot.challenge_id = challenge.challenge_id
             issued.append(_wire(challenge))
+        room = MAX_CHALLENGES_PER_POLL - len(issued)
+        issued += [_wire(challenge) for challenge in earlier[:room]]
+        self._outstanding[node_id] = [c.challenge_id for c in earlier] + fresh
         return issued
 
     def _live_nodes(self, node: _Node, now: float) -> list[PlacementNode]:
@@ -531,9 +559,8 @@ class Coordinator:
             if current is not None and current.released_at is None:
                 listed.add(digest)
                 continue
-            previous = lapsed.get(digest)
             # Only a span that needs a download counts against the cap.
-            reopened = previous is not None and previous.fill_count > 0
+            reopened = digest in lapsed and lapsed[digest].fill_count > 0
             if not reopened and created >= settings.max_new_assignments_per_poll:
                 continue
             span = _Assignment(
@@ -542,18 +569,21 @@ class Coordinator:
                 assigned_at=now,
                 lease_expires_at=now + settings.lease_seconds,
             )
-            if previous is not None:
-                # A span the node released starts fresh: it deleted the bytes.
-                span.fill_count = previous.fill_count
-                span.last_filled_at = previous.last_filled_at
             if current is not None:
-                self.history.append(current)  # the ledger still scores it
+                # This node downloaded these bytes before, so the fill history
+                # carries over: bytes it kept can be acknowledged without a
+                # second download. The closed span stays in history for the
+                # ledger.
+                span.fill_count = current.fill_count
+                span.last_filled_at = current.last_filled_at
+                self.history.append(current)
             self.assignments[(node.node_id, digest)] = span
             listed.add(digest)
             if not reopened:
                 created += 1
         return listed
 
+    @_serialized
     def poll(self, node_id: str, request: PollRequest) -> PollResponse:
         self._require_shadow()
         node = self._require_active(node_id)
@@ -594,6 +624,7 @@ class Coordinator:
             next_poll_seconds=self.settings.poll_interval_seconds,
         )
 
+    @_serialized
     def fill(self, node_id: str, digest: str) -> bytes:
         self._require_shadow()
         self._require_active(node_id)
@@ -607,6 +638,7 @@ class Coordinator:
         assignment.last_filled_at = self.clock()
         return obj.data
 
+    @_serialized
     def ack(self, node_id: str, request: AckRequest) -> AckResponse:
         self._require_active(node_id)
         now = self.clock()
@@ -628,6 +660,7 @@ class Coordinator:
             accepted += 1
         return AckResponse(accepted=accepted, ignored=ignored)
 
+    @_serialized
     def answer(
         self, node_id: str, challenge_id: str, answer: ChallengeAnswer
     ) -> AnswerResponse:
@@ -651,6 +684,7 @@ class Coordinator:
         challenge.answered_at = now
         return AnswerResponse(received=True)
 
+    @_serialized
     def status(self, node_id: str) -> NodeStatusResponse:
         node = self.nodes.get(node_id)
         if node is None:
@@ -688,6 +722,7 @@ class Coordinator:
             current_window=summary,
         )
 
+    @_serialized
     def leave(self, node_id: str, request: LeaveRequest) -> None:
         del request
         node = self.nodes.get(node_id)
@@ -713,6 +748,7 @@ class Coordinator:
             return "void"
         return "missed"
 
+    @_serialized
     def close_windows(self) -> list[LedgerRow]:
         """Score every window that has closed and whose deadlines have passed."""
         settings = self.settings

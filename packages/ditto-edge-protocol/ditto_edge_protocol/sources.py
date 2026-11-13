@@ -33,6 +33,7 @@ from urllib.parse import quote, urljoin, urlsplit
 from ditto_edge_protocol.limits import MEDIA_TYPES, MIB
 
 DEFAULT_SHARE_BASE = "https://share.heyditto.ai"
+_PAGE_MAX_BYTES = 4 * MIB
 DEFAULT_ARTIFACT_HOSTS = ("a.dittousercontent.com",)
 
 _SYNTHETIC_MIX: tuple[tuple[str, int, int, float], ...] = (
@@ -179,7 +180,7 @@ class PublicShareSource:
 
     def state(self, share_id: str) -> PublicState:
         """Whether the share is still public, as an anonymous visitor sees it."""
-        status, _, _ = self._get(self._page_url(share_id), 4 * MIB)
+        status, _, _ = self._get(self._page_url(share_id), _PAGE_MAX_BYTES)
         if status == 200:
             return "public"
         # 403 is left unknown: a WAF or bot wall can answer 403 for a share that
@@ -191,8 +192,9 @@ class PublicShareSource:
     def fetch(self, share_id: str) -> SourceObject | None:
         """The share's public bytes, or ``None`` when it is not public."""
         page_url = self._page_url(share_id)
-        status, body, _ = self._get(page_url, 4 * MIB)
-        if status != 200 or not body:
+        status, body, _ = self._get(page_url, _PAGE_MAX_BYTES)
+        # A page past the read limit was cut short: never parse a prefix.
+        if status != 200 or not body or len(body) > _PAGE_MAX_BYTES:
             return None
         page = _SharePage()
         page.feed(body.decode("utf-8", "replace"))

@@ -85,16 +85,25 @@ class LaneSettings:
                 self.lease_seconds >= 2 * self.poll_interval_seconds,
                 "lease_seconds must cover at least two polls",
             ),
+            (
+                self.poll_interval_seconds <= self.window_seconds,
+                "poll_interval_seconds must not exceed window_seconds",
+            ),
         )
         for ok, message in checks:
             if not ok:
                 raise ValueError(message)
-        # Every slot that can be due at one poll must fit in one response.
-        live = self.challenges_per_window * (self.late_slot_windows + 1)
+        # Every slot that can be due or awaiting its answer at one poll must
+        # fit in one response: those due within grace, and those issued within
+        # a deadline that are still pending and sent again.
+        deadline_windows = -(-self.challenge_deadline_seconds // self.window_seconds)
+        live = self.challenges_per_window * (
+            self.late_slot_windows + deadline_windows + 1
+        )
         if live > MAX_CHALLENGES_PER_POLL:
             raise ValueError(
-                "challenges_per_window over the windows grace spans exceeds "
-                f"{MAX_CHALLENGES_PER_POLL} challenges per poll"
+                "challenges_per_window over the windows grace and the deadline "
+                f"span exceeds {MAX_CHALLENGES_PER_POLL} challenges per poll"
             )
 
     @property

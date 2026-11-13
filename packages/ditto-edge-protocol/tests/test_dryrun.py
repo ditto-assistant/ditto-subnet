@@ -104,11 +104,14 @@ def test_every_instance_of_a_repeated_adversary_must_be_caught() -> None:
 
 
 def test_a_window_shorter_than_one_poll_is_refused() -> None:
-    settings = LaneSettings(
-        mode="shadow", window_seconds=300, poll_interval_seconds=600, lease_seconds=1200
-    )
-    with pytest.raises(ValueError, match="poll interval"):
-        run_dry_run(DryRunConfig(settings=settings), synthetic_objects(4))
+    # The lane settings refuse it before any run: a node must poll every window.
+    with pytest.raises(ValueError, match="must not exceed window_seconds"):
+        LaneSettings(
+            mode="shadow",
+            window_seconds=300,
+            poll_interval_seconds=600,
+            lease_seconds=1200,
+        )
 
 
 class _States:

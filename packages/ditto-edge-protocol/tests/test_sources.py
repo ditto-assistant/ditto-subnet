@@ -238,3 +238,17 @@ def test_a_malformed_link_on_the_page_is_skipped() -> None:
     )
     obj = source.fetch("m")
     assert obj is not None and obj.data == b"\x89PNG"
+
+
+def test_a_page_past_the_read_limit_is_never_parsed() -> None:
+    from ditto_edge_protocol.limits import MIB
+
+    # The prefix alone would parse: a complete source, then more page.
+    page = _page(
+        "<textarea data-copy-markdown-source>a short note</textarea>"
+        + "<p>"
+        + "x" * (4 * MIB)
+        + "</p>"
+    )
+    source = _FakeSource({f"{SHARE}/s/huge": (200, page, "text/html")})
+    assert source.fetch("huge") is None

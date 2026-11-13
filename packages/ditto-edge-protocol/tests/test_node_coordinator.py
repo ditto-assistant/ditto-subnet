@@ -21,6 +21,7 @@ from ditto_edge_protocol.wire import (
     AckRequest,
     AckResponse,
     Assignment,
+    ChallengeAnswer,
     ClientInfo,
     PollRequest,
     PollResponse,
@@ -200,7 +201,7 @@ def test_status_reports_held_bytes_and_no_payouts(lane: Lane) -> None:
 
 
 def test_live_status_does_not_count_a_pending_challenge_as_missed() -> None:
-    lane = Lane(_settings(challenges_per_window=60, min_challenges=6))
+    lane = Lane(_settings(challenges_per_window=40, min_challenges=6))
     for obj in synthetic_objects(4, seed=3):
         lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
     node = lane.node()
@@ -361,9 +362,8 @@ def test_a_span_replaced_after_release_still_counts_in_its_window(lane: Lane) ->
     lane.run([node], 600)
     spans = _spans(lane, node)
     assert spans and all(len(each) == 2 for each in spans.values())
-    # The node released its bytes when it left, so the reopened spans start
-    # their fill history over: one fill each, not one on top of the old.
-    assert all(each[-1].fill_count == 1 for each in spans.values())
+    # The reopened spans keep the fill history and add the new download.
+    assert all(each[-1].fill_count == each[0].fill_count + 1 for each in spans.values())
     lane.clock.advance(2 * 3600)
     lane.coordinator.close_windows()
     window_start = START
@@ -489,7 +489,7 @@ def test_header_names_match_case_insensitively() -> None:
 
 
 def test_an_unanswered_challenge_is_sent_again_until_its_deadline() -> None:
-    lane = Lane(_settings(challenges_per_window=60, min_challenges=6))
+    lane = Lane(_settings(challenges_per_window=40, min_challenges=6))
     for obj in synthetic_objects(4, seed=3):
         lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
     node = lane.node()
@@ -523,7 +523,7 @@ def test_a_poll_never_issues_more_challenges_than_one_response_carries(
     import ditto_edge_protocol.coordinator as coordinator_module
 
     monkeypatch.setattr(coordinator_module, "MAX_CHALLENGES_PER_POLL", 2)
-    lane = Lane(_settings(challenges_per_window=60, min_challenges=6))
+    lane = Lane(_settings(challenges_per_window=40, min_challenges=6))
     for obj in synthetic_objects(4, seed=3):
         lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
     node = lane.node()
@@ -545,9 +545,13 @@ def test_a_poll_never_issues_more_challenges_than_one_response_carries(
 
 
 def test_settings_refuse_more_due_slots_than_one_poll_carries() -> None:
+    # Due within grace (one earlier window) or pending within the deadline
+    # (one more): three windows of slots must fit in one 128-challenge poll.
     with pytest.raises(ValueError, match="challenges per poll"):
-        _settings(challenges_per_window=120)
-    assert _settings(challenges_per_window=64).late_slot_windows == 1
+        _settings(challenges_per_window=43)
+    assert _settings(challenges_per_window=42).late_slot_windows == 1
+    with pytest.raises(ValueError, match="must not exceed window_seconds"):
+        _settings(window_seconds=300, poll_interval_seconds=400, lease_seconds=900)
 
 
 def test_scored_windows_drop_their_slot_schedules(lane: Lane) -> None:
@@ -585,3 +589,94 @@ def test_a_revoked_digest_listed_again_leaves_no_lease(
     node.step()
     assert not node.store.has(digest)
     assert digest not in node._leases
+
+
+def test_a_span_lapsed_at_an_earlier_poll_reopens_with_its_fill_history() -> None:
+    lane = Lane(_settings(replicas=1))
+    obj = synthetic_objects(1, seed=3)[0]
+    digest = lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    assert node.node_id is not None
+    lane.run([node], 300)
+    # An earlier poll closed the span at its lapse without listing it again,
+    # and this node (its clock behind) kept the bytes past that lease.
+    span = lane.coordinator.assignments[(node.node_id, digest)]
+    span.lease_expires_at = span.released_at = lane.clock.now - 1
+    node._leases[digest] = int(lane.clock.now) - 1
+    filled = node.step().filled
+    reopened = lane.coordinator.assignments[(node.node_id, digest)]
+    assert filled == []
+    assert reopened is not span and reopened.fill_count == span.fill_count
+    assert reopened.acked_at is not None
+
+
+def test_due_slots_go_out_before_redeliveries(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ditto_edge_protocol.coordinator as coordinator_module
+
+    monkeypatch.setattr(coordinator_module, "MAX_CHALLENGES_PER_POLL", 2)
+    lane = Lane(_settings(challenges_per_window=40, min_challenges=6))
+    for obj in synthetic_objects(4, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    assert node.node_id is not None
+    lane.run([node], 120)
+    schedule = lane.coordinator.slots[(node.node_id, int(lane.clock.now // 3600))]
+    waiting = [slot for slot in schedule if slot.state == "scheduled"][:4]
+    request = PollRequest(protocol="edge/v1", free_bytes=GIB)
+    for slot in waiting[:2]:
+        slot.due_at = lane.clock.now - 1
+    # Two challenges go out and are never answered: both stay outstanding.
+    unanswered = {c.challenge_id for c in node.transport.poll(request).challenges}
+    assert len(unanswered) == 2
+    for slot in waiting[2:]:
+        slot.due_at = lane.clock.now - 1
+    lane.clock.advance(5)
+    # The newly due slots fill the poll; the outstanding pair waits its turn.
+    second = {c.challenge_id for c in node.transport.poll(request).challenges}
+    assert all(slot.state == "issued" for slot in waiting)
+    assert not second & unanswered
+    lane.clock.advance(5)
+    third = {c.challenge_id for c in node.transport.poll(request).challenges}
+    assert third and third <= unanswered | second
+
+
+def test_concurrent_answers_keep_the_first_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    import time
+
+    import ditto_edge_protocol.coordinator as coordinator_module
+
+    judge = coordinator_module.judge_answer
+
+    def slow_judge(**kwargs: object) -> object:
+        time.sleep(0.05)  # widen the gap between the pending check and the write
+        return judge(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(coordinator_module, "judge_answer", slow_judge)
+    lane = Lane(_settings(challenges_per_window=40, min_challenges=6))
+    for obj in synthetic_objects(4, seed=3):
+        lane.coordinator.ingest(obj.data, obj.media_type, obj.label)
+    node = lane.node()
+    lane.run([node], 300)
+    request = PollRequest(protocol="edge/v1", free_bytes=GIB)
+    poll = node.transport.poll(request)
+    while not poll.challenges:
+        lane.clock.advance(30)
+        poll = node.transport.poll(request)
+    challenge = poll.challenges[0]
+    honest = node.answer_for(challenge)
+    wrong = ChallengeAnswer(outcome="refused", refusal="not_held")
+    first = threading.Thread(
+        target=node.transport.answer, args=(challenge.challenge_id, honest)
+    )
+    second = threading.Thread(
+        target=node.transport.answer, args=(challenge.challenge_id, wrong)
+    )
+    first.start()
+    time.sleep(0.01)
+    second.start()
+    first.join()
+    second.join()
+    assert lane.coordinator.challenges[challenge.challenge_id].outcome == "passed"
