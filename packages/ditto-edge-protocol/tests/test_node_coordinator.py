@@ -354,6 +354,9 @@ def test_a_span_replaced_after_release_still_counts_in_its_window(lane: Lane) ->
     lane.run([node], 600)
     spans = _spans(lane, node)
     assert spans and all(len(each) == 2 for each in spans.values())
+    # The node released its bytes when it left, so the reopened spans start
+    # their fill history over: one fill each, not one on top of the old.
+    assert all(each[-1].fill_count == 1 for each in spans.values())
     lane.clock.advance(2 * 3600)
     lane.coordinator.close_windows()
     window_start = START

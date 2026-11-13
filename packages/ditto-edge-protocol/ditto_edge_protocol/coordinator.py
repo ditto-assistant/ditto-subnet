@@ -464,10 +464,12 @@ class Coordinator:
         that carries the fill history, and the node acknowledges it again.
         """
         settings = self.settings
-        # Acknowledged spans that lapse at this poll. The node has not polled
-        # since the lapse, so it has not deleted their bytes: they still count
-        # toward its quota, and reopening one needs no download.
-        lapsed: set[str] = set()
+        # Spans of revoked objects stay open until the node confirms the
+        # deletion. Any other span whose lease lapsed closes at the lapse. The
+        # node has not polled since, so it has not deleted those bytes:
+        # reopening one carries its fill history and needs no download, and
+        # acknowledged ones still count toward the node's quota.
+        lapsed: dict[str, _Assignment] = {}
         for a in self.assignments.values():
             if (
                 a.node_id == node.node_id
@@ -476,8 +478,7 @@ class Coordinator:
                 and a.lease_expires_at <= now
             ):
                 a.released_at = a.lease_expires_at
-                if a.acked_at is not None:
-                    lapsed.add(a.digest)
+                lapsed[a.digest] = a
         held_bytes = sum(
             len(self.objects[a.digest].data)
             for a in self.assignments.values()
@@ -512,8 +513,9 @@ class Coordinator:
             if current is not None and current.released_at is None:
                 listed.add(digest)
                 continue
+            previous = lapsed.get(digest)
             # Only a span that needs a download counts against the cap.
-            reopened = digest in lapsed
+            reopened = previous is not None and previous.fill_count > 0
             if not reopened and created >= settings.max_new_assignments_per_poll:
                 continue
             span = _Assignment(
@@ -522,12 +524,12 @@ class Coordinator:
                 assigned_at=now,
                 lease_expires_at=now + settings.lease_seconds,
             )
+            if previous is not None:
+                # A span the node released starts fresh: it deleted the bytes.
+                span.fill_count = previous.fill_count
+                span.last_filled_at = previous.last_filled_at
             if current is not None:
-                # The closed span stays in history for the ledger, and its fill
-                # history carries over: this node downloaded these bytes once.
-                span.fill_count = current.fill_count
-                span.last_filled_at = current.last_filled_at
-                self.history.append(current)
+                self.history.append(current)  # the ledger still scores it
             self.assignments[(node.node_id, digest)] = span
             listed.add(digest)
             if not reopened:
