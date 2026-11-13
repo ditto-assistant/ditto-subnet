@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ditto-edge-protocol"
+version = "0.1.0"
+description = "Ditto Edge (edge/v1): wire contract, request signing, proofs and shadow ledger rules for public-bytes Mac nodes."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "pydantic>=2.12",
+    "cryptography>=50.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["ditto_edge_protocol"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ditto_edge_protocol"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
