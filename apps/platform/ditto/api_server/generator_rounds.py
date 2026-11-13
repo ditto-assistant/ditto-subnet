@@ -425,7 +425,11 @@ async def select_round_columns(
     scored, in challenger queue order (:mod:`generator_challenger_queue`:
     template families interleaved, the most novel probe cases first within a
     family position, then the oldest qualification), then to the next-best
-    scored ones. A generator whose
+    scored ones. While ``challenger_columns`` is above zero, every template
+    family with a generator waiting gets one challenger column (its first in
+    queue order), past ``challenger_columns`` up to :data:`MAX_COLUMNS`, so a
+    generator qualified before a round opens is measured in that round
+    unless the round is full. A generator whose
     column in an earlier round is still in flight is skipped as a
     challenger: that round is already measuring it, and a void round returns
     a never-scored one to its place in the queue.
@@ -469,9 +473,21 @@ async def select_round_columns(
             columns.append(_column(len(columns), default, counted=True))
     challengers = settings.challenger_columns
     before = len(columns)
+    waiting = [entry for entry in queue if entry.in_flight_round is None]
+    if challengers:
+        # The next-round guarantee: every template family with a generator
+        # waiting for its first measurement gets one challenger column, past
+        # challenger_columns if need be, up to MAX_COLUMNS. Spare challenger
+        # columns then go on down the queue (an owner still holds one column),
+        # so a family's second build is seated only when no family waits.
+        heads: dict[str, GeneratorSubmission] = {}
+        for entry in waiting:
+            if entry.row.owner_key not in used_owners:
+                heads.setdefault(entry.family, entry.row)
+        take(list(heads.values()), MAX_COLUMNS, counted=False)
     take(
-        [entry.row for entry in queue if entry.in_flight_round is None],
-        challengers,
+        [entry.row for entry in waiting],
+        challengers - (len(columns) - before),
         counted=False,
     )
     take(

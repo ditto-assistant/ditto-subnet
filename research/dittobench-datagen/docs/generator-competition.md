@@ -284,7 +284,13 @@ When a round opens it freezes:
 - **Challenger columns** (`challenger_columns`, 1). These go to qualified
   generators that have never held a column. They are scored as generators but
   never move an agent, so a new generator qualifies against the top agents
-  without affecting them.
+  without affecting them. `challenger_columns` is a minimum: while it is above
+  zero, every template family with a generator waiting gets one challenger
+  column, up to the round's 8 columns. A generator qualified before a round
+  opens is measured in that round unless the round is full. An owner still
+  holds one column, so one miner's batch drains one build per round. Spare
+  challenger columns go on down the queue (a family's next build, under
+  another owner), then re-measure the next-best scored generators.
 - **The panel.** This is the top `panel_size` agent owners from the ledger
   validators fold, plus `reference_agent_ids`: subnet-run baselines, each
   counted as its own independent solver. An agent the round lane could not

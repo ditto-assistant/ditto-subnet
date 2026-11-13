@@ -483,8 +483,9 @@ class TestPrescreenScoring:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Pre-screens promote the best mini-scorer: after a batch scores the
-        older generator 0.1 and the newer 0.2, the newer one takes the
-        challenger column, which by qualification order the older would have."""
+        older generator 0.1 and the newer 0.2, the newer one takes the first
+        challenger column, which by qualification order the older would have.
+        Every waiting family is seated, so order decides a full round."""
         _install(app, session_maker)
         await _enable(client, counted_columns=1, challenger_columns=1)
         agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
@@ -512,7 +513,7 @@ class TestPrescreenScoring:
                 if not c["counted"]
             ]
 
-        assert await challenger() == [str(ids["a"])]
+        assert (await challenger())[0] == str(ids["a"])
         await _tick(session_maker)
         [batch] = await _batches(session_maker)
         work = await _lease(client)
@@ -533,7 +534,7 @@ class TestPrescreenScoring:
         )
         assert resp.status_code == 200, resp.text
 
-        assert await challenger() == [str(ids["b"])]
+        assert (await challenger())[0] == str(ids["b"])
         preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
         queue = {e["submission_id"]: e for e in preview["challenger_queue"]}
         assert queue[str(ids["b"])]["prescreen_score"] == pytest.approx(0.2)

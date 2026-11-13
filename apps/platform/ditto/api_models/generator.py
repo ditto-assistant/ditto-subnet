@@ -161,7 +161,11 @@ class GeneratorCompetitionSettings(BaseModel):
     """Extra columns for qualified generators that have never held a column.
     They are scored as generators but never move an agent. Bounded by the
     round's column capacity: counted plus challenger columns hold at most
-    ``MAX_ROUND_COLUMNS`` (8), so five counted columns leave room for three."""
+    ``MAX_ROUND_COLUMNS`` (8), so five counted columns leave room for three.
+    This is the minimum a round seats: above zero, every template family with
+    a never-scored generator waiting gets one challenger column, up to that
+    capacity. Spare challenger columns go on down the challenger queue, then
+    re-measure scored generators. Zero turns challenger columns off."""
     reference_agent_ids: Annotated[list[UUID], Field(max_length=3)] = Field(
         default_factory=list
     )
