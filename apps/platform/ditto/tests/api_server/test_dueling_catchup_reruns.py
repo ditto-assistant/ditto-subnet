@@ -104,7 +104,7 @@ async def test_catchup_board_names_the_newest_rerun_not_the_best_draw(
     other = await _seed(
         session,
         hotkey="5" + "B" * 47,
-        coldkey="5ColdkeyOther",
+        coldkey="5" + "C" * 47,
         sha256="d1" * 32,
         composite=0.80,
         created_at=_T0,
