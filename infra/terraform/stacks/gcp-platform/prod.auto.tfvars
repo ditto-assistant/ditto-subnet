@@ -40,9 +40,9 @@ enable_screener_capacity_controller = true
 enable_generator_scorer = true
 # Rehearsal VM is opt-in through the protected workflow and absent otherwise.
 enable_screener_fleet_dev_host = false
-# The bare-metal X.509 identity is live on subnet-screener-1. Preserve its
-# pool, provider, service account, and one-secret grants on routine plans.
-enable_screener_fleet_x509_identity       = true
+# Robot server 3062657 was cancelled on 2026-11-14 after the AWS wake drill.
+# Retire only its X.509 identity; the AWS pool and shared admin grant stay live.
+enable_screener_fleet_x509_identity       = false
 enable_screener_fleet_x509_node2_identity = false
 # DITTO-2594: the on-demand EC2 screener's WIF pool, review-key grants and
 # registration-grant secret are enabled through the protected apply workflow.

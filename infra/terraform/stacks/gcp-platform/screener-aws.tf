@@ -49,12 +49,8 @@ resource "google_iam_workload_identity_pool" "screener_aws" {
   description               = "The on-demand EC2 screener's instance role; reads only the screener review keys and its registration grant."
 
   lifecycle {
-    # Pool administration comes from the shared grant in screener-fleet-x509.tf,
-    # which exists while the X.509 or generator-scorer AWS pool is enabled.
-    precondition {
-      condition     = var.enable_screener_fleet_x509_identity || var.generator_scorer_aws_account_id != ""
-      error_message = "The screener-aws pool needs the shared workloadIdentityPoolAdmin grant (screener_fleet_x509_pool_admin)."
-    }
+    # The shared pool-admin grant is retained whenever this AWS pool is enabled;
+    # the retired Hetzner X.509 identity is not a prerequisite.
     precondition {
       condition     = var.enable_screener_fleet
       error_message = "enable_screener_aws_identity requires enable_screener_fleet (the review-key secrets)."

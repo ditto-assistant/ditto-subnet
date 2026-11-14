@@ -47,9 +47,9 @@ on:
         default: false
         type: boolean
       screener_fleet_x509_identity_enabled:
-        description: Retain subnet-screener-1 X.509 federation and one-secret service account
+        description: Enable retired Hetzner X.509 federation (off after server cancellation)
         required: true
-        default: true
+        default: false
         type: boolean
       validator_hotkey_admin_phase:
         description: Disposable GCP hotkey generator phase (gcp-platform plans only)
