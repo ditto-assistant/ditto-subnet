@@ -29,6 +29,9 @@ locals {
   trail_name   = "ditto-account-trail"
   trail_bucket = "ditto-cloudtrail-${local.account_id}"
   trail_arn    = "arn:aws:cloudtrail:${local.region}:${local.account_id}:trail/${local.trail_name}"
+
+  # One retention period for the Object Lock default and the lifecycle expiry.
+  trail_retention_days = 400
 }
 
 resource "aws_s3_bucket" "trail" {
@@ -68,7 +71,7 @@ resource "aws_s3_bucket_object_lock_configuration" "trail" {
   rule {
     default_retention {
       mode = "GOVERNANCE"
-      days = 400
+      days = local.trail_retention_days
     }
   }
   depends_on = [aws_s3_bucket_versioning.trail]
@@ -94,7 +97,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "trail" {
       storage_class = "GLACIER_IR"
     }
     expiration {
-      days = 400
+      days = local.trail_retention_days
     }
     # Clears versions made noncurrent by the expiration above. Object Lock
     # keeps any version until 400 days after its creation, so a version
@@ -163,6 +166,19 @@ data "aws_iam_policy_document" "trail_bucket" {
       identifiers = ["*"]
     }
   }
+  # Nobody may shorten or remove the default retention for later logs. To
+  # change it deliberately, remove this statement first (a PutBucketPolicy the
+  # trail records), then update aws_s3_bucket_object_lock_configuration.trail.
+  statement {
+    sid       = "DenyObjectLockConfigurationChanges"
+    effect    = "Deny"
+    actions   = ["s3:PutBucketObjectLockConfiguration"]
+    resources = [aws_s3_bucket.trail.arn]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
   statement {
     sid     = "DenyInsecureTransport"
     effect  = "Deny"
@@ -184,9 +200,13 @@ data "aws_iam_policy_document" "trail_bucket" {
 }
 
 resource "aws_s3_bucket_policy" "trail" {
-  bucket     = aws_s3_bucket.trail.id
-  policy     = data.aws_iam_policy_document.trail_bucket.json
-  depends_on = [aws_s3_bucket_public_access_block.trail]
+  bucket = aws_s3_bucket.trail.id
+  policy = data.aws_iam_policy_document.trail_bucket.json
+  # The lock configuration must exist before the policy denies changing it.
+  depends_on = [
+    aws_s3_bucket_public_access_block.trail,
+    aws_s3_bucket_object_lock_configuration.trail,
+  ]
 }
 
 resource "aws_cloudtrail" "account" {
