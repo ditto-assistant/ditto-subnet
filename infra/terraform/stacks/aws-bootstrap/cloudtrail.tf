@@ -15,6 +15,14 @@
 #
 # Retention: 400 days in S3, so a year-long SOC 2 observation period is covered
 # with margin. Objects move to Glacier Instant Retrieval after 90 days.
+#
+# Tamper resistance: S3 Object Lock (governance mode) gives every log and
+# digest version a 400-day retention, so no version can be removed early,
+# including by the lifecycle rule. The bucket policy additionally denies
+# object and version deletes, governance bypass and retention changes to every
+# principal. Removing evidence therefore first needs a bucket-policy change,
+# which this trail itself records. Governance (not compliance) mode keeps the
+# lock reversible by an administrator who removes that deny on purpose.
 ###############################################################################
 
 locals {
@@ -25,6 +33,8 @@ locals {
 
 resource "aws_s3_bucket" "trail" {
   bucket = local.trail_bucket
+  # Object Lock can only be turned on when the bucket is created.
+  object_lock_enabled = true
   lifecycle {
     prevent_destroy = true
   }
@@ -52,6 +62,18 @@ resource "aws_s3_bucket_versioning" "trail" {
   }
 }
 
+# Every new log and digest version is locked for 400 days from creation.
+resource "aws_s3_bucket_object_lock_configuration" "trail" {
+  bucket = aws_s3_bucket.trail.id
+  rule {
+    default_retention {
+      mode = "GOVERNANCE"
+      days = 400
+    }
+  }
+  depends_on = [aws_s3_bucket_versioning.trail]
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "trail" {
   bucket = aws_s3_bucket.trail.id
   rule {
@@ -74,6 +96,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "trail" {
     expiration {
       days = 400
     }
+    # Clears versions made noncurrent by the expiration above. Object Lock
+    # keeps any version until 400 days after its creation, so a version
+    # hidden early by a delete marker is not removed before then.
     noncurrent_version_expiration {
       noncurrent_days = 30
     }
@@ -81,11 +106,15 @@ resource "aws_s3_bucket_lifecycle_configuration" "trail" {
       days_after_initiation = 1
     }
   }
-  depends_on = [aws_s3_bucket_versioning.trail]
+  depends_on = [
+    aws_s3_bucket_versioning.trail,
+    aws_s3_bucket_object_lock_configuration.trail,
+  ]
 }
 
 # CloudTrail may check the ACL and write under AWSLogs/<account>/ for this one
-# trail only (aws:SourceArn). Everything else must use TLS.
+# trail only (aws:SourceArn). No principal may delete or unlock log objects,
+# and everything else must use TLS.
 data "aws_iam_policy_document" "trail_bucket" {
   statement {
     sid       = "CloudTrailAclCheck"
@@ -113,6 +142,25 @@ data "aws_iam_policy_document" "trail_bucket" {
       test     = "StringEquals"
       variable = "aws:SourceArn"
       values   = [local.trail_arn]
+    }
+  }
+  # Lifecycle expiration is not subject to bucket policy, so this does not
+  # stop the 400-day cleanup; it stops people and roles (including the root
+  # user) from deleting, unlocking or shortening the retention of log objects.
+  statement {
+    sid    = "DenyLogTampering"
+    effect = "Deny"
+    actions = [
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion",
+      "s3:BypassGovernanceRetention",
+      "s3:PutObjectRetention",
+      "s3:PutObjectLegalHold",
+    ]
+    resources = ["${aws_s3_bucket.trail.arn}/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
     }
   }
   statement {
