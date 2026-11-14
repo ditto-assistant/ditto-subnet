@@ -42,7 +42,7 @@ from ditto.validator.errors import (
     PlatformInfrastructureError,
     PlatformRetryLaterError,
 )
-from ditto.validator.platform import PlatformClient
+from ditto.validator.platform import PlatformClient, last_job_decline_reason
 from ditto.validator.signing import (
     artifact_signing_message,
     job_fail_signing_message,
@@ -161,6 +161,44 @@ async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
         assert await platform.request_job() is None
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("allocator_busy", "allocator_busy"),
+        ("no_candidate", "no_candidate"),
+        (None, None),
+        ("Not A Reason!", None),
+        ("x" * 65, None),
+    ],
+)
+async def test_job_claim_204_exposes_platforms_decline_reason(
+    header: str | None, expected: str | None
+) -> None:
+    """The worker backs off differently for a busy allocator and an empty queue."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    responses = [
+        httpx.Response(
+            204, headers={"X-Ditto-Decline-Reason": header} if header else {}
+        ),
+        httpx.Response(204),
+    ]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        assert await platform.request_job(slot_id="slot-0") is None
+        assert last_job_decline_reason() == expected
+        # Each call starts clean: a later bare 204 never inherits the reason.
+        assert await platform.request_job(slot_id="slot-0") is None
+        assert last_job_decline_reason() is None
 
 
 @pytest.mark.parametrize(

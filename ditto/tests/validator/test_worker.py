@@ -1939,6 +1939,145 @@ class TestRunOnce:
         # ordinary queue therefore keeps strict first refusal on spare slots.
         assert platform.request_job.await_count >= 2
 
+    async def test_allocator_busy_retries_the_slot_without_electing_other_lanes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A busy dispatch fence never read the queue, so it is not an empty one.
+
+        The slot retries on its own backoff; the retest lane is dispatched only
+        once a poll actually comes back empty.
+        """
+        from ditto.validator import platform as platform_mod
+
+        events: list[str] = []
+        reasons = ["allocator_busy", "allocator_busy", None]
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:  # noqa: ARG001
+            reason = reasons.pop(0) if reasons else None
+            platform_mod._JOB_DECLINE_REASON.set(reason)
+            events.append(f"poll:{reason}")
+            return None
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        monkeypatch.setattr(worker_mod, "_ALLOCATOR_BUSY_BACKOFF_BASE_SECONDS", 0.001)
+        backoffs: list[float] = []
+        real_backoff = worker_mod._allocator_busy_backoff_seconds
+
+        def record_backoff(streak: int) -> float:
+            delay = real_backoff(streak)
+            backoffs.append(delay)
+            return delay
+
+        monkeypatch.setattr(
+            worker_mod, "_allocator_busy_backoff_seconds", record_backoff
+        )
+
+        async def run_retests(**_kwargs: object) -> bool:
+            events.append("retest")
+            return False
+
+        monkeypatch.setattr(worker, "_run_top5_confirmation_lane", run_retests)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+
+        assert events[:4] == [
+            "poll:allocator_busy",
+            "poll:allocator_busy",
+            "poll:None",
+            "retest",
+        ]
+        # Exponential: the second busy in a row may wait up to twice the first.
+        assert len(backoffs) == 2
+        assert 0.0005 <= backoffs[0] <= 0.001
+        assert 0.001 <= backoffs[1] <= 0.002
+
+    async def test_allocator_busy_backoff_is_jittered_and_capped(self) -> None:
+        delays = [worker_mod._allocator_busy_backoff_seconds(n) for n in range(1, 12)]
+        cap = worker_mod._ALLOCATOR_BUSY_BACKOFF_MAX_SECONDS
+        assert all(0 < delay <= cap for delay in delays)
+        assert all(delay >= cap / 2 for delay in delays[6:])
+
+    async def test_empty_round_lane_does_not_wake_idle_siblings_into_a_storm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The live 288k-allocator_busy shape: one lease, idle siblings, rounds on.
+
+        Each empty round poll used to set the shared wake event, so every
+        waiting sibling re-polled at once, one of them became the next round
+        dispatcher, and the loop ran as fast as the round endpoint answered.
+        """
+        repoll = 0.2
+        polls: list[str] = []
+        round_polls = 0
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            polls.append(slot_id)
+            if slot_id == "slot-0" and not started.is_set():
+                return _job("5MinerA" + "x" * 41, slot_id=slot_id)
+            return None
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = 4
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 4
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._scorer_runs_generator_rounds = True
+        monkeypatch.setattr(worker, "_report_heartbeat", AsyncMock())
+        monkeypatch.setattr(worker_mod, "_IDLE_SLOT_REPOLL_SECONDS", repoll)
+
+        async def score(_job: JobResponse) -> ScoreReport:
+            started.set()
+            await release.wait()
+            return _report("run-slot-0", 0.7)
+
+        async def run_retests(**_kwargs: object) -> bool:
+            return False
+
+        async def run_round(**_kwargs: object) -> bool:
+            nonlocal round_polls
+            round_polls += 1
+            await asyncio.sleep(0)
+            return False
+
+        monkeypatch.setattr(worker, "_score_job", score)
+        monkeypatch.setattr(worker, "_run_top5_confirmation_lane", run_retests)
+        monkeypatch.setattr(worker, "_run_generator_round_lane", run_round)
+
+        sweep = asyncio.create_task(worker.run_once(set_weights=False))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        polls.clear()
+        round_polls = 0
+        window = 1.0
+        await asyncio.sleep(window)
+        idle_polls = len(polls)
+        observed_round_polls = round_polls
+        release.set()
+        await asyncio.wait_for(sweep, timeout=5)
+
+        # Three idle slots at a 0.2s (+/-25%) repoll: about 15 polls a second.
+        # The storm was hundreds.
+        assert idle_polls <= 3 * (window / (repoll * 0.75)) + 3, idle_polls
+        # The round lane is asked at most once per repoll interval host-wide.
+        assert observed_round_polls <= window / repoll + 1, observed_round_polls
+
     async def test_round_work_is_requested_while_a_retest_holds_a_slot(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
