@@ -953,6 +953,16 @@ class TestRoundLifecycle:
         miner = await _seed_generator(
             session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
         )
+        # The generator the miner's upload superseded on the same hotkey.
+        prior = await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a0"
+        )
+        async with session_maker() as session, session.begin():
+            row = await session.get(GeneratorSubmission, prior)
+            assert row is not None
+            row.status = "superseded"
+            row.status_reason = f"superseded by {miner}"
+            row.submitted_at -= timedelta(hours=2)
         await _qualify_all(session_maker)
         await _advance(session_maker, 3)
         await _advance(session_maker, 4)
@@ -972,6 +982,11 @@ class TestRoundLifecycle:
             row = await session.get(GeneratorSubmission, miner)
             assert row is not None and row.status == "rejected"
             assert (row.status_reason or "").startswith("round_generation_failed")
+            # SN-487: the failed upload cannot freeze the generator it
+            # superseded; that one is back, to qualify and be re-measured.
+            restored = await session.get(GeneratorSubmission, prior)
+            assert restored is not None and restored.status == "active"
+            assert restored.qualified_at is None
             default = await session.get(GeneratorSubmission, UUID(default_id))
             assert default is not None and default.status == "active"
             rnd = await get_round(session, 1)

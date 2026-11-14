@@ -51,6 +51,7 @@ from ditto.db.models import (
     GeneratorSubmission,
     MinerAvatar,
 )
+from ditto.db.queries.generator import restored_reason
 from ditto.tests.api_server.conftest import answer_registration_from_neurons
 from ditto.tests.api_server.endpoints.test_scoring import (
     _install_chain,
@@ -1584,6 +1585,109 @@ class TestOperatorActions:
         async with session_maker() as session:
             row = await session.get(GeneratorSubmission, UUID(sub_id))
             assert row is not None and row.status == "rejected"
+
+    async def test_a_withdraw_upload_restores_the_generator_it_superseded(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """SN-487: an upload made to fail ("withdrawn by owner ... not meant
+        to run") hands the hotkey back to the generator it superseded, which
+        qualifies again; reinstating the upload supersedes it again."""
+        _install(app, session_maker)
+        await _open_lane(client)
+        first = (await _upload(client, _archive("one")))["submission_id"]
+        assert (await _post(client, _result(await _lease(client), tag="one"))).json()[
+            "status"
+        ] == "qualified"
+        await _skip_cooldown(session_maker)
+        withdraw = await _upload(client, _archive("two"))
+        assert withdraw["superseded"] == [first]
+        work = await _lease(client)
+        assert work["submission_id"] == withdraw["submission_id"]
+        failed = _result(
+            work,
+            tag="two",
+            seed_overrides={
+                "valid": False,
+                "error": "withdrawn by owner: this upload only replaces my "
+                "entry; it is not meant to run",
+            },
+        )
+        assert (await _post(client, failed)).json()["submission_status"] == "rejected"
+
+        admin = "/api/v1/admin/generator-competition/submissions"
+        restored = (await client.get(f"{admin}/{first}", headers=_ADMIN)).json()
+        assert restored["summary"]["status"] == "active"
+        assert restored["summary"]["status_reason"] == restored_reason(
+            UUID(withdraw["submission_id"])
+        )
+        assert restored["summary"]["qualified_at"] is None
+        # Re-qualified on fresh seeds before it can hold a column again.
+        rerun = await _lease(client)
+        assert rerun is not None and rerun["submission_id"] == first
+        assert (await _post(client, _result(rerun, tag="one-again"))).json()[
+            "status"
+        ] == "qualified"
+
+        # The rejection was a scorer fault after all: reinstating the upload
+        # supersedes the restored generator again, as the upload did.
+        detail = (
+            await client.get(f"{admin}/{withdraw['submission_id']}", headers=_ADMIN)
+        ).json()
+        assert detail["reinstate_blockers"] == []
+        resp = await client.post(
+            f"{admin}/{withdraw['submission_id']}/reinstate",
+            headers=_ADMIN,
+            json={
+                "expected_status": "rejected",
+                "expected_status_reason": detail["summary"]["status_reason"],
+                "reason": "scorer was stale; not the miner's fault",
+                "actor": "backroom:test",
+                "confirmation": REINSTATE_SUBMISSION_CONFIRMATION,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["summary"]["status"] == "active"
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, UUID(first))
+            assert row is not None and row.status == "superseded"
+            assert row.status_reason == f"superseded by {withdraw['submission_id']}"
+            audit = (
+                await session.scalars(
+                    select(GeneratorOperatorAction).where(
+                        GeneratorOperatorAction.subject == withdraw["submission_id"]
+                    )
+                )
+            ).one()
+            assert audit.detail is not None
+            assert audit.detail["superseded"] == [first]
+
+    async def test_an_operator_reject_does_not_restore_the_superseded_row(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        first = (await _upload(client, _archive("one")))["submission_id"]
+        await _skip_cooldown(session_maker)
+        second = (await _upload(client, _archive("two")))["submission_id"]
+        resp = await client.post(
+            f"/api/v1/admin/generator-competition/submissions/{second}/reject",
+            headers=_ADMIN,
+            json={
+                "expected_status": "active",
+                "reason": "copy of another miner's generator",
+                "confirmation": REJECT_SUBMISSION_CONFIRMATION,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, UUID(first))
+            assert row is not None and row.status == "superseded"
 
 
 _SOURCE_READER = {**_ADMIN, "X-Admin-Actor": "backroom:test"}

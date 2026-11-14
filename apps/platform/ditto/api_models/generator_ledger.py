@@ -2,8 +2,8 @@
 
 Platform is the generator competition's system of record: generators compete
 in chain-epoch rounds (their cases run by validators against the top agents),
-and Platform folds every hotkey to its latest round column score within the
-freshness window. Validators read this ledger through
+and Platform folds every owner (``owner_key``, one round column per owner) to
+its latest round column score within the freshness window. Validators read this ledger through
 ``GET /scoring/generator-ledger`` and fold it as the ``generator`` track. From
 validator protocol 33 the track pays, but only the share the operator serves
 through ``LedgerResponse.track_shares_bps`` and only to entries marked

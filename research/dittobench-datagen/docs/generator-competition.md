@@ -479,7 +479,10 @@ column score = Σ credit / ((1 + champion_bonus) · max(n, cases_per_seed)) × (
 
 A generator's ledger score is its latest *scored* round column score within
 `window_days`; void rounds never count. A skipped round extends its source
-round's freshness without adding a score.
+round's freshness without adding a score. The ledger pays **one entry per
+owner**, keyed by the same `owner_key` that seats one column per owner: the
+owner's most recently scored column, whichever hotkey it is on. An owner's
+other hotkeys earn nothing from older rounds.
 
 **Agents.** Agents are ranked **pairwise-neutral**. Agents A and B are
 compared only on cases of counted columns owned by neither A's owner nor B's
@@ -787,7 +790,13 @@ current best generators. As agents improve, a generator's families become
 trivial, its column score falls, and it loses its counted column to a better
 generator. Earnings therefore need a generator that keeps finding blind spots.
 Uploading a new generator supersedes the hotkey's previous one. The previous
-one's last round score keeps counting until the new one is scored.
+one's last round score keeps counting only while the new upload is still
+active, until the new one is scored. If the new upload is rejected, the old
+score stops counting, because the superseded generator is never re-scored. An
+upload rejected by its own evaluation (a failed build or generation, a
+behavioral copy, or an invalid round pack) instead returns the hotkey to the
+generator it superseded. That generator qualifies again on fresh seeds before
+it earns or holds a column. An operator reject restores nothing.
 
 ## Upload fee
 

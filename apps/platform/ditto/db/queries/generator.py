@@ -259,6 +259,79 @@ async def superseded_by(
     return list(rows)
 
 
+def restored_reason(rejected: UUID) -> str:
+    """The ``status_reason`` :func:`restore_superseded` stamps on a row it
+    returns to active, naming the rejected replacement."""
+    return f"restored: replacement {rejected} was rejected"
+
+
+async def restore_superseded(
+    session: AsyncSession, rejected: GeneratorSubmission, *, now: datetime
+) -> UUID | None:
+    """Return the submission ``rejected`` superseded to ``active`` (SN-487).
+
+    For a hotkey's active submission that has just been rejected by its own
+    evaluation (a failed build or generation, a behavioral copy, an invalid
+    round pack). Without this, an upload made to fail freezes the row it
+    superseded: that row is never re-scored, yet the ledger kept paying its
+    last score. Restored, it qualifies again from scratch on fresh seeds and
+    the current probe (a probe rotation while it was superseded never
+    re-qualified it), so it earns nothing until it passes, and round selection
+    then re-measures it. An operator reject does not call this.
+
+    Restores the newest row ``rejected``'s upload superseded, and only while
+    the hotkey has no other active submission. The upload lock is only tried:
+    the caller already holds ``rejected``'s row lock, which an upload takes
+    after the hotkey lock, so waiting could deadlock. A busy lock means an
+    upload on the hotkey is committing a new active submission, which makes
+    the restore moot.
+    """
+    if rejected.public_default:
+        return None
+    locked = await session.scalar(
+        text("SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"generator-upload:{rejected.miner_hotkey}"},
+    )
+    if not locked:
+        return None
+    other_active = await session.scalar(
+        select(GeneratorSubmission.submission_id)
+        .where(
+            GeneratorSubmission.miner_hotkey == rejected.miner_hotkey,
+            GeneratorSubmission.status == "active",
+            GeneratorSubmission.submission_id != rejected.submission_id,
+        )
+        .limit(1)
+    )
+    if other_active is not None:
+        return None
+    prior = await session.scalar(
+        select(GeneratorSubmission)
+        .options(defer(GeneratorSubmission.source_bytes, raiseload=True))
+        .where(
+            GeneratorSubmission.miner_hotkey == rejected.miner_hotkey,
+            GeneratorSubmission.status == "superseded",
+            GeneratorSubmission.status_reason
+            == f"superseded by {rejected.submission_id}",
+        )
+        .order_by(
+            GeneratorSubmission.submitted_at.desc(),
+            GeneratorSubmission.submission_id.desc(),
+        )
+        .limit(1)
+        .with_for_update()
+    )
+    if prior is None:
+        return None
+    prior.status = "active"
+    prior.status_reason = restored_reason(rejected.submission_id)
+    prior.qualified_at = None
+    prior.attempts = 0
+    prior.next_run_at = now
+    prior.updated_at = now
+    return prior.submission_id
+
+
 async def lock_next_runnable_submission(
     session: AsyncSession, *, now: datetime
 ) -> GeneratorSubmission | None:

@@ -113,6 +113,7 @@ from ditto.db.queries.generator import (
     record_operator_action,
     rotate_probe_epoch,
     submission_counts_by_status,
+    supersede_active,
 )
 
 router = APIRouter(prefix="/admin/generator-competition", tags=["admin"])
@@ -657,12 +658,18 @@ async def _reinstate_blockers(
         .order_by(GeneratorSubmission.submitted_at, GeneratorSubmission.submission_id)
     )
     for other_id, other_status, submitted_at in others.tuples():
+        newer = _aware(submitted_at) > _aware(row.submitted_at)
+        if other_status == "active" and not newer:
+            # The generator this upload superseded, restored when it was
+            # rejected (restore_superseded). Reinstating supersedes it again,
+            # as the upload did.
+            continue
         if other_status == "active":
             blockers.append(
                 f"hotkey already has active submission {other_id}; one active "
                 "generator per hotkey"
             )
-        elif _aware(submitted_at) > _aware(row.submitted_at):
+        elif newer:
             blockers.append(
                 f"hotkey uploaded newer submission {other_id} ({other_status}); "
                 "a newer upload supersedes this one"
@@ -800,8 +807,10 @@ async def reinstate_submission(
     infrastructure failure read as a generator verdict). The submission
     qualifies again from scratch on fresh secret seeds and holds no round
     column until it passes. Guarded by the exact status and status_reason the
-    operator read. Refused while the hotkey has another active or a newer
-    submission, and for an operator ruling unless ``override_operator_ruling``.
+    operator read. Refused while the hotkey has a newer submission or another
+    active one uploaded after it, and for an operator ruling unless
+    ``override_operator_ruling``. An older active generator (the one this
+    submission superseded, restored when it was rejected) is superseded again.
     """
     if payload.confirmation != REINSTATE_SUBMISSION_CONFIRMATION:
         raise HTTPException(
@@ -856,6 +865,11 @@ async def reinstate_submission(
         await abandon_run(session, row.lease_run_id, now=now)
         clear_lease(row, now=now)
     previous_reason = row.status_reason
+    # Only an older generator restored when this one was rejected can be
+    # active here (_reinstate_blockers refuses a newer one).
+    resuperseded = await supersede_active(
+        session, miner_hotkey=row.miner_hotkey, keep=row.submission_id, now=now
+    )
     row.status = "active"
     row.status_reason = None
     row.qualified_at = None
@@ -872,6 +886,7 @@ async def reinstate_submission(
             "previous_status_reason": previous_reason,
             "operator_ruling": ruling,
             "override_operator_ruling": payload.override_operator_ruling,
+            "superseded": [str(sid) for sid in resuperseded],
         },
     )
     try:
