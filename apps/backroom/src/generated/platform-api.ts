@@ -2587,8 +2587,10 @@ export interface paths {
          *     infrastructure failure read as a generator verdict). The submission
          *     qualifies again from scratch on fresh secret seeds and holds no round
          *     column until it passes. Guarded by the exact status and status_reason the
-         *     operator read. Refused while the hotkey has another active or a newer
-         *     submission, and for an operator ruling unless ``override_operator_ruling``.
+         *     operator read. Refused while the hotkey has a newer submission or another
+         *     active one uploaded after it, and for an operator ruling unless
+         *     ``override_operator_ruling``. An older active generator (the one this
+         *     submission superseded, restored when it was rejected) is superseded again.
          */
         post: operations["reinstate_submission_api_v1_admin_generator_competition_submissions__submission_id__reinstate_post"];
         delete?: never;
