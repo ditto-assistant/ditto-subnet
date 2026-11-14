@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.485.0 (2026-11-14)
+
+### Chores
+
+- **infra**: Pin the AWS screener Buildx repair
+  ([#3545](https://github.com/ditto-assistant/ditto-subnet/pull/3545),
+  [`e9fb205`](https://github.com/ditto-assistant/ditto-subnet/commit/e9fb2057db2f638495309622b61768f1b6b89387))
+
+### Documentation
+
+- Correct the live submission fee to 0.075 TAO
+  ([#3549](https://github.com/ditto-assistant/ditto-subnet/pull/3549),
+  [`74b03f3`](https://github.com/ditto-assistant/ditto-subnet/commit/74b03f380876d07f1c6e14a6e2be77239a329d15))
+
+### Features
+
+- **infra**: Add account-wide CloudTrail trail to aws-bootstrap
+  ([#3548](https://github.com/ditto-assistant/ditto-subnet/pull/3548),
+  [`f7ac949`](https://github.com/ditto-assistant/ditto-subnet/commit/f7ac949a404886894b789d81df04c37a33e9f211))
+
+
 ## v0.484.2 (2026-11-13)
 
 ### Bug Fixes
