@@ -10543,6 +10543,12 @@ type GeneratedValidatorCapacityAssignment =
   PlatformComponents['schemas']['ValidatorCapacityAssignment']
 type GeneratedValidatorCapacityEntry = PlatformComponents['schemas']['ValidatorCapacityEntry']
 type GeneratedRequestOutcomeCount = PlatformComponents['schemas']['RequestOutcomeCount']
+type GeneratedValidatorCapacitySlot = PlatformComponents['schemas']['ValidatorCapacitySlot']
+type GeneratedDispatchFenceHolder = PlatformComponents['schemas']['DispatchFenceHolder']
+type GeneratedDispatchFenceValidatorHolds =
+  PlatformComponents['schemas']['DispatchFenceValidatorHolds']
+type GeneratedDispatchFenceBusyPair = PlatformComponents['schemas']['DispatchFenceBusyPair']
+type GeneratedDispatchFenceSnapshot = PlatformComponents['schemas']['DispatchFenceSnapshot']
 type GeneratedValidatorRequestOutcomes =
   PlatformComponents['schemas']['ValidatorRequestOutcomes']
 type GeneratedValidatorRequestOutcomeSummary =
@@ -10592,6 +10598,27 @@ const validatorCapacityAssignmentSchema = z.object({
   inference_idle_seconds: z.number().int().nonnegative().nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityAssignment>)
 
+// One configured slot: what it is doing or, when unusable, why. Reasons mirror
+// Platform's SlotUnusableReason; add a new one here in the same change.
+const validatorCapacitySlotSchema = z.object({
+  slot_id: z.string(),
+  state: z.enum(['claimed', 'free', 'reserved_round', 'unusable']),
+  reason: z
+    .enum([
+      'admission_draining',
+      'admission_paused',
+      'admission_resource_constrained',
+      'host_memory_admission',
+      'validator_unhealthy',
+      'bench_scorer_unverified',
+      'bench_software_obsolete',
+      'issuance_paused',
+      'platform_slot_cap',
+    ])
+    .nullable()
+    .default(null),
+} satisfies PlatformResponseShape<GeneratedValidatorCapacitySlot>)
+
 export const validatorCapacityEntrySchema = z.object({
   validator_hotkey: z.string(),
   seen_at: z.string(),
@@ -10605,6 +10632,11 @@ export const validatorCapacityEntrySchema = z.object({
   reserved_round_slots: z.number().int().nonnegative().default(0),
   claimed_slots: z.number().int().nonnegative(),
   assignments: z.array(validatorCapacityAssignmentSchema),
+  // Per-slot breakdown: defaulted so a Backroom deployed ahead of Platform
+  // still reads capacity, just without the reasons.
+  memory_admitted_slots: z.number().int().nonnegative().nullable().default(null),
+  unusable_slots: z.number().int().nonnegative().default(0),
+  slots: z.array(validatorCapacitySlotSchema).default([]),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityEntry>)
 
 const relayLaneSaturationSchema = z.object({
@@ -10620,7 +10652,10 @@ export const validatorCapacitySummarySchema = z.object({
   online_window_seconds: z.number().int().positive(),
   live_validator_count: z.number().int().nonnegative(),
   serviceable_validator_count: z.number().int().nonnegative(),
+  configured_slots: z.number().int().nonnegative().default(0),
   serviceable_slots: z.number().int().nonnegative(),
+  unusable_slots_by_reason: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  sandbox_memory_limit_mib: z.number().int().positive().nullable().default(null),
   claimed_slots: z.number().int().nonnegative(),
   active_assignment_count: z.number().int().nonnegative(),
   estimated_remaining_slot_minutes: z.number().nonnegative(),
@@ -10931,6 +10966,7 @@ const requestOutcomeCountSchema = z.object({
   outcome: z.string(),
   total: z.number().int().nonnegative(),
   recent_15m: z.number().int().nonnegative(),
+  recent_15m_by_slot: z.record(z.string(), z.number().int().nonnegative()).default({}),
   first_at: z.string().nullable(),
   last_at: z.string().nullable(),
   last_detail: z.string().nullable(),
@@ -10945,12 +10981,56 @@ const validatorRequestOutcomesSchema = z.object({
   outcomes: z.array(requestOutcomeCountSchema),
 } satisfies PlatformResponseShape<GeneratedValidatorRequestOutcomes>)
 
+const dispatchFenceSnapshotSchema = z.object({
+  observed_at: z.string(),
+  tracking_since: z.string(),
+  recent_window_seconds: z.number().int().positive(),
+  holder: z
+    .object({
+      validator_hotkey: z.string(),
+      slot_id: z.string(),
+      acquired_at: z.string(),
+      held_seconds: z.number().nonnegative(),
+    } satisfies PlatformResponseShape<GeneratedDispatchFenceHolder>)
+    .nullable(),
+  recent_holds: z.number().int().nonnegative(),
+  recent_held_seconds: z.number().nonnegative(),
+  recent_utilization: z.number().min(0).max(1),
+  hold_p50_seconds: z.number().nonnegative().nullable(),
+  hold_p95_seconds: z.number().nonnegative().nullable(),
+  hold_max_seconds: z.number().nonnegative().nullable(),
+  hold_outcomes: z.record(z.string(), z.number().int().nonnegative()),
+  recent_busy_declines: z.number().int().nonnegative(),
+  recent_busy_same_validator: z.number().int().nonnegative(),
+  recent_busy_untracked_holder: z.number().int().nonnegative(),
+  holds_by_validator: z.array(
+    z.object({
+      validator_hotkey: z.string(),
+      holds: z.number().int().nonnegative(),
+      held_seconds: z.number().nonnegative(),
+      max_hold_seconds: z.number().nonnegative(),
+    } satisfies PlatformResponseShape<GeneratedDispatchFenceValidatorHolds>),
+  ),
+  busy_by_validator: z.array(
+    z.object({
+      validator_hotkey: z.string(),
+      holder_hotkey: z.string().nullable(),
+      busy_declines: z.number().int().nonnegative(),
+      same_validator: z.boolean(),
+      by_slot: z.record(z.string(), z.number().int().nonnegative()),
+    } satisfies PlatformResponseShape<GeneratedDispatchFenceBusyPair>),
+  ),
+} satisfies PlatformResponseShape<GeneratedDispatchFenceSnapshot>)
+
 export const validatorRequestOutcomeSummarySchema = z.object({
   observed_at: z.string(),
   tracking_since: z.string(),
   recent_window_seconds: z.number().int().positive(),
   unauthenticated: z.record(z.string(), z.number().int().nonnegative()),
   validators: z.array(validatorRequestOutcomesSchema),
+  // What the dispatch fence behind allocator_busy is busy with. Null on a
+  // Platform that predates the monitor.
+  allocator: dispatchFenceSnapshotSchema.nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedValidatorRequestOutcomeSummary>)
 
 // Unreleased-copy signal (shadow). Evidence carries normalized source text

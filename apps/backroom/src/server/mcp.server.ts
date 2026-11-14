@@ -977,9 +977,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_validator_assignments:
     'Active validator leases.',
   get_validator_capacity:
-    'Read serviceable/claimed/round-reserved slots, queue age, progress and relay load.',
+    'Read per-slot state and unusable reason, serviceable/claimed slots, queue age, relay load.',
   get_validator_request_outcomes:
-    'Per-validator job-poll and weight-ledger outcomes: 204 gates, 428/426/409.',
+    'Per-validator/slot job-poll outcomes (204 gates, 428/426/409) and allocator fence holder.',
   get_miner_owner_footprint:
     'Read payment links; common-control signal, not ownership. Verify chain.',
   get_upload_payment_proof:

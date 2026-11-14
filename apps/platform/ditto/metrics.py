@@ -63,6 +63,18 @@ VALIDATOR_DISPATCH_DECLINED = Counter(
     ("reason",),
 )
 
+VALIDATOR_DISPATCH_FENCE_HOLD_SECONDS = Histogram(
+    "ditto_validator_dispatch_fence_hold_seconds",
+    "How long one validator job transaction held the allocator dispatch fence.",
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+)
+VALIDATOR_DISPATCH_FENCE_BUSY = Counter(
+    "ditto_validator_dispatch_fence_busy_total",
+    "Job polls answered allocator_busy, by whom the fence holder was: the same "
+    "validator (a sibling slot), another validator, or an untracked holder.",
+    ("collision",),
+)
+
 VALIDATOR_NONCE_JANITOR_RUNS = Counter(
     "ditto_validator_nonce_janitor_runs_total",
     "Bounded expired validator nonce sweeps, by outcome.",

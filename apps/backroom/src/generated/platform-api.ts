@@ -23534,6 +23534,122 @@ export interface components {
             mode: "off" | "observe" | "enforce" | "bypass";
         };
         /**
+         * DispatchFenceBusyPair
+         * @description Polls from one validator that bounced off a fence another poll held.
+         */
+        DispatchFenceBusyPair: {
+            /** Busy Declines */
+            busy_declines: number;
+            /**
+             * By Slot
+             * @description The declined validator's busy count per slot.
+             */
+            by_slot: {
+                [key: string]: number;
+            };
+            /**
+             * Holder Hotkey
+             * @description Whose job transaction held the fence. Null when the holder was not a tracked job poll (an operator cohort write).
+             */
+            holder_hotkey: string | null;
+            /**
+             * Same Validator
+             * @description The holder was this validator's own sibling slot: the host polls in synchronized bursts and collides with itself.
+             */
+            same_validator: boolean;
+            /**
+             * Validator Hotkey
+             * @description The validator declined.
+             */
+            validator_hotkey: string;
+        };
+        /**
+         * DispatchFenceHolder
+         * @description The job transaction holding the allocator fence at read time.
+         */
+        DispatchFenceHolder: {
+            /**
+             * Acquired At
+             * Format: date-time
+             */
+            acquired_at: string;
+            /** Held Seconds */
+            held_seconds: number;
+            /** Slot Id */
+            slot_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * DispatchFenceSnapshot
+         * @description What the job allocator's dispatch fence is busy with.
+         *
+         *     A high `recent_utilization` means the allocator transaction itself is slow.
+         *     A low one with many `recent_busy_same_validator` means a host's slots poll
+         *     in bursts and collide with each other, not with the allocator.
+         */
+        DispatchFenceSnapshot: {
+            /** Busy By Validator */
+            busy_by_validator: components["schemas"]["DispatchFenceBusyPair"][];
+            /** Hold Max Seconds */
+            hold_max_seconds: number | null;
+            /**
+             * Hold Outcomes
+             * @description How the recent holds ended: issued, no_candidate, a decline gate, or error_<Exception>.
+             */
+            hold_outcomes: {
+                [key: string]: number;
+            };
+            /** Hold P50 Seconds */
+            hold_p50_seconds: number | null;
+            /** Hold P95 Seconds */
+            hold_p95_seconds: number | null;
+            holder: components["schemas"]["DispatchFenceHolder"] | null;
+            /** Holds By Validator */
+            holds_by_validator: components["schemas"]["DispatchFenceValidatorHolds"][];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Recent Busy Declines */
+            recent_busy_declines: number;
+            /** Recent Busy Same Validator */
+            recent_busy_same_validator: number;
+            /** Recent Busy Untracked Holder */
+            recent_busy_untracked_holder: number;
+            /** Recent Held Seconds */
+            recent_held_seconds: number;
+            /** Recent Holds */
+            recent_holds: number;
+            /**
+             * Recent Utilization
+             * @description Share of the window (or of the time since tracking started, if shorter) the fence was held.
+             */
+            recent_utilization: number;
+            /** Recent Window Seconds */
+            recent_window_seconds: number;
+            /**
+             * Tracking Since
+             * Format: date-time
+             */
+            tracking_since: string;
+        };
+        /**
+         * DispatchFenceValidatorHolds
+         * @description One validator's fence holds in the recent window.
+         */
+        DispatchFenceValidatorHolds: {
+            /** Held Seconds */
+            held_seconds: number;
+            /** Holds */
+            holds: number;
+            /** Max Hold Seconds */
+            max_hold_seconds: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
          * DockerHealth
          * @description Aggregate Docker health without container identities or image metadata.
          */
@@ -39237,6 +39353,13 @@ export interface components {
              */
             recent_15m: number;
             /**
+             * Recent 15M By Slot
+             * @description The last-15-minute count split by the slot the poll offered (`unknown` when it named none).
+             */
+            recent_15m_by_slot?: {
+                [key: string]: number;
+            };
+            /**
              * Total
              * @description Count since tracking_since.
              */
@@ -47456,6 +47579,11 @@ export interface components {
             /** Issuance Paused */
             issuance_paused: boolean;
             /**
+             * Memory Admitted Slots
+             * @description Derived: harnesses at the live sandbox memory cap this host's announced memory admits after the published host reserve. Null when the host announced no memory. A validator with a custom reserve may admit slightly fewer or more.
+             */
+            memory_admitted_slots?: number | null;
+            /**
              * Reserved Round Slots
              * @description Of the allowed slots, how many are held back for generator-round runs: canonical and retest work cannot take them. Zero while validator rounds are disabled or the validator does not advertise round support.
              * @default 0
@@ -47471,8 +47599,35 @@ export interface components {
              * @description Healthy slots dispatch will fund right now: the fleet view's `allowed_slots` narrowed to `healthy_slots`, and zero unless the validator can serve the active benchmark.
              */
             serviceable_slots: number;
+            /**
+             * Slots
+             * @description Every configured slot with its state or unusable reason.
+             */
+            slots?: components["schemas"]["ValidatorCapacitySlot"][];
+            /**
+             * Unusable Slots
+             * @description Configured slots whose `state` is `unusable`.
+             * @default 0
+             */
+            unusable_slots: number;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /**
+         * ValidatorCapacitySlot
+         * @description One configured slot and what it is doing, or why it cannot work.
+         */
+        ValidatorCapacitySlot: {
+            /** Reason */
+            reason?: ("admission_draining" | "admission_paused" | "admission_resource_constrained" | "host_memory_admission" | "validator_unhealthy" | "bench_scorer_unverified" | "bench_software_obsolete" | "issuance_paused" | "platform_slot_cap") | null;
+            /** Slot Id */
+            slot_id: string;
+            /**
+             * State
+             * @description `claimed` holds a lease or signed occupancy; `free` can take canonical or retest work now; `reserved_round` is held back for generator-round runs; `unusable` cannot take any ticket, and `reason` says why.
+             * @enum {string}
+             */
+            state: "claimed" | "free" | "reserved_round" | "unusable";
         };
         /**
          * ValidatorCapacitySummary
@@ -47489,6 +47644,12 @@ export interface components {
             active_bench_version: number;
             /** Claimed Slots */
             claimed_slots: number;
+            /**
+             * Configured Slots
+             * @description Sum of every live validator's configured slots.
+             * @default 0
+             */
+            configured_slots: number;
             /**
              * Eligible Unleased Count
              * @description Active-era submissions passing the fleet-wide queue filter with quorum slots left and no live lease. Owner serialization and per-validator exclusions are not applied, so this is an upper bound on leasable work.
@@ -47515,6 +47676,11 @@ export interface components {
             online_window_seconds: number;
             /** Relay */
             relay: components["schemas"]["RelayLaneSaturation"][];
+            /**
+             * Sandbox Memory Limit Mib
+             * @description The live per-harness memory cap `memory_admitted_slots` uses.
+             */
+            sandbox_memory_limit_mib?: number | null;
             /** Serviceable Slots */
             serviceable_slots: number;
             /**
@@ -47524,6 +47690,13 @@ export interface components {
             serviceable_validator_count: number;
             /** Unestimated Assignment Count */
             unestimated_assignment_count: number;
+            /**
+             * Unusable Slots By Reason
+             * @description Configured slots that cannot take a ticket, by reason, across every live validator. Claimed slots are never counted here.
+             */
+            unusable_slots_by_reason?: {
+                [key: string]: number;
+            };
             /** Validators */
             validators: components["schemas"]["ValidatorCapacityEntry"][];
             /** Validators Truncated */
@@ -47688,6 +47861,8 @@ export interface components {
          * @description Process-local poll outcome tally; resets when Platform API restarts.
          */
         ValidatorRequestOutcomeSummary: {
+            /** @description The job allocator's dispatch fence: who holds it, hold times, and whose allocator_busy polls bounced off whose. */
+            allocator?: components["schemas"]["DispatchFenceSnapshot"] | null;
             /**
              * Observed At
              * Format: date-time
