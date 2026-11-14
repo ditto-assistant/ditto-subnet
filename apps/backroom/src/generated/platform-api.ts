@@ -20094,6 +20094,11 @@ export interface components {
              * @default 0
              */
             burn_share: number;
+            /**
+             * Burn Unfilled Rank Shares
+             * @default false
+             */
+            burn_unfilled_rank_shares: boolean;
             /** Rank Shares */
             rank_shares?: number[] | null;
         };
@@ -24679,6 +24684,8 @@ export interface components {
              * @enum {string}
              */
             source: "revision" | "default";
+            /** Unfilled Burn Served */
+            unfilled_burn_served?: boolean | null;
         };
         /**
          * EffectiveCompetitionFee
@@ -30436,6 +30443,11 @@ export interface components {
              */
             treasury_pin?: components["schemas"]["TreasuryLedgerPin"] | components["schemas"]["EnforcingTreasuryPin"] | null;
             /**
+             * Unfilled Share Mode
+             * @description Protocol-36 consensus marker. When burn, every rank slot no eligible agent fills keeps its fixed rank_shares fraction of the miner pool and that fraction burns, instead of the occupied slots being renormalised to the whole pool. Served only once every recently-live weight setter reports v36. Absent keeps the renormalising fold.
+             */
+            unfilled_share_mode?: "burn" | null;
+            /**
              * V9 Confirmation Mode
              * @description Fail-closed marker: every Bench v9 entry must carry a valid full-confirmation receipt while present.
              */
@@ -35801,6 +35813,18 @@ export interface components {
              * @default 20
              */
             tie_weighting_required_protocol: number;
+            /**
+             * Unfilled Burn Active
+             * @description Protocol 36: every rank slot no eligible agent fills keeps its fixed share of the miner pool and burns, so the displayed recipient shares sum to less than one. Omitted while off.
+             * @default false
+             */
+            unfilled_burn_active: boolean;
+            /**
+             * Unfilled Share Burned
+             * @description Fraction of the miner pool the unfilled rank slots burn under protocol 36. Omitted while zero.
+             * @default 0
+             */
+            unfilled_share_burned: number;
         };
         /**
          * PublicLeaderboardEntry

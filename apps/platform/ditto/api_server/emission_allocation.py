@@ -469,14 +469,9 @@ async def apply_allocation(
     derived_reason = f"emission allocation revision {row.revision}: {reason}"
 
     if derived.burn_share != burn.burn_share:
-        settings = BurnSettings.model_validate(
-            {
-                "burn_share": derived.burn_share,
-                "rank_shares": (
-                    list(burn.rank_shares) if burn.rank_shares is not None else None
-                ),
-            }
-        )
+        # Everything but ``burn_share`` stays as configured: the payout curve and
+        # the protocol-36 unfilled-slot burn belong to the burn settings.
+        settings = burn.model_copy(update={"burn_share": derived.burn_share})
         new_burn = await insert_burn_settings_revision(
             session,
             parent_revision=burn_row.revision if burn_row else 0,

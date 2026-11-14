@@ -1825,6 +1825,10 @@ const rankSharesSchema = z
 const burnSettingsBaseSchema = z.object({
   burn_share: z.number().min(MIN_BURN_SHARE).max(MAX_BURN_SHARE),
   rank_shares: rankSharesSchema.nullable().optional(),
+  // Protocol 36: burn the rank slots no eligible agent fills instead of
+  // renormalising the occupied ones. Off (absent) by default. Omitting it on a
+  // write keeps the current value.
+  burn_unfilled_rank_shares: z.boolean().optional(),
 })
 
 export const burnSettingsSchema = burnSettingsBaseSchema
@@ -1870,6 +1874,10 @@ export const effectiveBurnSettingsSchema = z.object({
   // Whether the configured curve is on the ledger now (every live weight
   // setter reports protocol 31); null when readiness could not be read.
   rank_shares_served: z.boolean().nullable().default(null),
+  // Whether the unfilled-slot burn is on the ledger now (setting on and every
+  // live weight setter reports protocol 36); false while the setting is off,
+  // null when readiness could not be read.
+  unfilled_burn_served: z.boolean().nullable().default(null),
 })
 
 export const burnSettingsControlSchema = z.object({

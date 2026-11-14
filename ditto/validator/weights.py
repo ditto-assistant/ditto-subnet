@@ -842,6 +842,7 @@ def compute_weights(
     incumbent_agent_id: UUID | None = None,
     unpaid_agent_id: UUID | None = None,
     crown_gate: CrownGate | None = None,
+    burn_unfilled: bool = False,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
@@ -901,6 +902,17 @@ def compute_weights(
     cohort -- exactly like any other, but whose shares are reported under
     :data:`UNPAID_SHARE_KEY` instead of its hotkey so the caller burns them
     (:func:`split_unpaid_share`). ``None`` leaves the vector exactly as before.
+
+    ``burn_unfilled`` (protocol 36, ``docs/bench-bump-readmission.md``) stops a
+    short board from renormalising: every rank slot beyond the occupied ones
+    keeps its fixed ``rank_shares`` fraction of the miner pool, and that
+    fraction is reported under :data:`UNPAID_SHARE_KEY` with any provisional
+    incumbent's share, so the caller burns it through the same
+    :func:`split_unpaid_share` path. Tie pooling still averages only occupied
+    slots, so pooled shares sum to the occupied total and the unfilled slots are
+    exactly ``rank_shares[len(recipients):]``. The score-ceiling joint crown
+    pays the whole pool to its cohort and has no unfilled slot. ``False``
+    returns the vector byte-identically to protocol 35.
     """
     eligible = filter_eligible(entries)
     scored = [e for e in eligible if _effective_composite(e) > 0.0]
@@ -969,6 +981,14 @@ def compute_weights(
         ): recipient_shares[index]
         for index, entry in enumerate(recipients)
     }
+    if burn_unfilled and not ceiling_cohort:
+        # ``rank_shares`` sum to one (checked above) and tie pooling preserves
+        # the occupied total, so what no agent fills is exactly the tail of the
+        # curve. Summed from the curve itself rather than ``1 - paid`` so a
+        # full board adds nothing, not float dust.
+        unfilled = math.fsum(rank_shares[len(recipients) :])
+        if unfilled > 0.0:
+            weights[UNPAID_SHARE_KEY] = weights.get(UNPAID_SHARE_KEY, 0.0) + unfilled
 
     return weights
 

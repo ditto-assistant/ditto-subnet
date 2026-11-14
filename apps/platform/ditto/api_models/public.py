@@ -2082,6 +2082,31 @@ class PublicKothEmissions(BaseModel):
             description="Minimum fleet heartbeat protocol for tie pooling.",
         ),
     ] = 20
+    unfilled_burn_active: Annotated[
+        bool,
+        Field(
+            default=False,
+            exclude_if=lambda value: value is False,
+            description=(
+                "Protocol 36: every rank slot no eligible agent fills keeps its "
+                "fixed share of the miner pool and burns, so the displayed "
+                "recipient shares sum to less than one. Omitted while off."
+            ),
+        ),
+    ] = False
+    unfilled_share_burned: Annotated[
+        float,
+        Field(
+            default=0.0,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value == 0.0,
+            description=(
+                "Fraction of the miner pool the unfilled rank slots burn under "
+                "protocol 36. Omitted while zero."
+            ),
+        ),
+    ] = 0.0
     ceiling_headroom_share: Annotated[
         float,
         Field(

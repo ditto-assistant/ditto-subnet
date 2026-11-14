@@ -92,6 +92,8 @@ class MemoryFoldParams:
     incumbent_agent_id: UUID | None = None
     unpaid_agent_id: UUID | None = None
     crown_gate: CrownGate | None = None
+    burn_unfilled: bool = False
+    """Protocol-36 marker: burn the rank shares no agent fills."""
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,7 @@ def memory_fold(inputs: TrackFoldInputs) -> dict[str, float]:
         incumbent_agent_id=params.incumbent_agent_id,
         unpaid_agent_id=params.unpaid_agent_id,
         crown_gate=params.crown_gate,
+        burn_unfilled=params.burn_unfilled,
     )
 
 

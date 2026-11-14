@@ -2360,6 +2360,21 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    unfilled_share_mode: Annotated[
+        Literal["burn"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-36 consensus marker. When burn, every rank slot no "
+                "eligible agent fills keeps its fixed rank_shares fraction of the "
+                "miner pool and that fraction burns, instead of the occupied "
+                "slots being renormalised to the whole pool. Served only once "
+                "every recently-live weight setter reports v36. Absent keeps "
+                "the renormalising fold."
+            ),
+        ),
+    ] = None
     count: Annotated[int, Field(ge=0, description="Number of entries returned.")]
     generated_at: Annotated[
         datetime | None,

@@ -172,7 +172,14 @@ from ditto import __version__
 # rotation re-score doubles as duel evidence) by re-deriving its CRN binding;
 # Platform issues those only to v35+ validators. Heartbeat signing bytes are
 # unchanged.
-HEARTBEAT_PROTOCOL_VERSION = 35
+# v36 consumes ``LedgerResponse.unfilled_share_mode=burn``: a rank slot no
+# eligible agent fills keeps its fixed ``rank_shares`` fraction of the miner
+# pool and burns, instead of the occupied slots being renormalised onto the
+# whole pool. A v35 validator ignores the additive marker and renormalises --
+# a different weight vector from the same evidence -- so Platform withholds it
+# until every recently-live weight setter reports v36+. Heartbeat signing bytes
+# are unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 36
 
 
 @dataclass(frozen=True)
