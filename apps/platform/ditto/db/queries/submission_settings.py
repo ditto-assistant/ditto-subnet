@@ -129,6 +129,9 @@ class EffectiveSubmissionSettings:
     """The default fee: the memory (agent) lane's price, inherited by every
     competition without its own amount."""
     competition_fees: Mapping[str, CompetitionFeeOverride] = field(default_factory=dict)
+    readmission_announced_at: datetime | None = None
+    """When the readmission fee was announced; ``None`` keeps it inactive.
+    See :mod:`ditto.db.queries.readmission_gate`."""
 
     def competition_fee(
         self, competition: str, *, competition_requires_fee: bool
@@ -205,6 +208,7 @@ def resolve_submission_settings(
         fee_amount_rao=latest.fee_amount_rao,
         payment_address=payment_address,
         competition_fees=parse_competition_fees(latest.competition_fees),
+        readmission_announced_at=latest.readmission_announced_at,
     )
 
 

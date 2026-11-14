@@ -32,6 +32,7 @@ from ditto.api_models.submission_settings import (
     CompetitionFeePolicy,
     EffectiveCompetitionFee,
     competition_fees_confirmation,
+    readmission_announcement_confirmation,
 )
 from ditto.api_models.submission_settings import (
     SubmissionSettingsRevision as RevisionModel,
@@ -39,6 +40,7 @@ from ditto.api_models.submission_settings import (
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.generator_competition import load_settings
+from ditto.api_server.readmission import activation_state
 from ditto.db.models import (
     OwnerSubmissionCooldownRevision,
     SubmissionSettingsRevision,
@@ -50,6 +52,11 @@ from ditto.db.queries.owner_submission_cooldown import (
     latest_overrides,
     override_history,
     override_state,
+)
+from ditto.db.queries.readmission_gate import (
+    ReadmissionAnnouncementError,
+    current_readmission_activation,
+    validate_new_announcement,
 )
 from ditto.db.queries.submission_settings import (
     DEFAULT_SUBMISSION_COOLDOWN_SECONDS,
@@ -85,6 +92,7 @@ def _revision(row: SubmissionSettingsRevision) -> RevisionModel:
         cooldown_seconds=row.cooldown_seconds,
         fee_amount_rao=row.fee_amount_rao,
         competition_fees=_policies(parse_competition_fees(row.competition_fees)),
+        readmission_announced_at=row.readmission_announced_at,
         reason=row.reason,
         actor=row.actor,
         created_at=row.created_at,
@@ -139,6 +147,9 @@ async def get_settings(
         current=_revision(latest) if latest is not None else _default_revision(),
         history=[_revision(row) for row in rows],
         effective_competition_fees=effective,
+        readmission=activation_state(
+            await current_readmission_activation(session, settings=resolved)
+        ),
     )
 
 
@@ -167,16 +178,40 @@ async def create_settings_revision(
             competition: policy.model_dump()
             for competition, policy in payload.competition_fees.items()
         }
+    # The readmission announcement carries forward unless the request names
+    # it; an explicit null clears it. Only a changed date is validated, so a
+    # later cooldown or fee write never trips over an older announcement.
+    current_announced_at = latest.readmission_announced_at if latest else None
+    announcement_sent = "readmission_announced_at" in payload.model_fields_set
+    readmission_announced_at = current_announced_at
+    if announcement_sent:
+        readmission_announced_at = payload.readmission_announced_at
+        if readmission_announced_at is not None and (
+            readmission_announced_at.tzinfo is None
+            or readmission_announced_at != current_announced_at
+        ):
+            try:
+                readmission_announced_at = validate_new_announcement(
+                    readmission_announced_at, now=datetime.now(UTC)
+                )
+            except ReadmissionAnnouncementError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
     expected_confirmation = (
         f"SET SUBMISSION COOLDOWN {payload.cooldown_seconds} SECONDS "
         f"FEE {fee_amount_rao} RAO"
     )
     if payload.competition_fees is not None:
         expected_confirmation += competition_fees_confirmation(payload.competition_fees)
+    if announcement_sent:
+        expected_confirmation += readmission_announcement_confirmation(
+            readmission_announced_at
+        )
     legacy_confirmation = f"SET SUBMISSION COOLDOWN {payload.cooldown_seconds} SECONDS"
     valid_confirmation = (
         {expected_confirmation, legacy_confirmation}
-        if payload.fee_amount_rao is None and payload.competition_fees is None
+        if payload.fee_amount_rao is None
+        and payload.competition_fees is None
+        and not announcement_sent
         else {expected_confirmation}
     )
     if payload.confirmation not in valid_confirmation:
@@ -198,6 +233,7 @@ async def create_settings_revision(
         cooldown_seconds=payload.cooldown_seconds,
         fee_amount_rao=fee_amount_rao,
         competition_fees=competition_fees,
+        readmission_announced_at=readmission_announced_at,
         reason=payload.reason.strip(),
         actor=payload.actor.strip(),
     )

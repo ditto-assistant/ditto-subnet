@@ -24,12 +24,14 @@ const initial: SubmissionSettingsControl = {
     cooldown_seconds: 3600,
     fee_amount_rao: 40_000_000,
     competition_fees: {},
+    readmission_announced_at: null,
     reason: 'Initialize existing one-hour submission cooldown',
     actor: 'migration',
     created_at: '2026-07-24T12:00:00Z',
   },
   history: [],
   effective_competition_fees: null,
+  readmission: null,
 }
 
 describe('SubmissionCooldownControlPanel', () => {

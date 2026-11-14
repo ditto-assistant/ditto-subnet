@@ -866,6 +866,28 @@ false makes uploads free, null leaves it to the generator
 (the Backroom panel does this). An upload must pay its competition's fee
 exactly, and one transfer funds one upload across both lanes.
 
+### Readmission activation (SN-485, read-only)
+
+A readmission is the owner re-entering an existing agent lineage: opting it
+into a new benchmark era, or re-running it unchanged after one of its
+evaluations completed. `get_submission_cooldown` reports each revision's
+`readmission_announced_at` (null by default) and `readmission`, the computed
+activation state. It is `active` only when the announcement is set, the active
+benchmark is at least `min_bench_version` (19), and `effective_at` (the
+announcement plus a seven-day `notice_period_seconds`) has passed.
+`inactive_reasons` names every unmet condition: `announcement_unset`,
+`bench_version_below_minimum`, `notice_period`. The price is always the upload
+default fee (`fee_source: upload_default`). The memory entry of
+`get_competition_submission_terms` carries the same state plus the rules
+miners read.
+
+Backroom cannot write the announcement. It is an operator write through the
+Platform admin API (`POST /api/v1/admin/submission-settings` with
+`readmission_announced_at`, which appends `; READMISSION ANNOUNCED
+<UTC>Z` to the phrase). Omitting it carries it forward, so
+`set_submission_cooldown` never changes it, and clearing it (`null`, `;
+READMISSION ANNOUNCEMENT CLEARED`) is the kill switch.
+
 ## Upload payment proofs
 
 When a miner reports a 3201, 3207 or 3208 after paying, call

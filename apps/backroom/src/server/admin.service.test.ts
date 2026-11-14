@@ -1854,8 +1854,9 @@ describe('submission cooldown administration', () => {
     // An older Platform omits the per-competition fields; reads default them.
     await expect(fetchSubmissionSettingsControl()).resolves.toEqual({
       ...control,
-      current: { ...control.current, competition_fees: {} },
+      current: { ...control.current, competition_fees: {}, readmission_announced_at: null },
       effective_competition_fees: null,
+      readmission: null,
     })
     await updateSubmissionSettings('operator@omniaura.ai', {
       expectedRevision: 1,
@@ -1883,6 +1884,61 @@ describe('submission cooldown administration', () => {
   })
 })
 
+describe('readmission activation (SN-485)', () => {
+  it('reads the announcement and activation state without writing it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const readmission = {
+      active: false,
+      inactive_reasons: ['notice_period'],
+      announced_at: '2026-12-01T00:00:00Z',
+      effective_at: '2026-12-08T00:00:00Z',
+      active_bench_version: 19,
+      min_bench_version: 19,
+      notice_period_seconds: 604800,
+      fee_amount_rao: 75_000_000,
+      fee_source: 'upload_default',
+      settings_revision: 3,
+    }
+    const current = {
+      revision: 3,
+      parent_revision: 2,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 75_000_000,
+      competition_fees: {},
+      readmission_announced_at: '2026-12-01T00:00:00Z',
+      reason: 'record the readmission announcement',
+      actor: 'operator@omniaura.ai',
+      created_at: '2026-12-01T00:00:00Z',
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ current, history: [], effective_competition_fees: [], readmission }),
+      )
+      .mockResolvedValueOnce(Response.json(current))
+      .mockResolvedValueOnce(
+        Response.json({ current, history: [], effective_competition_fees: [], readmission }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const control = await fetchSubmissionSettingsControl()
+    expect(control.readmission).toEqual(readmission)
+    expect(control.current.readmission_announced_at).toBe('2026-12-01T00:00:00Z')
+
+    // A cooldown write never names the announcement, so Platform carries it
+    // forward: Backroom cannot set or clear it.
+    await updateSubmissionSettings('operator@omniaura.ai', {
+      expectedRevision: 3,
+      cooldownSeconds: 3600,
+      feeAmountRao: 75_000_000,
+      reason: 'keep the cooldown as it is',
+      confirmation: 'SET SUBMISSION COOLDOWN 3600 SECONDS FEE 75000000 RAO',
+    })
+    const body = JSON.parse(String(fetchMock.mock.calls[1][1].body))
+    expect(body).not.toHaveProperty('readmission_announced_at')
+  })
+})
+
 describe('per-competition submission fees and terms', () => {
   const generatorFee = { fee_amount_rao: 500_000_000, fee_required: null }
   const priced = {
@@ -1892,11 +1948,13 @@ describe('per-competition submission fees and terms', () => {
       cooldown_seconds: 3600,
       fee_amount_rao: 200_000_000,
       competition_fees: { generator: generatorFee },
+      readmission_announced_at: null,
       reason: 'price the generator competition',
       actor: 'operator@omniaura.ai',
       created_at: '2026-10-26T12:00:00Z',
     },
     history: [],
+    readmission: null,
     effective_competition_fees: [
       {
         competition: 'memory',
@@ -2040,6 +2098,7 @@ describe('per-competition submission fees and terms', () => {
             settings_revision: 2,
           },
           terms_endpoint: '/api/v1/generator/upload-terms',
+          readmission: null,
         },
       ],
     }

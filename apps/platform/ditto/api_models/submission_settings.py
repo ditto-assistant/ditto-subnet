@@ -12,7 +12,7 @@ charges, so it has no override: change ``fee_amount_rao`` instead.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -107,9 +107,46 @@ class SubmissionSettingsRevision(BaseModel):
     competition_fees: dict[str, CompetitionFeePolicy] = Field(default_factory=dict)
     """Overrides as written; a revision from before per-competition fees
     reads as ``{}`` (everything inherits)."""
+    readmission_announced_at: datetime | None = None
+    """When the readmission fee was announced (SN-485); ``null`` keeps
+    readmission inactive. Only the Platform admin API writes it."""
     reason: str
     actor: str
     created_at: datetime | None
+
+
+ReadmissionInactiveReason = Literal[
+    "announcement_unset", "bench_version_below_minimum", "notice_period"
+]
+
+
+class ReadmissionActivationState(BaseModel):
+    """Whether the readmission fee and self-serve readmission are live.
+
+    Active only when ``readmission_announced_at`` is set, the active
+    benchmark is at least ``min_bench_version`` and ``effective_at``
+    (announcement plus the notice period) has passed. Read-only: the price
+    is always the upload default fee, never a setting of its own.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    active: bool
+    inactive_reasons: list[ReadmissionInactiveReason] = Field(default_factory=list)
+    """Every unmet condition; empty when active. ``announcement_unset``: no
+    announcement is recorded. ``bench_version_below_minimum``: the active
+    benchmark predates the first charged era. ``notice_period``: the
+    announcement is less than ``notice_period_seconds`` old."""
+    announced_at: datetime | None = None
+    effective_at: datetime | None = None
+    """The earliest moment a readmission can be charged."""
+    active_bench_version: int
+    min_bench_version: int
+    notice_period_seconds: int
+    fee_amount_rao: int
+    """What one readmission costs once active: exactly the upload fee."""
+    fee_source: Literal["upload_default"] = "upload_default"
+    settings_revision: int
 
 
 class AdminSubmissionSettingsResponse(BaseModel):
@@ -122,6 +159,9 @@ class AdminSubmissionSettingsResponse(BaseModel):
     )
     """The resolved fee of every competition with an upload lane, under the
     current revision and the generator competition's current policy."""
+    readmission: ReadmissionActivationState | None = None
+    """The readmission activation state under the current revision and the
+    live active benchmark."""
 
 
 class AdminSubmissionSettingsRequest(BaseModel):
@@ -134,6 +174,12 @@ class AdminSubmissionSettingsRequest(BaseModel):
     """The WHOLE override map for this revision, or ``null`` to carry the
     current one forward unchanged. ``{}`` clears every override. Sending it
     adds the overrides to the confirmation phrase."""
+    readmission_announced_at: Annotated[datetime | None, Field(strict=False)] = None
+    """Omitted: carry the current announcement forward unchanged. A
+    timezone-aware time: record that announcement (at most an hour in the
+    past, at most 30 days ahead). Explicit ``null``: clear it, which turns
+    readmission off. Sending the field adds it to the confirmation phrase
+    (:func:`readmission_announcement_confirmation`)."""
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
@@ -144,6 +190,18 @@ class AdminSubmissionSettingsRequest(BaseModel):
         cls, value: dict[str, CompetitionFeePolicy] | None
     ) -> dict[str, CompetitionFeePolicy] | None:
         return None if value is None else _validate_competition_fees(value)
+
+
+def readmission_announcement_confirmation(announced_at: datetime | None) -> str:
+    """The suffix an explicit ``readmission_announced_at`` adds to the phrase.
+
+    ``; READMISSION ANNOUNCED 2026-11-20T00:00:00Z`` (UTC, whole seconds) or
+    ``; READMISSION ANNOUNCEMENT CLEARED`` for ``null``.
+    """
+    if announced_at is None:
+        return "; READMISSION ANNOUNCEMENT CLEARED"
+    stamp = announced_at.astimezone(UTC).replace(microsecond=0, tzinfo=None).isoformat()
+    return f"; READMISSION ANNOUNCED {stamp}Z"
 
 
 def competition_fees_confirmation(

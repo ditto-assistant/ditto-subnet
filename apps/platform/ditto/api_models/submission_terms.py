@@ -18,6 +18,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ditto.api_models.submission_settings import ReadmissionActivationState
+
 CompetitionId = Literal["memory", "generator"]
 ArtifactKind = Literal["agent_harness_tarball", "generator_source_archive"]
 LimitSource = Literal["code", "environment", "setting"]
@@ -85,6 +87,22 @@ class SubmissionCooldownTerms(BaseModel):
     reference: str
 
 
+class ReadmissionTerms(BaseModel):
+    """The SN-485 readmission rules for one competition.
+
+    A readmission is the owner re-entering an existing agent lineage: into a
+    new benchmark era, or re-running it unchanged after one of its
+    evaluations completed. It costs exactly the upload fee and shares the
+    upload cooldown.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    activation: ReadmissionActivationState
+    rules: list[str] = Field(default_factory=list)
+    """The readmission, free-retry and refund rules in plain sentences."""
+
+
 class CompetitionSubmissionTerms(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -96,6 +114,8 @@ class CompetitionSubmissionTerms(BaseModel):
     terms_endpoint: str | None = None
     """The per-upload terms (blockers for one hotkey and archive) a client
     reads right before paying, when the lane has one."""
+    readmission: ReadmissionTerms | None = None
+    """The readmission rules, for a competition that has them (memory)."""
 
 
 class SubmissionTermsResponse(BaseModel):

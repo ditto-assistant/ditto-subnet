@@ -6965,6 +6965,12 @@ class SubmissionSettingsRevision(Base):
     """Per-competition overrides, ``{competition: {"fee_amount_rao": int |
     null, "fee_required": bool | null}}``; ``null`` (or a missing entry)
     inherits. See :mod:`ditto.db.queries.submission_settings`."""
+    readmission_announced_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    """When the readmission fee was announced (SN-485); null until an operator
+    writes it, which keeps readmission inactive. See
+    :mod:`ditto.db.queries.readmission_gate`."""
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
