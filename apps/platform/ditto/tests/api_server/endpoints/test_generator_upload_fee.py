@@ -36,7 +36,10 @@ from ditto.db.models import (
     GeneratorSubmissionPayment,
 )
 from ditto.db.queries.agents import insert_agent
-from ditto.db.queries.payments import insert_evaluation_payment
+from ditto.db.queries.payments import (
+    insert_evaluation_payment,
+    insert_readmission_payment,
+)
 from ditto.db.queries.submission_settings import effective_submission_settings
 from ditto.tests.api_server.endpoints.test_generator_competition import (
     _MINER,
@@ -308,6 +311,50 @@ class TestFeeOn:
             assert resp.status_code == 402, resp.text
             assert resp.json()["error_code"] == 3207
         assert await _count(session_maker, GeneratorSubmission) == 1
+
+    async def test_a_readmission_proof_cannot_fund_a_generator(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        app.state.payment_verifier = _fake_verifier()
+        await _open_lane(client, upload_fee_required=True)
+        readmission_proof = _block_hash(40)
+        agent_id = uuid4()
+        async with session_maker() as session, session.begin():
+            await insert_agent(
+                session,
+                agent_id=agent_id,
+                miner_hotkey=_MINER.ss58_address,
+                name="readmitted-agent",
+                sha256="ef" * 32,
+                size_bytes=10,
+            )
+            await insert_readmission_payment(
+                session,
+                verified=VerifiedPayment(
+                    block_hash=readmission_proof,
+                    extrinsic_index=1,
+                    miner_hotkey=_MINER.ss58_address,
+                    miner_coldkey=_MINER_COLDKEY,
+                    amount_rao=40_000_000,
+                    tao_usd_rate=None,
+                    dest_address=app.state.config.upload_payment_address,
+                    block_timestamp=datetime.now(UTC),
+                ),
+                agent_id=agent_id,
+                bench_version=19,
+                rollout_id=None,
+            )
+        resp = await client.post(
+            _UPLOAD_URL,
+            json=_with_proof(_upload_body(_MINER, _archive("r")), readmission_proof),
+        )
+        assert resp.status_code == 402, resp.text
+        assert resp.json()["error_code"] == 3207
+        assert await _count(session_maker, GeneratorSubmission) == 0
 
     async def test_agent_and_generator_lanes_never_share_a_proof(
         self,

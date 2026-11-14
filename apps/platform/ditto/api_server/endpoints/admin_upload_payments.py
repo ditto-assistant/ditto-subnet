@@ -26,10 +26,10 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import Agent
 from ditto.db.queries.payments import (
+    credit_expires_at,
     get_evaluation_payment_for_proof,
     get_generator_payment_for_proof,
 )
-from ditto.db.queries.submission_settings import UPLOAD_ADMISSION_TTL
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -56,8 +56,9 @@ async def get_upload_payment_proof(
         agent = await session.get(
             Agent, payment.agent_id if funded else payment.credit_for_agent_id
         )
-        # The same window the upload paths enforce on a credit.
-        expires_at = payment.timestamp + UPLOAD_ADMISSION_TTL
+        # The same window the upload paths enforce on a credit: 24 h, or 30
+        # days for a credit a refused readmission banked.
+        expires_at = credit_expires_at(payment)
         return UploadPaymentProofView(
             block_hash=payment.block_hash,
             extrinsic_index=payment.extrinsic_index,

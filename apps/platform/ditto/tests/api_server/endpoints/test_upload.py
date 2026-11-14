@@ -273,6 +273,7 @@ class TestUploadCheck:
                     agent_id=None,
                     miner_hotkey=_make_keypair().ss58_address,
                     timestamp=datetime.now(UTC),
+                    credit_origin=None,
                 )
             ),
         )
@@ -391,6 +392,78 @@ class TestUploadCheck:
         assert response.json()["error_code"] == 3207
         verifier.verify_payment.assert_not_awaited()
 
+    async def test_recovery_proof_that_paid_a_readmission_is_replayed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        kp = _make_keypair()
+        verifier = _override_payment_verifier(app)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_generator_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_readmission_payment_for_proof",
+            AsyncMock(return_value=MagicMock()),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(keypair=kp),
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == 402
+        assert response.json()["error_code"] == 3207
+        verifier.verify_payment.assert_not_awaited()
+
+    async def test_readmission_credit_recovers_for_thirty_days(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        kp = _make_keypair()
+        verifier = _override_payment_verifier(app)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=None,
+                    credit_for_agent_id=uuid4(),
+                    credit_origin="readmission",
+                    miner_hotkey=kp.ss58_address,
+                    timestamp=datetime.now(UTC) - timedelta(days=29),
+                )
+            ),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(keypair=kp),
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["payment_required"] is False
+        verifier.verify_payment.assert_not_awaited()
+
     async def test_payment_older_than_recovery_window_is_rejected(
         self,
         app: FastAPI,
@@ -412,6 +485,10 @@ class TestUploadCheck:
         )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_generator_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_readmission_payment_for_proof",
             AsyncMock(return_value=None),
         )
 
@@ -475,6 +552,10 @@ class TestUploadCheck:
         )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_generator_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_readmission_payment_for_proof",
             AsyncMock(return_value=None),
         )
         monkeypatch.setattr(
@@ -1357,6 +1438,7 @@ class TestUploadAgentHappyPath:
         credit = SimpleNamespace(
             agent_id=None,
             credit_for_agent_id=uuid4(),
+            credit_origin=None,
             miner_hotkey=kp.ss58_address,
             miner_coldkey="5Coldkey",
             timestamp=datetime.now(UTC),
@@ -1391,6 +1473,7 @@ class TestUploadAgentHappyPath:
         credit = SimpleNamespace(
             agent_id=None,
             credit_for_agent_id=uuid4(),
+            credit_origin=None,
             miner_hotkey=kp.ss58_address,
             miner_coldkey="5Coldkey",
             timestamp=datetime.now(UTC) - timedelta(hours=24, seconds=1),
@@ -1893,6 +1976,35 @@ class TestUploadAgentReplayHandling:
 
         assert response.status_code == 402
         assert response.json()["error_code"] == ERROR_CODE_PAYMENT_REPLAYED
+
+    async def test_readmission_proof_never_funds_an_upload(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        deps = _wire_full_stack(app)
+        for name in (
+            "get_agent_for_payment_proof",
+            "get_evaluation_payment_for_proof",
+            "get_generator_payment_for_proof",
+        ):
+            monkeypatch.setattr(
+                f"ditto.api_server.endpoints.upload.{name}",
+                AsyncMock(return_value=None),
+            )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_readmission_payment_for_proof",
+            AsyncMock(return_value=MagicMock()),
+        )
+        data, files = _upload_agent_form()
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 402
+        assert response.json()["error_code"] == ERROR_CODE_PAYMENT_REPLAYED
+        deps["verifier"].verify_payment.assert_not_awaited()
+        deps["storage"].put_object.assert_not_awaited()
 
     async def test_payment_replay_returns_402_3207(
         self, app: FastAPI, client: httpx.AsyncClient
