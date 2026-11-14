@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.485.1 (2026-11-14)
+
+### Bug Fixes
+
+- **platform**: Rank identical-content reruns by latest run, not max
+  ([#3550](https://github.com/ditto-assistant/ditto-subnet/pull/3550),
+  [`3742c6d`](https://github.com/ditto-assistant/ditto-subnet/commit/3742c6d7dc408b1cfdedad7c7a885d63d5dc0466))
+
+
 ## v0.485.0 (2026-11-14)
 
 ### Chores
