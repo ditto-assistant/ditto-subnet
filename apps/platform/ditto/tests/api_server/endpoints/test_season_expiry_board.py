@@ -323,6 +323,21 @@ class TestSeasonRotationAfterPin:
         assert reference["season_expiry"]["last_valid_composite"] == pytest.approx(
             0.915857
         )
+        # SN-486: the label says whether a free re-test is queued, and why not.
+        # These seasons opened with no catch-up record, so none decided it.
+        assert reference["season_expiry"]["retest"]["state"] == "not_queued"
+        assert reference["season_expiry"]["retest"]["reason"] == "not_considered"
+        assert reference["season_expiry"]["retest"]["note"]
+        # The agent card a miner opens carries the same label.
+        summary = await client.get(f"/api/v1/public/agent/{diana}/summary")
+        assert summary.status_code == 200, summary.text
+        card = summary.json()["season_expiry"]
+        assert card["state"] == "expired"
+        assert card["retest"]["reason"] == "not_considered"
+        champion_card = (
+            await client.get(f"/api/v1/public/agent/{champion}/summary")
+        ).json()
+        assert champion_card.get("season_expiry") is None
         assert entries[-1]["agent_id"] == str(diana)
 
         # The next pin is taken from the live window and drops logan; the

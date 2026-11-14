@@ -117,9 +117,16 @@ export const generatorCompetitionSettingsSchema = z.object({
   // public top-five agent with no score in the season that just closed, so
   // it does not expire unscored. season_catchup_enabled is the kill switch
   // (ships on); season_catchup_max_agents caps the agents per season (0..10,
-  // default 5). A write that omits them keeps the shipped defaults.
+  // default 5). Board agents past the cap, then scored agents off the board
+  // whose window scores expire (once per agent and bench version), queue
+  // while their estimated cost fits season_catchup_budget_usd (0..200, default
+  // 10; runs x the metered per-run cost of the last 24 hours, or
+  // season_catchup_run_cost_usd, default 0.5, when nothing was metered). A
+  // write that omits them keeps the shipped defaults.
   season_catchup_enabled: z.boolean().default(true),
   season_catchup_max_agents: z.number().int().min(0).max(10).default(5),
+  season_catchup_budget_usd: z.number().min(0).max(200).default(10),
+  season_catchup_run_cost_usd: z.number().gt(0).max(20).default(0.5),
   // Frontier cases: a case no two panel owners solved that the frontier
   // oracle (frontier_oracle_agent_id, a subnet-run reference agent answering
   // from a bounded context) passed and no failed sampled audit voided earns

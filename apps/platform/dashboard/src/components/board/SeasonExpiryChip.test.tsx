@@ -1,7 +1,8 @@
 // SN-466: a dueling season rotation expires a quorum by design, and the board
 // keeps the row instead of deleting it. This chip is what tells a reader why a
 // row is pinned-but-expiring or unranked, so it must stay silent on ordinary
-// rows and never imply the row is being re-scored.
+// rows and never imply the row is being re-scored unless Platform says a
+// re-test is queued (SN-486).
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -54,5 +55,46 @@ describe("SeasonExpiryChip", () => {
     const tip = chip()?.getAttribute("data-tooltip") ?? "";
     expect(tip).toContain("0.9607");
     expect(tip).not.toMatch(/re-?scor/i);
+  });
+
+  it("says a free re-test is queued only when Platform reports one", () => {
+    render(() => (
+      <SeasonExpiryChip
+        entry={entry(
+          expiry({
+            state: "expired",
+            pinned_epoch_index: null,
+            retest: {
+              state: "queued",
+              reason: "ath_clear",
+              dueling_season_id: "428a8bc5-b002-4af4-91e4-964cb83128f4",
+              note: "Queued: a free re-test on the open season, because its review hold was cleared.",
+            },
+          }),
+        )}
+      />
+    ));
+    expect(chip()?.textContent).toBe("Season expired \u00b7 re-test queued");
+    expect(chip()?.getAttribute("data-tooltip")).toContain("review hold was cleared");
+  });
+
+  it("explains why an expired row is not being re-tested", () => {
+    render(() => (
+      <SeasonExpiryChip
+        entry={entry(
+          expiry({
+            state: "expired",
+            pinned_epoch_index: null,
+            retest: {
+              state: "not_queued",
+              reason: "below_board_floor",
+              note: "Not re-tested: its last valid score is below the lowest score on the board.",
+            },
+          }),
+        )}
+      />
+    ));
+    expect(chip()?.textContent).toBe("Season expired");
+    expect(chip()?.getAttribute("data-tooltip")).toContain("below the lowest score");
   });
 });

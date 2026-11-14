@@ -12105,6 +12105,7 @@ export interface components {
              * @default []
              */
             score_dueling_season_ids: string[];
+            season_retest?: components["schemas"]["PublicSeasonRetest"] | null;
             /** Seed Anchor Block */
             seed_anchor_block: number | null;
             /** Seed Anchor Champion Id */
@@ -12669,6 +12670,7 @@ export interface components {
             /** Reconciled Quarantine Ids */
             reconciled_quarantine_ids?: string[];
             review: components["schemas"]["AdminCopyReviewItem"];
+            season_retest?: components["schemas"]["AdminSeasonRetestOutcome"] | null;
         };
         /** AdminCopySimilarityEvidence */
         AdminCopySimilarityEvidence: {
@@ -16104,6 +16106,46 @@ export interface components {
             receipt_id: string;
             /** Worker Hotkey */
             worker_hotkey: string;
+        };
+        /**
+         * AdminSeasonRetestOutcome
+         * @description What a clear queued so the hold cannot expire the agent's scores.
+         *
+         *     Bench v16+ scores count for two dueling seasons. A clear that leaves the
+         *     agent scored with less than a full quorum in the open season queues one
+         *     platform re-test per accepted score on that season (free to the miner).
+         */
+        AdminSeasonRetestOutcome: {
+            /**
+             * Already Current
+             * @default 0
+             */
+            already_current: number;
+            /** Bench Version */
+            bench_version?: number | null;
+            /**
+             * Busy
+             * @default 0
+             */
+            busy: number;
+            /** Catch Up Source */
+            catch_up_source?: "ath_clear" | null;
+            /** Dueling Season Id */
+            dueling_season_id?: string | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Queued
+             * @default 0
+             */
+            queued: number;
+            /**
+             * Replaced
+             * @default 0
+             */
+            replaced: number;
+            /** Skipped */
+            skipped?: string | null;
         };
         /** AdminSetOwnerCooldownRequest */
         AdminSetOwnerCooldownRequest: {
@@ -26308,6 +26350,11 @@ export interface components {
              */
             rounds_per_season: number;
             /**
+             * Season Catchup Budget Usd
+             * @default 10
+             */
+            season_catchup_budget_usd: number;
+            /**
              * Season Catchup Enabled
              * @default true
              */
@@ -26317,6 +26364,11 @@ export interface components {
              * @default 5
              */
             season_catchup_max_agents: number;
+            /**
+             * Season Catchup Run Cost Usd
+             * @default 0.5
+             */
+            season_catchup_run_cost_usd: number;
             /**
              * Seeds Per Run
              * @default 2
@@ -33371,6 +33423,8 @@ export interface components {
             scoring_wait?: components["schemas"]["PublicScoringWait"] | null;
             /** Screening Reason */
             screening_reason?: string | null;
+            /** @description Bench v16+ scored agents only: set when the accepted scores have left the two-season window, so the agent no longer ranks or earns. ``retest`` says whether a free platform re-test is queued and, if not, why. Absent while the quorum is still in the window. */
+            season_expiry?: components["schemas"]["PublicSeasonExpiry"] | null;
             /**
              * Status
              * @description Current public lifecycle stage.
@@ -37398,6 +37452,8 @@ export interface components {
              * @description ``pinned_carry`` only: the pin that still carries it.
              */
             pinned_epoch_index?: number | null;
+            /** @description Whether a free platform re-test on the open season is queued for this agent, and if not, why. Absent when not read. */
+            retest?: components["schemas"]["PublicSeasonRetest"] | null;
             /**
              * Score Dueling Season Ids
              * @description Distinct dueling seasons the accepted scores were taken in.
@@ -37414,6 +37470,37 @@ export interface components {
              * @description The live window: the current season, then the provisional previous one. Only scores from these seasons rank or pay.
              */
             window_dueling_season_ids: string[];
+        };
+        /**
+         * PublicSeasonRetest
+         * @description Whether Ditto is re-scoring an expired bench v16+ agent, and why not.
+         *
+         *     A platform re-test (season catch-up or an ATH clear) is free to the
+         *     miner. Only scores taken in the live window rank or pay again.
+         */
+        PublicSeasonRetest: {
+            /**
+             * Dueling Season Id
+             * @description Queued: the open season it is re-scored on. Otherwise the season whose boundary decided it.
+             */
+            dueling_season_id?: string | null;
+            /**
+             * Note
+             * @description One plain sentence for the miner.
+             */
+            note: string;
+            /**
+             * Reason
+             * @description Queued: ``rotation`` (the season-opening cohort), ``board`` (paid or top-five catch-up), ``board_overflow`` (board agent past the catch-up cap, within the per-season budget), ``off_board`` (off-board agent whose scores expired, within the budget), ``ath_clear`` (its review hold was cleared). Not queued: ``retested`` (a catch-up ran but did not restore a full quorum in the window), ``over_budget`` (the season's catch-up budget ran out; the next boundary reconsiders it), ``board_cap`` (past the board catch-up cap, before the budget existed), ``below_board_floor`` (its last valid score is under the lowest score on the board, so a re-test could not place it), ``owner_has_better_agent`` (its owner already has a better agent on the board), ``already_retested`` (it already had its one off-board catch-up on this bench version), ``unranked`` (its last quorum was not a full, positive run), ``catchup_disabled`` (season catch-up is switched off), ``not_considered`` (no boundary recorded a decision for it).
+             * @enum {string}
+             */
+            reason: "rotation" | "board" | "board_overflow" | "off_board" | "ath_clear" | "retested" | "over_budget" | "board_cap" | "below_board_floor" | "owner_has_better_agent" | "already_retested" | "unranked" | "catchup_disabled" | "not_considered";
+            /**
+             * State
+             * @description ``queued``: a re-test on the open season is queued or running. ``not_queued``: none is pending; ``reason`` says why.
+             * @enum {string}
+             */
+            state: "queued" | "not_queued";
         };
         /** PublicServiceBucket */
         PublicServiceBucket: {

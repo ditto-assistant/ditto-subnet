@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.db.models import Agent, DuelingSeason, EvaluationPayment, Score
@@ -316,3 +316,186 @@ async def expired_season_ledger_rows(
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+SEASON_RETEST_QUEUED_REASONS = (
+    "rotation",
+    "board",
+    "board_overflow",
+    "off_board",
+    "ath_clear",
+)
+"""``state=queued``: why the open season re-scores the agent (the opening
+rotation, or the re-test's ``catch_up_source``)."""
+SEASON_RETEST_UNQUEUED_REASONS = (
+    "retested",
+    "over_budget",
+    "board_cap",
+    "below_board_floor",
+    "owner_has_better_agent",
+    "already_retested",
+    "unranked",
+    "catchup_disabled",
+    "not_considered",
+)
+"""``state=not_queued``: why no re-test is pending. ``retested`` means a
+catch-up was queued at that boundary but its re-scores did not restore a full
+quorum in the window; the rest name why none was queued
+(:data:`ditto.api_server.dueling_seasons.OFF_BOARD_SKIP_REASONS` plus the
+budget, the pre-budget board cap, the kill switch, and no record at all)."""
+
+
+@dataclass(frozen=True)
+class SeasonRetestState:
+    """Whether an expired (or expiring) agent is being re-scored, and why."""
+
+    state: str
+    """``queued`` or ``not_queued``."""
+    reason: str
+    dueling_season_id: UUID | None
+    """``queued``: the season it is queued on. Otherwise the season whose
+    boundary record decided it (``None`` for ``not_considered``)."""
+
+
+def _catchup_decision(record: dict, agent_id: UUID) -> str | None:
+    """The reason a season's ``detail.catchup`` records for ``agent_id``."""
+    wanted = str(agent_id)
+    if record.get("skipped") == "season_catchup_enabled is off":
+        return "catchup_disabled"
+    queued = {str(a) for a in record.get("agents", ())} | {
+        str(item.get("agent_id")) for item in record.get("overflow", ())
+    }
+    queued |= {str(a) for a in record.get("in_opening_cohort", ())}
+    if wanted in queued:
+        return "retested"
+    if wanted in {str(item.get("agent_id")) for item in record.get("over_budget", ())}:
+        return "over_budget"
+    for item in record.get("off_board_skipped", ()):
+        if str(item.get("agent_id")) == wanted:
+            return str(item.get("reason") or "not_considered")
+    if wanted in {str(a) for a in record.get("capped", ())} and "overflow" not in (
+        record
+    ):
+        return "board_cap"  # recorded before the overflow budget existed
+    return None
+
+
+async def season_retest_states(
+    session: AsyncSession, coverages: Iterable[SeasonCoverage]
+) -> dict[UUID, SeasonRetestState]:
+    """Why each covered agent is or is not being re-scored.
+
+    In order: an open season rotation re-test on the open season
+    (``queued``, with its ``catch_up_source``); then the open season's own
+    boundary record (``detail.catchup``), which reconsiders every expired
+    agent at each boundary; then the record of the boundary that expired the
+    agent; else ``not_considered``. Reads stored rows only and queues
+    nothing. A few small reads per distinct season; bounded by the caller.
+    """
+    from ditto.db.models import ScoreAuditEntry
+    from ditto.db.queries.audit import (
+        EVENT_SCORE_RETEST_QUEUED,
+        EVENT_SCORE_RETEST_REQUESTED,
+        SCORE_RETEST_EVENTS,
+    )
+    from ditto.db.queries.score_retests import DUELING_ROTATION_RETEST_BASIS
+
+    values = list(coverages)
+    if not values:
+        return {}
+    ids = [value.agent_id for value in values]
+    latest_seq = (
+        select(
+            ScoreAuditEntry.agent_id,
+            ScoreAuditEntry.validator_hotkey,
+            func.max(ScoreAuditEntry.seq).label("seq"),
+        )
+        .where(
+            ScoreAuditEntry.agent_id.in_(ids),
+            ScoreAuditEntry.event.in_(SCORE_RETEST_EVENTS),
+        )
+        .group_by(ScoreAuditEntry.agent_id, ScoreAuditEntry.validator_hotkey)
+        .subquery()
+    )
+    pending: dict[UUID, tuple[str, UUID]] = {}
+    current = {value.agent_id: value.window.current for value in values}
+    for entry in await session.scalars(
+        select(ScoreAuditEntry).join(
+            latest_seq, ScoreAuditEntry.seq == latest_seq.c.seq
+        )
+    ):
+        season = current.get(entry.agent_id)
+        payload = entry.payload or {}
+        if (
+            season is None
+            or entry.agent_id in pending
+            or entry.event
+            not in (EVENT_SCORE_RETEST_QUEUED, EVENT_SCORE_RETEST_REQUESTED)
+            or payload.get("basis") != DUELING_ROTATION_RETEST_BASIS
+            or payload.get("dueling_season_id") != str(season)
+        ):
+            continue
+        source = (
+            str(payload.get("catch_up_source") or "board")
+            if payload.get("catch_up")
+            else "rotation"
+        )
+        pending[entry.agent_id] = (source, season)
+    deciding: dict[UUID, list[UUID]] = {}
+    for value in values:
+        if value.agent_id in pending:
+            continue
+        order: list[UUID] = []
+        if value.window.current is not None:
+            order.append(value.window.current)
+        opened = list(value.opened_seasons)
+        window = value.last_valid_window
+        if window is not None:
+            start = min((opened.index(s) for s in window if s in opened), default=None)
+            if start is not None and start >= 1:
+                order.append(opened[start - 1])
+        deciding[value.agent_id] = list(dict.fromkeys(order))
+    seasons = {s for order in deciding.values() for s in order}
+    records: dict[UUID, dict] = {}
+    if seasons:
+        for season_id, detail in (
+            await session.execute(
+                select(DuelingSeason.id, DuelingSeason.detail).where(
+                    DuelingSeason.id.in_(sorted(seasons, key=str))
+                )
+            )
+        ).tuples():
+            record = (detail or {}).get("catchup")
+            if isinstance(record, dict):
+                records[season_id] = record
+    out: dict[UUID, SeasonRetestState] = {}
+    for value in values:
+        if value.agent_id in pending:
+            source, season = pending[value.agent_id]
+            out[value.agent_id] = SeasonRetestState(
+                state="queued",
+                reason=source if source in SEASON_RETEST_QUEUED_REASONS else "board",
+                dueling_season_id=season,
+            )
+            continue
+        decided: SeasonRetestState | None = None
+        for season_id in deciding.get(value.agent_id, ()):
+            record = records.get(season_id)
+            reason = (
+                None if record is None else _catchup_decision(record, value.agent_id)
+            )
+            if reason is not None:
+                decided = SeasonRetestState(
+                    state="not_queued",
+                    reason=(
+                        reason
+                        if reason in SEASON_RETEST_UNQUEUED_REASONS
+                        else "not_considered"
+                    ),
+                    dueling_season_id=season_id,
+                )
+                break
+        out[value.agent_id] = decided or SeasonRetestState(
+            state="not_queued", reason="not_considered", dueling_season_id=None
+        )
+    return out

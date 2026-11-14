@@ -27,7 +27,11 @@ from ditto.api_server.endpoints.validator import _KothLaneSnapshot
 from ditto.api_server.koth import KothEntry, continual_composite
 from ditto.chain import ChainClient
 from ditto.db.queries.confirmation_score_voids import VoidRerunDebt
-from ditto.db.queries.dueling_season_expiry import SeasonCoverage, SeasonScore
+from ditto.db.queries.dueling_season_expiry import (
+    SeasonCoverage,
+    SeasonRetestState,
+    SeasonScore,
+)
 from ditto.db.queries.dueling_season_window import DuelingSeasonWindow
 from ditto.db.queries.retest_sample_inference import RetestSampleInference
 
@@ -699,6 +703,19 @@ async def test_an_expired_season_quorum_is_named_not_reported_missing(
     monkeypatch.setattr(
         admin_leaderboard, "_in_current_pin", AsyncMock(return_value=in_pin)
     )
+    monkeypatch.setattr(
+        admin_leaderboard,
+        "season_retest_states",
+        AsyncMock(
+            return_value={
+                _EXPIRED: SeasonRetestState(
+                    state="not_queued",
+                    reason="over_budget",
+                    dueling_season_id=_SEASON_CURRENT,
+                )
+            }
+        ),
+    )
     result = await admin_leaderboard.continual_retest_diagnostic(
         _request(),
         Response(),
@@ -717,8 +734,15 @@ async def test_an_expired_season_quorum_is_named_not_reported_missing(
         assert result.window_dueling_season_ids == []
         assert result.in_window_score_count is None
         assert result.last_valid_composite is None
+        assert result.season_retest is None
         return
     assert result.score_dueling_season_ids == [_SEASON_EXPIRED]
     assert result.window_dueling_season_ids == [_SEASON_CURRENT, _SEASON_PREVIOUS]
     assert result.in_window_score_count == 0
     assert result.last_valid_composite == pytest.approx(0.960714)
+    # SN-486: the diagnostic names why it is not being re-scored.
+    assert result.season_retest is not None
+    assert result.season_retest.state == "not_queued"
+    assert result.season_retest.reason == "over_budget"
+    assert result.season_retest.dueling_season_id == _SEASON_CURRENT
+    assert "budget" in result.season_retest.note

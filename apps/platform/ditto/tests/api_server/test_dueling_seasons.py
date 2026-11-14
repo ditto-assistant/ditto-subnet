@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.dueling_seasons as dueling_mod
 import ditto.api_server.generator_source_releases as releases_mod
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.generator import generator_settings_confirmation
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -2590,18 +2591,218 @@ class TestSeasonCatchup:
             season = await session.get(DuelingSeason, opened)
             assert season is not None
             _uncommit(season)
-        capped = GeneratorCompetitionSettings(season_catchup_max_agents=2)
+        # No overflow budget: past the cap, nothing queues.
+        capped = GeneratorCompetitionSettings(
+            season_catchup_max_agents=2, season_catchup_budget_usd=0.0
+        )
         _candidates, _rotation, catchup = await self._open(
             session_maker, opened, capped
         )
         assert catchup["agents"] == [str(a) for a in stale[:2]]
         assert catchup["capped"] == [str(stale[2])]
+        assert catchup["overflow"] == []
+        assert catchup["over_budget"] == [
+            {"agent_id": str(stale[2]), "source": "board_overflow"}
+        ]
         assert {a for a, _ in await self._queued(session_maker, catch_up=True)} == set(
             stale[:2]
         )
 
         with pytest.raises(ValueError):
             GeneratorCompetitionSettings(season_catchup_max_agents=11)
+
+    async def test_board_overflow_queues_within_the_budget(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SN-486: board agents past the cap are no longer dropped. They queue
+        while the estimated cost (runs x per-run cost) fits the budget."""
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        stale, _fresh, _closed, opened = await self._boundary(
+            session_maker, monkeypatch, stale=3, fresh=0
+        )
+        # No metered spend yet: 3 runs x the $0.50 fallback = $1.50 an agent.
+        settings = GeneratorCompetitionSettings(
+            season_catchup_max_agents=1, season_catchup_budget_usd=2.0
+        )
+        _candidates, _rotation, catchup = await self._open(
+            session_maker, opened, settings
+        )
+        assert catchup["agents"] == [str(stale[0])]
+        assert catchup["capped"] == [str(a) for a in stale[1:]]
+        assert catchup["run_cost_usd"] == 0.5
+        assert catchup["run_cost_source"] == "setting"
+        assert catchup["overflow"] == [
+            {
+                "agent_id": str(stale[1]),
+                "source": "board_overflow",
+                "runs": 3,
+                "estimated_usd": 1.5,
+            }
+        ]
+        assert catchup["overflow_estimated_usd"] == 1.5
+        assert catchup["over_budget"] == [
+            {"agent_id": str(stale[2]), "source": "board_overflow"}
+        ]
+        assert catchup["queued"] == 6
+        sources = await self._sources(session_maker)
+        assert sources == {stale[0]: {"board"}, stale[1]: {"board_overflow"}}
+
+    async def _sources(
+        self, maker: async_sessionmaker[AsyncSession]
+    ) -> dict[UUID, set[str]]:
+        from ditto.db.models import ScoreAuditEntry
+        from ditto.db.queries.audit import EVENT_SCORE_RETEST_QUEUED
+
+        out: dict[UUID, set[str]] = {}
+        async with maker() as session:
+            for entry in await session.scalars(
+                select(ScoreAuditEntry).where(
+                    ScoreAuditEntry.event == EVENT_SCORE_RETEST_QUEUED,
+                    ScoreAuditEntry.payload["catch_up"].as_boolean().is_(True),
+                )
+            ):
+                out.setdefault(entry.agent_id, set()).add(
+                    entry.payload["catch_up_source"]
+                )
+        return out
+
+    async def _off_board_agent(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        rank: int,
+        *,
+        season_index: int,
+        composite: float,
+        hotkey: str | None = None,
+    ) -> UUID:
+        """A scored agent off the board with a 3/3 quorum in one season."""
+        agent_id = await _seed_agent(maker, rank)
+        async with maker() as session, session.begin():
+            season_id = await session.scalar(
+                select(DuelingSeason.id).where(
+                    DuelingSeason.bench_version == 16,
+                    DuelingSeason.season_index == season_index,
+                )
+            )
+            assert season_id is not None
+            if hotkey is not None:
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                agent.miner_hotkey = hotkey
+            for validator in _CATCHUP_VALIDATORS:
+                session.add(
+                    _v16_score(agent_id, validator, season_id, composite=composite)
+                )
+        return agent_id
+
+    async def test_off_board_agents_whose_scores_expire_are_caught_up(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SN-486: an agent cut from the board (or never on it) whose
+        in-window scores expire at this boundary, or already expired, is
+        re-scored once within the budget if a re-score could place it."""
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        (late,), (fresh,), _closed, opened = await self._boundary(
+            session_maker, monkeypatch, stale=1
+        )
+        # Board medians are 0.9: that is the floor.
+        expiring = await self._off_board_agent(
+            session_maker, 50, season_index=31, composite=0.95
+        )
+        expired = await self._off_board_agent(
+            session_maker, 51, season_index=30, composite=0.92
+        )
+        below = await self._off_board_agent(
+            session_maker, 52, season_index=31, composite=0.5
+        )
+        # Same owner as the fresh board agent, which scores at least as well.
+        sibling = await self._off_board_agent(
+            session_maker, 53, season_index=31, composite=0.9, hotkey="5PanelMiner30"
+        )
+        # Scored in the closing season: still counts after the boundary.
+        current = await self._off_board_agent(
+            session_maker, 54, season_index=32, composite=0.99
+        )
+        candidates, _rotation, catchup = await self._open(
+            session_maker, opened, GeneratorCompetitionSettings()
+        )
+        assert [c.agent_id for c in candidates.off_board] == [expiring, expired]
+        assert [c.expired for c in candidates.off_board] == [False, True]
+        assert dict(candidates.off_board_skipped) == {
+            below: "below_board_floor",
+            sibling: "owner_has_better_agent",
+        }
+        assert current not in {c.agent_id for c in candidates.off_board}
+        assert [item["agent_id"] for item in catchup["overflow"]] == [
+            str(expiring),
+            str(expired),
+        ]
+        assert catchup["off_board_skipped_counts"] == {
+            "below_board_floor": 1,
+            "owner_has_better_agent": 1,
+        }
+        assert await self._sources(session_maker) == {
+            late: {"board"},
+            expiring: {"off_board"},
+            expired: {"off_board"},
+        }
+        assert fresh not in await self._sources(session_maker)
+
+        # One off-board catch-up per agent and bench version: the next
+        # boundary passes over both, with the reason.
+        from ditto.db.queries.dueling_season_window import dueling_season_window
+
+        async with session_maker() as session:
+            window = await dueling_season_window(session, 16)
+            assert window is not None
+            off_board, skipped = await dueling_mod._off_board_candidates(
+                session, 16, window=window, board=(late, fresh)
+            )
+        # Only the agent whose scores now sit in the provisional season (32)
+        # is owed one at the next boundary.
+        assert [c.agent_id for c in off_board] == [current]
+        assert dict(skipped)[expiring] == "already_retested"
+        assert dict(skipped)[expired] == "already_retested"
+
+    async def test_expired_agent_label_explains_the_retest_state(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Miners see why an expired agent is or is not being re-scored."""
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+        from ditto.db.queries.dueling_season_expiry import (
+            season_coverage,
+            season_retest_states,
+        )
+
+        (_late,), _fresh, _closed, opened = await self._boundary(
+            session_maker, monkeypatch, stale=1
+        )
+        queued = await self._off_board_agent(
+            session_maker, 50, season_index=30, composite=0.95
+        )
+        below = await self._off_board_agent(
+            session_maker, 51, season_index=30, composite=0.4
+        )
+        await self._open(session_maker, opened, GeneratorCompetitionSettings())
+        async with session_maker() as session:
+            coverage = await season_coverage(
+                session, bench_version=16, agent_ids=[queued, below]
+            )
+            states = await season_retest_states(session, coverage.values())
+        assert states[queued].state == "queued"
+        assert states[queued].reason == "off_board"
+        assert states[queued].dueling_season_id == opened
+        assert states[below].state == "not_queued"
+        assert states[below].reason == "below_board_floor"
+        assert states[below].dueling_season_id == opened
 
     async def _shadow_boundary(
         self,
@@ -2753,7 +2954,9 @@ class TestSeasonCatchup:
         _candidates, _rotation, catchup = await self._open(
             session_maker,
             opened,
-            GeneratorCompetitionSettings(season_catchup_max_agents=2),
+            GeneratorCompetitionSettings(
+                season_catchup_max_agents=2, season_catchup_budget_usd=0.0
+            ),
         )
         assert catchup["agents"] == [str(a) for a in stale[:2]]
         assert catchup["capped"] == [str(stale[2])]
@@ -3175,3 +3378,212 @@ class TestSeasonHandoffWithIdleExtension:
         assert second["open"] is True and second["rounds"] == 1
         assert second["episodes"] == 2 and second["episode_start_round"] == 13
         assert second["first_deferred_at"] == first["first_deferred_at"]
+
+
+class TestAthClearRetest:
+    """SN-486: clearing an ATH hold re-scores an agent whose scores left (or
+    are leaving) the season window while it was held; the hold must not
+    expire it."""
+
+    async def _held(
+        self,
+        maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        scored_season: int,
+    ) -> tuple[UUID, UUID]:
+        """A held v16 agent with a 3/3 quorum in season ``scored_season`` of
+        the 30/31/32 sequence (32 open). Returns it and the open season."""
+        from ditto.db.models import AthReview
+
+        _active(monkeypatch, 16)
+        default = await _generator(
+            maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        seasons = await _season_sequence(maker, default)
+        agent_id = await _seed_agent(maker, 70)
+        async with maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.status = AgentStatus.ATH_PENDING_REVIEW
+            agent.review_reason = "copy hold under review"
+            now = datetime.now(UTC)
+            for validator in _CATCHUP_VALIDATORS:
+                session.add(
+                    _v16_score(
+                        agent_id,
+                        validator,
+                        seasons[scored_season - 30],
+                        composite=0.824,
+                    )
+                )
+                session.add(
+                    ValidatorTicket(
+                        agent_id=agent_id,
+                        validator_hotkey=validator,
+                        bench_version=16,
+                        slot_id="slot-0",
+                        status=TicketStatus.SCORED,
+                        purpose=TicketPurpose.CANONICAL_QUORUM,
+                        purpose_revision=1,
+                        issued_at=now,
+                        deadline=now + timedelta(minutes=90),
+                        attempt_count=1,
+                        manual_retry_grants=0,
+                        infra_retry_grants=0,
+                        dueling_season_id=seasons[scored_season - 30],
+                        slice_sha256="ab" * 32,
+                    )
+                )
+            session.add(
+                AthReview(
+                    review_id=uuid4(),
+                    agent_id=agent_id,
+                    status="pending",
+                    opened_at=datetime.now(UTC),
+                    original_reason="copy hold under review",
+                    original_policy_version=8,
+                    original_evidence={"previous_status": "scored"},
+                    algorithm_provenance={"reference_provenance": "test"},
+                )
+            )
+        return agent_id, seasons[2]
+
+    async def _clear(
+        self, maker: async_sessionmaker[AsyncSession], agent_id: UUID
+    ) -> Any:
+        from ditto.api_models.admin_copy_review import AdminCopyReviewResolveRequest
+        from ditto.api_server.endpoints.admin_copy_review import resolve_copy_review
+
+        async with maker() as session:
+            return await resolve_copy_review(
+                agent_id,
+                AdminCopyReviewResolveRequest(
+                    resolution="clear", reason="false-positive copy hold"
+                ),
+                None,
+                session,
+                x_admin_actor="backroom:test",
+            )
+
+    async def test_clear_of_an_expired_agent_queues_a_free_retest(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.db.models import ScoreAuditEntry
+        from ditto.db.queries.audit import EVENT_SCORE_RETEST_QUEUED
+        from ditto.db.queries.dueling_season_expiry import (
+            season_coverage,
+            season_retest_states,
+        )
+
+        # Scored in 30, cleared while 32 is open: expired on clear (marlowe).
+        agent_id, open_id = await self._held(
+            session_maker, monkeypatch, scored_season=30
+        )
+        response = await self._clear(session_maker, agent_id)
+        assert response.agent_status == "scored"
+        retest = response.season_retest
+        assert retest is not None and retest.error is None
+        assert retest.queued == 3 and retest.skipped is None
+        assert retest.catch_up_source == "ath_clear"
+        assert retest.dueling_season_id == open_id and retest.bench_version == 16
+        async with session_maker() as session:
+            entries = list(
+                await session.scalars(
+                    select(ScoreAuditEntry).where(
+                        ScoreAuditEntry.agent_id == agent_id,
+                        ScoreAuditEntry.event == EVENT_SCORE_RETEST_QUEUED,
+                    )
+                )
+            )
+            coverage = await season_coverage(
+                session, bench_version=16, agent_ids=[agent_id]
+            )
+            states = await season_retest_states(session, coverage.values())
+        assert {e.validator_hotkey for e in entries} == set(_CATCHUP_VALIDATORS)
+        for entry in entries:
+            assert entry.payload["basis"] == DUELING_ROTATION_RETEST_BASIS
+            assert entry.payload["catch_up_source"] == "ath_clear"
+            assert entry.payload["actor"] == "platform:ath-clear-retest"
+            assert entry.payload["dueling_season_id"] == str(open_id)
+            assert entry.payload["ath_review_id"]
+        assert states[agent_id].state == "queued"
+        assert states[agent_id].reason == "ath_clear"
+
+        # It promotes like any rotation re-test.
+        async with session_maker() as session, session.begin():
+            ticket = await activate_next_score_retest(
+                session,
+                validator_hotkey=_CATCHUP_VALIDATORS[0],
+                now=datetime.now(UTC),
+                supports_version=lambda version: version == 16,
+                required_basis=DUELING_ROTATION_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+            )
+            assert ticket is not None and ticket.agent_id == agent_id
+
+    async def test_clear_of_a_provisional_agent_also_queues(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Scored in 31 (provisional): it would expire at the next boundary.
+        agent_id, _open_id = await self._held(
+            session_maker, monkeypatch, scored_season=31
+        )
+        response = await self._clear(session_maker, agent_id)
+        assert response.season_retest is not None
+        assert response.season_retest.queued == 3
+
+    async def test_clear_with_a_current_quorum_queues_nothing(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        agent_id, _open_id = await self._held(
+            session_maker, monkeypatch, scored_season=32
+        )
+        response = await self._clear(session_maker, agent_id)
+        assert response.season_retest is not None
+        assert response.season_retest.queued == 0
+        assert (
+            response.season_retest.skipped
+            == "its quorum is already from the open season"
+        )
+
+    async def test_reject_queues_nothing_and_below_floor_versions_skip(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_models.admin_copy_review import AdminCopyReviewResolveRequest
+        from ditto.api_server.endpoints.admin_copy_review import resolve_copy_review
+
+        agent_id, _open_id = await self._held(
+            session_maker, monkeypatch, scored_season=30
+        )
+        async with session_maker() as session:
+            rejected = await resolve_copy_review(
+                agent_id,
+                AdminCopyReviewResolveRequest(
+                    resolution="reject", reason="confirmed copied implementation"
+                ),
+                None,
+                session,
+                x_admin_actor="backroom:test",
+            )
+        assert rejected.season_retest is None
+
+        _active(monkeypatch, 15)
+        async with session_maker() as session, session.begin():
+            outcome = await dueling_mod.queue_cleared_hold_retest(
+                session, agent_id=agent_id, review_id=uuid4(), now=datetime.now(UTC)
+            )
+        assert outcome["queued"] == 0 and "skipped" in outcome

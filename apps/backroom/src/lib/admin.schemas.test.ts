@@ -134,6 +134,8 @@ import {
   emissionAllocationConfirmation,
   setEmissionAllocationInputSchema,
   trackSharesConfirmation,
+  resolveCopyReviewResponseSchema,
+  seasonRetestSchema,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -5875,5 +5877,31 @@ describe('publicDethroneDecisionSchema', () => {
       seed_differences: [0.03],
     })
     expect(parsed.method).toBe('duel')
+  })
+})
+
+describe('SN-486 season re-test visibility', () => {
+  it('parses the re-test label an expired agent carries', () => {
+    const label = seasonRetestSchema.parse({
+      state: 'not_queued',
+      reason: 'over_budget',
+      dueling_season_id: '428a8bc5-b002-4af4-91e4-964cb83128f4',
+      note: 'Not re-tested yet: the season catch-up budget ran out.',
+    })
+    expect(label.reason).toBe('over_budget')
+    expect(() => seasonRetestSchema.parse({ ...label, reason: 'mystery' })).toThrow()
+  })
+
+  it('parses the re-test a clear queued, and its absence on older Platforms', () => {
+    const shape = resolveCopyReviewResponseSchema.shape.season_retest
+    expect(shape.parse(undefined)).toBeNull()
+    expect(shape.parse({
+      queued: 3,
+      bench_version: 18,
+      dueling_season_id: '428a8bc5-b002-4af4-91e4-964cb83128f4',
+      catch_up_source: 'ath_clear',
+    })).toMatchObject({ queued: 3, skipped: null, error: null, catch_up_source: 'ath_clear' })
+    expect(shape.parse({ skipped: 'no dueling season is open' }))
+      .toMatchObject({ queued: 0, skipped: 'no dueling season is open' })
   })
 })
