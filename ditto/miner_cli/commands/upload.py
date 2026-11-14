@@ -210,8 +210,9 @@ def add_subparser(
         action="store_true",
         help=(
             "Deliberately buy another independently seeded run of source that "
-            "is byte-identical to one you already submitted. Off by default so "
-            "an accidental duplicate cannot spend TAO."
+            "is byte-identical to one you already submitted. Once it finalizes "
+            "ranked, the new run replaces the earlier one, even if it scores "
+            "lower. Off by default so an accidental duplicate cannot spend TAO."
         ),
     )
     recovery = parser.add_argument_group(

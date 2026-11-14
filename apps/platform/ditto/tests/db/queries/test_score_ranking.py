@@ -355,6 +355,47 @@ class TestComparator:
         assert winner.fold_first_seen == _BASE
         assert select_owner_representative([first, later])[0].agent_id == later.agent_id
 
+    def test_superseded_rerun_never_represents_while_its_successor_is_present(
+        self,
+    ) -> None:
+        """SN-485: a newer run of the same bytes represents them, whatever it drew.
+
+        The superseded flag is a leading key term, not a filter: the owner keeps
+        a representative when a caller's registration filter removes only the
+        newer run.
+        """
+
+        @dataclass(frozen=True)
+        class _RerunRow(_CrownRow):
+            superseded_rerun: bool = False
+
+        lucky = _RerunRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.95,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            superseded_rerun=True,
+        )
+        rerun = _RerunRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=1),
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+        )
+        scores = {lucky.agent_id: 0.95, rerun.agent_id: 0.90}
+
+        assert select_owner_representative([lucky, rerun], scores=scores)[0] == rerun
+        [winner] = dedupe_owner_rows([lucky, rerun], scores=scores)
+        assert winner.agent_id == rerun.agent_id
+        [fallback] = dedupe_owner_rows(
+            [lucky, rerun], scores=scores, registered_hotkeys={lucky.miner_hotkey}
+        )
+        assert fallback.agent_id == lucky.agent_id
+
     def test_equal_quality_keeps_the_earlier_crown_across_efficiency(self) -> None:
         early_expensive = _CrownRow(
             agent_id=_uuid("1"),

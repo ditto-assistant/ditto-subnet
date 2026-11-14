@@ -156,6 +156,7 @@ _RepresentativeSelection = Literal[
     "efficiency_tiebreak",
     "newest_generation",
     "agent_id_tiebreak",
+    "superseded_rerun",
     "none",
 ]
 _RoutePriority = Literal[
@@ -254,17 +255,20 @@ def _representative_selection(
     representative_id: UUID | None,
     official_scores: dict[UUID, float],
     entries_by_id: dict[UUID, KothEntry],
+    superseded_reruns: frozenset[UUID] = frozenset(),
 ) -> _RepresentativeSelection:
     """Which term of the owner-family key actually decided the representative.
 
-    Mirrors :func:`ditto.score_order.owner_family_key`: official quality first,
-    the curve-v3 efficiency secondary next, then the newest lineage clock, then
-    the stable agent-id tiebreak.
+    Mirrors :func:`ditto.score_order.owner_family_key`: a newer run of the same
+    artifact first (SN-485), then official quality, the curve-v3 efficiency
+    secondary, the newest lineage clock, and the stable agent-id tiebreak.
     """
     if representative_id is None:
         return "none"
     if representative_id == agent_id:
         return "self"
+    if agent_id in superseded_reruns and representative_id not in superseded_reruns:
+        return "superseded_rerun"
     own = official_scores.get(agent_id)
     representative = official_scores.get(representative_id)
     if own is None or representative is None or own != representative:
@@ -949,6 +953,7 @@ async def continual_retest_diagnostic(
             representative_id=representative_id,
             official_scores=snapshot.official_scores,
             entries_by_id=entries_by_id,
+            superseded_reruns=snapshot.superseded_reruns,
         ),
         cohort_cutoff=_cutoff_comparison(
             entry,

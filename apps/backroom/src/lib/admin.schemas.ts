@@ -9358,7 +9358,7 @@ export const continualRetestDiagnosticSchema = z.object({
   representative_margin: z.number().nullable().default(null),
   representative_selection: z.enum([
     'self', 'official_composite', 'efficiency_tiebreak',
-    'newest_generation', 'agent_id_tiebreak', 'none',
+    'newest_generation', 'agent_id_tiebreak', 'superseded_rerun', 'none',
   ]).default('none'),
   cohort_cutoff: retestCutoffComparisonSchema.default(() => emptyRetestCutoff),
   emission_cutoff: retestCutoffComparisonSchema.default(() => emptyRetestCutoff),

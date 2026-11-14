@@ -256,8 +256,13 @@ class AdminContinualRetestDiagnostic(BaseModel):
         "efficiency_tiebreak",
         "newest_generation",
         "agent_id_tiebreak",
+        "superseded_rerun",
         "none",
     ] = "none"
+    """Which owner-family key term chose the representative over this row.
+
+    ``superseded_rerun``: a newer finalized run of this exact artifact
+    represents the content, whatever either run scored (SN-485)."""
     cohort_cutoff: RetestCutoffComparison = RetestCutoffComparison()
     emission_cutoff: RetestCutoffComparison = RetestCutoffComparison()
     claim: RetestClaimability | None = None

@@ -733,7 +733,8 @@ async def _rollout_catchup_board(
     The agents holding a ranked desired-version quorum in the season window
     (:func:`~ditto.db.queries.scores.ranked_quorum_agent_ids`, the set
     ``count_ranked_quorum_agents`` gates activation on), best median
-    composite first, one per owner family. Not the KOTH board: an explicit
+    composite first, one per owner family, with reruns of one artifact
+    represented by the newest run. Not the KOTH board: an explicit
     version ledger read admits pre-quorum medians, and the rollout gate never
     counts those. Scalar columns only, never ``Score.details``.
     """
@@ -770,14 +771,15 @@ async def _rollout_catchup_board(
         for agent_id, scores in rows.items()
     }
     owners = {
-        agent_id: (miner_hotkey, owner, created_at)
-        for agent_id, miner_hotkey, owner, created_at in (
+        agent_id: (miner_hotkey, owner, created_at, sha256)
+        for agent_id, miner_hotkey, owner, created_at, sha256 in (
             await session.execute(
                 select(
                     Agent.agent_id,
                     Agent.miner_hotkey,
                     emission_owner_key(),
                     Agent.created_at,
+                    Agent.sha256,
                 )
                 .outerjoin(
                     EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id
@@ -793,9 +795,21 @@ async def _rollout_catchup_board(
     roots = await attested_emission_owner_roots(
         session, [owners[agent_id][:2] for agent_id in ordered]
     )
+    # SN-485: reruns of one artifact are represented by the newest one, as on
+    # the ledger (``LedgerRow.superseded_rerun``), never by the best draw.
+    latest_run: dict[tuple[str, str], UUID] = {}
+    for agent_id, root in zip(ordered, roots, strict=True):
+        content = (root, owners[agent_id][3])
+        current = latest_run.get(content)
+        if current is None or (owners[agent_id][2], agent_id) > (
+            owners[current][2],
+            current,
+        ):
+            latest_run[content] = agent_id
     board: dict[str, UUID] = {}
     for agent_id, root in zip(ordered, roots, strict=True):
-        board.setdefault(root, agent_id)
+        if latest_run[(root, owners[agent_id][3])] == agent_id:
+            board.setdefault(root, agent_id)
     return tuple(board.values())
 
 

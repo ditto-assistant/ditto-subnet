@@ -4247,6 +4247,9 @@ class _KothLaneSnapshot:
     folded_seeds_by_agent: dict[UUID, tuple[int, ...]]
     # (official owner representative, newer canonical-best generation).
     owner_challengers: tuple[tuple[UUID, KothEntry], ...]
+    # SN-485: runs a newer finalized run of the same artifact has replaced.
+    # They keep their scores for audit but can never represent the owner.
+    superseded_reruns: frozenset[UUID] = frozenset()
 
 
 async def _current_koth_entries(
@@ -4523,6 +4526,9 @@ async def _current_koth_entries(
             for row in rows
         },
         owner_challengers=owner_challengers,
+        superseded_reruns=frozenset(
+            row.agent_id for row in rows if row.superseded_rerun
+        ),
     )
 
 
