@@ -1661,6 +1661,43 @@ class TestRunOnce:
         assert final.benchmark_capacity.configured_slots == 2
         assert final.benchmark_capacity.healthy_slots == ["slot-0", "slot-1"]
 
+    async def test_scorer_narrowing_warning_names_the_effective_slots_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Memory below the scorer: report what runs, and only on change.
+
+        ``_available_slots`` runs on every heartbeat, so a persistent mismatch
+        used to log one warning per heartbeat, naming the scorer's count even
+        when host memory admitted fewer.
+        """
+        config = _config()
+        config.benchmark_capacity = 8
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 4
+        worker = ValidatorWorker(
+            config=config,
+            platform=_platform_with_ledger(jobs=[], ledger=[]),
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        monkeypatch.setattr(worker, "_memory_admitted_slots", lambda: 2)
+
+        with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
+            first = worker._available_slots()
+            second = worker._available_slots()
+
+        assert first == second == {"slot-0", "slot-1"}
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if "exceeds scorer capacity" in record.getMessage()
+        ]
+        assert warnings == [
+            "configured validator capacity 8 exceeds scorer capacity 4; "
+            "running 2 slot(s) until the stack agrees"
+        ]
+
     async def test_parallel_slots_overlap_and_isolate_sibling_failure(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

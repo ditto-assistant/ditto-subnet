@@ -1942,10 +1942,10 @@ class ValidatorWorker:
         if narrowed is not None and narrowed != self._scorer_narrowing_logged:
             logger.warning(
                 "configured validator capacity %s exceeds scorer capacity %s; "
-                "running the scorer's %s slot(s) until the stack agrees",
+                "running %s slot(s) until the stack agrees",
                 len(self._slots),
                 scorer_capacity,
-                scorer_capacity,
+                capacity,
             )
         self._scorer_narrowing_logged = narrowed
         return set(unblocked[:capacity])
