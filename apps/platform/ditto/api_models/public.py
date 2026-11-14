@@ -960,6 +960,7 @@ class PublicSeasonRetest(BaseModel):
             "board_cap",
             "below_board_floor",
             "owner_has_better_agent",
+            "superseded_rerun",
             "already_retested",
             "unranked",
             "catchup_disabled",
@@ -979,7 +980,9 @@ class PublicSeasonRetest(BaseModel):
                 "existed), ``below_board_floor`` (its last valid score is under "
                 "the lowest score on the board, so a re-test could not place "
                 "it), ``owner_has_better_agent`` (its owner already has a "
-                "better agent on the board), ``already_retested`` (it already "
+                "better agent on the board), ``superseded_rerun`` (a newer run "
+                "of the same artifact stands for it), ``already_retested`` (it "
+                "already "
                 "had its one off-board catch-up on this bench version), "
                 "``unranked`` (its last quorum was not a full, positive run), "
                 "``catchup_disabled`` (season catch-up is switched off), "

@@ -333,6 +333,7 @@ SEASON_RETEST_UNQUEUED_REASONS = (
     "board_cap",
     "below_board_floor",
     "owner_has_better_agent",
+    "superseded_rerun",
     "already_retested",
     "unranked",
     "catchup_disabled",

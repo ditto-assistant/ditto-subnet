@@ -2770,6 +2770,36 @@ class TestSeasonCatchup:
         assert dict(skipped)[expiring] == "already_retested"
         assert dict(skipped)[expired] == "already_retested"
 
+    async def test_an_older_rerun_of_one_artifact_is_not_the_one_retested(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SN-485 x SN-486: reruns of one artifact are represented by the
+        newest run, never the best draw, so only the newest is re-scored."""
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        _board, _fresh, _closed, opened = await self._boundary(
+            session_maker, monkeypatch, stale=1
+        )
+        lucky = await self._off_board_agent(
+            session_maker, 50, season_index=31, composite=0.97, hotkey="5Rerun"
+        )
+        newest = await self._off_board_agent(
+            session_maker, 51, season_index=31, composite=0.93, hotkey="5Rerun"
+        )
+        async with session_maker() as session, session.begin():
+            older = await session.get(Agent, lucky)
+            newer = await session.get(Agent, newest)
+            assert older is not None and newer is not None
+            newer.sha256 = older.sha256
+            newer.created_at = older.created_at + timedelta(hours=1)
+        candidates, _rotation, _catchup = await self._open(
+            session_maker, opened, GeneratorCompetitionSettings()
+        )
+        assert [c.agent_id for c in candidates.off_board] == [newest]
+        assert dict(candidates.off_board_skipped)[lucky] == "superseded_rerun"
+
     async def test_expired_agent_label_explains_the_retest_state(
         self,
         session_maker: async_sessionmaker[AsyncSession],

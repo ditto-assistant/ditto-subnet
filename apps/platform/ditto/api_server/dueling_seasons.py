@@ -86,7 +86,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import defer
 
@@ -742,6 +742,7 @@ class CatchupCandidates:
 OFF_BOARD_SKIP_REASONS = (
     "below_board_floor",
     "owner_has_better_agent",
+    "superseded_rerun",
     "already_retested",
     "unranked",
 )
@@ -751,6 +752,8 @@ OFF_BOARD_SKIP_REASONS = (
   the board, so a re-score could not place it;
 * ``owner_has_better_agent``: its owner family already has a better agent on
   the board or ahead of it in this list (one slot per owner);
+* ``superseded_rerun``: a newer run of the same artifact by the same owner
+  stands for that content (SN-485: the latest run, never the best draw);
 * ``already_retested``: it already had its one off-board catch-up at this
   bench version (an agent the board does not hold expires after that);
 * ``unranked``: its last valid quorum was not a full, positive benchmark."""
@@ -1002,9 +1005,10 @@ async def _off_board_candidates(
     The board's own catch-up covers board agents. Passed over, with the
     reason: a last median under the board's lowest in-window median, an
     owner family with a better agent on the board or earlier in the list, an
-    agent that already had its one off-board catch-up at this version, and a
-    last quorum that was not a full, positive benchmark. Best last median
-    first. Scalar score columns only.
+    agent that already had its one off-board catch-up at this version, an
+    older run of an artifact the owner re-ran (the newest run stands for it,
+    SN-485), and a last quorum that was not a full, positive benchmark. Best
+    last median first. Scalar score columns only.
     """
     from ditto.db.models import EvaluationPayment, ScoreAuditEntry
     from ditto.db.queries.audit import EVENT_SCORE_RETEST_QUEUED
@@ -1074,22 +1078,42 @@ async def _off_board_candidates(
                 .distinct()
             )
         )
-    identities = {
-        agent_id: (miner_hotkey, owner)
-        for agent_id, miner_hotkey, owner in (
-            await session.execute(
-                select(Agent.agent_id, Agent.miner_hotkey, emission_owner_key())
-                .outerjoin(
-                    EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id
-                )
-                .where(
+    identities: dict[UUID, tuple[str, str]] = {}
+    content: dict[UUID, tuple[str, datetime]] = {}
+    for agent_id, miner_hotkey, owner, sha256, created_at in (
+        await session.execute(
+            select(
+                Agent.agent_id,
+                Agent.miner_hotkey,
+                emission_owner_key(),
+                Agent.sha256,
+                Agent.created_at,
+            )
+            .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
+            .where(
+                or_(
                     Agent.agent_id.in_(
                         [*board_medians, *(a for a, _c, _e in owed)] or (UUID(int=0),)
-                    )
+                    ),
+                    # Every other scored run of an owed artifact, so a newer
+                    # rerun on (or off) the board still stands for it.
+                    and_(
+                        Agent.sha256.in_(
+                            select(Agent.sha256).where(
+                                Agent.agent_id.in_(
+                                    [a for a, _c, _e in owed] or (UUID(int=0),)
+                                )
+                            )
+                        ),
+                        Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+                        Agent.shadow.is_(False),
+                    ),
                 )
             )
-        ).tuples()
-    }
+        )
+    ).tuples():
+        identities[agent_id] = (miner_hotkey, owner)
+        content[agent_id] = (sha256, created_at)
     ordered = list(identities)
     roots = dict(
         zip(
@@ -1105,10 +1129,31 @@ async def _off_board_candidates(
         root = roots.get(agent_id)
         if root is not None:
             owner_best[root] = max(owner_best.get(root, median), median)
+    # SN-485: reruns of one artifact are represented by the newest run, as on
+    # the ledger and the rollout catch-up board, never by the best draw.
+    latest_run: dict[tuple[str, str], UUID] = {}
+    for agent_id in ordered:
+        root = roots.get(agent_id)
+        if root is None:
+            continue
+        key = (root, content[agent_id][0])
+        current = latest_run.get(key)
+        if current is None or (content[agent_id][1], agent_id) > (
+            content[current][1],
+            current,
+        ):
+            latest_run[key] = agent_id
     out: list[OffBoardCandidate] = []
     for agent_id, composite, expired in owed:
         root = roots.get(agent_id)
-        if agent_id in retested:
+        newest = (
+            None
+            if root is None or agent_id not in content
+            else latest_run.get((root, content[agent_id][0]))
+        )
+        if newest is not None and newest != agent_id:
+            skipped.append((agent_id, "superseded_rerun", composite))
+        elif agent_id in retested:
             skipped.append((agent_id, "already_retested", composite))
         elif root is not None and owner_best.get(root, -1.0) >= composite:
             skipped.append((agent_id, "owner_has_better_agent", composite))

@@ -3644,6 +3644,10 @@ _SEASON_RETEST_NOTES: dict[str, str] = {
     "owner_has_better_agent": (
         "Not re-tested: the same owner already has a better agent on the board."
     ),
+    "superseded_rerun": (
+        "Not re-tested: a newer run of the same artifact stands for it, so that "
+        "run is the one that counts."
+    ),
     "already_retested": (
         "Not re-tested: it already had its one free off-board catch-up on this "
         "bench version. Only new in-window scores count again."

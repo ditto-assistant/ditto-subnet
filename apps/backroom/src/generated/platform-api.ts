@@ -37434,7 +37434,9 @@ export interface components {
          *     (``current`` plus the provisional ``previous``); older ones expire from the
          *     authoritative ledger by design, so the platform never pays to re-score the
          *     board on every rotation. This label keeps such an agent visible instead of
-         *     dropping it, without re-scoring it and without changing any pin or weight.
+         *     dropping it, without changing any pin or weight. ``retest`` says whether a
+         *     free, bounded platform re-test (season catch-up or an ATH clear) is
+         *     queued, and if not, why.
          */
         PublicSeasonExpiry: {
             /**
@@ -37491,10 +37493,10 @@ export interface components {
             note: string;
             /**
              * Reason
-             * @description Queued: ``rotation`` (the season-opening cohort), ``board`` (paid or top-five catch-up), ``board_overflow`` (board agent past the catch-up cap, within the per-season budget), ``off_board`` (off-board agent whose scores expired, within the budget), ``ath_clear`` (its review hold was cleared). Not queued: ``retested`` (a catch-up ran but did not restore a full quorum in the window), ``over_budget`` (the season's catch-up budget ran out; the next boundary reconsiders it), ``board_cap`` (past the board catch-up cap, before the budget existed), ``below_board_floor`` (its last valid score is under the lowest score on the board, so a re-test could not place it), ``owner_has_better_agent`` (its owner already has a better agent on the board), ``already_retested`` (it already had its one off-board catch-up on this bench version), ``unranked`` (its last quorum was not a full, positive run), ``catchup_disabled`` (season catch-up is switched off), ``not_considered`` (no boundary recorded a decision for it).
+             * @description Queued: ``rotation`` (the season-opening cohort), ``board`` (paid or top-five catch-up), ``board_overflow`` (board agent past the catch-up cap, within the per-season budget), ``off_board`` (off-board agent whose scores expired, within the budget), ``ath_clear`` (its review hold was cleared). Not queued: ``retested`` (a catch-up ran but did not restore a full quorum in the window), ``over_budget`` (the season's catch-up budget ran out; the next boundary reconsiders it), ``board_cap`` (past the board catch-up cap, before the budget existed), ``below_board_floor`` (its last valid score is under the lowest score on the board, so a re-test could not place it), ``owner_has_better_agent`` (its owner already has a better agent on the board), ``superseded_rerun`` (a newer run of the same artifact stands for it), ``already_retested`` (it already had its one off-board catch-up on this bench version), ``unranked`` (its last quorum was not a full, positive run), ``catchup_disabled`` (season catch-up is switched off), ``not_considered`` (no boundary recorded a decision for it).
              * @enum {string}
              */
-            reason: "rotation" | "board" | "board_overflow" | "off_board" | "ath_clear" | "retested" | "over_budget" | "board_cap" | "below_board_floor" | "owner_has_better_agent" | "already_retested" | "unranked" | "catchup_disabled" | "not_considered";
+            reason: "rotation" | "board" | "board_overflow" | "off_board" | "ath_clear" | "retested" | "over_budget" | "board_cap" | "below_board_floor" | "owner_has_better_agent" | "superseded_rerun" | "already_retested" | "unranked" | "catchup_disabled" | "not_considered";
             /**
              * State
              * @description ``queued``: a re-test on the open season is queued or running. ``not_queued``: none is pending; ``reason`` says why.

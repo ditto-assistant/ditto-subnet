@@ -9312,7 +9312,7 @@ export const seasonRetestSchema = z.object({
   reason: z.enum([
     'rotation', 'board', 'board_overflow', 'off_board', 'ath_clear',
     'retested', 'over_budget', 'board_cap', 'below_board_floor',
-    'owner_has_better_agent', 'already_retested', 'unranked',
+    'owner_has_better_agent', 'superseded_rerun', 'already_retested', 'unranked',
     'catchup_disabled', 'not_considered',
   ]),
   dueling_season_id: z.string().uuid().nullable().default(null),

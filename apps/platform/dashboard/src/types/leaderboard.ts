@@ -454,6 +454,7 @@ export interface SeasonRetest {
     | "board_cap"
     | "below_board_floor"
     | "owner_has_better_agent"
+    | "superseded_rerun"
     | "already_retested"
     | "unranked"
     | "catchup_disabled"
