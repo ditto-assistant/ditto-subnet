@@ -509,3 +509,58 @@ async def test_restore_yields_to_an_upload_holding_the_hotkey_lock(
         row = await session.get(GeneratorSubmission, rejected_id)
         assert row is not None
         assert await restore_superseded(session, row, now=_NOW) == prior_id
+
+
+async def test_a_restore_skipped_for_a_racing_upload_is_recovered_on_its_reject(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A is superseded by S. S is rejected while upload U holds the hotkey
+    lock, so the restore is skipped and U commits active, superseding nothing.
+    When U is rejected in turn, A (still "superseded by S") is restored and
+    becomes runnable again."""
+    a_id, s_id, u_id = uuid4(), uuid4(), uuid4()
+    a = _Sub(
+        "a",
+        "coldkey:z",
+        "5Z",
+        status="superseded",
+        submitted_hours_ago=48,
+        status_reason=f"superseded by {s_id}",
+    )
+    s = _Sub("s", "coldkey:z", "5Z", qualified=False, submitted_hours_ago=2)
+    async with session_maker() as session, session.begin():
+        session.add_all([_row(a, a_id), _row(s, s_id)])
+    async with session_maker() as upload, upload.begin():
+        await upload.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": "generator-upload:5Z"},
+        )
+        async with session_maker() as session, session.begin():
+            row = await session.get(GeneratorSubmission, s_id)
+            assert row is not None
+            await competition._reject(  # noqa: SLF001 - the scorer's reject path
+                session, row, "build_failed: x", now=_NOW
+            )
+        # The upload commits U; S is no longer active, so U supersedes nothing.
+        upload.add(
+            _row(
+                _Sub("u", "coldkey:z", "5Z", qualified=False, submitted_hours_ago=1),
+                u_id,
+            )
+        )
+    async with session_maker() as session:
+        skipped = await session.get(GeneratorSubmission, a_id)
+        assert skipped is not None and skipped.status == "superseded"
+
+    async with session_maker() as session, session.begin():
+        row = await session.get(GeneratorSubmission, u_id)
+        assert row is not None
+        await competition._reject(  # noqa: SLF001 - the scorer's reject path
+            session, row, "generation_failed: seed 0: withdrawn by owner", now=_NOW
+        )
+    async with session_maker() as session:
+        restored = await session.get(GeneratorSubmission, a_id)
+        assert restored is not None and restored.status == "active"
+        assert restored.status_reason == restored_reason(u_id)
+        assert restored.qualified_at is None
+        assert restored.next_run_at is not None and restored.next_run_at <= _NOW

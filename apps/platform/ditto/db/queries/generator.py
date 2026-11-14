@@ -279,12 +279,18 @@ async def restore_superseded(
     re-qualified it), so it earns nothing until it passes, and round selection
     then re-measures it. An operator reject does not call this.
 
-    Restores the newest row ``rejected``'s upload superseded, and only while
-    the hotkey has no other active submission. The upload lock is only tried:
-    the caller already holds ``rejected``'s row lock, which an upload takes
-    after the hotkey lock, so waiting could deadlock. A busy lock means an
-    upload on the hotkey is committing a new active submission, which makes
-    the restore moot.
+    Restores the hotkey's newest superseded submission uploaded before
+    ``rejected``, and only while the hotkey has no other active submission.
+    That is normally the row ``rejected``'s own upload superseded. It is
+    chosen by upload order, not by the ``superseded by`` reason, so a restore
+    skipped below is recovered by the next rejection on the hotkey: an upload
+    that committed while it was skipped superseded nothing (the rejected row
+    was no longer active), and rejecting that upload restores the same row.
+
+    The upload lock is only tried: the caller already holds ``rejected``'s
+    row lock, which an upload takes after the hotkey lock, so waiting could
+    deadlock. A busy lock means an upload on the hotkey is committing a new
+    active submission, which makes the restore moot for now.
     """
     if rejected.public_default:
         return None
@@ -311,8 +317,7 @@ async def restore_superseded(
         .where(
             GeneratorSubmission.miner_hotkey == rejected.miner_hotkey,
             GeneratorSubmission.status == "superseded",
-            GeneratorSubmission.status_reason
-            == f"superseded by {rejected.submission_id}",
+            GeneratorSubmission.submitted_at < rejected.submitted_at,
         )
         .order_by(
             GeneratorSubmission.submitted_at.desc(),
