@@ -12094,7 +12094,7 @@ export interface components {
              * @default none
              * @enum {string}
              */
-            representative_selection: "self" | "official_composite" | "efficiency_tiebreak" | "newest_generation" | "agent_id_tiebreak" | "none";
+            representative_selection: "self" | "official_composite" | "efficiency_tiebreak" | "newest_generation" | "agent_id_tiebreak" | "superseded_rerun" | "none";
             /**
              * Retest Samples
              * @default []

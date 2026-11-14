@@ -1497,6 +1497,7 @@ async def _seed_k3(
     created_at: datetime | None = None,
     accepted_tickets: bool = True,
     queue_ready: bool = True,
+    sha256: str = "ab" * 32,
 ) -> str:
     """Seed one agent scored by ``len(composites)`` distinct validators.
 
@@ -1528,7 +1529,7 @@ async def _seed_k3(
             agent_id=agent_id,
             miner_hotkey=miner,
             name="agent",
-            sha256="ab" * 32,
+            sha256=sha256,
             size_bytes=524288,
             status=status,
             dataset_seed=dataset_seed,
@@ -4455,6 +4456,7 @@ class TestPublicLeaderboard:
             composites=[0.96, 0.96, 0.96],
             details={"bench_version": _ERA},
             created_at=datetime(2026, 6, 8, 18, 0, tzinfo=UTC),
+            sha256="b1" * 32,
         )
         retest_seed = 424242
         async with session_maker() as s, s.begin():
@@ -4677,6 +4679,7 @@ class TestPublicLeaderboard:
             miner=hidden_hotkey,
             composites=[0.90, 0.91, 0.92],
             created_at=datetime(2026, 6, 8, 13, 0, tzinfo=UTC),
+            sha256="b2" * 32,
         )
         await _seed_payment(
             session_maker,

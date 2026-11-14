@@ -475,6 +475,20 @@ class LedgerRow:
     fold reads). A v16 row without it never ranks or pays."""
     dueling: dict | None = None
     """Bench v16+: the representative score's signed ``details.dueling``."""
+    superseded_rerun: bool = False
+    """A newer finalized run of this exact artifact exists in the same owner family.
+
+    ``--allow-identical-rescore`` buys another seeded evaluation of the same
+    tarball as a separate ``agent_id``. If every such run competed on score, the
+    owner would be represented by the luckiest draw, and paying to re-roll would
+    be a lottery (SN-485). Instead the newest finalized run of one
+    ``(owner root, sha256)`` represents that content, and the older runs are
+    demoted behind every current row of the family
+    (:func:`~ditto.score_order.owner_family_key`). Distinct versions still
+    compete on score as before. Only a ranked run supersedes a ranked run: a
+    0.000, partial-profile or shadow rerun is a failed run, not a new draw.
+    Internal only. It never appears on a wire model.
+    """
 
 
 @dataclass(frozen=True)
@@ -1924,6 +1938,10 @@ async def list_eligible_ledger(
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
 
+    "Best" is across *distinct* artifacts. Identical-content reruns of one
+    artifact are represented by the newest finalized run, never the highest
+    (:attr:`LedgerRow.superseded_rerun`).
+
     ``diagnostic_*`` membership overrides are for the read-only ATH court
     projection only. They change no stored status. Authority callers leave
     both empty; the canonical quorum, shadow and confirmation gates still
@@ -1990,7 +2008,11 @@ async def list_eligible_ledger(
     2. join to ``agents`` filtered to ``scored``.
     3. after the canonical rows are materialized, rank them by the requested
        owner score and keep each attested payment owner root's first agent.
-       This also dedupes one owner across linked hotkeys and names.
+       This also dedupes one owner across linked hotkeys and names. Repeated
+       runs of one artifact (same owner root and ``sha256``) do not compete on
+       score: the newest finalized run represents that content and the older
+       runs are flagged :attr:`LedgerRow.superseded_rerun` and ranked behind
+       every current row (SN-485), so re-rolling is never a max over draws.
     4. before the losing generations are discarded, read the lineage's earliest
        band-equivalent arrival off them into the surviving row's
        :attr:`LedgerRow.crown_first_seen`. The owner family is the only place
@@ -2126,6 +2148,7 @@ async def list_eligible_ledger(
             EvaluationPayment.miner_coldkey.label("miner_coldkey"),
             _emission_owner_key().label("emission_owner"),
             Agent.created_at.label("first_seen"),
+            Agent.sha256.label("artifact_sha256"),
             case(
                 (Agent.agent_id.in_(diagnostic_scored_agent_ids), AgentStatus.SCORED),
                 else_=Agent.status,
@@ -2498,11 +2521,37 @@ async def list_eligible_ledger(
         )
         .cte("rooted_candidates")
     )
+    # SN-485: repeated runs of one artifact are sequential draws of the same
+    # content, not competing generations. The newest finalized run of each
+    # (owner root, sha256) represents that content; older runs are demoted
+    # behind every current row of the family. Without this, the owner-best
+    # selection below would take the MAX over identical-content re-rolls.
+    #
+    # Partitioned by ``eligible`` too. An unranked run (a 0.000 composite, a
+    # partial profile, a shadow upload) is a failed run rather than a draw on
+    # the score scale, so it never displaces a ranked run of the same bytes.
+    # That also keeps every Python consumer that filters to ``eligible`` before
+    # reducing the family on the same representative as this SQL selection.
+    rerun_marked = select(
+        rooted,
+        (
+            func.row_number().over(
+                partition_by=(
+                    rooted.c.owner_root,
+                    rooted.c.artifact_sha256,
+                    rooted.c.eligible,
+                ),
+                order_by=(rooted.c.first_seen.desc(), rooted.c.agent_id.desc()),
+            )
+            > 1
+        ).label("superseded_rerun"),
+    ).cte("rerun_marked_candidates")
     owner_order = owner_family_order_terms(
-        eligible=rooted.c.eligible,
-        composite=rooted.c.official_score,
-        first_seen=rooted.c.first_seen,
-        agent_id=rooted.c.agent_id,
+        eligible=rerun_marked.c.eligible,
+        composite=rerun_marked.c.official_score,
+        first_seen=rerun_marked.c.first_seen,
+        agent_id=rerun_marked.c.agent_id,
+        superseded=rerun_marked.c.superseded_rerun,
     )
     # Rank the owner's family once so a deduped read can serve one row per
     # owner. Weight and emission callers must not use this collapse on a pool
@@ -2511,9 +2560,9 @@ async def list_eligible_ledger(
     # it in the other order lets a deregistered best row win the family and
     # the later registration filter zeroes the linked owner.
     owner_ranked = select(
-        rooted,
+        rerun_marked,
         func.row_number()
-        .over(partition_by=rooted.c.owner_root, order_by=owner_order)
+        .over(partition_by=rerun_marked.c.owner_root, order_by=owner_order)
         .label("owner_rank"),
     ).cte("owner_ranked")
     # Resolve seniority *per row*, against the score that row defends — not
@@ -2848,6 +2897,7 @@ async def list_eligible_ledger(
             Score.dueling_season_id,
             Score.dueling,
             winners.c.crown_first_seen,
+            winners.c.superseded_rerun,
             *receipt_columns,
         )
         .select_from(winners)
@@ -3037,6 +3087,7 @@ async def list_eligible_ledger(
                 v9_confirmation=v9_confirmation,
                 dueling_season_id=row.dueling_season_id,
                 dueling=row.dueling,
+                superseded_rerun=bool(row.superseded_rerun),
             )
         )
     return ledger

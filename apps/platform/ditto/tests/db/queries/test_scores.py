@@ -21,7 +21,7 @@ from ditto.db.models import (
     Score,
 )
 from ditto.db.queries.confirmation_scores import confirmation_composites_by_seed
-from ditto.db.queries.score_ranking import official_composites
+from ditto.db.queries.score_ranking import dedupe_owner_rows, official_composites
 from ditto.db.queries.scores import (
     MIN_ELIGIBLE_CASES,
     count_ranked_quorum_agents,
@@ -262,13 +262,20 @@ async def _seed_scored(
     coldkey: str | None = None,
     name: str = "agent",
     shadow: bool = False,
+    sha256: str | None = None,
 ) -> Agent:
-    """Seed one agent + its score row, in the given lifecycle state."""
+    """Seed one agent + its score row, in the given lifecycle state.
+
+    Each agent gets its own artifact unless ``sha256`` is given: two seeded
+    generations are distinct versions, and only an explicit shared hash
+    models an ``--allow-identical-rescore`` rerun of the same bytes.
+    """
+    agent_id = uuid4()
     agent = Agent(
-        agent_id=uuid4(),
+        agent_id=agent_id,
         miner_hotkey=miner,
         name=name,
-        sha256="ab" * 32,
+        sha256=sha256 if sha256 is not None else agent_id.hex * 2,
         size_bytes=size_bytes,
         status=status,
         created_at=created_at,
@@ -399,6 +406,175 @@ class TestListEligibleLedger:
         ledger = await list_eligible_ledger(session)
 
         assert [row.agent_id for row in ledger] == [best.agent_id]
+
+    async def test_identical_rerun_replaces_the_earlier_draw_not_the_max(
+        self, session: AsyncSession
+    ) -> None:
+        """SN-485: re-rolling the same bytes is the latest run, never the best.
+
+        ``--allow-identical-rescore`` buys another seeded run of the same
+        tarball as a new ``agent_id``. If the owner-best selection compared
+        those runs on score, paying for reruns would keep the luckiest draw.
+        """
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        coldkey = "5ColdkeyOwner"
+        artifact = "c0" * 32
+        lucky = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.95,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        rerun = await _seed_scored(
+            session,
+            miner=_MINER_B,
+            coldkey=coldkey,
+            composite=0.90,
+            created_at=t0 + timedelta(hours=1),
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+
+        ledger = await list_eligible_ledger(session)
+        internal = {
+            row.agent_id: row
+            for row in await list_eligible_ledger(session, dedupe_owners=False)
+        }
+
+        assert [(row.agent_id, row.official_composite) for row in ledger] == [
+            (rerun.agent_id, pytest.approx(0.90))
+        ]
+        assert not ledger[0].superseded_rerun
+        assert internal[lucky.agent_id].superseded_rerun
+        assert not internal[rerun.agent_id].superseded_rerun
+        # The Python owner reduction every ranking surface applies to the
+        # undeduplicated read lands on the same row as the SQL reduction.
+        reduced = dedupe_owner_rows(
+            list(internal.values()),
+            scores={row.agent_id: row.composite for row in internal.values()},
+        )
+        assert [row.agent_id for row in reduced] == [rerun.agent_id]
+
+    async def test_distinct_version_still_beats_a_lower_identical_rerun(
+        self, session: AsyncSession
+    ) -> None:
+        """Only reruns of one artifact are collapsed; versions compete on score."""
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        coldkey = "5ColdkeyOwner"
+        artifact = "c1" * 32
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.97,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        distinct = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.93,
+            created_at=t0 + timedelta(hours=1),
+            n=MIN_ELIGIBLE_CASES,
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.91,
+            created_at=t0 + timedelta(hours=2),
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+
+        ledger = await list_eligible_ledger(session)
+
+        # The 0.97 draw is superseded by its own 0.91 rerun, so the distinct
+        # 0.93 version is the owner's best current artifact.
+        assert [row.agent_id for row in ledger] == [distinct.agent_id]
+
+    async def test_unranked_rerun_does_not_replace_a_ranked_run(
+        self, session: AsyncSession
+    ) -> None:
+        """A failed rerun (0.000 or partial profile) is not a new draw."""
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        coldkey = "5ColdkeyOwner"
+        artifact = "c2" * 32
+        ranked = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.92,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        zero = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.0,
+            created_at=t0 + timedelta(hours=1),
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        partial = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey=coldkey,
+            composite=0.99,
+            created_at=t0 + timedelta(hours=2),
+            n=MIN_ELIGIBLE_CASES - 1,
+            sha256=artifact,
+        )
+
+        ledger = await list_eligible_ledger(session)
+        internal = {
+            row.agent_id: row
+            for row in await list_eligible_ledger(session, dedupe_owners=False)
+        }
+
+        assert [row.agent_id for row in ledger] == [ranked.agent_id]
+        assert ledger[0].eligible
+        assert not internal[ranked.agent_id].superseded_rerun
+        # The two unranked runs supersede each other only, never the ranked one.
+        assert internal[zero.agent_id].superseded_rerun
+        assert not internal[partial.agent_id].superseded_rerun
+
+    async def test_identical_artifacts_of_different_owners_stay_separate(
+        self, session: AsyncSession
+    ) -> None:
+        """Superseding is per owner family. Another owner's copy is moderation's."""
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        artifact = "c3" * 32
+        first = await _seed_scored(
+            session,
+            miner=_MINER,
+            coldkey="5ColdkeyA",
+            composite=0.95,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+        second = await _seed_scored(
+            session,
+            miner=_MINER_B,
+            coldkey="5ColdkeyB",
+            composite=0.90,
+            created_at=t0 + timedelta(hours=1),
+            n=MIN_ELIGIBLE_CASES,
+            sha256=artifact,
+        )
+
+        ledger = await list_eligible_ledger(session)
+
+        assert [row.agent_id for row in ledger] == [first.agent_id, second.agent_id]
+        assert not any(row.superseded_rerun for row in ledger)
 
     async def test_official_score_can_replace_a_lucky_family_incumbent(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch

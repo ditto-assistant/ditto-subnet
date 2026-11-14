@@ -362,6 +362,13 @@ The existing explicit `--allow-identical-rescore` option still permits buying
 another seeded evaluation after the owner cooldown. Exact recovery of a
 previously paid upload continues to return its original submission identity.
 
+A rescore is a re-run, not a lottery ticket. Once the new run of the same bytes
+finalizes with a ranked score, it represents that artifact on the leaderboard,
+the crown, and the weight ledger, even when it scored lower than the earlier
+run. The earlier run stays on the public record but no longer ranks or earns.
+A run that finalizes unranked (0.000, a partial profile, or shadow mode) does
+not replace a ranked run of the same bytes.
+
 ## Track your submission
 
 ```sh
@@ -433,7 +440,9 @@ frequent harder versions, is the main defence against overfitting.
 - Grading is deterministic and judge-free. Tool and memory means contribute
   equally to the composite; bounded efficiency, consistency, and integrity
   checks can reduce it.
-- Each miner competes with its highest eligible score. A challenger dethrones
+- Each miner competes with its highest eligible score across distinct
+  versions. Repeated runs of byte-identical source count only the latest
+  ranked run. A challenger dethrones
   the incumbent only after clearing the greater of a fixed 0.007 composite-point
   hysteresis and the statistical error band. Shared-seed uncertainty may raise
   that bar, but not above twice the 0.007 gate — a 3-seed outlier cannot demand
@@ -995,7 +1004,9 @@ few seconds, not a deadline.
 to version an agent (`v1`, `v2`, and so on); a different name starts a new
 series. Every upload pays its own fee, and your highest eligible version
 represents your hotkey, so a lower-scoring or failed update never replaces your
-current best. The CLI saves the name after a successful upload and reuses it as
+current best. Byte-identical reruns (`--allow-identical-rescore`) are the
+exception: the latest ranked run of those bytes stands for them, whatever it
+scored. The CLI saves the name after a successful upload and reuses it as
 that hotkey's default.
 
 **What earns emissions?** A material, reproducible improvement over the current
