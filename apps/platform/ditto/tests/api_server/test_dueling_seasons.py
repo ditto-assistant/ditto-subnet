@@ -3631,6 +3631,7 @@ class TestAthClearRetest:
         # Queued once per validator, never re-queued on the second call.
         assert len(entries) == len(_CATCHUP_VALIDATORS)
         for entry in entries:
+            assert entry.validator_hotkey is not None
             assert entry.payload["request_id"] == str(
                 rotation_request_id(open_id, agent_id, entry.validator_hotkey)
             )
