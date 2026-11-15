@@ -884,9 +884,10 @@ miners read.
 Backroom cannot write the announcement. It is an operator write through the
 Platform admin API (`POST /api/v1/admin/submission-settings` with
 `readmission_announced_at`, which appends `; READMISSION ANNOUNCED
-<UTC>Z` to the phrase). Omitting it carries it forward, so
-`set_submission_cooldown` never changes it, and clearing it (`null`, `;
-READMISSION ANNOUNCEMENT CLEARED`) is the kill switch.
+<UTC>Z` to the phrase). Omitting it or sending `null` carries it forward, so
+`set_submission_cooldown` never changes it. Clearing it
+(`clear_readmission_announcement: true`, `; READMISSION ANNOUNCEMENT CLEARED`)
+is the kill switch.
 
 ## Upload payment proofs
 

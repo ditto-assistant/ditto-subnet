@@ -178,15 +178,30 @@ async def create_settings_revision(
             competition: policy.model_dump()
             for competition, policy in payload.competition_fees.items()
         }
-    # The readmission announcement carries forward unless the request names
-    # it; an explicit null clears it. Only a changed date is validated, so a
-    # later cooldown or fee write never trips over an older announcement.
+    # The readmission announcement carries forward unless the request sets a
+    # date or asks to clear it: a client that serializes the whole model
+    # sends null, which must never change it. Only a changed date is
+    # validated, so a later cooldown or fee write never trips over an older
+    # announcement.
     current_announced_at = latest.readmission_announced_at if latest else None
-    announcement_sent = "readmission_announced_at" in payload.model_fields_set
+    if (
+        payload.readmission_announced_at is not None
+        and payload.clear_readmission_announcement
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="set readmission_announced_at or clear it, not both",
+        )
+    announcement_sent = (
+        payload.readmission_announced_at is not None
+        or payload.clear_readmission_announcement
+    )
     readmission_announced_at = current_announced_at
-    if announcement_sent:
+    if payload.clear_readmission_announcement:
+        readmission_announced_at = None
+    elif payload.readmission_announced_at is not None:
         readmission_announced_at = payload.readmission_announced_at
-        if readmission_announced_at is not None and (
+        if (
             readmission_announced_at.tzinfo is None
             or readmission_announced_at != current_announced_at
         ):

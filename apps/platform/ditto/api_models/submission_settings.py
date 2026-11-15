@@ -175,11 +175,15 @@ class AdminSubmissionSettingsRequest(BaseModel):
     current one forward unchanged. ``{}`` clears every override. Sending it
     adds the overrides to the confirmation phrase."""
     readmission_announced_at: Annotated[datetime | None, Field(strict=False)] = None
-    """Omitted: carry the current announcement forward unchanged. A
+    """``null`` (or omitted): carry the current announcement forward unchanged,
+    so a client that serializes the whole model never touches it. A
     timezone-aware time: record that announcement (at most an hour in the
-    past, at most 30 days ahead). Explicit ``null``: clear it, which turns
-    readmission off. Sending the field adds it to the confirmation phrase
-    (:func:`readmission_announcement_confirmation`)."""
+    past, at most 30 days ahead); it adds ``; READMISSION ANNOUNCED <UTC>Z``
+    to the confirmation phrase."""
+    clear_readmission_announcement: bool = False
+    """Clear the announcement, which turns readmission off at once (the kill
+    switch); adds ``; READMISSION ANNOUNCEMENT CLEARED`` to the phrase.
+    Refused together with ``readmission_announced_at``."""
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str

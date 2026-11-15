@@ -60,12 +60,14 @@ def _write(
         "actor": "operator@example.com",
     }
     phrase = f"SET SUBMISSION COOLDOWN 3600 SECONDS FEE {fee} RAO"
-    if announcement is not ...:
+    if announcement is None:
+        body["clear_readmission_announcement"] = True
+        phrase += readmission_announcement_confirmation(None)
+    elif announcement is not ...:
         body["readmission_announced_at"] = announcement
-        parsed = (
-            None if announcement is None else datetime.fromisoformat(str(announcement))
+        phrase += readmission_announcement_confirmation(
+            datetime.fromisoformat(str(announcement))
         )
-        phrase += readmission_announcement_confirmation(parsed)
     body["confirmation"] = confirmation if confirmation is not None else phrase
     return body
 
@@ -135,6 +137,16 @@ async def test_announcement_needs_its_phrase_and_carries_forward(
     assert datetime.fromisoformat(readmission["effective_at"]) == (
         announced + timedelta(days=7)
     )
+
+    # A write that sends the whole model with a null announcement keeps it.
+    nulled = _write(revision + 1, fee=75_000_000)
+    nulled["readmission_announced_at"] = None
+    kept = await client.post(_URL, headers=_HEADERS, json=nulled)
+    assert kept.status_code == 200, kept.text
+    assert datetime.fromisoformat(kept.json()["readmission_announced_at"]) == (
+        announced
+    )
+    revision += 1
 
     # A later cooldown/fee write that never names the field keeps it, and
     # the legacy phrase still works for such a write.
@@ -210,3 +222,16 @@ async def test_public_memory_terms_report_the_readmission_state(
     )
     assert any("upload fee" in rule for rule in readmission["rules"])
     assert terms["generator"]["readmission"] is None
+
+
+async def test_setting_and_clearing_together_is_refused(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    revision = (await _current(client))["current"]["revision"]  # type: ignore[index]
+    body = _write(revision, fee=75_000_000, announcement=datetime.now(UTC).isoformat())
+    body["clear_readmission_announcement"] = True
+    resp = await client.post(_URL, headers=_HEADERS, json=body)
+    assert resp.status_code == 422, resp.text

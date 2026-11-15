@@ -16718,6 +16718,11 @@ export interface components {
              * @default admin_api
              */
             actor: string;
+            /**
+             * Clear Readmission Announcement
+             * @default false
+             */
+            clear_readmission_announcement: boolean;
             /** Competition Fees */
             competition_fees?: {
                 [key: string]: components["schemas"]["CompetitionFeePolicy"];
