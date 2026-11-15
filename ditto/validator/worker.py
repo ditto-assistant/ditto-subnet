@@ -19,6 +19,7 @@ import contextvars
 import inspect
 import logging
 import math
+import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -221,6 +222,7 @@ if TYPE_CHECKING:
     from ditto.validator.platform import PlatformClient
     from ditto.validator.stack_health import StackHealthCollector
 
+from ditto.validator.platform import last_job_decline_reason
 from ditto.validator.weight_receipts import WeightReceiptRelay
 
 logger = logging.getLogger(__name__)
@@ -684,6 +686,41 @@ _IDLE_SWEEP_MAX_SECONDS = 300.0
 # (normally seconds, Retry-After 15s), so a few waits cover a fresh seed, while
 # a preparation stuck behind operator review cannot keep the slot spinning.
 _JOB_RETRY_LATER_MAX_CONSECUTIVE = 6
+# A 204 ``allocator_busy`` means another job transaction held Platform's
+# dispatch fence: the queue was never read, and the fence clears in
+# milliseconds. Retry the same slot soon, on its own jittered exponential
+# backoff, instead of waking every sibling into the same held fence.
+_ALLOCATOR_BUSY_BACKOFF_BASE_SECONDS = 1.0
+_ALLOCATOR_BUSY_BACKOFF_MAX_SECONDS = 15.0
+# After the generator-round lane comes back empty, no slot asks it again for
+# one idle repoll interval (``_IDLE_SLOT_REPOLL_SECONDS``). Every empty
+# canonical poll could otherwise elect a new round dispatcher, and because each
+# empty round poll also woke every waiting sibling, an idle host re-polled
+# ``/validator/job`` in a loop bounded only by round-poll latency.
+#
+# Spread of each idle wait around its nominal interval, and the most a slot
+# waits (as a share of that interval) after a sibling's lease change wakes it,
+# so a host's idle slots do not reach Platform's one dispatch fence together.
+_IDLE_REPOLL_JITTER_FRACTION = 0.25
+_WAKE_STAGGER_FRACTION = 1 / 15
+
+
+def _allocator_busy_backoff_seconds(streak: int) -> float:
+    """Full-jitter exponential backoff for the ``streak``-th busy in a row."""
+    # Capped before exponentiation: a long busy streak must not overflow the
+    # float conversion (2**1024) and crash the slot.
+    exponent = min(max(0, streak - 1), 32)
+    ceiling = min(
+        _ALLOCATOR_BUSY_BACKOFF_MAX_SECONDS,
+        _ALLOCATOR_BUSY_BACKOFF_BASE_SECONDS * 2**exponent,
+    )
+    return random.uniform(ceiling / 2, ceiling)
+
+
+def _jittered(seconds: float) -> float:
+    spread = seconds * _IDLE_REPOLL_JITTER_FRACTION
+    return max(0.0, random.uniform(seconds - spread, seconds + spread))
+
 
 # Must stay exhaustive over ``BenchmarkProgressStage``: a missing stage raises
 # KeyError in ``_publish_benchmark_progress``, which the fail-open telemetry
@@ -1056,6 +1093,7 @@ class ValidatorWorker:
         )
         self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
+        self._scorer_narrowing_logged: tuple[int, int] | None = None
         self._scorer_runs_generator_rounds = False
         self._scorer_runs_frontier_oracle = False
         self._scorer_round_bench_versions = LEGACY_SCORER_ROUND_BENCH_VERSIONS
@@ -1343,6 +1381,9 @@ class ValidatorWorker:
             # is in flight per host; Platform decides whether a slot may take
             # it (it reserves round capacity per validator).
             round_dispatching = False
+            # Monotonic time before which no slot asks the round lane again,
+            # set when it last came back empty.
+            round_lane_quiet_until = 0.0
             # Set whenever a claim resolves or a slot finishes a lease, so a
             # waiting slot re-polls the instant the pool changes instead of
             # sitting out the interval. Cleared and read under ``budget_lock``
@@ -1358,10 +1399,12 @@ class ValidatorWorker:
                 nonlocal claimed, pending_claims, retest_dispatching
                 nonlocal retest_work_claimed, round_dispatching
                 nonlocal retests_dispatched, running, idle_since
+                nonlocal round_lane_quiet_until
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
                 retry_laters = 0
+                allocator_busy_streak = 0
                 token = _CURRENT_SLOT.set(slot_id)
                 try:
                     while not self._new_work_blocked(stop_requested, drain_requested):
@@ -1421,6 +1464,45 @@ class ValidatorWorker:
                             slot_failed += 1
                             break
                         retry_laters = 0
+                        if (
+                            job is None
+                            and last_job_decline_reason() == "allocator_busy"
+                        ):
+                            # Platform never read the queue for this poll. It
+                            # is neither an empty queue (no retest or round
+                            # election) nor a lease change (no sibling wakeup).
+                            async with budget_lock:
+                                claimed -= 1
+                                pending_claims -= 1
+                                if not (running or pending_claims):
+                                    # Let a sibling waiting on this last claim
+                                    # settle and decide whether to retire.
+                                    lease_state_changed.set()
+                                busy_sweep_expired = bool(
+                                    not running
+                                    and not retest_dispatching
+                                    and not round_dispatching
+                                    and time.monotonic() - idle_since
+                                    >= _IDLE_SWEEP_MAX_SECONDS
+                                )
+                            if busy_sweep_expired:
+                                break
+                            allocator_busy_streak += 1
+                            backoff = _allocator_busy_backoff_seconds(
+                                allocator_busy_streak
+                            )
+                            logger.debug(
+                                "job request for %s hit a busy allocator (%d in "
+                                "a row); retrying in %.2fs",
+                                slot_id,
+                                allocator_busy_streak,
+                                backoff,
+                            )
+                            await self._sleep_or_interrupt(
+                                backoff, stop_requested, drain_requested
+                            )
+                            continue
+                        allocator_busy_streak = 0
                         if job is None:
                             async with budget_lock:
                                 claimed -= 1
@@ -1446,6 +1528,7 @@ class ValidatorWorker:
                                     not dispatch_retests
                                     and not round_dispatching
                                     and self._scorer_runs_generator_rounds
+                                    and time.monotonic() >= round_lane_quiet_until
                                 )
                                 if dispatch_round:
                                     round_dispatching = True
@@ -1483,13 +1566,28 @@ class ValidatorWorker:
                                         retest_dispatching = False
                                         if retest_claimed:
                                             idle_since = time.monotonic()
-                                        lease_state_changed.set()
+                                        # An empty lane changed nothing a
+                                        # waiting sibling could claim; waking
+                                        # them all only sends them into the
+                                        # dispatch fence together. Wake them
+                                        # when work settled or when this was
+                                        # the last thing keeping them waiting.
+                                        if retest_claimed or not (
+                                            running
+                                            or pending_claims
+                                            or round_dispatching
+                                        ):
+                                            lease_state_changed.set()
                                 if not retest_claimed:
                                     # No retest: this slot may still ask for
                                     # round work, so a single-slot host is not
                                     # left without a round dispatcher.
                                     async with budget_lock:
-                                        take_round = not round_dispatching
+                                        take_round = (
+                                            not round_dispatching
+                                            and time.monotonic()
+                                            >= round_lane_quiet_until
+                                        )
                                         if take_round:
                                             round_dispatching = True
                                     if take_round:
@@ -1503,7 +1601,15 @@ class ValidatorWorker:
                                         finally:
                                             async with budget_lock:
                                                 round_dispatching = False
-                                                lease_state_changed.set()
+                                                if not retest_claimed:
+                                                    round_lane_quiet_until = (
+                                                        time.monotonic()
+                                                        + _IDLE_SLOT_REPOLL_SECONDS
+                                                    )
+                                                if retest_claimed or not (
+                                                    running or pending_claims
+                                                ):
+                                                    lease_state_changed.set()
                                 if retest_claimed:
                                     # The dispatcher itself becomes free only
                                     # after its retest work settles. Ask for
@@ -1528,7 +1634,20 @@ class ValidatorWorker:
                                         round_dispatching = False
                                         if round_claimed:
                                             idle_since = time.monotonic()
-                                        lease_state_changed.set()
+                                        else:
+                                            round_lane_quiet_until = (
+                                                time.monotonic()
+                                                + _IDLE_SLOT_REPOLL_SECONDS
+                                            )
+                                        # Same rule as the retest lane: an
+                                        # empty round poll wakes nobody unless
+                                        # it was the last thing in flight.
+                                        if round_claimed or not (
+                                            running
+                                            or pending_claims
+                                            or retest_dispatching
+                                        ):
+                                            lease_state_changed.set()
                                 if round_claimed:
                                     # The round run has settled; ask for
                                     # ordinary work before anything else.
@@ -1558,12 +1677,25 @@ class ValidatorWorker:
                             # platform's cap is set. The queue refills constantly
                             # (quorum openings, expiries, new submissions), so wait
                             # and ask again instead of leaving the sweep.
-                            await self._sleep_or_interrupt(
-                                _IDLE_SLOT_REPOLL_SECONDS,
+                            woken = await self._sleep_or_interrupt(
+                                _jittered(_IDLE_SLOT_REPOLL_SECONDS),
                                 stop_requested,
                                 drain_requested,
                                 lease_state_changed,
                             )
+                            if woken:
+                                # Every waiting sibling woke on the same event;
+                                # stagger them so they do not reach Platform's
+                                # one dispatch fence in the same instant.
+                                await self._sleep_or_interrupt(
+                                    random.uniform(
+                                        0,
+                                        _IDLE_SLOT_REPOLL_SECONDS
+                                        * _WAKE_STAGGER_FRACTION,
+                                    ),
+                                    stop_requested,
+                                    drain_requested,
+                                )
                             async with budget_lock:
                                 no_retest_work = bool(
                                     retests_dispatched
@@ -1797,23 +1929,33 @@ class ValidatorWorker:
         if self._admission != "accepting":
             return set()
         scorer_capacity = int(getattr(self._dittobench, "full_run_capacity", 1))
+        capacity = scorer_capacity
         memory_slots = self._memory_admitted_slots()
-        if memory_slots is not None and memory_slots < scorer_capacity:
-            scorer_capacity = memory_slots
+        if memory_slots is not None and memory_slots < capacity:
+            # Host memory binds; ``_memory_admitted_slots`` already logs it.
+            capacity = memory_slots
         unblocked = sorted(
             slot_id
             for slot_id in self._slots
             if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
         )
-        if scorer_capacity < len(self._slots):
+        # Keyed on both counts the message names, so a memory change under a
+        # steady scorer mismatch still logs the new effective slot count.
+        narrowed = (
+            (scorer_capacity, capacity) if scorer_capacity < len(self._slots) else None
+        )
+        # Every heartbeat re-asks this, so log the scorer mismatch when it
+        # changes, not once per heartbeat for as long as it lasts.
+        if narrowed is not None and narrowed != self._scorer_narrowing_logged:
             logger.warning(
                 "configured validator capacity %s exceeds scorer capacity %s; "
-                "running the scorer's %s slot(s) until the stack agrees",
+                "running %s slot(s) until the stack agrees",
                 len(self._slots),
                 scorer_capacity,
-                scorer_capacity,
+                capacity,
             )
-        return set(unblocked[:scorer_capacity])
+        self._scorer_narrowing_logged = narrowed
+        return set(unblocked[:capacity])
 
     def _memory_admitted_slots(self) -> int | None:
         """Slots whose harness caps fit in host memory less the reserve.
@@ -6070,7 +6212,7 @@ class ValidatorWorker:
     @staticmethod
     async def _sleep_or_interrupt(
         seconds: float, *events: asyncio.Event | None
-    ) -> None:
+    ) -> bool:
         """Sleep up to ``seconds``, returning early if any event is set.
 
         The in-sweep twin of :meth:`_sleep_or_stop_or_drain`, which requires a
@@ -6078,17 +6220,22 @@ class ValidatorWorker:
         are optional, so a waiting slot has to tolerate having neither and still
         honour whichever it was given -- otherwise an idle slot's wait would add
         its full duration to every shutdown and drain.
+
+        Returns whether an event ended the wait, decided before the cleanup
+        below yields: a sibling may clear a shared event during that await, so
+        re-reading it afterwards can miss the wakeup.
         """
         waits = [
             asyncio.create_task(event.wait()) for event in events if event is not None
         ]
         if not waits:
             await asyncio.sleep(seconds)
-            return
+            return False
         try:
-            await asyncio.wait(
+            done, _pending = await asyncio.wait(
                 waits, timeout=seconds, return_when=asyncio.FIRST_COMPLETED
             )
+            return bool(done)
         finally:
             for task in waits:
                 task.cancel()

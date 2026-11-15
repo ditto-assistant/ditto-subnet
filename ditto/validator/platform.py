@@ -9,6 +9,7 @@ signature. It never touches the platform DB directly.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import logging
 import math
@@ -330,6 +331,28 @@ def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
     return evidence
 
 
+# Platform names the gate behind each lease-lane 204 in this header. Set in
+# the awaiting task's own context, so concurrent slots never read each other's.
+JOB_DECLINE_REASON_HEADER = "X-Ditto-Decline-Reason"
+_JOB_DECLINE_REASON: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "validator_job_decline_reason", default=None
+)
+_DECLINE_REASON_PATTERN = re.compile(r"[a-z0-9_]{1,64}")
+
+
+def last_job_decline_reason() -> str | None:
+    """Why this task's most recent ``request_job`` 204 was declined, if known.
+
+    ``None`` when the last call was not a 204, or Platform predates the header.
+    """
+    return _JOB_DECLINE_REASON.get()
+
+
+def _decline_reason(resp: httpx.Response) -> str | None:
+    raw = resp.headers.get(JOB_DECLINE_REASON_HEADER, "").strip()
+    return raw if _DECLINE_REASON_PATTERN.fullmatch(raw) else None
+
+
 def _job_retry_after_seconds(response: httpx.Response) -> float | None:
     """A 503's delta-seconds ``Retry-After``, clamped; ``None`` if unusable.
 
@@ -462,8 +485,10 @@ class PlatformClient:
         POST /validator/job issues at most :data:`SCORING_QUORUM` tickets per
         agent to distinct validators, so most calls return 204. A returned ticket
         carries the pinned dataset (``seed`` + ``dataset_sha256`` + ``run_size``)
-        and the ``deadline`` to score by.
+        and the ``deadline`` to score by. After a 204, :func:`last_job_decline_reason`
+        names the gate Platform declined it at, when Platform said.
         """
+        _JOB_DECLINE_REASON.set(None)
         url = f"{self._base}{_PREFIX}/job"
         requested_at = datetime.now(UTC)
         nonce = uuid4()
@@ -487,6 +512,7 @@ class PlatformClient:
         except httpx.HTTPError as e:
             raise PlatformError(f"job request failed: {e}") from e
         if resp.status_code == 204:
+            _JOB_DECLINE_REASON.set(_decline_reason(resp))
             return None
         if resp.status_code == 428:
             # The compatibility gate wants a fresh signed heartbeat. Typed so the
