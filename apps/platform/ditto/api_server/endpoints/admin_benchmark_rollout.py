@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import asdict
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -743,6 +743,10 @@ class AdminStrandedAdmissionRequest(BaseModel):
         str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-fA-F]{64}$")
     ]
     expected_previous_score_count: int = Field(ge=1)
+    category: Literal["ditto_fault", "owner_policy"] | None = None
+    """Why this free admission is granted, audited so free admissions can be
+    counted against paid readmissions (SN-485). Omitted reads as
+    ``unspecified``."""
 
 
 class StrandedAdmissionTicketRow(BaseModel):
@@ -765,6 +769,15 @@ class StrandedAdmissionRow(BaseModel):
     admitted_at: datetime
     actor: str | None
     reason: str | None
+    origin: str = "operator_stranded_admission"
+    """``operator_stranded_admission`` (free, operator) or ``paid_readmission``
+    (the miner's self-serve paid readmission)."""
+    category: str | None = None
+    """``ditto_fault``, ``owner_policy``, ``unspecified`` or ``paid``; null on
+    an admission from before SN-485."""
+    payment_ref: dict[str, Any] | None = None
+    """For a paid readmission: the proof (``block_hash``,
+    ``extrinsic_index``), ``amount_rao`` and ``funding``."""
     position: int | None
     agent_sha256: str | None
     previous_bench_version: int | None
@@ -887,6 +900,7 @@ async def admit_stranded_previous_era(
             expected_previous_score_count=payload.expected_previous_score_count,
             actor=payload.actor,
             reason=payload.reason,
+            category=payload.category or "unspecified",
         )
     except StrandedAgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

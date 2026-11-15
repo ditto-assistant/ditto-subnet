@@ -121,12 +121,23 @@ func (q *Queries) GetSameHotkeyAgentBySHA(ctx context.Context, arg GetSameHotkey
 }
 
 const getSubmissionLatestPaidCreatedAt = `-- name: GetSubmissionLatestPaidCreatedAt :one
-SELECT max(a.created_at)::timestamptz
-FROM agents AS a
-JOIN evaluation_payments AS p ON p.agent_id = a.agent_id
-WHERE p.miner_coldkey = $1
+SELECT GREATEST(
+    (
+        SELECT max(a.created_at)
+        FROM agents AS a
+        JOIN evaluation_payments AS p ON p.agent_id = a.agent_id
+        WHERE p.miner_coldkey = $1
+    ),
+    (
+        SELECT max(r.updated_at)
+        FROM readmission_payments AS r
+        WHERE r.miner_coldkey = $1 AND r.outcome = 'admitted'
+    )
+)::timestamptz
 `
 
+// The coldkey's newest paid upload or admitted readmission: a readmission
+// counts toward, and starts, the same cooldown (SN-485). GREATEST skips NULL.
 func (q *Queries) GetSubmissionLatestPaidCreatedAt(ctx context.Context, minerColdkey string) (pgtype.Timestamptz, error) {
 	row := q.db.QueryRow(ctx, getSubmissionLatestPaidCreatedAt, minerColdkey)
 	var column_1 pgtype.Timestamptz

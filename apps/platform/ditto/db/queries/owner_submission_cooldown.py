@@ -30,6 +30,7 @@ from ditto.db.models import (
     Agent,
     EvaluationPayment,
     OwnerSubmissionCooldownRevision,
+    ReadmissionPayment,
     UploadAdmissionReservation,
 )
 
@@ -198,13 +199,49 @@ async def active_overrides_for(
     return [row for row in newest.values() if override_state(row, now=now) == "active"]
 
 
+async def latest_readmission_at(
+    session: AsyncSession,
+    *,
+    miner_coldkey: str | None,
+    miner_hotkey: str | None = None,
+) -> datetime | None:
+    """The newest admitted readmission by the hotkey or paid by the coldkey.
+
+    A readmission counts toward, and starts, the same owner cooldown as an
+    upload (SN-485 O4). ``updated_at`` is when it was admitted: a credit
+    spent on a readmission flips an older row.
+    """
+    clauses = []
+    if miner_hotkey:
+        clauses.append(ReadmissionPayment.miner_hotkey == miner_hotkey)
+    if miner_coldkey:
+        clauses.append(ReadmissionPayment.miner_coldkey == miner_coldkey)
+    if not clauses:
+        return None
+    latest = await session.scalar(
+        select(func.max(ReadmissionPayment.updated_at)).where(
+            ReadmissionPayment.outcome == "admitted", or_(*clauses)
+        )
+    )
+    return None if latest is None else _utc(latest)
+
+
+def _later(first: datetime | None, second: datetime | None) -> datetime | None:
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return max(first, second)
+
+
 async def owner_latest_submission_at(
     session: AsyncSession,
     *,
     miner_coldkey: str | None,
     miner_hotkey: str | None,
 ) -> datetime | None:
-    """The newest submission by the hotkey or paid by the coldkey."""
+    """The newest submission (upload or readmission) by the hotkey or paid by
+    the coldkey."""
     clauses = []
     if miner_hotkey:
         clauses.append(Agent.miner_hotkey == miner_hotkey)
@@ -223,7 +260,12 @@ async def owner_latest_submission_at(
     latest = await session.scalar(
         select(func.max(Agent.created_at)).where(or_(*clauses))
     )
-    return None if latest is None else _utc(latest)
+    return _later(
+        None if latest is None else _utc(latest),
+        await latest_readmission_at(
+            session, miner_coldkey=miner_coldkey, miner_hotkey=miner_hotkey
+        ),
+    )
 
 
 async def identity_latest_submission_at(
@@ -267,7 +309,14 @@ async def identity_latest_submission_at(
         )
         predicate = or_(paid_by_key, Agent.miner_hotkey.in_(linked_hotkeys))
     latest = await session.scalar(select(func.max(Agent.created_at)).where(predicate))
-    latest = None if latest is None else _utc(latest)
+    latest = _later(
+        None if latest is None else _utc(latest),
+        await latest_readmission_at(
+            session,
+            miner_coldkey=owner_key if scope == "coldkey" else None,
+            miner_hotkey=owner_key if scope == "hotkey" else None,
+        ),
+    )
     if scope == "hotkey":
         # Enforcement counts another coldkey's live reservation on this hotkey
         # as a submission in flight; report the same bound.
@@ -351,6 +400,7 @@ async def owner_override_retry_at(
 
 __all__ = [
     "MAX_OWNER_COOLDOWN_EXPIRY_DAYS",
+    "latest_readmission_at",
     "MAX_OWNER_COOLDOWN_SECONDS",
     "MIN_OWNER_COOLDOWN_SECONDS",
     "OverrideState",

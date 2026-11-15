@@ -48,6 +48,7 @@ from ditto.db.queries.benchmark_admission import (
 )
 from ditto.db.queries.owner_submission_cooldown import (
     OwnerCooldownNotice,
+    latest_readmission_at,
     lock_owner_cooldown_hotkey,
     owner_override_retry_at,
 )
@@ -94,6 +95,10 @@ class SubmissionCooldownDecision:
         )
 
 
+def _as_aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
 # Avoid importing ``queries.scores`` back into the agents module it already
 # imports. The public projection is the same fixed k=3 contract as the API.
 _PUBLIC_SCORE_QUORUM = 3
@@ -106,12 +111,19 @@ async def get_submission_retry_at(
     cooldown: timedelta,
     now: datetime | None = None,
 ) -> datetime | None:
-    """Return the next allowed submission time, or ``None`` when eligible."""
+    """Return the next allowed submission time, or ``None`` when eligible.
+
+    Measured from the coldkey's newest paid upload or admitted readmission:
+    a readmission counts toward, and starts, the same cooldown (SN-485).
+    """
     latest = await session.scalar(
         select(func.max(Agent.created_at))
         .join(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
         .where(EvaluationPayment.miner_coldkey == miner_coldkey)
     )
+    readmitted = await latest_readmission_at(session, miner_coldkey=miner_coldkey)
+    if readmitted is not None and (latest is None or readmitted > _as_aware(latest)):
+        latest = readmitted
     if latest is None:
         return None
 

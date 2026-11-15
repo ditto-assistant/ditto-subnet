@@ -40,7 +40,7 @@ from __future__ import annotations
 import statistics
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -77,7 +77,14 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 EVENT_STRANDED_ADMITTED = "stranded_admitted"
-ORIGIN_STRANDED_ADMISSION = "operator_stranded_admission"
+AdmissionOrigin = Literal["operator_stranded_admission", "paid_readmission"]
+ORIGIN_STRANDED_ADMISSION: Final = "operator_stranded_admission"
+ORIGIN_PAID_READMISSION: Final = "paid_readmission"
+"""A miner's self-serve paid readmission (SN-485); the same write, paid."""
+AdmissionCategory = Literal["ditto_fault", "owner_policy", "unspecified", "paid"]
+"""Why an admission happened, so free admissions can be counted against paid
+ones: an operator's ``ditto_fault`` or ``owner_policy`` (``unspecified`` when
+the operator gave none), or ``paid`` for a readmission."""
 
 
 class StrandedAgentNotFoundError(LookupError):
@@ -216,6 +223,9 @@ async def append_stranded_admission(
     actor: str,
     reason: str,
     now: datetime,
+    origin: AdmissionOrigin = ORIGIN_STRANDED_ADMISSION,
+    category: AdmissionCategory = "unspecified",
+    payment_ref: dict[str, Any] | None = None,
 ) -> BenchmarkRolloutMember:
     """Admit ``target`` onto its activated rollout. One agent per call.
 
@@ -291,7 +301,9 @@ async def append_stranded_admission(
         rollout,
         EVENT_STRANDED_ADMITTED,
         {
-            "origin": ORIGIN_STRANDED_ADMISSION,
+            "origin": origin,
+            "category": category,
+            "payment_ref": payment_ref,
             "actor": actor,
             "reason": reason,
             "agent_id": str(agent.agent_id),
@@ -348,6 +360,11 @@ class StrandedAdmissionEffect:
     admitted_at: datetime
     actor: str | None
     reason: str | None
+    origin: str
+    """``operator_stranded_admission`` or ``paid_readmission``; an audit row
+    from before SN-485 reads as the operator path it was."""
+    category: str | None
+    payment_ref: dict[str, Any] | None
     position: int | None
     agent_sha256: str | None
     previous_bench_version: int | None
@@ -475,6 +492,9 @@ async def stranded_admissions(
                 admitted_at=admitted_at,
                 actor=payload.get("actor"),
                 reason=payload.get("reason"),
+                origin=str(payload.get("origin") or ORIGIN_STRANDED_ADMISSION),
+                category=payload.get("category"),
+                payment_ref=payload.get("payment_ref"),
                 position=payload.get("position"),
                 agent_sha256=payload.get("agent_sha256"),
                 previous_bench_version=payload.get("previous_bench_version"),
@@ -515,7 +535,10 @@ async def stranded_admissions(
 
 __all__ = [
     "EVENT_STRANDED_ADMITTED",
+    "ORIGIN_PAID_READMISSION",
     "ORIGIN_STRANDED_ADMISSION",
+    "AdmissionCategory",
+    "AdmissionOrigin",
     "StrandedAdmissionEffect",
     "StrandedAdmissionTarget",
     "StrandedAdmissionTicket",
