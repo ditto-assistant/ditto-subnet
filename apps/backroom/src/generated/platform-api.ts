@@ -3399,6 +3399,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/readmissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Readmissions
+         * @description Every paid, credited and classified readmission, newest first.
+         */
+        get: operations["list_readmissions_api_v1_admin_readmissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/registration-freshness": {
         parameters: {
             query?: never;
@@ -14076,6 +14096,7 @@ export interface components {
             payment_address: string;
             /** Priced Submissions */
             priced_submissions: number;
+            readmission?: components["schemas"]["MinerFeeReadmissionLane"] | null;
             /** Recent Days */
             recent_days: components["schemas"]["MinerFeeDay"][];
             /** Unique Paying Coldkeys */
@@ -15018,6 +15039,32 @@ export interface components {
             effective: components["schemas"]["EffectiveQueuePolicySettings"];
             /** History */
             history: components["schemas"]["QueuePolicySettingsRevision"][];
+        };
+        /** AdminReadmissionsResponse */
+        AdminReadmissionsResponse: {
+            activation: components["schemas"]["ReadmissionActivationState"];
+            /** Bench Version */
+            bench_version?: number | null;
+            cost_basis?: components["schemas"]["ReadmissionCostBasis"] | null;
+            /** Free Admissions By Category */
+            free_admissions_by_category?: {
+                [key: string]: number;
+            };
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Paid */
+            paid?: components["schemas"]["PaidReadmissionRow"][];
+            totals: components["schemas"]["ReadmissionTotals"];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+            /** Uploads */
+            uploads?: components["schemas"]["UploadReadmissionRow"][];
         };
         /**
          * AdminReinstatementRetryBudget
@@ -31827,6 +31874,50 @@ export interface components {
             priced_submissions: number;
         };
         /**
+         * MinerFeeReadmissionLane
+         * @description The readmission lane's share of miner fee revenue (SN-485).
+         *
+         *     Each proof is counted once: an admitted readmission here, a credited one
+         *     in the upload lane (its banked credit row holds the proof).
+         */
+        MinerFeeReadmissionLane: {
+            /**
+             * Admitted
+             * @default 0
+             */
+            admitted: number;
+            /**
+             * Admitted Amount Rao
+             * @default 0
+             */
+            admitted_amount_rao: number;
+            /**
+             * Credit Funded
+             * @default 0
+             */
+            credit_funded: number;
+            /**
+             * Credited
+             * @default 0
+             */
+            credited: number;
+            /**
+             * Credited Amount Rao
+             * @default 0
+             */
+            credited_amount_rao: number;
+            /**
+             * Upload Readmission Amount Rao
+             * @default 0
+             */
+            upload_readmission_amount_rao: number;
+            /**
+             * Upload Readmissions
+             * @default 0
+             */
+            upload_readmissions: number;
+        };
+        /**
          * MinerGateNote
          * @description One gate note on one case, with the id a dispute can cite.
          */
@@ -33162,6 +33253,60 @@ export interface components {
              * @constant
              */
             scope: "plagiarism-screening-only";
+        };
+        /** PaidReadmissionRow */
+        PaidReadmissionRow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Amount Rao */
+            amount_rao: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Credit Audit */
+            credit_audit?: {
+                [key: string]: unknown;
+            } | null;
+            /** Credit Expires At */
+            credit_expires_at?: string | null;
+            /** Credit Spent */
+            credit_spent?: boolean | null;
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /**
+             * Funding
+             * @enum {string}
+             */
+            funding: "fresh" | "credit";
+            /** Miner Coldkey */
+            miner_coldkey: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "admitted" | "credited";
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Refusal Reason */
+            refusal_reason?: string | null;
+            /** Rollout Id */
+            rollout_id?: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** PanelCaseResult */
         PanelCaseResult: {
@@ -39964,6 +40109,38 @@ export interface components {
             rollout_id?: string | null;
         };
         /**
+         * ReadmissionCostBasis
+         * @description The measured cost of evaluating one agent on the active benchmark.
+         *
+         *     Published as the stated cost basis of the readmission fee (SN-485 section
+         *     2); the fee itself is the upload fee. Measured from Platform's inference
+         *     ledger: the median, across agents that reached a scoring quorum on
+         *     ``bench_version``, of each agent's mean scored-run cost, times
+         *     ``runs_per_evaluation``. ``null`` costs mean too few agents to measure.
+         */
+        ReadmissionCostBasis: {
+            /** Agents Sampled */
+            agents_sampled: number;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Measured At
+             * Format: date-time
+             */
+            measured_at: string;
+            /** Median Agent Cost Usd */
+            median_agent_cost_usd?: number | null;
+            /** Median Run Cost Usd */
+            median_run_cost_usd?: number | null;
+            /** Runs Per Evaluation */
+            runs_per_evaluation: number;
+            /**
+             * Source
+             * @default Platform inference ledger: chat + embedding cost of scored leases on the current metering contract
+             */
+            source: string;
+        };
+        /**
          * ReadmissionEligibilityView
          * @description What the stranded-era read says about this agent.
          */
@@ -39994,8 +40171,47 @@ export interface components {
          */
         ReadmissionTerms: {
             activation: components["schemas"]["ReadmissionActivationState"];
+            cost_basis?: components["schemas"]["ReadmissionCostBasis"] | null;
             /** Rules */
             rules?: string[];
+        };
+        /** ReadmissionTotals */
+        ReadmissionTotals: {
+            /**
+             * Admitted
+             * @default 0
+             */
+            admitted: number;
+            /**
+             * Admitted Amount Rao
+             * @default 0
+             */
+            admitted_amount_rao: number;
+            /**
+             * Credit Funded
+             * @default 0
+             */
+            credit_funded: number;
+            /**
+             * Credited
+             * @default 0
+             */
+            credited: number;
+            /**
+             * Credited Amount Rao
+             * @default 0
+             */
+            credited_amount_rao: number;
+            /**
+             * Upload Readmission Amount Rao
+             * @default 0
+             */
+            upload_readmission_amount_rao: number;
+            /**
+             * Upload Readmissions
+             * @default 0
+             */
+            upload_readmissions: number;
         };
         /** ReceiptDiagnosticObservation */
         ReceiptDiagnosticObservation: {
@@ -47056,6 +47272,39 @@ export interface components {
              * @enum {string}
              */
             state: "unrecorded" | "funded_agent" | "reusable_credit" | "funded_generator" | "funded_readmission";
+        };
+        /** UploadReadmissionRow */
+        UploadReadmissionRow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Amount Rao */
+            amount_rao?: number | null;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "identical_rescore" | "near_duplicate";
+            /**
+             * Lineage Agent Id
+             * Format: uuid
+             */
+            lineage_agent_id: string;
+            /** Lineage Evaluation Completed */
+            lineage_evaluation_completed: boolean;
+            /** Miner Coldkey */
+            miner_coldkey: string;
         };
         /**
          * V12AnswerStuffingGate
@@ -56791,6 +57040,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueuePolicySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_readmissions_api_v1_admin_readmissions_get: {
+        parameters: {
+            query?: {
+                bench_version?: number | null;
+                miner_coldkey?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminReadmissionsResponse"];
                 };
             };
             /** @description Validation Error */

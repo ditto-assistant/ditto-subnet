@@ -14,6 +14,7 @@ system with their own terms.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -87,6 +88,30 @@ class SubmissionCooldownTerms(BaseModel):
     reference: str
 
 
+class ReadmissionCostBasis(BaseModel):
+    """The measured cost of evaluating one agent on the active benchmark.
+
+    Published as the stated cost basis of the readmission fee (SN-485 section
+    2); the fee itself is the upload fee. Measured from Platform's inference
+    ledger: the median, across agents that reached a scoring quorum on
+    ``bench_version``, of each agent's mean scored-run cost, times
+    ``runs_per_evaluation``. ``null`` costs mean too few agents to measure.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    bench_version: int
+    agents_sampled: int
+    runs_per_evaluation: int
+    median_run_cost_usd: float | None = None
+    median_agent_cost_usd: float | None = None
+    measured_at: datetime
+    source: str = (
+        "Platform inference ledger: chat + embedding cost of scored leases on "
+        "the current metering contract"
+    )
+
+
 class ReadmissionTerms(BaseModel):
     """The SN-485 readmission rules for one competition.
 
@@ -101,6 +126,8 @@ class ReadmissionTerms(BaseModel):
     activation: ReadmissionActivationState
     rules: list[str] = Field(default_factory=list)
     """The readmission, free-retry and refund rules in plain sentences."""
+    cost_basis: ReadmissionCostBasis | None = None
+    """The measured per-agent evaluation cost on the active benchmark."""
 
 
 class CompetitionSubmissionTerms(BaseModel):

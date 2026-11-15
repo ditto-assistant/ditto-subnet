@@ -1,4 +1,5 @@
 import { fetchTreasuryFundingHistory, previewTreasuryFunding, recordTreasuryFunding } from './treasury-funding.service'
+import { listReadmissionsInputSchema } from '../lib/readmission.schemas'
 import {
   contributorHotkeyInputSchema, githubAccountInputSchema, claPolicyReadInputSchema,
   claPolicyWriteInputSchema, claPublishInputSchema,
@@ -360,6 +361,7 @@ import {
   fetchBenchmarkContractRefresh,
   fetchStrandedPreviousEra,
   fetchStrandedAdmissions,
+  fetchReadmissions,
   admitStrandedSubmission,
   fetchOwnerCooldowns,
   setOwnerCooldown,
@@ -1087,7 +1089,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   admit_stranded_submission:
     'Admit ONE stranded prior-bench agent to the active era. Guards + confirmation; see tool help.',
   get_stranded_admissions:
-    'Audited stranded admissions: admitted state and active-era lease progress. Read-only.',
+    'Audited stranded admissions: origin, category, admitted state and lease progress. Read-only.',
+  list_readmissions:
+    'SN-485 readmissions: paid, credited and classified uploads; totals and cost basis. Read-only.',
   start_benchmark_rollout:
     'Start a forward-only rollout. Confirmation: START BENCHMARK V{n}.',
   list_benchmark_canaries: 'Page isolated benchmark canaries. No score or rollout authority.',
@@ -2792,7 +2796,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get competition submission terms',
       description:
-        'Read what a miner submits to each competition with an upload lane (memory agent uploads, generator uploads), from GET /api/v1/public/submission-terms, the same terms the miner CLI shows before upload. Each entry gives the deliverable (artifact kind, format, contract version such as dittobench-generator/v1, required files, every upload-time limit with its source: code for a release constant, environment for a deploy variable, setting for an audited operator setting), the upload cooldown and its scope (owner coldkey or hotkey), and the competition\'s own fee (amount_rao, whether required, whether the amount is the default fee or this competition\'s override, the receiving address, and the submission settings revision it resolves from). The memory entry also carries readmission: the SN-485 activation state (as in get_submission_cooldown readmission) and the readmission rules miners read; other competitions report readmission=null. Change a fee with set_submission_cooldown competitionFees; change the generator cooldown, pack size or fee switch with set_generator_competition_settings. competitions=null means the Platform predates these terms. This is the miner submission contract only; build bounties are separate. Requires backroom:read and changes nothing.',
+        'Read what a miner submits to each competition with an upload lane (memory agent uploads, generator uploads), from GET /api/v1/public/submission-terms, the same terms the miner CLI shows before upload. Each entry gives the deliverable (artifact kind, format, contract version such as dittobench-generator/v1, required files, every upload-time limit with its source: code for a release constant, environment for a deploy variable, setting for an audited operator setting), the upload cooldown and its scope (owner coldkey or hotkey), and the competition\'s own fee (amount_rao, whether required, whether the amount is the default fee or this competition\'s override, the receiving address, and the submission settings revision it resolves from). The memory entry also carries readmission: the SN-485 activation state (as in get_submission_cooldown readmission), the readmission rules miners read, and cost_basis, the measured per-agent evaluation cost on the active bench (median across quorum agents of mean scored-run cost times runs_per_evaluation, from the inference ledger; null costs mean too few agents); other competitions report readmission=null. Change a fee with set_submission_cooldown competitionFees; change the generator cooldown, pack size or fee switch with set_generator_competition_settings. competitions=null means the Platform predates these terms. This is the miner submission contract only; build bounties are separate. Requires backroom:read and changes nothing.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchCompetitionSubmissionTerms()),
@@ -4706,7 +4710,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Admit one stranded previous-era submission',
       description:
-        'Admit exactly ONE agent from list_stranded_previous_era_submissions onto the activated benchmark era, after activation. Pins its active-version dataset (rendered before commit), appends it to the activated rollout after the frozen cohort without resizing or re-gating it, and writes an audited stranded_admitted rollout event with actor, reason, artifact SHA and previous-era evidence. The agent stays scored/live with its previous-era scores and history untouched; the post-activation top-up lane then leases it toward an active-version quorum. Guards, all re-checked before commit: expectedActiveVersion equals the active bench, no rollout is open, expectedSha256 is the exact artifact SHA, the agent is in the stranded list (scored/live, previous-era scores, no active score, no admission path; banned and rejected agents never are), expectedPreviousScoreCount equals its previous-era score count, it is not withdrawn from the active queue, and its screened image satisfies the active contract. Confirmation: "ADMIT STRANDED {agentId} TO BENCHMARK V{expectedActiveVersion}" with the lowercase agent UUID. Read the effect with get_stranded_admissions or agent_scoring_readiness. Requires backroom:write.',
+        'Admit exactly ONE agent from list_stranded_previous_era_submissions onto the activated benchmark era, after activation. Pins its active-version dataset (rendered before commit), appends it to the activated rollout after the frozen cohort without resizing or re-gating it, and writes an audited stranded_admitted rollout event with actor, reason, artifact SHA and previous-era evidence. The agent stays scored/live with its previous-era scores and history untouched; the post-activation top-up lane then leases it toward an active-version quorum. Guards, all re-checked before commit: expectedActiveVersion equals the active bench, no rollout is open, expectedSha256 is the exact artifact SHA, the agent is in the stranded list (scored/live, previous-era scores, no active score, no admission path; banned and rejected agents never are), expectedPreviousScoreCount equals its previous-era score count, it is not withdrawn from the active queue, and its screened image satisfies the active contract. Optional category (ditto_fault when Ditto\'s fault kept the row out of the era, owner_policy otherwise) is audited so free admissions can be counted against SN-485 paid readmissions; omitted reads as unspecified. This free operator path is unchanged by paid readmission. Confirmation: "ADMIT STRANDED {agentId} TO BENCHMARK V{expectedActiveVersion}" with the lowercase agent UUID. Read the effect with get_stranded_admissions or agent_scoring_readiness. Requires backroom:write.',
       inputSchema: admitStrandedSubmissionInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -4718,11 +4722,23 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Read stranded admissions',
       description:
-        'List every audited stranded admission on the active era (optionally one agentId) with its live effect: admitted (the live admission predicate; false if later withdrawn), is_member, actor, reason, admitted_at, previous-era score count and median, the pinned dataset SHA, active-version score count and median, first_lease_at (earliest active-version lease), live_lease_count, ticket_state (awaiting_first_lease, leased, awaiting_next_lease, quorum_complete) and every active-version ticket. Read-only. Requires backroom:read.',
+        'List every audited stranded admission on the active era (optionally one agentId) with its origin (operator_stranded_admission, the free operator path, or paid_readmission, a miner\'s SN-485 self-serve paid readmission), category (ditto_fault, owner_policy or unspecified for an operator admission, paid for a readmission; null before SN-485), payment_ref (the proof, amount and funding of a paid readmission) and its live effect: admitted (the live admission predicate; false if later withdrawn), is_member, actor, reason, admitted_at, previous-era score count and median, the pinned dataset SHA, active-version score count and median, first_lease_at (earliest active-version lease), live_lease_count, ticket_state (awaiting_first_lease, leased, awaiting_next_lease, quorum_complete) and every active-version ticket. Read-only. Requires backroom:read.',
       inputSchema: strandedAdmissionsInputSchema.shape,
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchStrandedAdmissions(input)),
+  )
+
+  registerTool(
+    'list_readmissions',
+    {
+      title: 'List readmissions',
+      description:
+        'List every SN-485 readmission, newest first. paid is the readmission payment lane: outcome admitted (a miner paid the upload fee to readmit one stranded agent into the active era; funding fresh or credit, credit_audit keeps a spent credit\'s history) or credited (refused after payment, for example a rollout opened or the agent was withdrawn, and banked as a 30-day upload credit: credit_spent, credit_expires_at, refusal_reason). uploads are accepted uploads classified as readmissions of the owner\'s own lineage: identical_rescore (byte-identical, allow_identical_rescore) or near_duplicate (same normalized source, new bytes), with lineage_agent_id and whether that lineage ever finished a quorum; they paid the ordinary upload fee. totals counts and sums each lane; free_admissions_by_category counts the active era\'s stranded admissions by audited category (ditto_fault, owner_policy, unspecified free; paid). Also returns activation (as in get_submission_cooldown readmission) and cost_basis. Filter by benchVersion or minerColdkey; limit 1-500 (default 100) and offset page both lists; truncated says more exist. Platform-caused re-tests (dueling_season_rotation) are never readmissions and never appear here. Requires backroom:read and changes nothing.',
+      inputSchema: listReadmissionsInputSchema.shape,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchReadmissions(input)),
   )
 
   registerTool(

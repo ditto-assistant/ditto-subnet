@@ -37,6 +37,7 @@ from ditto.api_server.endpoints.upload import (
 )
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.readmission import readmission_terms
+from ditto.api_server.readmission_cost_basis import readmission_cost_basis
 from ditto.api_server.source_inspect import (
     UPLOAD_MAX_MEMBERS,
     UPLOAD_MAX_UNPACKED_BYTES,
@@ -245,8 +246,12 @@ async def _all_terms(
         default_payment_address=request.app.state.config.upload_payment_address,
     )
     generator = (await load_settings(session)).settings
+    activation = await current_readmission_activation(session, settings=effective)
     readmission = readmission_terms(
-        await current_readmission_activation(session, settings=effective)
+        activation,
+        await readmission_cost_basis(
+            session, bench_version=activation.active_bench_version
+        ),
     )
     return [
         CompetitionSubmissionTerms(

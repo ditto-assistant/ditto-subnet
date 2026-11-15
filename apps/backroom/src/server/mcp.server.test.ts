@@ -759,6 +759,7 @@ describe('Backroom MCP tools', () => {
         'list_stranded_previous_era_submissions',
         'admit_stranded_submission',
         'get_stranded_admissions',
+        'list_readmissions',
         'get_burn_settings',
         'get_edge_lane_settings',
         'get_edge_lane_overview',
@@ -1200,7 +1201,9 @@ describe('Backroom MCP tools', () => {
     // The four airdrop run tools (SN-490: preview, execute, run read and run
     // list; one-line summaries, detail in tool help) measure 246,021 bytes;
     // keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(246_500)
+    // The SN-485 list_readmissions read (four paging/filter inputs, one-line
+    // summary, detail in tool help) measures 246,809 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(247_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

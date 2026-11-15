@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
-import { readmissionActivationSchema } from './readmission.schemas'
+import { readmissionActivationSchema, readmissionCostBasisSchema } from './readmission.schemas'
 
 // What a miner submits to each competition (GET /api/v1/public/submission-terms):
 // the deliverable (artifact kind, contract version, required files and every
@@ -64,6 +64,7 @@ export const submissionCooldownTermsSchema = z.object({
 export const readmissionTermsSchema = z.object({
   activation: readmissionActivationSchema,
   rules: z.array(z.string()).max(32).default([]),
+  cost_basis: readmissionCostBasisSchema.nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedReadmissionTerms>)
 
 export const competitionSubmissionTermsSchema = z.object({

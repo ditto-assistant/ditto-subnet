@@ -49,6 +49,7 @@ import {
   updateArtifactReleaseSettings,
   fetchSubmissionSettingsControl,
   fetchCompetitionSubmissionTerms,
+  fetchReadmissions,
   updateSubmissionSettings,
   fetchHotkeyBan,
   fetchHotkeyBans,
@@ -1881,6 +1882,73 @@ describe('submission cooldown administration', () => {
         }),
       }),
     )
+  })
+})
+
+describe('list_readmissions (SN-485)', () => {
+  it('pages both lanes and parses the readmission read', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const payload = {
+      activation: {
+        active: true,
+        inactive_reasons: [],
+        announced_at: '2026-12-01T00:00:00Z',
+        effective_at: '2026-12-08T00:00:00Z',
+        active_bench_version: 19,
+        min_bench_version: 19,
+        notice_period_seconds: 604800,
+        fee_amount_rao: 75_000_000,
+        fee_source: 'upload_default',
+        settings_revision: 3,
+      },
+      cost_basis: {
+        bench_version: 19,
+        agents_sampled: 12,
+        runs_per_evaluation: 3,
+        median_run_cost_usd: 0.35,
+        median_agent_cost_usd: 1.05,
+        measured_at: '2026-12-09T00:00:00Z',
+        source: 'Platform inference ledger',
+      },
+      bench_version: null,
+      totals: { admitted: 1, admitted_amount_rao: 75_000_000 },
+      free_admissions_by_category: { ditto_fault: 2, paid: 1 },
+      paid: [
+        {
+          block_hash: '0x' + 'a'.repeat(64),
+          extrinsic_index: 3,
+          agent_id: '11111111-1111-4111-8111-111111111111',
+          agent_name: 'stranded',
+          miner_hotkey: '5Hot',
+          miner_coldkey: '5Cold',
+          bench_version: 19,
+          rollout_id: null,
+          outcome: 'admitted',
+          funding: 'fresh',
+          amount_rao: 75_000_000,
+          refusal_reason: null,
+          credit_audit: null,
+          credit_spent: null,
+          credit_expires_at: null,
+          recorded_at: '2026-12-09T00:00:00Z',
+          updated_at: '2026-12-09T00:00:00Z',
+        },
+      ],
+      uploads: [],
+      truncated: false,
+      generated_at: '2026-12-09T00:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const read = await fetchReadmissions({ benchVersion: 19, offset: 100 })
+    expect(read.paid[0].outcome).toBe('admitted')
+    expect(read.totals.credited).toBe(0)
+    expect(read.cost_basis?.median_agent_cost_usd).toBe(1.05)
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).toContain('/api/v1/admin/readmissions?')
+    expect(url).toContain('bench_version=19')
+    expect(url).toContain('limit=100')
+    expect(url).toContain('offset=100')
   })
 })
 
