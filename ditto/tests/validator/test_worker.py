@@ -7107,9 +7107,10 @@ class TestJobRetryLater:
     ) -> list[float]:
         waits: list[float] = []
 
-        async def sleep(seconds: float, *_events: asyncio.Event | None) -> None:
+        async def sleep(seconds: float, *_events: asyncio.Event | None) -> bool:
             waits.append(seconds)
             await asyncio.sleep(0)
+            return False
 
         monkeypatch.setattr(worker, "_sleep_or_interrupt", sleep)
         return waits
@@ -7171,10 +7172,10 @@ class TestJobRetryLater:
         waiting = asyncio.Event()
         real_sleep = worker._sleep_or_interrupt
 
-        async def sleep(seconds: float, *events: asyncio.Event | None) -> None:
+        async def sleep(seconds: float, *events: asyncio.Event | None) -> bool:
             if seconds == 120.0:
                 waiting.set()
-            await real_sleep(seconds, *events)
+            return await real_sleep(seconds, *events)
 
         worker._sleep_or_interrupt = sleep  # type: ignore[method-assign]
         sweep = asyncio.create_task(
