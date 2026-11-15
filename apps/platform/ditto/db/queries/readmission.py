@@ -35,7 +35,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ditto.db.models import (
     Agent,
@@ -205,15 +205,25 @@ async def readmission_eligibility(
             f"{SCORING_QUORUM} previous-era scores; a partial row is not "
             "eligible for readmission. Resubmit instead",
         )
-    if await session.scalar(
-        select(SubmissionRetirement.agent_id).where(
+    # Retirement names the era it applies to: refuse an agent retired from the
+    # stranded (previous) era as well as from the active one.
+    retired_from = await session.scalar(
+        select(func.max(SubmissionRetirement.bench_version)).where(
             SubmissionRetirement.agent_id == agent_id,
-            SubmissionRetirement.bench_version == active,
+            SubmissionRetirement.bench_version.in_(
+                {active}
+                | (
+                    {report.rollout.from_version}
+                    if report.rollout is not None
+                    else set()
+                )
+            ),
         )
-    ):
+    )
+    if retired_from is not None:
         refuse(
             ERROR_CODE_READMISSION_NOT_ELIGIBLE,
-            f"agent {agent_id} is retired from the v{active} queue",
+            f"agent {agent_id} is retired from the v{retired_from} queue",
         )
     if not refusals:
         try:

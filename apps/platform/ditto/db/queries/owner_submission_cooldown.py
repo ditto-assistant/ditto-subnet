@@ -309,13 +309,26 @@ async def identity_latest_submission_at(
         )
         predicate = or_(paid_by_key, Agent.miner_hotkey.in_(linked_hotkeys))
     latest = await session.scalar(select(func.max(Agent.created_at)).where(predicate))
+    # Readmissions count toward the cooldown too, matched through the same
+    # payment links as uploads so the lookup is never earlier than enforcement.
+    if scope == "hotkey":
+        readmission_clauses = [
+            ReadmissionPayment.miner_hotkey == owner_key,
+            ReadmissionPayment.miner_coldkey.in_(linked),
+        ]
+    else:
+        readmission_clauses = [
+            ReadmissionPayment.miner_coldkey == owner_key,
+            ReadmissionPayment.miner_hotkey.in_(linked_hotkeys),
+        ]
+    readmitted = await session.scalar(
+        select(func.max(ReadmissionPayment.updated_at)).where(
+            ReadmissionPayment.outcome == "admitted", or_(*readmission_clauses)
+        )
+    )
     latest = _later(
         None if latest is None else _utc(latest),
-        await latest_readmission_at(
-            session,
-            miner_coldkey=owner_key if scope == "coldkey" else None,
-            miner_hotkey=owner_key if scope == "hotkey" else None,
-        ),
+        None if readmitted is None else _utc(readmitted),
     )
     if scope == "hotkey":
         # Enforcement counts another coldkey's live reservation on this hotkey

@@ -461,3 +461,59 @@ async def test_a_recent_upload_holds_the_readmission_cooldown(
     assert body["ok"] is False
     assert 1105 in body["error_codes"]
     assert body["admission_token"] is None
+
+
+async def test_an_agent_retired_from_the_previous_era_is_refused(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.db.models import SubmissionRetirement
+
+    agent_id = await _seed(session_maker)
+    async with session_maker() as session, session.begin():
+        session.add(
+            SubmissionRetirement(
+                retirement_id=uuid4(),
+                agent_id=agent_id,
+                bench_version=_FROM,
+                superseded_by_version=_ACTIVE,
+                actor="operator@example.test",
+                reason="retired from the previous era's queue",
+                expected_snapshot="0" * 64,
+                score_count=3,
+                ticket_snapshot=[],
+            )
+        )
+    body = await _check(client, agent_id, reserve_slot=True)
+    assert body["ok"] is False
+    assert 1111 in body["error_codes"]
+    assert any(f"retired from the v{_FROM}" in m for m in body["messages"])
+    assert body["admission_token"] is None
+
+
+async def test_the_operator_lookup_counts_a_readmission_paid_by_a_linked_coldkey(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.db.queries.owner_submission_cooldown import (
+        identity_latest_submission_at,
+    )
+
+    agent_id = await _seed(session_maker)
+    token = (await _check(client, agent_id, reserve_slot=True))["admission_token"]
+    resp = await client.post(
+        "/api/v1/readmission/commit",
+        json={**_signed(agent_id), "admission_token": token, **_proof(9)},
+    )
+    assert resp.json()["outcome"] == "admitted", resp.text
+    now = datetime.now(UTC)
+    async with session_maker() as session:
+        by_hotkey = await identity_latest_submission_at(
+            session, scope="hotkey", owner_key=_HOTKEY, now=now
+        )
+        by_coldkey = await identity_latest_submission_at(
+            session, scope="coldkey", owner_key=_COLDKEY, now=now
+        )
+    # The readmission (just now) is newer than the agent's upload (_BEFORE).
+    assert by_hotkey is not None and by_hotkey > now - timedelta(minutes=5)
+    assert by_coldkey is not None and by_coldkey > now - timedelta(minutes=5)
