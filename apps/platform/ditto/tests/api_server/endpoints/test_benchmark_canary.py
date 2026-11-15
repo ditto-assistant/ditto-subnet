@@ -15,6 +15,7 @@ from sqlalchemy.exc import DBAPIError
 
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import ScoreReport
+from ditto.api_server.dispatch_fence_monitor import DispatchFenceMonitor
 from ditto.api_server.endpoints import admin_benchmark_canary, validator
 from ditto.api_server.private_benchmark_preparation import (
     PrivatePreparationConfig,
@@ -627,8 +628,10 @@ async def test_auth_and_singleton(client, ready):
 
 
 async def test_signed_claim_and_result_are_diagnostic_only(
-    client, ready, session_maker
+    client, ready, session_maker, monkeypatch
 ):
+    fence = DispatchFenceMonitor()
+    monkeypatch.setattr(validator, "DISPATCH_FENCE", fence)
     row = await issue(client, ready)
     now, nonce = datetime.now(UTC), uuid4()
     signature = KEY.sign(
@@ -648,6 +651,9 @@ async def test_signed_claim_and_result_are_diagnostic_only(
     assert claim.status_code == 200, claim.text
     assert claim.json()["bench_version"] == 13
     assert claim.json()["dataset_sha256"] == row["dataset_sha256"]
+    # The canary resume returns its lease from inside the fenced transaction;
+    # the fence hold must read as issued work, not an empty poll.
+    assert fence.snapshot()["hold_outcomes"] == {"issued": 1}
     report = ScoreReport(
         run_id="canary-run",
         bench_version=13,

@@ -113,8 +113,15 @@ class DispatchFenceMonitor:
             )
         )
 
-    def _busy_decline(self, validator_hotkey: str, slot_id: str) -> None:
-        holder = self._holder
+    def _busy_decline(
+        self, validator_hotkey: str, slot_id: str, observed: _Holder | None
+    ) -> None:
+        # The lock check is a database round trip: the holder seen just before
+        # it is the one that most likely refused this poll. Fall back to the
+        # holder at record time only when none was tracked before the check
+        # (it acquired during the round trip). Best-effort: a holder that
+        # released and was replaced within one round trip is still misnamed.
+        holder = observed if observed is not None else self._holder
         holder_hotkey = holder.validator_hotkey if holder is not None else None
         if holder_hotkey is None:
             collision = "untracked"
@@ -142,7 +149,24 @@ class DispatchFenceMonitor:
             max((now - self.tracking_since).total_seconds(), 1e-9),
         )
         durations = sorted(hold.seconds for hold in holds)
-        held_seconds = sum(durations)
+        # Utilization counts only the part of each hold inside the window,
+        # including the hold still in progress; the quantiles above keep each
+        # hold's full duration.
+        held_seconds = sum(
+            max(
+                0.0,
+                (
+                    hold.ended_at
+                    - max(hold.ended_at - timedelta(seconds=hold.seconds), cutoff)
+                ).total_seconds(),
+            )
+            for hold in holds
+        )
+        live = self._holder
+        if live is not None:
+            held_seconds += max(
+                0.0, (now - max(live.acquired_at, cutoff)).total_seconds()
+            )
 
         by_validator: dict[str, list[float]] = {}
         for hold in holds:
@@ -230,7 +254,8 @@ class FenceAttempt:
     Enter it *outside* ``session.begin()`` (``async with attempt,
     session.begin():``) so it exits after the commit: the advisory lock is
     transaction-scoped and is released by that commit, not before. Inside,
-    call :meth:`acquired` once the lock is taken or :meth:`busy` when it is not.
+    call :meth:`before_lock_check` just before trying the lock, then
+    :meth:`acquired` once it is taken or :meth:`busy` when it is not.
     """
 
     def __init__(
@@ -240,7 +265,12 @@ class FenceAttempt:
         self._validator_hotkey = validator_hotkey
         self._slot_id = slot_id
         self._holder: _Holder | None = None
+        self._observed_holder: _Holder | None = None
         self._outcome: Callable[[], str | None] = lambda: None
+
+    def before_lock_check(self) -> None:
+        """Remember who held the fence just before this poll tries to take it."""
+        self._observed_holder = self._monitor._holder
 
     def acquired(self, outcome: Callable[[], str | None] | None = None) -> None:
         """Mark the fence taken; ``outcome`` labels the hold when it ends."""
@@ -256,7 +286,9 @@ class FenceAttempt:
     def busy(self) -> None:
         """Record a poll bounced off a held fence, naming who held it."""
         try:
-            self._monitor._busy_decline(self._validator_hotkey, self._slot_id)
+            self._monitor._busy_decline(
+                self._validator_hotkey, self._slot_id, self._observed_holder
+            )
         except Exception:  # pragma: no cover - observability must not fail a poll
             logger.exception("dispatch fence monitor failed to record busy")
 

@@ -3205,6 +3205,7 @@ async def request_job(
         # before the first one can lock a row.  Pollers are retry loops, so a
         # busy fence is a cheap 204 rather than another waiter extending the
         # control-plane saturation incident.
+        fence.before_lock_check()
         if not await try_lock_rollout_dispatch(session):
             fence.busy()
             _record_dispatch_decline(
@@ -3548,7 +3549,8 @@ async def request_job(
                 run_seed=canary.seed,
                 now=now,
             )
-            return JobResponse(
+            # Bound to ``job`` so the dispatch-fence hold reads as issued.
+            job = JobResponse(
                 **dueling_fields,
                 agent_id=canary.agent_id,
                 miner_hotkey=agent.miner_hotkey,
@@ -3576,6 +3578,7 @@ async def request_job(
                     request=request, grant=grant, bench_version=canary.bench_version
                 ),
             )
+            return job
         if rollout is not None:
             # A shadow/mismatched v9 score cannot satisfy rollout activation,
             # so its operator-authorized replacement is rollout work rather

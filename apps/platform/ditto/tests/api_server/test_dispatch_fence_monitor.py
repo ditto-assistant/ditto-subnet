@@ -101,3 +101,43 @@ async def test_events_age_out_of_the_recent_window() -> None:
     assert snap["recent_holds"] == 0
     assert snap["recent_busy_declines"] == 0
     assert snap["holds_by_validator"] == []
+
+
+async def test_utilization_counts_only_the_window_and_the_live_hold() -> None:
+    clock = _Clock()
+    monitor = _monitor(clock)
+    clock.advance(3600)
+    # A 120s hold whose first 60s fall before the window opens at read time
+    # (read 900s after the hold's 60th second): only its last 60s count.
+    attempt = monitor.attempt("5Val", "slot-0")
+    async with attempt:
+        attempt.acquired()
+        clock.advance(120)
+    clock.advance(900 - 60 - 30)
+    live = monitor.attempt("5Val", "slot-1")
+    async with live:
+        live.acquired()
+        clock.advance(30)
+        snap = monitor.snapshot()
+        # 60s of the clipped hold plus 30s of the hold still in progress.
+        assert snap["recent_held_seconds"] == pytest.approx(90.0)
+        assert snap["recent_utilization"] == pytest.approx(90.0 / 900)
+        # Quantiles keep the completed hold's full duration.
+        assert snap["hold_max_seconds"] == pytest.approx(120.0)
+
+
+async def test_busy_is_attributed_to_the_holder_seen_before_the_lock_check() -> None:
+    """The holder that refused the poll may release before the busy is recorded."""
+    clock = _Clock()
+    monitor = _monitor(clock)
+    holder = monitor.attempt("5Holder", "slot-0")
+    contender = monitor.attempt("5Contender", "slot-3")
+    async with holder:
+        holder.acquired()
+        contender.before_lock_check()
+        clock.advance(0.01)
+    # The round trip finished after the holder committed.
+    contender.busy()
+    snap = monitor.snapshot()
+    assert snap["recent_busy_untracked_holder"] == 0
+    assert snap["busy_by_validator"][0]["holder_hotkey"] == "5Holder"
