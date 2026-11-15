@@ -318,6 +318,8 @@ async def restore_superseded(
             GeneratorSubmission.miner_hotkey == rejected.miner_hotkey,
             GeneratorSubmission.status == "superseded",
             GeneratorSubmission.submitted_at < rejected.submitted_at,
+            # The public default is registered by operators, never restored.
+            GeneratorSubmission.public_default.is_(False),
         )
         .order_by(
             GeneratorSubmission.submitted_at.desc(),

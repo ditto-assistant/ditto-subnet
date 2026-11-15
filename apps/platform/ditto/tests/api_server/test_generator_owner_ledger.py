@@ -564,3 +564,26 @@ async def test_a_restore_skipped_for_a_racing_upload_is_recovered_on_its_reject(
         assert restored.status_reason == restored_reason(u_id)
         assert restored.qualified_at is None
         assert restored.next_run_at is not None and restored.next_run_at <= _NOW
+
+
+async def test_restore_never_reactivates_a_superseded_public_default(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The public default is registered by operators. A superseded default on
+    the rejected row's hotkey is never brought back."""
+    default_id, rejected_id = uuid4(), uuid4()
+    default = _Sub("old-default", "", "5V", status="superseded", submitted_hours_ago=48)
+    rejected = _Sub("miner", "coldkey:v", "5V", submitted_hours_ago=2)
+    async with session_maker() as session, session.begin():
+        stale = _row(default, default_id)
+        stale.public_default = True
+        session.add_all([stale, _row(rejected, rejected_id)])
+    async with session_maker() as session, session.begin():
+        row = await session.get(GeneratorSubmission, rejected_id)
+        assert row is not None
+        await competition._reject(  # noqa: SLF001 - the scorer's reject path
+            session, row, "build_failed: x", now=_NOW
+        )
+    async with session_maker() as session:
+        stale_row = await session.get(GeneratorSubmission, default_id)
+        assert stale_row is not None and stale_row.status == "superseded"
