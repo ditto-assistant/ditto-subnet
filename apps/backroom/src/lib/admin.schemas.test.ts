@@ -85,6 +85,7 @@ import {
   validatorSlotConfirmation,
   validatorIssuanceConfirmation,
   validatorCapacityEntrySchema,
+  validatorRequestOutcomeSummarySchema,
   benchmarkRolloutQualificationDetailSchema,
   validatorSlotSettingsControlSchema,
   validatorSlotSettingsSchema,
@@ -3503,6 +3504,98 @@ describe('validator slot settings schemas', () => {
     })
     expect(parsed.effective.source).toBe('revision')
     expect(parsed.current[0].actor).toBe('peyton@omniaura.ai')
+  })
+
+  it('reads the per-slot breakdown and defaults it on an older platform', () => {
+    const base = {
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-11-14T23:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 8,
+      serviceable_slots: 1,
+      claimed_slots: 0,
+      assignments: [],
+    }
+    const older = validatorCapacityEntrySchema.parse(base)
+    expect(older.slots).toEqual([])
+    expect(older.memory_admitted_slots).toBeNull()
+    const parsed = validatorCapacityEntrySchema.parse({
+      ...base,
+      memory_admitted_slots: 1,
+      unusable_slots: 1,
+      slots: [
+        { slot_id: 'slot-0', state: 'free', reason: null },
+        { slot_id: 'slot-1', state: 'unusable', reason: 'host_memory_admission' },
+      ],
+    })
+    expect(parsed.slots[1].reason).toBe('host_memory_admission')
+    expect(() =>
+      validatorCapacityEntrySchema.parse({
+        ...base,
+        slots: [{ slot_id: 'slot-0', state: 'unusable', reason: 'made_up' }],
+      }),
+    ).toThrow()
+  })
+
+  it('reads the allocator fence snapshot and per-slot outcome counts', () => {
+    const parsed = validatorRequestOutcomeSummarySchema.parse({
+      observed_at: '2026-11-14T23:00:00Z',
+      tracking_since: '2026-11-14T20:00:00Z',
+      recent_window_seconds: 900,
+      unauthenticated: {},
+      validators: [
+        {
+          validator_hotkey: '5Val',
+          lane: 'job',
+          last_poll_at: '2026-11-14T23:00:00Z',
+          last_outcome: 'allocator_busy',
+          outcomes: [
+            {
+              outcome: 'allocator_busy',
+              total: 10,
+              recent_15m: 3,
+              recent_15m_by_slot: { 'slot-1': 2, 'slot-2': 1 },
+              first_at: null,
+              last_at: null,
+              last_detail: null,
+              last_slot_id: 'slot-2',
+            },
+          ],
+        },
+      ],
+      allocator: {
+        observed_at: '2026-11-14T23:00:00Z',
+        tracking_since: '2026-11-14T20:00:00Z',
+        recent_window_seconds: 900,
+        holder: null,
+        recent_holds: 4,
+        recent_held_seconds: 0.4,
+        recent_utilization: 0.0004,
+        hold_p50_seconds: 0.1,
+        hold_p95_seconds: 0.1,
+        hold_max_seconds: 0.1,
+        hold_outcomes: { no_candidate: 4 },
+        recent_busy_declines: 3,
+        recent_busy_same_validator: 3,
+        recent_busy_untracked_holder: 0,
+        holds_by_validator: [
+          { validator_hotkey: '5Val', holds: 4, held_seconds: 0.4, max_hold_seconds: 0.1 },
+        ],
+        busy_by_validator: [
+          {
+            validator_hotkey: '5Val',
+            holder_hotkey: '5Val',
+            busy_declines: 3,
+            same_validator: true,
+            by_slot: { 'slot-1': 2, 'slot-2': 1 },
+          },
+        ],
+      },
+    })
+    expect(parsed.allocator?.recent_busy_same_validator).toBe(3)
+    expect(parsed.validators[0].outcomes[0].recent_15m_by_slot['slot-1']).toBe(2)
   })
 
   it('reads capacity from a platform that predates reserved round slots as zero', () => {

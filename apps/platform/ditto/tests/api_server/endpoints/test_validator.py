@@ -93,6 +93,7 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.dispatch_fence_monitor import DispatchFenceMonitor
 from ditto.api_server.endpoints import validator as validator_endpoint
 from ditto.api_server.endpoints.validator import (
     _fresh_submission_lane_due,
@@ -3987,6 +3988,8 @@ class TestRequestJob:
         monkeypatch.setattr(
             validator_endpoint, "try_lock_rollout_dispatch", synchronized_try_lock
         )
+        fence_monitor = DispatchFenceMonitor()
+        monkeypatch.setattr(validator_endpoint, "DISPATCH_FENCE", fence_monitor)
 
         async with session_maker() as holder:
             await holder.begin()
@@ -4012,7 +4015,15 @@ class TestRequestJob:
                 with contextlib.suppress(asyncio.CancelledError):
                     await contender
             assert response.status_code == 204
+            # The validator learns the gate clears in milliseconds, not that
+            # the queue is empty.
+            assert response.headers["X-Ditto-Decline-Reason"] == "allocator_busy"
             assert fence_results == [False]
+            # The raw SQL holder is no tracked job poll.
+            busy = fence_monitor.snapshot()
+            assert busy["recent_busy_declines"] == 1
+            assert busy["recent_busy_untracked_holder"] == 1
+            assert busy["busy_by_validator"][0]["by_slot"] == {_SLOT_ID: 1}
             async with session_maker() as probe:
                 assert await probe.get(ValidatorRequestNonce, nonce) is None
                 assert (
@@ -4029,7 +4040,13 @@ class TestRequestJob:
             "/api/v1/validator/job", headers=_AUTH_HEADER, json=claim
         )
         assert retry.status_code == 200, retry.text
+        assert "X-Ditto-Decline-Reason" not in retry.headers
         assert fence_results == [False, True]
+        held = fence_monitor.snapshot()
+        assert held["holder"] is None
+        assert held["recent_holds"] == 1
+        assert held["hold_outcomes"] == {"issued": 1}
+        assert held["holds_by_validator"][0]["validator_hotkey"] == (_VALIDATOR_HOTKEY)
         assert retry.json()["agent_id"] == str(agent_id)
         async with session_maker() as probe:
             assert await probe.get(ValidatorRequestNonce, nonce) is not None

@@ -39,6 +39,8 @@ def test_tally_windows_recent_counts_and_evicts_the_quietest_validator(
         1,
     )
     assert old["allocator_busy"]["last_slot_id"] == "slot-1"
+    # Only the in-window poll is split by slot.
+    assert old["allocator_busy"]["recent_15m_by_slot"] == {"slot-1": 1}
     assert (
         len(old["http_428"]["last_detail"])
         == validator_request_outcomes.MAX_DETAIL_CHARS
@@ -78,3 +80,30 @@ async def test_lease_lane_503_with_retry_after_tallies_as_retry_later(
     assert rows["top5_confirmation"]["last_outcome"] == "retry_later"
     # The ledger lane is not a lease: its 503 keeps meaning "ledger unavailable".
     assert rows["scoring_ledger"]["last_outcome"] == "http_503"
+
+
+async def test_lease_lane_204_carries_its_decline_reason_header(monkeypatch) -> None:
+    from fastapi import Response
+
+    tally = RequestOutcomeTally()
+    monkeypatch.setattr(validator_request_outcomes, "REQUEST_OUTCOMES", tally)
+
+    def endpoint(lane, reason):
+        @track_request_outcomes(lane)
+        async def handler(*, payload):  # noqa: ARG001 - the tally reads it
+            if reason is not None:
+                validator_request_outcomes.note_decline_reason(reason)
+            return Response(status_code=204)
+
+        return handler
+
+    payload = SimpleNamespace(validator_hotkey="5Val", slot_id="slot-3")
+    busy = await endpoint("job", "allocator_busy")(payload=payload)
+    assert busy.headers[validator_request_outcomes.DECLINE_REASON_HEADER] == (
+        "allocator_busy"
+    )
+    unattributed = await endpoint("job", None)(payload=payload)
+    assert validator_request_outcomes.DECLINE_REASON_HEADER not in unattributed.headers
+    # The ledger lane never leases, so it never names a dispatch gate.
+    ledger = await endpoint("scoring_ledger", "allocator_busy")(payload=payload)
+    assert validator_request_outcomes.DECLINE_REASON_HEADER not in ledger.headers

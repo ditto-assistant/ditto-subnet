@@ -172,6 +172,7 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.dispatch_fence_monitor import DISPATCH_FENCE
 from ditto.api_server.dueling_seasons import (
     DuelingEvidenceRejected,
     DuelingSliceUnavailable,
@@ -258,6 +259,7 @@ from ditto.api_server.v13_scorer_cohort import (
     pinned_validator_may_submit,
 )
 from ditto.api_server.validator_request_outcomes import (
+    current_decline_reason,
     note_decline_reason,
     track_request_outcomes,
 )
@@ -3190,20 +3192,36 @@ async def request_job(
     ticket_ttl = await resolve_scoring_ticket_ttl(request.app.state)
 
     job: JobResponse | None = None
-    async with session.begin():
+    # Entered before the transaction so it exits after the commit that releases
+    # the transaction-scoped fence: Backroom then sees the true hold time, who
+    # holds the fence now, and whose polls bounced off whose.
+    fence = DISPATCH_FENCE.attempt(
+        payload.validator_hotkey, payload.slot_id or "slot-0"
+    )
+    async with fence, session.begin():
         # The allocator has several independently-correct lanes whose row-lock
         # orders are not interchangeable (ordinary tickets, rollout members,
         # and queued score re-tests).  Fence the complete dispatch transaction
         # before the first one can lock a row.  Pollers are retry loops, so a
         # busy fence is a cheap 204 rather than another waiter extending the
         # control-plane saturation incident.
+        fence.before_lock_check()
         if not await try_lock_rollout_dispatch(session):
+            fence.busy()
             _record_dispatch_decline(
                 "allocator_busy",
                 validator_hotkey=payload.validator_hotkey,
                 slot_id=payload.slot_id or "slot-0",
             )
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        # Label the hold by how the transaction ended: a gate's decline, or,
+        # read after the commit, whether the candidate walk issued a ticket.
+        fence.acquired(
+            lambda: (
+                current_decline_reason()
+                or ("issued" if job is not None else "no_candidate")
+            )
+        )
         await _assert_validator_compatible(
             session,
             validator_hotkey=payload.validator_hotkey,
@@ -3531,7 +3549,8 @@ async def request_job(
                 run_seed=canary.seed,
                 now=now,
             )
-            return JobResponse(
+            # Bound to ``job`` so the dispatch-fence hold reads as issued.
+            job = JobResponse(
                 **dueling_fields,
                 agent_id=canary.agent_id,
                 miner_hotkey=agent.miner_hotkey,
@@ -3559,6 +3578,7 @@ async def request_job(
                     request=request, grant=grant, bench_version=canary.bench_version
                 ),
             )
+            return job
         if rollout is not None:
             # A shadow/mismatched v9 score cannot satisfy rollout activation,
             # so its operator-authorized replacement is rollout work rather

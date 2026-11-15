@@ -4,7 +4,9 @@ The Prometheus decline counter has no hotkey label by design. This read gives
 the per-validator view an operator needs when one validator sits idle (was it
 told 428 stale heartbeat, 204 allocator_busy, slot_not_healthy, or did it stop
 polling?) or skips setting weights (did its scoring-ledger read get a 428 for
-treasury fleet readiness?). Read-only; nothing here participates in dispatch.
+treasury fleet readiness?). The ``allocator`` block says what the dispatch
+fence behind ``allocator_busy`` is busy with. Read-only; nothing here
+participates in dispatch.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from fastapi import APIRouter, Depends, Query
 from ditto.api_models.validator_request_outcomes import (
     ValidatorRequestOutcomeSummary,
 )
-from ditto.api_server import validator_request_outcomes
+from ditto.api_server import dispatch_fence_monitor, validator_request_outcomes
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 
 router = APIRouter(tags=["admin"])
@@ -33,5 +35,8 @@ async def get_validator_request_outcomes(
 ) -> ValidatorRequestOutcomeSummary:
     """Per-validator request outcomes since this API process started."""
     return ValidatorRequestOutcomeSummary.model_validate(
-        validator_request_outcomes.REQUEST_OUTCOMES.snapshot(validator_hotkey)
+        {
+            **validator_request_outcomes.REQUEST_OUTCOMES.snapshot(validator_hotkey),
+            "allocator": dispatch_fence_monitor.DISPATCH_FENCE.snapshot(),
+        }
     )

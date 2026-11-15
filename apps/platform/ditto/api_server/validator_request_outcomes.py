@@ -48,9 +48,21 @@ _decline_reason: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 
+# Rides every 204 a lease lane answers, so the validator can tell a gate that
+# clears in milliseconds (``allocator_busy``: another transaction holds the
+# dispatch fence) from an empty queue and back off accordingly. Additive: a
+# validator that ignores it sees the same 204 it always did.
+DECLINE_REASON_HEADER = "X-Ditto-Decline-Reason"
+
+
 def note_decline_reason(reason: str) -> None:
     """Remember why the poll being handled is about to return 204."""
     _decline_reason.set(reason)
+
+
+def current_decline_reason() -> str | None:
+    """The decline reason noted for the poll being handled, if any."""
+    return _decline_reason.get()
 
 
 @dataclass
@@ -60,7 +72,7 @@ class OutcomeStats:
     last_at: datetime | None = None
     last_detail: str | None = None
     last_slot_id: str | None = None
-    recent: deque[datetime] = field(default_factory=deque)
+    recent: deque[tuple[datetime, str | None]] = field(default_factory=deque)
 
     def add(self, now: datetime, detail: str | None, slot_id: str | None) -> None:
         self.total += 1
@@ -70,14 +82,19 @@ class OutcomeStats:
             self.last_detail = detail[:MAX_DETAIL_CHARS]
         if slot_id is not None:
             self.last_slot_id = slot_id
-        self.recent.append(now)
+        self.recent.append((now, slot_id))
         self.prune(now)
 
     def prune(self, now: datetime) -> int:
         cutoff = now - RECENT_WINDOW
-        while self.recent and self.recent[0] < cutoff:
+        while self.recent and self.recent[0][0] < cutoff:
             self.recent.popleft()
         return len(self.recent)
+
+    def recent_by_slot(self) -> dict[str, int]:
+        """Recent-window count per slot; call after :meth:`prune`."""
+        counts = Counter(slot or "unknown" for _, slot in self.recent)
+        return dict(sorted(counts.items()))
 
 
 class RequestOutcomeTally:
@@ -120,6 +137,7 @@ class RequestOutcomeTally:
                     "outcome": outcome,
                     "total": stats.total,
                     "recent_15m": stats.prune(now),
+                    "recent_15m_by_slot": stats.recent_by_slot(),
                     "first_at": stats.first_at,
                     "last_at": stats.last_at,
                     "last_detail": stats.last_detail,
@@ -215,6 +233,8 @@ def track_request_outcomes(
             else:
                 outcome = classify(result)
                 _safely(_record, payload, header_hotkey, lane, outcome, None)
+                if lane in _LEASE_LANES:
+                    _safely(_stamp_decline_reason, result)
                 return result
             finally:
                 _decline_reason.reset(token)
@@ -238,6 +258,12 @@ def _record(
         detail=detail,
         slot_id=slot_id if isinstance(slot_id, str) else None,
     )
+
+
+def _stamp_decline_reason(result: object) -> None:
+    reason = _decline_reason.get()
+    if reason and isinstance(result, Response) and result.status_code == 204:
+        result.headers[DECLINE_REASON_HEADER] = reason
 
 
 def _record_unauthenticated(lane: str, error: str) -> None:
