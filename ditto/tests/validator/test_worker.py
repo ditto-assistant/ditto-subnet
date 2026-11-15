@@ -1681,13 +1681,19 @@ class TestRunOnce:
             chain=MagicMock(),
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
-        monkeypatch.setattr(worker, "_memory_admitted_slots", lambda: 2)
+        admitted = [2]
+        monkeypatch.setattr(worker, "_memory_admitted_slots", lambda: admitted[0])
 
         with caplog.at_level(logging.WARNING, logger=worker_mod.logger.name):
             first = worker._available_slots()
             second = worker._available_slots()
+            # Memory recovers while the scorer mismatch persists: the effective
+            # count changed, so the operator must see the new number.
+            admitted[0] = 4
+            recovered = worker._available_slots()
 
         assert first == second == {"slot-0", "slot-1"}
+        assert len(recovered) == 4
         warnings = [
             record.getMessage()
             for record in caplog.records
@@ -1695,7 +1701,9 @@ class TestRunOnce:
         ]
         assert warnings == [
             "configured validator capacity 8 exceeds scorer capacity 4; "
-            "running 2 slot(s) until the stack agrees"
+            "running 2 slot(s) until the stack agrees",
+            "configured validator capacity 8 exceeds scorer capacity 4; "
+            "running 4 slot(s) until the stack agrees",
         ]
 
     async def test_parallel_slots_overlap_and_isolate_sibling_failure(

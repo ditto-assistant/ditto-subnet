@@ -1090,7 +1090,7 @@ class ValidatorWorker:
         )
         self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
-        self._scorer_narrowing_logged: int | None = None
+        self._scorer_narrowing_logged: tuple[int, int] | None = None
         self._scorer_runs_generator_rounds = False
         self._scorer_runs_frontier_oracle = False
         self._scorer_round_bench_versions = LEGACY_SCORER_ROUND_BENCH_VERSIONS
@@ -1936,7 +1936,11 @@ class ValidatorWorker:
             for slot_id in self._slots
             if self._resource_blocked_until.get(slot_id, 0.0) <= time.monotonic()
         )
-        narrowed = scorer_capacity if scorer_capacity < len(self._slots) else None
+        # Keyed on both counts the message names, so a memory change under a
+        # steady scorer mismatch still logs the new effective slot count.
+        narrowed = (
+            (scorer_capacity, capacity) if scorer_capacity < len(self._slots) else None
+        )
         # Every heartbeat re-asks this, so log the scorer mismatch when it
         # changes, not once per heartbeat for as long as it lasts.
         if narrowed is not None and narrowed != self._scorer_narrowing_logged:
