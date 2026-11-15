@@ -564,7 +564,9 @@ async def spend_credit_on_readmission(
     banked by an earlier refused readmission flips that ``credited`` row to
     ``admitted`` for this target, any other credit gets a new ``admitted`` row,
     and the ``evaluation_payments`` credit row is removed so no upload can spend
-    the proof again. ``funding = 'credit'`` keeps that history.
+    the proof again. ``funding = 'credit'`` and ``credit_audit`` keep that
+    history: the credit's origin and, for a readmission-origin credit, the
+    earlier refusal.
 
     Raises:
         PaymentReplayedError: the credit is spent, another hotkey's, or expired.
@@ -588,6 +590,26 @@ async def spend_credit_on_readmission(
     )
     if existing is not None and existing.outcome != "credited":
         raise PaymentReplayedError("payment proof already paid a readmission")
+    # Spending removes the evaluation_payments credit row below, so keep its
+    # history (and an earlier refusal's) on the readmission row.
+    credit_audit: dict[str, object] = {
+        "credit_origin": credit.credit_origin or "duplicate_upload",
+        "credit_for_agent_id": str(credit.credit_for_agent_id),
+        "credit_recorded_at": (
+            credit.created_at.isoformat() if credit.created_at else None
+        ),
+    }
+    if existing is not None:
+        credit_audit.update(
+            {
+                "refusal_reason": existing.refusal_reason,
+                "credited_agent_id": str(existing.agent_id),
+                "credited_bench_version": existing.bench_version,
+                "credited_at": existing.created_at.isoformat()
+                if existing.created_at
+                else None,
+            }
+        )
     if existing is None:
         row = ReadmissionPayment(
             block_hash=credit.block_hash.lower(),
@@ -604,6 +626,7 @@ async def spend_credit_on_readmission(
             funding="credit",
             outcome="admitted",
             refusal_reason=None,
+            credit_audit=credit_audit,
         )
         session.add(row)
     else:
@@ -614,6 +637,7 @@ async def spend_credit_on_readmission(
         row.funding = "credit"
         row.outcome = "admitted"
         row.refusal_reason = None
+        row.credit_audit = credit_audit
         row.updated_at = current
     await session.execute(
         delete(EvaluationPayment).where(

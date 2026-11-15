@@ -20,15 +20,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.upload import _BLOCK_HASH_PATTERN
 from ditto.api_models.upload_payment_proof import (
     UploadPaymentProofAgent,
+    UploadPaymentProofReadmission,
     UploadPaymentProofView,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import Agent
+from ditto.db.models import Agent, ReadmissionPayment
 from ditto.db.queries.payments import (
     credit_expires_at,
     get_evaluation_payment_for_proof,
     get_generator_payment_for_proof,
+    get_readmission_payment_for_proof,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -48,6 +50,12 @@ async def get_upload_payment_proof(
 ) -> UploadPaymentProofView:
     """Return the upload a proof funded, the credit holding it, or neither."""
     generated_at = datetime.now(UTC)
+    readmission_row = await get_readmission_payment_for_proof(
+        session, block_hash=block_hash, extrinsic_index=extrinsic_index
+    )
+    readmission = (
+        _readmission_view(readmission_row) if readmission_row is not None else None
+    )
     payment = await get_evaluation_payment_for_proof(
         session, block_hash=block_hash, extrinsic_index=extrinsic_index
     )
@@ -72,6 +80,24 @@ async def get_upload_payment_proof(
             agent=_agent_view(agent) if agent is not None else None,
             recovery_expires_at=None if funded else expires_at,
             recovery_expired=None if funded else expires_at <= generated_at,
+            readmission=readmission,
+            generated_at=generated_at,
+        )
+
+    if readmission_row is not None:
+        agent = await session.get(Agent, readmission_row.agent_id)
+        return UploadPaymentProofView(
+            block_hash=readmission_row.block_hash,
+            extrinsic_index=readmission_row.extrinsic_index,
+            state="funded_readmission",
+            miner_hotkey=readmission_row.miner_hotkey,
+            miner_coldkey=readmission_row.miner_coldkey,
+            amount_rao=readmission_row.amount_rao,
+            dest_address=readmission_row.dest_address,
+            block_timestamp=readmission_row.timestamp,
+            recorded_at=readmission_row.created_at,
+            agent=_agent_view(agent) if agent is not None else None,
+            readmission=readmission,
             generated_at=generated_at,
         )
 
@@ -109,4 +135,17 @@ def _agent_view(agent: Agent) -> UploadPaymentProofAgent:
         agent_status=agent.status.value,
         artifact_sha256=agent.sha256,
         submitted_at=agent.created_at,
+    )
+
+
+def _readmission_view(row: ReadmissionPayment) -> UploadPaymentProofReadmission:
+    return UploadPaymentProofReadmission(
+        agent_id=row.agent_id,
+        bench_version=row.bench_version,
+        rollout_id=row.rollout_id,
+        outcome="admitted" if row.outcome == "admitted" else "credited",
+        funding="credit" if row.funding == "credit" else "fresh",
+        refusal_reason=row.refusal_reason,
+        credit_audit=row.credit_audit,
+        recorded_at=row.updated_at,
     )

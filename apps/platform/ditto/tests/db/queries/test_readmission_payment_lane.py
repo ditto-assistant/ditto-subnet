@@ -322,6 +322,11 @@ async def test_a_credited_readmission_can_be_spent_on_the_readmission(
             "credit",
             None,
         )
+        # The spent credit's history survives on the readmission row.
+        assert row.credit_audit is not None
+        assert row.credit_audit["credit_origin"] == "readmission"
+        assert row.credit_audit["credit_for_agent_id"] == str(target)
+        assert row.credit_audit["refusal_reason"] == "the cohort filled after payment"
     # The credit is gone, so no upload can spend the proof again.
     assert (
         await get_evaluation_payment_for_proof(
@@ -367,6 +372,9 @@ async def test_a_duplicate_upload_credit_can_pay_a_readmission_once(
         )
     )
     assert [(r.outcome, r.funding) for r in rows] == [("admitted", "credit")]
+    assert rows[0].credit_audit is not None
+    assert rows[0].credit_audit["credit_origin"] == "duplicate_upload"
+    assert rows[0].credit_audit["credit_for_agent_id"] == str(original)
     assert (
         await session.scalar(
             select(EvaluationPayment).where(

@@ -7,7 +7,8 @@ Three changes, all inert until a readmission is charged:
   ``(block_hash, extrinsic_index)`` stops a replay within the lane, and a
   partial unique index allows at most one *admitted* readmission per agent and
   era. ``outcome = 'credited'`` records a paid readmission that was refused
-  after payment; its proof is then banked as an upload credit.
+  after payment; its proof is then banked as an upload credit. A readmission
+  paid by spending a credit keeps that credit's history in ``credit_audit``.
 * ``readmission_reservations``: the pre-payment fee and address snapshot for
   one ``(agent_id, bench_version)``, separate from the per-coldkey upload slot
   so a readmission never blocks a new upload.
@@ -56,6 +57,7 @@ def upgrade() -> None:
         sa.Column("funding", sa.Text(), nullable=False),
         sa.Column("outcome", sa.Text(), nullable=False),
         sa.Column("refusal_reason", sa.Text(), nullable=True),
+        sa.Column("credit_audit", postgresql.JSONB(), nullable=True),
         sa.Column("created_at", _TS, server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", _TS, server_default=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint(
@@ -90,6 +92,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "funding IN ('fresh', 'credit')",
             name="readmission_payments_funding_check",
+        ),
+        sa.CheckConstraint(
+            "(funding = 'credit') = (credit_audit IS NOT NULL)",
+            name="readmission_payments_credit_audit_check",
         ),
         sa.CheckConstraint(
             "(outcome = 'admitted' AND refusal_reason IS NULL) OR "

@@ -2004,7 +2004,9 @@ class EvaluationPayment(Base):
     """Why this proof became a credit. ``None``: a byte-identical upload (and
     every row before SN-485). ``readmission``: a paid readmission of
     ``credit_for_agent_id`` was refused after payment; such a credit stays
-    spendable for 30 days. Kept after the credit is spent, as audit."""
+    spendable for 30 days. Kept after an upload spends the credit; a
+    readmission that spends it moves the proof to ``readmission_payments``,
+    whose ``credit_audit`` keeps this origin."""
 
     miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     """Signer hotkey on the payment extrinsic. FK-bound to ``agents.miner_hotkey``."""
@@ -7208,6 +7210,14 @@ insert_readmission_payment` refuses a proof already recorded by the agent or
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
     refusal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Why a credited readmission was refused after payment."""
+    credit_audit: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Set exactly when ``funding = 'credit'``: the history of the credit that
+    paid, kept because spending it removes the ``evaluation_payments`` credit
+    row (``credit_origin``, ``credit_for_agent_id``, ``credit_recorded_at``,
+    and for a readmission-origin credit the earlier ``refusal_reason`` and
+    ``credited_agent_id``/``credited_bench_version``)."""
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -7246,6 +7256,10 @@ insert_readmission_payment` refuses a proof already recorded by the agent or
         CheckConstraint(
             "funding IN ('fresh', 'credit')",
             name="readmission_payments_funding_check",
+        ),
+        CheckConstraint(
+            "(funding = 'credit') = (credit_audit IS NOT NULL)",
+            name="readmission_payments_credit_audit_check",
         ),
         CheckConstraint(
             "(outcome = 'admitted' AND refusal_reason IS NULL) OR "
