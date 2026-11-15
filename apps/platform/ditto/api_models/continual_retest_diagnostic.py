@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from ditto.api_models.continual_retest_settings import WaveMembership
+from ditto.api_models.public import PublicSeasonRetest
 
 
 class RetestFamilyMember(BaseModel):
@@ -211,7 +212,8 @@ class AdminContinualRetestDiagnostic(BaseModel):
     quorum is entirely or partly from seasons that left the two-season window
     (``score_dueling_season_ids`` vs ``window_dueling_season_ids``). The
     expiry is deliberate cost control; only scores taken in the window count
-    again. ``not_current_finalized_ledger`` is any other absence."""
+    again (``season_retest`` says whether a free re-test is queued and why
+    not). ``not_current_finalized_ledger`` is any other absence."""
     ledger_eligible: bool = False
     """Whether this generation is in the current finalized eligible ledger."""
     score_dueling_season_ids: list[UUID] = []
@@ -222,6 +224,10 @@ class AdminContinualRetestDiagnostic(BaseModel):
     """Bench v16+: accepted scores inside the live window (``None`` below)."""
     last_valid_composite: float | None = None
     """``expired_dueling_season`` only: the expired quorum's stored median."""
+    season_retest: PublicSeasonRetest | None = None
+    """``expired_dueling_season`` only: whether a free platform re-test on the
+    open season is queued (season catch-up or an ATH clear) and, if not, the
+    recorded reason -- the same label the public board and agent summary show."""
     in_current_pin: bool | None = None
     """Whether the epoch pin validators fold now lists this agent; ``None`` in
     live mode or before the first pin. A pinned agent keeps its emissions and

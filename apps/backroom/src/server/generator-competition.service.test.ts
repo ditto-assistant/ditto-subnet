@@ -1070,6 +1070,10 @@ describe('generator competition MCP tools', () => {
     expect(generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_enabled: false }))
       .toMatchObject({ season_catchup_enabled: false })
     expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_max_agents: 11 })).toThrow()
+    // SN-486: the overflow budget and per-run estimate default and are bounded.
+    expect(parsed).toMatchObject({ season_catchup_budget_usd: 10, season_catchup_run_cost_usd: 0.5 })
+    expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_budget_usd: -1 })).toThrow()
+    expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, season_catchup_run_cost_usd: 0 })).toThrow()
   })
 
   it('names the frontier write that was refused and the recovery its status implies', () => {

@@ -31,6 +31,7 @@ from ditto.api_models.admin_copy_review import (
     AdminCopyReviewResolveRequest,
     AdminCopyReviewResolveResponse,
     AdminDeferredReviewEvidence,
+    AdminSeasonRetestOutcome,
     AdminSourceDiffFileDetail,
     AdminSourceDiffManifest,
 )
@@ -50,6 +51,7 @@ from ditto.api_server.ath_review_state import (
     load_reopened_review_actions,
 )
 from ditto.api_server.dependencies import get_session, get_storage_client
+from ditto.api_server.dueling_seasons import queue_cleared_hold_retest
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.review_lineage import (
     ReviewLineageUnavailableError,
@@ -1410,6 +1412,27 @@ async def resolve_copy_review(
             )
         )
         await session.flush()
+    season_retest: AdminSeasonRetestOutcome | None = None
+    if canonical == "clear":
+        # Its own transaction, after the clear commits: the audit chain lock
+        # is never taken while the agent row lock is held, and a failed
+        # re-test write can never undo the ruling. A clear whose re-test did
+        # not land is still caught by the next boundary's off-board catch-up.
+        async with session.begin():
+            season_retest = AdminSeasonRetestOutcome.model_validate(
+                await queue_cleared_hold_retest(
+                    session,
+                    agent_id=agent_id,
+                    review_id=review.review_id,
+                    now=datetime.now(UTC),
+                )
+            )
+        logger.info(
+            "ATH clear %s by %s: season re-test %s",
+            agent_id,
+            actor,
+            season_retest.model_dump(exclude_none=True),
+        )
     candidate_coldkey, reference_coldkey = await _review_coldkeys(
         session, agent, matched
     )
@@ -1424,6 +1447,7 @@ async def resolve_copy_review(
         agent_status=agent.status.value,
         idempotent=False,
         reconciled_quarantine_ids=reconciled_quarantine_ids,
+        season_retest=season_retest,
     )
 
 

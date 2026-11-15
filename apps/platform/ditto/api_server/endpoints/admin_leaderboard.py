@@ -37,6 +37,7 @@ from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.public import (
     _LEADERBOARD_DETAIL_FIELDS,
     build_public_leaderboard,
+    public_season_retest,
 )
 from ditto.api_server.endpoints.validator import (
     ChainDep,
@@ -81,7 +82,10 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     not_voided,
 )
-from ditto.db.queries.dueling_season_expiry import season_coverage
+from ditto.db.queries.dueling_season_expiry import (
+    season_coverage,
+    season_retest_states,
+)
 from ditto.db.queries.ledger_epochs import latest_pin
 from ditto.db.queries.provider_outages import (
     provider_gate_closed,
@@ -910,6 +914,13 @@ async def continual_retest_diagnostic(
         last_valid_composite=(
             coverage.median.composite
             if season_expired and coverage is not None and coverage.median is not None
+            else None
+        ),
+        season_retest=(
+            public_season_retest(
+                (await season_retest_states(session, [coverage]))[agent_id]
+            )
+            if season_expired and coverage is not None
             else None
         ),
         in_current_pin=in_current_pin,

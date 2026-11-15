@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid5
 
 from sqlalchemy import func, select
@@ -712,6 +713,44 @@ async def _rotation_retest_stale_reason(
     return None
 
 
+CATCH_UP_SOURCE_BOARD = "board"
+"""A paid or public top-five agent within ``season_catchup_max_agents``."""
+CATCH_UP_SOURCE_BOARD_OVERFLOW = "board_overflow"
+"""A board agent past ``season_catchup_max_agents``, within the catch-up budget."""
+CATCH_UP_SOURCE_OFF_BOARD = "off_board"
+"""A scored agent off the board whose in-window scores expire (or expired),
+within the catch-up budget; at most once per agent and bench version."""
+CATCH_UP_SOURCE_ATH_CLEAR = "ath_clear"
+"""An ATH hold was cleared while the agent's scores sat outside the open
+season: the hold kept it off the board, so the platform re-scores it."""
+CATCH_UP_SOURCES = frozenset(
+    {
+        CATCH_UP_SOURCE_BOARD,
+        CATCH_UP_SOURCE_BOARD_OVERFLOW,
+        CATCH_UP_SOURCE_OFF_BOARD,
+        CATCH_UP_SOURCE_ATH_CLEAR,
+    }
+)
+_CATCH_UP_ACTOR_REASON = {
+    CATCH_UP_SOURCE_BOARD: (
+        "platform:dueling-season-catchup",
+        "dueling season catch-up: no score in the closed season",
+    ),
+    CATCH_UP_SOURCE_BOARD_OVERFLOW: (
+        "platform:dueling-season-catchup",
+        "dueling season catch-up: board agent past the catch-up cap, within budget",
+    ),
+    CATCH_UP_SOURCE_OFF_BOARD: (
+        "platform:dueling-season-catchup",
+        "dueling season catch-up: off-board agent whose window scores expire",
+    ),
+    CATCH_UP_SOURCE_ATH_CLEAR: (
+        "platform:ath-clear-retest",
+        "ATH hold cleared: re-score on the open season so the hold cannot expire it",
+    ),
+}
+
+
 def rotation_request_id(season_id: UUID, agent_id: UUID, validator_hotkey: str) -> UUID:
     """The deterministic request id of one season's rotation re-test."""
     return uuid5(season_id, f"dueling-rotation:{agent_id}:{validator_hotkey}")
@@ -726,6 +765,8 @@ async def queue_dueling_rotation_retests(
     now: datetime,
     catch_up: bool = False,
     first_rank: int = 0,
+    catch_up_source: str | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     """Queue one rotation re-test per accepted score of every cohort member.
 
@@ -733,7 +774,9 @@ async def queue_dueling_rotation_retests(
     ``catch_up`` the members are a season-boundary catch-up
     (:func:`ditto.api_server.dueling_seasons.queue_catchup_retests`), ranked
     from ``first_rank`` so they queue behind the opening cohort, and tagged
-    ``catch_up`` so their spend is told apart. Every
+    ``catch_up`` so their spend is told apart. ``catch_up_source`` says why
+    (:data:`CATCH_UP_SOURCES`; ``board`` when omitted); ``extra_payload`` is
+    merged into each queued entry (the ATH review that cleared a hold). Every
     ``(agent, validator)`` score at ``bench_version`` from another season is
     queued behind nothing (:func:`_ordered_queued_retests` puts rotation work
     first); a score already in ``season_id``, a live ticket, or an open
@@ -741,6 +784,17 @@ async def queue_dueling_rotation_retests(
     from an earlier season is closed and replaced. Idempotent per season: the
     request id is derived from ``(season, agent, validator)``. Caller commits.
     """
+    source = (catch_up_source or CATCH_UP_SOURCE_BOARD) if catch_up else None
+    if source is not None and source not in CATCH_UP_SOURCES:
+        raise ValueError(f"unknown catch-up source {source!r}")
+    actor, reason = (
+        _CATCH_UP_ACTOR_REASON[source]
+        if source is not None
+        else (
+            "platform:dueling-season-rotation",
+            "dueling season rotation: re-score on the new set",
+        )
+    )
     counts = {"queued": 0, "already_current": 0, "busy": 0, "replaced": 0}
     for rank, agent_id in enumerate(dict.fromkeys(cohort), start=first_rank):
         rows = list(
@@ -800,17 +854,12 @@ async def queue_dueling_rotation_retests(
                 validator_hotkey=validator_hotkey,
                 event=EVENT_SCORE_RETEST_QUEUED,
                 payload={
+                    # Caller metadata first: it can never replace the
+                    # deterministic idempotency key or any core field.
+                    **(extra_payload or {}),
                     "request_id": str(request_id),
-                    "actor": (
-                        "platform:dueling-season-catchup"
-                        if catch_up
-                        else "platform:dueling-season-rotation"
-                    ),
-                    "reason": (
-                        "dueling season catch-up: no score in the closed season"
-                        if catch_up
-                        else "dueling season rotation: re-score on the new set"
-                    ),
+                    "actor": actor,
+                    "reason": reason,
                     "basis": DUELING_ROTATION_RETEST_BASIS,
                     "bench_version": bench_version,
                     "run_id": run_id,
@@ -820,6 +869,7 @@ async def queue_dueling_rotation_retests(
                     ),
                     "rotation_rank": rank,
                     "catch_up": catch_up,
+                    **({"catch_up_source": source} if source is not None else {}),
                     "automatic": True,
                 },
                 recorded_at=now,

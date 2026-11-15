@@ -437,6 +437,31 @@ export interface SeasonExpiry {
   in_window_score_count: number;
   last_valid_composite: number;
   pinned_epoch_index?: number | null;
+  /** SN-486: whether a free platform re-test is queued, and if not, why. */
+  retest?: SeasonRetest | null;
+}
+
+export interface SeasonRetest {
+  state: "queued" | "not_queued";
+  reason:
+    | "rotation"
+    | "board"
+    | "board_overflow"
+    | "off_board"
+    | "ath_clear"
+    | "retested"
+    | "over_budget"
+    | "board_cap"
+    | "below_board_floor"
+    | "owner_has_better_agent"
+    | "superseded_rerun"
+    | "already_retested"
+    | "unranked"
+    | "catchup_disabled"
+    | "not_considered";
+  dueling_season_id?: string | null;
+  /** One plain sentence from Platform, shown as-is. */
+  note: string;
 }
 
 export type V9GateResult =

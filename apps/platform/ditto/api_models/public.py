@@ -932,6 +932,77 @@ class PublicRewardEligibility(BaseModel):
     ] = None
 
 
+class PublicSeasonRetest(BaseModel):
+    """Whether Ditto is re-scoring an expired bench v16+ agent, and why not.
+
+    A platform re-test (season catch-up or an ATH clear) is free to the
+    miner. Only scores taken in the live window rank or pay again.
+    """
+
+    state: Annotated[
+        Literal["queued", "not_queued"],
+        Field(
+            description=(
+                "``queued``: a re-test on the open season is queued or running. "
+                "``not_queued``: none is pending; ``reason`` says why."
+            )
+        ),
+    ]
+    reason: Annotated[
+        Literal[
+            "rotation",
+            "board",
+            "board_overflow",
+            "off_board",
+            "ath_clear",
+            "retested",
+            "over_budget",
+            "board_cap",
+            "below_board_floor",
+            "owner_has_better_agent",
+            "superseded_rerun",
+            "already_retested",
+            "unranked",
+            "catchup_disabled",
+            "not_considered",
+        ],
+        Field(
+            description=(
+                "Queued: ``rotation`` (the season-opening cohort), ``board`` "
+                "(paid or top-five catch-up), ``board_overflow`` (board agent "
+                "past the catch-up cap, within the per-season budget), "
+                "``off_board`` (off-board agent whose scores expired, within "
+                "the budget), ``ath_clear`` (its review hold was cleared). Not "
+                "queued: ``retested`` (a catch-up ran but did not restore a full "
+                "quorum in the window), ``over_budget`` (the season's catch-up "
+                "budget ran out; the next boundary reconsiders it), "
+                "``board_cap`` (past the board catch-up cap, before the budget "
+                "existed), ``below_board_floor`` (its last valid score is under "
+                "the lowest score on the board, so a re-test could not place "
+                "it), ``owner_has_better_agent`` (its owner already has a "
+                "better agent on the board), ``superseded_rerun`` (a newer run "
+                "of the same artifact stands for it), ``already_retested`` (it "
+                "already "
+                "had its one off-board catch-up on this bench version), "
+                "``unranked`` (its last quorum was not a full, positive run), "
+                "``catchup_disabled`` (season catch-up is switched off), "
+                "``not_considered`` (no boundary recorded a decision for it)."
+            )
+        ),
+    ]
+    dueling_season_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description=(
+                "Queued: the open season it is re-scored on. Otherwise the "
+                "season whose boundary decided it."
+            ),
+        ),
+    ] = None
+    note: Annotated[str, Field(description="One plain sentence for the miner.")]
+
+
 class PublicSeasonExpiry(BaseModel):
     """Why a bench v16+ row is shown although its scores left the live window.
 
@@ -939,7 +1010,9 @@ class PublicSeasonExpiry(BaseModel):
     (``current`` plus the provisional ``previous``); older ones expire from the
     authoritative ledger by design, so the platform never pays to re-score the
     board on every rotation. This label keeps such an agent visible instead of
-    dropping it, without re-scoring it and without changing any pin or weight.
+    dropping it, without changing any pin or weight. ``retest`` says whether a
+    free, bounded platform re-test (season catch-up or an ATH clear) is
+    queued, and if not, why.
     """
 
     state: Annotated[
@@ -985,6 +1058,17 @@ class PublicSeasonExpiry(BaseModel):
         Field(
             default=None,
             description="``pinned_carry`` only: the pin that still carries it.",
+        ),
+    ] = None
+    retest: Annotated[
+        PublicSeasonRetest | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Whether a free platform re-test on the open season is queued "
+                "for this agent, and if not, why. Absent when not read."
+            ),
         ),
     ] = None
 
@@ -4888,6 +4972,16 @@ class PublicAgentSummary(BaseModel):
     queue_withdrawn: bool = Field(
         default=False,
         description="Same as the activity row's queue_withdrawn.",
+    )
+    season_expiry: PublicSeasonExpiry | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench v16+ scored agents only: set when the accepted scores have "
+            "left the two-season window, so the agent no longer ranks or earns. "
+            "``retest`` says whether a free platform re-test is queued and, if "
+            "not, why. Absent while the quorum is still in the window."
+        ),
     )
 
 

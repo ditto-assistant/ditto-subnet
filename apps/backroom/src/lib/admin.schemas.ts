@@ -8489,6 +8489,21 @@ export const resolveCopyReviewResponseSchema = z.object({
   // Active screening quarantines a terminal reject closed in the same
   // transaction (ditto-subnet#2038).
   reconciled_quarantine_ids: z.array(z.string().uuid()).nullish().default([]),
+  // SN-486: a clear that leaves a bench v16+ agent scored with less than a
+  // full quorum in the open dueling season queues one free platform re-test
+  // per accepted score on it, so the hold cannot expire the agent. Null for
+  // a reject or an idempotent replay.
+  season_retest: z.object({
+    queued: z.number().int().nonnegative().default(0),
+    already_current: z.number().int().nonnegative().default(0),
+    busy: z.number().int().nonnegative().default(0),
+    replaced: z.number().int().nonnegative().default(0),
+    bench_version: z.number().int().nullable().default(null),
+    dueling_season_id: z.string().uuid().nullable().default(null),
+    catch_up_source: z.literal('ath_clear').nullable().default(null),
+    skipped: z.string().nullable().default(null),
+    error: z.string().nullable().default(null),
+  }).nullish().default(null),
 })
 
 export const getAthReviewInputSchema = z.object({
@@ -9290,6 +9305,19 @@ const emptyRetestCutoff = {
   within_tie_band: null,
 }
 
+
+// SN-486: why an expired bench v16+ agent is or is not being re-scored.
+export const seasonRetestSchema = z.object({
+  state: z.enum(['queued', 'not_queued']),
+  reason: z.enum([
+    'rotation', 'board', 'board_overflow', 'off_board', 'ath_clear',
+    'retested', 'over_budget', 'board_cap', 'below_board_floor',
+    'owner_has_better_agent', 'superseded_rerun', 'already_retested', 'unranked',
+    'catchup_disabled', 'not_considered',
+  ]),
+  dueling_season_id: z.string().uuid().nullable().default(null),
+  note: z.string(),
+})
 export const continualRetestDiagnosticSchema = z.object({
   generated_at: z.string(),
   agent_id: z.string().uuid(),
@@ -9337,6 +9365,10 @@ export const continualRetestDiagnosticSchema = z.object({
   window_dueling_season_ids: z.array(z.string().uuid()).default([]),
   in_window_score_count: z.number().int().nonnegative().nullable().default(null),
   last_valid_composite: z.number().min(0).max(1).nullable().default(null),
+  // SN-486, expired_dueling_season only: whether a free platform re-test on
+  // the open season is queued (season catch-up or an ATH clear) and, if not,
+  // the recorded reason -- the label miners see on the board and agent card.
+  season_retest: seasonRetestSchema.nullish().default(null),
   in_current_pin: z.boolean().nullable().default(null),
   canonical_sample_count: z.number().int().nonnegative().default(0),
   completed_wave_depth: z.number().int().nonnegative().default(0),

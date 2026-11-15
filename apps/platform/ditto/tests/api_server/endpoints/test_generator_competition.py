@@ -99,6 +99,8 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "skip_unchanged_rounds": True,
         "season_catchup_enabled": True,
         "season_catchup_max_agents": 5,
+        "season_catchup_budget_usd": 10.0,
+        "season_catchup_run_cost_usd": 0.5,
         "frontier_weight": 1.0,
         "frontier_oracle_agent_id": None,
         "frontier_audit_cases": 3,

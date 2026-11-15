@@ -406,6 +406,36 @@ Agents scored against different generator sets are not comparable, so the
   canary-only shadow season (no rollout at its version) has no catch-up. The admin seasons read reports `rotation_spend`: metered
   grant cost of rotation leases, opening and catch-up apart, per season and
   over the last 24 hours (`db/queries/dueling_rotation_spend.py`).
+- **Catch-up overflow, bounded by budget** (`season_catchup_budget_usd`,
+  default 10; `season_catchup_run_cost_usd`, default 0.5; SN-486). The first
+  `season_catchup_max_agents` board agents always queue. The overflow queues
+  in order while its estimated cost fits the budget: board agents past that
+  cap, then scored agents off the board (an authoritative season only) whose
+  quorum leaves the window at this open or already left it, best last median
+  first. The estimate is runs (accepted scores) times the metered cost per
+  priced rotation run over the last 24 hours, or the run-cost setting when
+  nothing was metered. An off-board agent is passed over, with the reason
+  recorded, when its last median is below the lowest in-window median on the
+  board, when its owner family has a better agent on the board or earlier in
+  the list, when its last quorum was not a full positive run, or when it
+  already had its one off-board catch-up at this bench version. Agents that
+  do not fit are recorded `over_budget` and reconsidered at the next open.
+  `detail.catchup` records `agents`, `capped`, `overflow` (with runs and the
+  estimate), `over_budget`, `off_board_skipped` (at most 200, best first) and
+  `off_board_skipped_counts`.
+- **An ATH clear re-scores what the hold let expire** (SN-486). A hold keeps
+  an agent off the board, so no catch-up covers it, and a hold longer than
+  about two seasons lets every score it holds leave the window. A clear
+  (`resolve_ath_review`, `execute_ath_rulings_batch`, the copy-hold court)
+  that leaves the agent scored or live at the active dueling version, with
+  less than a full quorum in the open season, queues one rotation re-test per
+  accepted score on that season (`catch_up_source = ath_clear`), after the
+  ruling commits. A re-test that did not land is caught by the next open's
+  off-board catch-up.
+- **Every platform re-test is free to the miner** (rotation, catch-up,
+  overflow, off-board, ATH clear). The public board and agent summary label
+  an expired agent with `season_expiry.retest` (queued, or why not), and the
+  continual-retest diagnostic carries the same label (`season_retest`).
 - A ban or copy ruling against a pinned generator mid-season triggers an early
   rotation, not an in-place swap.
 - **Idle seasons extend instead of rotating** (`skip_unchanged_rounds`, on by

@@ -133,6 +133,7 @@ from ditto.api_models import (
     PublicScreeningReviewFinding,
     PublicScreeningReviewLocation,
     PublicSeasonExpiry,
+    PublicSeasonRetest,
     PublicSubmissionFamily,
     PublicSubmissionFamilyMember,
     PublicSubmissionImageBuild,
@@ -413,7 +414,10 @@ from ditto.db.queries.confirmation_scores import (
 from ditto.db.queries.desired_era_backlog import prev_generation_agent_ids
 from ditto.db.queries.dueling_season_expiry import (
     SeasonCoverage,
+    SeasonRetestState,
     expired_season_ledger_rows,
+    season_coverage,
+    season_retest_states,
 )
 from ditto.db.queries.emission_eligibility import (
     AgentReviewPosture,
@@ -3584,6 +3588,90 @@ class _SeasonExpiryRow:
     """``pinned_carry`` only: the official composite the current pin folds."""
 
 
+async def _agent_season_expiry(
+    session: AsyncSession, agent_id: UUID, *, bench_version: int
+) -> PublicSeasonExpiry | None:
+    """One scored agent's expiry label with its re-test state, or ``None``
+    while its quorum is still in the window (or below the dueling floor)."""
+    if not is_dueling_bench_version(bench_version):
+        return None
+    coverage = (
+        await season_coverage(
+            session, bench_version=bench_version, agent_ids=[agent_id]
+        )
+    ).get(agent_id)
+    if coverage is None or not coverage.expired:
+        return None
+    states = await season_retest_states(session, [coverage])
+    label = _season_expiry_label(coverage, state="expired")
+    state = states.get(agent_id)
+    if state is None:
+        return label
+    return label.model_copy(update={"retest": public_season_retest(state)})
+
+
+_SEASON_RETEST_NOTES: dict[str, str] = {
+    "rotation": "Queued: the season-opening rotation re-scores it on the open season.",
+    "board": "Queued: a free catch-up re-test on the open season (board agent).",
+    "board_overflow": (
+        "Queued: a free catch-up re-test on the open season, past the board cap "
+        "and within the season's catch-up budget."
+    ),
+    "off_board": (
+        "Queued: a free catch-up re-test on the open season, because its scores "
+        "expired while it was off the board."
+    ),
+    "ath_clear": (
+        "Queued: a free re-test on the open season, because its review hold was "
+        "cleared after its scores had left the window."
+    ),
+    "retested": (
+        "A free catch-up re-test was queued, but it did not restore a full quorum "
+        "inside the window."
+    ),
+    "over_budget": (
+        "Not re-tested yet: the season's catch-up budget ran out. The next season "
+        "boundary reconsiders it."
+    ),
+    "board_cap": (
+        "Not re-tested: it was past the board catch-up cap when its season "
+        "expired. The next season boundary reconsiders it."
+    ),
+    "below_board_floor": (
+        "Not re-tested: its last valid score is below the lowest score on the "
+        "board, so a re-test could not place it."
+    ),
+    "owner_has_better_agent": (
+        "Not re-tested: the same owner already has a better agent on the board."
+    ),
+    "superseded_rerun": (
+        "Not re-tested: a newer run of the same artifact stands for it, so that "
+        "run is the one that counts."
+    ),
+    "already_retested": (
+        "Not re-tested: it already had its one free off-board catch-up on this "
+        "bench version. Only new in-window scores count again."
+    ),
+    "unranked": "Not re-tested: its last quorum was not a full, positive run.",
+    "catchup_disabled": "Not re-tested: season catch-up is switched off.",
+    "not_considered": (
+        "No season boundary has recorded a re-test decision for it yet. Each "
+        "boundary reconsiders expired agents."
+    ),
+}
+
+
+def public_season_retest(state: SeasonRetestState) -> PublicSeasonRetest:
+    """The miner-facing re-test label for one :class:`SeasonRetestState`."""
+    reason = state.reason if state.reason in _SEASON_RETEST_NOTES else "not_considered"
+    return PublicSeasonRetest(
+        state="queued" if state.state == "queued" else "not_queued",
+        reason=cast(Any, reason),
+        dueling_season_id=state.dueling_season_id,
+        note=_SEASON_RETEST_NOTES[reason],
+    )
+
+
 def _season_expiry_label(
     coverage: SeasonCoverage,
     *,
@@ -3722,6 +3810,7 @@ async def _season_expiry_rows(
     pinned_ids = {item.row.agent_id for item in pinned}
     taken |= provisional_owners
     expired: list[_SeasonExpiryRow] = []
+    expired_coverage: list[SeasonCoverage] = []
     for owner, (row, coverage) in zip(
         roots[len(carry_candidates) :], expired_candidates, strict=True
     ):
@@ -3737,7 +3826,30 @@ async def _season_expiry_rows(
                 score_count=len(coverage.scores),
             )
         )
-    return pinned, expired
+        expired_coverage.append(coverage)
+    shown = [
+        *(item.row.agent_id for item in pinned),
+        *(c.agent_id for c in expired_coverage),
+    ]
+    by_id = {coverage.agent_id: coverage for _row, coverage in candidates}
+    states = await season_retest_states(
+        session, [by_id[agent_id] for agent_id in shown if agent_id in by_id]
+    )
+
+    def _with_retest(item: _SeasonExpiryRow) -> _SeasonExpiryRow:
+        state = states.get(item.row.agent_id)
+        if state is None:
+            return item
+        return replace(
+            item,
+            expiry=item.expiry.model_copy(
+                update={"retest": public_season_retest(state)}
+            ),
+        )
+
+    return [_with_retest(item) for item in pinned], [
+        _with_retest(item) for item in expired
+    ]
 
 
 async def build_public_leaderboard(
@@ -8454,9 +8566,15 @@ async def agent_summary(
     )
     display_name, name_handle = _public_named(row.agent.name, owner_root, handle_claims)
     avatar = await get_miner_avatar(session, hotkey=row.agent.miner_hotkey)
+    season_expiry = (
+        await _agent_season_expiry(session, agent_id, bench_version=active_version)
+        if row.agent.status == AgentStatus.SCORED
+        else None
+    )
     return PublicAgentSummary(
         generated_at=now,
         agent_id=agent_id,
+        season_expiry=season_expiry,
         miner_hotkey=row.agent.miner_hotkey,
         name=display_name,
         name_handle=name_handle,

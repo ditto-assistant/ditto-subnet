@@ -430,6 +430,17 @@ frequent harder versions, is the main defence against overfitting.
   `uv run ditto practice --bench-version 16`, which builds a local slice from
   the public default generator only; live miner columns stay private until
   their source is released.
+- **On the dueling bench, a score counts for two seasons.** Scores count in
+  the season they were taken in and the next one (roughly 9.6 hours in all),
+  then expire, because scores from different generator sets are not
+  comparable. An expired agent stays on the board, labelled, but does not
+  rank or earn until it has new scores. Ditto re-tests it for free on the open
+  season in these cases: it is in the paid set or the public top five at a
+  season boundary; it is past those but fits that season's catch-up budget;
+  it is off the board but could still place (once per bench version); or a
+  review hold on it was cleared after its scores expired. The board row and
+  `GET /api/v1/public/agent/{id}/summary` show `season_expiry.retest`: whether
+  a re-test is queued and, if not, why.
 - The validator self-checks its `tool_endpoint` before scoring. A platform
   listener failure aborts and retries the run; if the listener is healthy and
   your harness never calls it, the run completes with the corresponding

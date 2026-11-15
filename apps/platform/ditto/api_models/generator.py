@@ -245,14 +245,30 @@ class GeneratorCompetitionSettings(BaseModel):
     season_catchup_enabled: bool = True
     """At a season boundary, re-score once on the new set every paid or
     public top-five agent with no score in the season that just closed
-    (:func:`ditto.api_server.dueling_seasons.queue_catchup_retests`). Without
-    it, an agent that scored after a season's opening cohort was picked
-    expires one season later, with no re-score. The kill switch: off queues
-    none. On by default, and a revision written before this field existed
-    reads as on."""
+    (:func:`ditto.api_server.dueling_seasons.queue_catchup_retests`), then,
+    within ``season_catchup_budget_usd``, board agents past the cap and
+    scored off-board agents whose window scores expire. Without it, an agent
+    that scored after a season's opening cohort was picked expires one season
+    later, with no re-score. The kill switch: off queues none (an ATH clear
+    still re-scores its agent). On by default, and a revision written before
+    this field existed reads as on."""
     season_catchup_max_agents: Annotated[int, Field(ge=0, le=10)] = 5
-    """At most this many catch-up agents per season (each re-scored by
-    every validator that scored it), in board order. Zero queues none."""
+    """At most this many board catch-up agents per season (each re-scored by
+    every validator that scored it), in board order, always queued. Board
+    agents past it are overflow, bounded by ``season_catchup_budget_usd``."""
+    season_catchup_budget_usd: Annotated[float, Field(ge=0.0, le=200.0)] = 10.0
+    """Estimated USD ceiling per season boundary for catch-up re-tests beyond
+    the first ``season_catchup_max_agents`` board agents: board agents past
+    the cap, then scored agents off the board whose last in-window scores
+    expire at this boundary (best last median first; one off-board catch-up
+    per agent per bench version). Estimated as runs x the metered rotation
+    cost per run of the last 24 hours (``season_catchup_run_cost_usd`` when
+    nothing was metered). Agents it cannot fit are recorded as capped, with
+    the reason, on the season and on the public expiry label. Zero queues
+    no overflow. A revision written before this field existed reads as 10."""
+    season_catchup_run_cost_usd: Annotated[float, Field(gt=0.0, le=20.0)] = 0.5
+    """Fallback cost of one re-test run, in USD, for the catch-up budget
+    estimate when no rotation re-test was metered in the last 24 hours."""
 
     frontier_weight: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
     """Share of full credit a frontier case earns: a case no two independent

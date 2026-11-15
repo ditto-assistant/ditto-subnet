@@ -332,6 +332,28 @@ class AdminCopyReviewOpenResponse(BaseModel):
     reopened: bool
 
 
+class AdminSeasonRetestOutcome(BaseModel):
+    """What a clear queued so the hold cannot expire the agent's scores.
+
+    Bench v16+ scores count for two dueling seasons. A clear that leaves the
+    agent scored with less than a full quorum in the open season queues one
+    platform re-test per accepted score on that season (free to the miner).
+    """
+
+    queued: int = 0
+    already_current: int = 0
+    busy: int = 0
+    """Scores with a re-test of another basis already open (left alone)."""
+    replaced: int = 0
+    bench_version: int | None = None
+    dueling_season_id: UUID | None = None
+    catch_up_source: Literal["ath_clear"] | None = None
+    skipped: str | None = None
+    """Why nothing was queued (no open season, quorum already current, ...)."""
+    error: str | None = None
+    """The re-test write failed; the clear itself still landed."""
+
+
 class AdminCopyReviewResolveResponse(BaseModel):
     review: AdminCopyReviewItem
     agent_status: str
@@ -339,6 +361,9 @@ class AdminCopyReviewResolveResponse(BaseModel):
     reconciled_quarantine_ids: list[UUID] = Field(default_factory=list)
     """Active screening quarantines a terminal reject closed atomically with
     the ruling; each keeps its own resolution and review-event audit rows."""
+    season_retest: AdminSeasonRetestOutcome | None = None
+    """A non-idempotent ``clear`` only: the dueling-season re-test it queued
+    (:func:`ditto.api_server.dueling_seasons.queue_cleared_hold_retest`)."""
 
 
 class AdminCopyReviewPrecedent(BaseModel):

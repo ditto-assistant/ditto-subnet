@@ -4191,6 +4191,7 @@ describe('production score reads', () => {
       window_dueling_season_ids: [],
       in_window_score_count: null,
       last_valid_composite: null,
+      season_retest: null,
       in_current_pin: null,
     })
     expect(result.raw_confirmation_seeds).toEqual(['9223372036854775001'])

@@ -152,15 +152,24 @@ export function RewardEligibilityChip(props: { entry: BoardEntry }): JSX.Element
  * A dueling season rotation expired this row's scores (SN-466). The platform
  * keeps it visible instead of dropping it, and this chip says which way: still
  * paid by the current pin until the next one, or an unranked last valid score.
+ * When Platform reports a queued free re-test (SN-486) the chip says so, and
+ * the tooltip carries Platform's own sentence on why it is or is not re-tested.
  * Nothing renders on a row whose quorum is inside the live window.
  */
 export function SeasonExpiryChip(props: { entry: BoardEntry }): JSX.Element {
   const expiry = (): SeasonExpiry | null => props.entry.season_expiry ?? null;
-  const label = (): string =>
-    expiry()?.state === "pinned_carry" ? "Season expired \u00b7 pinned" : "Season expired";
+  const label = (): string => {
+    const base =
+      expiry()?.state === "pinned_carry" ? "Season expired \u00b7 pinned" : "Season expired";
+    return expiry()?.retest?.state === "queued" ? `${base} \u00b7 re-test queued` : base;
+  };
   const tip = (): string => {
     const record = expiry();
     if (record === null) return "";
+    const note = record.retest?.note ? ` ${record.retest.note}` : "";
+    return baseTip(record) + note;
+  };
+  const baseTip = (record: SeasonExpiry): string => {
     const last = record.last_valid_composite.toFixed(4);
     return record.state === "pinned_carry"
       ? `This agent's scores are from a dueling season that has left the live window. ` +
