@@ -77,6 +77,34 @@ def format_submission_terms(terms: dict[str, Any]) -> list[str]:
             lines.append(f"  Fee:      none required (price if enabled: {price})")
     if terms.get("accepting") is False:
         lines.append("  Status:   not accepting submissions")
+    lines.extend(_readmission_lines(terms.get("readmission")))
+    return lines
+
+
+def _readmission_lines(readmission: object) -> list[str]:
+    """The SN-485 readmission state, when the competition has one."""
+    if not isinstance(readmission, dict):
+        return []
+    activation = readmission.get("activation") or {}
+    if not isinstance(activation, dict):
+        return []
+    if activation.get("active"):
+        state = "active: re-entering your own agent costs the upload fee"
+    else:
+        reasons = ", ".join(str(r) for r in activation.get("inactive_reasons") or [])
+        state = f"not active ({reasons or 'unknown'}); nothing is charged as one"
+    lines = [f"  Readmission: {state}"]
+    effective = activation.get("effective_at")
+    if effective and not activation.get("active"):
+        lines.append(f"  Readmission: earliest charge {effective}")
+    basis = readmission.get("cost_basis")
+    if isinstance(basis, dict) and basis.get("median_agent_cost_usd") is not None:
+        lines.append(
+            "  Cost basis: about "
+            f"${basis['median_agent_cost_usd']:.2f} measured per agent evaluation "
+            f"on v{basis.get('bench_version')} "
+            f"({basis.get('agents_sampled')} agents)"
+        )
     return lines
 
 

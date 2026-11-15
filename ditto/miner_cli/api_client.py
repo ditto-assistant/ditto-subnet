@@ -94,6 +94,8 @@ from ditto.miner_cli.errors import (
     PaymentRecoveryExpiredError,
     PaymentReplayedError,
     PreCheckRejectedError,
+    ReadmissionPaymentRejectedError,
+    ReadmissionUnavailableError,
     SubmissionCooldownError,
     TransientApiError,
     UploadAgentRejectedError,
@@ -416,6 +418,48 @@ class ApiClient:
         if response.status_code not in (200, 201):
             raise AttestationRejectedError(_format_error(response, prefix="owner-link"))
         return OwnerLinkResponse.model_validate(response.json())
+
+    # ---- /readmission (SN-485) ------------------------------------------
+
+    def post_readmission_check(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Pre-payment readmission check; ``ok=False`` is returned, not raised.
+
+        Raises :class:`ReadmissionUnavailableError` on a Platform without the
+        endpoint, so nothing is ever paid against one.
+        """
+        response = self._request("POST", "/api/v1/readmission/check", json=body)
+        if response.status_code == 404:
+            raise ReadmissionUnavailableError(
+                "this Platform does not offer readmission yet; no payment was sent"
+            )
+        if response.status_code != 200:
+            raise ApiResponseError(_format_error(response, prefix="readmission check"))
+        result: dict[str, Any] = response.json()
+        return result
+
+    def post_readmission_commit(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Commit a paid readmission: admitted, or credited when refused after
+        payment. A definitive proof refusal raises
+        :class:`ReadmissionPaymentRejectedError`."""
+        response = self._request(
+            "POST",
+            "/api/v1/readmission/commit",
+            json=body,
+            timeout=UPLOAD_TIMEOUT_S,
+        )
+        if response.status_code != 200:
+            message = _format_error(response, prefix="readmission")
+            if (
+                response.status_code == 402
+                and _safe_envelope(response).get("error_code")
+                in _DEFINITIVE_GENERATOR_PAYMENT_CODES
+            ):
+                raise ReadmissionPaymentRejectedError(message)
+            if response.status_code in _RETRYABLE_UPLOAD_STATUS_CODES:
+                raise TransientApiError(message)
+            raise ApiResponseError(message)
+        result: dict[str, Any] = response.json()
+        return result
 
     # ---- /generator (generator competition, shadow) ---------------------
 

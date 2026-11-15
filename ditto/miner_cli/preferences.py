@@ -38,6 +38,10 @@ def _key(*, network: str, hotkey: str) -> str:
 # credits, so a proof for another lane must live in its own bucket.
 AGENT_PAYMENTS_BUCKET = "pending_upload_payments"
 GENERATOR_PAYMENTS_BUCKET = "pending_generator_payments"
+# ``ditto readmit`` proofs (SN-485). Never scanned by uploads: a readmission
+# proof must not be reused as an upload's reusable credit, and Platform refuses
+# it there (3207) anyway.
+READMISSION_PAYMENTS_BUCKET = "pending_readmission_payments"
 
 
 def _pending_payment_key(*, network: str, hotkey: str, name: str, sha256: str) -> str:

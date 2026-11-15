@@ -37,6 +37,29 @@ def build_upload_payload(
     ).encode("ascii")
 
 
+READMISSION_SIGNATURE_DOMAIN = "ditto-readmit-v1"
+
+
+def build_readmission_payload(
+    *,
+    hotkey_ss58: str,
+    agent_id: UUID,
+    bench_version: int,
+    signature_timestamp: int,
+    signature_nonce: UUID,
+) -> bytes:
+    """The exact bytes ``ditto readmit`` signs and Platform verifies (SN-485).
+
+    A separate domain from uploads, binding the agent and the benchmark era,
+    so an upload signature can never stand in for a readmission or the
+    reverse. Pinned literally here and in Platform's readmission tests.
+    """
+    return (
+        f"{READMISSION_SIGNATURE_DOMAIN}:{hotkey_ss58}:{agent_id}:{bench_version}:"
+        f"{signature_timestamp}:{signature_nonce}"
+    ).encode("ascii")
+
+
 def sign_upload_payload(
     *,
     handle: WalletHandle,

@@ -468,3 +468,16 @@ class RegistrationCancelledError(MinerCliError):
     """
 
     pass
+
+
+class ReadmissionPaymentRejectedError(ApiResponseError):
+    """Platform definitively refused a readmission fee proof (SN-485).
+
+    The transfer failed, paid the wrong amount or address, was signed by a
+    coldkey that does not own the hotkey, already paid for something else,
+    or is outside its window. Resending the same proof cannot succeed.
+    """
+
+
+class ReadmissionUnavailableError(MinerCliError):
+    """This Platform has no self-serve readmission (an older deployment)."""
