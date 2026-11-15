@@ -19,6 +19,7 @@ improving the best artifact, not for serving live inference.
 - [Prepare for mainnet](#prepare-for-mainnet)
 - [Install the submission CLI](#install-the-submission-cli)
 - [Verify and submit](#verify-and-submit)
+- [Readmission](#readmission)
 - [Track your submission](#track-your-submission)
 - [Scoring and emissions](#scoring-and-emissions)
 - [Inference request contract](#inference-request-contract)
@@ -361,6 +362,80 @@ after updating.` Update and repackage the harness before submitting again.
 The existing explicit `--allow-identical-rescore` option still permits buying
 another seeded evaluation after the owner cooldown. Exact recovery of a
 previously paid upload continues to return its original submission identity.
+Once the readmission fee is live, such a re-run is a readmission (see below):
+same fee, same cooldown.
+
+## Readmission
+
+A readmission is the owner of an agent asking Ditto to score it again. Ditto
+identifies an agent by its lineage and the owner coldkey that paid for it, not
+by hotkey or upload id. Nothing is charged or readmitted automatically.
+
+**When it applies.** The readmission rules apply from benchmark v19. They go
+live no earlier than seven days after Ditto announces them, so nothing you
+submitted before then is ever charged as a readmission. Until then, uploads
+and `--allow-identical-rescore` behave exactly as described above.
+`ditto upload` and `ditto readmit` print the current state from the submission
+terms: whether readmission is active, the reason it is not, and the earliest
+time it can be charged.
+
+**What counts.**
+
+- Opting an agent you already uploaded into a new benchmark era with
+  `ditto readmit <agent_id>`.
+- Re-running an unchanged agent with `ditto upload --allow-identical-rescore`
+  after one of its evaluations completed.
+- A byte-identical or near-identical (same normalized source) re-upload of
+  your own agent. It is labelled a readmission. The price and cooldown are the
+  same as any upload.
+
+**Price and cooldown.** A readmission costs exactly the upload fee, never more,
+and is paid the same way. It counts toward, and starts, your coldkey's upload
+cooldown. The submission terms also publish the measured cost of evaluating one
+agent on the active benchmark, which is the basis for the fee.
+
+**`ditto readmit`.** Use it when an era changed and your scored agent was not
+carried into the new one (it was not in the frozen rescore cohort):
+
+```sh
+uv run ditto --network finney readmit <agent_id> \
+  --coldkey default \
+  --hotkey default
+```
+
+It checks eligibility before anything is paid and refuses with the reason. Your
+agent must:
+
+- be yours, with the hotkey still owned by the coldkey that paid for it;
+- have finished scoring on the previous era (a partial 2-of-3 row is not
+  eligible: resubmit instead);
+- not be withdrawn, retired, below the screening-policy floor, or missing its
+  screened image;
+- not already be admitted or readmitted to this era.
+
+A rollout must not be open, and your cooldown must be clear. Any of your
+stranded agents is eligible, but payouts count only your best agent; the check
+says when this is not your best, or when another of your agents is already on
+the era. Each agent can be readmitted at most once per era.
+
+The CLI pays the reserved amount after you confirm and saves the proof in its
+own local store. If the response is lost, rerun the same command: it reuses the
+proof and sends no new transfer.
+
+**Refusals after payment.** If Platform can only discover a refusal after you
+paid (a rollout opened, the agent was withdrawn), it keeps your payment as an
+upload credit for your hotkey, valid for 30 days, and `ditto readmit` prints how
+to spend it. Ditto does not refund TAO on chain.
+
+**Free retries.** A retry caused by Ditto, its queue, validators or data is
+always free. That covers stalls, stranded evaluations, issuance gaps,
+validator crashes, provider outages, expired leases the agent did not cause,
+and Ditto's own re-tests such as season rotation and catch-up. Eligibility
+comes only from the error codes validators and the queue record, never from a
+request. Free re-leases are capped per agent: once validators fail an agent
+on six distinct leases in one era without a scoring quorum, it is withdrawn
+from that era. A failure your agent caused is not retried for free; the remedy
+is a paid re-run or a new upload.
 
 A rescore is a re-run, not a lottery ticket. Once the new run of the same bytes
 finalizes with a ranked score, it represents that artifact on the leaderboard,

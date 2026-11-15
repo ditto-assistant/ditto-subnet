@@ -10,6 +10,7 @@ from __future__ import annotations
 from ditto.api_models.submission_settings import ReadmissionActivationState
 from ditto.api_models.submission_terms import ReadmissionCostBasis, ReadmissionTerms
 from ditto.api_server.readmission_cost_basis import CostBasis
+from ditto.db.queries.free_retry_cap import FREE_RETRY_CAP_FAILED_LEASES
 from ditto.db.queries.readmission_gate import (
     READMISSION_MIN_BENCH_VERSION,
     READMISSION_NOTICE_PERIOD,
@@ -27,6 +28,22 @@ READMISSION_RULES: tuple[str, ...] = (
     f"live no earlier than {READMISSION_NOTICE_PERIOD.days} days after it is "
     "announced (activation.effective_at). Nothing submitted before then is "
     "charged as a readmission, and nothing is readmitted automatically.",
+    "ditto readmit AGENT_ID re-enters one of your finalized agents from the "
+    "previous era into the active one. POST /api/v1/readmission/check refuses "
+    "before payment: not your agent, a partial (2 of 3) row, withdrawn, retired, "
+    "below the screening-policy floor, no screened image, already admitted, a "
+    "rollout open, or the cooldown. At most one paid readmission per agent per "
+    "era; payouts still count only the owner's best agent.",
+    "A refusal found only after payment keeps the payment as an upload credit "
+    "for the same hotkey for 30 days. Ditto never refunds TAO on chain.",
+    "Retries caused by Ditto, its queue, validators or data (stalls, stranded "
+    "evaluations, issuance gaps, validator crashes, provider outages, expired "
+    "leases the agent did not cause, and Ditto's own re-tests such as season "
+    "rotation and catch-up) are always free. Eligibility comes only from "
+    "recorded validator and queue error codes, never from a request. Free "
+    f"re-leases are capped at {FREE_RETRY_CAP_FAILED_LEASES} failed leases per "
+    "agent per era; a failure the agent caused is remedied by a paid re-run or "
+    "a new upload, never a free retry.",
 )
 
 

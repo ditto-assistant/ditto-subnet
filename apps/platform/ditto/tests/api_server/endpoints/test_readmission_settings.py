@@ -220,7 +220,10 @@ async def test_public_memory_terms_report_the_readmission_state(
         readmission["activation"]["fee_amount_rao"]
         == (terms["memory"]["fee"]["amount_rao"])
     )
-    assert any("upload fee" in rule for rule in readmission["rules"])
+    rules = " ".join(readmission["rules"])
+    assert "upload fee" in rules
+    assert "30 days" in rules and "never refunds" in rules
+    assert "always free" in rules and "re-tests" in rules
     assert terms["generator"]["readmission"] is None
     # Unannounced: the cost basis is not measured at all.
     assert readmission["cost_basis"] is None

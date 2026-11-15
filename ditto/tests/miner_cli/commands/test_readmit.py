@@ -239,7 +239,7 @@ def test_a_platform_without_readmission_is_refused_before_paying(
 ) -> None:
     calls = _install(monkeypatch)
     monkeypatch.setattr(
-        _FakeClient, "get_submission_terms", lambda self, competition: None
+        _FakeClient, "get_submission_terms", lambda _self, _competition: None
     )
     with pytest.raises(MinerCliError, match="does not offer readmission"):
         readmit_cmd.run(_args())
