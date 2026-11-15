@@ -147,7 +147,11 @@ from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
     heartbeat_supports_version,
 )
-from ditto.db.queries.generator import claimed_fingerprints, current_probe_epoch
+from ditto.db.queries.generator import (
+    claimed_fingerprints,
+    current_probe_epoch,
+    restore_superseded,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -1938,6 +1942,9 @@ async def record_generation(
                     f"{result.column_id}: {result.error or 'invalid pack'}"
                 )[:1000]
                 sub.updated_at = now
+                # A replacement made to fail must not freeze the generator it
+                # superseded (SN-487).
+                await restore_superseded(session, sub, now=now)
     generation = dict(row.generation or {})
     generation.update(
         {
@@ -2693,16 +2700,29 @@ async def round_counts_by_status(session: AsyncSession) -> dict[str, int]:
 async def build_round_ledger(
     session: AsyncSession, *, resolved: ResolvedSettings, now: datetime
 ) -> GeneratorLedgerResponse:
-    """Each hotkey's latest round column score within the freshness window.
+    """Each owner's latest round column score within the freshness window.
+
+    One entry per owner, keyed exactly as :func:`select_round_columns` seats
+    them (``owner_key``), so a miner with several hotkeys is paid once, for
+    the column it last held: the generator a round most recently measured
+    (SN-487). Round selection seats an owner's best active generator first,
+    so that is normally its best one.
+
+    A superseded generator's last round score counts only while the hotkey's
+    newer upload is still active, the grace until that upload is scored.
+    Once the newer upload is rejected (or withdrawn by making it fail), the
+    superseded score is not paid: it could never be re-scored. A rejection on
+    the upload's own evaluation restores the superseded generator instead
+    (:func:`~ditto.db.queries.generator.restore_superseded`), which then
+    qualifies and is re-measured like any active generator.
 
     ``shadow`` marks every entry ``weight_eligible=False``. ``enforce`` marks an
     entry eligible when its generator qualified (a scored round column implies
     it did, but the check is explicit so an unqualified row can never be paid).
-    A superseded generator stays eligible: its last round score keeps counting
-    until the hotkey's new generator is scored. The public default generator
-    and rejected generators never appear; ``mode=off`` serves an empty ledger,
-    which folds to zero generator emission. Eligibility alone pays nothing:
-    validators pay the generator track only from a governed share.
+    The public default generator and rejected generators never appear;
+    ``mode=off`` serves an empty ledger, which folds to zero generator
+    emission. Eligibility alone pays nothing: validators pay the generator
+    track only from a governed share.
     """
     settings = resolved.settings
     if settings.mode == "off":
@@ -2775,6 +2795,8 @@ async def build_round_ledger(
                 select(
                     GeneratorSubmission.submission_id,
                     GeneratorSubmission.miner_hotkey,
+                    GeneratorSubmission.owner_key,
+                    GeneratorSubmission.status,
                     GeneratorSubmission.submitted_at,
                     GeneratorSubmission.qualified_at,
                 ).where(
@@ -2787,12 +2809,30 @@ async def build_round_ledger(
         if latest
         else []
     )
+    pending = await _active_upload_times(
+        session, {sub.miner_hotkey for sub in subs if sub.status == "superseded"}
+    )
+    subs = [
+        sub
+        for sub in subs
+        if sub.status != "superseded"
+        or (
+            (replaced_at := pending.get(sub.miner_hotkey)) is not None
+            and _aware(replaced_at) > _aware(sub.submitted_at)
+        )
+    ]
+    # One entry per owner: the column round selection last seated it in. A
+    # round seats an owner once, so the latest round index is unambiguous;
+    # the rest of the key only makes the choice total.
     best: dict[str, tuple[Any, Any]] = {}
     for sub in subs:
         rnd = rounds[latest[sub.submission_id]]
-        prior = best.get(sub.miner_hotkey)
-        if prior is None or rnd.round_index > prior[1].round_index:
-            best[sub.miner_hotkey] = (sub, rnd)
+        prior = best.get(sub.owner_key)
+        if prior is None or (rnd.round_index, str(sub.submission_id)) > (
+            prior[1].round_index,
+            str(prior[0].submission_id),
+        ):
+            best[sub.owner_key] = (sub, rnd)
     entries: list[GeneratorLedgerEntry] = []
     for sub, rnd in best.values():
         column = next(
@@ -2824,6 +2864,30 @@ async def build_round_ledger(
             )
         )
     return _ledger_response(entries, settings=settings, now=now)
+
+
+async def _active_upload_times(
+    session: AsyncSession, hotkeys: set[str]
+) -> dict[str, datetime]:
+    """When each hotkey's active miner submission was uploaded.
+
+    Uploads and reinstates keep at most one active submission per hotkey; the
+    newest wins if that were ever violated.
+    """
+    if not hotkeys:
+        return {}
+    out: dict[str, datetime] = {}
+    for hotkey, submitted_at in await session.execute(
+        select(GeneratorSubmission.miner_hotkey, GeneratorSubmission.submitted_at)
+        .where(
+            GeneratorSubmission.miner_hotkey.in_(hotkeys),
+            GeneratorSubmission.status == "active",
+            GeneratorSubmission.public_default.is_(False),
+        )
+        .order_by(GeneratorSubmission.submitted_at)
+    ):
+        out[hotkey] = submitted_at
+    return out
 
 
 def _ledger_response(

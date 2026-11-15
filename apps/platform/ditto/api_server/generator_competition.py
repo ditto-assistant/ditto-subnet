@@ -56,6 +56,7 @@ from ditto.db.queries.generator import (
     lock_next_runnable_submission,
     lock_probe_epoch_if_current,
     new_seeds,
+    restore_superseded,
     start_run,
     upsert_probe_result,
 )
@@ -332,10 +333,21 @@ def _scorer_request_failure(payload: GeneratorResultRequest) -> str | None:
     return None
 
 
-def _reject(row: GeneratorSubmission, reason: str, *, now: datetime) -> None:
+async def _reject(
+    session: AsyncSession, row: GeneratorSubmission, reason: str, *, now: datetime
+) -> None:
+    """Reject a generator on its own evaluation.
+
+    A rejected active upload hands its hotkey back to the generator it
+    superseded (:func:`restore_superseded`), so a replacement made to fail
+    cannot freeze that generator's last round score (SN-487).
+    """
+    was_active = row.status == "active"
     row.status = "rejected"
     row.status_reason = reason[:1000]
     row.updated_at = now
+    if was_active:
+        await restore_superseded(session, row, now=now)
 
 
 async def record_result(
@@ -406,7 +418,7 @@ async def record_result(
     if failure is not None:
         outcome, detail = failure
         finish_run(run, status="invalid", outcome=outcome, now=now)
-        _reject(row, f"{outcome}: {detail}", now=now)
+        await _reject(session, row, f"{outcome}: {detail}", now=now)
         return RecordedResult("invalid", outcome, None, row.status)
 
     for seed in seeds:
@@ -459,7 +471,8 @@ async def record_result(
                 "probe_epoch": run.probe_epoch,
             }
             finish_run(run, status="copy", outcome="behavioral_copy", now=now)
-            _reject(
+            await _reject(
+                session,
                 row,
                 f"behavioral_copy: reproduces {overlap:.0%} of submission "
                 f"{earlier.submission_id}'s cases on the probe seed",
