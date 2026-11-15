@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.486.0 (2026-11-15)
+
+### Bug Fixes
+
+- **platform**: Pay generator ledger per owner; stop superseded score freezes (SN-487)
+  ([#3554](https://github.com/ditto-assistant/ditto-subnet/pull/3554),
+  [`9a2d35e`](https://github.com/ditto-assistant/ditto-subnet/commit/9a2d35e4ee4f571b4422ca1e6fdb79481b83af47))
+
+- **validator**: Stop idle slots from storming the job allocator
+  ([#3552](https://github.com/ditto-assistant/ditto-subnet/pull/3552),
+  [`fd7248f`](https://github.com/ditto-assistant/ditto-subnet/commit/fd7248fe15e1bc988a815a3bc936a3c1d4570ea5))
+
+### Features
+
+- **platform**: Re-test season-expiring agents past the board cap and on ATH clear
+  ([#3558](https://github.com/ditto-assistant/ditto-subnet/pull/3558),
+  [`6240262`](https://github.com/ditto-assistant/ditto-subnet/commit/6240262159beaf23e26751b104a4859dd7892f07))
+
+- **platform,backroom**: Show why validator slots are unusable
+  ([#3551](https://github.com/ditto-assistant/ditto-subnet/pull/3551),
+  [`29d7b55`](https://github.com/ditto-assistant/ditto-subnet/commit/29d7b55ed0e4a51c1f13c71385cc1dabc5f0c00d))
+
+
 ## v0.485.1 (2026-11-14)
 
 ### Bug Fixes
