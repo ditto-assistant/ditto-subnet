@@ -164,8 +164,11 @@ class DispatchFenceMonitor:
         )
         live = self._holder
         if live is not None:
-            held_seconds += max(
-                0.0, (now - max(live.acquired_at, cutoff)).total_seconds()
+            # Elapsed time comes from the monotonic clock: a wall-clock jump
+            # during a live hold must not shrink or inflate it.
+            held_seconds += min(
+                max(0.0, self._monotonic() - live.started),
+                RECENT_WINDOW.total_seconds(),
             )
 
         by_validator: dict[str, list[float]] = {}
@@ -305,11 +308,15 @@ class FenceAttempt:
         if holder is None:
             return
         self._holder = None
-        try:
-            if exc_type is not None:
-                outcome = f"error_{exc_type.__name__}"
-            else:
+        outcome = f"error_{exc_type.__name__}" if exc_type is not None else None
+        if outcome is None:
+            # A failing label must not strand the hold as the live holder.
+            try:
                 outcome = self._outcome() or "completed"
+            except Exception:
+                logger.exception("dispatch fence outcome label failed")
+                outcome = "unlabelled"
+        try:
             self._monitor._released(holder, outcome)
         except Exception:  # pragma: no cover - observability must not fail a poll
             logger.exception("dispatch fence monitor failed to close a hold")

@@ -141,3 +141,34 @@ async def test_busy_is_attributed_to_the_holder_seen_before_the_lock_check() -> 
     snap = monitor.snapshot()
     assert snap["recent_busy_untracked_holder"] == 0
     assert snap["busy_by_validator"][0]["holder_hotkey"] == "5Holder"
+
+
+async def test_a_failing_outcome_label_still_releases_the_hold() -> None:
+    clock = _Clock()
+    monitor = _monitor(clock)
+
+    def broken() -> str:
+        raise RuntimeError("label")
+
+    attempt = monitor.attempt("5Val", "slot-0")
+    async with attempt:
+        attempt.acquired(broken)
+        clock.advance(0.5)
+    snap = monitor.snapshot()
+    assert snap["holder"] is None
+    assert snap["hold_outcomes"] == {"unlabelled": 1}
+
+
+async def test_live_hold_uses_monotonic_time_across_a_wall_clock_jump() -> None:
+    clock = _Clock()
+    monitor = _monitor(clock)
+    clock.advance(1000)
+    attempt = monitor.attempt("5Val", "slot-0")
+    async with attempt:
+        attempt.acquired()
+        clock.mono += 10
+        # The wall clock steps back an hour mid-hold.
+        clock.now -= timedelta(hours=1)
+        snap = monitor.snapshot()
+        assert snap["recent_held_seconds"] == pytest.approx(10.0)
+        assert snap["holder"]["held_seconds"] == pytest.approx(10.0)
