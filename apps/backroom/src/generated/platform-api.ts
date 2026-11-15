@@ -46860,6 +46860,10 @@ export interface components {
              * @enum {string}
              */
             payment_disposition: "consumed" | "credit_consumed" | "reusable_credit";
+            /** Readmission Kind */
+            readmission_kind?: ("identical_rescore" | "near_duplicate") | null;
+            /** Readmission Of Agent Id */
+            readmission_of_agent_id?: string | null;
             status: components["schemas"]["AgentStatus"];
             /**
              * Version
@@ -46944,6 +46948,10 @@ export interface components {
             payment_required: boolean;
             /** Payment Send Address */
             payment_send_address?: string | null;
+            /** Readmission Kind */
+            readmission_kind?: "identical_rescore" | null;
+            /** Readmission Of Agent Id */
+            readmission_of_agent_id?: string | null;
             /** Retry At */
             retry_at?: string | null;
             /** Subtensor Network */

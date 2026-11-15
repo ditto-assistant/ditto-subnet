@@ -109,6 +109,7 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
             cooldown_seconds=3600,
             fee_amount_rao=40_000_000,
             payment_address=default_payment_address,
+            readmission_announced_at=None,
         )
 
     monkeypatch.setattr(
@@ -635,6 +636,44 @@ class TestUploadCheck:
         ]
         assert allowed.json()["ok"] is True
         assert allowed.json()["payment_required"] is True
+
+    async def test_identical_rescore_is_labelled_a_readmission_only_when_active(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        lineage_id = uuid4()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=lineage_id, status=AgentStatus.SCORED
+                )
+            ),
+        )
+        body = {**_signed_request_body(), "allow_identical_rescore": True}
+
+        # Inactive by default: today's behaviour, no label.
+        inactive = (await client.post("/api/v1/upload/check", json=body)).json()
+        assert inactive["ok"] is True
+        assert inactive["readmission_kind"] is None
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.announcement_in_effect",
+            lambda _settings: True,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.current_readmission_activation",
+            AsyncMock(return_value=SimpleNamespace(active=True)),
+        )
+        active = (await client.post("/api/v1/upload/check", json=body)).json()
+        # Same fee and cooldown; only the label differs.
+        assert active["ok"] is True
+        assert active["payment_required"] is True
+        assert active["readmission_kind"] == "identical_rescore"
+        assert active["readmission_of_agent_id"] == str(lineage_id)
 
     async def test_duplicate_from_another_owner_hotkey_precedes_cooldown(
         self,
@@ -1841,7 +1880,9 @@ class TestUploadAgentSn455PylonMiss:
             "ditto.api_server.endpoints.upload.effective_submission_settings",
             AsyncMock(
                 return_value=SimpleNamespace(
-                    fee_amount_rao=self._FEE_RAO, payment_address=self._SEND
+                    fee_amount_rao=self._FEE_RAO,
+                    payment_address=self._SEND,
+                    readmission_announced_at=None,
                 )
             ),
         )

@@ -143,6 +143,15 @@ close-out, counting only recorded ticket outcomes and excluding
 An operator reinstatement is the free remedy for a Ditto fault; the miner's
 remedy is a paid re-run.
 
+**Platform-caused re-tests are always exempt (SN-486).** Season rotation,
+budgeted catch-up overflow, off-board catch-up and the ATH-clear re-test are
+score re-tests with basis `dueling_season_rotation` (`catch_up_source` one of
+`board`, `board_overflow`, `off_board`, `ath_clear`). They never pass through
+`/upload` or a payment proof. No check, cap, label or classification in this
+stack counts them: the cap skips any lease on a validator that ran one for the
+agent in that era (and any agent already at quorum), and upload classification
+keys only on the owner's own uploads. Both have tests asserting it.
+
 ## Edge cases
 
 | Case | Handling |

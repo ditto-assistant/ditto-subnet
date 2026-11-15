@@ -141,6 +141,18 @@ async def current_readmission_activation(
     )
 
 
+def announcement_in_effect(
+    settings: EffectiveSubmissionSettings, *, now: datetime | None = None
+) -> bool:
+    """The settings-only half of the predicate: an announcement whose notice
+    has run. Lets hot paths skip reading the active benchmark while readmission
+    is off (the default)."""
+    announced = settings.readmission_announced_at
+    return announced is not None and _utc(now or datetime.now(UTC)) >= (
+        _utc(announced) + READMISSION_NOTICE_PERIOD
+    )
+
+
 def submitted_before_activation(
     activation: ReadmissionActivation, submitted_at: datetime
 ) -> bool:
@@ -188,6 +200,7 @@ __all__ = [
     "ReadmissionActivation",
     "ReadmissionAnnouncementError",
     "ReadmissionInactiveReason",
+    "announcement_in_effect",
     "current_readmission_activation",
     "readmission_activation",
     "readmission_fee_rao",

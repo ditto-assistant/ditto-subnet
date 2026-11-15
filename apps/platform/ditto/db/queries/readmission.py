@@ -32,7 +32,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -40,9 +40,12 @@ from sqlalchemy import func, select
 from ditto.db.models import (
     Agent,
     BenchmarkRollout,
+    EvaluationPayment,
     ReadmissionPayment,
     ReadmissionReservation,
+    Score,
     SubmissionRetirement,
+    UploadReadmission,
 )
 from ditto.db.queries.agents import (
     SubmissionCooldownError,
@@ -451,6 +454,113 @@ async def consume_readmission_admission(
         raise decision.error()
 
 
+UploadReadmissionKind = Literal["identical_rescore", "near_duplicate"]
+
+
+@dataclass(frozen=True)
+class UploadReadmissionLabel:
+    """Why an accepted upload is a readmission of the owner's own lineage."""
+
+    kind: UploadReadmissionKind
+    lineage_agent_id: UUID
+    lineage_evaluation_completed: bool
+
+
+async def get_same_owner_agent_by_normalized_source(
+    session: AsyncSession,
+    *,
+    miner_coldkey: str,
+    normalized_source_hash: str,
+    exclude_sha256: str,
+) -> UUID | None:
+    """The owner's earliest paid agent with the same normalized source but other
+    bytes: the existing near-duplicate (repack/reformat) signal."""
+    return await session.scalar(
+        select(Agent.agent_id)
+        .join(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
+        .where(
+            EvaluationPayment.miner_coldkey == miner_coldkey,
+            Agent.normalized_source_hash == normalized_source_hash,
+            Agent.sha256 != exclude_sha256,
+        )
+        .order_by(Agent.created_at.asc(), Agent.agent_id.asc())
+        .limit(1)
+    )
+
+
+async def lineage_evaluation_completed(session: AsyncSession, agent_id: UUID) -> bool:
+    """Whether ``agent_id`` finished a scoring quorum in any era."""
+    quorum = (
+        select(Score.bench_version)
+        .where(Score.agent_id == agent_id)
+        .group_by(Score.bench_version)
+        .having(func.count(Score.validator_hotkey) >= SCORING_QUORUM)
+        .limit(1)
+    )
+    return await session.scalar(quorum) is not None
+
+
+async def classify_upload_readmission(
+    session: AsyncSession,
+    *,
+    miner_coldkey: str,
+    sha256: str,
+    normalized_source_hash: str | None,
+    identical_agent_id: UUID | None,
+) -> UploadReadmissionLabel | None:
+    """Classify an upload being accepted against the owner's own lineage.
+
+    Reuses the same-owner machinery the upload already runs: an
+    ``identical_agent_id`` from :func:`~ditto.db.queries.payments.\
+get_same_owner_agent_by_sha` (only reached with ``allow_identical_rescore``)
+    is an identical rescore; otherwise a same-owner agent with the same
+    normalized source is a near-duplicate. Keys only on the owner's uploads,
+    never on score re-tests, so platform-caused re-tests (``dueling_season_\
+rotation`` and the rest) are never labelled or charged.
+    """
+    lineage: UUID | None = identical_agent_id
+    kind: UploadReadmissionKind = "identical_rescore"
+    if lineage is None and normalized_source_hash:
+        lineage = await get_same_owner_agent_by_normalized_source(
+            session,
+            miner_coldkey=miner_coldkey,
+            normalized_source_hash=normalized_source_hash,
+            exclude_sha256=sha256,
+        )
+        kind = "near_duplicate"
+    if lineage is None:
+        return None
+    return UploadReadmissionLabel(
+        kind=kind,
+        lineage_agent_id=lineage,
+        lineage_evaluation_completed=await lineage_evaluation_completed(
+            session, lineage
+        ),
+    )
+
+
+async def record_upload_readmission(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    label: UploadReadmissionLabel,
+    bench_version: int,
+    miner_coldkey: str,
+) -> None:
+    """Label an accepted upload, in the upload's own transaction."""
+    session.add(
+        UploadReadmission(
+            agent_id=agent_id,
+            kind=label.kind,
+            lineage_agent_id=label.lineage_agent_id,
+            bench_version=bench_version,
+            miner_coldkey=miner_coldkey,
+            lineage_evaluation_completed=label.lineage_evaluation_completed,
+        )
+    )
+    await session.flush()
+
+
 __all__ = [
     "ERROR_CODE_READMISSION_ALREADY_ADMITTED",
     "ERROR_CODE_READMISSION_INACTIVE",
@@ -460,7 +570,13 @@ __all__ = [
     "ReadmissionEligibility",
     "ReadmissionRefusal",
     "SubmissionCooldownError",
+    "UploadReadmissionKind",
+    "UploadReadmissionLabel",
     "admitted_readmission",
+    "classify_upload_readmission",
+    "get_same_owner_agent_by_normalized_source",
+    "lineage_evaluation_completed",
+    "record_upload_readmission",
     "consume_readmission_admission",
     "get_readmission_reservation",
     "readmission_eligibility",

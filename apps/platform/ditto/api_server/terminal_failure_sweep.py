@@ -7,6 +7,10 @@ never lost. That leaves two gaps this loop fills: a close-out the hook dropped
 on a transient error, and rows stranded before close-outs existed. Each sweep
 re-runs the same fail-closed decision under row locks, so a second replica
 running concurrently serializes on the agent row and writes nothing twice.
+
+The same loop applies the SN-485 per-agent free re-lease cap
+(:mod:`ditto.db.queries.free_retry_cap`), which does nothing until the
+readmission fee is active.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from ditto.db.queries.free_retry_cap import sweep_free_retry_cap
 from ditto.db.queries.terminal_failure import sweep_terminal_artifact_failures
 
 if TYPE_CHECKING:
@@ -60,7 +65,12 @@ class TerminalFailureSweeper:
             logger.warning(
                 "terminal failure sweep closed out %s submission(s)", written
             )
-        return written
+        # SN-485: the per-agent free re-lease cap, a no-op until the
+        # readmission fee is active.
+        capped = await sweep_free_retry_cap(self._session_maker)
+        if capped:
+            logger.warning("free retry cap withdrew %s submission(s)", capped)
+        return written + capped
 
     async def _run(self) -> None:
         while not self._stop.is_set():
