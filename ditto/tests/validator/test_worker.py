@@ -2045,10 +2045,33 @@ class TestRunOnce:
         assert 0.001 <= backoffs[1] <= 0.002
 
     async def test_allocator_busy_backoff_is_jittered_and_capped(self) -> None:
-        delays = [worker_mod._allocator_busy_backoff_seconds(n) for n in range(1, 12)]
+        # A streak past 2**1024 used to overflow the float conversion.
+        delays = [
+            worker_mod._allocator_busy_backoff_seconds(n)
+            for n in (*range(1, 12), 1025, 10**6)
+        ]
         cap = worker_mod._ALLOCATOR_BUSY_BACKOFF_MAX_SECONDS
         assert all(0 < delay <= cap for delay in delays)
         assert all(delay >= cap / 2 for delay in delays[6:])
+
+    async def test_sleep_reports_a_wakeup_a_sibling_already_cleared(self) -> None:
+        """The stagger decision must not re-read a shared event after cleanup."""
+        event = asyncio.Event()
+
+        async def set_then_clear() -> None:
+            await asyncio.sleep(0.01)
+            event.set()
+            # A sibling clears it before the sleeper's cleanup finishes.
+            await asyncio.sleep(0)
+            event.clear()
+
+        clearer = asyncio.create_task(set_then_clear())
+        woken = await ValidatorWorker._sleep_or_interrupt(5.0, None, event)
+        await clearer
+        assert woken is True
+        assert not event.is_set()
+        assert await ValidatorWorker._sleep_or_interrupt(0.01, event) is False
+        assert await ValidatorWorker._sleep_or_interrupt(0.01) is False
 
     async def test_empty_round_lane_does_not_wake_idle_siblings_into_a_storm(
         self, monkeypatch: pytest.MonkeyPatch

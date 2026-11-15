@@ -707,9 +707,12 @@ _WAKE_STAGGER_FRACTION = 1 / 15
 
 def _allocator_busy_backoff_seconds(streak: int) -> float:
     """Full-jitter exponential backoff for the ``streak``-th busy in a row."""
+    # Capped before exponentiation: a long busy streak must not overflow the
+    # float conversion (2**1024) and crash the slot.
+    exponent = min(max(0, streak - 1), 32)
     ceiling = min(
         _ALLOCATOR_BUSY_BACKOFF_MAX_SECONDS,
-        _ALLOCATOR_BUSY_BACKOFF_BASE_SECONDS * 2 ** max(0, streak - 1),
+        _ALLOCATOR_BUSY_BACKOFF_BASE_SECONDS * 2**exponent,
     )
     return random.uniform(ceiling / 2, ceiling)
 
@@ -1674,13 +1677,13 @@ class ValidatorWorker:
                             # platform's cap is set. The queue refills constantly
                             # (quorum openings, expiries, new submissions), so wait
                             # and ask again instead of leaving the sweep.
-                            await self._sleep_or_interrupt(
+                            woken = await self._sleep_or_interrupt(
                                 _jittered(_IDLE_SLOT_REPOLL_SECONDS),
                                 stop_requested,
                                 drain_requested,
                                 lease_state_changed,
                             )
-                            if lease_state_changed.is_set():
+                            if woken:
                                 # Every waiting sibling woke on the same event;
                                 # stagger them so they do not reach Platform's
                                 # one dispatch fence in the same instant.
@@ -6209,7 +6212,7 @@ class ValidatorWorker:
     @staticmethod
     async def _sleep_or_interrupt(
         seconds: float, *events: asyncio.Event | None
-    ) -> None:
+    ) -> bool:
         """Sleep up to ``seconds``, returning early if any event is set.
 
         The in-sweep twin of :meth:`_sleep_or_stop_or_drain`, which requires a
@@ -6217,17 +6220,22 @@ class ValidatorWorker:
         are optional, so a waiting slot has to tolerate having neither and still
         honour whichever it was given -- otherwise an idle slot's wait would add
         its full duration to every shutdown and drain.
+
+        Returns whether an event ended the wait, decided before the cleanup
+        below yields: a sibling may clear a shared event during that await, so
+        re-reading it afterwards can miss the wakeup.
         """
         waits = [
             asyncio.create_task(event.wait()) for event in events if event is not None
         ]
         if not waits:
             await asyncio.sleep(seconds)
-            return
+            return False
         try:
-            await asyncio.wait(
+            done, _pending = await asyncio.wait(
                 waits, timeout=seconds, return_when=asyncio.FIRST_COMPLETED
             )
+            return bool(done)
         finally:
             for task in waits:
                 task.cancel()
