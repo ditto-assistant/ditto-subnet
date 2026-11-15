@@ -328,6 +328,12 @@ from ditto.api_server.ledger_pin import (
 from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.model_use import model_use_factor, model_use_policy
 from ditto.api_server.storage import ObjectDownloadFailedError, ObjectNotFoundError
+from ditto.api_server.submission_status import (
+    PUBLIC_ACTIVITY_STATUSES,
+    closed_submission_statuses,
+    era_change,
+    public_agent_status,
+)
 from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
@@ -385,7 +391,9 @@ from ditto.db.queries.ath_review_queue_slo import (
 )
 from ditto.db.queries.audit import GENESIS_HASH, list_audit_entries
 from ditto.db.queries.benchmark_admission import (
+    admission_rollout_for_active_version,
     agent_is_admitted,
+    previous_era_scored_agent_ids,
 )
 from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
@@ -665,23 +673,7 @@ _BENCHMARK_STALL_AFTER = timedelta(minutes=15)
 # past the validator's own 75-minute cap — the signal is a floor on wedged runs,
 # not a competing timeout.
 _BENCHMARK_STALL_PER_CHECK = timedelta(seconds=60)
-_PUBLIC_ACTIVITY_STATUSES = frozenset(
-    {
-        "waiting_screening",
-        "screening_failed",
-        "screening",
-        "waiting_validator",
-        "evaluating",
-        "below_score_floor",
-        "not_queued",
-        "retired",
-        "scoring_failed",
-        "under_review",
-        "rejected",
-        "scored",
-        "live",
-    }
-)
+_PUBLIC_ACTIVITY_STATUSES = PUBLIC_ACTIVITY_STATUSES
 
 
 def _error_detail(error: BaseException) -> str:
@@ -6037,23 +6029,6 @@ def _public_handle_status(raw: str) -> Literal["reserved", "disputed", "pending"
 
 
 _SS58_HOTKEY_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")
-_INTERNAL_TO_PUBLIC_STATUS = {
-    "uploaded": "waiting_screening",
-    "screening_failed": "screening_failed",
-    "screening": "screening",
-    "screening_passed": "waiting_validator",
-    "evaluating": "evaluating",
-    "ath_pending_review": "under_review",
-    "quarantined": "under_review",
-    "banned": "rejected",
-}
-
-
-def _public_agent_status(raw: str) -> str:
-    mapped = _INTERNAL_TO_PUBLIC_STATUS.get(raw, raw)
-    if mapped in _PUBLIC_ACTIVITY_STATUSES:
-        return mapped
-    return "under_review"
 
 
 def _profile_handle_for_hotkey(claims: dict[str, Any], hotkey: str) -> Any:
@@ -6127,33 +6102,32 @@ async def public_miner_profile(
         )
     )[0]
     avatar_url = public_avatar_path(hotkey) if avatar else None
-    terminal_codes = await terminal_failure_codes(
+    # The same closed-out labels activity projects, so a previous-era row the
+    # active bench never admits reads ``era_changed`` here too, not the stored
+    # "evaluating" or "scored" (SN-462, SN-485).
+    closed = await closed_submission_statuses(
         session,
-        agent_ids=[agent.agent_id for agent in agents],
-    )
-    retired_ids = await retired_agent_ids(
-        session, agent_ids={agent.agent_id for agent in agents}
+        agents=agents,
+        active_version=await active_bench_version(session),
     )
     submissions = []
     for agent in agents:
         display, name_handle = _public_named(
             agent.name, owner_root, claims, strike=True
         )
+        closed_status = closed.get(agent.agent_id)
         submissions.append(
             PublicMinerSubmission(
                 agent_id=agent.agent_id,
                 name=display,
                 version=agent.version,
                 status=(
-                    "retired"
-                    if agent.agent_id in retired_ids
-                    and agent.status
-                    in (AgentStatus.EVALUATING, AgentStatus.SCREENING_PASSED)
-                    else "scoring_failed"
-                    if agent.status
-                    in (AgentStatus.EVALUATING, AgentStatus.SCREENING_PASSED)
-                    and agent.agent_id in terminal_codes
-                    else _public_agent_status(str(agent.status))
+                    closed_status.status
+                    if closed_status is not None
+                    else public_agent_status(str(agent.status))
+                ),
+                era_change=(
+                    closed_status.era_change if closed_status is not None else None
                 ),
                 created_at=agent.created_at,
                 avatar_url=avatar_url,
@@ -6641,8 +6615,17 @@ def _public_activity_status(
     retired: bool = False,
     terminal_failure: bool = False,
     screening_retry_authorized: bool = False,
+    queue_withdrawn: bool = False,
+    previous_era_scored: bool = False,
 ) -> str:
-    """Collapse internal moderation detail into stable public lifecycle labels."""
+    """Collapse internal moderation detail into stable public lifecycle labels.
+
+    ``benchmark_admitted`` is both queue gates. When it is false,
+    ``queue_withdrawn`` says an in-force operator removal is why (``not_queued``);
+    otherwise the era boundary refused the row (``era_changed``).
+    ``previous_era_scored`` is :func:`previous_era_scored_predicate` for a
+    finalized row.
+    """
     needs_rescreen = (
         status == AgentStatus.EVALUATING
         and screening_policy_version < lease_screening_policy_floor()
@@ -6678,7 +6661,7 @@ def _public_activity_status(
             and not has_active_validation
             and not has_live_assignment
         ):
-            return "not_queued"
+            return "not_queued" if queue_withdrawn else "era_changed"
         if (
             status == AgentStatus.EVALUATING
             and not has_live_assignment
@@ -6689,6 +6672,8 @@ def _public_activity_status(
         ):
             return "below_score_floor"
         return "evaluating" if has_active_validation else "waiting_validator"
+    if previous_era_scored and status in (AgentStatus.SCORED, AgentStatus.LIVE):
+        return "era_changed"
     if status in (AgentStatus.ATH_PENDING_REVIEW, AgentStatus.QUARANTINED):
         return "under_review"
     if status == AgentStatus.BANNED:
@@ -6967,13 +6952,17 @@ def _public_activity_response(
     miner_uids: dict[str, int] | None = None,
     scoring_waits: dict[UUID, PublicScoringWait] | None = None,
     queue_withdrawn_agent_ids: set[UUID] | None = None,
+    admission_rollout: BenchmarkRollout | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health.
 
     ``scoring_waits`` holds each waiting row's season hold, keyed by agent id;
     it is attached to the waiting lanes only. ``queue_withdrawn_agent_ids``
     names the rows an in-force operator removal keeps out of the active queue;
-    it marks ``not_queued`` rows only.
+    it marks ``not_queued`` rows only. ``admission_rollout`` is the rollout
+    that bounds the active era (the one the status projection already read);
+    with ``active_bench_version`` it names each ``era_changed`` row's reason
+    without another query.
     """
     waits = scoring_waits or {}
     withdrawn = queue_withdrawn_agent_ids or set()
@@ -7239,6 +7228,18 @@ def _public_activity_response(
                 ),
                 queue_withdrawn=(
                     row_status == "not_queued" and row.agent.agent_id in withdrawn
+                ),
+                era_change=(
+                    era_change(
+                        bench_version=active_bench_version,
+                        rollout=admission_rollout,
+                        # The projection names a finalized row ``era_changed``
+                        # only through the previous-era scored predicate.
+                        previous_era_scored=row.agent.status
+                        in (AgentStatus.SCORED, AgentStatus.LIVE),
+                    )
+                    if row_status == "era_changed" and active_bench_version is not None
+                    else None
                 ),
                 quorum=SCORING_QUORUM,
                 retry_state=(
@@ -7899,6 +7900,7 @@ async def activity(
             ],
             bench_version=active_version,
         ),
+        admission_rollout=activity_page.admission_rollout,
         duplicate_metadata=await _duplicate_submission_metadata(session, rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
@@ -8504,6 +8506,38 @@ async def agent_summary(
         and row.score_count == SCORING_QUORUM - 1
         else None
     )
+    # Which gate refused a waiting row: an operator removal (``not_queued``) or
+    # the era boundary (``era_changed``). A finalized row with no active-version
+    # score is checked against the stranded predicate. Both reads are skipped
+    # for every other row.
+    summary_withdrawn = (
+        needs_queue_state
+        and not admitted
+        and bool(
+            await removed_agent_ids(
+                session, agent_ids=[agent_id], bench_version=active_version
+            )
+        )
+    )
+    finalized_without_active_score = (
+        row.agent.status in {AgentStatus.SCORED, AgentStatus.LIVE}
+        and row.score_count == 0
+    )
+    summary_rollout = (
+        await admission_rollout_for_active_version(
+            session, bench_version=active_version
+        )
+        if (needs_queue_state and not admitted) or finalized_without_active_score
+        else None
+    )
+    summary_previous_era_scored = finalized_without_active_score and bool(
+        await previous_era_scored_agent_ids(
+            session,
+            agent_ids=[agent_id],
+            bench_version=active_version,
+            rollout=summary_rollout,
+        )
+    )
     status = _public_activity_status(
         row.agent.status,
         screening_policy_version=row.agent.screening_policy_version,
@@ -8528,6 +8562,8 @@ async def agent_summary(
         )
         if row.agent.status == AgentStatus.SCREENING_FAILED
         else False,
+        queue_withdrawn=summary_withdrawn,
+        previous_era_scored=summary_previous_era_scored,
     )
 
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] = {}
@@ -8632,13 +8668,15 @@ async def agent_summary(
                 active_version=active_version,
             )
         ).get(row.agent.agent_id),
-        queue_withdrawn=(
-            status == "not_queued"
-            and bool(
-                await removed_agent_ids(
-                    session, agent_ids=[agent_id], bench_version=active_version
-                )
+        queue_withdrawn=status == "not_queued" and summary_withdrawn,
+        era_change=(
+            era_change(
+                bench_version=active_version,
+                rollout=summary_rollout,
+                previous_era_scored=summary_previous_era_scored,
             )
+            if status == "era_changed"
+            else None
         ),
     )
 
@@ -9178,6 +9216,73 @@ async def agent_pipeline(
     dispute = await session.scalar(
         select(ScreeningDispute).where(ScreeningDispute.agent_id == agent_id)
     )
+    pipeline_withdrawn = (
+        agent.status in (AgentStatus.SCREENING_PASSED, AgentStatus.EVALUATING)
+        and not benchmark_admitted
+        and bool(
+            await removed_agent_ids(
+                session, agent_ids=[agent_id], bench_version=canonical_version
+            )
+        )
+    )
+    pipeline_finalized_without_active_score = (
+        agent.status in (AgentStatus.SCORED, AgentStatus.LIVE) and not canonical_scores
+    )
+    pipeline_rollout = (
+        await admission_rollout_for_active_version(
+            session, bench_version=canonical_version
+        )
+        if not benchmark_admitted or pipeline_finalized_without_active_score
+        else None
+    )
+    pipeline_previous_era_scored = pipeline_finalized_without_active_score and bool(
+        await previous_era_scored_agent_ids(
+            session,
+            agent_ids=[agent_id],
+            bench_version=canonical_version,
+            rollout=pipeline_rollout,
+        )
+    )
+    pipeline_status = _public_activity_status(
+        agent.status,
+        screening_retry_authorized=(
+            admission_retry is not None and admission_retry.state == "retry_queued"
+        ),
+        screening_policy_version=agent.screening_policy_version,
+        has_active_attempt=running_attempt is not None,
+        has_active_validation=any(
+            work.ticket.bench_version == canonical_version for work in active_work
+        ),
+        has_live_assignment=any(
+            ticket.status == TicketStatus.ISSUED
+            and ticket.bench_version == canonical_version
+            and cast(datetime, _aware(ticket.deadline)) > now
+            for ticket in tickets
+        ),
+        # Deliberately the ACTIVE-era count, not ``era_scores``. The only
+        # label this feeds is ``below_score_floor``, which compares a score
+        # against the active version's continuation floor -- a previous
+        # generation's composites are not on that scale, so admitting them
+        # here would decide a live-queue question with incomparable numbers.
+        score_count=len(canonical_scores),
+        highest_composite=(
+            max(score.composite for score in canonical_scores)
+            if canonical_scores
+            else None
+        ),
+        score_continuation_floor=score_continuation_floor,
+        benchmark_admitted=benchmark_admitted,
+        retired=agent_retired,
+        terminal_failure=pipeline_terminal_code is not None,
+        queue_withdrawn=pipeline_withdrawn,
+        previous_era_scored=pipeline_previous_era_scored,
+    )
+    if pipeline_status in ("not_queued", "era_changed"):
+        # The retry classifier resolves a row's era from its newest ticket or
+        # score, so a row the active era never admits can still carry a v9
+        # "retry queued" no validator will serve. The status already says it
+        # will not be scored; the dead retry state would contradict it.
+        validator_retry = None
     return PublicSubmissionPipeline(
         generated_at=now,
         agent_id=agent_id,
@@ -9192,37 +9297,15 @@ async def agent_pipeline(
                 now=now,
             )
         )[agent_id],
-        status=_public_activity_status(
-            agent.status,
-            screening_retry_authorized=(
-                admission_retry is not None and admission_retry.state == "retry_queued"
-            ),
-            screening_policy_version=agent.screening_policy_version,
-            has_active_attempt=running_attempt is not None,
-            has_active_validation=any(
-                work.ticket.bench_version == canonical_version for work in active_work
-            ),
-            has_live_assignment=any(
-                ticket.status == TicketStatus.ISSUED
-                and ticket.bench_version == canonical_version
-                and cast(datetime, _aware(ticket.deadline)) > now
-                for ticket in tickets
-            ),
-            # Deliberately the ACTIVE-era count, not ``era_scores``. The only
-            # label this feeds is ``below_score_floor``, which compares a score
-            # against the active version's continuation floor -- a previous
-            # generation's composites are not on that scale, so admitting them
-            # here would decide a live-queue question with incomparable numbers.
-            score_count=len(canonical_scores),
-            highest_composite=(
-                max(score.composite for score in canonical_scores)
-                if canonical_scores
-                else None
-            ),
-            score_continuation_floor=score_continuation_floor,
-            benchmark_admitted=benchmark_admitted,
-            retired=agent_retired,
-            terminal_failure=pipeline_terminal_code is not None,
+        status=pipeline_status,
+        era_change=(
+            era_change(
+                bench_version=canonical_version,
+                rollout=pipeline_rollout,
+                previous_era_scored=pipeline_previous_era_scored,
+            )
+            if pipeline_status == "era_changed"
+            else None
         ),
         submission_family=submission_family,
         # Why this exact artifact is or is not earning, separate from ``status``

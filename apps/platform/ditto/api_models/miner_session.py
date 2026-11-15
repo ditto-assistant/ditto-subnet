@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ditto.api_models.era_change import PublicEraChange
 from ditto.api_models.name_claim import NameClaimProof, PublicNameHandle
 
 MinerScope = Literal["read", "profile", "download", "upload", "handle", "challenges"]
@@ -125,6 +126,14 @@ class PublicMinerSubmission(BaseModel):
     name: str
     version: int | None = Field(default=None, ge=1)
     status: str
+    era_change: PublicEraChange | None = Field(
+        default=None,
+        description=(
+            "Set only on an 'era_changed' row: why it does not compete on the "
+            "active bench version and the miner's next step. Same as the "
+            "activity row's era_change."
+        ),
+    )
     created_at: datetime
     avatar_url: str | None = None
     name_handle: PublicNameHandle | None = None

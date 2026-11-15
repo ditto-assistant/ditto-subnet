@@ -74,6 +74,8 @@ export const GATE_NOTE_DISPUTE_STATUSES: ReadonlySet<string> = new Set([
   "live",
   "evaluating",
   "ath_pending_review",
+  // A previous-era row keeps its accepted scores when the era changes.
+  "era_changed",
 ]);
 
 /** The resolved-dispute card (renderScreeningDispute's dispute branch). */

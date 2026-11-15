@@ -34,6 +34,8 @@ const first = {
   attempts_used: 12,
   exhausted_validator_count: 2,
   silent_expiry_count: 0,
+  era_change: null,
+  serves_active_bench: true,
   snapshot: 'ab'.repeat(32),
   ticket_states: {},
 }

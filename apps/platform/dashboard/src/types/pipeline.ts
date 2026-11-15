@@ -39,6 +39,20 @@ export interface ScoringWait {
   season_scheduled?: boolean;
 }
 
+/** Why a submission reads `era_changed` (`era_change` on activity rows, the
+ * agent summary, the pipeline and miner submission lists): it belongs to an
+ * earlier bench version the active one does not admit, so it does not compete
+ * there. Derived at read time; it clears when the row is admitted. */
+export interface EraChange {
+  reason: "not_admitted_to_active_bench";
+  /** The active bench version the submission does not compete on. */
+  bench_version: number;
+  /** The earlier version it finalized on; its scores there stay visible.
+   * Null for a row that was still waiting for scores. */
+  scored_bench_version?: number | null;
+  next_step: "resubmit";
+}
+
 export interface ActivityEntry {
   agent_id?: string;
   name?: string | null;
@@ -78,6 +92,8 @@ export interface ActivityEntry {
   /** True on a `not_queued` row an operator withdrew from the active
    * benchmark queue, rather than one that predates the active era. */
   queue_withdrawn?: boolean;
+  /** Set only on an `era_changed` row. */
+  era_change?: EraChange | null;
 }
 
 interface ActivityPayloadBase<E> {

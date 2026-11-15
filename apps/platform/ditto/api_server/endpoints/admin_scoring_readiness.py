@@ -41,9 +41,14 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.submission_status import (
+    era_change,
+    era_change_blocking_reason,
+)
 from ditto.db.models import Agent, BenchmarkDataset, Score, ValidatorQueueWithdrawal
 from ditto.db.queries.benchmark_admission import (
     activated_rollout_for_version,
+    admission_rollout_for_active_version,
     agent_is_era_admitted,
 )
 from ditto.db.queries.benchmark_rollout import (
@@ -211,11 +216,18 @@ async def scoring_readiness(
         )
     if queue_removal is not None:
         blocking.append(_queue_removal_reason(queue_removal, scoring_version))
+    change = None
     if not era_admitted:
-        blocking.append(
-            f"historical submission is not admitted to the v{scoring_version} "
-            "validator queue"
+        # The same reason code and next step the miner's ``era_changed`` row
+        # carries, so Backroom and the dashboard name one cause (SN-485).
+        change = era_change(
+            bench_version=scoring_version,
+            rollout=await admission_rollout_for_active_version(
+                session, bench_version=scoring_version
+            ),
+            previous_era_scored=agent.status in (AgentStatus.SCORED, AgentStatus.LIVE),
         )
+        blocking.append(era_change_blocking_reason(change))
 
     return AgentScoringReadiness(
         agent_id=agent.agent_id,
@@ -244,4 +256,5 @@ async def scoring_readiness(
         ),
         leaseable=not blocking,
         blocking_reasons=blocking,
+        era_change=change,
     )

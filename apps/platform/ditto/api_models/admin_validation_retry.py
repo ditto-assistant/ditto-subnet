@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from ditto.api_models.era_change import PublicEraChange
 from ditto.api_models.inference_observability import ProviderCircuitSnapshot
 from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
 
@@ -265,6 +266,17 @@ class AdminStuckSubmission(BaseModel):
     automatic_retry_available: bool
     recovery_allowed: bool
     blocking_reason: str | None
+    """Why the row is not advancing. A row the active bench does not admit,
+    or whose retry state sits in an era validators no longer serve, says so
+    here instead of a quorum or retry message that cannot apply, and quotes
+    the label miners see (see :attr:`era_change`)."""
+    era_change: PublicEraChange | None = None
+    """Set when the active bench's era boundary refuses the submission: the
+    same reason code and next step the miner's ``era_changed`` row carries.
+    Read-only; ``retry_state`` keeps the classifier's own label."""
+    serves_active_bench: bool = True
+    """False when nothing this row's retry state describes can run: its era is
+    older than the active bench, or the active bench does not admit it."""
     recommended_action: RecommendedRetryAction | None = None
     """``withdraw`` for named agent-attributable exhaustion; ``retry`` when a
     grant can still restore quorum. ``None`` on rows that are not exhausted.

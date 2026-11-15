@@ -7509,6 +7509,15 @@ export const listStuckSubmissionsInputSchema = z.object({
   offset: z.number().int().min(0).default(0),
 })
 
+// The miner-facing `era_changed` reason (SN-485), quoted on operator rows so
+// Backroom names the same cause the dashboard shows. Read-only projection.
+export const eraChangeSchema = z.object({
+  reason: z.literal('not_admitted_to_active_bench'),
+  bench_version: z.number().int().positive(),
+  scored_bench_version: z.number().int().positive().nullish().default(null),
+  next_step: z.literal('resubmit'),
+})
+
 export const stuckSubmissionSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
@@ -7521,6 +7530,13 @@ export const stuckSubmissionSchema = z.object({
   automatic_retry_available: z.boolean(),
   recovery_allowed: z.boolean(),
   blocking_reason: z.string().nullable(),
+  // Set when the active bench's era boundary refuses the row; its
+  // blocking_reason then quotes the miner's `era_changed` label.
+  era_change: eraChangeSchema.nullish().default(null),
+  // False when nothing this retry state describes can run: its era is older
+  // than the active bench, or the active bench does not admit it. Absent from
+  // an older Platform, which means "unknown", not "serves".
+  serves_active_bench: z.boolean().nullish().default(null),
   recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
   dominant_failure_code: z.string().nullish().default(null),
   ...providerOutageRetryFields,
@@ -7675,6 +7691,7 @@ export const agentScoringReadinessSchema = z.object({
   screened_image: scoringReadinessScreenedImageSchema,
   leaseable: z.boolean(),
   blocking_reasons: z.array(z.string()),
+  era_change: eraChangeSchema.nullish().default(null),
 })
 
 export const validatorScoreReplacementLookupInputSchema = z.object({

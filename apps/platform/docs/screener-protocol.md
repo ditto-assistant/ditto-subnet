@@ -94,7 +94,7 @@ scores and findings are historical evidence, not silently migrated verdicts;
 only new or explicitly rescreened attempts attest policy 10. A policy bump
 re-queues only submissions admitted to the active benchmark era; a historical
 submission the validator allocator no longer leases is never rescreened for a
-bump alone and projects as `not_queued`, keeping the `waiting_screening`
+bump alone and projects as `era_changed`, keeping the `waiting_screening`
 backlog the capacity controller scales on honest.
 
 Policy 13 preserves the historical seven-invariant payload as nested assessment

@@ -65,7 +65,9 @@ from ditto.api_server.name_claim import expected_netuid
 from ditto.api_server.no_store import no_store
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.storage.errors import ObjectUploadFailedError
+from ditto.api_server.submission_status import closed_submission_statuses
 from ditto.db.models import AthReview
+from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.miner_avatars import (
     delete_miner_avatar,
     get_miner_avatar,
@@ -381,13 +383,28 @@ async def my_submissions(
             session, hotkey=row.miner_hotkey, limit=50
         )
         avatar = await get_miner_avatar(session, hotkey=row.miner_hotkey)
+        # A row the active bench will never score must not read "evaluating"
+        # or "scored" on the miner's own page (SN-462, SN-485). Other stored
+        # statuses stay as they are: this is the owner's view.
+        closed = await closed_submission_statuses(
+            session,
+            agents=agents,
+            active_version=await active_bench_version(session),
+        )
     avatar_url = public_avatar_path(row.miner_hotkey) if avatar else None
     return [
         PublicMinerSubmission(
             agent_id=agent.agent_id,
             name=agent.name,
             version=agent.version,
-            status=str(agent.status),
+            status=(
+                closed[agent.agent_id].status
+                if agent.agent_id in closed
+                else str(agent.status)
+            ),
+            era_change=(
+                closed[agent.agent_id].era_change if agent.agent_id in closed else None
+            ),
             created_at=agent.created_at,
             avatar_url=avatar_url,
         )

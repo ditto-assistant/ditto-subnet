@@ -8,13 +8,25 @@ two surfaces share their dispatch on the ORM model.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Text, case, cast, false, func, literal, or_, select, text, true
+from sqlalchemy import (
+    ColumnElement,
+    Text,
+    case,
+    cast,
+    false,
+    func,
+    literal,
+    or_,
+    select,
+    text,
+    true,
+)
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
-from sqlalchemy.orm import undefer_group
+from sqlalchemy.orm import aliased, undefer_group
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.db.errors import IntegrityError as DbIntegrityError
@@ -30,6 +42,8 @@ from ditto.db.models import (
 from ditto.db.queries.benchmark_admission import (
     admission_rollout_for_active_version,
     benchmark_admission_predicate,
+    previous_era_scored_agent_ids,
+    previous_era_scored_predicate,
     validator_queue_admission_predicate,
 )
 from ditto.db.queries.owner_submission_cooldown import (
@@ -461,6 +475,42 @@ class PublicActivityPage:
     admission_rollout: BenchmarkRollout | None
 
 
+# Status filters whose result changes when a finalized previous-era row reads
+# ``era_changed`` rather than its stored ``scored``/``live``.
+_PREVIOUS_ERA_SCORED_FILTER_STATUSES = frozenset({"era_changed", "scored", "live"})
+
+
+async def _relabel_previous_era_scored(
+    session: AsyncSession,
+    *,
+    rows: list[PublicActivityRow],
+    rollout: BenchmarkRollout | None,
+    bench_version: int,
+) -> list[PublicActivityRow]:
+    """Relabel the page's finalized previous-era rows ``era_changed``.
+
+    One query, keyed by the page's own ``scored``/``live`` rows that hold no
+    active-version score, through the same predicate as the stranded listing.
+    A page with no such row, or an era with no previous version, costs nothing.
+    """
+    candidates = [
+        row.agent.agent_id
+        for row in rows
+        if row.public_status in ("scored", "live") and row.score_count == 0
+    ]
+    stranded = await previous_era_scored_agent_ids(
+        session, agent_ids=candidates, bench_version=bench_version, rollout=rollout
+    )
+    if not stranded:
+        return rows
+    return [
+        replace(row, public_status="era_changed")
+        if row.agent.agent_id in stranded
+        else row
+        for row in rows
+    ]
+
+
 async def query_public_activity_page(
     session: AsyncSession,
     *,
@@ -533,10 +583,29 @@ async def query_public_activity_page(
         .correlate(Agent)
         .exists()
     )
-    admitted = validator_queue_admission_predicate(bench_version=bench_version)
-    if rollout is not None:
-        admitted &= benchmark_admission_predicate(
-            rollout=rollout, bench_version=bench_version
+    queue_open = validator_queue_admission_predicate(bench_version=bench_version)
+    era_admitted: ColumnElement[bool] = (
+        benchmark_admission_predicate(rollout=rollout, bench_version=bench_version)
+        if rollout is not None
+        else true()
+    )
+    admitted = queue_open & era_admitted
+    # A finalized previous-era row the active era never admits (the stranded
+    # listing's population) reads ``era_changed`` (SN-485). Activity polls every
+    # eight seconds, so the projection does not test every scored row for it:
+    # the returned page is relabelled after pagination with one bounded lookup
+    # (below). Only a status filter that can include or exclude such a row
+    # needs the SQL form, so that the filtered page and its total are exact.
+    previous_era_scored: ColumnElement[bool] = false()
+    era_filtered = bool(requested_statuses & _PREVIOUS_ERA_SCORED_FILTER_STATUSES)
+    if era_filtered and rollout is not None and rollout.from_version < bench_version:
+        stranded = aliased(Agent)
+        previous_era_scored = (score_count == 0) & Agent.agent_id.in_(
+            select(stranded.agent_id).where(
+                previous_era_scored_predicate(
+                    rollout=rollout, bench_version=bench_version, agent=stranded
+                )
+            )
         )
     active_validation = (
         Agent.agent_id.in_(active_validation_agent_ids)
@@ -590,13 +659,21 @@ async def query_public_activity_page(
         ),
         (waiting_state & retired, literal("retired")),
         (waiting_state & terminal_failure, literal("scoring_failed")),
+        # An operator withdrawal is named first, as before: it is the reason
+        # an otherwise admitted row is out of the queue. Every other refusal
+        # is the era boundary, and that reads ``era_changed`` (SN-485).
         (
-            waiting_state & ~admitted & ~active_validation & ~live_assignment,
+            waiting_state & ~queue_open & ~active_validation & ~live_assignment,
             literal("not_queued"),
+        ),
+        (
+            waiting_state & ~era_admitted & ~active_validation & ~live_assignment,
+            literal("era_changed"),
         ),
         (waiting_state & below_floor, literal("below_score_floor")),
         (waiting_state & active_validation, literal("evaluating")),
         (waiting_state, literal("waiting_validator")),
+        (previous_era_scored, literal("era_changed")),
         (
             Agent.status.in_((AgentStatus.ATH_PENDING_REVIEW, AgentStatus.QUARANTINED)),
             literal("under_review"),
@@ -663,6 +740,8 @@ async def query_public_activity_page(
             .order_by(base.c.public_status)
         )
     ).all()
+    # Unfiltered, a finalized previous-era row still counts under its stored
+    # ``scored``/``live``: only the returned page is relabelled ``era_changed``.
     status_counts = {str(status): int(count) for status, count in status_rows}
 
     filtered_statement = select(base)
@@ -808,6 +887,10 @@ async def query_public_activity_page(
             _board_group,
         ) in detail_rows
     ]
+    if not era_filtered:
+        rows = await _relabel_previous_era_scored(
+            session, rows=rows, rollout=rollout, bench_version=bench_version
+        )
     waiting_agent_ids = list(
         await session.scalars(
             select(projected.c.agent_id)

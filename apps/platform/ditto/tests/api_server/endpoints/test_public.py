@@ -6201,6 +6201,7 @@ class TestPublicActivity:
             "active_benchmarks": [],
             "scoring_wait": None,
             "queue_withdrawn": False,
+            "era_change": None,
         }
         assert "artifact_release" not in body
         assert "screening_attempts" not in body
@@ -6297,8 +6298,10 @@ class TestPublicActivity:
         # and one for live handle-claim reservations plus attested owner roots
         # so operations badges classify family children correctly.
         # Plus one bounded miner-avatar lookup for the page's hotkeys, and
-        # one open-rollout read for the dueling-season gate on waiting rows.
-        assert len(statements) <= 38
+        # one open-rollout read for the dueling-season gate on waiting rows,
+        # and one page-bound lookup that labels finalized previous-era rows
+        # era_changed (SN-485) instead of testing all history in the projection.
+        assert len(statements) <= 39
         body = response.json()
         assert body["active_bench_version"] == _ERA
         assert body["desired_bench_version"] == _NEXT_ERA
@@ -6596,6 +6599,7 @@ class TestPublicActivity:
             "validator_queue_gate_detail",
             "previous_generation",
             "queue_withdrawn",
+            "era_change",
             "quorum",
             "retry_state",
             "retry_after",
@@ -7699,11 +7703,19 @@ class TestPublicActivity:
 
         assert by_id[fresh_id]["validator_queue_rank"] == 1
         assert by_id[stranded_id]["validator_queue_rank"] is None
-        assert by_id[stranded_id]["status"] == "not_queued"
-        # Historical, not withdrawn: only the era boundary keeps it out.
+        # Historical, not withdrawn: only the era boundary keeps it out, so
+        # it reads era_changed with the resubmit next step (SN-485).
+        assert by_id[stranded_id]["status"] == "era_changed"
         assert by_id[stranded_id]["queue_withdrawn"] is False
+        assert by_id[stranded_id]["era_change"] == {
+            "reason": "not_admitted_to_active_bench",
+            "bench_version": _ERA,
+            "scored_bench_version": None,
+            "next_step": "resubmit",
+        }
         assert body["status_counts"]["waiting_validator"] == 1
-        assert body["status_counts"]["not_queued"] == 1
+        assert body["status_counts"]["era_changed"] == 1
+        assert "not_queued" not in body["status_counts"]
         assert by_id[fresh_id]["previous_generation"] is False
         assert by_id[stranded_id]["validator_queue_gate"] is None
         assert by_id[fresh_id]["validator_queue_gate"] is None
@@ -9088,12 +9100,12 @@ class TestPublicActivity:
             for entry in activity_body["entries"]
             if entry["agent_id"] == str(agent_id)
         )
-        assert activity["status"] == "not_queued"
+        assert activity["status"] == "era_changed"
         assert activity["score_count"] == 1
         assert activity["provisional_composite"] == pytest.approx(0.391897)
         assert activity["validator_queue_rank"] is None
         assert activity["retry_state"] is None
-        assert activity_body["status_counts"]["not_queued"] == 1
+        assert activity_body["status_counts"]["era_changed"] == 1
         assert [work["bench_version"] for work in activity["active_benchmarks"]] == [
             _PREV_ERA
         ]
@@ -9104,13 +9116,14 @@ class TestPublicActivity:
             entry["agent_id"] == str(agent_id)
             for entry in operations["activity"]["entries"]
         )
-        assert operations["activity"]["status_counts"]["not_queued"] == 1
+        assert operations["activity"]["status_counts"]["era_changed"] == 1
 
         pipeline = (
             await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
         ).json()
         assert pipeline["active_bench_version"] == _ERA
-        assert pipeline["status"] == "not_queued"
+        assert pipeline["status"] == "era_changed"
+        assert pipeline["era_change"]["next_step"] == "resubmit"
         assert pipeline["score_count"] == 1
         assert pipeline["score_floor"] == pytest.approx(0.80)
         scores_by_version = {
