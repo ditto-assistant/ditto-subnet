@@ -854,8 +854,10 @@ async def queue_dueling_rotation_retests(
                 validator_hotkey=validator_hotkey,
                 event=EVENT_SCORE_RETEST_QUEUED,
                 payload={
-                    "request_id": str(request_id),
+                    # Caller metadata first: it can never replace the
+                    # deterministic idempotency key or any core field.
                     **(extra_payload or {}),
+                    "request_id": str(request_id),
                     "actor": actor,
                     "reason": reason,
                     "basis": DUELING_ROTATION_RETEST_BASIS,

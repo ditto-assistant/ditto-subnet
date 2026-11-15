@@ -1312,11 +1312,16 @@ async def queue_catchup_retests(
     if any(batch for _source, batch in batches):
         totals = {"queued": 0, "already_current": 0, "busy": 0, "replaced": 0}
         rank = len(rotation.get("cohort", ()))
-        try:
-            async with session.begin_nested():
-                for source, batch in batches:
-                    if not batch:
-                        continue
+        errors: dict[str, str] = {}
+        for source, batch in batches:
+            if not batch:
+                continue
+            first_rank = rank
+            rank += len(batch)
+            # One savepoint per source: a failed overflow batch never rolls
+            # back the board catch-ups queued before it.
+            try:
+                async with session.begin_nested():
                     counts = await queue_dueling_rotation_retests(
                         session,
                         season_id=season.id,
@@ -1324,17 +1329,21 @@ async def queue_catchup_retests(
                         cohort=batch,
                         now=now,
                         catch_up=True,
-                        first_rank=rank,
+                        first_rank=first_rank,
                         catch_up_source=source,
                     )
-                    rank += len(batch)
-                    for key, value in counts.items():
-                        totals[key] = totals.get(key, 0) + value
-        except Exception as exc:  # noqa: BLE001 - recorded, never blocks the open
-            logger.exception("dueling season %s: catch-up re-tests failed", season.id)
-            record["error"] = f"{type(exc).__name__}: {exc}"[:500]
-        else:
-            record.update(totals)
+            except Exception as exc:  # noqa: BLE001 - recorded, never blocks the open
+                logger.exception(
+                    "dueling season %s: %s catch-up re-tests failed", season.id, source
+                )
+                errors[source] = f"{type(exc).__name__}: {exc}"[:500]
+                continue
+            for key, value in counts.items():
+                totals[key] = totals.get(key, 0) + value
+        record.update(totals)
+        if errors:
+            record["errors"] = errors
+            record["error"] = next(iter(errors.values()))
     season.detail = {**(season.detail or {}), CATCHUP_KEY: record}
     return record
 

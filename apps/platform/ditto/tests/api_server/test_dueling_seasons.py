@@ -2800,6 +2800,42 @@ class TestSeasonCatchup:
         assert [c.agent_id for c in candidates.off_board] == [newest]
         assert dict(candidates.off_board_skipped)[lucky] == "superseded_rerun"
 
+    async def test_a_failed_overflow_batch_keeps_the_board_catchup(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Each catch-up source has its own savepoint: an off-board batch that
+        fails never rolls back the board catch-ups queued before it."""
+        import ditto.db.queries.score_retests as retests_mod
+        from ditto.api_models.generator import GeneratorCompetitionSettings
+
+        (late,), _fresh, _closed, opened = await self._boundary(
+            session_maker, monkeypatch, stale=1
+        )
+        expiring = await self._off_board_agent(
+            session_maker, 50, season_index=31, composite=0.95
+        )
+        real = retests_mod.queue_dueling_rotation_retests
+
+        async def _flaky(*args: Any, **kwargs: Any) -> dict[str, int]:
+            if kwargs.get("catch_up_source") == "off_board":
+                raise RuntimeError("off-board write failed")
+            return await real(*args, **kwargs)
+
+        monkeypatch.setattr(retests_mod, "queue_dueling_rotation_retests", _flaky)
+        _candidates, _rotation, catchup = await self._open(
+            session_maker, opened, GeneratorCompetitionSettings()
+        )
+        assert catchup["queued"] == 3
+        assert catchup["errors"] == {
+            "off_board": "RuntimeError: off-board write failed"
+        }
+        assert catchup["error"] == "RuntimeError: off-board write failed"
+        sources = await self._sources(session_maker)
+        assert sources == {late: {"board"}}
+        assert expiring not in sources
+
     async def test_expired_agent_label_explains_the_retest_state(
         self,
         session_maker: async_sessionmaker[AsyncSession],
@@ -3558,6 +3594,47 @@ class TestAthClearRetest:
                 allow_parallel_contract_retests=True,
             )
             assert ticket is not None and ticket.agent_id == agent_id
+
+    async def test_caller_metadata_cannot_replace_the_idempotency_key(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.db.models import ScoreAuditEntry
+        from ditto.db.queries.audit import EVENT_SCORE_RETEST_QUEUED
+        from ditto.db.queries.score_retests import rotation_request_id
+
+        agent_id, open_id = await self._held(
+            session_maker, monkeypatch, scored_season=30
+        )
+        for _attempt in range(2):
+            async with session_maker() as session, session.begin():
+                await queue_dueling_rotation_retests(
+                    session,
+                    season_id=open_id,
+                    bench_version=16,
+                    cohort=[agent_id],
+                    now=datetime.now(UTC),
+                    catch_up=True,
+                    catch_up_source="ath_clear",
+                    extra_payload={"request_id": "spoofed", "actor": "spoofed"},
+                )
+        async with session_maker() as session:
+            entries = list(
+                await session.scalars(
+                    select(ScoreAuditEntry).where(
+                        ScoreAuditEntry.agent_id == agent_id,
+                        ScoreAuditEntry.event == EVENT_SCORE_RETEST_QUEUED,
+                    )
+                )
+            )
+        # Queued once per validator, never re-queued on the second call.
+        assert len(entries) == len(_CATCHUP_VALIDATORS)
+        for entry in entries:
+            assert entry.payload["request_id"] == str(
+                rotation_request_id(open_id, agent_id, entry.validator_hotkey)
+            )
+            assert entry.payload["actor"] == "platform:ath-clear-retest"
 
     async def test_clear_of_a_provisional_agent_also_queues(
         self,

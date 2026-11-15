@@ -4975,6 +4975,7 @@ class PublicAgentSummary(BaseModel):
     )
     season_expiry: PublicSeasonExpiry | None = Field(
         default=None,
+        exclude_if=lambda value: value is None,
         description=(
             "Bench v16+ scored agents only: set when the accepted scores have "
             "left the two-season window, so the agent no longer ranks or earns. "
