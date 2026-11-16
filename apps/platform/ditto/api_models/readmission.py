@@ -6,10 +6,14 @@ refused, and with ``reserve_slot`` reserves the price. ``POST
 /readmission/commit`` takes the finalized payment proof and admits the agent,
 or banks the payment as a credit when admission is refused after payment.
 
-Both are signed by the agent's hotkey over a domain separate from uploads:
-``ditto-readmit-v1:{hotkey}:{agent_id}:{bench_version}:{timestamp}:{nonce}``.
-An upload signature therefore can never stand in for a readmission, nor the
-reverse.
+Both are signed by the agent's hotkey over a domain separate from uploads that
+also names the operation:
+``ditto-readmit-v1:{operation}:{hotkey}:{agent_id}:{bench_version}:{timestamp}:{nonce}``
+with ``operation`` one of ``check`` (a dry run), ``reserve`` (a check with
+``reserve_slot``) or ``commit``. An upload signature can never stand in for a
+readmission nor the reverse, and a signature for one operation never
+authorizes another (a relayed dry run cannot become a reservation or a
+commit).
 """
 
 from __future__ import annotations
@@ -28,12 +32,14 @@ from ditto.api_models.upload import (
 )
 
 READMISSION_SIGNATURE_DOMAIN = "ditto-readmit-v1"
-"""The signed payload is
-``ditto-readmit-v1:{hotkey}:{agent_id}:{bench_version}:{timestamp}:{nonce}``."""
+"""The signed payload is ``ditto-readmit-v1:{operation}:{hotkey}:{agent_id}:\
+{bench_version}:{timestamp}:{nonce}``."""
+ReadmissionOperation = Literal["check", "reserve", "commit"]
 
 
 def readmission_signature_payload(
     *,
+    operation: ReadmissionOperation,
     hotkey: str,
     agent_id: UUID,
     bench_version: int,
@@ -41,8 +47,8 @@ def readmission_signature_payload(
     signature_nonce: UUID,
 ) -> bytes:
     return (
-        f"{READMISSION_SIGNATURE_DOMAIN}:{hotkey}:{agent_id}:{bench_version}:"
-        f"{signature_timestamp}:{signature_nonce}"
+        f"{READMISSION_SIGNATURE_DOMAIN}:{operation}:{hotkey}:{agent_id}:"
+        f"{bench_version}:{signature_timestamp}:{signature_nonce}"
     ).encode("ascii")
 
 
@@ -145,6 +151,7 @@ __all__ = [
     "ReadmissionCommitRequest",
     "ReadmissionCommitResponse",
     "ReadmissionEligibilityView",
+    "ReadmissionOperation",
     "ReadmissionOutcome",
     "readmission_signature_payload",
 ]

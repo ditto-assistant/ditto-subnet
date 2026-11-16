@@ -94,6 +94,27 @@ func (q *Queries) GetLatestSubmissionSettings(ctx context.Context) (GetLatestSub
 	return i, err
 }
 
+const getReadmissionBlockUntil = `-- name: GetReadmissionBlockUntil :one
+SELECT max(LEAST(r.expires_at, r.created_at + interval '15 minutes'))::timestamptz
+FROM readmission_reservations AS r
+WHERE r.miner_coldkey = $1
+  AND r.expires_at > $2::timestamptz
+`
+
+type GetReadmissionBlockUntilParams struct {
+	MinerColdkey string             `json:"minerColdkey"`
+	ObservedAt   pgtype.Timestamptz `json:"observedAt"`
+}
+
+// Until when a live readmission reservation of this coldkey holds its single
+// submission slot (SN-485): the upload rule, min(expiry, created + 15 min).
+func (q *Queries) GetReadmissionBlockUntil(ctx context.Context, arg GetReadmissionBlockUntilParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, getReadmissionBlockUntil, arg.MinerColdkey, arg.ObservedAt)
+	var column_1 pgtype.Timestamptz
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const getSameHotkeyAgentBySHA = `-- name: GetSameHotkeyAgentBySHA :one
 SELECT a.agent_id, a.status::text AS status
 FROM agents AS a

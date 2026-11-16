@@ -104,6 +104,47 @@ def _as_aware(value: datetime) -> datetime:
 _PUBLIC_SCORE_QUORUM = 3
 
 
+async def latest_coldkey_submission_at(
+    session: AsyncSession, *, miner_coldkey: str
+) -> datetime | None:
+    """The coldkey's newest paid upload or admitted readmission (UTC)."""
+    latest = await session.scalar(
+        select(func.max(Agent.created_at))
+        .join(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
+        .where(EvaluationPayment.miner_coldkey == miner_coldkey)
+    )
+    readmitted = await latest_readmission_at(session, miner_coldkey=miner_coldkey)
+    if latest is not None:
+        latest = _as_aware(latest)
+    if readmitted is not None and (latest is None or readmitted > latest):
+        latest = readmitted
+    return latest
+
+
+async def submission_since_reservation_error(
+    session: AsyncSession,
+    *,
+    miner_coldkey: str,
+    reserved_at: datetime,
+    cooldown: timedelta,
+    now: datetime | None = None,
+) -> SubmissionCooldownError | None:
+    """The cooldown a reservation no longer covers, if any.
+
+    A live reservation was granted while the cooldown was clear, so consuming
+    it normally skips the check. But another submission by the same coldkey
+    that landed *after* the reservation was issued (an upload, or a
+    readmission through the other lane) starts a new cooldown the reservation
+    cannot have accounted for. Returns that cooldown's error, or ``None``.
+    """
+    latest = await latest_coldkey_submission_at(session, miner_coldkey=miner_coldkey)
+    if latest is None or latest <= _as_aware(reserved_at):
+        return None
+    current = _as_aware(now or datetime.now(UTC))
+    retry_at = latest + cooldown
+    return SubmissionCooldownError(retry_at) if retry_at > current else None
+
+
 async def get_submission_retry_at(
     session: AsyncSession,
     *,
@@ -116,14 +157,7 @@ async def get_submission_retry_at(
     Measured from the coldkey's newest paid upload or admitted readmission:
     a readmission counts toward, and starts, the same cooldown (SN-485).
     """
-    latest = await session.scalar(
-        select(func.max(Agent.created_at))
-        .join(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
-        .where(EvaluationPayment.miner_coldkey == miner_coldkey)
-    )
-    readmitted = await latest_readmission_at(session, miner_coldkey=miner_coldkey)
-    if readmitted is not None and (latest is None or readmitted > _as_aware(latest)):
-        latest = readmitted
+    latest = await latest_coldkey_submission_at(session, miner_coldkey=miner_coldkey)
     if latest is None:
         return None
 

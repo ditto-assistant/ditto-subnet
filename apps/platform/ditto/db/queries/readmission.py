@@ -47,6 +47,7 @@ from ditto.db.models import (
 from ditto.db.queries.agents import (
     SubmissionCooldownError,
     submission_cooldown_decision,
+    submission_since_reservation_error,
 )
 from ditto.db.queries.benchmark_admission import agent_is_admitted
 from ditto.db.queries.benchmark_era_stranded import (
@@ -69,6 +70,8 @@ from ditto.db.queries.stranded_admission import (
 from ditto.db.queries.submission_settings import (
     UPLOAD_ADMISSION_TTL,
     EffectiveSubmissionSettings,
+    live_readmission_block_until,
+    live_upload_block_until,
     lock_upload_admission_coldkey,
 )
 
@@ -303,10 +306,15 @@ async def reserve_readmission(
 
     A live reservation for the same agent, era and hotkey is returned as is,
     so its price snapshot is honoured. A new one requires the owner's upload
-    cooldown to be clear (a readmission counts toward it).
+    cooldown to be clear (a readmission counts toward it), and holds the
+    coldkey's single submission slot like an upload reservation: at most one
+    live readmission reservation per coldkey, and none while an upload or
+    another readmission reservation is inside its 15-minute block window. An
+    older sibling past that window is replaced, as uploads replace theirs.
 
     Raises:
-        SubmissionCooldownError: the owner is inside the cooldown.
+        SubmissionCooldownError: the owner is inside the cooldown, or another
+            reservation of the coldkey still holds the slot.
     """
     current = _utc(now or datetime.now(UTC))
     await lock_upload_admission_coldkey(session, miner_coldkey)
@@ -325,6 +333,30 @@ async def reserve_readmission(
             return existing
         await session.delete(existing)
         await session.flush()
+    upload_block = await live_upload_block_until(
+        session, miner_coldkey=miner_coldkey, now=current
+    )
+    sibling_block = await live_readmission_block_until(
+        session,
+        miner_coldkey=miner_coldkey,
+        now=current,
+        exclude=(agent_id, bench_version),
+    )
+    blocked = max(
+        (block for block in (upload_block, sibling_block) if block is not None),
+        default=None,
+    )
+    if blocked is not None:
+        raise SubmissionCooldownError(blocked)
+    # Past their block window, the coldkey's other readmission reservations
+    # give way: one live readmission reservation per coldkey.
+    for sibling in await session.scalars(
+        select(ReadmissionReservation)
+        .where(ReadmissionReservation.miner_coldkey == miner_coldkey)
+        .with_for_update()
+    ):
+        await session.delete(sibling)
+    await session.flush()
     decision = await submission_cooldown_decision(
         session,
         miner_coldkey=miner_coldkey,
@@ -388,8 +420,20 @@ async def consume_readmission_admission(
             and locked.miner_hotkey == miner_hotkey
             and _utc(locked.expires_at) > current
         ):
+            reserved_at = locked.created_at
             await session.delete(locked)
             await session.flush()
+            # Another submission of this coldkey after the reservation was
+            # issued started a cooldown the reservation cannot cover.
+            stale = await submission_since_reservation_error(
+                session,
+                miner_coldkey=miner_coldkey,
+                reserved_at=reserved_at,
+                cooldown=timedelta(seconds=settings.cooldown_seconds),
+                now=current,
+            )
+            if stale is not None:
+                raise stale
             return
     decision = await submission_cooldown_decision(
         session,

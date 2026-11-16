@@ -41,10 +41,15 @@ from ditto.api_models.readmission import (
     ReadmissionCommitRequest,
     ReadmissionCommitResponse,
     ReadmissionEligibilityView,
+    ReadmissionOperation,
     readmission_signature_payload,
 )
 from ditto.api_server.benchmark_rollout import admit_stranded_previous_era_agent
-from ditto.api_server.cla import CLA_REQUIRED_ERROR_CODE, evaluate_cla_gate
+from ditto.api_server.cla import (
+    CLA_REQUIRED_ERROR_CODE,
+    ClaConsentRequired,
+    evaluate_cla_gate,
+)
 from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -72,6 +77,7 @@ from ditto.db.queries.agents import (
 )
 from ditto.db.queries.bans import is_hotkey_banned
 from ditto.db.queries.benchmark_rollout import RolloutConflictError
+from ditto.db.queries.contributor_identity import lock_identity_writes
 from ditto.db.queries.payments import (
     READMISSION_CREDIT_TTL,
     ReadmissionAlreadyAdmittedError,
@@ -135,7 +141,11 @@ class _CreditSnapshot:
     expires_at: datetime
 
 
-def _verify_signature(body: ReadmissionCheckRequest | ReadmissionCommitRequest) -> bool:
+def _verify_signature(
+    body: ReadmissionCheckRequest | ReadmissionCommitRequest,
+    *,
+    operation: ReadmissionOperation,
+) -> bool:
     if (
         body.signature_nonce.version != 4
         or abs(time.time() - body.signature_timestamp)
@@ -143,6 +153,7 @@ def _verify_signature(body: ReadmissionCheckRequest | ReadmissionCommitRequest) 
     ):
         return False
     payload = readmission_signature_payload(
+        operation=operation,
         hotkey=body.hotkey,
         agent_id=body.agent_id,
         bench_version=body.bench_version,
@@ -206,7 +217,9 @@ async def check(
         codes.append(code)
         messages.append(message)
 
-    signature_valid = _verify_signature(body)
+    signature_valid = _verify_signature(
+        body, operation="reserve" if body.reserve_slot else "check"
+    )
     if not signature_valid:
         refuse(_ERROR_CODE_BAD_SIGNATURE, "signature did not verify against the hotkey")
 
@@ -426,7 +439,7 @@ async def commit(
     whose admission is refused is recorded ``credited`` and banked as a credit
     for this hotkey, spendable on an upload or a readmission for 30 days.
     """
-    if not _verify_signature(body):
+    if not _verify_signature(body, operation="commit"):
         raise HTTPException(
             status_code=400, detail="signature did not verify against the hotkey"
         )
@@ -546,6 +559,7 @@ async def commit(
                 reservation_token=reservation_token,
                 payer_coldkey=payer_coldkey,
                 settings=settings,
+                netuid=request.app.state.config.chain.netuid,
             )
         except PaymentReplayedError:
             # A concurrent identical commit may have won the proof.
@@ -560,6 +574,7 @@ async def commit(
             ReadmissionAlreadyAdmittedError,
             SubmissionCooldownError,
             DataPipelineError,
+            ClaConsentRequired,
         ) as exc:
             refusal = (
                 f"the readmission could not be admitted after payment: {exc}"
@@ -621,6 +636,7 @@ async def _admit(
     reservation_token: UUID | None,
     payer_coldkey: str,
     settings: Any,
+    netuid: int,
 ) -> ReadmissionCommitResponse:
     eligibility = await readmission_eligibility(
         session,
@@ -642,6 +658,14 @@ async def _admit(
     async def record_payment(
         session: AsyncSession, target: StrandedAdmissionTarget
     ) -> dict[str, Any]:
+        # Decide consent inside the write, under the shared policy lock (the
+        # upload's order: policy, then the coldkey lock), so an agreement that
+        # took effect after the pre-write check is never missed. A refusal
+        # rolls the admission back and the payment is banked as a credit.
+        await lock_identity_writes(session, namespace="cla-policy", shared=True)
+        cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=body.hotkey)
+        if not cla.allowed:
+            raise ClaConsentRequired(cla.message)
         await consume_readmission_admission(
             session,
             agent_id=body.agent_id,

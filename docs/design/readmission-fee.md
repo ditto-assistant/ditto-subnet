@@ -78,7 +78,7 @@ at most 30 days ahead. Sending the field appends `; READMISSION ANNOUNCED
 | CLI flow | `ditto/miner_cli/commands/upload.py:424`, `:520`, `:586`, `:633` | check, pay, POST, with saved-proof recovery | New `ditto readmit <agent_id>` with the same shape. Not part of `upload` |
 | CLI proof store | `ditto/miner_cli/preferences.py:36-39` | One bucket per lane | New `pending_readmission_payments` bucket. `upload`'s `saved_reassigned` reuse (`upload.py:404-415`) never sees it |
 | Fee | `db/queries/submission_settings.py:133` `competition_fee` | Memory lane charges the default | `readmission_fee_rao(settings) = settings.fee_amount_rao`. No override key |
-| Reservation | `submission_settings.py:249`; model `db/models.py:7110` (PK `miner_coldkey`) | One slot per coldkey, fee and address snapshot, 24 h / 15 min | New `readmission_reservations`, PK `(agent_id, bench_version)`, same TTLs. It takes `lock_upload_admission_coldkey` (`:223`) so a readmission and an upload from one coldkey serialize, and the cooldown decision counts both |
+| Reservation | `submission_settings.py:249`; model `db/models.py:7110` (PK `miner_coldkey`) | One slot per coldkey, fee and address snapshot, 24 h / 15 min | New `readmission_reservations`, PK `(agent_id, bench_version)`, same TTLs. It takes `lock_upload_admission_coldkey` (`:223`) so a readmission and an upload from one coldkey serialize. The coldkey keeps one submission slot across both lanes: one live readmission reservation per coldkey, and neither lane reserves while the other's reservation is inside its 15-minute block window. Consuming any token rechecks the cooldown against submissions recorded after the reservation was issued |
 | Amount and chain proof | `api_server/payment_verifier/verifier.py:35-60`, `:106`, `:182` | Exact rao against the snapshot; signer coldkey owns the hotkey at the payment block | Reused unchanged |
 | Single use | `db/queries/payments.py:117` `lock_payment_proof`, `:176`, `:284` | Two lanes check each other under one advisory lock | **Three lanes.** Upload, generator and readmission inserts each check both other tables under the same lock. The upload pre-checks (`upload.py:419` check, `:702` commit) also refuse a readmission proof |
 | Recovery window | `upload.py:193` | 24 h | Same for a readmission proof. A readmission-origin credit lasts 30 days |
@@ -88,8 +88,11 @@ at most 30 days ahead. Sending the field appends `; READMISSION ANNOUNCED
 artifact, so it can attest a payment for an existing `agent_id`. Three things
 bind a readmission instead of a tarball:
 
-1. **A signature domain.** `ditto-readmit-v1:{hotkey}:{agent_id}:{bench_version}:{ts}:{nonce}`.
-   It differs from the upload domain, so neither signature can stand in for the other.
+1. **A signature domain.** `ditto-readmit-v1:{operation}:{hotkey}:{agent_id}:{bench_version}:{ts}:{nonce}`,
+   with `operation` one of `check`, `reserve` (a check with `reserve_slot`) or
+   `commit`. It differs from the upload domain, so neither signature can stand
+   in for the other, and a signature for one operation never authorizes
+   another.
 2. **`readmission_payments`**, not `evaluation_payments`, whose `UNIQUE(agent_id)`
    (`models.py:2039`) and every reader assume the row is the agent's upload
    payment. PK `(block_hash, extrinsic_index)`, plus `agent_id`, `bench_version`,

@@ -40,6 +40,14 @@ SELECT GREATEST(
     )
 )::timestamptz;
 
+-- name: GetReadmissionBlockUntil :one
+-- Until when a live readmission reservation of this coldkey holds its single
+-- submission slot (SN-485): the upload rule, min(expiry, created + 15 min).
+SELECT max(LEAST(r.expires_at, r.created_at + interval '15 minutes'))::timestamptz
+FROM readmission_reservations AS r
+WHERE r.miner_coldkey = sqlc.arg(miner_coldkey)
+  AND r.expires_at > sqlc.arg(observed_at)::timestamptz;
+
 -- name: LockUploadAdmissionColdkey :exec
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(miner_coldkey), 0));
 
