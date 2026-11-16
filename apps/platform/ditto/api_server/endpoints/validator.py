@@ -7905,9 +7905,14 @@ async def submit_score(
                 release_policy = await artifact_release_policy_as_of(
                     session, at=submitted_at_utc
                 )
+                # Every earlier generation, not only each owner's representative:
+                # a released sibling of the representative is still public, and
+                # it is usually the artifact that explains a match.
                 published_before = await list_public_source_releases(
                     session,
-                    agent_ids=[e.agent_id for e in eligible],
+                    agent_ids=list(
+                        {e.agent_id for e in (*eligible, *eligible_history)}
+                    ),
                     quorum=SCORING_QUORUM,
                     policy=release_policy,
                 )

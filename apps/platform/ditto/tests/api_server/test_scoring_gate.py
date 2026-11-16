@@ -1212,6 +1212,128 @@ class TestPublicReleaseNoCopyOpportunity:
         assert white_bolt_v2.held is False
 
 
+class TestReleasedSiblingInHistory:
+    """A released generation that is not its owner's representative still counts.
+
+    2026-11-16 copy-hold backfill: eleven holds named an unreleased dan0l
+    (v57/v58/v61) or beast-d41 (v10/v12) generation while a *released* generation
+    of the same owner (dan0l v59 ``a06c97e5``, public 2026-11-15 17:32Z;
+    beast-d41 v10/v11/v12/v19) explained every shared file. The gate built its
+    publication alibi from ``eligible`` alone, which holds one representative row
+    per owner -- here a later, still-embargoed generation -- so the released
+    sibling was invisible and every downstream fork was held.
+    """
+
+    ENGINE = {f"engine{i:010x}" for i in range(40)}
+    V59 = {f"v59{i:013x}" for i in range(4)}
+
+    def _family(self):
+        owner = {"miner": "5DveEYviiP", "coldkey": "5HKVUoKsd4"}
+        v58 = _entry(
+            agent_id=_id("430a581c"),
+            composite=0.80,
+            sha256="58" * 32,
+            content_fingerprint=_sk(self.ENGINE | {f"v58{i:013x}" for i in range(2)}),
+            first_seen=datetime(2026, 11, 13, 0, 33, 58, tzinfo=UTC),
+            **owner,
+        )
+        v59 = _entry(
+            agent_id=_id("a06c97e5"),
+            composite=0.81,
+            sha256="59" * 32,
+            content_fingerprint=_sk(self.ENGINE | self.V59),
+            first_seen=datetime(2026, 11, 13, 13, 51, 44, tzinfo=UTC),
+            **owner,
+        )
+        # The owner's representative row: a later, never-released generation.
+        rep = _entry(
+            agent_id=_id("d39820cb"),
+            composite=0.82,
+            sha256="69" * 32,
+            content_fingerprint=_sk({f"rep{i:013x}" for i in range(40)}),
+            first_seen=datetime(2026, 11, 16, 9, 42, 21, tzinfo=UTC),
+            **owner,
+        )
+        # Another owner's unreleased fork of v59: the nearest visible match.
+        relay = _entry(
+            agent_id=_id("94c08dd2"),
+            composite=0.79,
+            miner="5RelayHk",
+            coldkey="5RelayCold",
+            sha256="94" * 32,
+            content_fingerprint=_sk(
+                self.ENGINE | self.V59 | {f"rl{i:014x}" for i in range(2)}
+            ),
+            first_seen=datetime(2026, 11, 15, 16, 0, 0, tzinfo=UTC),
+        )
+        released = _released(
+            v59, available_at=datetime(2026, 11, 15, 17, 32, 28, tzinfo=UTC)
+        )
+        return v58, v59, rep, relay, released
+
+    def test_fork_of_released_sibling_is_not_held(self) -> None:
+        v58, v59, rep, relay, released = self._family()
+        decision = evaluate_duplicate_signals(
+            agent_id=_id("18c0168a"),
+            miner_hotkey="5Dz5NvybxD",
+            miner_coldkey="5D8FFBJMNZ",
+            sha256="t2" * 32,
+            size_bytes=None,
+            composite=0.79,
+            content_fingerprint=_sk(
+                self.ENGINE | self.V59 | {f"own{i:013x}" for i in range(3)}
+            ),
+            eligible=[relay, rep],
+            eligible_history=[v58, v59, relay, rep],
+            public_source_releases=[released],
+            submitted_at=datetime(2026, 11, 16, 8, 26, 30, tzinfo=UTC),
+        )
+        assert decision.held is False
+        withdrawal = decision.no_copy_opportunity
+        assert withdrawal is not None
+        assert withdrawal.kind == "public_release"
+        assert withdrawal.source_agent_id == v59.agent_id
+
+    def test_unreleased_only_content_is_still_held(self) -> None:
+        """The released sibling must account for the match, not merely exist."""
+        v58, v59, rep, relay, released = self._family()
+        v58_only = {f"v58{i:013x}" for i in range(2)}
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            miner_coldkey="5CopierCold",
+            sha256="cp" * 32,
+            size_bytes=None,
+            composite=0.80,
+            content_fingerprint=_sk(self.ENGINE | v58_only),
+            eligible=[v58],
+            eligible_history=[v58, v59, rep],
+            public_source_releases=[released],
+            submitted_at=datetime(2026, 11, 16, 8, 26, 30, tzinfo=UTC),
+        )
+        assert decision.held is True
+        assert decision.duplicate_of == v58.agent_id
+
+    def test_release_after_upload_is_no_alibi(self) -> None:
+        v58, v59, rep, relay, released = self._family()
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Early",
+            miner_coldkey="5EarlyCold",
+            sha256="ea" * 32,
+            size_bytes=None,
+            composite=0.80,
+            content_fingerprint=_sk(
+                self.ENGINE | self.V59 | {f"own{i:013x}" for i in range(3)}
+            ),
+            eligible=[relay, rep],
+            eligible_history=[v58, v59, relay, rep],
+            public_source_releases=[released],
+            submitted_at=datetime(2026, 11, 15, 17, 0, 0, tzinfo=UTC),
+        )
+        assert decision.held is True
+
+
 class TestSelfLineagePrecedence:
     """An originator must not be held against its own downstream copy.
 
