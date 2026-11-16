@@ -38,10 +38,12 @@ def build_upload_payload(
 
 
 READMISSION_SIGNATURE_DOMAIN = "ditto-readmit-v1"
+READMISSION_OPERATIONS = ("check", "reserve", "commit")
 
 
 def build_readmission_payload(
     *,
+    operation: str,
     hotkey_ss58: str,
     agent_id: UUID,
     bench_version: int,
@@ -50,13 +52,17 @@ def build_readmission_payload(
 ) -> bytes:
     """The exact bytes ``ditto readmit`` signs and Platform verifies (SN-485).
 
-    A separate domain from uploads, binding the agent and the benchmark era,
-    so an upload signature can never stand in for a readmission or the
-    reverse. Pinned literally here and in Platform's readmission tests.
+    A separate domain from uploads that names the ``operation`` (``check``,
+    ``reserve`` for a check with ``reserve_slot``, or ``commit``) and binds the
+    agent and the benchmark era, so an upload signature can never stand in for
+    a readmission, nor one operation's signature for another. Pinned literally
+    here and in Platform's readmission tests.
     """
+    if operation not in READMISSION_OPERATIONS:
+        raise ValueError(f"unknown readmission operation {operation!r}")
     return (
-        f"{READMISSION_SIGNATURE_DOMAIN}:{hotkey_ss58}:{agent_id}:{bench_version}:"
-        f"{signature_timestamp}:{signature_nonce}"
+        f"{READMISSION_SIGNATURE_DOMAIN}:{operation}:{hotkey_ss58}:{agent_id}:"
+        f"{bench_version}:{signature_timestamp}:{signature_nonce}"
     ).encode("ascii")
 
 

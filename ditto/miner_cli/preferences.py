@@ -42,6 +42,9 @@ GENERATOR_PAYMENTS_BUCKET = "pending_generator_payments"
 # proof must not be reused as an upload's reusable credit, and Platform refuses
 # it there (3207) anyway.
 READMISSION_PAYMENTS_BUCKET = "pending_readmission_payments"
+# The reservation token that goes with a saved readmission proof, so a rerun
+# commits against the same price snapshot the payment was made for.
+READMISSION_TOKENS_BUCKET = "pending_readmission_tokens"
 
 
 def _pending_payment_key(*, network: str, hotkey: str, name: str, sha256: str) -> str:
@@ -347,4 +350,34 @@ def clear_pending_payment(
         return True
     del payments[key]
     raw[bucket] = payments
+    return _save_preferences(raw)
+
+
+def save_readmission_token(*, network: str, hotkey: str, key: str, token: str) -> bool:
+    """Remember the reservation token a saved readmission proof was paid for."""
+    raw = _load_preferences()
+    tokens = raw.get(READMISSION_TOKENS_BUCKET)
+    if not isinstance(tokens, dict):
+        tokens = {}
+    tokens[f"{network}:{hotkey}:{key}"] = token
+    raw[READMISSION_TOKENS_BUCKET] = tokens
+    return _save_preferences(raw)
+
+
+def load_readmission_token(*, network: str, hotkey: str, key: str) -> str | None:
+    raw = _load_preferences()
+    tokens = raw.get(READMISSION_TOKENS_BUCKET)
+    if not isinstance(tokens, dict):
+        return None
+    value = tokens.get(f"{network}:{hotkey}:{key}")
+    return value if isinstance(value, str) and value else None
+
+
+def clear_readmission_token(*, network: str, hotkey: str, key: str) -> bool:
+    raw = _load_preferences()
+    tokens = raw.get(READMISSION_TOKENS_BUCKET)
+    if not isinstance(tokens, dict) or f"{network}:{hotkey}:{key}" not in tokens:
+        return True
+    del tokens[f"{network}:{hotkey}:{key}"]
+    raw[READMISSION_TOKENS_BUCKET] = tokens
     return _save_preferences(raw)

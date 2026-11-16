@@ -137,6 +137,7 @@ def _saved() -> PaymentReceipt | None:
 def test_the_signature_payload_is_the_pinned_wire_format() -> None:
     """Pinned literally here and in Platform's readmission endpoint tests."""
     payload = build_readmission_payload(
+        operation="commit",
         hotkey_ss58="5Hot",
         agent_id=_AGENT,
         bench_version=19,
@@ -144,9 +145,18 @@ def test_the_signature_payload_is_the_pinned_wire_format() -> None:
         signature_nonce=UUID("00000000-0000-4000-8000-000000000001"),
     )
     assert payload == (
-        b"ditto-readmit-v1:5Hot:7c9e6679-7425-40de-944b-e07fc1f90ae7:19:"
+        b"ditto-readmit-v1:commit:5Hot:7c9e6679-7425-40de-944b-e07fc1f90ae7:19:"
         b"1700000000:00000000-0000-4000-8000-000000000001"
     )
+    with pytest.raises(ValueError):
+        build_readmission_payload(
+            operation="upload",
+            hotkey_ss58="5Hot",
+            agent_id=_AGENT,
+            bench_version=19,
+            signature_timestamp=1700000000,
+            signature_nonce=UUID("00000000-0000-4000-8000-000000000001"),
+        )
 
 
 def test_a_refused_check_pays_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,8 +180,19 @@ def test_admits_after_paying_the_reserved_price_exactly(
     [commit] = _FakeClient.commits
     assert commit["admission_token"] == "00000000-0000-4000-8000-000000000009"
     assert commit["payment_block_hash"] == _BLOCK
-    # The signature is over the readmission domain, never the upload one.
+    # The check reserved, so it was signed as a reservation.
+    reserve_payload = build_readmission_payload(
+        operation="reserve",
+        hotkey_ss58=_KEY.ss58_address,
+        agent_id=_AGENT,
+        bench_version=19,
+        signature_timestamp=check["signature_timestamp"],
+        signature_nonce=UUID(check["signature_nonce"]),
+    )
+    assert _KEY.verify(reserve_payload, bytes.fromhex(check["signature"]))
+    # The commit is signed as a commit, over the readmission domain.
     payload = build_readmission_payload(
+        operation="commit",
         hotkey_ss58=_KEY.ss58_address,
         agent_id=_AGENT,
         bench_version=19,
@@ -198,13 +219,39 @@ def test_the_proof_lives_in_its_own_bucket_and_survives_a_failed_commit(
         == ()
     )
 
-    # A rerun reuses the saved proof without paying again.
+    # A rerun reuses the saved proof, and the reservation token it was paid
+    # for, without paying again.
     calls = _install(monkeypatch)
     assert readmit_cmd.run(_args()) == 0
     assert not any("pay" in call for call in calls)
     assert _FakeClient.checks == []
     assert _FakeClient.commits[0]["payment_block_hash"] == _BLOCK
+    assert _FakeClient.commits[0]["admission_token"] == (
+        "00000000-0000-4000-8000-000000000009"
+    )
     assert _saved() is None
+
+
+def test_explicit_recovery_flags_also_restore_the_saved_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch)
+    _FakeClient.commit = RuntimeError("gateway timeout")
+    with pytest.raises(RuntimeError):
+        readmit_cmd.run(_args())
+    _install(monkeypatch)
+    assert (
+        readmit_cmd.run(
+            _args(
+                payment_block_hash=_BLOCK,
+                payment_block_number=77,
+                payment_extrinsic_index=3,
+            )
+        )
+        == 0
+    )
+    [commit] = _FakeClient.commits
+    assert commit["admission_token"] == "00000000-0000-4000-8000-000000000009"
 
 
 def test_a_definitively_refused_proof_is_forgotten(

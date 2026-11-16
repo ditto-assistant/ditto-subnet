@@ -44,8 +44,11 @@ from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_paymen
 from ditto.miner_cli.preferences import (
     READMISSION_PAYMENTS_BUCKET,
     clear_pending_payment,
+    clear_readmission_token,
     load_pending_payment,
+    load_readmission_token,
     save_pending_payment,
+    save_readmission_token,
 )
 from ditto.miner_cli.signing import build_readmission_payload
 from ditto.miner_cli.submission_terms import show_submission_terms
@@ -130,12 +133,18 @@ def _active_bench_version(terms: dict[str, Any] | None) -> int:
 
 
 def _signed_body(
-    *, wallet: Any, hotkey: str, agent_id: UUID, bench_version: int
+    *,
+    wallet: Any,
+    operation: str,
+    hotkey: str,
+    agent_id: UUID,
+    bench_version: int,
 ) -> dict[str, Any]:
     nonce = uuid4()
     timestamp = int(time.time())
     signature = wallet.hotkey.sign(
         build_readmission_payload(
+            operation=operation,
             hotkey_ss58=hotkey,
             agent_id=agent_id,
             bench_version=bench_version,
@@ -195,8 +204,15 @@ def run(args: argparse.Namespace) -> int:
             "sha256": _pending_key(agent_id, bench_version),
             "bucket": READMISSION_PAYMENTS_BUCKET,
         }
+        token_key = {
+            "network": network.name,
+            "hotkey": hotkey,
+            "key": _pending_key(agent_id, bench_version),
+        }
         receipt = recovery
-        token: str | None = None
+        # A saved reservation token restores the price snapshot on both the
+        # saved-proof and the explicit-proof recovery paths.
+        token: str | None = load_readmission_token(**token_key)
         if receipt is None:
             receipt = load_pending_payment(**pending)
             if receipt is not None:
@@ -210,6 +226,7 @@ def run(args: argparse.Namespace) -> int:
                 {
                     **_signed_body(
                         wallet=wallet,
+                        operation="reserve",
                         hotkey=hotkey,
                         agent_id=agent_id,
                         bench_version=bench_version,
@@ -275,9 +292,13 @@ def run(args: argparse.Namespace) -> int:
                     "keep the printed proof if the readmission fails",
                     file=sys.stderr,
                 )
+            # Kept with the proof: a rerun commits against the same price
+            # snapshot the payment was made for.
+            save_readmission_token(**token_key, token=token)
         body = {
             **_signed_body(
                 wallet=wallet,
+                operation="commit",
                 hotkey=hotkey,
                 agent_id=agent_id,
                 bench_version=bench_version,
@@ -294,6 +315,7 @@ def run(args: argparse.Namespace) -> int:
         except ReadmissionPaymentRejectedError:
             if recovery is None:
                 clear_pending_payment(**pending, payment=receipt)
+                clear_readmission_token(**token_key)
                 print(
                     "\nplatform refused the payment proof; it was removed from "
                     "local storage. Rerunning reads the current price and asks "
@@ -312,6 +334,7 @@ def run(args: argparse.Namespace) -> int:
             )
             raise
     clear_pending_payment(**pending, payment=receipt)
+    clear_readmission_token(**token_key)
     if outcome == "admitted":
         print(str(agent_id))
         print(
