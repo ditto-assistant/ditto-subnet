@@ -54,6 +54,7 @@ from ditto.api_models.confirmation_bundles import (
 from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
     Agent,
+    AgentKingship,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
     ConfirmationBundleSubject,
@@ -1793,6 +1794,8 @@ async def list_anti_copy_history(
     *,
     bench_version: int,
     before: datetime,
+    statuses: tuple[AgentStatus, ...] = (AgentStatus.SCORED,),
+    kings_only: bool = False,
 ) -> list[LedgerRow]:
     """Every finalized generation uploaded before ``before``, not owner-reduced.
 
@@ -1828,6 +1831,16 @@ async def list_anti_copy_history(
     Unlike the ledger this takes an explicit ``bench_version`` and never resolves
     rollout authority: the caller is finalizing one ticket at one version and
     must compare within that era.
+
+    ``statuses`` / ``kings_only`` exist for one second caller: the anti-copy
+    gate's public-release alibi. Source release covers ``scored``, ``live`` and
+    ``banned`` kings (``SOURCE_RELEASE_STATUSES``), but the default read omits a
+    published king that is now ``live``, was banned after publication, or holds
+    scores only from an earlier bench version. Its content is still public.
+    ``kings_only=True`` restricts the read to agents that ever held the crown
+    (only kings are released) and drops the ``bench_version`` filter, so a king
+    released in an earlier era is still found; ``statuses`` picks which of the
+    release statuses to read.
     """
     agent_best = (
         select(
@@ -1850,7 +1863,20 @@ async def list_anti_copy_history(
             )
             .label("srn"),
         )
-        .where(Score.bench_version == bench_version)
+        # The public-release alibi is era-independent: a king released while it
+        # held the crown on an earlier bench version is still public, and the
+        # fingerprints it is compared on do not depend on the bench. So the
+        # kings-only read takes every era's scores; one median row per agent
+        # survives either way, and its composite is not read on that path.
+        # The king restriction sits inside the window too, so dropping the era
+        # filter never widens the scan past the (small) set of crowned agents.
+        .where(
+            *(
+                [Score.agent_id.in_(select(AgentKingship.agent_id))]
+                if kings_only
+                else [Score.bench_version == bench_version]
+            )
+        )
         .subquery()
     )
     rows = (
@@ -1881,8 +1907,13 @@ async def list_anti_copy_history(
             .join(agent_best, agent_best.c.agent_id == Agent.agent_id)
             .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
             .where(
-                Agent.status == AgentStatus.SCORED,
+                Agent.status.in_(statuses),
                 Agent.created_at <= before,
+                *(
+                    [Agent.agent_id.in_(select(AgentKingship.agent_id))]
+                    if kings_only
+                    else []
+                ),
                 # Same integer-arithmetic median as the ledger: exact, and
                 # portable across Postgres and the SQLite unit-test path.
                 or_(
