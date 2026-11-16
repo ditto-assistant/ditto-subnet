@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v0.487.1 (2026-11-16)
+
+### Bug Fixes
+
+- **platform**: Count live and banned released kings as copy-gate alibis
+  ([`db578eb`](https://github.com/ditto-assistant/ditto-subnet/commit/db578eb9408457c117e4c9fbe806b0ab64dce77f))
+
+- **platform**: Find released kings from earlier bench eras for copy-gate alibis
+  ([`4625acc`](https://github.com/ditto-assistant/ditto-subnet/commit/4625acce242596918bf3d5332cf69989184b97b4))
+
+- **platform**: See released sibling generations before opening a copy hold (SN-344)
+  ([`10b19e1`](https://github.com/ditto-assistant/ditto-subnet/commit/10b19e10a134182e4142278a6273a0d6d49f467c))
+
+### Performance Improvements
+
+- **platform**: Restrict the kings-only alibi window to crowned agents
+  ([`a41dc25`](https://github.com/ditto-assistant/ditto-subnet/commit/a41dc25482d7bd040b424a04b76516bf3b2f505b))
+
+### Testing
+
+- **platform**: Use plain owner fixtures so gitleaks generic-api-key does not fire
+  ([`013253b`](https://github.com/ditto-assistant/ditto-subnet/commit/013253babf737b73a396da91e7729f547e8455c1))
+
+
 ## v0.487.0 (2026-11-16)
 
 ### Features
