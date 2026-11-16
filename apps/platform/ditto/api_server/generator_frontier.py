@@ -732,6 +732,8 @@ def record_oracle_results(
             r.case_id for r in results if not r.fault and float(r.score) < threshold
         ]
         seated = {str(slot.get("agent_id")) for slot in row.panel or ()}
+        selected: list[str]
+        skipped: dict[str, str]
         if policy["agent_id"] in seated:
             # It already answered these cases on the panel; a second run
             # would only re-roll its own failed attempt.
