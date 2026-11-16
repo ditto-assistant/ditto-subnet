@@ -138,6 +138,20 @@ export const generatorCompetitionSettingsSchema = z.object({
   frontier_audit_cases: z.number().int().min(0).max(16).default(3),
   frontier_audit_grace_hours: z.number().int().min(1).max(336).default(24),
   frontier_oracle_timeout_hours: z.number().int().min(1).max(168).default(12),
+  // Frontier escalation (ships off: inference spend): a stronger reference
+  // agent re-checks a capped, secret-seed sample of the cases the oracle
+  // failed (at most frontier_escalation_max_cases per round and
+  // frontier_escalation_max_cases_per_column per column, none from a column
+  // whose oracle failures exceed frontier_escalation_max_failed_fraction of
+  // its cases). A pass at frontier_escalation_solve_threshold (default 1.0, a
+  // full answer) is attested and audited like an oracle pass. Off while
+  // frontier_escalation_agent_id is null; a Platform or revision that
+  // predates the tier reads as off.
+  frontier_escalation_agent_id: uuid.nullable().default(null),
+  frontier_escalation_solve_threshold: z.number().gt(0).max(1).default(1),
+  frontier_escalation_max_cases: z.number().int().min(1).max(64).default(8),
+  frontier_escalation_max_cases_per_column: z.number().int().min(1).max(16).default(4),
+  frontier_escalation_max_failed_fraction: z.number().gt(0).max(1).default(0.25),
   // Pre-screens (ships off: inference spend): batches of up to
   // prescreen_columns never-scored generators, prescreen_cases cases each, on
   // the top prescreen_panel_size runnable owners while no round needs the
@@ -937,6 +951,29 @@ export const generatorFrontierSchema = z.object({
       ),
     })
     .nullable(),
+  // The escalation tier's re-check of oracle-failed cases; null with
+  // escalation off (and from a Platform that predates it).
+  escalation: z
+    .object({
+      agent_id: uuid,
+      solve_threshold: z.number(),
+      oracle_failed: z.number().int(),
+      selected: z.array(z.string()),
+      skipped_columns: z.record(z.string(), z.string()).default({}),
+      attempts: z.number().int(),
+      deadline: z.string().nullable().optional().default(null),
+      outcome: z.string(),
+      validator_hotkey: z.string().nullable().optional().default(null),
+      run_id: z.string().nullable().optional().default(null),
+      recorded_at: z.string().nullable().optional().default(null),
+      passed: z.array(z.string()).default([]),
+      results: z
+        .array(z.object({ case_id: z.string(), score: z.number(), fault: z.boolean() }))
+        .default([]),
+    })
+    .nullable()
+    .optional()
+    .default(null),
   attested: z.record(z.string(), z.array(z.string())),
   audits: z.array(generatorFrontierAuditSchema),
   applied: z.record(z.string(), z.array(z.string())).nullable().optional(),

@@ -365,6 +365,13 @@ opens, once it is scored or void.
     ruled, after `frontier_audit_grace_hours`, or when the oracle times out.
     `settle_generator_round_frontier` (`SETTLE GENERATOR FRONTIER {round}`)
     settles it now. Until a round settles it pays its unattested score.
+    With `frontier_escalation_agent_id` set (off by default), the oracle's
+    report does not open the audits yet: a stronger escalation agent
+    re-checks a capped, secret-seed sample of the cases the oracle failed,
+    and its passes join the attestations and the same audit.
+    `get_generator_round_frontier` shows it as `escalation` (selected cases,
+    skipped columns and why, outcome, results); the knobs are in
+    `get_generator_competition_settings`.
   - `rotate_dueling_season` (`ROTATE DUELING SEASON`, audited reason) closes
     the open dueling season at the next round boundary, or on the next
     round-driver tick with `immediate: true`; the next season opens at the

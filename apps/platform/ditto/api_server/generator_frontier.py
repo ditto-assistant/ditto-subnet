@@ -29,6 +29,25 @@ generator-competition.md``, "Frontier cases"):
    score, verdict rows, and the generator's ``round_score`` are rewritten.
    The pre-frontier column scores stay on the round.
 
+**Escalation** (``frontier_escalation_agent_id``, off by default). A case the
+panel and the oracle both fail stays unsolved, so a hard but valid case
+scores like a broken one. With escalation on, the oracle's report does not
+open the audits yet: :func:`select_escalation` takes a capped sample of the
+oracle-failed candidates (at most ``frontier_escalation_max_cases_per_column``
+per column and ``frontier_escalation_max_cases`` per round, lowest
+``sha256(domain ‖ round_seed ‖ column ‖ case)`` first, so the secret round
+seed decides and a generator cannot), skipping every column whose oracle
+failures exceed ``frontier_escalation_max_failed_fraction`` of its cases (a
+column that mostly beats the oracle looks broken, not hard). The lane stays
+``oracle_pending`` in its ``escalation`` phase while one lease runs the
+stronger escalation agent on exactly those cases, on the same bounded
+contexts and dataset mode. A case it passes at
+``frontier_escalation_solve_threshold`` (default 1.0, a full answer) joins the
+round's attestations, and the audits open over every attested case, so an
+escalated case is audited and credited exactly like an oracle pass. An
+escalation that never reports (timeout or attempt cap) only adds nothing:
+the oracle's own attestations still go to audit.
+
 Until a round settles it pays its unattested score, so frontier credit never
 reaches the ledger before its audit. :func:`apply_frontier` and
 :func:`frontier_audit_sample` port the Go contract and replay its golden
@@ -58,6 +77,7 @@ from ditto.api_models.generator_round_validator import GeneratorRoundCaseResult
 from ditto.api_models.generator_rounds import (
     GeneratorFrontierAuditView,
     GeneratorFrontierCaseView,
+    GeneratorFrontierEscalationView,
     GeneratorFrontierMemoryPair,
     GeneratorFrontierOracleView,
     GeneratorFrontierView,
@@ -76,6 +96,7 @@ from ditto.db.models import (
 logger = logging.getLogger(__name__)
 
 FRONTIER_AUDIT_DOMAIN = b"dittobench-frontier-audit/v1"
+FRONTIER_ESCALATION_DOMAIN = b"dittobench-frontier-escalation/v1"
 FRONTIER_DOCUMENT_VERSION = 1
 # Oracle leases a round issues before it settles with no attestations, so a
 # broken oracle cannot pin a round. A lease still running is always allowed to
@@ -85,6 +106,11 @@ MAX_ORACLE_ATTEMPTS = 4
 STATE_ORACLE_PENDING = "oracle_pending"
 STATE_AUDIT_PENDING = "audit_pending"
 STATE_SETTLED = "settled"
+
+# Phases of an ``oracle_pending`` lane: the oracle's run, then (with
+# escalation on and oracle-failed cases selected) the escalation agent's run.
+PHASE_ORACLE = "oracle"
+PHASE_ESCALATION = "escalation"
 
 AUDIT_PENDING = "pending"
 AUDIT_PASSED = "passed"
@@ -145,6 +171,65 @@ def frontier_audit_sample(
             + case_id.encode()
         ).hexdigest()
     return [case_id for case_id, _ in sorted(keyed.items(), key=lambda kv: kv[1])][:n]
+
+
+def _escalation_key(round_seed: str, case_id: str) -> str:
+    column_id, _, local = case_id.partition("/")
+    return hashlib.sha256(
+        FRONTIER_ESCALATION_DOMAIN
+        + b"\x00"
+        + round_seed.encode()
+        + b"\x00"
+        + column_id.encode()
+        + b"\x00"
+        + local.encode()
+    ).hexdigest()
+
+
+def select_escalation(
+    *,
+    round_seed: str,
+    failed: Sequence[str],
+    column_sizes: dict[str, int],
+    max_cases: int,
+    max_cases_per_column: int,
+    max_failed_fraction: float,
+) -> tuple[list[str], dict[str, str]]:
+    """The oracle-failed round case ids the escalation agent re-checks, and
+    the columns skipped with their reason.
+
+    ``failed`` are round case ids (``column/case``) the oracle answered and
+    failed (never faulted ones); ``column_sizes`` is each column's scored,
+    non-duplicate case count. A column whose failures exceed
+    ``max_failed_fraction`` of its cases is skipped whole, so a pack flooded
+    with unsolvable cases buys no escalation. From each remaining column the
+    ``max_cases_per_column`` cases with the lowest
+    ``sha256(domain ‖ 0 ‖ round_seed ‖ 0 ‖ column ‖ 0 ‖ case)`` are taken, then
+    the ``max_cases`` lowest of those across the round. The round seed is
+    secret until reveal, so a generator cannot steer which cases are picked,
+    and the result is returned in key order (deterministic)."""
+    by_column: dict[str, list[str]] = {}
+    for case_id in dict.fromkeys(failed):
+        by_column.setdefault(case_id.split("/", 1)[0], []).append(case_id)
+    skipped: dict[str, str] = {}
+    pool: list[tuple[str, str]] = []
+    for column_id in sorted(by_column):
+        case_ids = by_column[column_id]
+        size = column_sizes.get(column_id, 0)
+        if size <= 0:
+            skipped[column_id] = "column has no scored cases"
+            continue
+        share = len(case_ids) / size
+        if share > max_failed_fraction:
+            skipped[column_id] = (
+                f"oracle failed {len(case_ids)}/{size} cases "
+                f"({share:.0%} > {max_failed_fraction:.0%})"
+            )
+            continue
+        keyed = sorted((_escalation_key(round_seed, c), c) for c in case_ids)
+        pool.extend(keyed[: max(0, max_cases_per_column)])
+    pool.sort()
+    return [case_id for _, case_id in pool[: max(0, max_cases)]], skipped
 
 
 def apply_frontier(
@@ -266,8 +351,50 @@ def begin_frontier(
         "oracle": None,
         "attested": {},
         "audits": {},
+        "phase": PHASE_ORACLE,
+        # Frozen like the rest of the policy; None runs no escalation.
+        "escalation_policy": (
+            {
+                "agent_id": str(settings.frontier_escalation_agent_id),
+                "solve_threshold": settings.frontier_escalation_solve_threshold,
+                "max_cases": settings.frontier_escalation_max_cases,
+                "max_cases_per_column": (
+                    settings.frontier_escalation_max_cases_per_column
+                ),
+                "max_failed_fraction": settings.frontier_escalation_max_failed_fraction,
+            }
+            if settings.frontier_escalation_enabled
+            else None
+        ),
+        "escalation": None,
     }
     return True
+
+
+def in_escalation(frontier: dict[str, Any] | None) -> bool:
+    """The lane is waiting on its escalation run, not the oracle's."""
+    frontier = frontier or {}
+    return (
+        frontier.get("state") == STATE_ORACLE_PENDING
+        and frontier.get("phase") == PHASE_ESCALATION
+        and bool(frontier.get("escalation"))
+    )
+
+
+def oracle_run_agent(frontier: dict[str, Any]) -> str:
+    """The agent the lane's open run leases: the oracle, or in the
+    escalation phase the escalation agent."""
+    if in_escalation(frontier):
+        return str(frontier["escalation"]["agent_id"])
+    return str(frontier["oracle_agent_id"])
+
+
+def oracle_run_cases(frontier: dict[str, Any]) -> list[str]:
+    """The round case ids the lane's open run answers: every candidate, or in
+    the escalation phase only the selected oracle-failed cases."""
+    if in_escalation(frontier):
+        return list(frontier["escalation"]["selected"])
+    return list(frontier.get("candidates") or ())
 
 
 def oracle_capable(heartbeat: ValidatorHeartbeat | None) -> bool:
@@ -411,7 +538,10 @@ async def oracle_round(
         )
         if row is None or await live_oracle_lease(session, row, now=now) is not None:
             continue
-        if settle_reason(row, now=now) is not None:
+        if (
+            settle_reason(row, now=now) is not None
+            or escalation_expired(row, now=now) is not None
+        ):
             continue
         await close_stale_oracle_attempts(session, row, now=now)
         return row
@@ -433,29 +563,37 @@ def oracle_column_cases(row: GeneratorRound) -> int:
 
 def is_oracle_run(row: GeneratorRound, agent_id: UUID) -> bool:
     """A result or dataset read on ``row`` from ``agent_id`` is the frontier
-    oracle's: the round is scored and waiting on its oracle."""
+    oracle's (or, in the escalation phase, the escalation agent's): the round
+    is scored and waiting on that run."""
     frontier = row.frontier or {}
     return (
         row.status == "scored"
         and frontier.get("state") == STATE_ORACLE_PENDING
-        and frontier.get("oracle_agent_id") == str(agent_id)
+        and oracle_run_agent(frontier) == str(agent_id)
     )
 
 
 def note_oracle_lease(row: GeneratorRound) -> None:
     frontier = dict(row.frontier or {})
-    frontier["oracle_attempts"] = int(frontier.get("oracle_attempts") or 0) + 1
+    if in_escalation(frontier):
+        escalation = dict(frontier["escalation"])
+        escalation["attempts"] = int(escalation.get("attempts") or 0) + 1
+        frontier["escalation"] = escalation
+    else:
+        frontier["oracle_attempts"] = int(frontier.get("oracle_attempts") or 0) + 1
     row.frontier = frontier
 
 
 def validate_oracle_results(
     row: GeneratorRound, results: Sequence[GeneratorRoundCaseResult]
 ) -> None:
-    expected = list((row.frontier or {}).get("candidates", ()))
+    expected = oracle_run_cases(row.frontier or {})
     got = [r.case_id for r in results]
     if len(got) != len(set(got)) or set(got) != set(expected):
         raise FrontierRejected(
             "oracle results must cover exactly the round's frontier candidates"
+            if not in_escalation(row.frontier)
+            else "escalation results must cover exactly the selected cases"
         )
     if all(r.fault for r in results):
         # Like a panel run that faulted every case, this is an infrastructure
@@ -475,33 +613,35 @@ def _columns_of(case_ids: Iterable[str]) -> dict[str, list[str]]:
     return out
 
 
-def record_oracle_results(
-    row: GeneratorRound,
-    results: Sequence[GeneratorRoundCaseResult],
-    *,
-    validator_hotkey: str,
-    run_id: str,
-    signature: str,
-    now: datetime,
-) -> None:
-    """Store the oracle's results, attest the cases it passed, and open the
-    sampled audits (or settle-ready state when there is nothing to audit)."""
-    validate_oracle_results(row, results)
-    frontier = dict(row.frontier or {})
-    threshold = float(frontier.get("solve_threshold") or 0.5)
-    passed = [r.case_id for r in results if not r.fault and float(r.score) >= threshold]
-    order = {case_id: i for i, case_id in enumerate(frontier["candidates"])}
-    attested = _columns_of(sorted(passed, key=order.__getitem__))
+def _case_fingerprints(row: GeneratorRound) -> dict[str, str]:
     # Each attestation is bound to the content it was earned on (the case's
     # fingerprint in the scored round), as the Go contract's FrontierCases.
-    fingerprints = {
+    return {
         case["case_id"]: case["fingerprint"]
         for column in (row.score or {}).get("columns", ())
         for case in column["pack"].get("cases", ())
     }
+
+
+def _column_sizes(row: GeneratorRound) -> dict[str, int]:
+    """Each scored column's non-duplicate case count."""
+    out: dict[str, int] = {}
+    for column in (row.score or {}).get("columns", ()):
+        pack = column["pack"]
+        if pack.get("status") != "scored":
+            continue
+        out[column["column_id"]] = len(pack.get("cases") or ()) - int(
+            pack.get("duplicate") or 0
+        )
+    return out
+
+
+def _open_audits(row: GeneratorRound, frontier: dict[str, Any], now: datetime) -> None:
+    """Draw each attested column's audit sample and move to ``audit_pending``
+    (settle-ready when there is nothing to audit)."""
     audits: dict[str, Any] = {}
     n = int(frontier.get("audit_cases") or 0)
-    for column_id, case_ids in attested.items():
+    for column_id, case_ids in (frontier.get("attested") or {}).items():
         if n <= 0:
             continue
         audits[column_id] = {
@@ -515,21 +655,144 @@ def record_oracle_results(
     frontier.update(
         {
             "state": STATE_AUDIT_PENDING,
-            "oracle": {
-                "validator_hotkey": validator_hotkey,
-                "run_id": run_id,
-                "signature": signature,
-                "recorded_at": _iso(now),
-                "results": [r.model_dump(mode="json") for r in results],
-            },
-            "attested": attested,
-            "attested_fingerprints": {
-                case_id: fingerprints[case_id] for case_id in passed
-            },
             "audits": audits,
             "audit_opened_at": _iso(now),
         }
     )
+
+
+def _attest(frontier: dict[str, Any], passed: Iterable[str]) -> dict[str, list[str]]:
+    """Every attested case so far plus ``passed``, per column, in candidate
+    order."""
+    order = {case_id: i for i, case_id in enumerate(frontier["candidates"])}
+    already = [c for ids in (frontier.get("attested") or {}).values() for c in ids]
+    merged = set(already) | set(passed)
+    return _columns_of(sorted(merged, key=order.__getitem__))
+
+
+def record_oracle_results(
+    row: GeneratorRound,
+    results: Sequence[GeneratorRoundCaseResult],
+    *,
+    validator_hotkey: str,
+    run_id: str,
+    signature: str,
+    now: datetime,
+) -> None:
+    """Store the open run's results and attest the cases it passed.
+
+    The oracle's run attests at the round's ``solve_threshold``. With
+    escalation on and oracle-failed cases selected (:func:`select_escalation`)
+    the lane then waits on the escalation run; otherwise, and after the
+    escalation run, the sampled audits open over every attested case (or the
+    lane is settle-ready when there is nothing to audit)."""
+    validate_oracle_results(row, results)
+    run = {
+        "validator_hotkey": validator_hotkey,
+        "run_id": run_id,
+        "signature": signature,
+        "recorded_at": _iso(now),
+        "results": [r.model_dump(mode="json") for r in results],
+    }
+    frontier = dict(row.frontier or {})
+    fingerprints = _case_fingerprints(row)
+    if in_escalation(frontier):
+        escalation = dict(frontier["escalation"])
+        threshold = float(escalation["solve_threshold"])
+        passed = [
+            r.case_id for r in results if not r.fault and float(r.score) >= threshold
+        ]
+        escalation.update({**run, "passed": passed, "outcome": "reported"})
+        frontier["escalation"] = escalation
+        frontier["attested"] = _attest(frontier, passed)
+        frontier["attested_fingerprints"] = {
+            **(frontier.get("attested_fingerprints") or {}),
+            **{case_id: fingerprints[case_id] for case_id in passed},
+        }
+        _open_audits(row, frontier, now)
+        row.frontier = frontier
+        return
+
+    threshold = float(frontier.get("solve_threshold") or 0.5)
+    passed = [r.case_id for r in results if not r.fault and float(r.score) >= threshold]
+    frontier.update(
+        {
+            "oracle": run,
+            "attested": _attest({**frontier, "attested": {}}, passed),
+            "attested_fingerprints": {
+                case_id: fingerprints[case_id] for case_id in passed
+            },
+        }
+    )
+    policy = frontier.get("escalation_policy")
+    if policy:
+        # A faulted case is the scorer's failure, not the oracle's answer:
+        # only answered-and-failed cases are escalated.
+        failed = [
+            r.case_id for r in results if not r.fault and float(r.score) < threshold
+        ]
+        seated = {str(slot.get("agent_id")) for slot in row.panel or ()}
+        if policy["agent_id"] in seated:
+            # It already answered these cases on the panel; a second run
+            # would only re-roll its own failed attempt.
+            selected, skipped = [], {}
+            outcome = "escalation agent sat on the round panel"
+        else:
+            selected, skipped = select_escalation(
+                round_seed=row.seed or "",
+                failed=failed,
+                column_sizes=_column_sizes(row),
+                max_cases=int(policy["max_cases"]),
+                max_cases_per_column=int(policy["max_cases_per_column"]),
+                max_failed_fraction=float(policy["max_failed_fraction"]),
+            )
+            outcome = "pending" if selected else "nothing selected"
+        frontier["escalation"] = {
+            "agent_id": policy["agent_id"],
+            "solve_threshold": float(policy["solve_threshold"]),
+            "oracle_failed": len(failed),
+            "selected": selected,
+            "skipped_columns": skipped,
+            "attempts": 0,
+            "created_at": _iso(now),
+            "passed": [],
+            "outcome": outcome,
+        }
+        if selected:
+            frontier["phase"] = PHASE_ESCALATION
+            row.frontier = frontier
+            return
+    _open_audits(row, frontier, now)
+    row.frontier = frontier
+
+
+def escalation_expired(row: GeneratorRound, *, now: datetime) -> str | None:
+    """Why the lane's escalation run should be given up, or None. It gets the
+    oracle's own budget: ``frontier_oracle_timeout_hours`` from its start and
+    ``MAX_ORACLE_ATTEMPTS`` leases."""
+    frontier = row.frontier or {}
+    if not in_escalation(frontier):
+        return None
+    escalation = frontier["escalation"]
+    created = _parse(escalation.get("created_at")) or now
+    timeout = timedelta(hours=int(frontier.get("oracle_timeout_hours") or 12))
+    if now - created >= timeout:
+        return "escalation timed out"
+    if int(escalation.get("attempts") or 0) >= MAX_ORACLE_ATTEMPTS:
+        return "escalation attempts exhausted"
+    return None
+
+
+def close_escalation(row: GeneratorRound, *, reason: str, now: datetime) -> None:
+    """Give up an escalation run that never reported. It adds nothing, and the
+    oracle's own attestations go to audit as if escalation were off."""
+    frontier = dict(row.frontier or {})
+    if not in_escalation(frontier):
+        return
+    escalation = dict(frontier["escalation"])
+    escalation["outcome"] = reason
+    frontier["escalation"] = escalation
+    _open_audits(row, frontier, now)
     row.frontier = frontier
 
 
@@ -588,6 +851,11 @@ def settle_reason(
     under it would throw away a run that may yet deliver."""
     frontier = row.frontier or {}
     state = frontier.get("state")
+    if in_escalation(frontier):
+        # The oracle reported: an escalation that never reports opens the
+        # audits (close_escalation, escalation_expired), never a settle that
+        # would skip them.
+        return None
     if state == STATE_ORACLE_PENDING:
         if oracle_running:
             return None
@@ -634,9 +902,11 @@ async def settle_frontier(
         await expire_round_tickets(
             session, row, now=now, detail=f"frontier settled: {reason}"[:500]
         )
+    # An operator settle during the escalation run keeps the oracle's own
+    # attestations, as a settle with audits still pending does.
     attested: dict[str, list[str]] = (
         frontier.get("attested") or {}
-        if frontier.get("state") == STATE_AUDIT_PENDING
+        if frontier.get("state") == STATE_AUDIT_PENDING or in_escalation(frontier)
         else {}
     )
     audits = frontier.get("audits") or {}
@@ -741,6 +1011,10 @@ async def advance_frontier_rounds(
         running = (row.frontier or {}).get("state") == STATE_ORACLE_PENDING and (
             await live_oracle_lease(session, row, now=now) is not None
         )
+        if not running and (expired := escalation_expired(row, now=now)):
+            await close_stale_oracle_attempts(session, row, now=now)
+            close_escalation(row, reason=expired, now=now)
+            notes.append(f"round {row.round_index} frontier {expired}")
         reason = settle_reason(row, now=now, oracle_running=running)
         if reason is None:
             continue
@@ -814,6 +1088,34 @@ def _column_scores(columns: Iterable[dict[str, Any]]) -> dict[str, float]:
     return {column["column_id"]: float(column["pack"]["score"]) for column in columns}
 
 
+def _escalation_view(
+    frontier: dict[str, Any], timeout: timedelta
+) -> GeneratorFrontierEscalationView | None:
+    escalation = frontier.get("escalation")
+    if not escalation:
+        return None
+    created = _parse(escalation.get("created_at"))
+    return GeneratorFrontierEscalationView(
+        agent_id=UUID(escalation["agent_id"]),
+        solve_threshold=float(escalation["solve_threshold"]),
+        oracle_failed=int(escalation.get("oracle_failed") or 0),
+        selected=list(escalation.get("selected") or ()),
+        skipped_columns=dict(escalation.get("skipped_columns") or {}),
+        attempts=int(escalation.get("attempts") or 0),
+        deadline=(
+            created + timeout
+            if created is not None and in_escalation(frontier)
+            else None
+        ),
+        outcome=str(escalation.get("outcome") or "pending"),
+        validator_hotkey=escalation.get("validator_hotkey"),
+        run_id=escalation.get("run_id"),
+        recorded_at=_parse(escalation.get("recorded_at")),
+        passed=list(escalation.get("passed") or ()),
+        results=list(escalation.get("results") or ()),
+    )
+
+
 def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
     frontier = row.frontier
     if not frontier:
@@ -835,7 +1137,10 @@ def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
             results=results,
         )
     created = datetime.fromisoformat(frontier["created_at"])
-    pending = frontier.get("state") == STATE_ORACLE_PENDING
+    timeout = timedelta(hours=int(frontier.get("oracle_timeout_hours") or 12))
+    pending = frontier.get("state") == STATE_ORACLE_PENDING and not in_escalation(
+        frontier
+    )
     base = frontier.get("base_columns")
     return GeneratorFrontierView(
         round_index=row.round_index,
@@ -845,12 +1150,9 @@ def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
         audit_cases=int(frontier.get("audit_cases") or 0),
         candidates=list(frontier.get("candidates") or ()),
         oracle_attempts=int(frontier.get("oracle_attempts") or 0),
-        oracle_deadline=(
-            created + timedelta(hours=int(frontier.get("oracle_timeout_hours") or 12))
-            if pending
-            else None
-        ),
+        oracle_deadline=created + timeout if pending else None,
         oracle=oracle_view,
+        escalation=_escalation_view(frontier, timeout),
         attested=dict(frontier.get("attested") or {}),
         audits=audit_views(row),
         applied=frontier.get("applied"),

@@ -292,6 +292,32 @@ class GeneratorCompetitionSettings(BaseModel):
     frontier_oracle_timeout_hours: Annotated[int, Field(ge=1, le=168)] = 12
     """Hours a scored round waits for its oracle run before it settles with
     no attestations."""
+    frontier_escalation_agent_id: Annotated[UUID | None, Field(strict=False)] = None
+    """A second, stronger subnet-run reference agent that re-checks the cases
+    the frontier oracle failed (:mod:`ditto.api_server.generator_frontier`,
+    "Escalation"). It runs only on a capped, secret-seed sample of the
+    oracle-failed candidates, on the same bounded oracle contexts, and a case
+    it passes is attested exactly like an oracle pass (same audit, same
+    frontier credit). Unset (the default) runs no escalation, so frontier
+    scoring and spend are unchanged. Must differ from the frontier oracle and
+    from every reference agent, and takes effect only while frontier scoring
+    runs."""
+    frontier_escalation_solve_threshold: Annotated[float, Field(gt=0.0, le=1.0)] = 1.0
+    """Score the escalation agent needs on a case to attest it. 1.0, the
+    default, requires a full answer (every list item), never a partial."""
+    frontier_escalation_max_cases: Annotated[int, Field(ge=1, le=64)] = 8
+    """At most this many oracle-failed cases per round go to the escalation
+    agent, across all columns: the round's spend ceiling."""
+    frontier_escalation_max_cases_per_column: Annotated[int, Field(ge=1, le=16)] = 4
+    """At most this many oracle-failed cases per column go to the escalation
+    agent."""
+    frontier_escalation_max_failed_fraction: Annotated[float, Field(gt=0.0, le=1.0)] = (
+        0.25
+    )
+    """A column whose oracle-failed cases exceed this share of its scored
+    (non-duplicate) cases is not escalated at all: a column that mostly
+    beats the oracle looks broken, not hard, and flooding a pack with
+    unsolvable cases must not buy escalation."""
 
     prescreen_enabled: bool = False
     """Pre-screen never-scored generators before they take a challenger
@@ -321,6 +347,19 @@ class GeneratorCompetitionSettings(BaseModel):
             raise ValueError("reference_agent_ids must be unique")
         if self.counted_columns + self.challenger_columns > MAX_ROUND_COLUMNS:
             raise ValueError(f"a round holds at most {MAX_ROUND_COLUMNS} columns")
+        escalation = self.frontier_escalation_agent_id
+        if escalation is not None:
+            if escalation == self.frontier_oracle_agent_id:
+                raise ValueError(
+                    "frontier_escalation_agent_id must differ from "
+                    "frontier_oracle_agent_id"
+                )
+            if escalation in self.reference_agent_ids:
+                # A panel agent already failed these cases on the panel; it
+                # must not re-roll its own attempt into an attestation.
+                raise ValueError(
+                    "frontier_escalation_agent_id must not be a reference agent"
+                )
         return self
 
     def dueling_season_refusal(self) -> str | None:
@@ -354,6 +393,11 @@ class GeneratorCompetitionSettings(BaseModel):
         """Frontier scoring runs: a positive weight and an oracle agent."""
         return self.frontier_weight > 0 and self.frontier_oracle_agent_id is not None
 
+    @property
+    def frontier_escalation_enabled(self) -> bool:
+        """Oracle-failed cases are re-checked by the escalation agent."""
+        return self.frontier_enabled and self.frontier_escalation_agent_id is not None
+
     def measurement_params(self) -> dict[str, float | int | str]:
         """Everything this policy changes about what a round measures: the
         score params, plus the frontier policy while frontier scoring runs.
@@ -366,6 +410,22 @@ class GeneratorCompetitionSettings(BaseModel):
             params["frontier_audit_cases"] = self.frontier_audit_cases
             params["frontier_audit_grace_hours"] = self.frontier_audit_grace_hours
             params["frontier_oracle_timeout_hours"] = self.frontier_oracle_timeout_hours
+        if self.frontier_escalation_enabled:
+            # Only while escalation runs, so a policy without it keeps its
+            # unchanged-round signature.
+            params["frontier_escalation_agent_id"] = str(
+                self.frontier_escalation_agent_id
+            )
+            params["frontier_escalation_solve_threshold"] = (
+                self.frontier_escalation_solve_threshold
+            )
+            params["frontier_escalation_max_cases"] = self.frontier_escalation_max_cases
+            params["frontier_escalation_max_cases_per_column"] = (
+                self.frontier_escalation_max_cases_per_column
+            )
+            params["frontier_escalation_max_failed_fraction"] = (
+                self.frontier_escalation_max_failed_fraction
+            )
         return params
 
 
