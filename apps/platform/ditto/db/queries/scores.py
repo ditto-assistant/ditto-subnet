@@ -1868,7 +1868,15 @@ async def list_anti_copy_history(
         # fingerprints it is compared on do not depend on the bench. So the
         # kings-only read takes every era's scores; one median row per agent
         # survives either way, and its composite is not read on that path.
-        .where(*([] if kings_only else [Score.bench_version == bench_version]))
+        # The king restriction sits inside the window too, so dropping the era
+        # filter never widens the scan past the (small) set of crowned agents.
+        .where(
+            *(
+                [Score.agent_id.in_(select(AgentKingship.agent_id))]
+                if kings_only
+                else [Score.bench_version == bench_version]
+            )
+        )
         .subquery()
     )
     rows = (
