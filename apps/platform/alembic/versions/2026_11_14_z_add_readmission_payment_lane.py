@@ -38,6 +38,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _TS = sa.TIMESTAMP(timezone=True)
+_CREDIT_ORIGIN_CHECK = "ck_evaluation_payments_evaluation_payments_credit_origin_check"
 
 
 def upgrade() -> None:
@@ -174,23 +175,23 @@ def upgrade() -> None:
     # (every existing row is NULL anyway); VALIDATE then runs in its own
     # transaction under SHARE UPDATE EXCLUSIVE, which does not block readers
     # or writers of the payment ledger.
+    # Raw SQL skips the metadata naming convention, so spell the conventional
+    # name the model's CheckConstraint resolves to.
     op.execute(
-        "ALTER TABLE evaluation_payments "
-        "ADD CONSTRAINT evaluation_payments_credit_origin_check "
+        f"ALTER TABLE evaluation_payments ADD CONSTRAINT {_CREDIT_ORIGIN_CHECK} "
         "CHECK (credit_origin IS NULL OR credit_origin = 'readmission') NOT VALID"
     )
     with op.get_context().autocommit_block():
         op.execute(
             "ALTER TABLE evaluation_payments "
-            "VALIDATE CONSTRAINT evaluation_payments_credit_origin_check"
+            f"VALIDATE CONSTRAINT {_CREDIT_ORIGIN_CHECK}"
         )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "evaluation_payments_credit_origin_check",
-        "evaluation_payments",
-        type_="check",
+    op.execute(
+        f"ALTER TABLE evaluation_payments DROP CONSTRAINT IF EXISTS "
+        f"{_CREDIT_ORIGIN_CHECK}"
     )
     op.drop_column("evaluation_payments", "credit_origin")
     op.drop_index(
