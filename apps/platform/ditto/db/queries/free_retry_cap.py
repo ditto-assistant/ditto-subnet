@@ -110,12 +110,18 @@ def _counted_failures() -> tuple[ColumnElement[bool], ...]:
 
 
 async def free_retry_cap_candidates(
-    session: AsyncSession, *, bench_version: int, limit: int = 200
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    limit: int = 200,
+    agent_id: UUID | None = None,
 ) -> list[UUID]:
     """Evaluating agents below quorum in ``bench_version`` at or over the cap.
 
     Excludes agents with a live lease, an in-force withdrawal, or *any*
     earlier cap withdrawal for this era (an operator's reinstatement wins).
+    ``agent_id`` narrows the same decision to one agent (the withdrawal's
+    re-check under its locks).
     """
     live = (
         select(ValidatorTicket.agent_id)
@@ -162,7 +168,9 @@ async def free_retry_cap_candidates(
         .order_by(Agent.created_at.asc(), Agent.agent_id.asc())
         .limit(limit)
     )
-    return [agent_id for agent_id, _ in await session.execute(statement)]
+    if agent_id is not None:
+        statement = statement.where(Agent.agent_id == agent_id)
+    return [candidate for candidate, _ in await session.execute(statement)]
 
 
 async def withdraw_at_free_retry_cap(
@@ -178,17 +186,8 @@ async def withdraw_at_free_retry_cap(
     )
     if agent is None or agent.status != AgentStatus.EVALUATING:
         return None
-    if agent_id not in await free_retry_cap_candidates(
-        session, bench_version=bench_version, limit=10_000
-    ):
-        return None
-    if await session.scalar(
-        select(SubmissionRetirement.agent_id).where(
-            SubmissionRetirement.agent_id == agent_id,
-            SubmissionRetirement.bench_version == bench_version,
-        )
-    ):
-        return None
+    # Lock the tickets first, then decide: an operator retry grant that lands
+    # between a decision and the lock would otherwise be withdrawn over.
     tickets = list(
         await session.scalars(
             select(ValidatorTicket)
@@ -201,6 +200,17 @@ async def withdraw_at_free_retry_cap(
             .with_for_update()
         )
     )
+    if agent_id not in await free_retry_cap_candidates(
+        session, bench_version=bench_version, limit=1, agent_id=agent_id
+    ):
+        return None
+    if await session.scalar(
+        select(SubmissionRetirement.agent_id).where(
+            SubmissionRetirement.agent_id == agent_id,
+            SubmissionRetirement.bench_version == bench_version,
+        )
+    ):
+        return None
     score_count = int(
         await session.scalar(
             select(func.count(Score.validator_hotkey)).where(
@@ -249,23 +259,34 @@ async def withdraw_at_free_retry_cap(
     return withdrawal
 
 
+async def _active_cap_version(session: AsyncSession, *, now: datetime) -> int | None:
+    """The active era while the cap is enforceable (readmission active)."""
+    settings = resolve_submission_settings(
+        await latest_submission_settings(session), payment_address=""
+    )
+    bench_version = await active_bench_version(session)
+    activation = await current_readmission_activation(
+        session, settings=settings, bench_version=bench_version, now=now
+    )
+    return bench_version if activation.active else None
+
+
 async def sweep_free_retry_cap(
     session_maker: async_sessionmaker[AsyncSession],
     *,
     now: datetime | None = None,
     limit: int = 200,
 ) -> int:
-    """Apply the cap to every candidate in the active era, while it is active."""
+    """Apply the cap to every candidate in the active era, while it is active.
+
+    The gate and the era are re-read inside every withdrawal transaction, so
+    clearing ``readmission_announced_at`` (the kill switch) or an era change
+    mid-sweep stops it before another withdrawal is written.
+    """
     at = now or datetime.now(UTC)
     async with session_maker() as session:
-        settings = resolve_submission_settings(
-            await latest_submission_settings(session), payment_address=""
-        )
-        bench_version = await active_bench_version(session)
-        activation = await current_readmission_activation(
-            session, settings=settings, bench_version=bench_version, now=at
-        )
-        if not activation.active:
+        bench_version = await _active_cap_version(session, now=at)
+        if bench_version is None:
             return 0
         candidates = await free_retry_cap_candidates(
             session, bench_version=bench_version, limit=limit
@@ -274,6 +295,8 @@ async def sweep_free_retry_cap(
     for agent_id in candidates:
         try:
             async with session_maker() as session, session.begin():
+                if await _active_cap_version(session, now=at) != bench_version:
+                    break
                 if await withdraw_at_free_retry_cap(
                     session, agent_id=agent_id, bench_version=bench_version, now=at
                 ):

@@ -119,6 +119,14 @@ class UploadCheckResponse(BaseModel):
     identical_agent_status: AgentStatus | None = None
     """Current lifecycle state of :attr:`identical_agent_id`."""
 
+    readmission_kind: Literal["identical_rescore"] | None = None
+    """Set while the SN-485 readmission fee is active and this upload re-runs
+    the owner's own unchanged agent (``allow_identical_rescore``): it is a
+    readmission at the same fee and cooldown."""
+
+    readmission_of_agent_id: UUID | None = None
+    """The owner's existing agent this upload readmits."""
+
     retry_at: datetime | None = None
     """UTC timestamp when an owner coldkey blocked by cooldown may retry."""
 
@@ -202,3 +210,10 @@ class UploadAgentResponse(BaseModel):
 
     credit_for_agent_id: UUID | None = None
     """Existing identical submission that caused a reusable credit."""
+
+    readmission_kind: Literal["identical_rescore", "near_duplicate"] | None = None
+    """Set when this accepted upload was classified as a readmission of the
+    owner's own lineage (SN-485, only while the fee is active)."""
+
+    readmission_of_agent_id: UUID | None = None
+    """The owner's existing agent this upload readmits."""

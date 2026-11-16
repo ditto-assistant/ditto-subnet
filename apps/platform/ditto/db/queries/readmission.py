@@ -539,6 +539,16 @@ rotation`` and the rest) are never labelled or charged.
     )
 
 
+async def get_upload_readmission(
+    session: AsyncSession, *, agent_id: UUID
+) -> UploadReadmission | None:
+    """The readmission label recorded for an accepted upload, if any."""
+    row = await session.scalar(
+        select(UploadReadmission).where(UploadReadmission.agent_id == agent_id)
+    )
+    return row if isinstance(row, UploadReadmission) else None
+
+
 async def record_upload_readmission(
     session: AsyncSession,
     *,
@@ -575,6 +585,7 @@ __all__ = [
     "admitted_readmission",
     "classify_upload_readmission",
     "get_same_owner_agent_by_normalized_source",
+    "get_upload_readmission",
     "lineage_evaluation_completed",
     "record_upload_readmission",
     "consume_readmission_admission",

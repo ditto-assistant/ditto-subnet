@@ -107,6 +107,7 @@ from ditto.db.queries.payments import (
 )
 from ditto.db.queries.readmission import (
     classify_upload_readmission,
+    get_upload_readmission,
     record_upload_readmission,
 )
 from ditto.db.queries.readmission_gate import (
@@ -1183,11 +1184,22 @@ async def _exact_retry_of_accepted_upload(
     ):
         return None
     assert existing.version is not None
+    # The readmission label recorded with the original upload (SN-485), so an
+    # exact retry reports what the first response did.
+    label = await get_upload_readmission(session, agent_id=existing.agent_id)
     # Read the row before a commit expires it.
     recovered = UploadAgentResponse(
         agent_id=existing.agent_id,
         version=existing.version,
         status=existing.status,
+        readmission_kind=(
+            None
+            if label is None
+            else "identical_rescore"
+            if label.kind == "identical_rescore"
+            else "near_duplicate"
+        ),
+        readmission_of_agent_id=label.lineage_agent_id if label else None,
     )
     if identity.admission_token is not None:
         await release_upload_admission_for_exact_retry(

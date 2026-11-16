@@ -188,3 +188,30 @@ async def test_the_sweep_is_inert_until_readmission_is_active(
         assert agent_id not in await free_retry_cap_candidates(
             session, bench_version=_VERSION
         )
+
+
+async def test_the_sweep_stops_when_the_gate_closes_mid_sweep(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clearing the announcement stops the sweep before the next withdrawal."""
+    first = await _seed(session_maker)
+    second = await _seed(session_maker)
+    monkeypatch.setattr(
+        free_retry_cap, "active_bench_version", AsyncMock(return_value=_VERSION)
+    )
+    # Active for the candidate read, then closed before the first withdrawal.
+    monkeypatch.setattr(
+        free_retry_cap,
+        "current_readmission_activation",
+        AsyncMock(
+            side_effect=[
+                SimpleNamespace(active=True),
+                SimpleNamespace(active=False),
+            ]
+        ),
+    )
+    assert await sweep_free_retry_cap(session_maker) == 0
+    async with session_maker() as session:
+        still = await free_retry_cap_candidates(session, bench_version=_VERSION)
+    assert first in still and second in still

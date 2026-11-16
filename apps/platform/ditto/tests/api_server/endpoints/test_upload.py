@@ -1991,6 +1991,44 @@ class TestUploadAgentReplayHandling:
         deps["session"].commit.assert_awaited_once()
         deps["storage"].put_object.assert_not_awaited()
 
+    async def test_exact_retry_reports_the_original_readmission_label(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        original_id, lineage_id = uuid4(), uuid4()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_agent_for_payment_proof",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=original_id,
+                    miner_hotkey=kp.ss58_address,
+                    name="alpha-agent",
+                    sha256=_GOOD_TAR_SHA,
+                    version=3,
+                    status=AgentStatus.UPLOADED,
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_readmission",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    kind="identical_rescore", lineage_agent_id=lineage_id
+                )
+            ),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["readmission_kind"] == "identical_rescore"
+        assert response.json()["readmission_of_agent_id"] == str(lineage_id)
+
     async def test_reused_proof_for_different_upload_stays_rejected(
         self,
         app: FastAPI,

@@ -698,6 +698,33 @@
         ],
         "type": "string"
       },
+      "readmission_kind": {
+        "anyOf": [
+          {
+            "enum": [
+              "identical_rescore",
+              "near_duplicate"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "readmission_of_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "status": {
         "$ref": "#/$defs/AgentStatus"
       },
@@ -935,6 +962,30 @@
         "anyOf": [
           {
             "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "readmission_kind": {
+        "anyOf": [
+          {
+            "const": "identical_rescore",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "readmission_of_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
             "type": "string"
           },
           {
