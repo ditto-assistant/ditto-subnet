@@ -731,6 +731,46 @@ attestations. The lane that produces them:
    unattested score, so frontier credit never reaches the ledger before its
    audit, and operator silence never withholds it forever.
 
+### Escalation: a stronger second witness (Platform, off by default)
+
+A case the panel and the oracle both fail stays `unsolved`, so a hard but
+valid case scores like a broken one. The escalation tier re-checks a capped
+sample of those cases with a stronger subnet-run reference agent
+(`frontier_escalation_agent_id`, unset by default). It is Platform-only: the
+same dataset mode (`generator-frontier-oracle-v1`), the same bounded
+`OracleContext`, the same validator capability and the same
+`FrontierCases`/`apply_frontier` contract, so no bench or pack version
+changes. "Stronger" means a different reference harness; the inference model
+stays the bench contract's.
+
+1. When the oracle reports, the cases it answered and failed (never faulted
+   ones) are the escalation pool. A column whose oracle failures exceed
+   `frontier_escalation_max_failed_fraction` (default 0.25) of its scored
+   cases is skipped whole: a column that mostly beats the oracle looks broken,
+   and flooding a pack with unsolvable cases buys no escalation.
+2. From each remaining column the `frontier_escalation_max_cases_per_column`
+   (default 4) cases with the lowest
+   `sha256("dittobench-frontier-escalation/v1" ‖ 0 ‖ round_seed ‖ 0 ‖ column_id ‖ 0 ‖ case_id)`
+   are taken, then the `frontier_escalation_max_cases` (default 8) lowest
+   across the round. The round seed is secret until reveal, so a generator
+   cannot steer the choice, and the caps bound the round's spend.
+3. The lane stays `oracle_pending` while one lease runs the escalation agent
+   on exactly those cases. A case it scores at least
+   `frontier_escalation_solve_threshold` on (default 1.0, a full answer, not
+   a partial) is attested.
+4. The audits then open over every attested case, the oracle's and the
+   escalation's, with the same secret-seed sample: one invalid case voids the
+   column's frontier credit, escalated or not. An escalated attestation scores
+   exactly as any frontier case. An escalation that does not report within
+   `frontier_oracle_timeout_hours` or `MAX_ORACLE_ATTEMPTS` leases adds
+   nothing; the oracle's attestations still go to audit. An operator settle
+   during the escalation run closes it the same way: the oracle's
+   attestations draw their audit sample before the lane settles.
+
+The escalation agent must differ from the oracle and from every reference
+agent, so a panel agent never re-rolls its own failed attempt into an
+attestation.
+
 The oracle job and the audit window run after scoring and never hold a round
 open. A round whose oracle job does not complete within
 `frontier_oracle_timeout_hours` settles with no attestations.
@@ -754,8 +794,12 @@ recorded as an operator action), and a forced settle
 New settings (Platform, revisioned): `frontier_weight` (operator default 1.0),
 `frontier_oracle_agent_id` (unset: no oracle, frontier off),
 `frontier_audit_cases` (default 3), `frontier_audit_grace_hours` (default 24),
-`frontier_oracle_timeout_hours` (default 12). `skip_unchanged_rounds` compares
-`frontier_weight` with the other score parameters.
+`frontier_oracle_timeout_hours` (default 12), and the escalation tier's
+`frontier_escalation_agent_id` (unset: off), `frontier_escalation_solve_threshold`
+(1.0), `frontier_escalation_max_cases` (8), `frontier_escalation_max_cases_per_column`
+(4) and `frontier_escalation_max_failed_fraction` (0.25). `skip_unchanged_rounds`
+compares `frontier_weight` with the other score parameters, and the escalation
+fields only while escalation runs.
 
 ## Copies
 

@@ -75,6 +75,8 @@ from ditto.api_server.generator_frontier import (
     oracle_capable,
     oracle_column_cases,
     oracle_round,
+    oracle_run_agent,
+    oracle_run_cases,
     record_oracle_results,
 )
 from ditto.api_server.generator_prescreens import (
@@ -607,7 +609,9 @@ async def _lease_oracle_job(
     round's epochs end, an oracle run only within its timeout. The oracle is
     the round's configured reference agent on its own ``generator_round``
     ticket at the round's frozen bench version, leased only to a validator
-    whose scorer runs ``generator-frontier-oracle-v1``.
+    whose scorer runs ``generator-frontier-oracle-v1``. In the lane's
+    escalation phase the same lease runs the escalation agent on the selected
+    oracle-failed cases instead.
     """
     async with session.begin():
         settings = (await load_settings(session)).settings
@@ -646,8 +650,10 @@ async def _lease_oracle_job(
         if slot is None:
             return None
         frontier = row.frontier or {}
-        oracle_agent_id = UUID(frontier["oracle_agent_id"])
-        candidates = list(frontier["candidates"])
+        # The oracle on every candidate, or in the escalation phase the
+        # escalation agent on its selected oracle-failed cases.
+        oracle_agent_id = UUID(oracle_run_agent(frontier))
+        candidates = oracle_run_cases(frontier)
         ticket = await issue_generator_round_ticket(
             session,
             agent_id=oracle_agent_id,

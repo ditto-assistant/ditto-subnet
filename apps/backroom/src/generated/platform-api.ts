@@ -26377,6 +26377,28 @@ export interface components {
              * @default 24
              */
             frontier_audit_grace_hours: number;
+            /** Frontier Escalation Agent Id */
+            frontier_escalation_agent_id?: string | null;
+            /**
+             * Frontier Escalation Max Cases
+             * @default 8
+             */
+            frontier_escalation_max_cases: number;
+            /**
+             * Frontier Escalation Max Cases Per Column
+             * @default 4
+             */
+            frontier_escalation_max_cases_per_column: number;
+            /**
+             * Frontier Escalation Max Failed Fraction
+             * @default 0.25
+             */
+            frontier_escalation_max_failed_fraction: number;
+            /**
+             * Frontier Escalation Solve Threshold
+             * @default 1
+             */
+            frontier_escalation_solve_threshold: number;
             /** Frontier Oracle Agent Id */
             frontier_oracle_agent_id?: string | null;
             /**
@@ -26652,6 +26674,46 @@ export interface components {
             /** Visible Pairs */
             visible_pairs: number;
         };
+        /**
+         * GeneratorFrontierEscalationView
+         * @description The escalation tier's re-check of the cases the oracle failed
+         *     (``frontier_escalation_agent_id``).
+         */
+        GeneratorFrontierEscalationView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Attempts */
+            attempts: number;
+            /** Deadline */
+            deadline?: string | null;
+            /** Oracle Failed */
+            oracle_failed: number;
+            /** Outcome */
+            outcome: string;
+            /** Passed */
+            passed?: string[];
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Results */
+            results?: {
+                [key: string]: unknown;
+            }[];
+            /** Run Id */
+            run_id?: string | null;
+            /** Selected */
+            selected: string[];
+            /** Skipped Columns */
+            skipped_columns?: {
+                [key: string]: string;
+            };
+            /** Solve Threshold */
+            solve_threshold: number;
+            /** Validator Hotkey */
+            validator_hotkey?: string | null;
+        };
         /** GeneratorFrontierMemoryPair */
         GeneratorFrontierMemoryPair: {
             /** Pair Id */
@@ -26737,6 +26799,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            escalation?: components["schemas"]["GeneratorFrontierEscalationView"] | null;
             /** Frontier Weight */
             frontier_weight: number;
             oracle: components["schemas"]["GeneratorFrontierOracleView"] | null;

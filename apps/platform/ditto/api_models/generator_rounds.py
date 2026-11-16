@@ -768,6 +768,39 @@ class GeneratorFrontierOracleView(RoundModel):
     """Per-case ``{case_id, score, fault}`` exactly as the validator signed."""
 
 
+class GeneratorFrontierEscalationView(RoundModel):
+    """The escalation tier's re-check of the cases the oracle failed
+    (``frontier_escalation_agent_id``)."""
+
+    agent_id: UUID
+    solve_threshold: float
+    """Score the escalation agent needed on a case to attest it."""
+    oracle_failed: int
+    """Candidates the oracle answered and failed (faulted ones excluded)."""
+    selected: list[str]
+    """Round case ids the escalation agent re-checks: a capped sample drawn
+    from the secret round seed."""
+    skipped_columns: dict[str, str] = Field(default_factory=dict)
+    """Columns with oracle failures that were not escalated, with the reason
+    (for example too high a share of oracle failures)."""
+    attempts: int
+    deadline: datetime | None = None
+    """When the escalation is given up if it has not reported (while
+    running)."""
+    outcome: str
+    """``pending``, ``reported``, ``nothing selected``, ``escalation agent
+    sat on the round panel``, ``escalation timed out`` or ``escalation
+    attempts exhausted``."""
+    validator_hotkey: str | None = None
+    run_id: str | None = None
+    recorded_at: datetime | None = None
+    passed: list[str] = Field(default_factory=list)
+    """Selected cases the escalation agent passed: attested, then audited
+    like oracle passes."""
+    results: list[dict] = Field(default_factory=list)
+    """Per-case ``{case_id, score, fault}`` exactly as the validator signed."""
+
+
 class GeneratorFrontierAuditView(RoundModel):
     """One column's sampled operator audit of its oracle-attested cases."""
 
@@ -803,6 +836,9 @@ class GeneratorFrontierView(RoundModel):
     """When the round settles with no attestations if the oracle never
     reports (while ``oracle_pending``)."""
     oracle: GeneratorFrontierOracleView | None
+    escalation: GeneratorFrontierEscalationView | None = None
+    """The escalation tier, when the round's policy ran one after the
+    oracle reported; null with escalation off."""
     attested: dict[str, list[str]]
     audits: list[GeneratorFrontierAuditView]
     applied: dict[str, list[str]] | None = None

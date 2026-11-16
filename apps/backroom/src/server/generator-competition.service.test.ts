@@ -12,6 +12,7 @@ import { PlatformAdminError } from './ditto.server'
 import { frontierRefusal } from './generator-competition.service'
 import {
   generatorFrontierAuditListSchema,
+  generatorFrontierSchema,
   generatorCompetitionSettingsSchema,
   generatorRoundPreviewSchema,
   generatorRunDetailSchema,
@@ -1062,6 +1063,44 @@ describe('generator competition MCP tools', () => {
       frontier_audit_grace_hours: 24, frontier_oracle_timeout_hours: 12,
     })
     expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, frontier_weight: 1.5 })).toThrow()
+  })
+
+  it('defaults the frontier escalation tier off and bounds its caps', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse(settings)
+    // Ships off: a Platform or revision that predates the tier reads as off.
+    expect(parsed).toMatchObject({
+      frontier_escalation_agent_id: null, frontier_escalation_solve_threshold: 1,
+      frontier_escalation_max_cases: 8, frontier_escalation_max_cases_per_column: 4,
+      frontier_escalation_max_failed_fraction: 0.25,
+    })
+    for (const bad of [
+      { frontier_escalation_max_cases: 0 }, { frontier_escalation_max_cases: 65 },
+      { frontier_escalation_max_cases_per_column: 17 }, { frontier_escalation_solve_threshold: 0 },
+      { frontier_escalation_max_failed_fraction: 0 }, { frontier_escalation_max_failed_fraction: 1.5 },
+    ]) {
+      expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, ...bad })).toThrow()
+    }
+  })
+
+  it('reads a round frontier with or without its escalation tier', () => {
+    const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const ESCALATION = '1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d'
+    const base = {
+      round_index: 7, state: 'oracle_pending', oracle_agent_id: AGENT, frontier_weight: 1, audit_cases: 2,
+      candidates: ['c1/k0', 'c1/k2'], oracle_attempts: 1, oracle_deadline: null, oracle: null,
+      attested: { c1: ['c1/k2'] }, audits: [], column_scores: { c1: 0 }, created_at: '2026-11-09T09:00:00Z',
+    }
+    // An older Platform sends no escalation: it reads as null.
+    expect(generatorFrontierSchema.parse(base).escalation).toBeNull()
+    const escalation = {
+      agent_id: ESCALATION, solve_threshold: 1, oracle_failed: 1, selected: ['c1/k0'],
+      skipped_columns: { c3: 'oracle failed 40/70 cases (57% > 25%)' }, attempts: 1,
+      deadline: '2026-11-09T21:00:00Z', outcome: 'pending',
+    }
+    expect(generatorFrontierSchema.parse({ ...base, escalation }).escalation).toMatchObject({
+      agent_id: ESCALATION, selected: ['c1/k0'], outcome: 'pending', passed: [], results: [],
+      skipped_columns: { c3: 'oracle failed 40/70 cases (57% > 25%)' },
+    })
   })
 
   it('defaults the season catch-up settings a write omits and bounds the cap', () => {

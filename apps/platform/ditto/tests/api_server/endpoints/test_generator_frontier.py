@@ -42,10 +42,13 @@ from ditto.api_server.generator_frontier import (
     advance_frontier_rounds,
     apply_frontier,
     frontier_audit_sample,
+    record_oracle_results,
+    select_escalation,
     settle_reason,
 )
 from ditto.api_server.generator_rounds import get_round, round_column_seed
 from ditto.db.models import (
+    GeneratorRound,
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
     GeneratorSubmission,
@@ -323,8 +326,13 @@ class _Lane:
     ) -> None:
         self.chain = _install(app, self.maker)
         app.state.generator_round_loop = None
-        agents = [await _seed_agent(self.maker, rank) for rank in range(4)]
+        agents = [await _seed_agent(self.maker, rank) for rank in range(5)]
         self.oracle = agents[3]
+        # A stronger reference agent for the escalation tier; only on the
+        # lane when a test sets frontier_escalation_agent_id to it.
+        self.escalation = agents[4]
+        if settings.pop("escalation", False):
+            settings["frontier_escalation_agent_id"] = str(self.escalation)
         await _apply_settings(
             self.client,
             validator_rounds_enabled=True,
@@ -389,12 +397,25 @@ class _Lane:
         return job
 
     async def report_oracle(
-        self, job: dict[str, Any], passed: set[str], *, status: int = 200
+        self,
+        job: dict[str, Any],
+        passed: set[str],
+        *,
+        status: int = 200,
+        faulted: frozenset[str] = frozenset(),
+        partial: frozenset[str] = frozenset(),
     ) -> httpx.Response:
+        def score(case_id: str) -> float:
+            if case_id in passed:
+                return 1.0
+            return 0.5 if case_id in partial else 0.0
+
         payload = _signed_score(job, job["oracle_case_ids"], 0.0)
         payload["results"] = [
             GeneratorRoundCaseResult(
-                case_id=case_id, score=1.0 if case_id in passed else 0.0
+                case_id=case_id,
+                score=0.0 if case_id in faulted else score(case_id),
+                fault=case_id in faulted,
             ).model_dump(mode="json")
             for case_id in job["oracle_case_ids"]
         ]
@@ -1049,3 +1070,493 @@ async def test_an_older_incompatible_round_never_hides_younger_oracle_work(
     await lane.report_oracle(job, set(job["oracle_case_ids"]))
     monkeypatch.setattr(lane_mod, "_round_column_capacity", lambda *_a, **_k: 80)
     assert (await lane.lease_oracle())["round_index"] == older
+
+
+# --- escalation tier ----------------------------------------------------------
+
+
+def test_escalation_off_keeps_the_unchanged_round_signature() -> None:
+    on = GeneratorCompetitionSettings(frontier_oracle_agent_id=uuid4())
+    assert not on.frontier_escalation_enabled
+    with_agent = on.model_copy(update={"frontier_escalation_agent_id": uuid4()})
+    assert with_agent.frontier_escalation_enabled
+    # Escalation decides what a round measures only while it runs.
+    assert with_agent.measurement_params() != on.measurement_params()
+    frontier_off = with_agent.model_copy(update={"frontier_oracle_agent_id": None})
+    assert not frontier_off.frontier_escalation_enabled
+    assert frontier_off.measurement_params() == frontier_off.score_params()
+    for field, value in (
+        ("frontier_escalation_solve_threshold", 0.75),
+        ("frontier_escalation_max_cases", 2),
+        ("frontier_escalation_max_cases_per_column", 1),
+        ("frontier_escalation_max_failed_fraction", 0.5),
+    ):
+        changed = with_agent.model_copy(update={field: value})
+        assert changed.measurement_params() != with_agent.measurement_params(), field
+
+
+def test_escalation_agent_is_neither_the_oracle_nor_a_reference_agent() -> None:
+    oracle, reference = uuid4(), uuid4()
+    with pytest.raises(ValueError, match="differ from frontier_oracle_agent_id"):
+        GeneratorCompetitionSettings(
+            frontier_oracle_agent_id=oracle, frontier_escalation_agent_id=oracle
+        )
+    with pytest.raises(ValueError, match="must not be a reference agent"):
+        GeneratorCompetitionSettings(
+            panel_size=5,
+            frontier_oracle_agent_id=oracle,
+            reference_agent_ids=[reference],
+            frontier_escalation_agent_id=reference,
+        )
+    # Ships off.
+    assert GeneratorCompetitionSettings().frontier_escalation_agent_id is None
+
+
+class TestEscalationSelection:
+    @staticmethod
+    def _failed(columns: dict[str, int]) -> list[str]:
+        return [f"{c}/k{i}" for c, n in columns.items() for i in range(n)]
+
+    def test_caps_bound_the_cases_per_column_and_per_round(self) -> None:
+        # Every column fails 10 of 70 cases (14%): all eligible, so only the
+        # caps bound the spend however many cases a generator emits.
+        failed = self._failed({f"c{i}": 10 for i in range(8)})
+        sizes = {f"c{i}": 70 for i in range(8)}
+        selected, skipped = select_escalation(
+            round_seed="ab" * 32,
+            failed=failed,
+            column_sizes=sizes,
+            max_cases=8,
+            max_cases_per_column=4,
+            max_failed_fraction=0.25,
+        )
+        assert skipped == {}
+        assert len(selected) == 8
+        per_column: dict[str, int] = {}
+        for case_id in selected:
+            per_column[case_id.split("/")[0]] = (
+                per_column.get(case_id.split("/")[0], 0) + 1
+            )
+        assert max(per_column.values()) <= 4
+        assert set(selected) <= set(failed)
+        # One column alone never exceeds its own cap.
+        alone, _ = select_escalation(
+            round_seed="ab" * 32,
+            failed=self._failed({"c0": 10}),
+            column_sizes={"c0": 70},
+            max_cases=8,
+            max_cases_per_column=4,
+            max_failed_fraction=0.25,
+        )
+        assert len(alone) == 4
+
+    def test_a_flooded_column_is_never_escalated(self) -> None:
+        # c1 is a generator that floods its pack with unsolvable cases: 40 of
+        # 70 beat the oracle. It gets no escalation at all; c0 is unaffected.
+        selected, skipped = select_escalation(
+            round_seed="cd" * 32,
+            failed=self._failed({"c0": 3, "c1": 40}),
+            column_sizes={"c0": 70, "c1": 70},
+            max_cases=8,
+            max_cases_per_column=4,
+            max_failed_fraction=0.25,
+        )
+        assert sorted(selected) == ["c0/k0", "c0/k1", "c0/k2"]
+        assert list(skipped) == ["c1"]
+        assert "40/70" in skipped["c1"]
+        # At the boundary (exactly the fraction) a column is still eligible.
+        at, skipped = select_escalation(
+            round_seed="cd" * 32,
+            failed=self._failed({"c1": 2}),
+            column_sizes={"c1": 8},
+            max_cases=8,
+            max_cases_per_column=4,
+            max_failed_fraction=0.25,
+        )
+        assert len(at) == 2 and skipped == {}
+
+    def test_selection_is_seeded_and_order_independent(self) -> None:
+        failed = self._failed({"c0": 12, "c1": 12})
+        kwargs: dict[str, Any] = {
+            "column_sizes": {"c0": 70, "c1": 70},
+            "max_cases": 3,
+            "max_cases_per_column": 2,
+            "max_failed_fraction": 0.25,
+        }
+        one, _ = select_escalation(round_seed="11" * 32, failed=failed, **kwargs)
+        again, _ = select_escalation(
+            round_seed="11" * 32, failed=list(reversed(failed)), **kwargs
+        )
+        # Deterministic: the miner cannot reorder or resubmit its way in.
+        assert one == again and len(one) == 3
+        # The secret round seed, not the generator, decides which cases.
+        picks = {
+            tuple(select_escalation(round_seed=f"{i:064x}", failed=failed, **kwargs)[0])
+            for i in range(8)
+        }
+        assert len(picks) > 1
+
+
+class TestFrontierEscalation:
+    """The panel and the oracle both fail a case; the escalation agent
+    re-checks a capped sample of them."""
+
+    @staticmethod
+    async def _lease_escalation(lane: _Lane) -> dict[str, Any]:
+        job = await _lease_job(lane.client)
+        assert job is not None
+        assert job["dataset_mode"] == "generator-frontier-oracle-v1"
+        assert job["agent_id"] == str(lane.escalation)
+        return job
+
+    @staticmethod
+    async def _statuses(
+        maker: async_sessionmaker[AsyncSession], round_index: int, column: str
+    ) -> dict[str, tuple[str, float]]:
+        async with maker() as session:
+            return {
+                v.case_id: (v.status, float(v.credit))
+                for v in await session.scalars(
+                    select(GeneratorRoundCaseVerdict).where(
+                        GeneratorRoundCaseVerdict.round_index == round_index,
+                        GeneratorRoundCaseVerdict.column_id == column,
+                    )
+                )
+            }
+
+    async def test_a_stronger_pass_earns_frontier_credit_and_a_fail_stays_zero(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=0, escalation=True)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        # The oracle passes 6 of 8 and fails 2 (25%, at the flood guard).
+        oracle_failed = lane.candidates[6:]
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+
+        frontier = await lane.frontier(round_index)
+        # The audits wait for the escalation run.
+        assert frontier["state"] == STATE_ORACLE_PENDING
+        assert frontier["oracle_deadline"] is None
+        escalation = frontier["escalation"]
+        assert escalation["outcome"] == "pending"
+        assert escalation["oracle_failed"] == 2
+        assert sorted(escalation["selected"]) == sorted(oracle_failed)
+        assert escalation["agent_id"] == str(lane.escalation)
+        assert escalation["deadline"] is not None
+        # Oracle attestations are recorded but not applied yet.
+        assert frontier["attested"] == {lane.miner_column: lane.candidates[:6]}
+
+        esc_job = await self._lease_escalation(lane)
+        assert esc_job["oracle_case_ids"] == escalation["selected"]
+        assert esc_job["case_count"] == 2
+        # One open lease at a time.
+        assert await _lease_job(client) is None
+        # The escalation agent reads the scored round's dataset, as the oracle.
+        download = PrivateDatasetRequest(
+            validator_hotkey=_VALIDATOR.ss58_address,
+            dataset_sha256=esc_job["dataset_sha256"],
+            deadline=datetime.fromisoformat(esc_job["deadline"]),
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+            signature="0" * 128,
+        )
+        download.signature = _VALIDATOR.sign(
+            download.signing_message(UUID(esc_job["agent_id"]))
+        ).hex()
+        body = await client.post(
+            f"/api/v1/validator/agent/{esc_job['agent_id']}/private-dataset",
+            json=download.model_dump(mode="json"),
+        )
+        assert body.status_code == 200, body.text
+
+        hard_valid, broken = oracle_failed
+        await lane.report_oracle(esc_job, {hard_valid})
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_AUDIT_PENDING
+        assert frontier["escalation"]["outcome"] == "reported"
+        assert frontier["escalation"]["passed"] == [hard_valid]
+        assert frontier["attested"] == {
+            lane.miner_column: lane.candidates[:6] + [hard_valid]
+        }
+
+        notes = await lane.tick()
+        assert notes and "no audit required" in notes[0]
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_SETTLED
+        # The rule: an escalated pass is an ordinary frontier case. 7 of 8
+        # frontier at 1.5 credit (mean 0, champion failed), 1 unsolved:
+        # 10.5 / (1.5 * 8) * (1 - 1/8)^2.
+        want = 10.5 / (1.5 * 8) * (7 / 8) ** 2
+        assert frontier["column_scores"][lane.miner_column] == pytest.approx(want)
+        statuses = await self._statuses(session_maker, round_index, lane.miner_column)
+        assert statuses[hard_valid] == ("frontier", pytest.approx(1.5))
+        # Panel, oracle and escalation all failed it: still zero.
+        assert statuses[broken] == ("unsolved", 0.0)
+
+    async def test_an_escalation_that_fails_everything_adds_nothing(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=0, escalation=True)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+        esc_job = await self._lease_escalation(lane)
+        # A half-right answer is not a full answer: the default threshold is
+        # 1.0, so a 0.5 partial never attests at the escalation tier.
+        await lane.report_oracle(esc_job, set(), partial=frozenset(lane.candidates[6:]))
+        await lane.tick()
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_SETTLED
+        assert frontier["escalation"]["passed"] == []
+        # Exactly the escalation-off score: 6 frontier, 2 unsolved.
+        want = 9 / (1.5 * 8) * 0.75 * 0.75
+        assert frontier["column_scores"][lane.miner_column] == pytest.approx(want)
+        statuses = await self._statuses(session_maker, round_index, lane.miner_column)
+        for case_id in lane.candidates[6:]:
+            assert statuses[case_id] == ("unsolved", 0.0)
+
+    async def test_escalated_passes_go_through_the_same_audit(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=16, escalation=True)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+        # No audit while the escalation runs.
+        assert (await lane.frontier(round_index))["audits"] == []
+        esc_job = await self._lease_escalation(lane)
+        await lane.report_oracle(esc_job, set(esc_job["oracle_case_ids"]))
+        (audit,) = (await lane.frontier(round_index))["audits"]
+        # The sample covers every attested case, escalated ones included,
+        # so an invalid escalated case voids the column like any other.
+        assert set(audit["sample"]) == set(lane.candidates)
+        url = f"{_ROUNDS_URL}/{round_index}/frontier/audits/{lane.miner_column}"
+        resp = await client.post(
+            url,
+            headers=_ADMIN,
+            json={
+                "valid": False,
+                "invalid_case_ids": [lane.candidates[7]],
+                "reason": "the escalated case's gold is the superseded value",
+                "actor": "backroom:test",
+                "confirmation": frontier_audit_confirmation(
+                    round_index, lane.miner_column, False
+                ),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        await lane.tick()
+        frontier = await lane.frontier(round_index)
+        assert frontier["applied"] == {}
+        assert frontier["column_scores"][lane.miner_column] == 0.0
+
+    async def test_a_flooded_column_is_not_escalated(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=0, escalation=True)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        # The oracle fails every case: a column of deliberately unsolvable
+        # cases buys no escalation and keeps the squared penalty.
+        await lane.report_oracle(job, set())
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_AUDIT_PENDING
+        escalation = frontier["escalation"]
+        assert escalation["outcome"] == "nothing selected"
+        assert escalation["selected"] == []
+        assert "8/8" in escalation["skipped_columns"][lane.miner_column]
+        assert await _lease_job(client) is None
+        await lane.tick()
+        assert (await lane.frontier(round_index))["column_scores"][
+            lane.miner_column
+        ] == 0.0
+
+    async def test_the_round_cap_and_faulted_cases_bound_the_selection(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(
+            app,
+            monkeypatch,
+            frontier_audit_cases=0,
+            escalation=True,
+            frontier_escalation_max_cases=1,
+            frontier_escalation_max_failed_fraction=0.5,
+        )
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        # 4 passed, 1 faulted (the scorer's failure, never escalated), 3
+        # failed: one case goes to escalation under the round cap.
+        faulted = lane.candidates[4]
+        await lane.report_oracle(
+            job, set(lane.candidates[:4]), faulted=frozenset({faulted})
+        )
+        escalation = (await lane.frontier(round_index))["escalation"]
+        assert escalation["oracle_failed"] == 3
+        assert len(escalation["selected"]) == 1
+        assert escalation["selected"][0] in lane.candidates[5:]
+        esc_job = await self._lease_escalation(lane)
+        assert esc_job["oracle_case_ids"] == escalation["selected"]
+
+    async def test_an_escalation_that_never_reports_still_audits_the_oracle(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(
+            app,
+            monkeypatch,
+            frontier_audit_cases=2,
+            frontier_oracle_timeout_hours=1,
+            escalation=True,
+        )
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+        # Nothing settles (or opens) while the escalation still has time.
+        assert await lane.tick() == []
+        later = datetime.now(UTC) + timedelta(hours=1, minutes=1)
+        notes = await lane.tick(now=later)
+        assert notes == [f"round {round_index} frontier escalation timed out"]
+        frontier = await lane.frontier(round_index)
+        assert frontier["state"] == STATE_AUDIT_PENDING
+        assert frontier["escalation"]["outcome"] == "escalation timed out"
+        assert frontier["attested"] == {lane.miner_column: lane.candidates[:6]}
+        (audit,) = frontier["audits"]
+        assert set(audit["sample"]) <= set(lane.candidates[:6])
+        # A timed-out escalation is never leased again.
+        assert await _lease_job(client) is None
+
+    async def test_an_operator_settle_during_escalation_keeps_oracle_credit(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=2, escalation=True)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+        await self._lease_escalation(lane)
+        resp = await client.post(
+            f"{_ROUNDS_URL}/{round_index}/frontier/settle",
+            headers=_ADMIN,
+            json={
+                "reason": "escalation agent misconfigured for this round",
+                "actor": "backroom:test",
+                "confirmation": frontier_settle_confirmation(round_index),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["applied"] == {lane.miner_column: lane.candidates[:6]}
+        # The escalation was closed and the oracle's attestations drew their
+        # audit sample before settling: no credit without one.
+        frontier = await lane.frontier(round_index)
+        assert frontier["escalation"]["outcome"].startswith("frontier settled:")
+        (audit,) = frontier["audits"]
+        assert len(audit["sample"]) == 2
+        assert set(audit["sample"]) <= set(lane.candidates[:6])
+        async with session_maker() as session:
+            attempts = list(
+                await session.scalars(
+                    select(GeneratorRoundAttempt).where(
+                        GeneratorRoundAttempt.round_index == round_index,
+                        GeneratorRoundAttempt.kind == "oracle",
+                    )
+                )
+            )
+            # The escalation lease was expired, not left spending.
+            assert sorted(a.status for a in attempts) == ["completed", "failed"]
+
+
+def test_an_escalation_agent_seated_on_the_panel_is_never_leased() -> None:
+    """A ledger agent picked as the escalation agent may also sit on the round
+    panel; it must not re-roll its own failed panel attempt."""
+    escalation = str(uuid4())
+    cases = [
+        {"case_id": f"c1/k{i}", "fingerprint": f"fp{i}", "status": "unsolved"}
+        for i in range(8)
+    ]
+    row = GeneratorRound(
+        round_index=1,
+        seed="ab" * 32,
+        panel=[{"agent_id": escalation}],
+        score={
+            "columns": [
+                {
+                    "column_id": "c1",
+                    "pack": {"status": "scored", "duplicate": 0, "cases": cases},
+                }
+            ]
+        },
+        frontier={
+            "state": STATE_ORACLE_PENDING,
+            "phase": "oracle",
+            "oracle_agent_id": str(uuid4()),
+            "solve_threshold": 0.5,
+            "audit_cases": 0,
+            "candidates": [c["case_id"] for c in cases],
+            "attested": {},
+            "audits": {},
+            "escalation_policy": {
+                "agent_id": escalation,
+                "solve_threshold": 1.0,
+                "max_cases": 8,
+                "max_cases_per_column": 4,
+                "max_failed_fraction": 0.5,
+            },
+            "escalation": None,
+        },
+    )
+    record_oracle_results(
+        row,
+        [
+            GeneratorRoundCaseResult(case_id=c["case_id"], score=1.0 if i < 6 else 0.0)
+            for i, c in enumerate(cases)
+        ],
+        validator_hotkey="5V",
+        run_id="r",
+        signature="s",
+        now=datetime.now(UTC),
+    )
+    frontier = row.frontier or {}
+    assert frontier["state"] == STATE_AUDIT_PENDING
+    assert frontier["escalation"]["selected"] == []
+    assert (
+        frontier["escalation"]["outcome"] == "escalation agent sat on the round panel"
+    )
+    assert frontier["attested"] == {"c1": [f"c1/k{i}" for i in range(6)]}
+    # The failed column is reported as skipped, with the reason.
+    assert frontier["escalation"]["skipped_columns"] == {
+        "c1": "escalation agent sat on the round panel"
+    }

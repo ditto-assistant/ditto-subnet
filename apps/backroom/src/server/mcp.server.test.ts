@@ -1026,7 +1026,10 @@ describe('Backroom MCP tools', () => {
     // The four Ditto Edge shadow lane reads (settings, overview, nodes,
     // ledger; one-line summaries, detail in tool help) measure 241,967 bytes;
     // keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(242_450)
+    // The five frontier escalation settings on the generator settings write
+    // schema (no new tool; detail in tool help) measure 242,706 bytes; keep
+    // about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(243_200)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
