@@ -239,7 +239,7 @@ async def test_released_king_alibi_pool_reads_live_and_banned_kings_only(
         session,
         name="live-king",
         hotkey="5LiveKing",
-        coldkey="5LiveKingCold",
+        coldkey="5LiveOwner",
         created_at=_BASE,
         status=AgentStatus.LIVE,
     )
@@ -247,7 +247,7 @@ async def test_released_king_alibi_pool_reads_live_and_banned_kings_only(
         session,
         name="banned-king",
         hotkey="5BannedKing",
-        coldkey="5BannedKingCold",
+        coldkey="5BannedOwner",
         created_at=_BASE,
         status=AgentStatus.BANNED,
     )
@@ -255,14 +255,14 @@ async def test_released_king_alibi_pool_reads_live_and_banned_kings_only(
         session,
         name="scored-king",
         hotkey="5ScoredKing",
-        coldkey="5ScoredKingCold",
+        coldkey="5ScoredOwner",
         created_at=_BASE,
     )
     await _generation(
         session,
         name="banned-never-king",
         hotkey="5BannedPlain",
-        coldkey="5BannedPlainCold",
+        coldkey="5PlainOwner",
         created_at=_BASE,
         status=AgentStatus.BANNED,
     )
