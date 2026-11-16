@@ -16,7 +16,13 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ditto.db.models import Agent, AgentStatus, EvaluationPayment, Score
+from ditto.db.models import (
+    Agent,
+    AgentKingship,
+    AgentStatus,
+    EvaluationPayment,
+    Score,
+)
 from ditto.db.queries.scores import list_anti_copy_history, list_eligible_ledger
 
 pytestmark = pytest.mark.asyncio
@@ -216,3 +222,64 @@ async def test_history_excludes_unscored_and_other_eras(
         session, bench_version=_BENCH, before=_BASE + timedelta(hours=1)
     )
     assert [row.agent_id for row in history] == [scored]
+
+
+async def test_released_king_alibi_pool_reads_live_and_banned_kings_only(
+    session: AsyncSession,
+) -> None:
+    """The copy gate's public-release alibi needs kings the scored pool omits.
+
+    Source release covers ``scored``, ``live`` and ``banned`` kings. A king that
+    is live now, or was banned after its source went public, is in neither
+    scored-only pool, but its source is still public. The alibi read returns
+    exactly those kings, never a non-king and never a scored row (already in
+    the default pool).
+    """
+    live_king = await _generation(
+        session,
+        name="live-king",
+        hotkey="5LiveKing",
+        coldkey="5LiveKingCold",
+        created_at=_BASE,
+        status=AgentStatus.LIVE,
+    )
+    banned_king = await _generation(
+        session,
+        name="banned-king",
+        hotkey="5BannedKing",
+        coldkey="5BannedKingCold",
+        created_at=_BASE,
+        status=AgentStatus.BANNED,
+    )
+    scored_king = await _generation(
+        session,
+        name="scored-king",
+        hotkey="5ScoredKing",
+        coldkey="5ScoredKingCold",
+        created_at=_BASE,
+    )
+    await _generation(
+        session,
+        name="banned-never-king",
+        hotkey="5BannedPlain",
+        coldkey="5BannedPlainCold",
+        created_at=_BASE,
+        status=AgentStatus.BANNED,
+    )
+    for agent_id in (live_king, banned_king, scored_king):
+        session.add(AgentKingship(agent_id=agent_id, first_crowned_at=_BASE))
+    await session.flush()
+
+    default_pool = await list_anti_copy_history(
+        session, bench_version=_BENCH, before=_BASE + timedelta(hours=1)
+    )
+    alibi_pool = await list_anti_copy_history(
+        session,
+        bench_version=_BENCH,
+        before=_BASE + timedelta(hours=1),
+        statuses=(AgentStatus.LIVE, AgentStatus.BANNED),
+        kings_only=True,
+    )
+
+    assert {row.agent_id for row in default_pool} == {scored_king}
+    assert {row.agent_id for row in alibi_pool} == {live_king, banned_king}

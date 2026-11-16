@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -1330,6 +1331,60 @@ class TestReleasedSiblingInHistory:
             eligible_history=[v58, v59, relay, rep],
             public_source_releases=[released],
             submitted_at=datetime(2026, 11, 15, 17, 0, 0, tzinfo=UTC),
+        )
+        assert decision.held is True
+
+    def test_live_released_king_is_an_alibi_only_when_passed(self) -> None:
+        """A released king that is live now is outside both scored-only pools.
+
+        Without ``public_release_candidates`` the gate cannot see it and the
+        fork is held against the unreleased relay. With it, the released king
+        accounts for the match and the hold is withdrawn.
+        """
+        v58, v59, rep, relay, released = self._family()
+        live_v59 = replace(v59, status=AgentStatus.LIVE)
+        kwargs = {
+            "agent_id": uuid4(),
+            "miner_hotkey": "5Dz5NvybxD",
+            "miner_coldkey": "5D8FFBJMNZ",
+            "sha256": "lk" * 32,
+            "size_bytes": None,
+            "composite": 0.79,
+            "content_fingerprint": _sk(
+                self.ENGINE | self.V59 | {f"own{i:013x}" for i in range(3)}
+            ),
+            "eligible": [relay, rep],
+            "eligible_history": [v58, relay, rep],
+            "public_source_releases": [released],
+            "submitted_at": datetime(2026, 11, 16, 8, 26, 30, tzinfo=UTC),
+        }
+        assert evaluate_duplicate_signals(**kwargs).held is True
+
+        decision = evaluate_duplicate_signals(
+            **kwargs, public_release_candidates=[live_v59]
+        )
+        assert decision.held is False
+        assert decision.no_copy_opportunity is not None
+        assert decision.no_copy_opportunity.source_agent_id == v59.agent_id
+
+    def test_unpublished_live_king_is_no_alibi(self) -> None:
+        """A candidate row without a release dated before upload withdraws nothing."""
+        v58, v59, rep, relay, _ = self._family()
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Dz5NvybxD",
+            miner_coldkey="5D8FFBJMNZ",
+            sha256="lu" * 32,
+            size_bytes=None,
+            composite=0.79,
+            content_fingerprint=_sk(
+                self.ENGINE | self.V59 | {f"own{i:013x}" for i in range(3)}
+            ),
+            eligible=[relay, rep],
+            eligible_history=[v58, relay, rep],
+            public_source_releases=[],
+            public_release_candidates=[replace(v59, status=AgentStatus.LIVE)],
+            submitted_at=datetime(2026, 11, 16, 8, 26, 30, tzinfo=UTC),
         )
         assert decision.held is True
 

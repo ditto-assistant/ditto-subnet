@@ -7905,13 +7905,31 @@ async def submit_score(
                 release_policy = await artifact_release_policy_as_of(
                     session, at=submitted_at_utc
                 )
+                # Released kings outside the scored population: a king that is
+                # live now, or was banned after its source went public. Neither
+                # pool above contains them, but their source is still public.
+                # Alibi only: the gate never triggers or attributes on these.
+                released_kings_outside_pool = await list_anti_copy_history(
+                    session,
+                    bench_version=ticket.bench_version,
+                    before=agent.created_at,
+                    statuses=(AgentStatus.LIVE, AgentStatus.BANNED),
+                    kings_only=True,
+                )
                 # Every earlier generation, not only each owner's representative:
                 # a released sibling of the representative is still public, and
                 # it is usually the artifact that explains a match.
                 published_before = await list_public_source_releases(
                     session,
                     agent_ids=list(
-                        {e.agent_id for e in (*eligible, *eligible_history)}
+                        {
+                            e.agent_id
+                            for e in (
+                                *eligible,
+                                *eligible_history,
+                                *released_kings_outside_pool,
+                            )
+                        }
                     ),
                     quorum=SCORING_QUORUM,
                     policy=release_policy,
@@ -7937,6 +7955,7 @@ async def submit_score(
                     prompt_fingerprint=agent.prompt_fingerprint,
                     eligible=eligible,
                     eligible_history=eligible_history,
+                    public_release_candidates=released_kings_outside_pool,
                 )
                 if not decision.held:
                     # An artifact an operator already rejected, re-uploaded as a

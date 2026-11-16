@@ -583,6 +583,7 @@ def evaluate_duplicate_signals(
     miner_coldkey: str | None = None,
     linked_owner_hotkeys: frozenset[str] = frozenset(),
     public_source_releases: Sequence[PublicSourceRelease] = (),
+    public_release_candidates: Sequence[LedgerRow] = (),
     score_tol: float = _DEFAULT_SCORE_TOL,
     size_tol: int = _DEFAULT_SIZE_TOL,
     jaccard_tol: float = _DEFAULT_JACCARD_TOL,
@@ -722,6 +723,14 @@ def evaluate_duplicate_signals(
       in the cluster can be the source and the signal is withdrawn as
       ``self_origin`` instead.
 
+    ``public_release_candidates`` widens only the public-release alibi. It
+    carries released kings outside the ``scored`` population that ``eligible``
+    and ``eligible_history`` both read: a king that is ``live`` now, or was
+    banned after its source went public. Public is public. These rows can
+    withdraw a hold through :func:`_withdraw_ranked`'s two-way test. They never
+    trigger a rule, never join attribution or self-lineage, and count only when
+    ``public_source_releases`` dates them at or before this upload.
+
     Callers that pass only ``eligible`` get exactly the pre-existing behaviour:
     the cluster is then the representative rows alone, whose earliest member is
     the row the rule already selected.
@@ -775,13 +784,15 @@ def evaluate_duplicate_signals(
     # eleven copy holds pending on 2026-11-16 named an unreleased dan0l or
     # beast-d41 generation while a released one of the same owner (dan0l v59,
     # beast-d41 v10/v11/v12/v19) explained every shared file. History rows only
-    # ever withdraw here; no rule triggers on them.
+    # ever withdraw here; no rule triggers on them. ``public_release_candidates``
+    # adds released kings that are live or banned now, which neither scored-only
+    # pool contains.
     released_at: dict[UUID, datetime] = {
         release.agent_id: _utc(release.available_at)
         for release in public_source_releases
     }
     release_pool: dict[UUID, LedgerRow] = {}
-    for row in (*eligible, *eligible_history):
+    for row in (*eligible, *eligible_history, *public_release_candidates):
         if row.agent_id != agent_id:
             release_pool.setdefault(row.agent_id, row)
     published_before = sorted(

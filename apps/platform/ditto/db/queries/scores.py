@@ -54,6 +54,7 @@ from ditto.api_models.confirmation_bundles import (
 from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
     Agent,
+    AgentKingship,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
     ConfirmationBundleSubject,
@@ -1793,6 +1794,8 @@ async def list_anti_copy_history(
     *,
     bench_version: int,
     before: datetime,
+    statuses: tuple[AgentStatus, ...] = (AgentStatus.SCORED,),
+    kings_only: bool = False,
 ) -> list[LedgerRow]:
     """Every finalized generation uploaded before ``before``, not owner-reduced.
 
@@ -1828,6 +1831,15 @@ async def list_anti_copy_history(
     Unlike the ledger this takes an explicit ``bench_version`` and never resolves
     rollout authority: the caller is finalizing one ticket at one version and
     must compare within that era.
+
+    ``statuses`` / ``kings_only`` exist for one second caller: the anti-copy
+    gate's public-release alibi. Source release covers ``scored``, ``live`` and
+    ``banned`` kings (``SOURCE_RELEASE_STATUSES``), but the default ``scored``
+    population omits a published king that is now ``live`` or was banned after
+    publication. Its content is still public. Passing
+    ``statuses=(LIVE, BANNED), kings_only=True`` loads exactly those rows,
+    restricted to agents that ever held the crown, because only kings are
+    released.
     """
     agent_best = (
         select(
@@ -1881,8 +1893,13 @@ async def list_anti_copy_history(
             .join(agent_best, agent_best.c.agent_id == Agent.agent_id)
             .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
             .where(
-                Agent.status == AgentStatus.SCORED,
+                Agent.status.in_(statuses),
                 Agent.created_at <= before,
+                *(
+                    [Agent.agent_id.in_(select(AgentKingship.agent_id))]
+                    if kings_only
+                    else []
+                ),
                 # Same integer-arithmetic median as the ledger: exact, and
                 # portable across Postgres and the SQLite unit-test path.
                 or_(
