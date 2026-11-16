@@ -440,3 +440,19 @@ async def test_credited_needs_a_reason_and_admitted_refuses_one(
             rollout_id=None,
             refusal_reason="not a refusal",
         )
+
+
+async def test_a_whitespace_reason_on_an_admitted_readmission_is_ignored(
+    session: AsyncSession,
+) -> None:
+    target = await _agent(session)
+    async with session.begin():
+        row = await insert_readmission_payment(
+            session,
+            verified=_verified(13),
+            agent_id=target,
+            bench_version=19,
+            rollout_id=None,
+            refusal_reason="   ",
+        )
+        assert row.outcome == "admitted" and row.refusal_reason is None

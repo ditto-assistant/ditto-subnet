@@ -170,11 +170,20 @@ def upgrade() -> None:
         "evaluation_payments",
         sa.Column("credit_origin", sa.Text(), nullable=True),
     )
-    op.create_check_constraint(
-        "evaluation_payments_credit_origin_check",
-        "evaluation_payments",
-        "credit_origin IS NULL OR credit_origin = 'readmission'",
+    # NOT VALID skips the existing-row scan under the ACCESS EXCLUSIVE lock
+    # (every existing row is NULL anyway); VALIDATE then runs in its own
+    # transaction under SHARE UPDATE EXCLUSIVE, which does not block readers
+    # or writers of the payment ledger.
+    op.execute(
+        "ALTER TABLE evaluation_payments "
+        "ADD CONSTRAINT evaluation_payments_credit_origin_check "
+        "CHECK (credit_origin IS NULL OR credit_origin = 'readmission') NOT VALID"
     )
+    with op.get_context().autocommit_block():
+        op.execute(
+            "ALTER TABLE evaluation_payments "
+            "VALIDATE CONSTRAINT evaluation_payments_credit_origin_check"
+        )
 
 
 def downgrade() -> None:

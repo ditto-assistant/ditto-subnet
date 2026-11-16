@@ -510,7 +510,7 @@ async def insert_readmission_payment(
         timestamp=verified.block_timestamp,
         funding="fresh",
         outcome=outcome,
-        refusal_reason=refusal_reason.strip() if refusal_reason else None,
+        refusal_reason=(refusal_reason or "").strip() or None,
     )
     session.add(row)
     if outcome == "credited":

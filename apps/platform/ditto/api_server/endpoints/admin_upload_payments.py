@@ -147,5 +147,5 @@ def _readmission_view(row: ReadmissionPayment) -> UploadPaymentProofReadmission:
         funding="credit" if row.funding == "credit" else "fresh",
         refusal_reason=row.refusal_reason,
         credit_audit=row.credit_audit,
-        recorded_at=row.updated_at,
+        recorded_at=row.created_at,
     )
