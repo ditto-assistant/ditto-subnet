@@ -139,14 +139,16 @@ async def _agent(
     return agent_id
 
 
-async def _scores(session: AsyncSession, agent_id: UUID, *, count: int) -> None:
+async def _scores(
+    session: AsyncSession, agent_id: UUID, *, count: int, bench_version: int = _FROM
+) -> None:
     for index in range(count):
         session.add(
             Score(
                 agent_id=agent_id,
-                bench_version=_FROM,
+                bench_version=bench_version,
                 validator_hotkey=_hotkey(f"validator-{index}"),
-                run_id=f"{agent_id}-{index}",
+                run_id=f"{agent_id}-{bench_version}-{index}",
                 signature=None,
                 seed=7 + index,
                 composite=0.61,
@@ -154,7 +156,7 @@ async def _scores(session: AsyncSession, agent_id: UUID, *, count: int) -> None:
                 memory_mean=0.61,
                 median_ms=1,
                 n=350,
-                details={"bench_version": _FROM},
+                details={"bench_version": bench_version},
                 generated_at=_BEFORE + timedelta(hours=1),
             )
         )
@@ -507,3 +509,140 @@ async def test_unfiltered_page_pays_one_bounded_lookup(
     # test_activity_page_hydrates_only_one_page_in_five_round_trips) plus the
     # one page lookup.
     assert len(statements) == 6, statements
+
+
+async def _readiness(client: httpx.AsyncClient, agent_id: UUID) -> dict:
+    response = await client.get(
+        f"/api/v1/admin/agents/{agent_id}/scoring-readiness", headers=_HEADERS
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_readiness_names_a_previous_era_score_only_when_one_exists(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Review r4576442191: status alone is not evidence of a v17 score.
+
+    A refused ``scored`` row with only older-era scores, or with a score on the
+    active version, must not be reported as finalized on the previous version.
+    The miner projection and the stranded listing use the same predicate.
+    """
+    seeded = await _seed(maker)
+    async with maker() as session, session.begin():
+        older_only = await _agent(
+            session,
+            name="v16-only",
+            status=AgentStatus.SCORED,
+            created_at=_BEFORE - timedelta(days=5),
+        )
+        await _scores(session, older_only, count=3, bench_version=_FROM - 1)
+        with_active = await _agent(
+            session, name="v17-and-v18", status=AgentStatus.SCORED, created_at=_BEFORE
+        )
+        await _scores(session, with_active, count=3)
+        await _scores(session, with_active, count=1, bench_version=_ACTIVE)
+    _install(app, maker)
+
+    finalized = await _readiness(client, seeded.finalized)
+    assert finalized["era_change"] == _change(scored_bench_version=_FROM)
+    for agent_id in (older_only, with_active):
+        body = await _readiness(client, agent_id)
+        assert body["leaseable"] is False
+        assert body["era_change"] == _change(scored_bench_version=None), body
+        assert _ERA_REASON in body["blocking_reasons"]
+
+
+async def _issue_active_ticket(
+    maker: async_sessionmaker[AsyncSession], agent_id: UUID, *, deadline: datetime
+) -> None:
+    async with maker() as session, session.begin():
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey=_hotkey("validator-live"),
+                status=TicketStatus.ISSUED,
+                issued_at=deadline - timedelta(hours=1),
+                deadline=deadline,
+                bench_version=_ACTIVE,
+                attempt_count=1,
+                manual_retry_grants=0,
+            )
+        )
+
+
+async def test_an_expired_active_era_lease_does_not_hold_the_waiting_label(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Review r4576442366: only an unexpired lease is a validator holding it.
+
+    ``list_active_validator_assignments`` (behind the activity projection)
+    counts ``issued`` rows whose deadline has not passed. The miner lists used
+    every ``issued`` row, so an expired one kept "evaluating" on the profile.
+    """
+    seeded = await _seed(maker)
+    await _issue_active_ticket(
+        maker, seeded.waiting, deadline=datetime.now(UTC) - timedelta(minutes=5)
+    )
+    _install(app, maker)
+
+    profile = (
+        await client.get(f"/api/v1/public/miners/{_hotkey('v17-waiting')}")
+    ).json()
+    assert [(row["status"], row["era_change"]) for row in profile["submissions"]] == [
+        ("era_changed", _change(scored_bench_version=None))
+    ]
+    _, by_id = await _activity(client)
+    assert by_id[str(seeded.waiting)]["status"] == "era_changed"
+
+
+async def test_a_live_active_era_lease_keeps_the_waiting_label_on_both_surfaces(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Review r4576442515: Backroom and the miner page agree while a lease drains.
+
+    A refused row a validator still holds keeps its waiting label for the
+    miner, so the stuck list must not call it era-changed either.
+    """
+    seeded = await _seed(maker)
+    await _issue_active_ticket(
+        maker, seeded.waiting, deadline=datetime.now(UTC) + timedelta(hours=1)
+    )
+    _install(app, maker)
+
+    profile = (
+        await client.get(f"/api/v1/public/miners/{_hotkey('v17-waiting')}")
+    ).json()
+    assert [(row["status"], row["era_change"]) for row in profile["submissions"]] == [
+        ("evaluating", None)
+    ]
+    _, by_id = await _activity(client)
+    assert by_id[str(seeded.waiting)]["status"] != "era_changed"
+    assert by_id[str(seeded.waiting)]["era_change"] is None
+
+    stuck = (
+        await client.get(
+            "/api/v1/admin/validation-retries",
+            params={"generation": "all"},
+            headers=_HEADERS,
+        )
+    ).json()
+    row = next(
+        item for item in stuck["submissions"] if item["agent_id"] == str(seeded.waiting)
+    )
+    assert row["retry_state"] == "running"
+    assert row["era_change"] is None
+    assert "Era changed" not in (row["blocking_reason"] or "")
+    # Unrelated rows on the same list keep their era-changed reading.
+    dead = next(
+        item
+        for item in stuck["submissions"]
+        if item["agent_id"] == str(seeded.dead_retry)
+    )
+    assert dead["era_change"] == _change(scored_bench_version=None)

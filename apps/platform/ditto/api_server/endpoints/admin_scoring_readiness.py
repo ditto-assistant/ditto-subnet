@@ -50,6 +50,7 @@ from ditto.db.queries.benchmark_admission import (
     activated_rollout_for_version,
     admission_rollout_for_active_version,
     agent_is_era_admitted,
+    previous_era_scored_agent_ids,
 )
 from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
@@ -220,12 +221,25 @@ async def scoring_readiness(
     if not era_admitted:
         # The same reason code and next step the miner's ``era_changed`` row
         # carries, so Backroom and the dashboard name one cause (SN-485).
+        change_rollout = await admission_rollout_for_active_version(
+            session, bench_version=scoring_version
+        )
+        # Status alone is not evidence of a previous-era score: a historical
+        # row may hold only older scores, or one on this version. Ask the same
+        # predicate the miner projection and the stranded listing use.
+        previous_era_scored = agent.status in (
+            AgentStatus.SCORED,
+            AgentStatus.LIVE,
+        ) and agent_id in await previous_era_scored_agent_ids(
+            session,
+            agent_ids=[agent_id],
+            bench_version=scoring_version,
+            rollout=change_rollout,
+        )
         change = era_change(
             bench_version=scoring_version,
-            rollout=await admission_rollout_for_active_version(
-                session, bench_version=scoring_version
-            ),
-            previous_era_scored=agent.status in (AgentStatus.SCORED, AgentStatus.LIVE),
+            rollout=change_rollout,
+            previous_era_scored=previous_era_scored,
         )
         blocking.append(era_change_blocking_reason(change))
 

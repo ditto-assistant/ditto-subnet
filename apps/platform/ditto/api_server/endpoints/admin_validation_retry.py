@@ -71,6 +71,7 @@ from ditto.api_server.submission_status import (
     closed_era_blocking_reason,
     era_change,
     era_change_blocking_reason,
+    holds_live_lease,
 )
 from ditto.db.models import (
     Agent,
@@ -713,10 +714,15 @@ async def list_validation_retries(
         # the active queue, so it is never "not admitted" here. A row an
         # operator withdrew keeps its withdrawal as the reason, as on the
         # miner's ``not_queued`` row.
+        # A live active-era lease keeps the miner's waiting label while it
+        # drains (``closed_submission_statuses``), so the operator row agrees.
         refused_by_era = (
             agent_id not in admitted_to_active
             and agent_id not in withdrawn_from_active
             and retry.bench_version <= active_version
+            and not holds_live_lease(
+                retry.tickets, bench_version=active_version, now=now
+            )
         )
         exclusion = (
             era_change(

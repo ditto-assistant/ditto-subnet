@@ -16,12 +16,13 @@ label as soon as an operator or a rollout admits it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
@@ -70,6 +71,41 @@ _INTERNAL_TO_PUBLIC_STATUS = {
 
 _WAITING_STATUSES = (AgentStatus.SCREENING_PASSED, AgentStatus.EVALUATING)
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
+
+
+def live_lease_predicate(*, bench_version: int, now: datetime) -> ColumnElement[bool]:
+    """SQL form of :func:`holds_live_lease` for one ``ValidatorTicket`` row.
+
+    The same "assignment" rule as ``list_active_validator_assignments``, which
+    feeds the activity projection: an issued lease whose deadline has not
+    passed. An expired ``issued`` row is not a validator holding the work.
+    """
+    return (
+        (ValidatorTicket.status == TicketStatus.ISSUED)
+        & (ValidatorTicket.bench_version == bench_version)
+        & (ValidatorTicket.deadline > now)
+    )
+
+
+def holds_live_lease(
+    tickets: Iterable[ValidatorTicket], *, bench_version: int, now: datetime
+) -> bool:
+    """Whether a validator currently holds an unexpired lease on ``bench_version``.
+
+    While one does, the row keeps its waiting label as the lease drains, so
+    neither the miner projection nor the operator stuck list calls it
+    ``era_changed``.
+    """
+    return any(
+        ticket.status == TicketStatus.ISSUED
+        and ticket.bench_version == bench_version
+        and _aware(ticket.deadline) > now
+        for ticket in tickets
+    )
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def public_agent_status(raw: str) -> str:
@@ -144,6 +180,7 @@ async def closed_submission_statuses(
     *,
     agents: Sequence[Agent],
     active_version: int,
+    now: datetime | None = None,
 ) -> dict[UUID, ClosedSubmissionStatus]:
     """Close out a miner list's rows with the activity projection's predicates.
 
@@ -156,6 +193,7 @@ async def closed_submission_statuses(
     by the given agents, and a list with nothing to close costs only the
     rollout read.
     """
+    now = now or datetime.now(UTC)
     waiting = [agent.agent_id for agent in agents if agent.status in _WAITING_STATUSES]
     finalized = [
         agent.agent_id for agent in agents if agent.status in _FINALIZED_STATUSES
@@ -204,14 +242,14 @@ async def closed_submission_statuses(
     refused = [agent_id for agent_id in open_rows if agent_id not in admitted]
     if not refused:
         return result
-    # A validator already holding an active-era lease keeps the row in its
-    # waiting label while it drains, as in the activity projection.
+    # A validator holding a live active-era lease keeps the row in its waiting
+    # label while it drains, as in the activity projection. An ``issued`` row
+    # past its deadline is not a held lease.
     held = set(
         await session.scalars(
             select(ValidatorTicket.agent_id).where(
                 ValidatorTicket.agent_id.in_(refused),
-                ValidatorTicket.bench_version == active_version,
-                ValidatorTicket.status == TicketStatus.ISSUED,
+                live_lease_predicate(bench_version=active_version, now=now),
             )
         )
     )
@@ -243,5 +281,7 @@ __all__ = [
     "era_change",
     "era_change_blocking_reason",
     "era_change_label",
+    "holds_live_lease",
+    "live_lease_predicate",
     "public_agent_status",
 ]
