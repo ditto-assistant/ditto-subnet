@@ -1463,7 +1463,7 @@ class TestFrontierEscalation:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         lane = _Lane(client, session_maker)
-        await lane.setup(app, monkeypatch, frontier_audit_cases=0, escalation=True)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=2, escalation=True)
         round_index = await lane.score_round()
         job = await lane.lease_oracle()
         await lane.report_oracle(job, set(lane.candidates[:6]))
@@ -1479,6 +1479,13 @@ class TestFrontierEscalation:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["applied"] == {lane.miner_column: lane.candidates[:6]}
+        # The escalation was closed and the oracle's attestations drew their
+        # audit sample before settling: no credit without one.
+        frontier = await lane.frontier(round_index)
+        assert frontier["escalation"]["outcome"].startswith("frontier settled:")
+        (audit,) = frontier["audits"]
+        assert len(audit["sample"]) == 2
+        assert set(audit["sample"]) <= set(lane.candidates[:6])
         async with session_maker() as session:
             attempts = list(
                 await session.scalars(
@@ -1549,3 +1556,7 @@ def test_an_escalation_agent_seated_on_the_panel_is_never_leased() -> None:
         frontier["escalation"]["outcome"] == "escalation agent sat on the round panel"
     )
     assert frontier["attested"] == {"c1": [f"c1/k{i}" for i in range(6)]}
+    # The failed column is reported as skipped, with the reason.
+    assert frontier["escalation"]["skipped_columns"] == {
+        "c1": "escalation agent sat on the round panel"
+    }

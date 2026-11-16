@@ -763,7 +763,9 @@ stays the bench contract's.
    column's frontier credit, escalated or not. An escalated attestation scores
    exactly as any frontier case. An escalation that does not report within
    `frontier_oracle_timeout_hours` or `MAX_ORACLE_ATTEMPTS` leases adds
-   nothing; the oracle's attestations still go to audit.
+   nothing; the oracle's attestations still go to audit. An operator settle
+   during the escalation run closes it the same way: the oracle's
+   attestations draw their audit sample before the lane settles.
 
 The escalation agent must differ from the oracle and from every reference
 agent, so a panel agent never re-rolls its own failed attempt into an

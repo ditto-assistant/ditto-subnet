@@ -737,8 +737,9 @@ def record_oracle_results(
         if policy["agent_id"] in seated:
             # It already answered these cases on the panel; a second run
             # would only re-roll its own failed attempt.
-            selected, skipped = [], {}
             outcome = "escalation agent sat on the round panel"
+            selected = []
+            skipped = dict.fromkeys(_columns_of(failed), outcome)
         else:
             selected, skipped = select_escalation(
                 round_seed=row.seed or "",
@@ -904,11 +905,16 @@ async def settle_frontier(
         await expire_round_tickets(
             session, row, now=now, detail=f"frontier settled: {reason}"[:500]
         )
-    # An operator settle during the escalation run keeps the oracle's own
-    # attestations, as a settle with audits still pending does.
+    if in_escalation(frontier):
+        # An operator settle during the escalation run gives it up as a
+        # timeout would: the oracle's own attestations draw their audit
+        # samples first, so none is credited without one, and then settle as
+        # a settle with audits still pending does.
+        close_escalation(row, reason=f"frontier settled: {reason}"[:500], now=now)
+        frontier = dict(row.frontier or {})
     attested: dict[str, list[str]] = (
         frontier.get("attested") or {}
-        if frontier.get("state") == STATE_AUDIT_PENDING or in_escalation(frontier)
+        if frontier.get("state") == STATE_AUDIT_PENDING
         else {}
     )
     audits = frontier.get("audits") or {}
