@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.487.0 (2026-11-16)
+
+### Features
+
+- **platform,backroom**: Add frontier escalation tier for oracle-failed cases
+  ([#3565](https://github.com/ditto-assistant/ditto-subnet/pull/3565),
+  [`fc9851e`](https://github.com/ditto-assistant/ditto-subnet/commit/fc9851e4d52305c112316fb104e051c8533a69f0))
+
+
 ## v0.486.0 (2026-11-15)
 
 ### Bug Fixes
