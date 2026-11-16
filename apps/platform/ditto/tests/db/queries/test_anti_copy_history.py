@@ -283,3 +283,53 @@ async def test_released_king_alibi_pool_reads_live_and_banned_kings_only(
 
     assert {row.agent_id for row in default_pool} == {scored_king}
     assert {row.agent_id for row in alibi_pool} == {live_king, banned_king}
+
+
+async def test_released_king_alibi_pool_spans_earlier_bench_eras(
+    session: AsyncSession,
+) -> None:
+    """A king released on an earlier bench version is still public.
+
+    The default read stays era-scoped (see
+    ``test_history_excludes_unscored_and_other_eras``); the kings-only alibi
+    read must not be, or a king that reigned on bench N-1 can never account
+    for a bench-N candidate's match.
+    """
+    earlier_era_king = await _generation(
+        session,
+        name="earlier-era-king",
+        hotkey="5EraKing",
+        coldkey="5EraOwner",
+        created_at=_BASE,
+        status=AgentStatus.LIVE,
+        bench_version=_BENCH - 1,
+    )
+    earlier_era_scored_king = await _generation(
+        session,
+        name="earlier-era-scored-king",
+        hotkey="5EraScoredKing",
+        coldkey="5EraScoredOwner",
+        created_at=_BASE,
+        composites=(0.70, 0.80),
+        bench_version=_BENCH - 1,
+    )
+    for agent_id in (earlier_era_king, earlier_era_scored_king):
+        session.add(AgentKingship(agent_id=agent_id, first_crowned_at=_BASE))
+    await session.flush()
+
+    default_pool = await list_anti_copy_history(
+        session, bench_version=_BENCH, before=_BASE + timedelta(hours=1)
+    )
+    alibi_pool = await list_anti_copy_history(
+        session,
+        bench_version=_BENCH,
+        before=_BASE + timedelta(hours=1),
+        statuses=(AgentStatus.SCORED, AgentStatus.LIVE, AgentStatus.BANNED),
+        kings_only=True,
+    )
+
+    assert default_pool == []
+    # One median row per agent even with an even score count.
+    assert sorted(row.agent_id for row in alibi_pool) == sorted(
+        [earlier_era_king, earlier_era_scored_king]
+    )

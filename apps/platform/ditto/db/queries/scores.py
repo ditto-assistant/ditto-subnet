@@ -1834,12 +1834,13 @@ async def list_anti_copy_history(
 
     ``statuses`` / ``kings_only`` exist for one second caller: the anti-copy
     gate's public-release alibi. Source release covers ``scored``, ``live`` and
-    ``banned`` kings (``SOURCE_RELEASE_STATUSES``), but the default ``scored``
-    population omits a published king that is now ``live`` or was banned after
-    publication. Its content is still public. Passing
-    ``statuses=(LIVE, BANNED), kings_only=True`` loads exactly those rows,
-    restricted to agents that ever held the crown, because only kings are
-    released.
+    ``banned`` kings (``SOURCE_RELEASE_STATUSES``), but the default read omits a
+    published king that is now ``live``, was banned after publication, or holds
+    scores only from an earlier bench version. Its content is still public.
+    ``kings_only=True`` restricts the read to agents that ever held the crown
+    (only kings are released) and drops the ``bench_version`` filter, so a king
+    released in an earlier era is still found; ``statuses`` picks which of the
+    release statuses to read.
     """
     agent_best = (
         select(
@@ -1862,7 +1863,12 @@ async def list_anti_copy_history(
             )
             .label("srn"),
         )
-        .where(Score.bench_version == bench_version)
+        # The public-release alibi is era-independent: a king released while it
+        # held the crown on an earlier bench version is still public, and the
+        # fingerprints it is compared on do not depend on the bench. So the
+        # kings-only read takes every era's scores; one median row per agent
+        # survives either way, and its composite is not read on that path.
+        .where(*([] if kings_only else [Score.bench_version == bench_version]))
         .subquery()
     )
     rows = (

@@ -724,9 +724,10 @@ def evaluate_duplicate_signals(
       ``self_origin`` instead.
 
     ``public_release_candidates`` widens only the public-release alibi. It
-    carries released kings outside the ``scored`` population that ``eligible``
-    and ``eligible_history`` both read: a king that is ``live`` now, or was
-    banned after its source went public. Public is public. These rows can
+    carries released kings that the scored, same-era ``eligible`` and
+    ``eligible_history`` pools miss: a king that is ``live`` now, was banned
+    after its source went public, or reigned on an earlier bench version.
+    Public is public. These rows can
     withdraw a hold through :func:`_withdraw_ranked`'s two-way test. They never
     trigger a rule, never join attribution or self-lineage, and count only when
     ``public_source_releases`` dates them at or before this upload.
@@ -785,8 +786,8 @@ def evaluate_duplicate_signals(
     # beast-d41 generation while a released one of the same owner (dan0l v59,
     # beast-d41 v10/v11/v12/v19) explained every shared file. History rows only
     # ever withdraw here; no rule triggers on them. ``public_release_candidates``
-    # adds released kings that are live or banned now, which neither scored-only
-    # pool contains.
+    # adds released kings that are live, banned, or from an earlier bench era,
+    # which neither scored, same-era pool contains.
     released_at: dict[UUID, datetime] = {
         release.agent_id: _utc(release.available_at)
         for release in public_source_releases
