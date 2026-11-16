@@ -73,6 +73,32 @@ describe('SubmissionCooldownControlPanel', () => {
     })
   })
 
+  it('shows the readmission notice period the Platform reports', () => {
+    render(
+      <SubmissionCooldownControlPanel
+        initialState={{
+          ...initial,
+          readmission: {
+            active: false,
+            inactive_reasons: ['notice_period'],
+            announced_at: '2026-12-01T00:00:00Z',
+            effective_at: '2026-12-11T00:00:00Z',
+            active_bench_version: 19,
+            min_bench_version: 19,
+            notice_period_seconds: 10 * 86400,
+            fee_amount_rao: 75_000_000,
+            fee_source: 'upload_default',
+            settings_revision: 3,
+          },
+        }}
+        readOnly
+      />,
+    )
+    const line = screen.getByLabelText('Readmission').textContent ?? ''
+    expect(line).toContain('inactive (notice_period)')
+    expect(line).toContain('10 days after the')
+  })
+
   it('keeps write controls disabled for read-only operators', () => {
     render(<SubmissionCooldownControlPanel initialState={initial} readOnly />)
 

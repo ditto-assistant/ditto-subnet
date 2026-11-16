@@ -239,8 +239,9 @@ export function SubmissionCooldownControlPanel({
               {state.readmission.active
                 ? ` since ${formatWhen(state.readmission.effective_at)}`
                 : ` (${state.readmission.inactive_reasons.join(', ')})`}
-              . It costs the upload fee and applies from v{state.readmission.min_bench_version}, seven
-              days after the announcement; the announcement is set through the Platform admin API.
+              . It costs the upload fee and applies from v{state.readmission.min_bench_version},{' '}
+              {Math.round(state.readmission.notice_period_seconds / 86400)} days after the
+              announcement; the announcement is set through the Platform admin API.
             </p>
           ) : null}
 
