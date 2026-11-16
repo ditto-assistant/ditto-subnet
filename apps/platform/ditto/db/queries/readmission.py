@@ -583,14 +583,18 @@ class ReadmissionFeeTotals:
 
 
 async def readmission_fee_totals(
-    session: AsyncSession, *, bench_version: int | None = None
+    session: AsyncSession,
+    *,
+    bench_version: int | None = None,
+    miner_coldkey: str | None = None,
 ) -> ReadmissionFeeTotals:
-    """Counts and amounts of every readmission, optionally for one era."""
-    paid_filter = (
-        [ReadmissionPayment.bench_version == bench_version]
-        if bench_version is not None
-        else []
-    )
+    """Counts and amounts of every readmission, optionally for one era and
+    one payment coldkey."""
+    paid_filter = []
+    if bench_version is not None:
+        paid_filter.append(ReadmissionPayment.bench_version == bench_version)
+    if miner_coldkey is not None:
+        paid_filter.append(ReadmissionPayment.miner_coldkey == miner_coldkey)
     rows = (
         await session.execute(
             select(
@@ -613,11 +617,11 @@ async def readmission_fee_totals(
         else:
             credited += int(count)
             credited_rao += int(amount)
-    upload_filter = (
-        [UploadReadmission.bench_version == bench_version]
-        if bench_version is not None
-        else []
-    )
+    upload_filter = []
+    if bench_version is not None:
+        upload_filter.append(UploadReadmission.bench_version == bench_version)
+    if miner_coldkey is not None:
+        upload_filter.append(UploadReadmission.miner_coldkey == miner_coldkey)
     uploads, upload_rao = (
         await session.execute(
             select(

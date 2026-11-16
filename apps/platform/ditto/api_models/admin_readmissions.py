@@ -82,7 +82,9 @@ class AdminReadmissionsResponse(BaseModel):
     free_admissions_by_category: dict[str, int] = Field(default_factory=dict)
     """Stranded admissions on the active era by audited category: an
     operator's ``ditto_fault``/``owner_policy``/``unspecified`` (free) against
-    ``paid``."""
+    ``paid``. Always the whole active era: the ``bench_version`` and
+    ``miner_coldkey`` filters apply to ``totals``, ``paid`` and ``uploads``
+    only."""
     paid: list[PaidReadmissionRow] = Field(default_factory=list)
     uploads: list[UploadReadmissionRow] = Field(default_factory=list)
     truncated: bool = False

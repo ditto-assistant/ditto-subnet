@@ -2,6 +2,10 @@ import { fetchMinerGithubLink, fetchGithubContributor, fetchClaPolicy, updateCla
 import { contributorFixture, claStatusFixture, claControlFixture, claShadowRevisionFixture, claVersionFixture, githubRevocationFixture, revokedGithubFixture } from './contributor.test-fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  admitStrandedSubmissionInputSchema,
+  strandedAdmissionConfirmation,
+} from '../lib/benchmark-era-stranded.schemas'
+import {
   startBenchmarkRollout,
   expandBenchmarkRollout,
   supersedeBenchmarkRollout,
@@ -1882,6 +1886,28 @@ describe('submission cooldown administration', () => {
         }),
       }),
     )
+  })
+})
+
+describe('stranded admission category (SN-485)', () => {
+  it('accepts an omitted or null category and a known one', () => {
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const base = {
+      agentId,
+      expectedActiveVersion: 19,
+      expectedSha256: 'a'.repeat(64),
+      expectedPreviousScoreCount: 3,
+      reason: 'owner asked to readmit after the era change',
+      confirmation: strandedAdmissionConfirmation(agentId, 19),
+    }
+    expect(admitStrandedSubmissionInputSchema.parse(base).category).toBeUndefined()
+    expect(admitStrandedSubmissionInputSchema.parse({ ...base, category: null }).category).toBeNull()
+    expect(
+      admitStrandedSubmissionInputSchema.parse({ ...base, category: 'ditto_fault' }).category,
+    ).toBe('ditto_fault')
+    expect(() =>
+      admitStrandedSubmissionInputSchema.parse({ ...base, category: 'paid' }),
+    ).toThrow()
   })
 })
 

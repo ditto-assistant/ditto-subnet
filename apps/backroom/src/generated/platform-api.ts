@@ -3409,6 +3409,9 @@ export interface paths {
         /**
          * List Readmissions
          * @description Every paid, credited and classified readmission, newest first.
+         *
+         *     ``bench_version`` and ``miner_coldkey`` filter the rows and the totals.
+         *     ``free_admissions_by_category`` always describes the whole active era.
          */
         get: operations["list_readmissions_api_v1_admin_readmissions_get"];
         put?: never;

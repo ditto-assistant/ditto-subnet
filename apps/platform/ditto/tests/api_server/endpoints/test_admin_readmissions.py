@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -158,6 +159,22 @@ async def test_list_readmissions_reports_every_lane_and_the_fee_summary_adds_it(
     ).json()
     assert filtered["paid"] == [] and filtered["uploads"] == []
 
+    other = (
+        await client.get(
+            "/api/v1/admin/readmissions",
+            params={"miner_coldkey": "5SomeoneElse"},
+            headers=_HEADERS,
+        )
+    ).json()
+    assert other["paid"] == [] and other["uploads"] == []
+    # Totals follow the coldkey filter too.
+    assert other["totals"]["admitted"] == 0
+    assert other["totals"]["upload_readmissions"] == 0
+    empty = await client.get(
+        "/api/v1/admin/readmissions", params={"miner_coldkey": ""}, headers=_HEADERS
+    )
+    assert empty.status_code == 422
+
     fees = (await client.get("/api/v1/admin/miner-fees", headers=_HEADERS)).json()
     lane = fees["readmission"]
     assert lane["admitted"] == 1
@@ -184,7 +201,7 @@ async def _quorum_agent(session: AsyncSession, *, version: int, run_cost: int) -
                 tool_mean=0.5,
                 memory_mean=0.5,
                 median_ms=1,
-                n=10,
+                n=350,
                 details={},
                 generated_at=now,
             )
@@ -244,7 +261,7 @@ async def _quorum_agent(session: AsyncSession, *, version: int, run_cost: int) -
 async def test_cost_basis_is_the_measured_median_or_null_without_enough_data(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    version = 41  # an era no other test seeds
+    version = 15  # below the dueling floor: no season window applies
     async with session_maker() as session, session.begin():
         for cost in (100_000, 200_000, 300_000, 400_000):
             await _quorum_agent(session, version=version, run_cost=cost)
@@ -267,3 +284,32 @@ async def test_cost_basis_is_the_measured_median_or_null_without_enough_data(
     # Median of 0.10 .. 0.60 USD per run is 0.35; one evaluation is 3 runs.
     assert basis.median_run_cost_usd == pytest.approx(0.35)
     assert basis.median_agent_cost_usd == pytest.approx(1.05)
+
+
+async def test_cost_basis_excludes_unranked_agents(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Agents the leaderboard does not rank never enter the published basis."""
+    version = 15
+    async with session_maker() as session, session.begin():
+        for cost in (100_000, 200_000, 300_000, 400_000, 500_000):
+            await _quorum_agent(session, version=version, run_cost=cost)
+        # A sixth quorum agent that is shadow-only: graded, never ranked.
+        await _quorum_agent(session, version=version, run_cost=9_000_000)
+        shadow = (
+            await session.scalars(
+                select(Agent)
+                .where(Agent.name.like("costed-%"))
+                .order_by(Agent.created_at.desc())
+            )
+        ).first()
+    async with session_maker() as session, session.begin():
+        row = await session.get(Agent, shadow.agent_id)  # type: ignore[union-attr]
+        assert row is not None
+        row.shadow = True
+    async with session_maker() as session:
+        basis = await readmission_cost_basis.readmission_cost_basis(
+            session, bench_version=version
+        )
+    assert basis.agents_sampled == 5
+    assert basis.median_run_cost_usd == pytest.approx(0.3)

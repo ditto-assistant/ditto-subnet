@@ -3703,7 +3703,7 @@ export async function admitStrandedSubmission(actor: string, rawInput: unknown) 
         expected_previous_score_count: input.expectedPreviousScoreCount,
         // Omitted (not null) when unset, so an older Platform sees the body
         // it always did.
-        ...(input.category === undefined ? {} : { category: input.category }),
+        ...(input.category == null ? {} : { category: input.category }),
       } satisfies AdmitRequest,
     },
   )

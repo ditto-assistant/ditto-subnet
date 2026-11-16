@@ -47,11 +47,15 @@ async def list_readmissions(
     _admin: AdminDep,
     session: SessionDep,
     bench_version: Annotated[int | None, Query(ge=1)] = None,
-    miner_coldkey: Annotated[str | None, Query(max_length=128)] = None,
+    miner_coldkey: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ) -> AdminReadmissionsResponse:
-    """Every paid, credited and classified readmission, newest first."""
+    """Every paid, credited and classified readmission, newest first.
+
+    ``bench_version`` and ``miner_coldkey`` filter the rows and the totals.
+    ``free_admissions_by_category`` always describes the whole active era.
+    """
     generated_at = datetime.now(UTC)
     settings = await effective_submission_settings(
         session, default_payment_address=request.app.state.config.upload_payment_address
@@ -83,31 +87,43 @@ async def list_readmissions(
         )
     paid_rows = (
         await session.execute(
-            paid_stmt.order_by(ReadmissionPayment.updated_at.desc())
+            paid_stmt.order_by(
+                ReadmissionPayment.updated_at.desc(),
+                ReadmissionPayment.block_hash.desc(),
+                ReadmissionPayment.extrinsic_index.desc(),
+            )
             .offset(offset)
             .limit(limit + 1)
         )
     ).all()
     upload_rows = (
         await session.execute(
-            upload_stmt.order_by(UploadReadmission.created_at.desc())
+            upload_stmt.order_by(
+                UploadReadmission.created_at.desc(),
+                UploadReadmission.agent_id.desc(),
+            )
             .offset(offset)
             .limit(limit + 1)
         )
     ).all()
     truncated = len(paid_rows) > limit or len(upload_rows) > limit
 
+    # One query for the banked credits of every credited row on the page.
+    credited = [row for row, _name in paid_rows[:limit] if row.outcome == "credited"]
+    credits: dict[tuple[str, int], EvaluationPayment] = {}
+    if credited:
+        for banked in await session.scalars(
+            select(EvaluationPayment).where(
+                EvaluationPayment.block_hash.in_({row.block_hash for row in credited})
+            )
+        ):
+            credits[(banked.block_hash, banked.extrinsic_index)] = banked
     paid: list[PaidReadmissionRow] = []
     for row, name in paid_rows[:limit]:
         credit_spent = None
         expires = None
         if row.outcome == "credited":
-            credit = await session.scalar(
-                select(EvaluationPayment).where(
-                    EvaluationPayment.block_hash == row.block_hash,
-                    EvaluationPayment.extrinsic_index == row.extrinsic_index,
-                )
-            )
+            credit = credits.get((row.block_hash, row.extrinsic_index))
             if credit is not None:
                 credit_spent = credit.agent_id is not None
                 expires = None if credit_spent else credit_expires_at(credit)
@@ -149,7 +165,9 @@ async def list_readmissions(
         for row, name, amount in upload_rows[:limit]
     ]
 
-    totals = await readmission_fee_totals(session, bench_version=bench_version)
+    totals = await readmission_fee_totals(
+        session, bench_version=bench_version, miner_coldkey=miner_coldkey
+    )
     categories: dict[str, int] = {}
     rollout = await activated_rollout_for_version(
         session, bench_version=activation.active_bench_version
