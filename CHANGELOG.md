@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.488.0 (2026-11-17)
+
+### Documentation
+
+- **research**: Center the sn118 memo on a ditto context-packet model
+  ([#3568](https://github.com/ditto-assistant/ditto-subnet/pull/3568),
+  [`1147388`](https://github.com/ditto-assistant/ditto-subnet/commit/11473886986d082940f4be05a3df9f88adac16ca))
+
+- **research**: Design memo for an sn118 model competition
+  ([#3567](https://github.com/ditto-assistant/ditto-subnet/pull/3567),
+  [`7fd76f4`](https://github.com/ditto-assistant/ditto-subnet/commit/7fd76f42c678785fa570f600396ad07bcc0a3f21))
+
+### Features
+
+- **platform**: Add backroom airdrop runs with rehearsal-only settlement
+  ([#3569](https://github.com/ditto-assistant/ditto-subnet/pull/3569),
+  [`a1fa422`](https://github.com/ditto-assistant/ditto-subnet/commit/a1fa422c0529eaa8a66cf8dd02c61cdc92f128df))
+
+
 ## v0.487.2 (2026-11-17)
 
 ### Bug Fixes
