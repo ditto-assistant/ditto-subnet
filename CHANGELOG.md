@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.493.0 (2026-11-17)
+
+### Features
+
+- **platform,backroom**: Add readmission visibility and cost basis (SN-485)
+  ([#3561](https://github.com/ditto-assistant/ditto-subnet/pull/3561),
+  [`5862763`](https://github.com/ditto-assistant/ditto-subnet/commit/5862763c36366fa2706d61fcff467dbf399f28e6))
+
+
 ## v0.492.0 (2026-11-17)
 
 ### Features
