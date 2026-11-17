@@ -8,8 +8,8 @@ is v19 or later and seven days have passed since this date; see
 :mod:`ditto.db.queries.readmission_gate`.
 
 Revision ID: 9d4b7e2a6c18
-Revises: b44f233dc32f
-Create Date: 2026-11-14
+Revises: d307b3894c95
+Create Date: 2026-11-17
 """
 
 from collections.abc import Sequence
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "9d4b7e2a6c18"
-down_revision: str | Sequence[str] | None = "b44f233dc32f"
+down_revision: str | Sequence[str] | None = "d307b3894c95"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
