@@ -529,6 +529,10 @@ async def test_readiness_names_a_previous_era_score_only_when_one_exists(
     A refused ``scored`` row with only older-era scores, or with a score on the
     active version, must not be reported as finalized on the previous version.
     The miner projection and the stranded listing use the same predicate.
+
+    Review r4605892617: such a row keeps ``scored`` on the miner's side, so
+    readiness names the era boundary without the ``era_change`` payload or a
+    quoted miner label.
     """
     seeded = await _seed(maker)
     async with maker() as session, session.begin():
@@ -551,8 +555,11 @@ async def test_readiness_names_a_previous_era_score_only_when_one_exists(
     for agent_id in (older_only, with_active):
         body = await _readiness(client, agent_id)
         assert body["leaseable"] is False
-        assert body["era_change"] == _change(scored_bench_version=None), body
-        assert _ERA_REASON in body["blocking_reasons"]
+        assert body["era_change"] is None, body
+        assert _ERA_REASON not in body["blocking_reasons"]
+        assert (
+            f"historical submission is not admitted to the v{_ACTIVE} validator queue"
+        ) in body["blocking_reasons"]
 
 
 async def _issue_active_ticket(
