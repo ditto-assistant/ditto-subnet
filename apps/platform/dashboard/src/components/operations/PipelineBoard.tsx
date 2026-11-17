@@ -15,6 +15,7 @@ import {
   deferredReviewSummary,
   policyScreeningLabel,
   SCREENING_INCOMPLETE_LABEL,
+  eraChangedProgress,
 } from "../pipeline/status";
 import type { FleetReport } from "../../types/fleet";
 import type { BenchmarkProgress } from "../../types/pipeline";
@@ -351,6 +352,7 @@ function validationProgress(e: PipelineEntryExt): string {
   }
   if (e.status === "below_score_floor") return count + " of " + quorum + " · queued last";
   if (e.status === "not_queued") return "Not in active benchmark queue";
+  if (e.status === "era_changed") return eraChangedProgress(e);
   if (e.status === "retired") return count + " of " + quorum + " · benchmark closed";
   const hasStarted =
     count > 0 ||

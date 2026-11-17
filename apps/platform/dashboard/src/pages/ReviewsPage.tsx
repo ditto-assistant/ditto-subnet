@@ -16,6 +16,8 @@ import {
   setMinerSession,
 } from "../stores/sessionStore";
 import { gateNoteLabel, percentage, postureState } from "../components/evidence/GateEvidence";
+import { eraChangedLabel } from "../components/pipeline/status";
+import type { EraChange } from "../types/pipeline";
 import type { GatePosture, NameHandle } from "../types/leaderboard";
 
 const SCOPES: Array<{ id: string; label: string; hint: string }> = [
@@ -112,6 +114,8 @@ interface MinerSubmission {
   name: string;
   version?: number | null;
   status: string;
+  /** Set only on an `era_changed` row (SN-485). */
+  era_change?: EraChange | null;
   created_at: string;
 }
 
@@ -1001,7 +1005,8 @@ function AccountPanel(): JSX.Element {
                   <li>
                     <a href={"/agent/" + item.agent_id}>{item.name}</a>
                     <span class="muted">
-                      {item.version == null ? "Unversioned" : "v" + item.version} · {item.status} ·{" "}
+                      {item.version == null ? "Unversioned" : "v" + item.version} ·{" "}
+                      {item.status === "era_changed" ? eraChangedLabel(item) : item.status} ·{" "}
                       {item.created_at}
                     </span>
                     <div class="account-submission-actions">

@@ -15,6 +15,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from ditto.api_models.era_change import PublicEraChange
+
 
 class ScreenedImageReadiness(BaseModel):
     complete: bool
@@ -54,3 +56,8 @@ class AgentScoringReadiness(BaseModel):
     not authority: the lease path does not consult this endpoint, and this does
     not model attempt budgets or per-slot validator occupancy."""
     blocking_reasons: list[str]
+    era_change: PublicEraChange | None = None
+    """Set when the era boundary refuses the submission at
+    ``scoring_bench_version``: the reason code and next step the miner's
+    ``era_changed`` row shows. The era refusal's blocking reason quotes the
+    same label."""

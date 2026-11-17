@@ -41,6 +41,10 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.submission_status import (
+    closed_submission_statuses,
+    era_change_blocking_reason,
+)
 from ditto.db.models import Agent, BenchmarkDataset, Score, ValidatorQueueWithdrawal
 from ditto.db.queries.benchmark_admission import (
     activated_rollout_for_version,
@@ -211,11 +215,28 @@ async def scoring_readiness(
         )
     if queue_removal is not None:
         blocking.append(_queue_removal_reason(queue_removal, scoring_version))
+    change = None
     if not era_admitted:
-        blocking.append(
-            f"historical submission is not admitted to the v{scoring_version} "
-            "validator queue"
-        )
+        # Quote the miner's label only where the miner projection shows it, by
+        # asking that projection directly rather than restating its rules. It
+        # closes a waiting row as retired, scoring_failed, or not_queued before
+        # the era boundary, keeps a row a validator holds on a live lease in its
+        # waiting label, and labels a finalized row only with a previous-era
+        # score. Any other refused row keeps its own status, so readiness names
+        # the era boundary without claiming a label the miner never sees.
+        closed = (
+            await closed_submission_statuses(
+                session, agents=[agent], active_version=scoring_version
+            )
+        ).get(agent.agent_id)
+        if closed is not None and closed.era_change is not None:
+            change = closed.era_change
+            blocking.append(era_change_blocking_reason(change))
+        else:
+            blocking.append(
+                f"historical submission is not admitted to the v{scoring_version} "
+                "validator queue"
+            )
 
     return AgentScoringReadiness(
         agent_id=agent.agent_id,
@@ -244,4 +265,5 @@ async def scoring_readiness(
         ),
         leaseable=not blocking,
         blocking_reasons=blocking,
+        era_change=change,
     )

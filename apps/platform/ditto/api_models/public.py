@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ditto.api_models.benchmark_capacity import BenchmarkAdmission
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_progress import ConfirmationProgressStage
+from ditto.api_models.era_change import PublicEraChange
 from ditto.api_models.gate_evidence import PublicGateEvidence
 from ditto.api_models.name_claim import PublicNameHandle
 from ditto.api_models.retry_state import RetryDisposition, RetryState
@@ -4164,6 +4165,19 @@ class PublicActivityEntry(BaseModel):
             ),
         ),
     ] = False
+    era_change: Annotated[
+        PublicEraChange | None,
+        Field(
+            default=None,
+            description=(
+                "Set only on an 'era_changed' row: the submission belongs to "
+                "an earlier bench version the active one does not admit, so "
+                "it does not compete there, with the miner's next step. "
+                "Derived at read time from the queue's own admission "
+                "predicate, so it clears by itself when the row is admitted."
+            ),
+        ),
+    ] = None
     quorum: Annotated[
         int,
         Field(ge=1, description="Independent validator scores required to finalize."),
@@ -4288,7 +4302,11 @@ class PublicActivityResponse(BaseModel):
             default_factory=dict,
             description=(
                 "Counts by canonical public lifecycle stage before status filters "
-                "are applied. Search filtering is reflected when present."
+                "are applied. Search filtering is reflected when present. A "
+                "finalized previous-era row the active bench does not admit is "
+                "labelled 'era_changed' on its returned row only and still "
+                "counts under 'scored' or 'live' here; filter by "
+                "status=era_changed for the exact set."
             ),
         ),
     ]
@@ -4983,6 +5001,10 @@ class PublicAgentSummary(BaseModel):
             "not, why. Absent while the quorum is still in the window."
         ),
     )
+    era_change: PublicEraChange | None = Field(
+        default=None,
+        description="Same as the activity row's era_change.",
+    )
 
 
 class PublicValidatorRetry(BaseModel):
@@ -5067,8 +5089,14 @@ class PublicSubmissionPipeline(BaseModel):
         default=None,
         description=(
             "Live validator-retry state while the submission is below quorum; "
-            "null once it finalizes, and before any validator work exists."
+            "null once it finalizes, before any validator work exists, and "
+            "while it is 'not_queued' or 'era_changed' (no validator serves "
+            "that retry)."
         ),
+    )
+    era_change: PublicEraChange | None = Field(
+        default=None,
+        description="Same as the activity row's era_change.",
     )
     ordinary_review: PublicOrdinaryReview | None = Field(
         default=None,

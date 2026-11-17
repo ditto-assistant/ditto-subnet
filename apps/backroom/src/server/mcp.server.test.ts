@@ -11870,6 +11870,10 @@ describe('Backroom MCP tools', () => {
         automatic_retry_available: false,
         recovery_allowed: true,
         blocking_reason: null,
+        // An older Platform omits both; null reads as "unknown", never as
+        // "serves the active bench".
+        era_change: null,
+        serves_active_bench: null,
         recommended_action: null,
         dominant_failure_code: null,
         provider_outage: null,

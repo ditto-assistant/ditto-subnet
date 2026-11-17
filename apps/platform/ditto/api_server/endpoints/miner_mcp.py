@@ -45,8 +45,13 @@ from ditto.api_server.miner_session import (
 )
 from ditto.api_server.name_claim import expected_netuid
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.submission_status import (
+    ClosedSubmissionStatus,
+    closed_submission_statuses,
+)
 from ditto.db.models import AthReview
 from ditto.db.queries.artifact_fetch_audit import ENDPOINT_MINER_MCP_ARTIFACT
+from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.miner_avatars import get_miner_avatar
 from ditto.db.queries.miner_sessions import (
     MinerGrantConflictError,
@@ -66,6 +71,16 @@ from ditto.db.queries.miner_sessions import (
     get_session as get_session_row,
 )
 from ditto.db.queries.name_claims import active_handle_claims
+
+
+def _era_change_json(
+    closed: ClosedSubmissionStatus | None,
+) -> dict[str, object] | None:
+    """The submission's era change as JSON, or None when it has none."""
+    if closed is None or closed.era_change is None:
+        return None
+    return closed.era_change.model_dump(mode="json")
+
 
 router = APIRouter(tags=["miner-mcp"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -641,12 +656,23 @@ async def _call_tool(
         agents = await list_recent_agents_for_hotkey(
             session, hotkey=row.miner_hotkey, limit=50
         )
+        # Same closed-out labels as /miner/me/submissions (SN-462).
+        closed = await closed_submission_statuses(
+            session,
+            agents=agents,
+            active_version=await active_bench_version(session),
+        )
         return [
             {
                 "agent_id": str(agent.agent_id),
                 "name": agent.name,
                 "version": agent.version,
-                "status": str(agent.status),
+                "status": (
+                    closed[agent.agent_id].status
+                    if agent.agent_id in closed
+                    else str(agent.status)
+                ),
+                "era_change": _era_change_json(closed.get(agent.agent_id)),
                 "created_at": agent.created_at.isoformat(),
             }
             for agent in agents

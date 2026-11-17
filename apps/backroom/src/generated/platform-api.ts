@@ -16591,6 +16591,7 @@ export interface components {
             dominant_failure_code?: string | null;
             /** Earliest Retry After */
             earliest_retry_after: string | null;
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /** Exhausted Validator Count */
             exhausted_validator_count: number;
             /** Miner Hotkey */
@@ -16614,6 +16615,11 @@ export interface components {
             retry_state: "running" | "retry_available" | "cooling_down" | "exhausted" | "queued";
             /** Score Count */
             score_count: number;
+            /**
+             * Serves Active Bench
+             * @default true
+             */
+            serves_active_bench: boolean;
             /** Silent Expiry Count */
             silent_expiry_count: number;
             /** Snapshot */
@@ -18064,6 +18070,7 @@ export interface components {
             agent_name: string;
             /** Blocking Reasons */
             blocking_reasons: string[];
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /** Has Versioned Dataset */
             has_versioned_dataset: boolean;
             /** Leaseable */
@@ -33720,6 +33727,8 @@ export interface components {
              * @description Version of the matched submission; null when it is legacy.
              */
             duplicate_version?: number | null;
+            /** @description Set only on an 'era_changed' row: the submission belongs to an earlier bench version the active one does not admit, so it does not compete there, with the miner's next step. Derived at read time from the queue's own admission predicate, so it clears by itself when the row is admitted. */
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /**
              * Hold Failure Code
              * @description The agreed machine cause behind an 'operator_hold', when every remaining slot reports the same one, drawn from the same allowlist as a validation attempt's failure_code. Null is the ordinary case and means the cause is mixed, unnamed or stale: the row is unattributed rather than proven to be a fleet failure, and must not be described as one.
@@ -33937,7 +33946,7 @@ export interface components {
             page_size: number;
             /**
              * Status Counts
-             * @description Counts by canonical public lifecycle stage before status filters are applied. Search filtering is reflected when present.
+             * @description Counts by canonical public lifecycle stage before status filters are applied. Search filtering is reflected when present. A finalized previous-era row the active bench does not admit is labelled 'era_changed' on its returned row only and still counts under 'scored' or 'live' here; filter by status=era_changed for the exact set.
              */
             status_counts?: {
                 [key: string]: number;
@@ -34063,6 +34072,8 @@ export interface components {
             duplicate_of?: string | null;
             /** Duplicate Version */
             duplicate_version?: number | null;
+            /** @description Same as the activity row's era_change. */
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /**
              * Generated At
              * Format: date-time
@@ -36087,6 +36098,34 @@ export interface components {
             share: number;
         };
         /**
+         * PublicEraChange
+         * @description Set only on an ``era_changed`` row.
+         */
+        PublicEraChange: {
+            /**
+             * Bench Version
+             * @description The active bench version it does not compete on.
+             */
+            bench_version: number;
+            /**
+             * Next Step
+             * @description 'resubmit': upload a new version to compete on the active bench version.
+             * @constant
+             */
+            next_step: "resubmit";
+            /**
+             * Reason
+             * @description 'not_admitted_to_active_bench': the submission belongs to an earlier bench version, and nothing admits it to the active one (not the rollout cohort, a previous-generation carryover, an operator admission or an audited contract refresh). Validators score only the active version, so it is not scored or ranked there. This is not a rejection.
+             * @constant
+             */
+            reason: "not_admitted_to_active_bench";
+            /**
+             * Scored Bench Version
+             * @description The earlier bench version this submission finalized on, when it was scored there. Its scores and history on that version stay visible. Null for a submission that was still waiting for scores when the era changed.
+             */
+            scored_bench_version?: number | null;
+        };
+        /**
          * PublicFeedbackTrackResponse
          * @description Counts only. Never the account, the email, or the report text.
          */
@@ -37323,6 +37362,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** @description Set only on an 'era_changed' row: why it does not compete on the active bench version and the miner's next step. Same as the activity row's era_change. */
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /** Name */
             name: string;
             name_handle?: components["schemas"]["PublicNameHandle"] | null;
@@ -38354,6 +38395,8 @@ export interface components {
              * @description Same pin as ``active_bench_version``, named for what it decides. A submission finalized at a different ``score_bench_version`` is not earning on this version's ledger.
              */
             emission_bench_version: number;
+            /** @description Same as the activity row's era_change. */
+            era_change?: components["schemas"]["PublicEraChange"] | null;
             /**
              * Final Composite
              * @description Canonical median over the ``score_bench_version`` scores once quorum is reached; null while scores are still provisional.
@@ -38416,7 +38459,7 @@ export interface components {
             submission_family?: components["schemas"]["PublicSubmissionFamily"] | null;
             /** Validation Attempts */
             validation_attempts?: components["schemas"]["PublicValidationAttempt"][];
-            /** @description Live validator-retry state while the submission is below quorum; null once it finalizes, and before any validator work exists. */
+            /** @description Live validator-retry state while the submission is below quorum; null once it finalizes, before any validator work exists, and while it is 'not_queued' or 'era_changed' (no validator serves that retry). */
             validator_retry?: components["schemas"]["PublicValidatorRetry"] | null;
         };
         /**

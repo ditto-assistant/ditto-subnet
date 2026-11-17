@@ -491,6 +491,18 @@ touched at all, no score is created or removed, and `AgentStatus` gains no
 member. The agent stays `evaluating`; the retirement row is what the queue
 predicates and the public projection read.
 
+Before an operator decides (admit, carry over or retire), an unadmitted
+closed-era row is already terminal on public surfaces. It reads `era_changed`
+with `era_change.next_step: "resubmit"`. So does a `scored` row that
+finalized on the previous version and is outside the active era (the
+`list_stranded_previous_era_submissions` population; its previous-era scores
+stay visible). The status is computed from the admission predicate when it
+is read, so it writes nothing, and retirement, admission or a carryover
+adoption replaces it on the next read (SN-485). The operator stuck list and
+`agent_scoring_readiness` quote the same label. A stuck row whose retry era
+is older than the active bench says `bench vN is no longer served` instead of
+"retry is queued".
+
 ### Eligibility
 
 A submission may be retired only when all of these hold:

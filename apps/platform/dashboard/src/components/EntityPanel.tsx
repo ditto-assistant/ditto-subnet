@@ -65,7 +65,7 @@ import type {
   StackIdentity,
 } from "../types/fleet";
 import type { LeaderboardEntry } from "../types/leaderboard";
-import type { AgentSummaryPayload, BenchmarkProgress } from "../types/pipeline";
+import type { AgentSummaryPayload, BenchmarkProgress, EraChange } from "../types/pipeline";
 import { activityStage } from "./pipeline/status";
 import { AgentEvidence } from "./evidence/AgentEvidence";
 import type { AgentEvidenceEntry, PipelineDetailPayload } from "./evidence/AgentEvidence";
@@ -905,6 +905,9 @@ interface PublicMinerSubmission {
   agent_id: string;
   name: string;
   status: string;
+  /** Set only on an `era_changed` row: it does not compete on the active
+   * bench version (SN-485). */
+  era_change?: EraChange | null;
   created_at: string;
 }
 
@@ -941,7 +944,11 @@ const PROFILE_BANDS: ReadonlyArray<{ key: string; label: string; statuses: reado
   },
   { key: "under_review", label: "Under review", statuses: ["under_review"] },
   { key: "rejected", label: "Rejected", statuses: ["rejected"] },
-  { key: "closed", label: "Closed", statuses: ["not_queued", "retired", "scoring_failed"] },
+  {
+    key: "closed",
+    label: "Closed",
+    statuses: ["not_queued", "era_changed", "retired", "scoring_failed"],
+  },
   { key: "other", label: "Other", statuses: [] },
 ];
 

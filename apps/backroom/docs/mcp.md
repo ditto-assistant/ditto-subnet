@@ -1060,6 +1060,19 @@ keeps one row per owner. The payload also names the admission rollout and
 whether `prev_gen_carryover` is enabled. The tool changes nothing and needs
 `backroom:read`.
 
+Miners see every listed row as public status `era_changed` with
+`era_change.next_step: "resubmit"` and `scored_bench_version` naming the
+previous era, whose scores stay visible (SN-485). The same status covers
+earlier-era work still waiting for scores that the active bench never
+admitted. `list_stuck_submissions(generation=all)` and
+`agent_scoring_readiness` return the same `era_change` object, and their
+blocking reason quotes the miner's label (`Era changed · resubmit for vN`)
+rather than "not enough expired tickets" or "operator-authorized validator
+retry is queued". A stuck row whose retry era is older than the active bench
+also reads `serves_active_bench: false` and a blocking reason that starts with
+`bench vN is no longer served`. The status is computed when it is read, so
+admitting the row clears it.
+
 ### Admitting one stranded submission
 
 `admit_stranded_submission(agentId, expectedActiveVersion, expectedSha256,

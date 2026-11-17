@@ -14,6 +14,7 @@ import {
   deferredReviewSummary,
   isSourceReviewIncomplete,
   duplicateComparisonLabel,
+  eraChangedLabel,
   policyScreeningLabel,
   QUEUE_WITHDRAWN_LABEL,
   reviewEventLabel,
@@ -41,6 +42,7 @@ describe("status vocabulary (row 10)", () => {
       "evaluating",
       "below_score_floor",
       "not_queued",
+      "era_changed",
       "retired",
       "scoring_failed",
       "under_review",
@@ -229,6 +231,46 @@ describe("status vocabulary (row 10)", () => {
       "Historical · not queued",
       "",
     ]);
+  });
+
+  it("names a previous-era row as era changed with the resubmit step (SN-485)", () => {
+    const waiting = {
+      status: "era_changed",
+      score_count: 0,
+      quorum: 3,
+      era_change: {
+        reason: "not_admitted_to_active_bench" as const,
+        bench_version: 18,
+        scored_bench_version: null,
+        next_step: "resubmit" as const,
+      },
+    };
+    // The same text Backroom quotes in its blocking reason.
+    expect(activityStage("era_changed", waiting)).toEqual(["Era changed · resubmit for v18", ""]);
+    expect(eraChangedLabel(waiting)).toBe("Era changed · resubmit for v18");
+    expect(validationProgress(waiting)).toBe("Era changed · not scored");
+    expect(validationDetail(waiting)).toBe(
+      "This submission was still waiting for validator scores when the subnet moved to " +
+        "bench v18, and it is not admitted to it, so no validator will score it. The " +
+        "submission and its record stay on file. This is not a rejection. Resubmit to " +
+        "compete on bench v18. If it is admitted to bench v18 later, this notice clears " +
+        "on its own.",
+    );
+
+    const finalized = {
+      ...waiting,
+      era_change: { ...waiting.era_change, scored_bench_version: 17 },
+    };
+    expect(validationProgress(finalized)).toBe("Scored on v17 · era changed");
+    const detail = validationDetail(finalized);
+    expect(detail).toContain("This submission finalized on bench v17.");
+    expect(detail).toContain("Its bench v17 scores and history stay on file.");
+    expect(detail).toContain("Resubmit to compete on bench v18.");
+    // Never "waiting", never a promise of a free retry.
+    expect(detail).not.toMatch(/waiting for validators|free/i);
+
+    // Without the payload the chip still names the era change.
+    expect(activityStage("era_changed")).toEqual(["Era changed · resubmit", ""]);
   });
 
   it("keeps the generic floor copy when no floor number is quotable", () => {

@@ -67,6 +67,12 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.miner_logs import ticket_log_is_stale
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
+from ditto.api_server.submission_status import (
+    closed_era_blocking_reason,
+    era_change,
+    era_change_blocking_reason,
+    holds_live_lease,
+)
 from ditto.db.models import (
     Agent,
     BenchmarkRolloutMember,
@@ -88,7 +94,10 @@ from ditto.db.queries.audit import (
     append_audit_entry,
     get_latest_score_retest_event,
 )
-from ditto.db.queries.benchmark_admission import admitted_agent_ids
+from ditto.db.queries.benchmark_admission import (
+    admission_rollout_for_active_version,
+    admitted_agent_ids,
+)
 from ditto.db.queries.benchmark_rollout import (
     MIN_SCOREABLE_BENCH_VERSION,
     active_bench_version,
@@ -105,6 +114,7 @@ from ditto.db.queries.queue_removal import (
     is_in_force,
     load_queue_removal,
     load_reinstatement,
+    removed_agent_ids,
 )
 from ditto.db.queries.retry_budget import (
     MAX_AGENT_INFRA_RETRY_GRANTS,
@@ -656,6 +666,24 @@ async def list_validation_retries(
         bench_version=active_version,
         agent_ids=list(classified),
     )
+    # Name the era refusal the way the miner's ``era_changed`` row does, so
+    # Backroom and the dashboard read the same label (SN-462, SN-485). Both
+    # reads are skipped when every classified row is admitted.
+    refused_ids = [
+        agent_id
+        for agent_id, retry in classified.items()
+        if agent_id not in admitted_to_active and retry.bench_version <= active_version
+    ]
+    exclusion_rollout = (
+        await admission_rollout_for_active_version(
+            session, bench_version=active_version
+        )
+        if refused_ids
+        else None
+    )
+    withdrawn_from_active = await removed_agent_ids(
+        session, agent_ids=refused_ids, bench_version=active_version
+    )
 
     submissions: list[AdminStuckSubmission] = []
     counts: dict[RetryState, int] = {}
@@ -682,6 +710,59 @@ async def list_validation_retries(
         provider_outage, provider_blocked = _provider_outage_view(
             circuit=circuit, scores=retry.scores, tickets=retry.tickets, now=now
         )
+        # Newer desired-version rollout work is scored by that rollout, not
+        # the active queue, so it is never "not admitted" here. A row an
+        # operator withdrew keeps its withdrawal as the reason, as on the
+        # miner's ``not_queued`` row.
+        # A live active-era lease keeps the miner's waiting label while it
+        # drains (``closed_submission_statuses``), so the operator row agrees.
+        refused_by_era = (
+            agent_id not in admitted_to_active
+            and agent_id not in withdrawn_from_active
+            and retry.bench_version <= active_version
+            and not holds_live_lease(
+                retry.tickets, bench_version=active_version, now=now
+            )
+        )
+        exclusion = (
+            era_change(
+                bench_version=active_version,
+                rollout=exclusion_rollout,
+                previous_era_scored=False,
+            )
+            if refused_by_era
+            else None
+        )
+        blocking_reason = (
+            PROVIDER_OUTAGE_RETRY_BLOCKING_REASON
+            if retry.recovery_allowed and provider_blocked
+            else retry.blocking_reason
+        )
+        if exclusion is not None:
+            blocking_reason = era_change_blocking_reason(exclusion)
+        if retry.bench_version < active_version:
+            # No validator is issued work for a closed era, so "retry queued"
+            # or "not enough expired tickets" describes something that will
+            # never happen. Say that first, then where the row stands now.
+            if exclusion is not None:
+                standing = era_change_blocking_reason(exclusion)
+            elif agent_id in admitted_to_active:
+                standing = (
+                    f"the submission is admitted to v{active_version} and is "
+                    "scored there"
+                )
+            else:
+                standing = (
+                    f"the submission is withdrawn from the v{active_version} "
+                    "validator queue"
+                )
+            blocking_reason = (
+                closed_era_blocking_reason(
+                    era_version=retry.bench_version, active_version=active_version
+                )
+                + "; "
+                + standing
+            )
         submissions.append(
             AdminStuckSubmission(
                 agent_id=agent.agent_id,
@@ -694,10 +775,11 @@ async def list_validation_retries(
                 retry_state=retry.state,
                 automatic_retry_available=retry.automatic_retry_available,
                 recovery_allowed=retry.recovery_allowed and not provider_blocked,
-                blocking_reason=(
-                    PROVIDER_OUTAGE_RETRY_BLOCKING_REASON
-                    if retry.recovery_allowed and provider_blocked
-                    else retry.blocking_reason
+                blocking_reason=blocking_reason,
+                era_change=exclusion,
+                serves_active_bench=(
+                    agent_id in admitted_to_active
+                    and retry.bench_version >= active_version
                 ),
                 recommended_action=recommended_retry_action(
                     scores=retry.scores,

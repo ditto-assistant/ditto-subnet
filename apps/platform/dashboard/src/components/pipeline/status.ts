@@ -12,6 +12,7 @@ import { agentLabel, fx } from "../../lib/format";
 import type {
   ActivityEntry,
   DeferredReviewTrigger,
+  EraChange,
   ReviewConclusion,
   ScoringWait,
   ValidationAttempt,
@@ -30,6 +31,7 @@ export const ACTIVITY_STATUSES: readonly string[] = [
   "evaluating",
   "below_score_floor",
   "not_queued",
+  "era_changed",
   "retired",
   "scoring_failed",
   "under_review",
@@ -139,6 +141,60 @@ export function isQueueWithdrawn(
   return status === "not_queued" && entry?.queue_withdrawn === true;
 }
 
+// ── Era change (SN-485) ─────────────────────────────────────────────────────
+
+/** The field that names an era change, from any payload. */
+export interface EraChangeFields {
+  era_change?: EraChange | null;
+}
+
+/** The chip an `era_changed` row reads. Backroom quotes the same text in its
+ * blocking reason, so operator and miner see one label. */
+export function eraChangedLabel(entry?: EraChangeFields | null): string {
+  const bench = entry?.era_change?.bench_version;
+  return bench != null ? "Era changed · resubmit for v" + bench : "Era changed · resubmit";
+}
+
+/** The short Validation-column line for an `era_changed` row. */
+export function eraChangedProgress(entry?: EraChangeFields | null): string {
+  const scoredOn = entry?.era_change?.scored_bench_version;
+  return scoredOn != null
+    ? "Scored on v" + scoredOn + " · era changed"
+    : "Era changed · not scored";
+}
+
+/**
+ * The long-form sentence for an `era_changed` row: why it does not compete
+ * on the active bench, that nothing was rejected, and the next step. It never
+ * promises a free resubmission.
+ */
+export function eraChangedDetail(entry?: EraChangeFields | null): string {
+  const change = entry?.era_change;
+  const bench = change?.bench_version;
+  const active = bench != null ? "bench v" + bench : "the active benchmark";
+  const scoredOn = change?.scored_bench_version;
+  const what =
+    scoredOn != null
+      ? "This submission finalized on bench v" +
+        scoredOn +
+        ". The subnet now scores " +
+        active +
+        ", and this submission is not admitted to it, so it does not compete there. Its bench v" +
+        scoredOn +
+        " scores and history stay on file."
+      : "This submission was still waiting for validator scores when the subnet moved to " +
+        active +
+        ", and it is not admitted to it, so no validator will score it. The submission and its record stay on file.";
+  return (
+    what +
+    " This is not a rejection. Resubmit to compete on " +
+    active +
+    ". If it is admitted to " +
+    active +
+    " later, this notice clears on its own."
+  );
+}
+
 // ── Dueling-season wait (bench v16+) ────────────────────────────────────────
 
 /** The chip a waiting row reads while no dueling season is open. */
@@ -230,9 +286,15 @@ export function seasonWaitSentence(
  */
 export function activityStage(
   status: string | null | undefined,
-  entry?: DeferredReviewFields & TerminalFailureFields & ScoringWaitFields & QueueWithdrawalFields,
+  entry?: DeferredReviewFields &
+    TerminalFailureFields &
+    ScoringWaitFields &
+    QueueWithdrawalFields &
+    EraChangeFields,
 ): ChipState {
   if (isTerminalScoringFailure(status, entry)) return [SCORING_FAILED_LABEL, "bad"];
+  // History, not failure: neutral like not_queued and retired.
+  if (status === "era_changed") return [eraChangedLabel(entry), ""];
   // Validators turn the work away until a season opens, so "waiting for
   // validators" would name the wrong thing.
   if (seasonWait(status, entry)) return [SEASON_WAIT_LABEL, "progress"];
@@ -470,6 +532,7 @@ export function validationProgress(e: ActivityStatusEntry): string {
   if (e.status === "below_score_floor") return count + " of " + quorum + " · queued last";
   if (isQueueWithdrawn(e.status, e)) return count + " of " + quorum + " · withdrawn";
   if (e.status === "not_queued") return "Not in active benchmark queue";
+  if (e.status === "era_changed") return eraChangedProgress(e);
   if (e.status === "retired") return count + " of " + quorum + " · benchmark closed";
   const hasStarted =
     count > 0 ||
@@ -603,6 +666,7 @@ export function validationDetail(e: ActivityStatusEntry, now: Date = new Date())
       " stay on file."
     );
   }
+  if (e.status === "era_changed") return eraChangedDetail(e);
   if (e.status === "not_queued") {
     return "This historical submission is retained for audit history but is not admitted to the active benchmark queue. It cannot consume validator capacity unless an explicit audited recovery admits it.";
   }

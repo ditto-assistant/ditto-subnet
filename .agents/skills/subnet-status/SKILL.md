@@ -64,9 +64,23 @@ Add `--json` for the raw snapshot to script against.
   statistical band. That is why a higher composite can sit below an earlier
   champion.
 - **Statuses:**
-  - `evaluating`: still collecting validator scores (the quorum is 3). An
-    operator can still reject a proven violation at this stage.
-  - `scored`: ranked.
+  - `waiting_validator` or `evaluating`: still collecting validator scores
+    (the quorum is 3). An operator can still reject a proven violation at
+    this stage.
+  - `scored`: finalized on the active bench and ranked.
+  - `era_changed`: the agent belongs to an earlier bench version that the
+    active one does not admit, so it does not compete there. It applies both
+    to agents still waiting for scores when the era changed and to agents
+    that finalized on the previous version. `era_change.next_step` is
+    `resubmit`: upload a new version to compete on the active bench. A
+    previous-era score stays visible (`era_change.scored_bench_version`
+    names that version). This is not a rejection, and it clears by itself if
+    an operator or a rollout admits the agent.
+  - `not_queued` with `queue_withdrawn: true`: an operator withdrew it from
+    the active queue.
+  - `retired`: an operator closed out an earlier-generation submission.
+  - `scoring_failed`: the agent's own failures on every remaining validator
+    run mean it cannot finish scoring on this version.
   - `banned`: rejected by board review. The reason on the agent is
     miner-visible.
   - `rejected` or `quarantined`: stopped by screening.

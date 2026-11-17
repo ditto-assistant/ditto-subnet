@@ -206,6 +206,15 @@ def render(snapshot: dict[str, Any], hotkey: str | None) -> None:
             for key in ("screening_reason", "review_reason", "review_conclusion"):
                 if agent.get(key):
                     print(f"    {key}: {agent[key]}")
+            change = agent.get("era_change") or {}
+            if change:
+                scored_on = change.get("scored_bench_version")
+                history = f"; its v{scored_on} scores stay on file" if scored_on else ""
+                bench = change.get("bench_version")
+                print(
+                    f"    era changed: not admitted to bench v{bench}"
+                    f"{history}; next step: {change.get('next_step')}"
+                )
 
 
 def main() -> int:
