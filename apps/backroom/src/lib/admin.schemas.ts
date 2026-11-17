@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import { duelingColumnAggregateSchema } from './benchmark-canary.schemas'
+import { readmissionActivationSchema } from './readmission.schemas'
 
 // Every Platform response field must have an explicit Backroom validator. Making
 // optional OpenAPI properties required in this mapped shape is deliberate: it
@@ -1481,6 +1482,9 @@ export const submissionSettingsRevisionSchema = z.object({
   // Per-competition overrides as written. A Platform that predates
   // per-competition fees omits the map; every competition then inherits.
   competition_fees: z.record(z.string(), competitionFeePolicySchema).default({}),
+  // SN-485: null (and a Platform that predates it) keeps readmission
+  // inactive. Read-only here; only the Platform admin API writes it.
+  readmission_announced_at: z.string().nullable().default(null),
   reason: z.string(),
   actor: z.string(),
   created_at: z.string().nullable(),
@@ -1504,6 +1508,8 @@ export const submissionSettingsControlSchema = z.object({
     .max(16)
     .nullable()
     .default(null),
+  // null: Platform predates SN-485 readmission (nothing is charged as one).
+  readmission: readmissionActivationSchema.nullable().default(null),
 })
 
 export const updateSubmissionSettingsInputSchema = z.object({

@@ -36,10 +36,12 @@ from ditto.api_server.endpoints.upload import (
     MAX_TARBALL_SIZE_BYTES,
 )
 from ditto.api_server.generator_competition import load_settings
+from ditto.api_server.readmission import readmission_terms
 from ditto.api_server.source_inspect import (
     UPLOAD_MAX_MEMBERS,
     UPLOAD_MAX_UNPACKED_BYTES,
 )
+from ditto.db.queries.readmission_gate import current_readmission_activation
 from ditto.db.queries.submission_settings import (
     EffectiveSubmissionSettings,
     effective_submission_settings,
@@ -243,6 +245,9 @@ async def _all_terms(
         default_payment_address=request.app.state.config.upload_payment_address,
     )
     generator = (await load_settings(session)).settings
+    readmission = readmission_terms(
+        await current_readmission_activation(session, settings=effective)
+    )
     return [
         CompetitionSubmissionTerms(
             competition="memory",
@@ -256,6 +261,7 @@ async def _all_terms(
             ),
             fee=_fee(effective, "memory", competition_requires_fee=True),
             terms_endpoint="/api/v1/upload/check",
+            readmission=readmission,
         ),
         CompetitionSubmissionTerms(
             competition="generator",

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
+import { readmissionActivationSchema } from './readmission.schemas'
 
 // What a miner submits to each competition (GET /api/v1/public/submission-terms):
 // the deliverable (artifact kind, contract version, required files and every
@@ -17,6 +18,7 @@ type GeneratedSubmissionFeeTerms = PlatformComponents['schemas']['SubmissionFeeT
 type GeneratedSubmissionCooldownTerms = PlatformComponents['schemas']['SubmissionCooldownTerms']
 type GeneratedCompetitionSubmissionTerms =
   PlatformComponents['schemas']['CompetitionSubmissionTerms']
+type GeneratedReadmissionTerms = PlatformComponents['schemas']['ReadmissionTerms']
 
 const limitSource = z.enum(['code', 'environment', 'setting'])
 
@@ -57,6 +59,13 @@ export const submissionCooldownTermsSchema = z.object({
   reference: z.string(),
 } satisfies PlatformResponseShape<GeneratedSubmissionCooldownTerms>)
 
+// SN-485 readmission rules (memory only): the activation state and the
+// readmission, free-retry and refund rules in plain sentences.
+export const readmissionTermsSchema = z.object({
+  activation: readmissionActivationSchema,
+  rules: z.array(z.string()).max(32).default([]),
+} satisfies PlatformResponseShape<GeneratedReadmissionTerms>)
+
 export const competitionSubmissionTermsSchema = z.object({
   competition: z.enum(['memory', 'generator']),
   accepting: z.boolean(),
@@ -64,6 +73,8 @@ export const competitionSubmissionTermsSchema = z.object({
   cooldown: submissionCooldownTermsSchema,
   fee: submissionFeeTermsSchema,
   terms_endpoint: z.string().nullable().default(null),
+  // null: a competition without readmission, or a Platform that predates it.
+  readmission: readmissionTermsSchema.nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedCompetitionSubmissionTerms>)
 
 export const submissionTermsSchema = z.object({

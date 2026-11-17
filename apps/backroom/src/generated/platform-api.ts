@@ -16718,6 +16718,11 @@ export interface components {
              * @default admin_api
              */
             actor: string;
+            /**
+             * Clear Readmission Announcement
+             * @default false
+             */
+            clear_readmission_announcement: boolean;
             /** Competition Fees */
             competition_fees?: {
                 [key: string]: components["schemas"]["CompetitionFeePolicy"];
@@ -16730,6 +16735,8 @@ export interface components {
             expected_revision: number;
             /** Fee Amount Rao */
             fee_amount_rao?: number | null;
+            /** Readmission Announced At */
+            readmission_announced_at?: string | null;
             /** Reason */
             reason: string;
         };
@@ -16740,6 +16747,7 @@ export interface components {
             effective_competition_fees?: components["schemas"]["EffectiveCompetitionFee"][];
             /** History */
             history: components["schemas"]["SubmissionSettingsRevision"][];
+            readmission?: components["schemas"]["ReadmissionActivationState"] | null;
         };
         /** AdminTargetedValidationRetryRequest */
         AdminTargetedValidationRetryRequest: {
@@ -22092,6 +22100,7 @@ export interface components {
             cooldown: components["schemas"]["SubmissionCooldownTerms"];
             deliverable: components["schemas"]["ArtifactContract"];
             fee: components["schemas"]["SubmissionFeeTerms"];
+            readmission?: components["schemas"]["ReadmissionTerms"] | null;
             /** Terms Endpoint */
             terms_endpoint?: string | null;
         };
@@ -39694,6 +39703,55 @@ export interface components {
             scope: string;
             settings: components["schemas"]["QueuePolicySettings"];
         };
+        /**
+         * ReadmissionActivationState
+         * @description Whether the readmission fee and self-serve readmission are live.
+         *
+         *     Active only when ``readmission_announced_at`` is set, the active
+         *     benchmark is at least ``min_bench_version`` and ``effective_at``
+         *     (announcement plus the notice period) has passed. Read-only: the price
+         *     is always the upload default fee, never a setting of its own.
+         */
+        ReadmissionActivationState: {
+            /** Active */
+            active: boolean;
+            /** Active Bench Version */
+            active_bench_version: number;
+            /** Announced At */
+            announced_at?: string | null;
+            /** Effective At */
+            effective_at?: string | null;
+            /** Fee Amount Rao */
+            fee_amount_rao: number;
+            /**
+             * Fee Source
+             * @default upload_default
+             * @constant
+             */
+            fee_source: "upload_default";
+            /** Inactive Reasons */
+            inactive_reasons?: ("announcement_unset" | "bench_version_below_minimum" | "notice_period")[];
+            /** Min Bench Version */
+            min_bench_version: number;
+            /** Notice Period Seconds */
+            notice_period_seconds: number;
+            /** Settings Revision */
+            settings_revision: number;
+        };
+        /**
+         * ReadmissionTerms
+         * @description The SN-485 readmission rules for one competition.
+         *
+         *     A readmission is the owner re-entering an existing agent lineage: into a
+         *     new benchmark era, or re-running it unchanged after one of its
+         *     evaluations completed. It costs exactly the upload fee and shares the
+         *     upload cooldown.
+         */
+        ReadmissionTerms: {
+            activation: components["schemas"]["ReadmissionActivationState"];
+            /** Rules */
+            rules?: string[];
+        };
         /** ReceiptDiagnosticObservation */
         ReceiptDiagnosticObservation: {
             /**
@@ -44845,6 +44903,8 @@ export interface components {
             fee_amount_rao: number;
             /** Parent Revision */
             parent_revision: number;
+            /** Readmission Announced At */
+            readmission_announced_at?: string | null;
             /** Reason */
             reason: string;
             /** Revision */

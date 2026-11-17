@@ -7361,6 +7361,7 @@ CREATE TABLE public.submission_settings_revisions (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     fee_amount_rao bigint NOT NULL,
     competition_fees jsonb DEFAULT '{}'::jsonb NOT NULL,
+    readmission_announced_at timestamp with time zone,
     CONSTRAINT ck_submission_settings_revisions_submission_settings_ac_6db4 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_co_109c CHECK (((cooldown_seconds >= 60) AND (cooldown_seconds <= 86400))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_co_c3f0 CHECK ((jsonb_typeof(competition_fees) = 'object'::text)),
