@@ -81,6 +81,10 @@ export const WRITE_TOOL_NAMES = new Set([
   // functions already require a write-level session.
   'preview_treasury_manual_transfer',
   'queue_treasury_manual_transfer',
+  // Airdrop preview resolves recipients and execute records and settles a
+  // run (rehearsal-only today, SN-490); both act for a write-level operator.
+  'preview_airdrop',
+  'execute_airdrop',
   'preview_treasury_funding_reconciliation',
   'record_treasury_funding_reconciliation',
   'schedule_l2_report_canary',

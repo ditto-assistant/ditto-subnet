@@ -145,6 +145,7 @@ import { createTreasuryObserverServer } from './treasury-observer-mcp.server'
 import { recordTreasurySettingsInputSchema, treasuryPreviewInputSchema, treasuryQuoteInputSchema } from '../lib/treasury.schemas'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
 import { fetchTreasuryLedger, fetchTreasuryReceipts, recordTreasuryReceipt, fetchTreasuryReceiptPreflight, fetchTreasuryManualTransfers, previewTreasuryManualTransfer, queueTreasuryManualTransfer } from './admin.service'
+import { executeAirdrop, fetchAirdropRun, fetchAirdropRuns, previewAirdrop } from './admin.service'
 import { fetchTreasuryActivationPreflight, fetchTreasuryLedgerReadiness, fetchTreasuryQuote, fetchTreasurySettings, fetchTreasuryObserverSettings, previewTreasuryTopup, recordTreasurySettings } from './admin.service'
 import { fetchRuntimeInterfaceReport, fetchTreasuryRuntime, recordTreasuryRuntime } from './admin.service'
 import { runtimeInterfaceReportInputSchema } from '../lib/runtime-interface.schemas'
@@ -1046,6 +1047,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   preview_treasury_funding_reconciliation: 'Preview GM funding.',
   record_treasury_funding_reconciliation: 'Record GM funding.',
   get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
+  preview_airdrop: 'Dry-run an airdrop: totals, cap, balance, digest, phrase. No writes; see help.',
+  execute_airdrop: 'Run a previewed airdrop; dry_run defaults true. Key-idempotent; rehearsal-only. See help.',
+  get_airdrop_run: 'One airdrop run and its recipient results.',
+  list_airdrop_runs: 'Airdrop runs, caps and executors.',
   preview_treasury_manual_transfer: 'Preview one Gamma collector transfer: envelope, digest and the exact confirmation to echo. not_queued; nothing moves.',
   queue_treasury_manual_transfer: "Queues a real on-chain SN118 alpha transfer from the Gamma collector to the named bucket's holding coldkey. Call preview first; exact confirmation. Custody re-verifies everything; one unresolved claim blocks another.",
   get_treasury_receipt_preflight: 'Read exact receipt readiness/archive checkpoint; no writes.',
@@ -4228,6 +4233,68 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => queueTreasuryManualTransfer(input, props.session.email)),
+  )
+  const airdropInput = {
+    asset: z.enum(['alpha', 'ditto_credits']),
+    mode: z.enum(['rehearsal', 'live']).optional(),
+    idempotency_key: z.string().min(8).max(128),
+    reason: z.string().min(8),
+    recipients: z.array(z.object({
+      kind: z.enum(['wallet', 'account']),
+      address: z.string().max(64),
+      amount: z.number().int().positive(),
+    })).min(1).max(1000),
+  }
+  registerTool(
+    'preview_airdrop',
+    {
+      title: 'Preview an SN118 airdrop',
+      description: 'Dry run of an SN118 airdrop; writes nothing and moves nothing. asset alpha pays wallet recipients (SS58 coldkeys) in rao; ditto_credits pays account recipients (SN118 miner hotkeys with an active Sign in with Ditto link) in credits. Give an idempotency_key (8-128 of A-Z a-z 0-9 . _ : -; reuse it unchanged on execute and every retry), an audit reason and 1-1000 recipients {kind, address, amount}. Returns each row\'s payee, refusal and prior_amount (paid or in flight under other keys), totals, the per-run cap, the funding balance, blockers, confirmation_digest and the exact confirmation phrase. Only rehearsal executors exist (SN-490), so mode live is blocked. Requires backroom:write.',
+      inputSchema: airdropInput,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => write(() => previewAirdrop(input, props.session.email)),
+  )
+  registerTool(
+    'execute_airdrop',
+    {
+      title: 'Execute an SN118 airdrop',
+      description: 'DESTRUCTIVE when dry_run=false. dry_run defaults to true and then returns only the preview. To run, resend the same inputs with dry_run=false, the preview\'s confirmation_digest and its exact confirmation phrase; Platform re-derives the preview and refuses any change. The idempotency_key names the run forever: the same key and inputs resume it and never resend a recipient that has started settling; the same key with other inputs is refused. After a timeout, retry with the same key, never a new one. Returns every recipient\'s status (settled, failed, uncertain, dispatching, pending) and receipt. Only rehearsal executors exist today, so nothing moves (SN-490). The signed-in operator is the audit actor. Requires backroom:write.',
+      inputSchema: {
+        ...airdropInput,
+        dry_run: z.boolean().optional(),
+        confirmation_digest: z.string().max(64).optional(),
+        confirmation: z.string().max(200).optional(),
+      },
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => executeAirdrop(input, props.session.email)),
+  )
+  registerTool(
+    'get_airdrop_run',
+    {
+      title: 'Read one airdrop run',
+      description: 'Read one airdrop run by run_id: asset, mode, executor, actor, reason, digest, status, totals, settled amount, per-status counts and each recipient\'s payee, amount, status, receipt and error. Requires backroom:read.',
+      inputSchema: { run_id: z.string().meta({ format: 'uuid' }) },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchAirdropRun(input.run_id)),
+  )
+  registerTool(
+    'list_airdrop_runs',
+    {
+      title: 'List airdrop runs',
+      description: 'List recent airdrop runs newest first (limit 1-100, default 20; offset), optionally filtered by idempotency_key, asset or mode, with the policy in force: max recipients, each asset\'s per-run cap, unit, recipient kind, rehearsal and live executor and funding source. Requires backroom:read.',
+      inputSchema: {
+        limit: z.number().int().min(1).max(100).default(20),
+        offset: z.number().int().min(0).max(10_000).default(0),
+        idempotency_key: z.string().max(128).optional(),
+        asset: z.enum(['alpha', 'ditto_credits']).optional(),
+        mode: z.enum(['rehearsal', 'live']).optional(),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchAirdropRuns(input)),
   )
   registerTool(
     'get_treasury_receipt_preflight',
