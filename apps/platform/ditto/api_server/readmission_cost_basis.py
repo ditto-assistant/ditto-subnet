@@ -51,8 +51,9 @@ _locks: dict[int, asyncio.Lock] = {}
 
 
 def _reset_cache() -> None:
-    """Tests only."""
+    """Tests only. Locks bind to the loop that first waits on them."""
     _cache.clear()
+    _locks.clear()
 
 
 async def _measure(session: AsyncSession, *, bench_version: int) -> CostBasis:

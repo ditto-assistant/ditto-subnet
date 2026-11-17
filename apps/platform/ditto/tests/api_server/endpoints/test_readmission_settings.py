@@ -222,6 +222,8 @@ async def test_public_memory_terms_report_the_readmission_state(
     )
     assert any("upload fee" in rule for rule in readmission["rules"])
     assert terms["generator"]["readmission"] is None
+    # Unannounced: the cost basis is not measured at all.
+    assert readmission["cost_basis"] is None
 
 
 async def test_setting_and_clearing_together_is_refused(

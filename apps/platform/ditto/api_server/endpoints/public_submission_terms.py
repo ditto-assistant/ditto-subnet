@@ -247,10 +247,16 @@ async def _all_terms(
     )
     generator = (await load_settings(session)).settings
     activation = await current_readmission_activation(session, settings=effective)
+    # The cost basis is published once readmission is announced; before that
+    # the public terms skip the aggregation entirely.
     readmission = readmission_terms(
         activation,
-        await readmission_cost_basis(
-            session, bench_version=activation.active_bench_version
+        (
+            await readmission_cost_basis(
+                session, bench_version=activation.active_bench_version
+            )
+            if activation.announced_at is not None
+            else None
         ),
     )
     return [

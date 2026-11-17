@@ -127,7 +127,8 @@ class ReadmissionTerms(BaseModel):
     rules: list[str] = Field(default_factory=list)
     """The readmission, free-retry and refund rules in plain sentences."""
     cost_basis: ReadmissionCostBasis | None = None
-    """The measured per-agent evaluation cost on the active benchmark."""
+    """The measured per-agent evaluation cost on the active benchmark, once
+    readmission is announced (``null`` before)."""
 
 
 class CompetitionSubmissionTerms(BaseModel):
