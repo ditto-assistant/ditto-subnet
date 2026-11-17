@@ -81,6 +81,7 @@ from ditto.db.queries.contributor_identity import lock_identity_writes
 from ditto.db.queries.payments import (
     READMISSION_CREDIT_TTL,
     ReadmissionAlreadyAdmittedError,
+    ReadmissionTargetError,
     credit_expired,
     credit_expires_at,
     get_evaluation_payment_for_proof,
@@ -572,6 +573,7 @@ async def commit(
             RolloutConflictError,
             StrandedAgentNotFoundError,
             ReadmissionAlreadyAdmittedError,
+            ReadmissionTargetError,
             SubmissionCooldownError,
             DataPipelineError,
             ClaConsentRequired,
