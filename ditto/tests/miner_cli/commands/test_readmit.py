@@ -299,3 +299,26 @@ def test_the_parser_registers_readmit() -> None:
     args = _build_parser().parse_args(["readmit", str(_AGENT), "--yes"])
     assert args.agent_id == _AGENT
     assert args.func is readmit_cmd.run
+
+
+def test_a_malformed_commit_response_keeps_the_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch)
+    _FakeClient.commit = {"status": "ok"}
+    with pytest.raises(MinerCliError, match="invalid readmission response"):
+        readmit_cmd.run(_args())
+    assert _saved() == PaymentReceipt(
+        block_hash=_BLOCK, block_number=77, extrinsic_index=3
+    )
+
+
+def test_nothing_is_paid_when_the_reservation_cannot_be_saved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _install(monkeypatch)
+    monkeypatch.setattr(readmit_cmd, "save_readmission_token", lambda **_kw: False)
+    with pytest.raises(MinerCliError, match="no payment was sent"):
+        readmit_cmd.run(_args())
+    assert not any("pay" in call for call in calls)
+    assert _FakeClient.commits == []

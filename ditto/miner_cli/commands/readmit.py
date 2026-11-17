@@ -254,6 +254,14 @@ def run(args: argparse.Namespace) -> int:
                 raise MinerCliError(
                     "platform did not reserve a readmission price; no payment was sent"
                 )
+            # Saved before anything irreversible: a rerun after a lost response
+            # must commit against the price snapshot this payment is made for.
+            if not save_readmission_token(**token_key, token=token):
+                raise MinerCliError(
+                    "could not save the readmission reservation locally; no "
+                    "payment was sent. Check that the CLI config is writable "
+                    "and rerun"
+                )
             chain_endpoint = getattr(args, "chain_endpoint", None) or None
             preflight_payment_signer(
                 live_wallet=wallet,
@@ -292,9 +300,6 @@ def run(args: argparse.Namespace) -> int:
                     "keep the printed proof if the readmission fails",
                     file=sys.stderr,
                 )
-            # Kept with the proof: a rerun commits against the same price
-            # snapshot the payment was made for.
-            save_readmission_token(**token_key, token=token)
         body = {
             **_signed_body(
                 wallet=wallet,
@@ -311,7 +316,6 @@ def run(args: argparse.Namespace) -> int:
             body["admission_token"] = token
         try:
             result = client.post_readmission_commit(body)
-            outcome = result["outcome"]
         except ReadmissionPaymentRejectedError:
             if recovery is None:
                 clear_pending_payment(**pending, payment=receipt)
@@ -333,6 +337,14 @@ def run(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             raise
+        outcome = result.get("outcome") if isinstance(result, dict) else None
+        if outcome not in ("admitted", "credited"):
+            # The saved proof and token stay, so a rerun retries with them.
+            raise MinerCliError(
+                "platform returned an invalid readmission response "
+                f"(outcome {outcome!r}); rerun the same command to retry with "
+                "the saved proof, or rerun with:\n  " + _recovery_flags(receipt)
+            )
     clear_pending_payment(**pending, payment=receipt)
     clear_readmission_token(**token_key)
     if outcome == "admitted":
