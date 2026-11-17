@@ -48,6 +48,9 @@ class CostBasis:
 
 _cache: dict[int, CostBasis] = {}
 _locks: dict[int, asyncio.Lock] = {}
+# Benchmark versions only advance, so keep the newest few and drop the rest
+# rather than holding one entry per version for the process lifetime.
+_MAX_CACHED_VERSIONS = 4
 
 
 def _reset_cache() -> None:
@@ -150,7 +153,22 @@ async def readmission_cost_basis(
             return cached
         measured = await _measure(session, bench_version=bench_version)
         _cache[bench_version] = measured
+        _evict_old_versions()
         return measured
+
+
+def _evict_old_versions() -> None:
+    """Bound ``_cache`` and ``_locks`` to the newest benchmark versions.
+
+    A lock still held by an in-flight measurement is kept; it is dropped on a
+    later eviction once released.
+    """
+    for version in sorted(_cache)[:-_MAX_CACHED_VERSIONS]:
+        del _cache[version]
+    keep = set(sorted(_cache)[-_MAX_CACHED_VERSIONS:])
+    for version in [v for v in _locks if v not in keep]:
+        if not _locks[version].locked():
+            del _locks[version]
 
 
 __all__ = ["CACHE_TTL", "MIN_AGENTS", "CostBasis", "readmission_cost_basis"]

@@ -8,6 +8,9 @@ import type { components as PlatformComponents } from '../generated/platform-api
 // price is always the upload default fee. Backroom never writes the
 // announcement; that is a Platform admin API write.
 
+// Platform serializes timezone-aware datetimes; reject anything else.
+const timestamp = () => z.string().datetime({ offset: true })
+
 type PlatformResponseShape<Response extends object> = {
   [Field in keyof Response]-?: z.ZodType<Response[Field]>
 }
@@ -24,8 +27,8 @@ export const READMISSION_INACTIVE_REASONS = [
 export const readmissionActivationSchema = z.object({
   active: z.boolean(),
   inactive_reasons: z.array(z.enum(READMISSION_INACTIVE_REASONS)).max(8).default([]),
-  announced_at: z.string().nullable().default(null),
-  effective_at: z.string().nullable().default(null),
+  announced_at: timestamp().nullable().default(null),
+  effective_at: timestamp().nullable().default(null),
   active_bench_version: z.number().int().nonnegative(),
   min_bench_version: z.number().int().nonnegative(),
   notice_period_seconds: z.number().int().nonnegative(),
@@ -47,7 +50,7 @@ export const readmissionCostBasisSchema = z.object({
   runs_per_evaluation: z.number().int().positive(),
   median_run_cost_usd: z.number().nullable().default(null),
   median_agent_cost_usd: z.number().nullable().default(null),
-  measured_at: z.string(),
+  measured_at: timestamp(),
   source: z.string().default(''),
 } satisfies PlatformResponseShape<GeneratedReadmissionCostBasis>)
 
@@ -66,9 +69,9 @@ const paidReadmissionRowSchema = z.object({
   refusal_reason: z.string().nullable().default(null),
   credit_audit: z.record(z.string(), z.unknown()).nullable().default(null),
   credit_spent: z.boolean().nullable().default(null),
-  credit_expires_at: z.string().nullable().default(null),
-  recorded_at: z.string(),
-  updated_at: z.string(),
+  credit_expires_at: timestamp().nullable().default(null),
+  recorded_at: timestamp(),
+  updated_at: timestamp(),
 })
 
 const uploadReadmissionRowSchema = z.object({
@@ -80,7 +83,7 @@ const uploadReadmissionRowSchema = z.object({
   bench_version: z.number().int(),
   miner_coldkey: z.string(),
   amount_rao: z.number().int().nullable().default(null),
-  created_at: z.string(),
+  created_at: timestamp(),
 })
 
 const readmissionTotalsSchema = z.object({
@@ -102,7 +105,7 @@ export const adminReadmissionsSchema = z.object({
   paid: z.array(paidReadmissionRowSchema).max(500).default([]),
   uploads: z.array(uploadReadmissionRowSchema).max(500).default([]),
   truncated: z.boolean().default(false),
-  generated_at: z.string(),
+  generated_at: timestamp(),
 })
 
 export const listReadmissionsInputSchema = z.object({

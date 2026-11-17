@@ -313,3 +313,41 @@ async def test_cost_basis_excludes_unranked_agents(
         )
     assert basis.agents_sampled == 5
     assert basis.median_run_cost_usd == pytest.approx(0.3)
+
+
+async def test_cost_basis_cache_keeps_only_the_newest_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retired benchmark versions do not pin cache or lock entries forever."""
+    measured: list[int] = []
+
+    async def fake_measure(
+        _session: object, *, bench_version: int
+    ) -> readmission_cost_basis.CostBasis:
+        measured.append(bench_version)
+        return readmission_cost_basis.CostBasis(
+            bench_version=bench_version,
+            agents_sampled=0,
+            runs_per_evaluation=3,
+            median_run_cost_usd=None,
+            median_agent_cost_usd=None,
+            measured_at=datetime.now(UTC),
+        )
+
+    monkeypatch.setattr(readmission_cost_basis, "_measure", fake_measure)
+    limit = readmission_cost_basis._MAX_CACHED_VERSIONS
+    versions = list(range(10, 10 + limit + 3))
+    for version in versions:
+        await readmission_cost_basis.readmission_cost_basis(
+            None,  # type: ignore[arg-type]
+            bench_version=version,
+        )
+    newest = set(versions[-limit:])
+    assert set(readmission_cost_basis._cache) == newest
+    assert set(readmission_cost_basis._locks) == newest
+    # A still-cached version is served without measuring again.
+    await readmission_cost_basis.readmission_cost_basis(
+        None,  # type: ignore[arg-type]
+        bench_version=versions[-1],
+    )
+    assert measured == versions

@@ -50,8 +50,9 @@ export function MinerFeePanel({ summary }: { summary: MinerFeeSummary }) {
           <h2 className="text-sm font-semibold">Readmission fees</h2>
           <p className="mt-1">
             {summary.readmission.admitted.toLocaleString()} paid readmissions,{' '}
-            {tao(summary.readmission.admitted_amount_rao, 9)} TAO (not in the gross above;{' '}
-            {summary.readmission.credit_funded.toLocaleString()} paid by an earlier credit).{' '}
+            {tao(summary.readmission.admitted_amount_rao, 9)} TAO. Freshly paid readmissions are not in
+            the gross above; the {summary.readmission.credit_funded.toLocaleString()} paid by an earlier
+            credit may already be counted there.{' '}
             {summary.readmission.credited.toLocaleString()} refused after payment and banked as
             credits, and {summary.readmission.upload_readmissions.toLocaleString()} uploads classified
             as readmissions, are already in the upload totals.

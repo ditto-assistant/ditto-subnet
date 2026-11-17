@@ -87,8 +87,10 @@ async def list_readmissions(
         )
     paid_rows = (
         await session.execute(
+            # ``created_at`` is immutable; ``updated_at`` moves when a credited
+            # row is later spent, which would shift offset pages mid-listing.
             paid_stmt.order_by(
-                ReadmissionPayment.updated_at.desc(),
+                ReadmissionPayment.created_at.desc(),
                 ReadmissionPayment.block_hash.desc(),
                 ReadmissionPayment.extrinsic_index.desc(),
             )
