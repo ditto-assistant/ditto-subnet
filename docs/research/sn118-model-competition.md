@@ -1,59 +1,485 @@
-# SN118 model competition: a fixed harness, miners submit a model
+# SN118 model competition: a Ditto context-packet model that miners train
 
-Status: **research memo, 2026-11-17.** Nothing here changes a live score,
-weight, setting, lease or piece of infrastructure. Infrastructure is described
-as AWS proposals only. Every decision is listed under *Open questions for
-Peyton*.
+Status: **research memo, 2026-11-17, revision 2.** Nothing here changes a live
+score, weight, setting, lease or piece of infrastructure. Infrastructure is
+described as AWS proposals only, and every experiment listed needs its own
+spend approval. Revision 1 (#3567) covered the SN118 mechanism; it is kept as
+Part II. Revision 2 adds Part I and makes it the central question:
 
-## TL;DR
+> "Making our own decision model only makes sense if we hyperfocus this model
+> on the things that Ditto needs. Our special sauce is creating the perfect
+> context packet for a larger model. If the decision model could help in the
+> retrieval process and the pruning process, because retrieval isn't enough:
+> if you don't prune you're going to blow up the context window. Given these
+> two outcomes I would want to know how we would design our own decision model
+> in a way that would far outperform something general-purpose like Jev."
+> — Peyton, 2026-11-17
 
-- **The inversion is smaller than it sounds.** SN118 already locks the model
-  and lets miners own the harness. Every grant pins a chat model
-  (`openai/gpt-oss-20b`) and, from bench 15, a decision model
-  (`typesafe/jev-1.14`). A model competition pins the harness instead and lets
-  a miner artifact fill one of those two model slots. Seeds, CRN, quorum,
-  dueling seasons, the sequential dethrone, outage voiding, copy holds and the
-  generator competition all carry over.
-- **"Mercury 3" is probably Mercury Decide.** Mercury 3 itself is Inception's
-  closed generative diffusion LLM (released Oct 2026). The "classifier model
-  that can do strings" Peyton describes matches **Mercury Decide**, released
-  three weeks earlier. It is a Jev-shaped decision model (`noul` / `choice` /
-  `score`) with an added `extract` question that returns exact text spans.
-  Training our own Mercury 3 is not realistic. Training our own Mercury
-  Decide-class model is realistic and cheap: open recipes fine-tune a 4B base
-  with LoRA in under an hour, for tens of dollars.
-- **Prior art warns against naive "submit a model" designs.** On Bittensor:
-  - SN9's original competition was relaunched as IOTA.
-  - SN37 was handed off.
-  - SN11 Dippy reset scoring several times, then moved to image inference.
-  - SN120 Affine now takes training batches instead of models.
+## TL;DR (read-aloud length)
 
-  The designs that survive share three traits: the operator executes the
-  evaluation on its own hardware, the evaluation data is fresh or private, and
-  the crown passes only by a statistical test. SN118 already has all three.
-- **Recommended v1: "Decide track", shadow first.**
-  - Miners submit weights for the **decision slot**: a LoRA adapter, or a
-    full fine-tune within one pinned small base family.
-  - Ditto serves them on a Ditto-owned inference pool, with the System One wire
-    plus `extract`, prefill-only and batch-invariant.
-  - A frozen reference harness calls that pool in place of Jev. The chat slot
-    stays `gpt-oss-20b`.
-  - KOTH on the existing dueling machinery, in its own track, at 0 bps until
-    the board has depth.
-  - The chat slot (v2) and a single "Ditto Mercury" model that decides,
-    extracts and writes (v3) follow only if v1 shows the model lever moves the
-    bench.
-- **Rough cost.** About $0.05–0.50 of GPU per scored run for a ≤2B decision
-  model. The fleet needs about 1–2 always-on L40S-class GPUs, roughly
-  $1.4k–2.7k/month on-demand. That is the same order as or below today's
-  OpenRouter spend. A miner pays $5–150 per training attempt plus the
-  0.075 TAO evaluation fee.
-- **Gate before building.** A model-sensitivity study (P0): hold the harness
-  fixed and swap decision models. If the composite spread between decent
-  decision models is not several times the dethrone margin, the decision slot
-  is too weak a lever, and we lead with the chat slot instead.
+Jev is a general decision model. Ditto's edge is the context packet: the few
+exact spans a big model needs, inside a token budget. So we build one small
+Ditto model that ranks, prunes and extracts for that packet, and we train it
+on the only thing that matters: how well the big model answers per context
+token. DittoBench already knows the gold evidence for every case, so we can
+label it, measure it and pay miners to improve it from day one. Start with an
+autoregressive model of one to two billion parameters with decide and extract
+heads. Diffusion is a later bet, not the first step. The proof is a P0 with the
+same harness and the same big model: Jev against our model, comparing answer
+quality at a fixed token budget.
 
-## 1. Where SN118 is today, and what changes
+## How to read this memo
+
+- **Part I** (this part) answers Peyton's question:
+  - the context-packet model (CPM): task, architecture, data, objective;
+  - why it beats Jev;
+  - how DittoBench measures it;
+  - what each build path takes: (A) a Ditto diffusion LLM, (B) a Ditto
+    Decide + Extract model, (C) an open-weight Ditto Extract for pruning;
+  - the diffusion track in detail;
+  - the product order and the P0 that proves it.
+- **Part II** (revision 1, kept) is the SN118 mechanism: prior art, KOTH vs
+  distributed training, submission format, anti-copy, hosting, cost and
+  migration. Its "Decide track" is now the **Context track**: the same
+  contract, with the miner slot being the CPM.
+
+# Part I. The Ditto context-packet model
+
+## I.1 Answer in one paragraph
+
+The win does not come from a bigger or cleverer general classifier. It comes
+from changing the task, along three lines:
+
+1. **What one call does.** Jev answers isolated typed questions. A Ditto CPM
+   looks at the whole candidate set at once (memories, subjects, tool output,
+   history), against Ditto's memory schema and a token budget.
+2. **What it emits.** Jev returns labels. A CPM returns a packet plan: scores,
+   keep/drop, exact spans, a per-source budget, and "retrieve more" or
+   "absent" signals.
+3. **What it is trained on.** Jev is trained for label accuracy. A CPM is
+   trained for the downstream big model's graded answer quality per context
+   token.
+
+DittoBench is the unfair advantage. Every generated case already carries:
+
+- the gold evidence records (`v10_evidence_pair_ids`);
+- the expected answer and accepted variants;
+- hard negatives (`distractor_answers`, the forbidden answer);
+- the coined needle that served tool output embeds;
+- the correct tools and argument claims.
+
+These are free, unlimited and privacy-safe labels that a general vendor model
+never sees.
+
+## I.2 Task definition
+
+**Pipeline.** The CPM is stage 1 of three. Stages 0 and 2 are deterministic
+Ditto code.
+
+| Stage | Owner | Job |
+| --- | --- | --- |
+| 0. Recall | Ditto code | BM25 plus embeddings plus subject-graph expansion. Returns N ≈ 100–300 candidates with ids (memory pairs, subjects, tool-menu entries, tool-output chunks, history turns). Cheap and high recall |
+| **1. Packet model (CPM)** | **the model** | Joint scoring, pruning and extraction against a budget. One forward pass per window |
+| 2. Packer | Ditto code | Renders the plan into the big model's prompt: order, dedupe, verbatim spans with source ids, budget enforcement |
+
+**Inputs** (one `packet` request):
+
+| Field | Content | Ditto source |
+| --- | --- | --- |
+| `query` | The user turn, the time anchor ("as of"), the system-prompt digest | `/run` `user_input`, `system_prompt` |
+| `user_state` | Stable profile facts, stored defaults (e.g. reasoning effort), linked connectors, current date | user settings, subject graph |
+| `space_state` | Active space or scope, its pinned subjects, recent activity | the space |
+| `candidates[]` | `{id, kind, text, meta}` where kind ∈ `pair` (prompt/response, `session_id`, `timestamp`), `subject` (`subject_text`, `description_text`, linked pair ids), `tool` (name, description), `tool_output` (chunk of a served result), `turn` (history) | `/seed` pairs, subjects, links; tool menu; tool results; conversation |
+| `budget` | Target packet tokens B, optional per-source caps | cost policy, big-model window |
+
+**Outputs** (the packet plan):
+
+| Output | Type | Used for |
+| --- | --- | --- |
+| `relevance[id]` | calibrated probability | ranking, thresholding |
+| `keep[id]` | keep / drop / keep-as-pointer (id only, no text) | pruning |
+| `spans[id][]` | exact substrings with char offsets, a field tag (`answer_value`, `support`, `temporal_anchor`, `supersedes`, `arg_candidate`) and a confidence | span-level pruning; argument filling; the `answer` slot |
+| `allocation` | tokens per source (memories, tools, history) summing to ≤ B | budget packing |
+| `route` | recall / act / remember / chat, plus restraint (no_call, clarify, decline) | harness control (replaces the Jev route questions) |
+| `tool_shortlist` | top-k tool ids with scores | tool menu pruning (the v18 1,400–2,000-tool problem) |
+| `signals` | `need_more_retrieval` (with an expansion: a query string as a span of the input, or subject ids), `conflict` (ids that disagree, and which is newer), `absent` (probability the answer is not in context) | second-round retrieval; abstention; supersession |
+
+**Wire.** `ditto-packet-v1`, a superset of the System One body (`choice`,
+`noul`, `score`) plus Mercury-style `extract`, plus a `packet` question type
+carrying the candidates and budget. Spans are guaranteed verbatim by
+construction: the head tags input tokens and never generates text. That
+matches Inception's own guarantee for Extract, "every span is an exact
+substring of your input"
+([Extract docs](https://docs.inceptionlabs.ai/capabilities/extract),
+spot-checked). It also stays inside DittoBench's `answer_in_prompt` exemption,
+because values come from the request, `/seed` records and served tool results.
+
+## I.3 Architecture options and latency targets
+
+| Option | Shape | Strengths | Weaknesses |
+| --- | --- | --- | --- |
+| **A. Cross-encoder reranker plus span tagger** | ModernBERT or Ettin encoder (150M–1B) scoring `(query, candidate)` pairs, and a GLiNER2- or LLMLingua-2-style token tagger | Proven: LLMLingua-2 compresses by token classification with a bidirectional encoder, 2–5x compression at 1.6–2.9x end-to-end speedup. Provence frames pruning as sequence labeling unified with reranking. Tiny, CPU-capable, deterministic | Pairwise: no listwise view of redundancy or conflicts. Two models. Short windows (8K for Ettin). Weak at route and tool decisions |
+| **B. Small AR decide + extract** | Qwen3.5-0.8B/2B with one prefill over `query + candidates`, label-logit decisions, and a token-tagging head on hidden states | Listwise. One model for all outputs. 262K context. The base open decision models already use (Tev1, Kev). Batch-invariant serving exists | Causal attention tags each token with left context only (mitigate: query and criteria first, or a bidirectional fine-tune). Larger than A |
+| **C. Diffusion / bidirectional extract** | A block-diffusion LM (LLaDA2.x-mini, SDAR-4B, Nemotron-Labs-Diffusion-3B) used as a bidirectional encoder for tagging, with generation available later | Full bidirectional context inside a block. Same weights could later generate | Small open bases are 16B resident (LLaDA2 mini) or custom-licensed. Worse published calibration. No batch-invariant serving. Needs `trust_remote_code` (see I.9) |
+| **D. Multi-head on one backbone (recommended)** | B's backbone with three heads sharing one prefill: listwise relevance (logit at each candidate's marker token), token BIO/keep tagging per field, decision logits | One pass, one artifact, one determinism story. Every output trained jointly against the same end-to-end reward | Needs custom serving for the heads. Ditto owns this; miners only supply weights |
+
+**Latency targets** (stage 1, per packet request, one L4/L40S-class GPU,
+≤16K candidate tokens):
+
+- p50 ≤ 150 ms, p95 ≤ 400 ms.
+- Total pre-model overhead (stages 0–2) ≤ 15% of the big model's
+  time-to-first-token.
+
+For reference, Jev is about 70–500 ms per call (vendor claim), and the v18
+hybrid harness makes many Jev calls per case: menu chunks, note ranking, one
+per argument, next-tool. A single CPM pass that replaces most of them is a
+latency win even if one call is slower.
+
+**Long inputs.** Window the candidates at 8–16K tokens, repeat the query prefix
+(prefix KV cache), score listwise within each window, and merge by calibrated
+score. Tool outputs over 16K are chunked, and the needle-bearing chunk is the
+training target.
+
+## I.4 Training data
+
+| Source | Labels | Scale and cost | Privacy |
+| --- | --- | --- | --- |
+| **1. DittoBench generator (public datagen)** | `v10_evidence_pair_ids` → relevant pairs. `expected_answer` / `accept_any` located inside evidence → `answer_value` spans. `distractor_answers` and the forbidden answer → hard negative spans. Fixture `needle` in served tool output → tool-output spans. Correct tool and `required_arg_claims` → shortlist and `arg_candidate` spans. Absence families → `absent`. Supersession and point-in-time families → `supersedes`, `temporal_anchor`, `conflict` | Unlimited, CPU-only, deterministic per seed | None: synthetic |
+| **2. Downstream ablation labels** | Run the locked big model on packets with candidates or spans dropped. The label is Δ grader score (leave-one-out, or sampled subsets) | ~10k–100k episodes. At ~4K prompt tokens and $0.07/M for `gpt-oss-20b`, 100k episodes ≈ 400M tokens ≈ **$28** | None |
+| **3. Teacher labels** | An open-weight large model annotates relevance and spans on synthetic and public data | Moderate | Only open-weight teachers whose license allows distillation. Do not train on closed-vendor outputs (Jev, Mercury); that is a ToS risk |
+| **4. Public data** | LongMemEval-S (already the confirmation lane), MS MARCO / BEIR for reranker warm-up, the LLMLingua-2 MeetingBank compression set | Large | Check each license |
+| **5. Ditto product traces** | Real queries, retrieved memories, tool outputs, big-model answers, user feedback | The real distribution | **Opt-in only.** Scrubbed and kept inside Ditto infrastructure. Never shared with miners or validators. Used only for Ditto's internal fine-tune and a private product eval that stays in Ditto. SN118 sees synthetic and public data only |
+
+The SN118 split matters. Miners train on sources 1–4. The crown is decided on
+the private generator slice and fresh block-hash seeds, and Ditto's product
+eval on source 5 never leaves Ditto.
+
+## I.5 Objective: answer quality per context token
+
+Peyton's framing is the objective. We optimize
+
+  **J = E[ Q(big-model answer | packet) ] − λ · tokens(packet)**
+
+or, equivalently, Q at a fixed budget B. Q is the DittoBench deterministic case
+grade: no judge, reproducible.
+
+| Stage | Loss | Signal |
+| --- | --- | --- |
+| S1. Supervised | Listwise softmax cross-entropy over candidates, token BIO cross-entropy per field, decision cross-entropy | Generator gold (source 1) |
+| S2. Budgeted | The same losses under randomly sampled budgets B. Recall of `answer_value` spans weighted highest, then `temporal_anchor` and `supersedes`, then `support` | Teaches allocation and graceful degradation |
+| S3. End-to-end | Policy gradient (GRPO-style) over sampled keep/span decisions, with the frozen locked big model as the environment and reward = case grade − λ·tokens | Learns what the big model needs (e.g. keep the "as of" anchor), not what a labeler thinks is relevant |
+
+Report standalone classification accuracy only as a diagnostic. The model ships
+on the metrics in I.7.
+
+## I.6 Why a Ditto CPM should beat Jev
+
+| | Jev (general System One) | Ditto CPM |
+| --- | --- | --- |
+| Unit of work | One typed question, ≤255 options, answered in isolation | The whole candidate set, listwise: sees redundancy, conflicts and complementary facts (owner → email multi-hop) |
+| Strings | None. `box` is visual only. The harness fakes spans with clause-then-span `choice` | Native verbatim spans with offsets |
+| Schema | Generic state | Ditto pairs, sessions, timestamps, subjects and links. Supersession and point-in-time are first-class labels |
+| Budget | No notion of tokens | Allocation is an output, trained against a budget |
+| Training target | Label accuracy on general decisions | The big model's graded answer per token (S3) |
+| Data | General | Unlimited gold from the generator, plus an adversarial generator competition that keeps producing the cases agents miss |
+| Calls per case | Many (menu chunks, notes, each argument, next tool) | One per window (plus an optional retrieve-more round) |
+| Cost and control | $0.042/M input, vendor-pinned, vendor drift risk, user memories sent to a third party | Owned weights, deterministic serving, no per-token fee, memories stay in Ditto |
+
+**Honest caveat.** On out-of-domain general decisions Jev will likely stay
+stronger. Keep Jev as the product fallback until the CPM wins P0 and a
+production shadow.
+
+## I.7 DittoBench metrics for context-packet quality, and how miners compete
+
+**Metrics** (all computable from existing generator metadata and the
+deterministic grader):
+
+| Metric | Definition | Role |
+| --- | --- | --- |
+| **Q@B** | Composite (and memory/tool means) with the packet hard-capped at B ∈ {1K, 2K, 4K, 8K} tokens, big model and harness fixed | Headline. Also the area under the Q-vs-B curve |
+| **Needed-fact recall@B** | Share of gold evidence (answer-bearing spans plus required supporting records) present in the packet | Diagnostic and cheap pre-screen |
+| **Distractor and forbidden inclusion** | Share of packets that contain a `distractor_answers` value or the forbidden answer | Precision proxy |
+| **Tokens saved** | Packet tokens vs (a) today's hybrid packet (8 notes plus 3–6 tool schemas) and (b) the full-context baseline. Also the priced-cost factor | Cost |
+| **Latency** | Stage-1 p50/p95 per call, and added end-to-end time per case | Gate |
+| **Absent and conflict calibration** | Brier of `absent` on the absence families; precision of `need_more_retrieval` | Diagnostic |
+
+**Two run modes:**
+
+1. **Packet replay (offline, cheap).** Stage-0 candidate sets are recorded per
+   seed with gold labels, and the CPM is scored on recall@B, inclusion and
+   calibration with no big-model calls. This is the screening gate and the
+   miner's local loop (`uv run ditto practice --packet-model <path>`,
+   proposed).
+2. **Full bench (the crown).** Frozen packet harness, frozen big model
+   (`gpt-oss-20b`), budget pinned per contract. Scored by the bench composite
+   under the existing priced-cost contract, so token savings already count.
+   Quorum of 3, dueling seasons, sequential paired dethrone, as in Part II.
+
+**How SN118 miners compete.** The Context track (Part II §6, with the slot
+renamed):
+
+- Miners submit weights for stage 1 only: a pinned backbone family, LoRA or
+  full fine-tune.
+- Ditto owns stage 0, stage 2, the heads' read-out code and the big model.
+- Anti-copy, private-until-release, hosting and emissions are as in Part II.
+
+Three forces keep it honest:
+
+- Generator miners attack the CPM: buried needles in long tool output,
+  near-duplicate distractors, corrections arriving in later waves, multi-hop
+  evidence.
+- The private generator slice decides the crown.
+- Champion releases compound through lineage.
+
+The champion can also be offered to **harness miners** as a lane, like the
+decision lane today, and to **Ditto product** behind the router. Its existing
+tool-result-compression and memory-recall levers
+([router-compression-competition-v1.md](../router-compression-competition-v1.md))
+are exactly where a CPM plugs in.
+
+## I.8 What each build path would take
+
+| | (A) Ditto diffusion LLM (Mercury 3-like, generative) | (B) Ditto Decide + Extract (AR or diffusion) | (C) Open-weight Ditto Extract / CPM for pruning |
+| --- | --- | --- | --- |
+| Base | Fine-tune LLaDA2.1-mini (Apache-2.0, 16B / ~1.4B active), SDAR-4B (MIT) or Nemotron-Labs-Diffusion-3B (NVIDIA license). Converting our own AR base is an option (SDAR-style, ~50B tokens) | Qwen3.5-0.8B/2B (Apache-2.0) with label-logit and tag heads. Or an encoder (ModernBERT / Ettin / GLiNER2) | Same backbone as B, plus listwise relevance and budget heads (option D) |
+| Data | Generator SFT data, distillation from the locked open-weight `gpt-oss-20b` on generator cases, public instruction and tool data | Generator gold (I.4 source 1), teacher labels from open models | B's data plus downstream ablation labels and S3 rewards (I.4 sources 1–3) |
+| Training compute and cost | LoRA SFT: a few to tens of A100-hours (extrapolated; no primary source gives a dollar figure), so **~$100–1,000 per run**. Own AR→block-diffusion conversion at SDAR scale: thousands of GPU-hours, **~$10k–50k** (estimate). Dream-scale (580B tokens) **~$90k**. From scratch (LLaDA 8B) **~$675k** | LoRA ≤4B: **$5–150 per run**. Full FT ≤2B: **$10–40** | S1–S2 as B. The S3 reward stage needs ~400M big-model tokens ≈ **$30**, plus a few GPU-days ≈ **$100–500** |
+| Serving | SGLang dLLM framework (LLaDA2.x upstream), dInfer, vLLM for DiffusionGemma only. `trust_remote_code` bases | vLLM or SGLang, prefill-only, batch-invariant mode (beta) | Same as B, plus a small custom head server Ditto owns |
+| Determinism for validators | **Weak.** Pin the sampler (I.9.3). Algorithmically deterministic at temperature 0 with low-confidence remasking and fixed steps, but not bitwise across GPUs, batch sizes or kernels. One 2026 study calls dLLM nondeterminism "pervasive". Compare within a tolerance | **Strong.** One forward pass, argmax read-out. Batch-invariant kernels give bitwise repeats on fixed hardware | **Strong**, as B |
+| Team and time | 2–3 ML engineers. **3–6 months** to a competitive fine-tune, 6–12 months for our own conversion | 1–2 engineers. **6–10 weeks** to v0 | 2 engineers. **8–12 weeks** to v1, with P0 inside the first 3 weeks |
+| Product value | Fast generation for the chat slot. Unproven on our JSON and tool path | Replaces Jev calls | Directly cuts big-model tokens on every Ditto turn. That is the special sauce |
+
+## I.9 The diffusion track
+
+Peyton asked: "we should train a diffusion model?" This section answers it.
+
+### I.9.1 Open diffusion LLM bases (fine-tune, don't pretrain)
+
+| Model | Params (total / active) | Kind | Context | License | Tools / JSON evidence |
+| --- | --- | --- | --- | --- | --- |
+| **LLaDA2.0-mini** (2025-12) | 16B / 1.4B (MoE) | Block diffusion, converted from AR Ling-mini-2.0 | 32,768 | Apache-2.0 | "Supports tool calling". BFCL_Live 70.90 vs Qwen3-8B 70.08 (vendor). [card](https://huggingface.co/inclusionAI/LLaDA2.0-mini) (spot-checked), [paper](https://arxiv.org/html/2512.15745v2) |
+| **LLaDA2.1-mini** (2026-02) | 16B | Adds token editing | 32,768 | Apache-2.0 | BFCL v3 73.61 in quality mode (vendor). [card](https://huggingface.co/inclusionAI/LLaDA2.1-mini) |
+| LLaDA2.2-flash (2026-07) | 100B | Edit plus agentic RL | 128K | Apache-2.0 | BFCL-V4 60.78 vs 66.81 for the AR sibling. No mini. [card](https://huggingface.co/inclusionAI/LLaDA2.2-flash) |
+| **SDAR-1.7B/4B/8B** (2025-07) | 4B dense option | Block diffusion converted from Qwen3 (50B continued-pretraining + 4B SFT tokens) | unverified | MIT | 1.7B "on par with" its AR SFT counterpart. [repo](https://github.com/JetAstra/SDAR) |
+| TraDo-4B/8B (2025-09) | 4B / 8B | SDAR lineage (unverified), TraceRL | — | weights unverified | Math and code. [repo](https://github.com/Gen-Verse/dLLM-RL) |
+| **Nemotron-Labs-Diffusion-3B** (2026-05) | ~4B dense (the Hub lists 4B) | **Tri-mode: AR, diffusion and self-speculation in the same weights** | not stated | NVIDIA Nemotron Open Model License (custom, commercial use allowed) | Not documented. [card](https://huggingface.co/nvidia/Nemotron-Labs-Diffusion-3B) (spot-checked) |
+| DiffusionGemma-26B-A4B-it (2026-06) | 25.2B / 3.8B | Gemma 4 converted to block diffusion | 256K | Tagged Apache-2.0, but links to the Gemma 4 license page: check | Native tools. Tau2 56.2 vs 68.2 for its AR parent. Stochastic sampler. [report](https://arxiv.org/html/2608.00146v1), [vLLM](https://vllm.ai/blog/2026-06-10-diffusion-gemma) |
+| LLaDA-8B / LLaDA 1.5 | 8B dense | Masked diffusion from scratch | 4,096 | MIT | BFCL-v3 19.4. [card](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct) |
+| LLaDA-MoE-7B-A1B | 7B / 1.4B | Masked diffusion | **4,096** | Apache-2.0 | Too short for our contexts. [card](https://huggingface.co/inclusionAI/LLaDA-MoE-7B-A1B-Instruct) |
+| Dream-v0 7B | 7.6B | From Qwen2.5-7B | **2,048** | Apache-2.0 | BFCL-v3 13.6. [repo](https://github.com/DreamLM/Dream) |
+| DiffuCoder-7B | 7.6B | From Qwen2.5-Coder | — | **Research-only / non-commercial**: exclude | Code. [card](https://huggingface.co/apple/DiffuCoder-7B-cpGRPO) |
+| Open-dCoder 0.5B | 0.6B | Masked diffusion | — | Apache-2.0 | Code only, no numbers. [card](https://huggingface.co/fredzzp/open-dcoder-0.5B) |
+| Seed Diffusion, Gemini Diffusion, Mercury 3 | — | — | — | **Closed** | — |
+
+Credible bases for a ≤4B-active track are **LLaDA2.1-mini** (best license and
+tool evidence, but 16B to hold in memory), **SDAR-4B** (MIT, dense) and
+**Nemotron-Labs-Diffusion-3B**. Nemotron's built-in AR mode is a free
+same-weights control for the head-to-head. Its custom license and missing SFT
+code are the costs.
+
+### I.9.2 Fine-tune recipe and cost
+
+- **Objective.** Noise only the response tokens and keep the prompt clean.
+  Masked cross-entropy is weighted by 1/p_mask and normalized by answer length
+  ([LLaDA guidelines](https://raw.githubusercontent.com/ML-GSAI/LLaDA/main/GUIDELINES.md)).
+- **Tooling.**
+  - The `dllm` library (Apache-2.0): SFT and LoRA for LLaDA, LLaDA-MoE and
+    Dream; diffu-GRPO; AR-to-diffusion `a2d` examples
+    ([repo](https://github.com/ZHZisZZ/dllm)).
+  - dFactory for LLaDA2.x (FSDP2), and LlamaFactory-based tuning for SDAR.
+  - Reinforcement learning: TraceRL / dLLM-RL, d1 / diffu-GRPO
+    ([arXiv 2504.12216](https://arxiv.org/pdf/2504.12216)), wd1
+    ([arXiv 2507.08838](https://arxiv.org/pdf/2507.08838)).
+- **Reported compute.**
+  - d1 ran on 4× A5000. wd1's SFT took 2 h on 4× A100.
+  - The DiffusionGemma LoRA used rank 4–8, LR 1e-4 to 3e-4, 2k–8k steps, on at
+    least 2× A100-80GB. Its PubMedQA LoRA moved accuracy only 75.6 → 76.6, and
+    denoising steps rose from 18 to 32, so the fine-tune made inference
+    *slower*.
+  - No primary source prices SFT on 10k–100k examples. Extrapolated: a few to
+    tens of A100-hours, about $100–1,000.
+- **Converting an AR model** (if we want our own Ditto base):
+
+  | Method | Training spend | Quality |
+  | --- | --- | --- |
+  | Fast-dLLM v2 ([arXiv 2509.26328](https://arxiv.org/abs/2509.26328)) | ~1B tokens | Claims to match AR |
+  | SDAR | ~50B tokens | Roughly AR parity |
+  | Dream | 580B tokens | — |
+  | BYOD LoRA ([arXiv 2610.41574](https://arxiv.org/abs/2610.41574)) | ~3–4 GPU-hours | Generation perplexity 8–11 vs 2–3 for the AR parent |
+
+### I.9.3 Serving, speed and determinism
+
+- **Engines.**
+  - SGLang has a dLLM framework with LLaDA2.0 support since 2025-12-19
+    ([LMSYS](https://www.lmsys.org/blog/2025-12-19-diffusion-llm/)).
+  - dInfer v0.2: LLaDA2-flash-CAP at ~581 tok/s at batch 1 on 8×H20
+    ([repo](https://github.com/inclusionAI/dInfer)).
+  - vLLM supports DiffusionGemma natively and others through a partial plugin
+    that rejects grammar-constrained decoding in block mode
+    ([plugin](https://github.com/vllm-project/dllm-plugin)).
+- **Speed on our shapes.** Our calls are prefill-heavy (4K–32K prompt) with
+  short outputs, and the diffusion advantage is in decode.
+  - LLaDA2.0-mini commits ~2.55 tokens per forward pass, so a 32–64-token
+    reply takes ~13–25 passes instead of 32–64. Prefill costs the same.
+  - DiffusionGemma's speed claims use 1,024-token outputs. AR overtakes it at
+    ~32 concurrent requests, and one denoising step costs ~3.2x an AR step
+    ([report](https://arxiv.org/html/2608.00146v1)).
+  - Expect parity to a small win at batch 1, and parity or a loss under load.
+- **Determinism.**
+  - Temperature 0 with low-confidence (or fixed-threshold) remasking, fixed
+    steps and fixed block length is algorithmically deterministic.
+  - It is **not** bitwise-reproducible across GPU SKU, batch size, precision
+    or cache mode. One study finds dLLM nondeterminism "pervasive and
+    structured" ([arXiv 2604.13413](https://arxiv.org/abs/2604.13413)).
+  - We found no batch-invariant dLLM serving work.
+  - DiffusionGemma's default sampler is stochastic: a random canvas, a
+    temperature schedule, re-noising.
+- **What validators would pin:**
+
+  | Category | Pin |
+  | --- | --- |
+  | Model | Weight hash, `mask_id` |
+  | Sampling | temperature 0, top-p/top-k off, `cfg_scale` 0 |
+  | Remasking | `low_confidence` / `maskgit_plus`, never random |
+  | Decoding | block_length 32; fixed steps per block or a fixed threshold (0.95) plus a fixed fallback; editing thresholds for LLaDA2.1/2.2 |
+  | Length | `gen_length`, EOS early-stop |
+  | Cache | None, or the exact block-prefix cache only |
+  | Engine and numerics | bf16, attention backend, engine commit, TP size |
+  | Batching | Batch size 1 |
+  | Hardware | GPU SKU |
+  | Likelihood scoring | Single masked-position logits only; never a Monte Carlo ELBO (LLaDA's default draws 128 unseeded samples) |
+
+  Even pinned, scores must be compared within a tolerance. That is weaker than
+  the AR batch-invariant story in Part II §6.4.
+
+### I.9.4 Fit for the decide slot and the chat slot
+
+- **Decide and extract slot.** No structural advantage.
+  - A masked diffusion LM can read label logits at one masked position in one
+    pass ([LLaDA, NeurIPS 2025](https://proceedings.neurips.cc/paper_files/paper/2025/file/48b383b24230e0e6e649d9c98dae4d8c-Paper-Conference.pdf)),
+    but an AR model also reads next-token logits after one prefill.
+  - The evidence cuts against diffusion. Putting many labels in one prompt
+    shows strong slot bias (the first slot is predicted positive 99–100% of
+    the time), so labels must be scored one at a time, which hurts 255-option
+    choices ([arXiv 2608.14649](https://arxiv.org/abs/2608.14649)).
+  - Calibration and ranking degrade under noise worse than AR
+    ([arXiv 2608.08791](https://arxiv.org/abs/2608.08791)).
+  - What diffusion *does* offer is bidirectional context for span tagging. An
+    encoder (option A) or a bidirectional fine-tune of an AR model gets the
+    same thing more cheaply.
+- **Chat slot.** Possible, only on the newest bases, with constrained
+  decoding.
+  - 2025-era dLLMs scored 13.6–28.0 on BFCL-v3 and **0 on multi-turn**, with
+    more malformed JSON (["The Bitter Lesson of dLLMs for Agentic Workflows",
+    ACL 2026](https://arxiv.org/abs/2601.12979)).
+  - LLaDA2.x reaches single-turn parity (vendor numbers).
+  - Grammar-constrained diffusion decoding reaches 100% JSON validity
+    ([arXiv 2508.10111](https://arxiv.org/pdf/2508.10111)).
+  - Automaton-constrained decoding lifts Dream-7B BFCL-Live from 22.3 to 69.0
+    sampled ([arXiv 2607.07026](https://arxiv.org/abs/2607.07026)).
+  - Neither ships in the vLLM dLLM plugin.
+
+### I.9.5 P0-D: diffusion vs autoregressive, head to head on our decision cases
+
+- **Data.** 50k training and 5k held-out decision examples exported from
+  generator gold (I.4 source 1):
+  - tool shortlist over v18 menus;
+  - route and restraint;
+  - note relevance;
+  - argument and answer spans;
+  - absence.
+
+  Held-out seeds never appear in training.
+- **Arms.** The same data, steps budget and LoRA rank (8–16):
+
+  | Arm | Model | Notes |
+  | --- | --- | --- |
+  | AR-4B | Qwen3.5-4B LoRA | Label logits plus a tag head (the control) |
+  | AR-2B | Qwen3.5-2B LoRA | The efficiency control |
+  | D-LLaDA | LLaDA2.1-mini LoRA | Masked-position logits plus a tag head |
+  | D-SDAR | SDAR-4B LoRA | As above |
+  | D/AR-Nemotron | Nemotron-Labs-Diffusion-3B LoRA, scored in diffusion mode **and** AR mode | A same-weights control that isolates decoding mode from data |
+  | Reference | Jev 1.14 zero-shot (and Mercury Decide zero-shot, if API spend is approved) | — |
+
+- **Metrics.**
+  - Quality: tool shortlist recall@3/@8, route and restraint accuracy, note
+    nDCG@8, span exact-match F1 and needed-fact recall, absence Brier, ECE.
+  - Speed: p50/p95 latency at batch 1 and batch 16, GPU-seconds per 1k
+    decisions.
+  - Reproducibility: identical outputs across 3 reruns and 2 batch sizes on
+    one GPU SKU.
+- **Short-generation sub-test (P0-G, optional).** 2k held-out tool-call cases
+  with 3–6 pre-filtered schemas. Measures JSON validity, exact-call accuracy
+  and latency to complete output. The diffusion arms run with and without
+  grammar constraints.
+- **Decision rule.** Diffusion advances to a track only if it matches AR-4B
+  quality within noise **and** wins latency or cost at our shapes **and**
+  passes the reproducibility check. Otherwise it stays a research lane.
+- **Cost.** About $200–800 of rented A100/H100 time (4 LoRAs plus eval), plus
+  ≤$20 of Jev. This needs a spend approval; no new infrastructure.
+
+### I.9.6 Recommendation on diffusion
+
+**Yes to diffusion research, no to diffusion first.** The decide and extract
+work is one forward pass whichever architecture we pick, so diffusion's
+parallel decoding buys nothing there. Its calibration evidence is worse, and
+its determinism is weaker exactly where validators need it. The small open
+bases are either 16B resident or custom-licensed.
+
+Diffusion's real promise is fast short generation, the "Mercury 3" bet. That
+belongs to a later chat-slot track. Miners may enter a diffusion fine-tune
+there, if P0-D/G show parity on our tool JSON.
+
+Run P0-D now: it is cheap, and it settles the question with our own data
+instead of vendor charts.
+
+## I.10 Product recommendation: the order, and the P0 that proves it
+
+"iPhone mentality" means the model is made for Ditto's job, measured by
+Ditto's benchmark, and owned by Ditto. In that frame the order is:
+
+1. **Ditto CPM (decide + extract + pack), autoregressive, 0.8–2B.** It hits
+   the special sauce directly, ships fast (8–12 weeks), and serves
+   deterministically. It is miner-improvable from day one, because DittoBench
+   already holds the labels and the grader.
+2. **Open-weight release of the Extract head as "Ditto Extract".** The same
+   weights, documented for context pruning. This is the open-weight story
+   Peyton asked about, at no extra training cost.
+3. **The SN118 Context track.** Part II's mechanism with the CPM as the miner
+   slot: shadow, then a share, then lineage.
+4. **A small generative model for the chat slot.** AR first. A diffusion
+   entrant is allowed if P0-D/G clear it. A single "Ditto Mercury" that packs,
+   decides and writes is the long-range goal, not v1.
+
+**P0 (≈3 weeks, research only; each spend needs approval):**
+
+| Experiment | Question | Setup | Win criterion |
+| --- | --- | --- | --- |
+| **P0-A. CPM vs Jev (the proof)** | Does a Ditto-trained packet model beat general-purpose Jev at building the context packet? | Frozen packet harness (stage 0 recall, stage 2 packer), frozen big model `gpt-oss-20b`, v18 full profile, 5 held-out seeds, plus a LongMemEval-S subset. Arms: (1) no model (today's top-k: 8 notes, semantic top-3 tools); (2) Jev 1.14 doing ranking, pruning and route as in today's hybrid; (3) off-the-shelf LLMLingua-2 / Provence-style pruner; (4) **Ditto CPM v0**: Qwen3.5-0.8B/2B multi-head, S1+S2 on generator gold, ~$50 compute; (5) Ditto CPM v0 + S3 reward (stretch); (6) Mercury Decide `extract` (only with API approval) | **CPM v0 ≥ Jev + 0.02 Q@4K at equal tokens, or equal Q at ≤60% of Jev's tokens.** Needed-fact recall@4K ≥ 0.95. Stage-1 p95 ≤ Jev's per-case decision latency. Bitwise-repeatable outputs on one GPU SKU |
+| P0-D. Diffusion vs AR | Is diffusion a better backbone for our decisions? | I.9.5 | I.9.5 decision rule |
+| P0-S. Lever size | Does the CPM move the bench enough to run a miner competition on it? | Spread of Q@4K across arms (1)–(5) vs the 0.007 dethrone margin and the paired per-seed sd (0.024–0.045) | Spread ≥ 3–5× the margin; otherwise the track would mostly reward noise |
+
+P0 inference spend is small. About 5 seeds × 6 arms × one 350-case run is ~30
+runs, at ≲$1 each under the v18 run budget. The training spend is ≲$100 for
+CPM v0 and $200–800 for P0-D. No new infrastructure is needed.
+
+**Product calls only Peyton can make** (also listed in Part II §10):
+
+1. Is the CPM the product's packet builder (it replaces the hybrid's Jev calls
+   and feeds the router's compression levers), or only a benchmark lane at
+   first?
+2. Open weights: release Ditto Extract and CPM weights publicly (Apache-2.0),
+   only SN118 champions after their reign, or keep them internal?
+3. Product traces: may opt-in, scrubbed product traces train the internal
+   model and form a private Ditto-only eval?
+4. Big-model target: is the packet tuned for the locked `gpt-oss-20b`
+   (benchmark), or for the production big model (Claude or another)? A packet
+   tuned for one reader may not transfer, so P1 must re-measure on the
+   production reader.
+
+# Part II. The SN118 mechanism (revision 1)
+
+## II.1 Where SN118 is today, and what changes
 
 Live state from the public API (`subnet-status`, 2026-11-17):
 
@@ -103,7 +529,7 @@ biggest workaround was faking span extraction with two nested `choice`
 questions, first over clauses and then over spans. A native `extract`
 primitive removes that workaround.
 
-## 2. What "Mercury 3" is
+## II.2 What "Mercury 3" is
 
 | | Mercury 3 | Mercury Decide | TypeSafe Jev 1.14 |
 | --- | --- | --- | --- |
@@ -123,13 +549,18 @@ Sources: [Inception blog](https://www.inceptionlabs.ai/blog/introducing-mercury-
 [OpenRouter: What is Jev](https://openrouter.ai/blog/insights/what-is-jev/) (spot-checked),
 [Mercury technical report, arXiv 2506.17298](https://arxiv.org/abs/2506.17298).
 
-**Interpretation.** No product named "Mercury 3" from TypeSafe or OpenRouter
-turned up. "A classifier model that can do strings" describes Mercury Decide:
-Jev's typed decisions with calibrated probabilities, plus exact-span `extract`.
-Mercury 3 is a general generative model. **Peyton should confirm which one was
-meant** (open question 1). The rest of this memo treats the target as "a
-Mercury Decide-class model we own", and treats Mercury 3 as the long-range
-"one model does everything" stretch goal.
+**Interpretation (resolved 2026-11-17).** Peyton confirmed the target was
+Mercury 3, the generative diffusion LLM, and also likes Mercury Decide's
+`extract` mode, which is a token tagger: per-token BIO tags with
+probabilities, and "nothing is generated"
+([Extract docs](https://docs.inceptionlabs.ai/capabilities/extract)). Both
+threads now live in Part I:
+
+- the diffusion question is I.9;
+- the Decide + Extract model and the open-weight Ditto Extract are I.8 and
+  I.10.
+
+Peyton's sharpened thesis makes the context-packet model the target.
 
 **Can we reproduce them?**
 
@@ -177,7 +608,7 @@ subnet runs a "miners train a decision model, scored inside an agent harness"
 competition. That gap is ours to fill, and REAX is a possible future serving
 outlet, not a competitor for the training lever.
 
-## 3. Prior art: Bittensor and close analogs
+## II.3 Prior art: Bittensor and close analogs
 
 Condensed. "Unverified" marks claims we could not find a primary source for.
 Spot-checked rows were re-read for this memo; the rest come from a research
@@ -226,7 +657,7 @@ pass that cited each claim.
 9. **Version scoring changes as eras.** Our `bench_version` contracts already
    do this. A `harness_version` should join them.
 
-## 4. Candidate model targets mapped to the bench
+## II.4 Candidate model targets mapped to the bench
 
 The bench a model would face (v18, [dueling-bench.md](../../research/dittobench-datagen/docs/dueling-bench.md)):
 
@@ -251,7 +682,7 @@ The bench a model would face (v18, [dueling-bench.md](../../research/dittobench-
 
 | Target | Concrete bases (Nov 2026) | Artifact | Serving cost | Lever on the bench | Main risk |
 | --- | --- | --- | --- | --- | --- |
-| **(a) Ultralight LLM** in the chat slot | Qwen3.5-0.8B/2B/4B (Apache 2.0, 262K context; 4B: BFCL-V4 50.3, TAU2 79.9). Gemma 4 E2B/E4B (Apache 2.0). Granite 4.0 1B/3B (Apache 2.0). Phi-4-mini (BFCL 70.3) | 2–10 GB | Decode-heavy, about $0.5–1.5 per run (section 7) | Replaces `gpt-oss-20b` (20B MoE). Probably a lower ceiling than today's chat agents | Tool-call JSON validity at small sizes. Decode nondeterminism. Biggest per-run cost |
+| **(a) Ultralight LLM** in the chat slot | Qwen3.5-0.8B/2B/4B (Apache 2.0, 262K context; 4B: BFCL-V4 50.3, TAU2 79.9). Gemma 4 E2B/E4B (Apache 2.0). Granite 4.0 1B/3B (Apache 2.0). Phi-4-mini (BFCL 70.3) | 2–10 GB | Decode-heavy, about $0.5–1.5 per run (§II.7) | Replaces `gpt-oss-20b` (20B MoE). Probably a lower ceiling than today's chat agents | Tool-call JSON validity at small sizes. Decode nondeterminism. Biggest per-run cost |
 | **(b) Decision + extract model** in the decision slot (recommended v1) | Qwen3.5-0.8B/2B (the same base open decision models use), Granite 4.0 1B, a GLiNER2-style encoder for extract | 50–500 MB as LoRA, 2–4 GB as full weights | **Prefill-only**, about $0.05–0.5 per run | Every decision row in the hybrid table. Also makes no-chat mode viable | The lever may be weaker than the chat slot. P0 measures it |
 | **(c) "Ditto Mercury"**: one model that decides, extracts and writes | (b)'s base with a generation head. Diffusion only as an optional entrant | 2–8 GB | Mixed | Both slots | Two objectives in one model. Diffusion JSON weakness. Do this last |
 
@@ -276,7 +707,7 @@ across vendors. Avoid as required bases:
    bench that dominates v18: tool selection over a huge menu, span arguments
    and extractive memory.
 2. Prefill-only scoring is cheap, needs no generation and is far easier to
-   make **deterministic** (section 6.4). That attacks the dominant source of
+   make **deterministic** (§II.6.4). That attacks the dominant source of
    crown noise.
 3. The plumbing exists: decision-lane pinning, metering, walls, outage codes
    and the priced-cost line.
@@ -285,7 +716,7 @@ across vendors. Avoid as required bases:
 5. Artifacts are small enough that hundreds of miners share one GPU through
    multi-LoRA serving.
 
-## 5. Mechanism options
+## II.5 Mechanism options
 
 ### M1. King of the Hill on a frozen harness (crown)
 
@@ -298,7 +729,7 @@ existing sequential paired dethrone.
   training method, including RL against the public generator, distillation
   and synthetic data. The winner is a finished, servable artifact.
 - Weaknesses: winner-take-all stagnation (mitigated by the five-way curve and
-  lineage releases), copy-and-tweak (section 6.3), and GPU hosting cost.
+  lineage releases), copy-and-tweak (§II.6.3), and GPU hosting cost.
 
 ### M2. Continuous distributed training with checkpoints
 
@@ -344,15 +775,24 @@ M1 for scoring, plus three changes:
 | Emission | Track share × 50/20/13/10/7 | ∝ accepted contribution | M1, plus later a data-lane share |
 | Fit for SN118 | High | Low at this scale and cost | **Highest. M1 now, M3 lineage from P3** |
 
-## 6. Recommended v1: the Decide track
+## II.6 Recommended v1: the Context track (revised from "Decide track")
 
-### 6.1 Contract
+Revision 2 note: the miner slot is now the **context-packet model** of Part I,
+covering decide, extract and pack, not a bare decision model. Everything below
+applies unchanged, with three substitutions:
+
+- the wire is `ditto-packet-v1` (I.2);
+- the frozen harness is the packet harness (stages 0 and 2, plus the locked big
+  model);
+- the score is the bench composite at a pinned packet budget B (I.7).
+
+### II.6.1 Contract
 
 - **Frozen harness.** A Ditto-owned reference harness image, digest-pinned,
   versioned as `harness_version` and bound to each bench contract the way a
   generator pack version is. Candidate: the starter kit's v18 hybrid path
   (0.263 on seed 42 at full, $0.27) or a stronger harness built from released
-  champion source (open question 4).
+  champion source (§II.10).
 - **Miner slot: decision.** The chat slot stays the locked `gpt-oss-20b`, so
   every composite difference is attributable to the decision model.
 - **Wire.** `ditto-decide-v1`, a strict subset of System One (`choice`,
@@ -368,7 +808,7 @@ M1 for scoring, plus three changes:
   No miner code runs anywhere. That avoids `trust_remote_code`, sandboxing and
   source review.
 
-### 6.2 Submission
+### II.6.2 Submission
 
 - **Manifest `ditto-model.toml`**, inside an upload signed with the existing
   `ditto-upload-v2` hotkey signature. Fields:
@@ -396,7 +836,7 @@ M1 for scoring, plus three changes:
 
   Same fee (0.075 TAO), cooldowns and bans as today.
 
-### 6.3 Anti-copy, layered
+### II.6.3 Anti-copy, layered
 
 1. **Private until release.** Unreleased weights are never public and the
    endpoint is never exposed, so nobody can download or distill an unreleased
@@ -431,7 +871,7 @@ M1 for scoring, plus three changes:
    data engine: generator miners find what the models miss, and model miners
    train on it.
 
-### 6.4 Evaluation and inference hosting
+### II.6.4 Evaluation and inference hosting
 
 - **Unchanged validators.** CPU-only, 4 vCPU / 32 GB / 160 GB disk
   ([VALIDATOR.md](../VALIDATOR.md#requirements)). They run the frozen harness
@@ -471,9 +911,9 @@ M1 for scoring, plus three changes:
   no-fault (`model_relay_unavailable`). The canonical outage void with
   same-validator re-test (#3566) applies unchanged.
 
-### 6.5 Emissions
+### II.6.5 Emissions
 
-- A new track, `model_decide`, beside `memory` and `generator`, folded under
+- A new track, `model_context`, beside `memory` and `generator`, folded under
   a new validator protocol. The track-share gate already refuses a share until
   the fleet reports the paying protocol.
 - Share path, as the no-inference memo proposed for its track: **0 bps
@@ -484,7 +924,7 @@ M1 for scoring, plus three changes:
   the dethrone margin. A stock or near-stock model earns nothing, and the
   track burns when nobody clears the floor.
 
-### 6.6 What a miner does
+### II.6.6 What a miner does
 
 1. Pull the public generator, frozen harness and decision renderer.
 2. Generate unlimited `(state, question, gold)` training data:
@@ -499,7 +939,7 @@ M1 for scoring, plus three changes:
 This is a much shorter loop than harness engineering, and it is the
 "Bittensor is good at training models" lever Peyton pointed at.
 
-## 7. Cost estimates (rough, to be replaced by P0 measurements)
+## II.7 Cost estimates (rough, to be replaced by P0 measurements)
 
 Assumptions, all unmeasured on our workload:
 
@@ -530,7 +970,7 @@ output tok/s at 64–256 concurrency
 ([RunInfra](https://runinfra.ai/engines/vllm)). Prefill-only decision serving
 is faster still. P0 replaces all of this with measured numbers.
 
-## 8. Migration path
+## II.8 Migration path
 
 ### Keep, change, add
 
@@ -539,7 +979,7 @@ is faster still. P0 replaces all of this with measured numbers.
 | Bench contracts, generator (public datagen half, private generator slice), block-hash seeds, CRN | The artifact: weights plus a manifest instead of a Docker build context | `harness_version`, frozen and digest-pinned per bench contract |
 | Quorum of 3, dueling seasons, sequential paired dethrone, rank shares | Screening: tensor checks and a load test instead of image build and `/health` | Ditto inference pool (multi-LoRA, batch-invariant) behind the relay |
 | Canonical outage voiding and re-test (#3566), no-fault relay codes | Copy evidence: tensor hash, ΔW similarity and behavior fingerprint instead of lexical and structural source fingerprints | `ditto-decide-v1` wire with `extract` |
-| Copy holds and the released-king alibi pool (#3564), now with a lineage alibi | Daily top-five read: model card, attestation and probe behavior instead of source | Track `model_decide`, validator fold protocol, Backroom reads for every new knob |
+| Copy holds and the released-king alibi pool (#3564), now with a lineage alibi | Daily top-five read: model card, attestation and probe behavior instead of source | Track `model_context`, validator fold protocol, Backroom reads for every new knob |
 | Generator competition, now the adversarial data engine | Priced cost by base-size tier | Miner tooling: fixture exporter, local decide server, `practice --decision-model` |
 | LongMemEval confirmation | Decision lane must be open on confirmation sessions | Reference fine-tune per base, the pay floor |
 
@@ -551,17 +991,17 @@ shrinks is a share decision, not a flag day.
 
 | Phase | What | Exit criterion |
 | --- | --- | --- |
-| **P0. Measure (≈2 weeks, research only)** | Hold the harness fixed (v18 hybrid). Swap decision models: Jev 1.14, Mercury Decide, open Kev-4B / Tev1, stock Qwen3.5-0.8B/2B/4B read-out, and a quick Ditto LoRA on generator-derived fixtures. 5 seeds at full. Also try the chat slot with Qwen3.5-4B / Gemma 4 E4B. Measure composite spread, per-seed paired sd with batch-invariant on and off, tokens, GPU time | **Go** if the spread across decent decision models is ≥ 3–5× the 0.007 margin, and a Ditto LoRA beats stock. Otherwise switch v1 to the chat slot or stop |
+| **P0. Measure (≈3 weeks, research only)** | Part I §I.10: P0-A (CPM vs Jev at a fixed budget), P0-D (diffusion vs AR), P0-S (lever size vs the dethrone margin) | **Go** if CPM v0 beats Jev on Q@B or tokens, and the spread is ≥ 3–5× the 0.007 margin. Otherwise stop or re-scope |
 | **P1. Contract (weight 0)** | Manifest, upload and screening path. Wire and renderer published. Pool on AWS (Terraform plan/apply, protected). Grant pin `miner:<digest>`. Fixtures exporter and local rehearsal | Conformance vectors in CI. A Ditto reference model scores end to end on a canary |
 | **P2. Shadow board (≥2 weeks)** | Open uploads, quorum scoring, seasons, copy gate v1, Backroom reads. 0 bps | ≥5 distinct owners ranked. Copy gate false-positive review. Crown stability. Cost per run within estimate |
 | **P3. Carve a share** | ~1,000 bps of the track pool. Champion release, base-of-record lineage (M3) | Board depth holds. No unresolved copy rulings. Owner sign-off |
 | **P4. Expand** | Chat-slot track (v2), then the one-model "Ditto Mercury" track (v3). Optional open architectures (diffusion) with Ditto-maintained serving adapters. Optional validator GPU spot-checks. Ditto's product decision lane served by the merged champion | Each step is its own contract version and its own shadow period |
 
-## 9. Risks
+## II.9 Risks
 
 - **The lever is too weak.** If the frozen harness caps the score, model
   differences vanish into harness error. P0 is the guard. A stronger frozen
-  harness (open question 4) raises the ceiling.
+  harness (§II.10) raises the ceiling.
 - **The harness becomes the spec.** Models will overfit harness quirks. That
   is acceptable, because the harness is Ditto's product path, but changing it
   is a contract bump, like a bench version.
@@ -579,30 +1019,45 @@ shrinks is a share decision, not a flag day.
   overfit, cost and stagnation failures directly, but none of it is proven
   until P2.
 
-## 10. Open questions for Peyton
+## II.10 Open questions for Peyton
 
-1. **Mercury 3 or Mercury Decide?** Did you mean Inception's Mercury Decide
-   (decision plus span extraction), or Mercury 3 (a generative diffusion LLM)?
-   The recommendation assumes Decide.
-2. **Which slot leads:** decision (recommended, pending P0) or chat?
-3. **Base allowlist and size tiers for v1:** Qwen3.5-0.8B/2B only, or also 4B
-   and Granite 4.0 1B? LoRA only, or LoRA plus full fine-tunes within family?
-4. **Which frozen harness:** the starter kit's hybrid (0.263), or a
-   Ditto-built reference from released champion source (higher ceiling,
-   more work)?
-5. **Hosting:** a Ditto pool on AWS (recommended), miner-hosted on Chutes
-   with TEE (Affine era 1), or validator GPUs?
-6. **Release policy for weights:** release champions on crown, after N days,
-   or never? This sets how much lineage compounding we get.
-7. **Emission share and timing** for `model_decide`. Should it ever draw from
-   the memory track's share?
-8. **Product intent:** is the winning model meant to replace Jev in Ditto's
-   own product lane? If yes, latency and calibration targets belong in the
-   contract from P1.
-9. **Data lane (Affine era 2 style):** pay miners for training data that
-   improves the base of record, as a later track?
-10. **Distillation from closed decision models:** stay silent, discourage, or
-    forbid?
+Resolved on 2026-11-17:
+
+- **Mercury 3 or Mercury Decide?** Mercury 3. Extract is also of interest.
+- **Which slot leads?** The context-packet model (decide + extract + pack),
+  per Peyton's thesis.
+
+Product calls (Part I §I.10):
+
+1. Is the CPM the product's packet builder from P1, or only a benchmark lane
+   at first?
+2. Open weights: release Ditto Extract and CPM weights publicly (Apache-2.0),
+   release only SN118 champions after their reign, or keep them internal?
+3. May opt-in, scrubbed product traces train the internal model and form a
+   private Ditto-only eval?
+4. Should the packet be tuned for the locked benchmark reader (`gpt-oss-20b`)
+   or for the production big model?
+
+Mechanism and spend:
+
+5. Base allowlist and size tiers: Qwen3.5-0.8B/2B only, or also 4B? LoRA
+   only, or also full fine-tunes within the family?
+6. Frozen packet harness: stage 0 and stage 2 from the starter kit's hybrid,
+   or a Ditto-built reference from released champion source?
+7. Budget B and λ pinned per contract (1K / 2K / 4K / 8K)?
+8. Hosting: a Ditto pool on AWS (recommended), miner-hosted on Chutes with
+   TEE, or validator GPUs?
+9. Release policy for champion weights: on crown, after N days, or never?
+   This sets how much lineage compounding we get.
+10. Emission share and timing for `model_context`. Should it ever draw from
+    the memory track's share?
+11. Data lane (Affine era 2 style): pay miners for training data that improves
+    the base of record?
+12. Distillation from closed decision models (Jev, Mercury): recommend
+    forbidding it for Ditto's own training and requiring an attestation from
+    miners.
+13. Spend approval for P0: about $300–1,000 of rented GPU time, plus ≤$50 of
+    locked-model and Jev inference. No new infrastructure.
 
 ## Sources
 
@@ -638,3 +1093,28 @@ AlphaSignal, the kartit.net ranking, Macrocosmos repositories and Substack
 posts, Templar papers, Gradients docs and paper, Dippy docs, SimplyTAO, Prime
 Intellect, Gensyn, Nous, the Hugging Face model cards and arXiv papers named
 in each section, and Vantage instance pricing.
+
+External added in revision 2 (spot-checked):
+
+- [Mercury Decide Extract docs](https://docs.inceptionlabs.ai/capabilities/extract)
+- [LLMLingua-2, arXiv 2403.12968](https://arxiv.org/abs/2403.12968)
+- [Provence, arXiv 2501.16214](https://arxiv.org/abs/2501.16214)
+- [LLaDA2.0-mini card](https://huggingface.co/inclusionAI/LLaDA2.0-mini)
+- [Nemotron-Labs-Diffusion-3B card](https://huggingface.co/nvidia/Nemotron-Labs-Diffusion-3B)
+
+External added in revision 2 (from the research pass, cited inline in I.9):
+the LLaDA, LLaDA2.x, SDAR, TraDo, Dream, DiffuCoder, DiffusionGemma and
+Open-dCoder cards and repositories; SGLang, dInfer and the vLLM dLLM plugin;
+the dllm library; d1, wd1, Fast-dLLM v2 and BYOD; and the arXiv papers on
+dLLM nondeterminism (2604.13413), slot bias (2608.14649), calibration
+(2608.08791), agentic workflows (2601.12979) and constrained decoding
+(2508.10111, 2607.07026). Vendor benchmark numbers are labelled as such.
+
+Repository added in revision 2:
+
+- Gold labels the CPM trains on: `research/dittobench-datagen/gen/artifact.go`
+  (`V10EvidencePairIDs`) and `research/dittobench-datagen/protocol/protocol.go`
+  (`DistractorAnswers`, `PrerequisitePairs`)
+- [docs/no-inference/extractive_ceiling.py](../no-inference/extractive_ceiling.py)
+- [starter-kit PROTOCOL.md](../../miners/dittobench-starter-kit/PROTOCOL.md):
+  the `/seed` pairs, subjects and links schema
