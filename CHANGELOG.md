@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.491.0 (2026-11-17)
+
+### Features
+
+- **platform**: Add signed readmission check and commit (SN-485)
+  ([#3559](https://github.com/ditto-assistant/ditto-subnet/pull/3559),
+  [`c5a85d5`](https://github.com/ditto-assistant/ditto-subnet/commit/c5a85d5171edde29062922a3cf1918f395602989))
+
+
 ## v0.490.0 (2026-11-17)
 
 ### Bug Fixes
