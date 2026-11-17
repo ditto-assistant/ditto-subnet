@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.490.0 (2026-11-17)
+
+### Bug Fixes
+
+- **platform,dashboard,backroom**: Show era_changed for previous-era rows
+  ([#3562](https://github.com/ditto-assistant/ditto-subnet/pull/3562),
+  [`a638667`](https://github.com/ditto-assistant/ditto-subnet/commit/a638667ca3e3ee95dd71550d13bee8384aabbf81))
+
+### Features
+
+- **platform**: Add the readmission payment lane (SN-485)
+  ([#3556](https://github.com/ditto-assistant/ditto-subnet/pull/3556),
+  [`fba1196`](https://github.com/ditto-assistant/ditto-subnet/commit/fba1196d8f6ca478356002a7c3860b5f552c9d75))
+
+
 ## v0.489.0 (2026-11-17)
 
 ### Features
