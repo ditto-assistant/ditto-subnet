@@ -378,6 +378,7 @@ from ditto.db.queries.score_ranking import (
 )
 from ditto.db.queries.score_retests import (
     DUELING_ROTATION_RETEST_BASIS,
+    OUTAGE_VOID_RETEST_BASIS,
     V9_CONTRACT_RETEST_BASIS,
     activate_next_score_retest,
 )
@@ -1930,6 +1931,41 @@ async def _activate_dueling_rotation_retest(
             allow_season_seed=season_seeds,
         )
     return ticket
+
+
+async def _activate_outage_void_retest(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    heartbeat: ValidatorHeartbeat | None,
+    bench_version: int,
+    now: datetime,
+    validator_running_benchmark: bool,
+    slot_id: str,
+    ttl: timedelta,
+) -> ValidatorTicket | None:
+    """Promote this validator's next provider-outage void re-test, if any.
+
+    Only at ``bench_version`` and only on a slot whose heartbeat serves it.
+    The replacement runs the validator's canonical seed for the agent again
+    (a continual retest's pin on the reused row is dropped first).
+    """
+    return await activate_next_score_retest(
+        session,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        supports_version=lambda version: (
+            heartbeat is not None
+            and version == bench_version
+            and heartbeat_supports_version(heartbeat, now=now, version=version)
+        ),
+        validator_running_benchmark=validator_running_benchmark,
+        slot_id=slot_id,
+        required_basis=OUTAGE_VOID_RETEST_BASIS,
+        allow_parallel_ordinary=True,
+        allow_parallel_contract_retests=True,
+        ttl=ttl,
+    )
 
 
 async def _dueling_evidence(
@@ -3903,6 +3939,21 @@ async def request_job(
                         slot_id=slot_id,
                         ttl=ticket_ttl,
                         settings=await _continual_settings(request),
+                    )
+                if not gated and ticket is None:
+                    # SN-489: a canonical score that measured a provider
+                    # outage is re-run on its own validator ahead of ordinary
+                    # quorum work, beside it on any free slot, so the
+                    # contaminated run stops counting as soon as possible.
+                    ticket = await _activate_outage_void_retest(
+                        session,
+                        validator_hotkey=payload.validator_hotkey,
+                        heartbeat=heartbeat,
+                        bench_version=canonical_version,
+                        now=now,
+                        validator_running_benchmark=slot_running_benchmark,
+                        slot_id=slot_id,
+                        ttl=ticket_ttl,
                     )
                 ticket = (
                     ticket
@@ -7610,10 +7661,12 @@ async def submit_score(
             bench_version=ticket.bench_version,
         )
         audit_now = datetime.now(UTC)
-        if replacement_event is not None and agent.status in {
-            AgentStatus.SCORED,
-            AgentStatus.LIVE,
-        }:
+        if replacement_event is not None and (
+            agent.status in {AgentStatus.SCORED, AgentStatus.LIVE}
+            # An outage void may replace a score before quorum; its lifecycle
+            # must still close, and the contaminated run stays on the record.
+            or replacement_event.payload.get("basis") == OUTAGE_VOID_RETEST_BASIS
+        ):
             assert existing_score is not None
             await append_audit_entry(
                 session,
@@ -7650,6 +7703,11 @@ async def submit_score(
                     },
                     "replacement_run_id": report.run_id,
                     "replacement_composite": report.composite,
+                    **(
+                        {"basis": replacement_event.payload["basis"]}
+                        if replacement_event.payload.get("basis")
+                        else {}
+                    ),
                 },
                 recorded_at=audit_now,
             )

@@ -1258,12 +1258,14 @@ export interface paths {
         put?: never;
         /**
          * Void Infra Confirmation Scores
-         * @description Void continual-retest samples whose own grant shows an inference outage.
+         * @description Void samples or canonical scores whose own grant shows an inference outage.
          *
          *     Each item is guarded on its exact run id and composite and gated on the
          *     serving grant's outage-class failures. ``dry_run`` (the default) writes
-         *     nothing. A voided sample counts toward nothing and its seed is re-leased;
-         *     the score row itself is never changed.
+         *     nothing. A voided retest sample counts toward nothing and its seed is
+         *     re-leased; the score row itself is never changed. A voided canonical score
+         *     queues a same-validator replacement re-test that swaps the score when it
+         *     lands (no miner retry budget is spent).
          */
         post: operations["void_infra_confirmation_scores_api_v1_admin_confirmation_score_voids_post"];
         delete?: never;
@@ -29603,6 +29605,12 @@ export interface components {
             expected_composite: number;
             /** Expected Run Id */
             expected_run_id: string;
+            /**
+             * Sample Kind
+             * @default auto
+             * @enum {string}
+             */
+            sample_kind: "auto" | "continual_retest" | "canonical";
             /** Seed */
             seed: string;
             /** Validator Hotkey */
@@ -29632,7 +29640,7 @@ export interface components {
              * Disposition
              * @enum {string}
              */
-            disposition: "ready" | "applied" | "already_voided" | "not_found" | "stale_guard" | "insufficient_evidence";
+            disposition: "ready" | "applied" | "already_voided" | "already_queued" | "already_replaced" | "not_found" | "stale_guard" | "insufficient_evidence" | "retest_busy" | "retest_closed" | "not_retestable" | "auto_cap_reached";
             /**
              * Evidence
              * @default {}
@@ -29642,6 +29650,14 @@ export interface components {
             };
             /** Evidence Digest */
             evidence_digest?: string | null;
+            /** Retest Request Id */
+            retest_request_id?: string | null;
+            /**
+             * Sample Kind
+             * @default continual_retest
+             * @enum {string}
+             */
+            sample_kind: "continual_retest" | "canonical";
             /** Seed */
             seed: string;
             /** Validator Hotkey */
@@ -32040,6 +32056,12 @@ export interface components {
             run_id: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+            /** Void Detail */
+            void_detail?: string | null;
+            /** Void Disposition */
+            void_disposition?: string | null;
+            /** Void Request Id */
+            void_request_id?: string | null;
         };
         /** OutageSweepError */
         OutageSweepError: {

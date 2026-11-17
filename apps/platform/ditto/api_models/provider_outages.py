@@ -2,7 +2,8 @@
 
 One response carries the relay-owned circuit rows, the evidence gate the
 post-outage sweep applies, and its append-only runs (voids written, outage
-windows observed, canonical scores flagged for operator replacement).
+windows observed, canonical scores flagged and voided by a same-validator
+replacement re-test).
 """
 
 from __future__ import annotations
@@ -82,6 +83,15 @@ class OutageSweepCanonicalFlag(BaseModel):
     failure_codes: dict[str, int] = {}
     outage_started_at: datetime | None = None
     outage_ended_at: datetime | None = None
+    void_disposition: str | None = None
+    """What the sweep's canonical void did (SN-489): ``applied`` queued the
+    replacement re-test; ``already_queued``, ``retest_busy``,
+    ``not_retestable``, ``auto_cap_reached`` and the guard dispositions left the
+    score as is; ``error`` means the void raised. Null on runs before SN-489."""
+    void_request_id: UUID | None = None
+    """Deterministic replacement request id (``get_validator_score_replacement``
+    shows its state)."""
+    void_detail: str | None = None
 
 
 class OutageSweepError(BaseModel):
@@ -106,8 +116,8 @@ class OutageSweepRunView(BaseModel):
     voids: list[OutageSweepVoid] = []
     outage_windows: list[OutageSweepWindow] = []
     canonical_flagged: list[OutageSweepCanonicalFlag] = []
-    """Canonical scores to review with ``replace_validator_score``; never
-    replaced automatically."""
+    """Canonical scores whose grant met the gate, each with the disposition of
+    the automatic same-validator replacement re-test it queued."""
     errors: list[OutageSweepError] = []
 
 

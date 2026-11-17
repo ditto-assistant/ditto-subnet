@@ -188,6 +188,23 @@ epoch pin, and the seed re-runs at the next `void_generation`. Validators fold
 the served `confirmation_history`, so no protocol change is involved.
 `list_infra_voids` reads them back with the re-run composite once it lands.
 
+The same tool voids a canonical quorum score (SN-489). Copy the validator,
+seed, `run_id` and composite from `get_agent_scores` or a `canonical_flagged`
+row; `sampleKind: auto` resolves a key's canonical run by its run id. The
+guards and evidence gate are the same, read off the score's own serving grant.
+A canonical score is one signed, upserted row per validator, so it cannot be
+set aside in place: `applied` queues a same-validator replacement re-test
+(basis `provider_outage_void`, `retest_request_id` derived from the voided
+run) on the same seed. It is leased ahead of ordinary quorum work on any free
+slot and does not spend the miner's retry budget. The score stays canonical
+until the replacement lands; then the score path appends `score_invalidated`
+(with the contaminated score) and swaps the row, and every median read
+recomputes. An agent still accumulating its quorum cannot finalize on the
+outage run, because its ticket is live again. A replacement that fails or
+expires closes (`retest_closed` on a repeat) and leaves the score as it was;
+retry with `replace_validator_score`. `get_validator_score_replacement` shows
+the pending request.
+
 `get_provider_outages` (`backroom:read`) reads the relay-owned
 `provider_outage_circuits` rows and the post-outage sweep. The circuit closes
 on any successful call, so in a low-balance flap a retest can still finish with
@@ -201,9 +218,11 @@ grant's first and last outage-class failure as the outage window. Each
 append-only run (`outage_sweep_runs`) records its watermark range, counts,
 voids, outage windows, per-row errors, and `canonical_flagged`. Those are
 canonical scores accepted in the same range whose grant shows the same
-evidence. The sweep never replaces them; review each with
-`replace_validator_score`. A row that errors is listed and skipped, not
-retried. `withFindings` keeps only runs that voided, flagged or errored.
+evidence. The sweep voids each one through the canonical path above (source
+`outage_sweep`, at most 2 automatic re-tests per agent, version and validator)
+and records `void_disposition`, `void_request_id` and `void_detail` on the flag.
+Anything other than `applied` or `already_queued` needs operator review. A row
+that errors is listed and skipped, not retried. `withFindings` keeps only runs that voided, flagged or errored.
 
 The shadow DittoBench generator competition has its own operator surface.
 Miners submit CPU-only Go generator source. The scorer qualifies each upload:

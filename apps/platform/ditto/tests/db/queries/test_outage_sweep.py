@@ -291,7 +291,8 @@ async def test_sweep_voids_the_tainted_retest_with_its_window_and_is_idempotent(
     ]
     assert [w["sample"] for w in first.outage_windows] == ["confirmation"]
     assert first.outage_windows[0]["started_at"] == OUTAGE_START.isoformat()
-    # The canonical score from the same grant is flagged, never replaced.
+    # The canonical score from the same grant is flagged and voided by a
+    # queued same-validator replacement; the row itself is not changed.
     (flag,) = first.canonical_flagged
     assert (flag["agent_id"], flag["validator_hotkey"], flag["run_id"]) == (
         str(agent_id),
@@ -300,6 +301,8 @@ async def test_sweep_voids_the_tainted_retest_with_its_window_and_is_idempotent(
     )
     assert flag["outage_failed_requests"] == 40
     assert flag["failure_codes"] == {"agent_timeout": 1, "upstream_http_402": 40}
+    assert flag["void_disposition"] == "applied"
+    assert flag["void_request_id"] is not None
     async with session_maker() as read:
         composite = await read.scalar(
             select(Score.composite).where(Score.agent_id == agent_id)

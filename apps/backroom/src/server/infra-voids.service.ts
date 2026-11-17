@@ -24,6 +24,7 @@ export async function voidInfraScores(raw: unknown, actor: string) {
         seed: item.seed,
         expected_run_id: item.expectedRunId,
         expected_composite: item.expectedComposite,
+        sample_kind: item.sampleKind,
       })),
       reason: input.reason,
       dry_run: input.dryRun,
