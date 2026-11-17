@@ -42,15 +42,13 @@ from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.submission_status import (
-    era_change,
+    closed_submission_statuses,
     era_change_blocking_reason,
 )
 from ditto.db.models import Agent, BenchmarkDataset, Score, ValidatorQueueWithdrawal
 from ditto.db.queries.benchmark_admission import (
     activated_rollout_for_version,
-    admission_rollout_for_active_version,
     agent_is_era_admitted,
-    previous_era_scored_agent_ids,
 )
 from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
@@ -219,39 +217,20 @@ async def scoring_readiness(
         blocking.append(_queue_removal_reason(queue_removal, scoring_version))
     change = None
     if not era_admitted:
-        # The same reason code and next step the miner's ``era_changed`` row
-        # carries, so Backroom and the dashboard name one cause (SN-485).
-        change_rollout = await admission_rollout_for_active_version(
-            session, bench_version=scoring_version
-        )
-        # Status alone is not evidence of a previous-era score: a historical
-        # row may hold only older scores, or one on this version. Ask the same
-        # predicate the miner projection and the stranded listing use.
-        previous_era_scored = agent.status in (
-            AgentStatus.SCORED,
-            AgentStatus.LIVE,
-        ) and agent_id in await previous_era_scored_agent_ids(
-            session,
-            agent_ids=[agent_id],
-            bench_version=scoring_version,
-            rollout=change_rollout,
-        )
-        # Quote the miner's label only where the miner projection shows it: a
-        # waiting row with no in-force removal (a withdrawn one reads
-        # ``not_queued``), or a finalized row with a previous-era score. Any
-        # other refused row (banned, quarantined, screening_failed, or scored
-        # only on an older era) keeps its own status, so name the era boundary
-        # without claiming a label the miner never sees.
-        miner_sees_era_changed = previous_era_scored or (
-            agent.status in (AgentStatus.SCREENING_PASSED, AgentStatus.EVALUATING)
-            and queue_removal is None
-        )
-        if miner_sees_era_changed:
-            change = era_change(
-                bench_version=scoring_version,
-                rollout=change_rollout,
-                previous_era_scored=previous_era_scored,
+        # Quote the miner's label only where the miner projection shows it, by
+        # asking that projection directly rather than restating its rules. It
+        # closes a waiting row as retired, scoring_failed, or not_queued before
+        # the era boundary, keeps a row a validator holds on a live lease in its
+        # waiting label, and labels a finalized row only with a previous-era
+        # score. Any other refused row keeps its own status, so readiness names
+        # the era boundary without claiming a label the miner never sees.
+        closed = (
+            await closed_submission_statuses(
+                session, agents=[agent], active_version=scoring_version
             )
+        ).get(agent.agent_id)
+        if closed is not None and closed.era_change is not None:
+            change = closed.era_change
             blocking.append(era_change_blocking_reason(change))
         else:
             blocking.append(

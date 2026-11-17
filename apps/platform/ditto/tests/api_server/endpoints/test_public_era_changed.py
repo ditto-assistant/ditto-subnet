@@ -36,6 +36,7 @@ from ditto.db.models import (
     BenchmarkRolloutMember,
     Score,
     ScreeningAttempt,
+    SubmissionRetirement,
     ValidatorQueueWithdrawal,
     ValidatorTicket,
 )
@@ -653,3 +654,53 @@ async def test_a_live_active_era_lease_keeps_the_waiting_label_on_both_surfaces(
         if item["agent_id"] == str(seeded.dead_retry)
     )
     assert dead["era_change"] == _change(scored_bench_version=None)
+
+
+async def test_readiness_defers_to_the_miner_projection_for_a_retired_waiting_row(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Review r4605892617 follow-up: a retired waiting row reads ``retired``.
+
+    The miner projection closes retired waiting rows before the era boundary,
+    so readiness must not quote the era-changed label for one, even with no
+    queue removal in force.
+    """
+    seeded = await _seed(maker)
+    async with maker() as session, session.begin():
+        session.add(
+            SubmissionRetirement(
+                retirement_id=uuid4(),
+                agent_id=seeded.waiting,
+                bench_version=_FROM,
+                superseded_by_version=_ACTIVE,
+                actor="operator",
+                reason="superseded by a newer version from the same miner",
+                expected_snapshot="ab" * 32,
+                score_count=0,
+                ticket_snapshot=[],
+                created_at=_ACTIVATED_AT,
+            )
+        )
+    _install(app, maker)
+
+    async with maker() as session:
+        agent = await session.get(Agent, seeded.waiting)
+        assert agent is not None
+        closed = await closed_submission_statuses(
+            session, agents=[agent], active_version=_ACTIVE
+        )
+    assert closed[seeded.waiting].status == "retired"
+
+    body = await _readiness(client, seeded.waiting)
+    assert body["era_change"] is None, body
+    assert _ERA_REASON not in body["blocking_reasons"]
+    assert (
+        f"historical submission is not admitted to the v{_ACTIVE} validator queue"
+    ) in body["blocking_reasons"]
+
+    # The plain waiting row with no close-out still quotes the miner's label.
+    other = await _readiness(client, seeded.dead_retry)
+    assert other["era_change"] is not None
+    assert any("miners see" in r for r in other["blocking_reasons"])
