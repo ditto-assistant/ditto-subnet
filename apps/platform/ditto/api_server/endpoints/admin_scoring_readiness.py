@@ -236,12 +236,28 @@ async def scoring_readiness(
             bench_version=scoring_version,
             rollout=change_rollout,
         )
-        change = era_change(
-            bench_version=scoring_version,
-            rollout=change_rollout,
-            previous_era_scored=previous_era_scored,
+        # Quote the miner's label only where the miner projection shows it: a
+        # waiting row with no in-force removal (a withdrawn one reads
+        # ``not_queued``), or a finalized row with a previous-era score. Any
+        # other refused row (banned, quarantined, screening_failed, or scored
+        # only on an older era) keeps its own status, so name the era boundary
+        # without claiming a label the miner never sees.
+        miner_sees_era_changed = previous_era_scored or (
+            agent.status in (AgentStatus.SCREENING_PASSED, AgentStatus.EVALUATING)
+            and queue_removal is None
         )
-        blocking.append(era_change_blocking_reason(change))
+        if miner_sees_era_changed:
+            change = era_change(
+                bench_version=scoring_version,
+                rollout=change_rollout,
+                previous_era_scored=previous_era_scored,
+            )
+            blocking.append(era_change_blocking_reason(change))
+        else:
+            blocking.append(
+                f"historical submission is not admitted to the v{scoring_version} "
+                "validator queue"
+            )
 
     return AgentScoringReadiness(
         agent_id=agent.agent_id,

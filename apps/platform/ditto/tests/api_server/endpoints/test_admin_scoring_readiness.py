@@ -265,6 +265,50 @@ async def test_withdrawn_historical_submission_names_both_gates(
         "operator withdrawal"
     )
     assert "historical submission" in reasons[1]
+    # The miner sees ``not_queued`` for a withdrawn row, never ``era_changed``.
+    assert body["era_change"] is None
+    assert "miners see" not in reasons[1]
+
+
+@pytest.mark.parametrize(
+    "status",
+    [AgentStatus.SCREENING_FAILED, AgentStatus.BANNED, AgentStatus.SCORED],
+)
+async def test_refused_row_the_miner_does_not_see_as_era_changed(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    sr_maker: async_sessionmaker[AsyncSession],
+    status: AgentStatus,
+) -> None:
+    """Only rows the miner projection labels ``era_changed`` quote that label.
+
+    A refused row that keeps its own status (a screening failure, a ban, or a
+    ``scored`` row with no previous-era score) still names the era boundary,
+    but carries no ``era_change`` payload and no claim about what miners see.
+    """
+    agent_id = await _seed(sr_maker, status=status, historical=True)
+    _install(app, sr_maker)
+
+    body = await _get(client, agent_id)
+
+    assert body["era_change"] is None
+    era_reasons = [r for r in body["blocking_reasons"] if "historical submission" in r]
+    assert era_reasons == [
+        f"historical submission is not admitted to the v{MIN_SCOREABLE_BENCH_VERSION} "
+        "validator queue"
+    ]
+
+
+async def test_waiting_refused_row_quotes_the_miner_label(
+    app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed(sr_maker, historical=True)
+    _install(app, sr_maker)
+
+    body = await _get(client, agent_id)
+
+    assert body["era_change"] is not None
+    assert any("miners see" in r for r in body["blocking_reasons"])
 
 
 async def test_missing_screened_image_blocks_and_names_fields(
