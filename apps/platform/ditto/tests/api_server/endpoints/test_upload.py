@@ -1548,6 +1548,44 @@ class TestUploadAgentHappyPath:
         assert body["version"] == 1
         assert body["status"] == "uploaded"
 
+    async def test_a_racing_identical_upload_is_still_labelled_a_readmission(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The first duplicate lookup misses a concurrent identical upload; the
+        recheck under the coldkey lock still finds the lineage (SN-485)."""
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        lineage_id = uuid4()
+        lookup = AsyncMock(side_effect=[None, SimpleNamespace(agent_id=lineage_id)])
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha", lookup
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.announcement_in_effect",
+            lambda _settings: True,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.current_readmission_activation",
+            AsyncMock(
+                return_value=SimpleNamespace(active=True, active_bench_version=19)
+            ),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+        data["allow_identical_rescore"] = "true"
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        assert lookup.await_count == 2
+        assert response.json()["readmission_kind"] == "identical_rescore"
+        assert response.json()["readmission_of_agent_id"] == str(lineage_id)
+
     async def test_stores_tar_under_agent_id_key(
         self, app: FastAPI, client: httpx.AsyncClient
     ):

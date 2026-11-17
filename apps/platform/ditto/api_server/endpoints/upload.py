@@ -1019,6 +1019,19 @@ async def upload_agent(
             )
             if reserved is not None:
                 raise HTTPException(status_code=409, detail=reserved)
+            # SN-485: an identical upload committed by a concurrent request
+            # after the lookup above is this rescore's lineage. Re-read it
+            # under the coldkey lock, before this agent exists, so the
+            # readmission label below is never lost to the race.
+            if (
+                identical_lineage_id is None
+                and allow_identical_rescore
+                and announcement_in_effect(settings)
+            ):
+                lineage = await get_same_owner_agent_by_sha(
+                    session, miner_coldkey=owner_coldkey, sha256=sha256
+                )
+                identical_lineage_id = lineage.agent_id if lineage else None
             version = await insert_agent(
                 session,
                 agent_id=agent_id,
