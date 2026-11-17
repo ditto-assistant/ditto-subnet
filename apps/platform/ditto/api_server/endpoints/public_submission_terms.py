@@ -9,9 +9,11 @@ rule. See :mod:`ditto.api_models.submission_terms`.
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import (
@@ -60,6 +62,8 @@ from ditto_screening_protocol.source_limits import (
     MAX_SOURCE_LINE_CHARS,
     SOURCE_LIMITS_EFFECTIVE_AT,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/public/submission-terms", tags=["public"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -248,17 +252,22 @@ async def _all_terms(
     generator = (await load_settings(session)).settings
     activation = await current_readmission_activation(session, settings=effective)
     # The cost basis is published once readmission is announced; before that
-    # the public terms skip the aggregation entirely.
-    readmission = readmission_terms(
-        activation,
-        (
-            await readmission_cost_basis(
+    # the public terms skip the aggregation entirely. It is informational, so
+    # a failed measurement serves the terms without it rather than failing
+    # the routes miners read before paying.
+    cost_basis = None
+    if activation.announced_at is not None:
+        try:
+            cost_basis = await readmission_cost_basis(
                 session, bench_version=activation.active_bench_version
             )
-            if activation.announced_at is not None
-            else None
-        ),
-    )
+        except SQLAlchemyError:
+            logger.exception(
+                "readmission cost basis unavailable for v%s",
+                activation.active_bench_version,
+            )
+            await session.rollback()
+    readmission = readmission_terms(activation, cost_basis)
     return [
         CompetitionSubmissionTerms(
             competition="memory",

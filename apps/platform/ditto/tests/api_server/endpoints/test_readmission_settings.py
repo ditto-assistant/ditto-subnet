@@ -237,3 +237,37 @@ async def test_setting_and_clearing_together_is_refused(
     body["clear_readmission_announcement"] = True
     resp = await client.post(_URL, headers=_HEADERS, json=body)
     assert resp.status_code == 422, resp.text
+
+
+async def test_terms_survive_a_failed_cost_basis_measurement(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once announced, a failed cost-basis query still serves the terms."""
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.exc import OperationalError
+
+    from ditto.api_server.endpoints import public_submission_terms
+
+    _install(app, session_maker)
+    revision = (await _current(client))["current"]["revision"]  # type: ignore[index]
+    stamp = datetime.now(UTC).replace(microsecond=0).isoformat()
+    recorded = await client.post(
+        _URL,
+        headers=_HEADERS,
+        json=_write(revision, fee=75_000_000, announcement=stamp),
+    )
+    assert recorded.status_code == 200, recorded.text
+    monkeypatch.setattr(
+        public_submission_terms,
+        "readmission_cost_basis",
+        AsyncMock(side_effect=OperationalError("select", {}, Exception("down"))),
+    )
+    resp = await client.get("/api/v1/public/submission-terms/memory")
+    assert resp.status_code == 200, resp.text
+    readmission = resp.json()["readmission"]
+    assert readmission["cost_basis"] is None
+    assert readmission["activation"]["announced_at"] is not None
