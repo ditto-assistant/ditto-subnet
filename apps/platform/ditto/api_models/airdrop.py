@@ -73,7 +73,7 @@ IdempotencyKey = Annotated[
 
 
 class AirdropRecipientInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(frozen=True)
 
     kind: AirdropRecipientKind
     address: Annotated[
@@ -95,7 +95,8 @@ class AirdropRecipientInput(BaseModel):
 
 
 class AirdropPreviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Unknown fields are ignored, never forbidden (repository forward-compat
+    # rule). A mistyped execute flag therefore leaves dry_run at its default.
 
     asset: AirdropAsset
     mode: AirdropMode = "rehearsal"

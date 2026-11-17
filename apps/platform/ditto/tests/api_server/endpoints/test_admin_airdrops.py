@@ -199,6 +199,32 @@ async def test_execute_defaults_to_dry_run(
     assert await _count(session_maker, AirdropRun) == 0
 
 
+async def test_unknown_fields_are_ignored_and_never_turn_off_dry_run(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    body = _request()
+    preview = await _preview(client, body)
+
+    response = await client.post(
+        "/api/v1/admin/airdrops/execute",
+        headers=_HEADERS,
+        json={
+            **body,
+            "dryrun": False,
+            "confirmation_digest": preview["confirmation_digest"],
+            "confirmation": preview["confirmation"],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["dry_run"] is True
+    assert response.json()["run"] is None
+    assert await _count(session_maker, AirdropRun) == 0
+
+
 async def test_rehearsal_settles_audits_and_retry_never_pays_twice(
     app: FastAPI,
     client: httpx.AsyncClient,
