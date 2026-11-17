@@ -616,6 +616,7 @@ import {
   submissionTermsReadSchema,
   submissionTermsSchema,
 } from '../lib/submission-terms.schemas'
+import { adminReadmissionsSchema, listReadmissionsInputSchema } from '../lib/readmission.schemas'
 import {
   competitionImprovementMetricsInputSchema,
   competitionImprovementMetricsSchema,
@@ -1423,6 +1424,24 @@ export async function fetchCompetitionSubmissionTerms() {
 }
 
 const SUBMISSION_SETTINGS_PATH = '/api/v1/admin/submission-settings'
+
+/**
+ * Every SN-485 readmission: the paid lane (admitted, or credited when refused
+ * after payment) and uploads classified as readmissions, with totals, the
+ * active era's free admissions by category, activation and the cost basis.
+ */
+export async function fetchReadmissions(rawInput: unknown) {
+  const input = listReadmissionsInputSchema.parse(rawInput ?? {})
+  const params = new URLSearchParams()
+  if (input.benchVersion !== undefined) params.set('bench_version', String(input.benchVersion))
+  if (input.minerColdkey !== undefined) params.set('miner_coldkey', input.minerColdkey)
+  params.set('limit', String(input.limit))
+  params.set('offset', String(input.offset))
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/readmissions?${params.toString()}`,
+  )
+  return adminReadmissionsSchema.parse(payload)
+}
 
 export async function fetchSubmissionSettingsControl() {
   const payload = await platformAdminRequest(SUBMISSION_SETTINGS_PATH)
@@ -3682,6 +3701,9 @@ export async function admitStrandedSubmission(actor: string, rawInput: unknown) 
         expected_active_version: input.expectedActiveVersion,
         expected_sha256: input.expectedSha256.toLowerCase(),
         expected_previous_score_count: input.expectedPreviousScoreCount,
+        // Omitted (not null) when unset, so an older Platform sees the body
+        // it always did.
+        ...(input.category == null ? {} : { category: input.category }),
       } satisfies AdmitRequest,
     },
   )

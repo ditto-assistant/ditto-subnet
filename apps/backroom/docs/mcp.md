@@ -889,6 +889,31 @@ Platform admin API (`POST /api/v1/admin/submission-settings` with
 (`clear_readmission_announcement: true`, `; READMISSION ANNOUNCEMENT CLEARED`)
 is the kill switch.
 
+### Readmission records (`list_readmissions`)
+
+`list_readmissions` reads every SN-485 readmission, newest first:
+
+- `paid`: the readmission payment lane. `outcome: admitted` is a paid
+  readmission of one stranded agent into the active era (`funding` `fresh`,
+  or `credit` with the spent credit's history in `credit_audit`).
+  `outcome: credited` is a readmission refused after payment and banked as a
+  30-day upload credit (`refusal_reason`, `credit_spent`,
+  `credit_expires_at`). Ditto never refunds on chain.
+- `uploads`: accepted uploads classified as readmissions of the owner's own
+  lineage: `identical_rescore` or `near_duplicate`, with `lineage_agent_id`.
+  They paid the ordinary upload fee.
+- `totals`, `free_admissions_by_category` (the active era's stranded
+  admissions by audited category: free `ditto_fault`, `owner_policy`,
+  `unspecified`, against `paid`), `activation` and `cost_basis`.
+
+Platform-caused re-tests (`dueling_season_rotation`: rotation, catch-up, ATH
+clear) never pass through `/upload` or a payment, so they are never
+readmissions and never appear here. `get_stranded_admissions` shows each
+admission's `origin` (`operator_stranded_admission` or `paid_readmission`),
+`category` and `payment_ref`; `admit_stranded_submission` takes an optional
+`category`. The miner-fee panel and `/admin/miner-fees` report the readmission
+lane beside the upload totals, counting each proof once.
+
 ## Upload payment proofs
 
 When a miner reports a 3201, 3207 or 3208 after paying, call

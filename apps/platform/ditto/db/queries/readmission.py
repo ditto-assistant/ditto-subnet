@@ -571,6 +571,81 @@ async def record_upload_readmission(
     await session.flush()
 
 
+@dataclass(frozen=True)
+class ReadmissionFeeTotals:
+    admitted: int
+    admitted_amount_rao: int
+    credit_funded: int
+    credited: int
+    credited_amount_rao: int
+    upload_readmissions: int
+    upload_readmission_amount_rao: int
+
+
+async def readmission_fee_totals(
+    session: AsyncSession,
+    *,
+    bench_version: int | None = None,
+    miner_coldkey: str | None = None,
+) -> ReadmissionFeeTotals:
+    """Counts and amounts of every readmission, optionally for one era and
+    one payment coldkey."""
+    paid_filter = []
+    if bench_version is not None:
+        paid_filter.append(ReadmissionPayment.bench_version == bench_version)
+    if miner_coldkey is not None:
+        paid_filter.append(ReadmissionPayment.miner_coldkey == miner_coldkey)
+    rows = (
+        await session.execute(
+            select(
+                ReadmissionPayment.outcome,
+                ReadmissionPayment.funding,
+                func.count(),
+                func.coalesce(func.sum(ReadmissionPayment.amount_rao), 0),
+            )
+            .where(*paid_filter)
+            .group_by(ReadmissionPayment.outcome, ReadmissionPayment.funding)
+        )
+    ).tuples()
+    admitted = admitted_rao = credit_funded = credited = credited_rao = 0
+    for outcome, funding, count, amount in rows:
+        if outcome == "admitted":
+            admitted += int(count)
+            admitted_rao += int(amount)
+            if funding == "credit":
+                credit_funded += int(count)
+        else:
+            credited += int(count)
+            credited_rao += int(amount)
+    upload_filter = []
+    if bench_version is not None:
+        upload_filter.append(UploadReadmission.bench_version == bench_version)
+    if miner_coldkey is not None:
+        upload_filter.append(UploadReadmission.miner_coldkey == miner_coldkey)
+    uploads, upload_rao = (
+        await session.execute(
+            select(
+                func.count(UploadReadmission.agent_id),
+                func.coalesce(func.sum(EvaluationPayment.amount_rao), 0),
+            )
+            .outerjoin(
+                EvaluationPayment,
+                EvaluationPayment.agent_id == UploadReadmission.agent_id,
+            )
+            .where(*upload_filter)
+        )
+    ).one()
+    return ReadmissionFeeTotals(
+        admitted=admitted,
+        admitted_amount_rao=admitted_rao,
+        credit_funded=credit_funded,
+        credited=credited,
+        credited_amount_rao=credited_rao,
+        upload_readmissions=int(uploads),
+        upload_readmission_amount_rao=int(upload_rao),
+    )
+
+
 __all__ = [
     "ERROR_CODE_READMISSION_ALREADY_ADMITTED",
     "ERROR_CODE_READMISSION_INACTIVE",
@@ -578,6 +653,7 @@ __all__ = [
     "ERROR_CODE_READMISSION_OWNER_MISMATCH",
     "READMISSION_RESERVATION_TTL",
     "ReadmissionEligibility",
+    "ReadmissionFeeTotals",
     "ReadmissionRefusal",
     "SubmissionCooldownError",
     "UploadReadmissionKind",
@@ -591,6 +667,7 @@ __all__ = [
     "consume_readmission_admission",
     "get_readmission_reservation",
     "readmission_eligibility",
+    "readmission_fee_totals",
     "reservation_live",
     "reserve_readmission",
 ]

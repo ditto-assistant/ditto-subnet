@@ -30,6 +30,15 @@ describe('MinerFeePanel', () => {
               gross_value_usd: 10,
             },
           ],
+          readmission: {
+            admitted: 3,
+            admitted_amount_rao: 225_000_000,
+            credit_funded: 1,
+            credited: 1,
+            credited_amount_rao: 75_000_000,
+            upload_readmissions: 2,
+            upload_readmission_amount_rao: 150_000_000,
+          },
         }}
       />,
     )
@@ -38,6 +47,9 @@ describe('MinerFeePanel', () => {
     expect(screen.getAllByText('$10.00')).toHaveLength(2)
     expect(screen.getByText(/365 legacy payments are unpriced/)).toBeTruthy()
     expect(screen.getByText('5PaymentAddress')).toBeTruthy()
+    expect(screen.getByLabelText('Readmission fees').textContent).toContain(
+      '3 paid readmissions',
+    )
     expect(screen.getByText('2/2')).toBeTruthy()
   })
 })

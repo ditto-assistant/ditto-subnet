@@ -42,6 +42,24 @@ export function MinerFeePanel({ summary }: { summary: MinerFeeSummary }) {
         </section>
       ) : null}
 
+      {summary.readmission ? (
+        <section
+          aria-label="Readmission fees"
+          className="rounded-xl border border-[var(--line)] bg-[var(--panel)] px-5 py-4 text-xs leading-5 text-[var(--muted-strong)]"
+        >
+          <h2 className="text-sm font-semibold">Readmission fees</h2>
+          <p className="mt-1">
+            {summary.readmission.admitted.toLocaleString()} paid readmissions,{' '}
+            {tao(summary.readmission.admitted_amount_rao, 9)} TAO. Freshly paid readmissions are not in
+            the gross above; the {summary.readmission.credit_funded.toLocaleString()} paid by an earlier
+            credit may already be counted there.{' '}
+            {summary.readmission.credited.toLocaleString()} refused after payment and banked as
+            credits, and {summary.readmission.upload_readmissions.toLocaleString()} uploads classified
+            as readmissions, are already in the upload totals.
+          </p>
+        </section>
+      ) : null}
+
       <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
         <div className="flex flex-col gap-4 border-b border-[var(--line)] px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
           <div>

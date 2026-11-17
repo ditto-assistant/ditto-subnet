@@ -8,7 +8,8 @@ the readmission endpoints, so every surface reports the same state.
 from __future__ import annotations
 
 from ditto.api_models.submission_settings import ReadmissionActivationState
-from ditto.api_models.submission_terms import ReadmissionTerms
+from ditto.api_models.submission_terms import ReadmissionCostBasis, ReadmissionTerms
+from ditto.api_server.readmission_cost_basis import CostBasis
 from ditto.db.queries.readmission_gate import (
     READMISSION_MIN_BENCH_VERSION,
     READMISSION_NOTICE_PERIOD,
@@ -43,10 +44,30 @@ def activation_state(activation: ReadmissionActivation) -> ReadmissionActivation
     )
 
 
-def readmission_terms(activation: ReadmissionActivation) -> ReadmissionTerms:
-    return ReadmissionTerms(
-        activation=activation_state(activation), rules=list(READMISSION_RULES)
+def cost_basis_view(basis: CostBasis) -> ReadmissionCostBasis:
+    return ReadmissionCostBasis(
+        bench_version=basis.bench_version,
+        agents_sampled=basis.agents_sampled,
+        runs_per_evaluation=basis.runs_per_evaluation,
+        median_run_cost_usd=basis.median_run_cost_usd,
+        median_agent_cost_usd=basis.median_agent_cost_usd,
+        measured_at=basis.measured_at,
     )
 
 
-__all__ = ["READMISSION_RULES", "activation_state", "readmission_terms"]
+def readmission_terms(
+    activation: ReadmissionActivation, cost_basis: CostBasis | None = None
+) -> ReadmissionTerms:
+    return ReadmissionTerms(
+        activation=activation_state(activation),
+        rules=list(READMISSION_RULES),
+        cost_basis=cost_basis_view(cost_basis) if cost_basis is not None else None,
+    )
+
+
+__all__ = [
+    "READMISSION_RULES",
+    "activation_state",
+    "cost_basis_view",
+    "readmission_terms",
+]
