@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.487.2 (2026-11-17)
+
+### Bug Fixes
+
+- **platform**: Serialize canonical outage void gate with the audit append
+  ([`03bd489`](https://github.com/ditto-assistant/ditto-subnet/commit/03bd48956fbf46051cef69226f8e07a550ddf24d))
+
+- **platform**: Void outage-tainted canonical scores with a same-validator re-test
+  ([`acc088b`](https://github.com/ditto-assistant/ditto-subnet/commit/acc088b4da111820a257d138e364fc925363b9d0))
+
+
 ## v0.487.1 (2026-11-16)
 
 ### Bug Fixes
