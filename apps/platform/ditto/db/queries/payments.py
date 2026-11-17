@@ -74,6 +74,33 @@ class ReadmissionAlreadyAdmittedError(Exception):
     """This agent already has an admitted readmission in this era."""
 
 
+class ReadmissionTargetError(Exception):
+    """The readmitted agent is not the paying owner's."""
+
+
+async def _ensure_readmission_target(
+    session: AsyncSession, *, agent_id: UUID, miner_hotkey: str, miner_coldkey: str
+) -> None:
+    """Refuse to bind a payment to an agent the payer does not own.
+
+    The agent must have been uploaded by the paying hotkey and, when it has a
+    payment-time owner, paid for by the paying coldkey: otherwise one miner's
+    payment could take another miner's admitted-once slot for an era.
+    """
+    owner_hotkey = await session.scalar(
+        select(Agent.miner_hotkey).where(Agent.agent_id == agent_id)
+    )
+    if owner_hotkey is None or owner_hotkey != miner_hotkey:
+        raise ReadmissionTargetError(
+            f"agent {agent_id} was not uploaded by hotkey {miner_hotkey}"
+        )
+    owner_coldkey = await get_miner_coldkey_for_agent(session, agent_id=agent_id)
+    if owner_coldkey is not None and owner_coldkey != miner_coldkey:
+        raise ReadmissionTargetError(
+            f"agent {agent_id} was paid for by a different coldkey"
+        )
+
+
 def credit_ttl(payment: EvaluationPayment) -> timedelta:
     """How long ``payment`` stays spendable as a credit, by its origin."""
     if payment.credit_origin == CREDIT_ORIGIN_READMISSION:
@@ -465,9 +492,18 @@ async def insert_readmission_payment(
         PaymentReplayedError: the proof is already recorded by any lane.
         ReadmissionAlreadyAdmittedError: ``agent_id`` already has an admitted
             readmission for ``bench_version`` (``admitted`` only).
+        ReadmissionTargetError: ``agent_id`` is not the payer's (``admitted``
+            only; a credited row is the payer's own credit and binds no slot).
     """
     if (outcome == "credited") != bool(refusal_reason and refusal_reason.strip()):
         raise ValueError("a credited readmission needs a refusal reason; only it")
+    if outcome == "admitted":
+        await _ensure_readmission_target(
+            session,
+            agent_id=agent_id,
+            miner_hotkey=verified.miner_hotkey,
+            miner_coldkey=verified.miner_coldkey,
+        )
     with session.no_autoflush:
         await lock_payment_proof(
             session,
@@ -571,6 +607,7 @@ async def spend_credit_on_readmission(
     Raises:
         PaymentReplayedError: the credit is spent, another hotkey's, or expired.
         ReadmissionAlreadyAdmittedError: as :func:`insert_readmission_payment`.
+        ReadmissionTargetError: ``agent_id`` is not the payer's.
     """
     current = now or datetime.now(UTC)
     if credit.agent_id is not None or credit.credit_for_agent_id is None:
@@ -579,6 +616,12 @@ async def spend_credit_on_readmission(
         raise PaymentReplayedError("payment credit belongs to a different hotkey")
     if credit_expired(credit, now=current):
         raise PaymentReplayedError("payment credit has expired")
+    await _ensure_readmission_target(
+        session,
+        agent_id=agent_id,
+        miner_hotkey=miner_hotkey,
+        miner_coldkey=credit.miner_coldkey,
+    )
     await lock_payment_proof(
         session, block_hash=credit.block_hash, extrinsic_index=credit.extrinsic_index
     )

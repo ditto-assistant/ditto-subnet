@@ -456,3 +456,56 @@ async def test_a_whitespace_reason_on_an_admitted_readmission_is_ignored(
             refusal_reason="   ",
         )
         assert row.outcome == "admitted" and row.refusal_reason is None
+
+
+async def test_a_payment_never_readmits_another_miners_agent(
+    session: AsyncSession,
+) -> None:
+    """Neither a fresh proof nor a credit can take a victim's era slot."""
+    from ditto.db.queries.payments import ReadmissionTargetError
+
+    victim = await _agent(session, hotkey="5HKVictimHotkey")
+    with pytest.raises(ReadmissionTargetError):
+        async with session.begin():
+            await insert_readmission_payment(
+                session,
+                verified=_verified(30),
+                agent_id=victim,
+                bench_version=19,
+                rollout_id=None,
+            )
+    original = await _agent(session)
+    proof = _verified(31)
+    async with session.begin():
+        await insert_evaluation_payment(
+            session, verified=proof, credit_for_agent_id=original
+        )
+    with pytest.raises(ReadmissionTargetError):
+        async with session.begin():
+            credit = await get_evaluation_payment_for_proof(
+                session,
+                block_hash=proof.block_hash,
+                extrinsic_index=proof.extrinsic_index,
+                for_update=True,
+            )
+            assert credit is not None
+            await spend_credit_on_readmission(
+                session,
+                credit=credit,
+                agent_id=victim,
+                bench_version=19,
+                rollout_id=None,
+                miner_hotkey=HOTKEY,
+            )
+    # A refused readmission still banks the payer's own credit.
+    async with session.begin():
+        row = await insert_readmission_payment(
+            session,
+            verified=_verified(32),
+            agent_id=victim,
+            bench_version=19,
+            rollout_id=None,
+            outcome="credited",
+            refusal_reason="not the payer's agent",
+        )
+        assert row.outcome == "credited"

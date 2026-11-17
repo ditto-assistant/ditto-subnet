@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 _PARENT = "9d4b7e2a6c18"
+_PLATFORM_DIR = Path(__file__).resolve().parents[3]
 _CHECK = "ck_evaluation_payments_evaluation_payments_credit_origin_check"
 
 
@@ -21,6 +23,8 @@ def _alembic(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["uv", "run", "alembic", *args],
         check=True,
+        # alembic.ini lives in apps/platform: run there wherever pytest started.
+        cwd=_PLATFORM_DIR,
         env=os.environ.copy(),
         capture_output=True,
         text=True,
