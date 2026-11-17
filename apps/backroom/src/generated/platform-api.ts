@@ -46761,6 +46761,42 @@ export interface components {
             submitted_at: string;
         };
         /**
+         * UploadPaymentProofReadmission
+         * @description The readmission lane's record of a proof (SN-485).
+         */
+        UploadPaymentProofReadmission: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Credit Audit */
+            credit_audit?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Funding
+             * @enum {string}
+             */
+            funding: "fresh" | "credit";
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "admitted" | "credited";
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Refusal Reason */
+            refusal_reason?: string | null;
+            /** Rollout Id */
+            rollout_id?: string | null;
+        };
+        /**
          * UploadPaymentProofView
          * @description Platform's record of one ``(block_hash, extrinsic_index)`` payment proof.
          */
@@ -46787,6 +46823,7 @@ export interface components {
             miner_coldkey?: string | null;
             /** Miner Hotkey */
             miner_hotkey?: string | null;
+            readmission?: components["schemas"]["UploadPaymentProofReadmission"] | null;
             /** Recorded At */
             recorded_at?: string | null;
             /** Recovery Expired */
@@ -46797,7 +46834,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "unrecorded" | "funded_agent" | "reusable_credit" | "funded_generator";
+            state: "unrecorded" | "funded_agent" | "reusable_credit" | "funded_generator" | "funded_readmission";
         };
         /**
          * V12AnswerStuffingGate

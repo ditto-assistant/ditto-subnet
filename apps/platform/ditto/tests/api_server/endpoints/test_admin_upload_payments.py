@@ -279,3 +279,71 @@ async def test_requires_admin_and_a_well_formed_proof(
     assert short_hash.status_code == 422
     assert negative_index.status_code == 422
     assert oversized_index.status_code == 422
+
+
+async def test_a_readmission_proof_reports_the_readmission_lane(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """SN-485: a proof that paid a readmission is not 'unrecorded'."""
+    from decimal import Decimal
+
+    from ditto.api_server.payment_verifier import VerifiedPayment
+    from ditto.db.queries.payments import insert_readmission_payment
+
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    readmitted = await _seed_agent(session_maker, name="readmitted", created_at=now)
+    refused = await _seed_agent(session_maker, name="refused", created_at=now)
+
+    def verified(block_hash: str) -> VerifiedPayment:
+        return VerifiedPayment(
+            block_hash=block_hash,
+            extrinsic_index=12,
+            miner_hotkey=_HOTKEY,
+            miner_coldkey=_COLDKEY,
+            amount_rao=75_000_000,
+            tao_usd_rate=Decimal("400"),
+            dest_address=_DEST,
+            block_timestamp=now - timedelta(days=2),
+        )
+
+    paid, credited = _proof("readmission-paid"), _proof("readmission-credited")
+    async with session_maker() as session, session.begin():
+        await insert_readmission_payment(
+            session,
+            verified=verified(paid),
+            agent_id=readmitted,
+            bench_version=19,
+            rollout_id=None,
+        )
+        await insert_readmission_payment(
+            session,
+            verified=verified(credited),
+            agent_id=refused,
+            bench_version=19,
+            rollout_id=None,
+            outcome="credited",
+            refusal_reason="a rollout opened after payment",
+        )
+
+    body = (
+        await client.get(f"/api/v1/admin/upload-payments/{paid}/12", headers=_HEADERS)
+    ).json()
+    assert body["state"] == "funded_readmission"
+    assert body["agent"]["agent_id"] == str(readmitted)
+    assert body["readmission"]["outcome"] == "admitted"
+    assert body["readmission"]["bench_version"] == 19
+
+    body = (
+        await client.get(
+            f"/api/v1/admin/upload-payments/{credited}/12", headers=_HEADERS
+        )
+    ).json()
+    # The banked credit is what the miner can spend; the readmission record
+    # says why it exists, and it lasts 30 days, not 24 hours.
+    assert body["state"] == "reusable_credit"
+    assert body["readmission"]["outcome"] == "credited"
+    assert body["readmission"]["refusal_reason"] == "a rollout opened after payment"
+    assert body["recovery_expired"] is False

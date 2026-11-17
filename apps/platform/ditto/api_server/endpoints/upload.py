@@ -96,9 +96,12 @@ from ditto.db.queries.contributor_identity import lock_identity_writes
 from ditto.db.queries.name_claims import upload_name_is_reserved
 from ditto.db.queries.payments import (
     consume_evaluation_credit,
+    credit_expired,
+    credit_ttl,
     get_agent_for_payment_proof,
     get_evaluation_payment_for_proof,
     get_generator_payment_for_proof,
+    get_readmission_payment_for_proof,
     get_same_owner_agent_by_sha,
     insert_evaluation_payment,
 )
@@ -116,7 +119,7 @@ from ditto.db.queries.unreleased_copy import store_items as store_distinctive_it
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
-    from ditto.db.models import Agent
+    from ditto.db.models import Agent, EvaluationPayment
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +205,33 @@ def _ensure_payment_recovery_fresh(block_timestamp: datetime) -> None:
         )
 
 
+def _ensure_credit_fresh(credit: EvaluationPayment) -> None:
+    """A credit expires on its own clock: 24 h, or 30 days for a credit a
+    refused readmission banked (SN-485)."""
+    if credit_expired(credit):
+        window = credit_ttl(credit)
+        span = "24-hour" if window <= timedelta(hours=24) else f"{window.days}-day"
+        raise PaymentRecoveryExpired(
+            f"payment at {_as_utc(credit.timestamp).isoformat()} is outside the "
+            f"{span} window"
+        )
+
+
+async def _readmission_lane_replay(
+    session: AsyncSession, *, block_hash: str, extrinsic_index: int
+) -> None:
+    """Refuse a proof the readmission lane holds (it never funds an upload).
+
+    A credited readmission also banks an ``evaluation_payments`` credit, which
+    the caller looks up first; only a proof that is in the readmission lane
+    alone reaches this check.
+    """
+    if await get_readmission_payment_for_proof(
+        session, block_hash=block_hash, extrinsic_index=extrinsic_index
+    ):
+        raise PaymentReplayedError("payment proof already paid a readmission")
+
+
 ChainDep = Annotated["ChainClient", Depends(get_chain_client)]
 PaymentVerifierDep = Annotated[PaymentVerifier, Depends(get_payment_verifier)]
 StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
@@ -251,7 +281,13 @@ async def _cla_check_message(
     if credit and (
         credit.agent_id is not None
         or credit.miner_hotkey != body.hotkey
-        or _payment_recovery_expired(credit.timestamp)
+        or credit_expired(credit)
+    ):
+        return None
+    if credit is None and await get_readmission_payment_for_proof(
+        session,
+        block_hash=body.payment_block_hash,
+        extrinsic_index=body.payment_extrinsic_index,
     ):
         return None
     return cla.message
@@ -413,7 +449,7 @@ async def check(
                     "payment credit belongs to a different hotkey"
                 )
             else:
-                _ensure_payment_recovery_fresh(payment_record.timestamp)
+                _ensure_credit_fresh(payment_record)
                 recovery_payment_verified = True
         else:
             if await get_generator_payment_for_proof(
@@ -424,6 +460,11 @@ async def check(
                 raise PaymentReplayedError(
                     "payment proof already funded a generator upload"
                 )
+            await _readmission_lane_replay(
+                session,
+                block_hash=body.payment_block_hash,
+                extrinsic_index=body.payment_extrinsic_index,
+            )
             # The replay lookup autobegins a read transaction. Do not hold a
             # pooled connection across the recovery proof's chain reads.
             if session.in_transaction():
@@ -705,11 +746,17 @@ async def upload_agent(
         extrinsic_index=payment_extrinsic_index,
     ):
         raise PaymentReplayedError("payment proof already funded a generator upload")
+    if payment_record is None:
+        await _readmission_lane_replay(
+            session,
+            block_hash=payment_block_hash,
+            extrinsic_index=payment_extrinsic_index,
+        )
     if payment_record and payment_record.miner_hotkey != hotkey:
         raise PaymentReplayedError("payment credit belongs to a different hotkey")
     if payment_record:
         try:
-            _ensure_payment_recovery_fresh(payment_record.timestamp)
+            _ensure_credit_fresh(payment_record)
         except PaymentRecoveryExpired as exc:
             return await _refuse_unless_exact_retry(session, exc, retry_identity)
     cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)

@@ -4632,7 +4632,9 @@ CREATE TABLE public.evaluation_payments (
     tao_usd_rate numeric(20,8),
     credit_for_agent_id uuid,
     accepted_under_legacy_fee_amnesty boolean NOT NULL,
+    credit_origin text,
     CONSTRAINT ck_evaluation_payments_evaluation_payments_assignment_x_e252 CHECK (((agent_id IS NOT NULL) <> (credit_for_agent_id IS NOT NULL))),
+    CONSTRAINT ck_evaluation_payments_evaluation_payments_credit_origin_check CHECK (((credit_origin IS NULL) OR (credit_origin = 'readmission'::text))),
     CONSTRAINT ck_evaluation_payments_evaluation_payments_tao_usd_rate_8029 CHECK (((tao_usd_rate IS NULL) OR (tao_usd_rate > (0)::numeric))),
     CONSTRAINT evaluation_payments_amount_rao_check CHECK ((amount_rao > 0)),
     CONSTRAINT evaluation_payments_extrinsic_index_check CHECK ((extrinsic_index >= 0))
@@ -6041,6 +6043,60 @@ CREATE SEQUENCE public.queue_policy_settings_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.queue_policy_settings_revisions_revision_seq OWNED BY public.queue_policy_settings_revisions.revision;
+
+
+--
+-- Name: readmission_payments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.readmission_payments (
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    rollout_id uuid,
+    miner_hotkey text NOT NULL,
+    miner_coldkey text NOT NULL,
+    amount_rao bigint NOT NULL,
+    tao_usd_rate numeric(20,8),
+    dest_address text NOT NULL,
+    "timestamp" timestamp with time zone NOT NULL,
+    funding text NOT NULL,
+    outcome text NOT NULL,
+    refusal_reason text,
+    credit_audit jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_readmission_payments_readmission_payments_amount_rao_check CHECK ((amount_rao > 0)),
+    CONSTRAINT ck_readmission_payments_readmission_payments_bench_vers_82f9 CHECK ((bench_version >= 1)),
+    CONSTRAINT ck_readmission_payments_readmission_payments_credit_audit_check CHECK (((funding = 'credit'::text) = (credit_audit IS NOT NULL))),
+    CONSTRAINT ck_readmission_payments_readmission_payments_extrinsic__4077 CHECK ((extrinsic_index >= 0)),
+    CONSTRAINT ck_readmission_payments_readmission_payments_funding_check CHECK ((funding = ANY (ARRAY['fresh'::text, 'credit'::text]))),
+    CONSTRAINT ck_readmission_payments_readmission_payments_outcome_check CHECK ((((outcome = 'admitted'::text) AND (refusal_reason IS NULL)) OR ((outcome = 'credited'::text) AND (funding = 'fresh'::text) AND (length(TRIM(BOTH FROM refusal_reason)) > 0)))),
+    CONSTRAINT ck_readmission_payments_readmission_payments_tao_usd_ra_26ea CHECK (((tao_usd_rate IS NULL) OR (tao_usd_rate > (0)::numeric)))
+);
+
+
+--
+-- Name: readmission_reservations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.readmission_reservations (
+    agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    token uuid NOT NULL,
+    rollout_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    miner_coldkey text NOT NULL,
+    settings_revision integer NOT NULL,
+    cooldown_seconds integer NOT NULL,
+    fee_amount_rao bigint NOT NULL,
+    payment_send_address text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_readmission_reservations_readmission_reservations_co_8aaf CHECK (((cooldown_seconds >= 60) AND (cooldown_seconds <= 86400))),
+    CONSTRAINT ck_readmission_reservations_readmission_reservations_fe_04a6 CHECK (((fee_amount_rao >= 1) AND (fee_amount_rao <= '1000000000000'::bigint)))
+);
 
 
 --
@@ -11524,6 +11580,30 @@ ALTER TABLE ONLY public.queue_policy_settings_revisions
 
 
 --
+-- Name: readmission_payments readmission_payments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.readmission_payments
+    ADD CONSTRAINT readmission_payments_pkey PRIMARY KEY (block_hash, extrinsic_index);
+
+
+--
+-- Name: readmission_reservations readmission_reservations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.readmission_reservations
+    ADD CONSTRAINT readmission_reservations_pkey PRIMARY KEY (agent_id, bench_version);
+
+
+--
+-- Name: readmission_reservations readmission_reservations_token_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.readmission_reservations
+    ADD CONSTRAINT readmission_reservations_token_key UNIQUE (token);
+
+
+--
 -- Name: score_audit_log score_audit_log_entry_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -13468,6 +13548,41 @@ CREATE INDEX owner_attestations_lo_idx ON public.owner_attestations USING btree 
 --
 
 CREATE UNIQUE INDEX queue_policy_settings_scope_revision_idx ON public.queue_policy_settings_revisions USING btree (scope, revision);
+
+
+--
+-- Name: readmission_payments_admitted_once; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX readmission_payments_admitted_once ON public.readmission_payments USING btree (agent_id, bench_version) WHERE (outcome = 'admitted'::text);
+
+
+--
+-- Name: readmission_payments_bench_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX readmission_payments_bench_version_idx ON public.readmission_payments USING btree (bench_version, created_at);
+
+
+--
+-- Name: readmission_payments_miner_coldkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX readmission_payments_miner_coldkey_idx ON public.readmission_payments USING btree (miner_coldkey, created_at);
+
+
+--
+-- Name: readmission_reservations_expires_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX readmission_reservations_expires_at_idx ON public.readmission_reservations USING btree (expires_at);
+
+
+--
+-- Name: readmission_reservations_miner_coldkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX readmission_reservations_miner_coldkey_idx ON public.readmission_reservations USING btree (miner_coldkey);
 
 
 --
@@ -16779,6 +16894,30 @@ ALTER TABLE ONLY public.miner_session_tokens
 
 ALTER TABLE ONLY public.name_claim_endorsements
     ADD CONSTRAINT name_claim_endorsements_claim_id_fkey FOREIGN KEY (claim_id) REFERENCES public.name_claims(claim_id) ON DELETE CASCADE;
+
+
+--
+-- Name: readmission_payments readmission_payments_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.readmission_payments
+    ADD CONSTRAINT readmission_payments_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: readmission_payments readmission_payments_rollout_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.readmission_payments
+    ADD CONSTRAINT readmission_payments_rollout_id_fkey FOREIGN KEY (rollout_id) REFERENCES public.benchmark_rollouts(rollout_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: readmission_reservations readmission_reservations_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.readmission_reservations
+    ADD CONSTRAINT readmission_reservations_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --

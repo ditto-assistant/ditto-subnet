@@ -112,6 +112,7 @@ from ditto.db.queries.name_claims import upload_name_is_reserved
 from ditto.db.queries.payments import (
     get_evaluation_payment_for_proof,
     get_generator_payment_for_proof,
+    get_readmission_payment_for_proof,
     insert_generator_payment,
 )
 from ditto.db.queries.scores import emission_owner
@@ -220,6 +221,12 @@ async def _replayed_or_retry(
         extrinsic_index=payload.payment_extrinsic_index,
     ):
         raise PaymentReplayedError("payment proof already funded an agent upload")
+    if await get_readmission_payment_for_proof(
+        session,
+        block_hash=payload.payment_block_hash,
+        extrinsic_index=payload.payment_extrinsic_index,
+    ):
+        raise PaymentReplayedError("payment proof already paid a readmission")
     return None
 
 

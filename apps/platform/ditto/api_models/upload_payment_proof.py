@@ -7,14 +7,35 @@ chain.
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
 
 UploadPaymentProofState = Literal[
-    "unrecorded", "funded_agent", "reusable_credit", "funded_generator"
+    "unrecorded",
+    "funded_agent",
+    "reusable_credit",
+    "funded_generator",
+    "funded_readmission",
 ]
+
+
+class UploadPaymentProofReadmission(BaseModel):
+    """The readmission lane's record of a proof (SN-485)."""
+
+    agent_id: UUID
+    bench_version: int
+    rollout_id: UUID | None = None
+    #: ``admitted``: it paid this readmission. ``credited``: the readmission
+    #: was refused after payment and the proof is banked as an upload credit
+    #: (``state`` is then ``reusable_credit`` until it is spent).
+    outcome: Literal["admitted", "credited"]
+    #: ``fresh`` transfer, or ``credit`` when an earlier credit paid.
+    funding: Literal["fresh", "credit"]
+    refusal_reason: str | None = None
+    credit_audit: dict[str, Any] | None = None
+    recorded_at: datetime
 
 
 class UploadPaymentProofAgent(BaseModel):
@@ -38,6 +59,7 @@ class UploadPaymentProofView(BaseModel):
     #: a byte-identical upload left it unspent, ``agent`` is that earlier upload,
     #: and the same hotkey may spend it until ``recovery_expires_at``.
     #: ``funded_generator``: it paid for ``generator_submission_id``.
+    #: ``funded_readmission``: it paid the readmission in ``readmission``.
     state: UploadPaymentProofState
     miner_hotkey: str | None = None
     #: Payment-time owner of ``miner_hotkey`` and signer of the transfer.
@@ -49,8 +71,12 @@ class UploadPaymentProofView(BaseModel):
     recorded_at: datetime | None = None
     agent: UploadPaymentProofAgent | None = None
     generator_submission_id: UUID | None = None
-    #: Credits only: block time plus the 24-hour recovery window. At or after
-    #: it, an upload that spends the credit is refused with 3208.
+    #: The readmission lane's record: for ``funded_readmission``, and for a
+    #: ``reusable_credit`` a refused readmission banked.
+    readmission: UploadPaymentProofReadmission | None = None
+    #: Credits only: block time plus the recovery window (24 hours, or 30 days
+    #: for a credit a refused readmission banked). At or after it, an upload
+    #: that spends the credit is refused with 3208.
     recovery_expires_at: datetime | None = None
     recovery_expired: bool | None = None
     generated_at: datetime

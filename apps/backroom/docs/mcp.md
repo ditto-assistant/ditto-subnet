@@ -895,9 +895,12 @@ When a miner reports a 3201, 3207 or 3208 after paying, call
 `get_upload_payment_proof` with the block hash and extrinsic index the CLI
 printed. It reads Platform's payment records only and answers in one `state`:
 `funded_agent` (the upload it paid for), `reusable_credit` (left by a
-byte-identical upload; spendable by the same hotkey until
-`recovery_expires_at`), `funded_generator`, or `unrecorded` (no upload consumed
-it). A funded proof is spent: do not grant a second credit for it. The tool
+byte-identical upload, or by a readmission refused after payment; spendable by
+the same hotkey until `recovery_expires_at`, 24 hours or 30 days for a
+readmission credit), `funded_generator`, `funded_readmission` (it paid the
+SN-485 readmission in `readmission`), or `unrecorded` (no upload consumed
+it). `readmission` carries the readmission lane's record (outcome, funding,
+refusal reason, and `credit_audit` when a credit paid). A funded proof is spent: do not grant a second credit for it. The tool
 never re-reads the chain, so check an unrecorded proof's block, signer,
 destination, amount and `ExtrinsicSuccess` on chain before advising a retry.
 

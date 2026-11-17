@@ -2000,6 +2000,14 @@ class EvaluationPayment(Base):
     )
     """Earlier same-owner agent whose identical artifact created this credit."""
 
+    credit_origin: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Why this proof became a credit. ``None``: a byte-identical upload (and
+    every row before SN-485). ``readmission``: a paid readmission of
+    ``credit_for_agent_id`` was refused after payment; such a credit stays
+    spendable for 30 days. Kept after an upload spends the credit; a
+    readmission that spends it moves the proof to ``readmission_payments``,
+    whose ``credit_audit`` keeps this origin."""
+
     miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     """Signer hotkey on the payment extrinsic. FK-bound to ``agents.miner_hotkey``."""
 
@@ -2052,6 +2060,10 @@ class EvaluationPayment(Base):
         CheckConstraint(
             "(agent_id IS NOT NULL) <> (credit_for_agent_id IS NOT NULL)",
             name="evaluation_payments_assignment_xor_credit",
+        ),
+        CheckConstraint(
+            "credit_origin IS NULL OR credit_origin = 'readmission'",
+            name="evaluation_payments_credit_origin_check",
         ),
         CheckConstraint("amount_rao > 0", name="evaluation_payments_amount_rao_check"),
         CheckConstraint(
@@ -7154,6 +7166,167 @@ class UploadAdmissionReservation(Base):
             name="upload_admission_sha256_length_check",
         ),
         Index("upload_admission_expires_at_idx", "expires_at"),
+    )
+
+
+class ReadmissionPayment(Base):
+    """The finalized TAO transfer that paid one readmission (SN-485).
+
+    A readmission re-enters an existing agent into one benchmark era, so the
+    row binds a proof to ``(agent_id, bench_version)`` rather than to a new
+    upload. The primary key ``(block_hash, extrinsic_index)`` stops a replay
+    within the lane; :func:`ditto.db.queries.readmission_payments.\
+insert_readmission_payment` refuses a proof already recorded by the agent or
+    generator upload lane under the shared per-proof advisory lock, and both of
+    those lanes refuse a proof recorded here, so one transfer funds exactly one
+    thing across all three lanes.
+
+    ``outcome`` is ``admitted`` (the readmission was written) or ``credited``
+    (it was refused after payment: the proof is also banked as an
+    :class:`EvaluationPayment` credit with ``credit_origin = 'readmission'``,
+    which is the only case one proof appears in two tables). At most one
+    admitted readmission exists per agent and era. ``funding`` is ``fresh`` for
+    a new transfer and ``credit`` when an earlier credit paid for it.
+    """
+
+    __tablename__ = "readmission_payments"
+
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    rollout_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """Coldkey that owned the hotkey and signed the transfer at payment time."""
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tao_usd_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    dest_address: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """On-chain block timestamp."""
+    funding: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    refusal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Why a credited readmission was refused after payment."""
+    credit_audit: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Set exactly when ``funding = 'credit'``: the history of the credit that
+    paid, kept because spending it removes the ``evaluation_payments`` credit
+    row (``credit_origin``, ``credit_for_agent_id``, ``credit_recorded_at``,
+    and for a readmission-origin credit the earlier ``refusal_reason`` and
+    ``credited_agent_id``/``credited_bench_version``)."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "block_hash", "extrinsic_index", name="readmission_payments_pkey"
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="readmission_payments_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["rollout_id"],
+            ["benchmark_rollouts.rollout_id"],
+            ondelete="RESTRICT",
+            name="readmission_payments_rollout_id_fkey",
+        ),
+        CheckConstraint("amount_rao > 0", name="readmission_payments_amount_rao_check"),
+        CheckConstraint(
+            "tao_usd_rate IS NULL OR tao_usd_rate > 0",
+            name="readmission_payments_tao_usd_rate_positive",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0",
+            name="readmission_payments_extrinsic_index_check",
+        ),
+        CheckConstraint(
+            "bench_version >= 1", name="readmission_payments_bench_version_check"
+        ),
+        CheckConstraint(
+            "funding IN ('fresh', 'credit')",
+            name="readmission_payments_funding_check",
+        ),
+        CheckConstraint(
+            "(funding = 'credit') = (credit_audit IS NOT NULL)",
+            name="readmission_payments_credit_audit_check",
+        ),
+        CheckConstraint(
+            "(outcome = 'admitted' AND refusal_reason IS NULL) OR "
+            "(outcome = 'credited' AND funding = 'fresh' "
+            "AND length(trim(refusal_reason)) > 0)",
+            name="readmission_payments_outcome_check",
+        ),
+        Index(
+            "readmission_payments_admitted_once",
+            "agent_id",
+            "bench_version",
+            unique=True,
+            postgresql_where=text("outcome = 'admitted'"),
+        ),
+        Index("readmission_payments_miner_coldkey_idx", "miner_coldkey", "created_at"),
+        Index("readmission_payments_bench_version_idx", "bench_version", "created_at"),
+    )
+
+
+class ReadmissionReservation(Base):
+    """Pre-payment fee and address snapshot for one readmission (SN-485).
+
+    Keyed by ``(agent_id, bench_version)``, not by coldkey, so reserving a
+    readmission never takes the coldkey's upload slot. The reservation and the
+    upload slot still serialize on the same per-coldkey advisory lock.
+    """
+
+    __tablename__ = "readmission_reservations"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    token: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    rollout_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    payment_send_address: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "agent_id", "bench_version", name="readmission_reservations_pkey"
+        ),
+        UniqueConstraint("token", name="readmission_reservations_token_key"),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="readmission_reservations_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "cooldown_seconds BETWEEN 60 AND 86400",
+            name="readmission_reservations_cooldown_seconds_check",
+        ),
+        CheckConstraint(
+            "fee_amount_rao BETWEEN 1 AND 1000000000000",
+            name="readmission_reservations_fee_amount_rao_check",
+        ),
+        Index("readmission_reservations_expires_at_idx", "expires_at"),
+        Index("readmission_reservations_miner_coldkey_idx", "miner_coldkey"),
     )
 
 
