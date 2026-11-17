@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.492.0 (2026-11-17)
+
+### Features
+
+- **platform**: Classify readmission uploads and cap free re-leases (SN-485)
+  ([#3560](https://github.com/ditto-assistant/ditto-subnet/pull/3560),
+  [`a0128bc`](https://github.com/ditto-assistant/ditto-subnet/commit/a0128bc69ca65f029cdaf7200b19e8ab6364ddbe))
+
+
 ## v0.491.0 (2026-11-17)
 
 ### Features
