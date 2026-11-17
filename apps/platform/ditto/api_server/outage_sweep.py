@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 class OutageVoidSweeper:
-    """Every :data:`SWEEP_INTERVAL_SECONDS`, void outage-tainted retest samples."""
+    """Every :data:`SWEEP_INTERVAL_SECONDS`, void outage-tainted samples and scores."""
 
     def __init__(
         self,
@@ -69,10 +69,14 @@ class OutageVoidSweeper:
             run = await sweep_outage_voids(session, now=at, bench_version=version)
         if run is not None and (run.voided_count or run.canonical_flagged):
             logger.warning(
-                "outage sweep voided %d sample(s) and flagged %d canonical "
-                "score(s) on v%d",
+                "outage sweep voided %d sample(s), flagged %d canonical "
+                "score(s) and queued %d canonical replacement(s) on v%d",
                 run.voided_count,
                 len(run.canonical_flagged),
+                sum(
+                    flag.get("void_disposition") == "applied"
+                    for flag in run.canonical_flagged
+                ),
                 run.bench_version,
             )
         return run

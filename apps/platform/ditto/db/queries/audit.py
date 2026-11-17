@@ -136,6 +136,22 @@ def _entry_content(
     }
 
 
+async def lock_audit_chain(session: AsyncSession) -> None:
+    """Take the transaction-scoped audit-chain lock (re-entrant per transaction).
+
+    :func:`append_audit_entry` takes it before reading the head. A caller that
+    decides from the log whether to append (an idempotency gate) takes it
+    first, so a concurrent writer's entry is visible before the decision.
+    """
+    await session.execute(
+        select(
+            func.pg_advisory_xact_lock(
+                func.hashtextextended("ditto-score-audit-chain", 0)
+            )
+        )
+    )
+
+
 async def append_audit_entry(
     session: AsyncSession,
     *,
@@ -152,13 +168,7 @@ async def append_audit_entry(
     The advisory lock lasts through commit, so the next append reads the actual
     predecessor. Returns the persisted row (its ``seq`` is assigned on flush).
     """
-    await session.execute(
-        select(
-            func.pg_advisory_xact_lock(
-                func.hashtextextended("ditto-score-audit-chain", 0)
-            )
-        )
-    )
+    await lock_audit_chain(session)
     head = (
         await session.execute(
             select(ScoreAuditEntry)

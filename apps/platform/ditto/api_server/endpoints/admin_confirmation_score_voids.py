@@ -1,4 +1,9 @@
-"""Operator reads and guarded writes for continual-retest infrastructure voids."""
+"""Operator reads and guarded writes for infrastructure voids.
+
+Continual-retest samples are voided in place (append-only void rows). A
+canonical quorum score is voided by queueing a same-validator replacement
+re-test (SN-489, :mod:`ditto.db.queries.canonical_outage_voids`).
+"""
 
 from __future__ import annotations
 
@@ -22,6 +27,12 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import ConfirmationScore
 from ditto.db.queries.benchmark_rollout import active_bench_version
+from ditto.db.queries.canonical_outage_voids import (
+    CanonicalVoidOutcome,
+    CanonicalVoidRequest,
+    is_canonical_run,
+    void_canonical_scores,
+)
 from ditto.db.queries.confirmation_score_voids import (
     VoidOutcome,
     VoidRequest,
@@ -48,12 +59,14 @@ async def void_infra_confirmation_scores(
     session: SessionDep,
     x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> InfraVoidResponse:
-    """Void continual-retest samples whose own grant shows an inference outage.
+    """Void samples or canonical scores whose own grant shows an inference outage.
 
     Each item is guarded on its exact run id and composite and gated on the
     serving grant's outage-class failures. ``dry_run`` (the default) writes
-    nothing. A voided sample counts toward nothing and its seed is re-leased;
-    the score row itself is never changed.
+    nothing. A voided retest sample counts toward nothing and its seed is
+    re-leased; the score row itself is never changed. A voided canonical score
+    queues a same-validator replacement re-test that swaps the score when it
+    lands (no miner retry budget is spent).
     """
     actor = _require_actor(x_admin_actor)
     if not payload.dry_run and payload.confirmation != VOID_CONFIRMATION_PHRASE:
@@ -84,8 +97,14 @@ async def void_infra_confirmation_scores(
     )
 
 
+_ACCEPTED = frozenset({"applied", "already_voided", "already_queued"})
+"""Dispositions an applied batch may contain; anything else rolls it back."""
+
+AnyOutcome = VoidOutcome | CanonicalVoidOutcome
+
+
 class _BatchRefused(Exception):
-    def __init__(self, version: int, outcomes: list[VoidOutcome]) -> None:
+    def __init__(self, version: int, outcomes: list[AnyOutcome]) -> None:
         super().__init__("void batch refused")
         self.version = version
         self.outcomes = outcomes
@@ -93,38 +112,109 @@ class _BatchRefused(Exception):
 
 async def _apply(
     session: AsyncSession, payload: InfraVoidRequest, *, actor: str, now: datetime
-) -> tuple[int, list[VoidOutcome]]:
+) -> tuple[int, list[AnyOutcome]]:
     version = await active_bench_version(session)
-    outcomes = await void_confirmation_samples(
-        session,
-        requests=[
-            VoidRequest(
-                agent_id=item.agent_id,
-                validator_hotkey=item.validator_hotkey,
-                seed=int(item.seed),
-                expected_run_id=item.expected_run_id,
-                expected_composite=item.expected_composite,
+    canonical: list[bool] = []
+    for item in payload.items:
+        if item.sample_kind == "auto":
+            canonical.append(
+                await is_canonical_run(
+                    session,
+                    agent_id=item.agent_id,
+                    bench_version=version,
+                    validator_hotkey=item.validator_hotkey,
+                    run_id=item.expected_run_id,
+                )
             )
-            for item in payload.items
-        ],
-        bench_version=version,
-        reason=payload.reason,
-        actor=actor,
-        source="operator",
-        now=now,
-        apply=not payload.dry_run,
+        else:
+            canonical.append(item.sample_kind == "canonical")
+    retest_items = [
+        item
+        for item, is_canonical in zip(payload.items, canonical, strict=True)
+        if not is_canonical
+    ]
+    canonical_items = [
+        item
+        for item, is_canonical in zip(payload.items, canonical, strict=True)
+        if is_canonical
+    ]
+    retest_outcomes = iter(
+        await void_confirmation_samples(
+            session,
+            requests=[
+                VoidRequest(
+                    agent_id=item.agent_id,
+                    validator_hotkey=item.validator_hotkey,
+                    seed=int(item.seed),
+                    expected_run_id=item.expected_run_id,
+                    expected_composite=item.expected_composite,
+                )
+                for item in retest_items
+            ],
+            bench_version=version,
+            reason=payload.reason,
+            actor=actor,
+            source="operator",
+            now=now,
+            apply=not payload.dry_run,
+        )
+        if retest_items
+        else []
     )
+    canonical_outcomes = iter(
+        await void_canonical_scores(
+            session,
+            requests=[
+                CanonicalVoidRequest(
+                    agent_id=item.agent_id,
+                    validator_hotkey=item.validator_hotkey,
+                    expected_run_id=item.expected_run_id,
+                    expected_composite=item.expected_composite,
+                    expected_seed=int(item.seed),
+                )
+                for item in canonical_items
+            ],
+            bench_version=version,
+            reason=payload.reason,
+            actor=actor,
+            source="operator",
+            now=now,
+            apply=not payload.dry_run,
+        )
+        if canonical_items
+        else []
+    )
+    outcomes: list[AnyOutcome] = [
+        next(canonical_outcomes) if is_canonical else next(retest_outcomes)
+        for is_canonical in canonical
+    ]
     if not payload.dry_run and any(
-        outcome.disposition not in {"applied", "already_voided"} for outcome in outcomes
+        outcome.disposition not in _ACCEPTED for outcome in outcomes
     ):
         raise _BatchRefused(version, outcomes)
     return version, outcomes
 
 
-def _outcome_wire(outcome: VoidOutcome, *, applied: bool) -> InfraVoidOutcome:
+def _outcome_wire(outcome: AnyOutcome, *, applied: bool) -> InfraVoidOutcome:
     disposition = outcome.disposition
     if disposition == "applied" and not applied:
         disposition = "ready"
+    if isinstance(outcome, CanonicalVoidOutcome):
+        return InfraVoidOutcome(
+            agent_id=outcome.request.agent_id,
+            validator_hotkey=outcome.request.validator_hotkey,
+            seed=str(
+                outcome.seed
+                if outcome.seed is not None
+                else outcome.request.expected_seed
+            ),
+            sample_kind="canonical",
+            disposition=disposition,
+            detail=outcome.detail,
+            retest_request_id=outcome.request_id,
+            evidence=outcome.evidence,
+            evidence_digest=outcome.evidence_digest,
+        )
     return InfraVoidOutcome(
         agent_id=outcome.request.agent_id,
         validator_hotkey=outcome.request.validator_hotkey,

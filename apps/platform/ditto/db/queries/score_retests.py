@@ -62,10 +62,22 @@ mini-rollout"). Queued by Platform at season open, champion first, then by
 rank; promoted ahead of every other re-test, on any free slot. During an open
 rollout a re-score that cannot add a quorum score waits while the validator
 can lease an activation-blocking member's missing score instead."""
+OUTAGE_VOID_RETEST_BASIS = "provider_outage_void"
+"""SN-489: a canonical score whose serving grant shows provider-outage
+evidence (:mod:`ditto.db.queries.canonical_outage_voids`). Queued by the
+post-outage sweep or an operator void, re-run on the same validator ahead of
+ordinary quorum work on any free slot, and never charged to the miner's
+attempt budget: the outage was the platform's provider path, not the agent."""
 PARALLEL_RETEST_BASES = frozenset(
-    {V9_CONTRACT_RETEST_BASIS, DUELING_ROTATION_RETEST_BASIS}
+    {V9_CONTRACT_RETEST_BASIS, DUELING_ROTATION_RETEST_BASIS, OUTAGE_VOID_RETEST_BASIS}
 )
 """Typed bases that may run beside ordinary work on otherwise-free slots."""
+REPAIR_RETEST_BASES = frozenset({V9_CONTRACT_RETEST_BASIS, OUTAGE_VOID_RETEST_BASIS})
+"""Bases that repair one known-bad accepted score rather than re-buy evidence.
+The accepted score and its exact run are the authority, so they may run
+before quorum (evaluating or ATH-held agents), may re-lease a row a continual
+retest left ``expired``, and a failed replacement restores the consumed ticket
+and closes instead of stranding the lifecycle."""
 MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS = 1
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
 
@@ -80,7 +92,9 @@ def _agent_retestable(agent: Agent | None, entry: ScoreAuditEntry) -> bool:
     # require a finalized three-score set, but one already-accepted shadow
     # score is independently known to be non-authoritative and may be replaced
     # without waiting for the other validators or the human review to finish.
-    return entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS and agent.status in {
+    # An outage void is the same: re-issuing the ticket keeps an agent still
+    # accumulating its quorum from finalizing on a provider-outage run.
+    return entry.payload.get("basis") in REPAIR_RETEST_BASES and agent.status in {
         AgentStatus.EVALUATING,
         AgentStatus.ATH_PENDING_REVIEW,
     }
@@ -175,7 +189,7 @@ async def _requeue_failed_contract_retests(
     latest: dict[UUID, ScoreAuditEntry],
     now: datetime,
 ) -> None:
-    """Return failed v9 contract replacements to their preserved queue.
+    """Return failed v9 contract and outage-void replacements to their queue.
 
     A replacement reuses the consumed score ticket. ``fail_job`` therefore
     changes that row to ``expired`` while the append-only lifecycle remains
@@ -188,7 +202,7 @@ async def _requeue_failed_contract_retests(
     for entry in tuple(latest.values()):
         if (
             entry.event != EVENT_SCORE_RETEST_REQUESTED
-            or entry.payload.get("basis") != V9_CONTRACT_RETEST_BASIS
+            or entry.payload.get("basis") not in REPAIR_RETEST_BASES
         ):
             continue
         bench_version = int(entry.payload.get("bench_version", -1))
@@ -413,8 +427,8 @@ async def activate_next_score_retest(
         allow_parallel_ordinary or allow_parallel_contract_retests
     ) and required_basis not in PARALLEL_RETEST_BASES:
         raise ValueError(
-            "parallel execution is reserved for v9 contract and dueling "
-            "rotation retests"
+            "parallel execution is reserved for v9 contract, dueling "
+            "rotation and provider-outage void retests"
         )
     # Look before locking. A validator with no re-test lifecycle at all cannot
     # reach any mutating branch below -- `issued` needs a REQUESTED entry and
@@ -619,7 +633,7 @@ async def activate_next_score_retest(
             continue
         elif ticket.status != TicketStatus.SCORED and not (
             ticket.status == TicketStatus.EXPIRED
-            and entry.payload.get("basis") == V9_CONTRACT_RETEST_BASIS
+            and entry.payload.get("basis") in REPAIR_RETEST_BASES
         ):
             stale_reason = "accepted score ticket is no longer reusable"
         elif score is None or score.run_id != entry.payload.get("run_id"):
@@ -676,10 +690,12 @@ async def activate_next_score_retest(
         ticket.issued_at = now
         ticket.deadline = deadline
         parked_epoch = ticket.provider_outage_epoch
-        if parked_epoch is None:
-            ticket.attempt_count += 1
-        else:
+        if parked_epoch is not None:
             ticket.provider_outage_attempted_epoch = parked_epoch
+        elif entry.payload.get("basis") != OUTAGE_VOID_RETEST_BASIS:
+            # An outage void's replacement is not charged: the voided run
+            # measured the platform's provider outage, not the agent.
+            ticket.attempt_count += 1
         ticket.provider_outage_epoch = None
         ticket.retry_after = None
         ticket.first_reported_at = None
@@ -896,7 +912,9 @@ def retest_is_queued(entry: ScoreAuditEntry | None) -> bool:
 __all__ = [
     "EVENT_SCORE_INVALIDATED",
     "REPLACEMENT_TICKET_TTL",
+    "REPAIR_RETEST_BASES",
     "MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS",
+    "OUTAGE_VOID_RETEST_BASIS",
     "V9_CONTRACT_RETEST_BASIS",
     "activate_next_score_retest",
     "try_lock_validator",

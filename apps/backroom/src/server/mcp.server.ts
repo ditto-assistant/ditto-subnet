@@ -959,7 +959,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_scores:
     'Read accepted scores/seeds/aggregates; current benchmark default.',
   void_infra_scores:
-    'Void retest samples whose grant shows outage-class failures; guarded, dryRun default. See tool help.',
+    'Void retest samples or canonical scores whose grant shows outage-class failures; guarded, dryRun default. See tool help.',
   list_infra_voids:
     'List infra voids (operator and outage sweep) with evidence and re-run result.',
   get_provider_outages:
@@ -4417,9 +4417,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'void_infra_scores',
     {
-      title: 'Void infrastructure-tainted retest samples',
+      title: 'Void infrastructure-tainted samples and scores',
       description:
-        'Set aside continual-retest samples that measured an inference outage instead of the agent. Read get_continual_retest_diagnostic first and copy each sample\'s validator_hotkey, exact seed, run_id (expectedRunId) and composite (expectedComposite) from retest_samples. Each item is guarded on that exact run and composite (a re-run that already landed reads stale_guard) and gated on the serving grant\'s outage-class failures (upstream_http_402 credit refusal, upstream_http_429/503 backpressure): at least 5, and at least 20 or 5% of chat calls, else insufficient_evidence. dryRun defaults to true and writes nothing; dryRun=false needs confirmation "VOID INFRA SCORES" and is all-or-nothing (any item not applied/already_voided rolls the batch back). A void is append-only and audited (reason, evidence + digest, actor); the score row is never changed. Every fold read (official composite, owner representative, cohort, crown, validator ledger) skips a voided sample from the next epoch pin, which reopens its seed for the agent; the re-run lands at the next void_generation and counts. Canonical quorum scores are not voided here: use replace_validator_score. Requires backroom:write.',
+        'Set aside continual-retest samples that measured an inference outage instead of the agent. Read get_continual_retest_diagnostic first and copy each sample\'s validator_hotkey, exact seed, run_id (expectedRunId) and composite (expectedComposite) from retest_samples. Each item is guarded on that exact run and composite (a re-run that already landed reads stale_guard) and gated on the serving grant\'s outage-class failures (upstream_http_402 credit refusal, upstream_http_429/503 backpressure): at least 5, and at least 20 or 5% of chat calls, else insufficient_evidence. dryRun defaults to true and writes nothing; dryRun=false needs confirmation "VOID INFRA SCORES" and is all-or-nothing (any item not applied/already_voided/already_queued rolls the batch back). A void is append-only and audited (reason, evidence + digest, actor); the score row is never changed. Every fold read (official composite, owner representative, cohort, crown, validator ledger) skips a voided sample from the next epoch pin, which reopens its seed for the agent; the re-run lands at the next void_generation and counts. Canonical quorum scores (SN-489): copy validator_hotkey, seed, run_id and composite from get_agent_scores (or a get_provider_outages canonical_flagged row); sampleKind auto resolves a key\'s canonical run. The same guards and evidence gate apply to the score\'s own serving grant; applied queues a same-validator replacement re-test (retest_request_id, basis provider_outage_void) on the same seed, leased ahead of ordinary work and never charged to the miner\'s retry budget. The score stays canonical until the replacement lands, when it is swapped with a score_invalidated audit entry and every median recomputes. Canonical dispositions add already_queued, already_replaced, retest_busy (another re-test is open), retest_closed (the replacement closed without a score; use replace_validator_score), not_retestable and auto_cap_reached. Requires backroom:write.',
       inputSchema: voidInfraScoresInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -4443,7 +4443,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get provider outages',
       description:
-        'Current provider_outage_circuits rows (state, epoch, opened/retry/last-failure times, failure_count, last_status, last_error_code, outage_active including the recovery quiet window), the post-outage sweep policy (interval, batch, first lookback, evidence gate), and newest-first sweep runs. Each run lists its watermark range, examined/voided/error counts, the voids it wrote (source outage_sweep), the per-grant outage windows observed, and canonical scores whose grant shows the same outage evidence (canonical_flagged: review with replace_validator_score; never replaced automatically). withFindings keeps runs that voided, flagged or errored. Requires backroom:read.',
+        'Current provider_outage_circuits rows (state, epoch, opened/retry/last-failure times, failure_count, last_status, last_error_code, outage_active including the recovery quiet window), the post-outage sweep policy (interval, batch, first lookback, evidence gate), and newest-first sweep runs. Each run lists its watermark range, examined/voided/error counts, the voids it wrote (source outage_sweep), the per-grant outage windows observed, and canonical scores whose grant shows the same outage evidence (canonical_flagged, each with void_disposition/void_request_id: the sweep queues a same-validator replacement re-test that swaps the score when it lands; anything other than applied/already_queued needs operator review). withFindings keeps runs that voided, flagged or errored. Requires backroom:read.',
       inputSchema: getProviderOutagesInputSchema,
       annotations: toolAnnotations('read'),
     },
