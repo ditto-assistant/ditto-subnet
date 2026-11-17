@@ -4657,3 +4657,51 @@ async function readPublishedClaVersion(version: number) {
     throw error
   }
 }
+
+import {
+  airdropExecuteInputSchema, airdropExecuteResultSchema, airdropPreviewInputSchema, airdropPreviewSchema,
+  airdropRunListInputSchema, airdropRunListSchema, airdropRunReportSchema,
+} from '../lib/airdrop-runs.schemas'
+
+/**
+ * SN118 airdrop runs (SN-490). Preview never writes or moves anything; the
+ * signed-in operator is the Platform audit actor on every call.
+ */
+export async function previewAirdrop(rawInput: unknown, actor: string) {
+  const body = airdropPreviewInputSchema.parse(rawInput)
+  return airdropPreviewSchema.parse(await platformAdminRequest('/api/v1/admin/airdrops/preview', {
+    method: 'POST', body, actor,
+  }))
+}
+
+/**
+ * Execute is a dry run unless `dry_run: false` is passed with the preview's
+ * digest and exact phrase. Platform re-derives the preview before recording
+ * anything and resumes, never repeats, a run named by the same key. Settling
+ * a full run can take a while, so the deadline is longer than a read's; a
+ * timeout is resolved by retrying with the same key, never a new one.
+ */
+export async function executeAirdrop(rawInput: unknown, actor: string) {
+  const body = airdropExecuteInputSchema.parse(rawInput)
+  return airdropExecuteResultSchema.parse(await platformAdminRequest('/api/v1/admin/airdrops/execute', {
+    method: 'POST', body, actor, timeoutMs: body.dry_run ? undefined : 120_000,
+  }))
+}
+
+export async function fetchAirdropRuns(rawInput: unknown = {}) {
+  const input = airdropRunListInputSchema.parse(rawInput)
+  const params = new URLSearchParams({ limit: String(input.limit), offset: String(input.offset) })
+  if (input.idempotency_key) params.set('idempotency_key', input.idempotency_key)
+  if (input.asset) params.set('asset', input.asset)
+  if (input.mode) params.set('mode', input.mode)
+  return airdropRunListSchema.parse(await platformAdminRequest(`/api/v1/admin/airdrops?${params}`, {
+    retries: 1,
+  }))
+}
+
+export async function fetchAirdropRun(runId: string) {
+  const id = z.string().uuid().parse(runId)
+  return airdropRunReportSchema.parse(await platformAdminRequest(`/api/v1/admin/airdrops/${id}`, {
+    retries: 1,
+  }))
+}

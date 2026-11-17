@@ -256,6 +256,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/airdrops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Airdrop Runs
+         * @description Recent runs, newest first, plus the caps and executors in force.
+         */
+        get: operations["list_airdrop_runs_api_v1_admin_airdrops_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/airdrops/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Airdrop
+         * @description Run an airdrop. ``dry_run`` defaults to true and then only previews.
+         *
+         *     With ``dry_run=false`` the request must echo the preview's
+         *     ``confirmation_digest`` and exact ``confirmation`` phrase. A retry with
+         *     the same ``idempotency_key`` resumes the recorded run and never sends a
+         *     recipient that has already been claimed.
+         */
+        post: operations["execute_airdrop_api_v1_admin_airdrops_execute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/airdrops/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Airdrop
+         * @description Resolve, cap and price a run. Never writes the ledger or moves anything.
+         */
+        post: operations["preview_airdrop_api_v1_admin_airdrops_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/airdrops/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Airdrop Run
+         * @description One run with every recipient's settlement result.
+         */
+        get: operations["get_airdrop_run_api_v1_admin_airdrops__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/artifact-fetch-audit": {
         parameters: {
             query?: never;
@@ -18053,6 +18138,404 @@ export interface components {
             provider_sort: string;
             /** Reliability Provider Order */
             reliability_provider_order: string[];
+        };
+        /** AirdropAssetPolicy */
+        AirdropAssetPolicy: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /** Funding Source */
+            funding_source: string | null;
+            /** Live Executor */
+            live_executor: string | null;
+            /** Max Total Amount */
+            max_total_amount: number;
+            /**
+             * Recipient Kind
+             * @enum {string}
+             */
+            recipient_kind: "wallet" | "account";
+            /** Rehearsal Executor */
+            rehearsal_executor: string | null;
+            /** Unit */
+            unit: string;
+        };
+        /** AirdropBalanceCheck */
+        AirdropBalanceCheck: {
+            /** Available */
+            available: number | null;
+            /** Detail */
+            detail: string;
+            /** Required */
+            required: number;
+            /** Source */
+            source: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "sufficient" | "insufficient" | "unavailable";
+        };
+        /** AirdropCapCheck */
+        AirdropCapCheck: {
+            /** Max Recipients */
+            max_recipients: number;
+            /** Max Total Amount */
+            max_total_amount: number;
+            /** Recipient Count */
+            recipient_count: number;
+            /** Total Amount */
+            total_amount: number;
+            /** Within Cap */
+            within_cap: boolean;
+        };
+        /**
+         * AirdropExecuteRequest
+         * @description Execute, guarded by the preview's digest and exact phrase.
+         *
+         *     ``dry_run`` defaults to true: without an explicit ``false`` this returns
+         *     the preview and writes nothing.
+         */
+        AirdropExecuteRequest: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /** Confirmation */
+            confirmation?: string | null;
+            /** Confirmation Digest */
+            confirmation_digest?: string | null;
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+            /**
+             * Idempotency Key
+             * @description 8-128 chars of [A-Za-z0-9._:-]. Names one run forever: a retry with the same key resumes it and never pays a recipient twice.
+             */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @default rehearsal
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Reason */
+            reason: string;
+            /** Recipients */
+            recipients: components["schemas"]["AirdropRecipientInput"][];
+        };
+        /** AirdropExecuteResponse */
+        AirdropExecuteResponse: {
+            /** Dry Run */
+            dry_run: boolean;
+            preview: components["schemas"]["AirdropPreview"];
+            run: components["schemas"]["AirdropRunReport"] | null;
+        };
+        /** AirdropPolicy */
+        AirdropPolicy: {
+            /** Assets */
+            assets: components["schemas"]["AirdropAssetPolicy"][];
+            /** Max Recipients */
+            max_recipients: number;
+        };
+        /** AirdropPreview */
+        AirdropPreview: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            balance: components["schemas"]["AirdropBalanceCheck"];
+            /** Blockers */
+            blockers: string[];
+            cap: components["schemas"]["AirdropCapCheck"];
+            /** Confirmation */
+            confirmation: string;
+            /** Confirmation Digest */
+            confirmation_digest: string;
+            /**
+             * Dry Run
+             * @default true
+             * @constant
+             */
+            dry_run: true;
+            /** Executor */
+            executor: string | null;
+            /** Existing Run Id */
+            existing_run_id: string | null;
+            /** Existing Run Matches */
+            existing_run_matches: boolean | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Ready */
+            ready: boolean;
+            /** Reason */
+            reason: string;
+            /** Recipient Count */
+            recipient_count: number;
+            /** Recipients */
+            recipients: components["schemas"]["AirdropPreviewRecipient"][];
+            /** Refused Count */
+            refused_count: number;
+            /**
+             * Spending Authority
+             * @default none
+             * @constant
+             */
+            spending_authority: "none";
+            /** Total Amount */
+            total_amount: number;
+            /** Unit */
+            unit: string;
+            /**
+             * Warnings
+             * @description Advisories that do not block, such as prior payments.
+             */
+            warnings: string[];
+        };
+        /** AirdropPreviewRecipient */
+        AirdropPreviewRecipient: {
+            /** Address */
+            address: string;
+            /** Amount */
+            amount: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "wallet" | "account";
+            /**
+             * Payee
+             * @description Who is paid: the coldkey, or the linked Ditto account id.
+             */
+            payee: string | null;
+            /** Position */
+            position: number;
+            /**
+             * Prior Amount
+             * @description What this payee already received or is being paid (every status but failed) for this asset and mode under other run keys, to catch a retry made with a new key.
+             */
+            prior_amount: number;
+            /**
+             * Recipient Key
+             * @description Per-recipient idempotency key; null on a refused row.
+             */
+            recipient_key: string | null;
+            /**
+             * Refused
+             * @description Why this row cannot be paid, or null when it can.
+             */
+            refused: string | null;
+        };
+        /** AirdropPreviewRequest */
+        AirdropPreviewRequest: {
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /**
+             * Idempotency Key
+             * @description 8-128 chars of [A-Za-z0-9._:-]. Names one run forever: a retry with the same key resumes it and never pays a recipient twice.
+             */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @default rehearsal
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Reason */
+            reason: string;
+            /** Recipients */
+            recipients: components["schemas"]["AirdropRecipientInput"][];
+        };
+        /** AirdropRecipientInput */
+        AirdropRecipientInput: {
+            /**
+             * Address
+             * @description SS58 coldkey for a wallet, SS58 miner hotkey for an account.
+             */
+            address: string;
+            /**
+             * Amount
+             * @description Integer amount in the asset's base unit (rao or credit).
+             */
+            amount: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "wallet" | "account";
+        };
+        /** AirdropRecipientResult */
+        AirdropRecipientResult: {
+            /** Address */
+            address: string;
+            /** Amount */
+            amount: number;
+            /** Attempted At */
+            attempted_at: string | null;
+            /** Error */
+            error: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "wallet" | "account";
+            /** Payee */
+            payee: string;
+            /** Position */
+            position: number;
+            /** Receipt */
+            receipt: string | null;
+            /** Recipient Key */
+            recipient_key: string;
+            /** Settled At */
+            settled_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "dispatching" | "settled" | "failed" | "uncertain";
+        };
+        /** AirdropRunList */
+        AirdropRunList: {
+            policy: components["schemas"]["AirdropPolicy"];
+            /** Runs */
+            runs: components["schemas"]["AirdropRunSummary"][];
+        };
+        /** AirdropRunReport */
+        AirdropRunReport: {
+            /** Actor */
+            actor: string;
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /** Completed At */
+            completed_at: string | null;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Digest */
+            digest: string;
+            /** Executor */
+            executor: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Reason */
+            reason: string;
+            /** Recipient Count */
+            recipient_count: number;
+            /** Recipients */
+            recipients: components["schemas"]["AirdropRecipientResult"][];
+            /**
+             * Resumed
+             * @description True when this call found the run already recorded under its key.
+             * @default false
+             */
+            resumed: boolean;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Settled Amount */
+            settled_amount: number;
+            /**
+             * Stale Dispatching
+             * @description Rows claimed over ten minutes ago with no recorded outcome. They are never resent and need reconciliation (SN-490).
+             */
+            stale_dispatching: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "settled" | "needs_attention";
+            /** Total Amount */
+            total_amount: number;
+            /** Unit */
+            unit: string;
+        };
+        /** AirdropRunSummary */
+        AirdropRunSummary: {
+            /** Actor */
+            actor: string;
+            /**
+             * Asset
+             * @enum {string}
+             */
+            asset: "alpha" | "ditto_credits";
+            /** Completed At */
+            completed_at: string | null;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Digest */
+            digest: string;
+            /** Executor */
+            executor: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "rehearsal" | "live";
+            /** Reason */
+            reason: string;
+            /** Recipient Count */
+            recipient_count: number;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Settled Amount */
+            settled_amount: number;
+            /**
+             * Stale Dispatching
+             * @description Rows claimed over ten minutes ago with no recorded outcome. They are never resent and need reconciliation (SN-490).
+             */
+            stale_dispatching: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "settled" | "needs_attention";
+            /** Total Amount */
+            total_amount: number;
+            /** Unit */
+            unit: string;
         };
         /**
          * AnswerResponse
@@ -49196,6 +49679,147 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceReleaseEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_airdrop_runs_api_v1_admin_airdrops_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                idempotency_key?: string | null;
+                asset?: ("alpha" | "ditto_credits") | null;
+                mode?: ("rehearsal" | "live") | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AirdropRunList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_airdrop_api_v1_admin_airdrops_execute_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AirdropExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AirdropExecuteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_airdrop_api_v1_admin_airdrops_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AirdropPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AirdropPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_airdrop_run_api_v1_admin_airdrops__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AirdropRunReport"];
                 };
             };
             /** @description Validation Error */

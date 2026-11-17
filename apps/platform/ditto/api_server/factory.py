@@ -60,6 +60,7 @@ from ditto.api_server.embedding import create_embedder
 from ditto.api_server.emission_allocation import EmissionAllocationResolver
 from ditto.api_server.emission_eligibility import EmissionEligibilityResolver
 from ditto.api_server.endpoints import (
+    admin_airdrops_router,
     admin_artifact_release_settings_router,
     admin_ath_review_queue_slo_router,
     admin_ath_rulings_router,
@@ -891,6 +892,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
     app.include_router(admin_ath_rulings_router, prefix="/api/v1")
+    app.include_router(admin_airdrops_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
     app.include_router(admin_unreleased_copy_router, prefix="/api/v1")
     app.include_router(admin_upload_payments_router, prefix="/api/v1")

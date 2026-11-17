@@ -480,7 +480,7 @@ Three scopes, in ascending sensitivity:
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
 | `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/lineage/baseline diffs, and sanitized private screening failure details. |
-| `backroom:write` | Mutations, including `set_emission_allocation` and `set_burn_settings`, which move TAO, and `queue_treasury_manual_transfer`, which moves SN118 alpha. |
+| `backroom:write` | Mutations, including `set_emission_allocation` and `set_burn_settings`, which move TAO, `queue_treasury_manual_transfer`, which moves SN118 alpha, and `execute_airdrop`, which settles an airdrop run (rehearsal-only today). |
 
 Two independent gates apply to every privileged call. The grant must carry the
 scope, **and** the operator's account must still resolve to `write` through
@@ -578,6 +578,56 @@ before Platform is called, and Backroom supplies Platform's own wire
 confirmation. Custody re-verifies balances, reserve, destination and the
 previous claim before signing. One unresolved claim blocks another, and an
 unresolved request is never resent automatically.
+
+### Airdrop runs (SN-490)
+
+`preview_airdrop`, `execute_airdrop`, `get_airdrop_run` and `list_airdrop_runs`
+drive Platform's airdrop run ledger (`/api/v1/admin/airdrops`). Preview and
+execute need `backroom:write`; the reads need `backroom:read`. The signed-in
+operator is the audit actor on every call.
+
+A run pays one `asset` to 1-1000 recipients `{kind, address, amount}`.
+Amounts are integers in the asset's base unit:
+
+| Asset | Recipient kind | Unit | Payee |
+|---|---|---|---|
+| `alpha` | `wallet` (SS58 coldkey) | rao | the coldkey |
+| `ditto_credits` | `account` (SN118 miner hotkey) | credit | the Ditto account bound by that hotkey's active Sign in with Ditto link |
+
+Preview writes nothing. It refuses bad rows: the wrong kind for the asset, an
+invalid SS58 address, a duplicate recipient, an unlinked hotkey, or two hotkeys
+that resolve to one Ditto account. It also applies the per-run cap (200
+recipients, plus a per-asset total pinned in Platform code) and reports the
+funding balance check. Each row carries `prior_amount`, what that payee
+already received or is being paid for this asset and mode under other keys,
+and `warnings` names any such rows, so a retry under a new key is visible.
+Preview returns `blockers`, `ready`,
+`confirmation_digest` and the exact `confirmation` phrase, for example
+`AIRDROP 1.5 ALPHA TO 2 RECIPIENTS AS REHEARSAL`.
+
+`execute_airdrop` is a dry run unless `dry_run: false` is passed with the
+preview's digest and phrase. Platform re-derives the preview and refuses any
+difference. It then records the run and every recipient as `pending` before
+settling anything, and claims each row (`dispatching`) before its executor
+runs. The `idempotency_key` names the run forever:
+
+- The same key with the same inputs resumes the run and only settles rows
+  still `pending`.
+- A row that has left `pending` is never sent again. A crash mid-send leaves
+  it `dispatching`, and an executor error leaves it `uncertain`; both wait for
+  reconciliation. A row still `dispatching` after ten minutes is counted in
+  `stale_dispatching` and puts the run in `needs_attention`. Reconciling a row
+  needs evidence from the asset's settlement system, so the reconcile tool
+  ships with the first live executor (SN-490).
+- The same key with different inputs is refused.
+
+After a timeout, retry with the same key, never a new one.
+
+Only simulated rehearsal executors exist, so every run is a rehearsal and
+nothing moves. A `live` run is refused for every asset until SN-490 decides
+what an airdrop pays and a reviewed live executor and funding source are
+wired in. `list_airdrop_runs` reports the caps, executors and funding source
+in force.
 
 ## Bindings
 

@@ -273,6 +273,170 @@ describe('Backroom MCP tools', () => {
     })
   })
 
+  describe('SN118 airdrop runs (SN-490)', () => {
+    const alice = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY'
+    const bob = '5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty'
+    const runId = '11111111-2222-4333-8444-555555555555'
+    const input = {
+      asset: 'alpha', idempotency_key: 'airdrop-test-0001', reason: 'thank early SN118 miners',
+      recipients: [
+        { kind: 'wallet', address: alice, amount: 1_000_000_000 },
+        { kind: 'wallet', address: bob, amount: 500_000_000 },
+      ],
+    }
+    const preview = {
+      dry_run: true, asset: 'alpha', unit: 'rao', mode: 'rehearsal', idempotency_key: input.idempotency_key,
+      reason: input.reason, executor: 'simulated',
+      recipients: input.recipients.map((row, position) => ({
+        position, ...row, payee: row.address, recipient_key: String(position).repeat(64),
+        refused: null, prior_amount: 0,
+      })),
+      recipient_count: 2, refused_count: 0, total_amount: 1_500_000_000,
+      cap: { max_recipients: 200, max_total_amount: 10_000_000_000, recipient_count: 2, total_amount: 1_500_000_000, within_cap: true },
+      balance: { status: 'unavailable', source: null, available: null, required: 1_500_000_000, detail: 'No funding source is configured for alpha (SN-490).' },
+      blockers: [], ready: true, existing_run_id: null, existing_run_matches: null, warnings: [],
+      confirmation_digest: 'c'.repeat(64), confirmation: 'AIRDROP 1.5 ALPHA TO 2 RECIPIENTS AS REHEARSAL',
+      spending_authority: 'none',
+    }
+    const run = {
+      run_id: runId, idempotency_key: input.idempotency_key, asset: 'alpha', unit: 'rao', mode: 'rehearsal',
+      executor: 'simulated', reason: input.reason, actor: session.email, digest: 'c'.repeat(64),
+      created_at: '2026-11-17T18:00:00Z', completed_at: '2026-11-17T18:00:01Z', status: 'settled', stale_dispatching: 0,
+      recipient_count: 2, total_amount: 1_500_000_000, settled_amount: 1_500_000_000, counts: { settled: 2 },
+      recipients: preview.recipients.map(row => ({
+        position: row.position, kind: row.kind, address: row.address, payee: row.address, amount: row.amount,
+        recipient_key: row.recipient_key, status: 'settled', receipt: `rehearsal:${row.recipient_key.slice(0, 16)}`,
+        error: null, attempted_at: '2026-11-17T18:00:00Z', settled_at: '2026-11-17T18:00:01Z',
+      })),
+      resumed: false,
+    }
+
+    it('previews with the operator actor and refuses read-only grants and malformed keys before Platform', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+      const fetchMock = vi.fn().mockImplementation(async () => Response.json(preview))
+      vi.stubGlobal('fetch', fetchMock)
+      const readonly = await connect([BACKROOM_READ_SCOPE])
+      try {
+        expect((await readonly.client.callTool({ name: 'preview_airdrop', arguments: input })).isError).toBe(true)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally { await readonly.client.close(); await readonly.server.close() }
+      const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        for (const args of [
+          { ...input, idempotency_key: 'has spaces in it' },
+          { ...input, reason: 'short' },
+          { ...input, recipients: [{ kind: 'wallet', address: alice, amount: 0 }] },
+        ]) {
+          expect((await writer.client.callTool({ name: 'preview_airdrop', arguments: args })).isError).toBe(true)
+        }
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        const response = await writer.client.callTool({ name: 'preview_airdrop', arguments: input })
+        expect(response.isError).not.toBe(true)
+        expect(readJsonResult(response)).toEqual(preview)
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(url).toMatch(/\/api\/v1\/admin\/airdrops\/preview$/)
+        expect(init.method).toBe('POST')
+        expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+        expect(JSON.parse(String(init.body))).toEqual({ ...input, mode: 'rehearsal' })
+      } finally { await writer.client.close(); await writer.server.close() }
+    })
+
+    it('executes as a dry run by default and runs only with the digest and AIRDROP phrase', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+      const fetchMock = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as { dry_run: boolean }
+        return Response.json({ dry_run: body.dry_run, preview, run: body.dry_run ? null : run })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        const dry = readJsonResult(await writer.client.callTool({ name: 'execute_airdrop', arguments: input })) as { dry_run: boolean; run: unknown }
+        expect(dry).toMatchObject({ dry_run: true, run: null })
+        expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({ dry_run: true })
+
+        for (const args of [
+          { ...input, dry_run: false },
+          { ...input, dry_run: false, confirmation_digest: preview.confirmation_digest },
+          { ...input, dry_run: false, confirmation_digest: preview.confirmation_digest, confirmation: 'yes' },
+        ]) {
+          expect((await writer.client.callTool({ name: 'execute_airdrop', arguments: args })).isError).toBe(true)
+        }
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+
+        const executed = await writer.client.callTool({
+          name: 'execute_airdrop',
+          arguments: { ...input, dry_run: false, confirmation_digest: preview.confirmation_digest, confirmation: preview.confirmation },
+        })
+        expect(executed.isError).not.toBe(true)
+        expect(readJsonResult(executed)).toEqual({ dry_run: false, preview, run })
+        const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+        expect(url).toMatch(/\/api\/v1\/admin\/airdrops\/execute$/)
+        expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+        expect(JSON.parse(String(init.body))).toEqual({
+          ...input, mode: 'rehearsal', dry_run: false,
+          confirmation_digest: preview.confirmation_digest, confirmation: preview.confirmation,
+        })
+      } finally { await writer.client.close(); await writer.server.close() }
+    })
+
+    it('reads runs and the policy with read scope only', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+      const { recipients: _recipients, resumed: _resumed, ...summary } = run
+      const listing = {
+        policy: {
+          max_recipients: 200,
+          assets: [
+            { asset: 'alpha', unit: 'rao', recipient_kind: 'wallet', max_total_amount: 10_000_000_000, rehearsal_executor: 'simulated', live_executor: null, funding_source: null },
+            { asset: 'ditto_credits', unit: 'credit', recipient_kind: 'account', max_total_amount: 25_000_000_000, rehearsal_executor: 'simulated', live_executor: null, funding_source: null },
+          ],
+        },
+        runs: [summary],
+      }
+      const fetchMock = vi.fn().mockImplementation(async (url: string) =>
+        Response.json(String(url).includes(runId) ? { ...run } : listing))
+      vi.stubGlobal('fetch', fetchMock)
+      const reader = await connect([BACKROOM_READ_SCOPE])
+      try {
+        const listed = await reader.client.callTool({
+          name: 'list_airdrop_runs', arguments: { limit: 5, asset: 'alpha', idempotency_key: input.idempotency_key },
+        })
+        expect(readJsonResult(listed)).toEqual(listing)
+        const listUrl = new URL(String(fetchMock.mock.calls[0][0]))
+        expect(listUrl.pathname).toBe('/api/v1/admin/airdrops')
+        expect(Object.fromEntries(listUrl.searchParams)).toEqual({ limit: '5', offset: '0', asset: 'alpha', idempotency_key: input.idempotency_key })
+
+        const one = await reader.client.callTool({ name: 'get_airdrop_run', arguments: { run_id: runId } })
+        expect(readJsonResult(one)).toEqual(run)
+        expect(String(fetchMock.mock.calls[1][0])).toMatch(new RegExp(`/api/v1/admin/airdrops/${runId}$`))
+        expect((await reader.client.callTool({ name: 'get_airdrop_run', arguments: { run_id: 'nope' } })).isError).toBe(true)
+      } finally { await reader.client.close(); await reader.server.close() }
+    })
+
+    it('publishes execute as destructive and both writes as write-scoped', async () => {
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+      try {
+        const { tools } = await client.listTools()
+        const byName = new Map(tools.map(tool => [tool.name, tool]))
+        expect(byName.get('preview_airdrop')?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+        expect(byName.get('execute_airdrop')?.annotations).toEqual({
+          readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true,
+        })
+        expect(byName.get('get_airdrop_run')?.annotations?.readOnlyHint).toBe(true)
+        expect(byName.get('list_airdrop_runs')?.annotations?.readOnlyHint).toBe(true)
+        expect(TOOL_SCOPE_REQUIREMENTS.get('preview_airdrop')).toBe(BACKROOM_WRITE_SCOPE)
+        expect(TOOL_SCOPE_REQUIREMENTS.get('execute_airdrop')).toBe(BACKROOM_WRITE_SCOPE)
+        expect(TOOL_SCOPE_REQUIREMENTS.get('list_airdrop_runs')).toBeUndefined()
+        const help = readJsonResult(await client.callTool({
+          name: 'get_backroom_tool_help', arguments: { tool: 'execute_airdrop' },
+        })) as { guidance: string }
+        for (const fragment of ['DESTRUCTIVE when dry_run=false', 'dry_run defaults to true', 'never resend', 'same key', 'SN-490']) {
+          expect(help.guidance).toContain(fragment)
+        }
+      } finally { await client.close(); await server.close() }
+    })
+  })
+
   it('preflights a receipt with read scope and never invokes receipt ingress', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const selection = { stage: 'service_distribution', epoch_index: 9, bucket_id: 'gamma', source_block: 100,
@@ -542,6 +706,10 @@ describe('Backroom MCP tools', () => {
         'expand_benchmark_rollout_cohort',
         'get_backroom_access',
         'get_backroom_tool_help',
+        'preview_airdrop',
+        'execute_airdrop',
+        'get_airdrop_run',
+        'list_airdrop_runs',
         'get_generator_competition_settings',
         'set_generator_competition_settings',
         'list_generator_submissions',
@@ -1029,7 +1197,10 @@ describe('Backroom MCP tools', () => {
     // The five frontier escalation settings on the generator settings write
     // schema (no new tool; detail in tool help) measure 242,706 bytes; keep
     // about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(243_200)
+    // The four airdrop run tools (SN-490: preview, execute, run read and run
+    // list; one-line summaries, detail in tool help) measure 246,021 bytes;
+    // keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(246_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1095,7 +1266,9 @@ describe('Backroom MCP tools', () => {
       // on get_generator_submission measure 29,886; keep about 200 chars.
       // The four one-line Ditto Edge shadow lane reads (SN-481) measure
       // 30,227; keep about 200 chars.
-      30_430,
+      // The four one-line airdrop run summaries (SN-490) measure 30,364;
+      // keep about 200 chars.
+      30_560,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

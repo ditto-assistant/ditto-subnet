@@ -2,10 +2,14 @@
 
 This is the public SN118 operations console and MCP server hosted at
 `backroom.dittobench.ai`. It may call only `ditto-platform` and public subnet
-surfaces. Product feature flags, app publishing review, airdrops, and product
-ops logs remain in the private `backroom` repository hosted at
+surfaces. Product feature flags, app publishing review, Ditto product credit
+airdrops by email, and product ops logs remain in the private `backroom`
+repository hosted at
 `backroom.heyditto.ai`; the subnet half of its MCP now lives here (see
-`docs/mcp.md`), and the two tool sets must not be recombined.
+`docs/mcp.md`), and the two tool sets must not be recombined. SN118 airdrop
+runs (SN-490) are Platform-owned and live here; they reach a Ditto account only
+through a miner hotkey's verified Sign in with Ditto link, never by email or
+through the private product API.
 
 Before substantial UI work, run `pnpm dlx @tanstack/intent@latest list` here and
 load any matching package skill. Never edit `src/routeTree.gen.ts`; run

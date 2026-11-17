@@ -58,6 +58,79 @@ CREATE TYPE public.ticketstatus AS ENUM (
 
 
 --
+-- Name: airdrop_no_truncate(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.airdrop_no_truncate() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN RAISE EXCEPTION 'airdrop history cannot be truncated'; END $$;
+
+
+--
+-- Name: airdrop_recipient_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.airdrop_recipient_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF TG_OP <> 'UPDATE' THEN
+            RAISE EXCEPTION 'airdrop recipients are append-only';
+          END IF;
+          IF to_jsonb(NEW) - 'status' - 'receipt' - 'error'
+               - 'attempted_at' - 'settled_at'
+             IS DISTINCT FROM
+             to_jsonb(OLD) - 'status' - 'receipt' - 'error'
+               - 'attempted_at' - 'settled_at'
+          THEN
+            RAISE EXCEPTION 'airdrop recipient terms are immutable';
+          END IF;
+          IF OLD.status IN ('settled', 'failed') THEN
+            RAISE EXCEPTION 'airdrop recipient % is final', OLD.status;
+          END IF;
+          IF OLD.attempted_at IS NOT NULL
+             AND NEW.attempted_at IS DISTINCT FROM OLD.attempted_at THEN
+            RAISE EXCEPTION 'airdrop recipient attempt time is final';
+          END IF;
+          IF NEW.status IS DISTINCT FROM OLD.status AND NOT (
+               (OLD.status = 'pending' AND NEW.status = 'dispatching')
+            OR (OLD.status = 'dispatching'
+                AND NEW.status IN ('settled', 'failed', 'uncertain'))
+            OR (OLD.status = 'uncertain' AND NEW.status IN ('settled', 'failed'))
+          ) THEN
+            RAISE EXCEPTION 'airdrop recipient cannot move from % to %',
+              OLD.status, NEW.status;
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
+-- Name: airdrop_run_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.airdrop_run_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF TG_OP <> 'UPDATE' THEN
+            RAISE EXCEPTION 'airdrop runs are append-only';
+          END IF;
+          IF to_jsonb(NEW) - 'completed_at'
+             IS DISTINCT FROM to_jsonb(OLD) - 'completed_at'
+          THEN
+            RAISE EXCEPTION 'airdrop run terms are immutable';
+          END IF;
+          IF OLD.completed_at IS NOT NULL
+             AND NEW.completed_at IS DISTINCT FROM OLD.completed_at THEN
+            RAISE EXCEPTION 'airdrop run completion is final';
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
 -- Name: bounty_history_immutable(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1375,6 +1448,59 @@ CREATE TABLE public.agents (
     shadow boolean DEFAULT false NOT NULL,
     CONSTRAINT agents_version_positive_check CHECK (((version IS NULL) OR (version > 0))),
     CONSTRAINT ck_agents_agents_screened_image_fields_check CHECK ((((screened_image_sha256 IS NULL) AND (screened_image_size_bytes IS NULL) AND (screened_image_id IS NULL) AND (screened_image_ref IS NULL) AND (screened_image_upload_id IS NULL) AND (screened_image_verified_at IS NULL)) OR ((length(screened_image_sha256) = 64) AND (screened_image_size_bytes > 0) AND (length(screened_image_id) = 71) AND (length(screened_image_ref) > 0) AND (screened_image_upload_id IS NOT NULL) AND (screened_image_verified_at IS NOT NULL))))
+);
+
+
+--
+-- Name: airdrop_recipients; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.airdrop_recipients (
+    run_id uuid NOT NULL,
+    "position" integer NOT NULL,
+    recipient_key text NOT NULL,
+    kind text NOT NULL,
+    address text NOT NULL,
+    payee text NOT NULL,
+    amount bigint NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    receipt text,
+    error text,
+    attempted_at timestamp with time zone,
+    settled_at timestamp with time zone,
+    CONSTRAINT ck_airdrop_recipients_ck_airdrop_recipients_amount CHECK ((amount > 0)),
+    CONSTRAINT ck_airdrop_recipients_ck_airdrop_recipients_attempted CHECK (((status = 'pending'::text) = (attempted_at IS NULL))),
+    CONSTRAINT ck_airdrop_recipients_ck_airdrop_recipients_kind CHECK ((kind = ANY (ARRAY['wallet'::text, 'account'::text]))),
+    CONSTRAINT ck_airdrop_recipients_ck_airdrop_recipients_position CHECK (("position" >= 0)),
+    CONSTRAINT ck_airdrop_recipients_ck_airdrop_recipients_recipient_key CHECK ((recipient_key ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_airdrop_recipients_ck_airdrop_recipients_status CHECK ((status = ANY (ARRAY['pending'::text, 'dispatching'::text, 'settled'::text, 'failed'::text, 'uncertain'::text])))
+);
+
+
+--
+-- Name: airdrop_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.airdrop_runs (
+    run_id uuid NOT NULL,
+    idempotency_key text NOT NULL,
+    asset text NOT NULL,
+    mode text NOT NULL,
+    executor text NOT NULL,
+    digest text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    recipient_count integer NOT NULL,
+    total_amount bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT ck_airdrop_runs_ck_airdrop_runs_actor CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 320))),
+    CONSTRAINT ck_airdrop_runs_ck_airdrop_runs_asset CHECK ((asset = ANY (ARRAY['alpha'::text, 'ditto_credits'::text]))),
+    CONSTRAINT ck_airdrop_runs_ck_airdrop_runs_digest CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_airdrop_runs_ck_airdrop_runs_mode CHECK ((mode = ANY (ARRAY['rehearsal'::text, 'live'::text]))),
+    CONSTRAINT ck_airdrop_runs_ck_airdrop_runs_reason CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_airdrop_runs_ck_airdrop_runs_recipient_count CHECK (((recipient_count >= 1) AND (recipient_count <= 1000))),
+    CONSTRAINT ck_airdrop_runs_ck_airdrop_runs_total_amount CHECK ((total_amount > 0))
 );
 
 
@@ -9821,6 +9947,22 @@ ALTER TABLE ONLY public.agent_kingship
 
 
 --
+-- Name: airdrop_recipients pk_airdrop_recipients; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.airdrop_recipients
+    ADD CONSTRAINT pk_airdrop_recipients PRIMARY KEY (run_id, "position");
+
+
+--
+-- Name: airdrop_runs pk_airdrop_runs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.airdrop_runs
+    ADD CONSTRAINT pk_airdrop_runs PRIMARY KEY (run_id);
+
+
+--
 -- Name: artifact_fetch_audit pk_artifact_fetch_audit; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11725,6 +11867,30 @@ ALTER TABLE ONLY public.unreleased_copy_settings_revisions
 
 
 --
+-- Name: airdrop_recipients uq_airdrop_recipients_recipient_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.airdrop_recipients
+    ADD CONSTRAINT uq_airdrop_recipients_recipient_key UNIQUE (recipient_key);
+
+
+--
+-- Name: airdrop_recipients uq_airdrop_recipients_run_address; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.airdrop_recipients
+    ADD CONSTRAINT uq_airdrop_recipients_run_address UNIQUE (run_id, kind, address);
+
+
+--
+-- Name: airdrop_runs uq_airdrop_runs_idempotency_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.airdrop_runs
+    ADD CONSTRAINT uq_airdrop_runs_idempotency_key UNIQUE (idempotency_key);
+
+
+--
 -- Name: benchmark_rollout_carryover uq_benchmark_rollout_carryover_rollout_id; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12265,6 +12431,20 @@ CREATE INDEX agents_status_scored_idx ON public.agents USING btree (status) WHER
 --
 
 CREATE INDEX agents_status_uploaded_idx ON public.agents USING btree (status) WHERE (status = 'uploaded'::public.agentstatus);
+
+
+--
+-- Name: airdrop_recipients_payee_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX airdrop_recipients_payee_idx ON public.airdrop_recipients USING btree (payee, status);
+
+
+--
+-- Name: airdrop_runs_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX airdrop_runs_created_idx ON public.airdrop_runs USING btree (created_at);
 
 
 --
@@ -13857,6 +14037,34 @@ CREATE TRIGGER agent_cla_bindings_no_truncate BEFORE TRUNCATE ON public.agent_cl
 
 
 --
+-- Name: airdrop_recipients airdrop_recipients_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER airdrop_recipients_guard BEFORE DELETE OR UPDATE ON public.airdrop_recipients FOR EACH ROW EXECUTE FUNCTION public.airdrop_recipient_guard();
+
+
+--
+-- Name: airdrop_recipients airdrop_recipients_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER airdrop_recipients_no_truncate BEFORE TRUNCATE ON public.airdrop_recipients FOR EACH STATEMENT EXECUTE FUNCTION public.airdrop_no_truncate();
+
+
+--
+-- Name: airdrop_runs airdrop_runs_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER airdrop_runs_guard BEFORE DELETE OR UPDATE ON public.airdrop_runs FOR EACH ROW EXECUTE FUNCTION public.airdrop_run_guard();
+
+
+--
+-- Name: airdrop_runs airdrop_runs_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER airdrop_runs_no_truncate BEFORE TRUNCATE ON public.airdrop_runs FOR EACH STATEMENT EXECUTE FUNCTION public.airdrop_no_truncate();
+
+
+--
 -- Name: bounties bounties_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -15266,6 +15474,14 @@ ALTER TABLE ONLY public.agent_distinctive_items
 
 ALTER TABLE ONLY public.agent_kingship
     ADD CONSTRAINT fk_agent_kingship_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: airdrop_recipients fk_airdrop_recipients_run_id_airdrop_runs; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.airdrop_recipients
+    ADD CONSTRAINT fk_airdrop_recipients_run_id_airdrop_runs FOREIGN KEY (run_id) REFERENCES public.airdrop_runs(run_id);
 
 
 --

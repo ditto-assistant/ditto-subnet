@@ -15705,3 +15705,96 @@ class EdgeLedgerWindow(Base):
         ),
         Index("edge_ledger_windows_node_idx", "node_id", "window_index"),
     )
+
+
+class AirdropRun(Base):
+    """One Backroom airdrop run (SN-490), named forever by its idempotency key.
+
+    Only ``completed_at`` may change after insert, once; a trigger refuses
+    every other update, delete and truncate. ``mode`` records whether the
+    run's executor could move anything: today only ``rehearsal`` executors
+    exist.
+    """
+
+    __tablename__ = "airdrop_runs"
+
+    run_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    asset: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    executor: Mapped[str] = mapped_column(Text, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_airdrop_runs_idempotency_key"),
+        CheckConstraint("asset IN ('alpha', 'ditto_credits')", name="asset"),
+        CheckConstraint("mode IN ('rehearsal', 'live')", name="mode"),
+        CheckConstraint("digest ~ '^[0-9a-f]{64}$'", name="digest"),
+        CheckConstraint("length(trim(reason)) >= 8", name="reason"),
+        CheckConstraint("length(trim(actor)) BETWEEN 1 AND 320", name="actor"),
+        CheckConstraint("recipient_count BETWEEN 1 AND 1000", name="recipient_count"),
+        CheckConstraint("total_amount > 0", name="total_amount"),
+        Index("airdrop_runs_created_idx", "created_at"),
+    )
+
+
+class AirdropRecipient(Base):
+    """One recipient of an airdrop run and its settlement state.
+
+    The recipient's terms never change. Its status only moves forward:
+    ``pending`` -> ``dispatching`` (committed before the executor is called)
+    -> ``settled`` / ``failed`` / ``uncertain``, and ``uncertain`` may later
+    reconcile to ``settled`` or ``failed``. A row that left ``pending`` is
+    never sent again, which is what keeps a retry from paying twice.
+    """
+
+    __tablename__ = "airdrop_recipients"
+
+    run_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    recipient_key: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    address: Mapped[str] = mapped_column(Text, nullable=False)
+    payee: Mapped[str] = mapped_column(Text, nullable=False)
+    amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'pending'")
+    )
+    receipt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["run_id"], ["airdrop_runs.run_id"]),
+        UniqueConstraint("recipient_key", name="uq_airdrop_recipients_recipient_key"),
+        UniqueConstraint(
+            "run_id", "kind", "address", name="uq_airdrop_recipients_run_address"
+        ),
+        CheckConstraint("kind IN ('wallet', 'account')", name="kind"),
+        CheckConstraint("recipient_key ~ '^[0-9a-f]{64}$'", name="recipient_key"),
+        CheckConstraint("amount > 0", name="amount"),
+        CheckConstraint("position >= 0", name="position"),
+        CheckConstraint(
+            "status IN ('pending', 'dispatching', 'settled', 'failed', 'uncertain')",
+            name="status",
+        ),
+        CheckConstraint(
+            "(status = 'pending') = (attempted_at IS NULL)", name="attempted"
+        ),
+        Index("airdrop_recipients_payee_idx", "payee", "status"),
+    )

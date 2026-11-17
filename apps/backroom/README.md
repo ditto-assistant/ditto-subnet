@@ -7,8 +7,10 @@ capacity, screener policy/capacity, quarantine and copy review, source-release
 policy, submission cadence, score retests, and miner fees.
 
 Ditto product controls are intentionally absent. Feature flags, app publishing
-review, production airdrops, product ops logs, and the product MCP stay in the
-private Backroom deployment at `backroom.heyditto.ai`.
+review, Ditto product credit airdrops by email, product ops logs, and the
+product MCP stay in the private Backroom deployment at `backroom.heyditto.ai`.
+SN118 airdrop runs (SN-490) are Platform-owned and are operated here; see
+`docs/mcp.md`.
 
 ```bash
 pnpm install
