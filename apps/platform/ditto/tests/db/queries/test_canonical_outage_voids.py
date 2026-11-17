@@ -11,6 +11,7 @@ flagged it and voided nothing.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -681,3 +682,47 @@ async def test_row_left_expired_by_a_continual_retest_is_re_leased(
     # The wave seed is dropped; the job re-derives the canonical seed.
     assert ticket.seed is None
     assert ticket.retry_after is None
+
+
+async def test_concurrent_applies_of_one_run_queue_it_once(
+    session_maker: async_sessionmaker[AsyncSession], session: AsyncSession
+) -> None:
+    """The sweep and an operator voiding the same run at once: the second
+    waits on the audit-chain lock, then reads the first one's queued event."""
+    await seed_nov17(session)
+    first_holds_lock = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def first() -> CanonicalVoidOutcome:
+        async with session_maker() as write, write.begin():
+            (outcome,) = await void_canonical_scores(
+                write,
+                requests=[_request()],
+                bench_version=V,
+                reason=REASON,
+                actor="operator@example",
+                source="operator",
+                now=SWEEP_AT,
+                apply=True,
+            )
+            first_holds_lock.set()
+            # Hold the transaction open so the second gate runs concurrently.
+            await release_first.wait()
+            return outcome
+
+    async def second() -> CanonicalVoidOutcome:
+        await first_holds_lock.wait()
+        task = asyncio.create_task(
+            _void(session_maker, _request(), apply=True, source="outage_sweep")
+        )
+        await asyncio.sleep(0.3)
+        # Still blocked on the lock the first transaction holds.
+        assert not task.done()
+        release_first.set()
+        (outcome,) = await task
+        return outcome
+
+    a, b = await asyncio.gather(first(), second())
+
+    assert (a.disposition, b.disposition) == ("applied", "already_queued")
+    assert len(await _queued(session_maker)) == 1

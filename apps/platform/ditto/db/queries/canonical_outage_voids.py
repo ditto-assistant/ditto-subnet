@@ -52,6 +52,7 @@ from ditto.db.queries.audit import (
     EVENT_SCORE_RETEST_QUEUED,
     append_audit_entry,
     get_latest_score_retest_event,
+    lock_audit_chain,
 )
 from ditto.db.queries.confirmation_score_voids import (
     MIN_OUTAGE_FAILED_CALLS,
@@ -339,12 +340,20 @@ async def void_canonical_scores(
     """Guard, gate and (when ``apply``) queue each canonical replacement.
 
     ``apply=False`` returns the same dispositions without writing (``ready``
-    instead of ``applied``). The caller owns the transaction. The score row is
-    read unlocked: the score path takes the audit-chain lock before the score
-    row, so locking the row here first could deadlock against it. A score that
+    instead of ``applied``). The caller owns the transaction. With ``apply``
+    the audit-chain lock is held from the gate through the append, so two
+    concurrent voids of one run queue it once. The score row is read
+    unlocked: the score path takes the audit-chain lock before the score row,
+    so locking the row here first could deadlock against it. A score that
     changes after this read closes the queued request stale at promotion
     (``score.run_id`` must still equal the request's ``run_id``).
     """
+    if apply:
+        # Serialize the gate with the append: a concurrent void of the same run
+        # (the sweep and an operator) waits here, then reads the first one's
+        # queued event and answers ``already_queued``. The score path takes this
+        # lock before the score row too, so the lock order is unchanged.
+        await lock_audit_chain(session)
     outcomes: list[CanonicalVoidOutcome] = []
     for request in requests:
         request_id = outage_void_request_id(
