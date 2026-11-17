@@ -470,15 +470,20 @@ async def consume_or_enforce_upload_admission(
                 retry_at if retry_at > current else current + timedelta(seconds=60)
             )
         reserved_at = existing.created_at
+        reserved_cooldown = existing.cooldown_seconds
         await session.delete(existing)
         await session.flush()
         # A readmission that landed after this reservation started a cooldown
-        # the reservation could not have covered (SN-485).
+        # the reservation could not have covered (SN-485). The longer of the
+        # reserved and the current cooldown: a change in either direction
+        # after the reservation never lets the intervening one end early.
         stale = await submission_since_reservation_error(
             session,
             miner_coldkey=miner_coldkey,
             reserved_at=reserved_at,
-            cooldown=timedelta(seconds=existing.cooldown_seconds),
+            cooldown=timedelta(
+                seconds=max(reserved_cooldown, settings.cooldown_seconds)
+            ),
             now=current,
         )
         if stale is not None:

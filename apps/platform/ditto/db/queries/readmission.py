@@ -421,15 +421,20 @@ async def consume_readmission_admission(
             and _utc(locked.expires_at) > current
         ):
             reserved_at = locked.created_at
+            reserved_cooldown = locked.cooldown_seconds
             await session.delete(locked)
             await session.flush()
             # Another submission of this coldkey after the reservation was
-            # issued started a cooldown the reservation cannot cover.
+            # issued started a cooldown the reservation cannot cover. The
+            # longer of the reserved and the current cooldown applies, so a
+            # change in either direction never lets it end early.
             stale = await submission_since_reservation_error(
                 session,
                 miner_coldkey=miner_coldkey,
                 reserved_at=reserved_at,
-                cooldown=timedelta(seconds=settings.cooldown_seconds),
+                cooldown=timedelta(
+                    seconds=max(reserved_cooldown, settings.cooldown_seconds)
+                ),
                 now=current,
             )
             if stale is not None:

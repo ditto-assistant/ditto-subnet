@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -729,6 +730,9 @@ async def test_a_readmission_after_the_reservation_restarts_the_cooldown(
                 updated_at=datetime.now(UTC) - timedelta(minutes=5),
             )
         )
+    # Shortening the cooldown after the reservation does not shorten the
+    # cooldown the intervening readmission started (the reserved 3600 s wins).
+    shortened = replace(settings, cooldown_seconds=60)
     with pytest.raises(SubmissionCooldownError):
         async with session_maker() as session, session.begin():
             await consume_readmission_admission(
@@ -738,5 +742,5 @@ async def test_a_readmission_after_the_reservation_restarts_the_cooldown(
                 reservation_token=token,
                 miner_coldkey=_COLDKEY,
                 miner_hotkey=_HOTKEY,
-                settings=settings,
+                settings=shortened,
             )
