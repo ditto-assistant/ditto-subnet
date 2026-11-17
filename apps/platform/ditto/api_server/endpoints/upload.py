@@ -26,7 +26,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import bittensor
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -128,7 +128,7 @@ from ditto.db.queries.unreleased_copy import store_items as store_distinctive_it
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
-    from ditto.db.models import Agent, EvaluationPayment
+    from ditto.db.models import Agent, EvaluationPayment, UploadReadmission
 
 logger = logging.getLogger(__name__)
 
@@ -408,8 +408,21 @@ async def check(
         and owner_coldkey is not None
         and not banned
         and body.allow_identical_rescore
-        and body.payment_block_hash is None
         and announcement_in_effect(settings)
+        and (
+            # A proof that already funded an exact committed upload recovers
+            # that upload; an unused proof or credit labels like a new one.
+            body.payment_block_hash is None
+            or (
+                body.payment_extrinsic_index is not None
+                and await get_agent_for_payment_proof(
+                    session,
+                    block_hash=body.payment_block_hash,
+                    extrinsic_index=body.payment_extrinsic_index,
+                )
+                is None
+            )
+        )
         and (await current_readmission_activation(session, settings=settings)).active
     ):
         lineage = await get_same_owner_agent_by_sha(
@@ -911,12 +924,20 @@ async def upload_agent(
                     raced and raced.agent_id is None and raced.miner_hotkey == hotkey
                 ):
                     raise
+        # The existing agent's own readmission label, as an exact retry reports.
+        duplicate_label = await get_upload_readmission(
+            session, agent_id=duplicate_agent_id
+        )
         return UploadAgentResponse(
             agent_id=duplicate_agent_id,
             version=duplicate_version,
             status=duplicate_status,
             payment_disposition="reusable_credit",
             credit_for_agent_id=duplicate_agent_id,
+            readmission_kind=_label_kind(duplicate_label),
+            readmission_of_agent_id=(
+                duplicate_label.lineage_agent_id if duplicate_label else None
+            ),
         )
 
     # The duplicate lookup autobegan a read transaction. Do not pin a pooled
@@ -1019,14 +1040,22 @@ async def upload_agent(
             )
             if reserved is not None:
                 raise HTTPException(status_code=409, detail=reserved)
-            # SN-485: an identical upload committed by a concurrent request
-            # after the lookup above is this rescore's lineage. Re-read it
-            # under the coldkey lock, before this agent exists, so the
-            # readmission label below is never lost to the race.
+            # SN-485: whether this upload can be a readmission, resolved once
+            # in this transaction and reused by the label below.
+            activation = (
+                await current_readmission_activation(session, settings=settings)
+                if announcement_in_effect(settings)
+                else None
+            )
+            readmission_live = activation is not None and activation.active
+            # An identical upload committed by a concurrent request after the
+            # lookup above is this rescore's lineage. Re-read it under the
+            # coldkey lock, before this agent exists, so the readmission label
+            # below is never lost to the race.
             if (
                 identical_lineage_id is None
                 and allow_identical_rescore
-                and announcement_in_effect(settings)
+                and readmission_live
             ):
                 lineage = await get_same_owner_agent_by_sha(
                     session, miner_coldkey=owner_coldkey, sha256=sha256
@@ -1078,12 +1107,7 @@ async def upload_agent(
             # while the fee is active (never retroactively). Same fee and
             # cooldown as any upload; the row is accounting and rules only.
             readmission = None
-            activation = (
-                await current_readmission_activation(session, settings=settings)
-                if announcement_in_effect(settings)
-                else None
-            )
-            if activation is not None and activation.active:
+            if activation is not None and readmission_live:
                 readmission = await classify_upload_readmission(
                     session,
                     miner_coldkey=owner_coldkey,
@@ -1149,6 +1173,17 @@ async def upload_agent(
     )
 
 
+def _label_kind(
+    label: UploadReadmission | None,
+) -> Literal["identical_rescore", "near_duplicate"] | None:
+    """The wire kind of a recorded readmission label."""
+    if label is None:
+        return None
+    return (
+        "identical_rescore" if label.kind == "identical_rescore" else "near_duplicate"
+    )
+
+
 @dataclass(frozen=True)
 class _RetryIdentity:
     """What makes a request an exact retry of an accepted upload."""
@@ -1205,13 +1240,7 @@ async def _exact_retry_of_accepted_upload(
         agent_id=existing.agent_id,
         version=existing.version,
         status=existing.status,
-        readmission_kind=(
-            None
-            if label is None
-            else "identical_rescore"
-            if label.kind == "identical_rescore"
-            else "near_duplicate"
-        ),
+        readmission_kind=_label_kind(label),
         readmission_of_agent_id=label.lineage_agent_id if label else None,
     )
     if identity.admission_token is not None:

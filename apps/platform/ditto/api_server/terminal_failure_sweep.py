@@ -70,7 +70,8 @@ class TerminalFailureSweeper:
         capped = await sweep_free_retry_cap(self._session_maker)
         if capped:
             logger.warning("free retry cap withdrew %s submission(s)", capped)
-        return written + capped
+        # Close-outs only: the cap's withdrawals are logged above, not counted.
+        return written
 
     async def _run(self) -> None:
         while not self._stop.is_set():

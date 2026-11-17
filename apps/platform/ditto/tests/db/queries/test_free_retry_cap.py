@@ -231,3 +231,21 @@ async def test_the_sweep_stops_when_the_gate_closes_mid_sweep(
     async with session_maker() as session:
         still = await free_retry_cap_candidates(session, bench_version=_VERSION)
     assert first in still and second in still
+
+
+async def test_the_sweeper_reports_only_terminal_close_outs(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ditto.api_server import terminal_failure_sweep
+
+    monkeypatch.setattr(
+        terminal_failure_sweep,
+        "sweep_terminal_artifact_failures",
+        AsyncMock(return_value=1),
+    )
+    monkeypatch.setattr(
+        terminal_failure_sweep, "sweep_free_retry_cap", AsyncMock(return_value=3)
+    )
+    sweeper = terminal_failure_sweep.TerminalFailureSweeper(session_maker=session_maker)
+    assert await sweeper.sweep() == 1
