@@ -425,8 +425,29 @@ async def check(
         )
         and (await current_readmission_activation(session, settings=settings)).active
     ):
+        # Label against the owner the commit will use: an unused credit of this
+        # hotkey commits under its payment-time coldkey, not the hotkey's
+        # current chain owner, so the preview must match that lineage.
+        credit = (
+            await get_evaluation_payment_for_proof(
+                session,
+                block_hash=body.payment_block_hash,
+                extrinsic_index=body.payment_extrinsic_index,
+            )
+            if body.payment_block_hash is not None
+            and body.payment_extrinsic_index is not None
+            else None
+        )
+        label_coldkey = (
+            credit.miner_coldkey
+            if credit is not None
+            and credit.agent_id is None
+            and credit.miner_hotkey == body.hotkey
+            and credit.miner_coldkey is not None
+            else owner_coldkey
+        )
         lineage = await get_same_owner_agent_by_sha(
-            session, miner_coldkey=owner_coldkey, sha256=body.sha256
+            session, miner_coldkey=label_coldkey, sha256=body.sha256
         )
         readmission_of = lineage.agent_id if lineage is not None else None
     reserved_admission = (
