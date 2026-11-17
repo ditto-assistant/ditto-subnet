@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ditto.api_server.endpoints.admin_airdrops import (
+    router as admin_airdrops_router,
+)
 from ditto.api_server.endpoints.admin_artifact_release_settings import (
     router as admin_artifact_release_settings_router,
 )
@@ -235,6 +238,7 @@ __all__ = [
     "admin_registration_freshness_router",
     "health_router",
     "inference_router",
+    "admin_airdrops_router",
     "admin_artifact_release_settings_router",
     "admin_transcript_mirror_settings_router",
     "admin_ath_review_queue_slo_router",
