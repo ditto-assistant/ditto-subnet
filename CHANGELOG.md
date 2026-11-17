@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.489.0 (2026-11-17)
+
+### Features
+
+- **platform,backroom**: Add the readmission announcement gate (SN-485)
+  ([#3555](https://github.com/ditto-assistant/ditto-subnet/pull/3555),
+  [`f0b762c`](https://github.com/ditto-assistant/ditto-subnet/commit/f0b762c586a9595098d2dcee99a26e9c2b1fc298))
+
+
 ## v0.488.0 (2026-11-17)
 
 ### Documentation
