@@ -6,7 +6,9 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from ditto.miner_cli.models import PaymentReceipt, PendingUploadPayment
 
@@ -38,13 +40,10 @@ def _key(*, network: str, hotkey: str) -> str:
 # credits, so a proof for another lane must live in its own bucket.
 AGENT_PAYMENTS_BUCKET = "pending_upload_payments"
 GENERATOR_PAYMENTS_BUCKET = "pending_generator_payments"
-# ``ditto readmit`` proofs (SN-485). Never scanned by uploads: a readmission
-# proof must not be reused as an upload's reusable credit, and Platform refuses
-# it there (3207) anyway.
-READMISSION_PAYMENTS_BUCKET = "pending_readmission_payments"
-# The reservation token that goes with a saved readmission proof, so a rerun
-# commits against the same price snapshot the payment was made for.
-READMISSION_TOKENS_BUCKET = "pending_readmission_tokens"
+# ``ditto readmit`` ledger (SN-485): one record per agent for its unresolved
+# readmission payment. Never scanned by uploads: a readmission proof must not
+# be reused as an upload's reusable credit (Platform refuses it there, 3207).
+READMISSION_LEDGER_BUCKET = "pending_readmissions"
 
 
 def _pending_payment_key(*, network: str, hotkey: str, name: str, sha256: str) -> str:
@@ -353,31 +352,147 @@ def clear_pending_payment(
     return _save_preferences(raw)
 
 
-def save_readmission_token(*, network: str, hotkey: str, key: str, token: str) -> bool:
-    """Remember the reservation token a saved readmission proof was paid for."""
+ReadmissionState = Literal["reserved", "paying", "paid"]
+
+
+@dataclass(frozen=True)
+class ReadmissionRecord:
+    """The one unresolved readmission payment of one agent (SN-485).
+
+    Keyed by network, hotkey and agent, never by benchmark era, so a rerun
+    after the active era changes still finds it. ``bench_version`` is the era
+    the reservation and payment were made for. The states, each written
+    before the step it guards:
+
+    * ``reserved``: a price reservation exists; nothing was paid.
+    * ``paying``: a transfer is about to be, or was, submitted and no receipt
+      came back. It may have finalized, so nothing is paid again until the
+      miner supplies its proof or explicitly discards it.
+    * ``paid``: ``payment`` is the finalized proof; reruns commit it.
+    """
+
+    agent_id: str
+    bench_version: int
+    state: ReadmissionState
+    token: str | None = None
+    amount_rao: int | None = None
+    send_address: str | None = None
+    payment: PaymentReceipt | None = None
+    updated_at: str = ""
+
+
+def _ledger_key(network: str, hotkey: str, agent_id: str) -> str:
+    return f"{network}:{hotkey}:{agent_id}"
+
+
+def _parse_record(value: object) -> ReadmissionRecord | None:
+    if not isinstance(value, dict):
+        return None
+    agent_id = value.get("agent_id")
+    bench_version = value.get("bench_version")
+    state = value.get("state")
+    if (
+        not isinstance(agent_id, str)
+        or not isinstance(bench_version, int)
+        or isinstance(bench_version, bool)
+        or state not in ("reserved", "paying", "paid")
+    ):
+        return None
+    payment = None
+    block_hash = value.get("block_hash")
+    block_number = value.get("block_number")
+    extrinsic_index = value.get("extrinsic_index")
+    if (
+        isinstance(block_hash, str)
+        and block_hash.startswith("0x")
+        and len(block_hash) == 66
+        and isinstance(block_number, int)
+        and block_number >= 1
+        and isinstance(extrinsic_index, int)
+        and extrinsic_index >= 0
+    ):
+        payment = PaymentReceipt(
+            block_hash=block_hash,
+            block_number=block_number,
+            extrinsic_index=extrinsic_index,
+        )
+    if state == "paid" and payment is None:
+        return None
+    token = value.get("token")
+    amount = value.get("amount_rao")
+    address = value.get("send_address")
+    updated = value.get("updated_at")
+    return ReadmissionRecord(
+        agent_id=agent_id,
+        bench_version=bench_version,
+        state=state,
+        token=token if isinstance(token, str) and token else None,
+        amount_rao=amount
+        if isinstance(amount, int) and not isinstance(amount, bool)
+        else None,
+        send_address=address if isinstance(address, str) else None,
+        payment=payment,
+        updated_at=updated if isinstance(updated, str) else "",
+    )
+
+
+def load_readmission_record(
+    *, network: str, hotkey: str, agent_id: str
+) -> ReadmissionRecord | None:
+    """This agent's unresolved readmission payment, whatever era it was for."""
     raw = _load_preferences()
-    tokens = raw.get(READMISSION_TOKENS_BUCKET)
-    if not isinstance(tokens, dict):
-        tokens = {}
-    tokens[f"{network}:{hotkey}:{key}"] = token
-    raw[READMISSION_TOKENS_BUCKET] = tokens
+    ledger = raw.get(READMISSION_LEDGER_BUCKET)
+    if not isinstance(ledger, dict):
+        return None
+    return _parse_record(ledger.get(_ledger_key(network, hotkey, agent_id)))
+
+
+def save_readmission_record(
+    *, network: str, hotkey: str, record: ReadmissionRecord
+) -> bool:
+    """Atomically replace this agent's record; returns whether it persisted."""
+    raw = _load_preferences()
+    ledger = raw.get(READMISSION_LEDGER_BUCKET)
+    if not isinstance(ledger, dict):
+        ledger = {}
+    value: dict[str, object] = {
+        "agent_id": record.agent_id,
+        "bench_version": record.bench_version,
+        "state": record.state,
+        "token": record.token,
+        "amount_rao": record.amount_rao,
+        "send_address": record.send_address,
+        "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    if record.payment is not None:
+        value.update(
+            block_hash=record.payment.block_hash,
+            block_number=record.payment.block_number,
+            extrinsic_index=record.payment.extrinsic_index,
+        )
+    ledger[_ledger_key(network, hotkey, record.agent_id)] = value
+    raw[READMISSION_LEDGER_BUCKET] = ledger
     return _save_preferences(raw)
 
 
-def load_readmission_token(*, network: str, hotkey: str, key: str) -> str | None:
+def clear_readmission_record(
+    *,
+    network: str,
+    hotkey: str,
+    agent_id: str,
+    payment: PaymentReceipt | None = None,
+) -> bool:
+    """Forget this agent's record. With ``payment``, only if it is that proof,
+    so resolving one proof never discards a different one."""
     raw = _load_preferences()
-    tokens = raw.get(READMISSION_TOKENS_BUCKET)
-    if not isinstance(tokens, dict):
-        return None
-    value = tokens.get(f"{network}:{hotkey}:{key}")
-    return value if isinstance(value, str) and value else None
-
-
-def clear_readmission_token(*, network: str, hotkey: str, key: str) -> bool:
-    raw = _load_preferences()
-    tokens = raw.get(READMISSION_TOKENS_BUCKET)
-    if not isinstance(tokens, dict) or f"{network}:{hotkey}:{key}" not in tokens:
+    ledger = raw.get(READMISSION_LEDGER_BUCKET)
+    key = _ledger_key(network, hotkey, agent_id)
+    if not isinstance(ledger, dict) or key not in ledger:
         return True
-    del tokens[f"{network}:{hotkey}:{key}"]
-    raw[READMISSION_TOKENS_BUCKET] = tokens
+    if payment is not None:
+        current = _parse_record(ledger[key])
+        if current is None or current.payment != payment:
+            return True
+    del ledger[key]
+    raw[READMISSION_LEDGER_BUCKET] = ledger
     return _save_preferences(raw)

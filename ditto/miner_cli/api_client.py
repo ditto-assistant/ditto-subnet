@@ -432,6 +432,8 @@ class ApiClient:
             raise ReadmissionUnavailableError(
                 "this Platform does not offer readmission yet; no payment was sent"
             )
+        if response.status_code in _RETRYABLE_UPLOAD_STATUS_CODES:
+            raise TransientApiError(_format_error(response, prefix="readmission check"))
         if response.status_code != 200:
             raise ApiResponseError(_format_error(response, prefix="readmission check"))
         result: dict[str, Any] = response.json()

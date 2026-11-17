@@ -120,3 +120,18 @@ def test_an_older_platform_or_an_unreadable_response_never_blocks(
 def test_terms_for_another_competition_are_refused() -> None:
     with pytest.raises(MinerCliError, match="no payment was sent"):
         show_submission_terms(_Client(_GENERATOR_TERMS), "memory")
+
+
+@pytest.mark.parametrize("median", ["1.05", {"usd": 1}, [1], True])
+def test_a_malformed_cost_basis_is_skipped_not_fatal(median: object) -> None:
+    """4607332683: the cost basis is informational; a bad value never crashes."""
+    lines = format_submission_terms(
+        {
+            "competition": "memory",
+            "readmission": {
+                "activation": {"active": True, "active_bench_version": 19},
+                "cost_basis": {"bench_version": 19, "median_agent_cost_usd": median},
+            },
+        }
+    )
+    assert not any("Cost basis" in line for line in lines)

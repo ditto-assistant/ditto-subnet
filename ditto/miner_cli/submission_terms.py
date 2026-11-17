@@ -98,10 +98,16 @@ def _readmission_lines(readmission: object) -> list[str]:
     if effective and not activation.get("active"):
         lines.append(f"  Readmission: earliest charge {effective}")
     basis = readmission.get("cost_basis")
-    if isinstance(basis, dict) and basis.get("median_agent_cost_usd") is not None:
+    median = basis.get("median_agent_cost_usd") if isinstance(basis, dict) else None
+    # Informational only: a malformed value is skipped, never a crash.
+    if (
+        isinstance(basis, dict)
+        and isinstance(median, (int, float))
+        and not isinstance(median, bool)
+    ):
         lines.append(
             "  Cost basis: about "
-            f"${basis['median_agent_cost_usd']:.2f} measured per agent evaluation "
+            f"${median:.2f} measured per agent evaluation "
             f"on v{basis.get('bench_version')} "
             f"({basis.get('agents_sampled')} agents)"
         )

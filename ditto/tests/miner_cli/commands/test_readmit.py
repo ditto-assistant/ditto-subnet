@@ -1,4 +1,9 @@
-"""``ditto readmit``: wire format, refuse-before-paying, proof storage, outcomes."""
+"""``ditto readmit``: wire format, refuse-before-paying, the payment ledger, outcomes.
+
+The ledger invariant: a miner never pays twice and never loses track of a
+payment already made, across reruns, era changes, explicit recovery flags and
+transfers whose outcome is unknown.
+"""
 
 from __future__ import annotations
 
@@ -15,9 +20,10 @@ from ditto.miner_cli.commands import readmit as readmit_cmd
 from ditto.miner_cli.errors import MinerCliError, ReadmissionPaymentRejectedError
 from ditto.miner_cli.models import PaymentReceipt
 from ditto.miner_cli.preferences import (
-    READMISSION_PAYMENTS_BUCKET,
-    load_pending_payment,
+    ReadmissionRecord,
     load_pending_payments_for_hotkey,
+    load_readmission_record,
+    save_readmission_record,
 )
 from ditto.miner_cli.signing import build_readmission_payload
 
@@ -124,14 +130,40 @@ def _install(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return calls
 
 
-def _saved() -> PaymentReceipt | None:
-    return load_pending_payment(
-        network="local",
-        hotkey=_KEY.ss58_address,
-        name=readmit_cmd.PENDING_PAYMENT_NAME,
-        sha256=readmit_cmd._pending_key(_AGENT, 19),
-        bucket=READMISSION_PAYMENTS_BUCKET,
+def _record() -> ReadmissionRecord | None:
+    return load_readmission_record(
+        network="local", hotkey=_KEY.ss58_address, agent_id=str(_AGENT)
     )
+
+
+def _saved() -> PaymentReceipt | None:
+    record = _record()
+    return record.payment if record is not None else None
+
+
+_PROOF = PaymentReceipt(block_hash=_BLOCK, block_number=77, extrinsic_index=3)
+_OTHER = PaymentReceipt(block_hash="0x" + "cd" * 32, block_number=78, extrinsic_index=1)
+
+
+def _flags(receipt: PaymentReceipt) -> dict[str, Any]:
+    return {
+        "payment_block_hash": receipt.block_hash,
+        "payment_block_number": receipt.block_number,
+        "payment_extrinsic_index": receipt.extrinsic_index,
+    }
+
+
+def _active(version: int) -> dict[str, Any]:
+    terms = dict(_TERMS)
+    terms["readmission"] = {
+        **_TERMS["readmission"],  # type: ignore[dict-item]
+        "activation": {
+            "active": True,
+            "inactive_reasons": [],
+            "active_bench_version": version,
+        },
+    }
+    return terms
 
 
 def test_the_signature_payload_is_the_pinned_wire_format() -> None:
@@ -317,7 +349,7 @@ def test_nothing_is_paid_when_the_reservation_cannot_be_saved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = _install(monkeypatch)
-    monkeypatch.setattr(readmit_cmd, "save_readmission_token", lambda **_kw: False)
+    monkeypatch.setattr(readmit_cmd, "save_readmission_record", lambda **_kw: False)
     with pytest.raises(MinerCliError, match="no payment was sent"):
         readmit_cmd.run(_args())
     assert not any("pay" in call for call in calls)
@@ -329,7 +361,13 @@ def test_unsaved_proof_guidance_never_says_rerun_the_same_command(
 ) -> None:
     """With nothing saved, a plain rerun would pay again: insist on the flags."""
     _install(monkeypatch)
-    monkeypatch.setattr(readmit_cmd, "save_pending_payment", lambda **_kw: False)
+    real_save = readmit_cmd.save_readmission_record
+
+    def _save(**kw: Any) -> bool:
+        # The reserved and paying records persist; the paid one does not.
+        return kw["record"].state != "paid" and real_save(**kw)
+
+    monkeypatch.setattr(readmit_cmd, "save_readmission_record", _save)
     _FakeClient.commit = RuntimeError("gateway timeout")
     with pytest.raises(RuntimeError):
         readmit_cmd.run(_args())
@@ -351,3 +389,145 @@ def test_a_malformed_activation_is_refused_before_paying(
     with pytest.raises(MinerCliError, match="does not offer readmission"):
         readmit_cmd.run(_args())
     assert calls == []
+
+
+# --- the ledger invariant, one test per review finding (SN-485 #3563) -------
+
+
+def test_a_rerun_after_the_era_changes_commits_the_saved_payment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """4607089935: the record is keyed by agent, not era; the paid era wins."""
+    _install(monkeypatch)
+    _FakeClient.commit = RuntimeError("gateway timeout")
+    with pytest.raises(RuntimeError):
+        readmit_cmd.run(_args())
+    calls = _install(monkeypatch)
+    monkeypatch.setattr(
+        _FakeClient, "get_submission_terms", lambda _self, _competition: _active(20)
+    )
+    _FakeClient.commit = {
+        "outcome": "credited",
+        "refusal_reason": "the active era moved to v20",
+        "credit_expires_at": "2026-12-30T00:00:00Z",
+    }
+    assert readmit_cmd.run(_args()) == 1
+    assert not any("pay" in call for call in calls)
+    assert _FakeClient.checks == []
+    [commit] = _FakeClient.commits
+    assert commit["bench_version"] == 19
+    assert commit["payment_block_hash"] == _BLOCK
+    assert _record() is None
+
+
+def test_recovery_flags_never_drop_a_different_saved_payment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """4607090550: a different saved proof is refused, not left or lost."""
+    _install(monkeypatch)
+    _FakeClient.commit = RuntimeError("gateway timeout")
+    with pytest.raises(RuntimeError):
+        readmit_cmd.run(_args())
+    calls = _install(monkeypatch)
+    with pytest.raises(MinerCliError, match="different finalized readmission payment"):
+        readmit_cmd.run(_args(**_flags(_OTHER)))
+    assert _FakeClient.commits == [] and not any("pay" in c for c in calls)
+    assert _saved() == _PROOF
+    # The matching flags resolve it and leave nothing stale behind.
+    _install(monkeypatch)
+    assert readmit_cmd.run(_args(**_flags(_PROOF))) == 0
+    assert _record() is None
+
+
+def test_an_unconfirmed_transfer_is_never_paid_twice(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """4607091041: a timeout with no receipt blocks any second transfer."""
+    calls = _install(monkeypatch)
+
+    def _timeout(**kw: Any) -> PaymentReceipt:
+        calls.append({"pay": kw})
+        raise TimeoutError("finalization timed out")
+
+    monkeypatch.setattr(readmit_cmd, "submit_eval_payment", _timeout)
+    with pytest.raises(TimeoutError):
+        readmit_cmd.run(_args())
+    record = _record()
+    assert record is not None and record.state == "paying"
+    assert "Do not pay again" in capsys.readouterr().err
+
+    calls = _install(monkeypatch)
+    with pytest.raises(MinerCliError, match="never confirmed"):
+        readmit_cmd.run(_args())
+    assert not any("pay" in c for c in calls) and _FakeClient.checks == []
+
+    # Its proof, once found in the coldkey history, resolves it.
+    _install(monkeypatch)
+    assert readmit_cmd.run(_args(**_flags(_PROOF))) == 0
+    assert _FakeClient.commits[0]["admission_token"] == (
+        "00000000-0000-4000-8000-000000000009"
+    )
+    assert _record() is None
+
+
+def test_discarding_an_unconfirmed_transfer_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    save_readmission_record(
+        network="local",
+        hotkey=_KEY.ss58_address,
+        record=ReadmissionRecord(
+            agent_id=str(_AGENT),
+            bench_version=19,
+            state="paying",
+            amount_rao=75_000_000,
+        ),
+    )
+    calls = _install(monkeypatch)
+    assert readmit_cmd.run(_args(discard_unconfirmed_payment=True)) == 0
+    assert any("pay" in c for c in calls) and len(_FakeClient.checks) == 1
+
+
+def test_explicit_recovery_proofs_are_saved_before_the_commit(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """4607333170: a flags-supplied proof is really saved, so a plain rerun
+    reuses it and never reserves or pays again."""
+    _install(monkeypatch)
+    _FakeClient.commit = RuntimeError("gateway timeout")
+    with pytest.raises(RuntimeError):
+        readmit_cmd.run(_args(**_flags(_PROOF)))
+    assert _saved() == _PROOF
+    assert "Rerun the same command" in capsys.readouterr().err
+    calls = _install(monkeypatch)
+    assert readmit_cmd.run(_args()) == 0
+    assert not any("pay" in c for c in calls) and _FakeClient.checks == []
+    assert _FakeClient.commits[0]["payment_block_hash"] == _BLOCK
+
+
+def test_a_rejected_proof_supplied_by_flags_is_cleared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """4607333593: a definitive 32xx clears that exact proof however supplied."""
+    _install(monkeypatch)
+    _FakeClient.commit = RuntimeError("gateway timeout")
+    with pytest.raises(RuntimeError):
+        readmit_cmd.run(_args())
+    _install(monkeypatch)
+    _FakeClient.commit = ReadmissionPaymentRejectedError("3208 recovery expired")
+    with pytest.raises(ReadmissionPaymentRejectedError):
+        readmit_cmd.run(_args(**_flags(_PROOF)))
+    assert _record() is None
+
+
+def test_tokenless_flag_recovery_commits_without_a_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """4607334065: with the local config gone the commit carries no token, and
+    Platform falls back to the reservation it holds for this agent and era
+    (pinned in Platform's test_a_tokenless_commit_keeps_the_reserved_price)."""
+    _install(monkeypatch)
+    assert readmit_cmd.run(_args(**_flags(_PROOF))) == 0
+    [commit] = _FakeClient.commits
+    assert "admission_token" not in commit
+    assert commit["bench_version"] == 19

@@ -70,7 +70,7 @@ from ditto.api_server.upload_feedback import (
     submission_cooldown_message,
 )
 from ditto.chain import ChainError
-from ditto.db.models import ReadmissionPayment
+from ditto.db.models import ReadmissionPayment, ReadmissionReservation
 from ditto.db.queries.agents import (
     SubmissionCooldownError,
     submission_cooldown_decision,
@@ -485,20 +485,27 @@ async def commit(
     )
     expected_amount_rao = readmission_fee_rao(settings)
     expected_send_address = settings.payment_address
-    if body.admission_token is not None:
-        reservation = await get_readmission_reservation(
-            session, token=body.admission_token
+    # The token names the reservation. Without one (a client that lost its
+    # local config) fall back to the live reservation Platform holds for this
+    # exact agent, era and signing hotkey, so the price snapshot the payment
+    # was made for still applies.
+    reservation = (
+        await get_readmission_reservation(session, token=body.admission_token)
+        if body.admission_token is not None
+        else await session.get(
+            ReadmissionReservation, (body.agent_id, body.bench_version)
         )
-        if reservation is not None and reservation_live(
-            reservation,
-            agent_id=body.agent_id,
-            bench_version=body.bench_version,
-            hotkey=body.hotkey,
-            now=now,
-        ):
-            reservation_token = reservation.token
-            expected_amount_rao = reservation.fee_amount_rao
-            expected_send_address = reservation.payment_send_address
+    )
+    if reservation is not None and reservation_live(
+        reservation,
+        agent_id=body.agent_id,
+        bench_version=body.bench_version,
+        hotkey=body.hotkey,
+        now=now,
+    ):
+        reservation_token = reservation.token
+        expected_amount_rao = reservation.fee_amount_rao
+        expected_send_address = reservation.payment_send_address
 
     await _release(session)
     try:

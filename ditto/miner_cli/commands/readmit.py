@@ -19,18 +19,34 @@ The flow mirrors ``ditto upload``:
    refused it after payment (the era moved, the agent was withdrawn) and kept
    your payment as an upload credit for 30 days. Ditto never refunds on chain.
 
-The finalized proof is saved in its own local bucket before the commit, so a
-lost response or a crash is recovered by rerunning the same command. Uploads
-never read that bucket.
+One rule keeps a miner from paying twice or losing track of a payment: each
+agent has at most one local readmission record (its own bucket, never read by
+uploads), keyed by agent and never by benchmark era, and it is written before
+every irreversible step:
+
+* ``reserved`` before asking to pay; ``paying`` before the transfer is
+  submitted; ``paid`` with the finalized proof once it returns. A failure to
+  write ``reserved`` or ``paying`` stops before any TAO moves.
+* A ``paid`` record is committed on every rerun before anything else, for the
+  era it was paid for, even after the active era moved on (Platform then banks
+  it as a 30-day credit rather than losing it).
+* A ``paying`` record means a transfer may have been sent with no receipt
+  back. No rerun pays again until the miner supplies that transfer's
+  ``--payment-*`` flags or explicitly runs ``--discard-unconfirmed-payment``.
+* ``--payment-*`` flags are written into the same record. Flags that differ
+  from a saved ``paid`` proof are refused until that proof is resolved, so
+  neither payment is ever dropped.
+* The record is cleared only on Platform's definitive answer for its proof:
+  admitted, credited, or a 32xx rejection of that exact proof.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import sys
 import time
+from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -42,20 +58,16 @@ from ditto.miner_cli.models import PaymentReceipt
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
 from ditto.miner_cli.preferences import (
-    READMISSION_PAYMENTS_BUCKET,
-    clear_pending_payment,
-    clear_readmission_token,
-    load_pending_payment,
-    load_readmission_token,
-    save_pending_payment,
-    save_readmission_token,
+    ReadmissionRecord,
+    clear_readmission_record,
+    load_readmission_record,
+    save_readmission_record,
 )
 from ditto.miner_cli.signing import build_readmission_payload
 from ditto.miner_cli.submission_terms import show_submission_terms
 from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
 
 MEMORY_COMPETITION = "memory"
-PENDING_PAYMENT_NAME = "readmission"
 
 
 def add_subparser(
@@ -102,13 +114,18 @@ def add_subparser(
     recovery.add_argument("--payment-block-hash")
     recovery.add_argument("--payment-block-number", type=int)
     recovery.add_argument("--payment-extrinsic-index", type=int)
+    recovery.add_argument(
+        "--discard-unconfirmed-payment",
+        action="store_true",
+        dest="discard_unconfirmed_payment",
+        help=(
+            "Forget a transfer that was submitted but never confirmed. Only "
+            "after checking your coldkey's history shows it did not go "
+            "through: if it did, rerun with its --payment-* flags instead."
+        ),
+    )
     parser.set_defaults(func=run)
     return parser
-
-
-def _pending_key(agent_id: UUID, bench_version: int) -> str:
-    """A 64-hex local key for one (agent, era) readmission proof."""
-    return hashlib.sha256(f"{agent_id}:{bench_version}".encode()).hexdigest()
 
 
 def _recovery_flags(receipt: PaymentReceipt) -> str:
@@ -131,6 +148,20 @@ def _retry_guidance(receipt: PaymentReceipt, *, proof_saved: bool) -> str:
         "The proof is not saved locally. To retry without sending another "
         f"transfer, rerun with the finalized proof:\n  {_recovery_flags(receipt)}\n"
         "Do not rerun without these payment flags."
+    )
+
+
+def _unconfirmed_message(record: ReadmissionRecord) -> str:
+    amount = f"{record.amount_rao} rao" if record.amount_rao is not None else "the fee"
+    return (
+        f"a readmission transfer of {amount} to {record.send_address or 'the '}"
+        f"{'' if record.send_address else 'reserved address'} for agent "
+        f"{record.agent_id} (v{record.bench_version}) was submitted at "
+        f"{record.updated_at or 'an earlier run'} and never confirmed; it may "
+        "have gone through. Nothing was sent now. Check your coldkey's transfer "
+        "history: if it finalized, rerun with its --payment-block-hash, "
+        "--payment-block-number and --payment-extrinsic-index; if you are sure "
+        "it did not, rerun with --discard-unconfirmed-payment."
     )
 
 
@@ -199,6 +230,7 @@ def _describe_eligibility(check: dict[str, Any]) -> None:
 def run(args: argparse.Namespace) -> int:
     agent_id: UUID = args.agent_id
     recovery = _recovery_receipt_from_args(args)
+    discard = bool(getattr(args, "discard_unconfirmed_payment", False))
     coldkey_name, hotkey_name = resolve_wallet_names(
         coldkey_name=args.coldkey_name,
         hotkey_name=args.hotkey_name,
@@ -207,121 +239,90 @@ def run(args: argparse.Namespace) -> int:
     handle, wallet = load_wallet(coldkey_name=coldkey_name, hotkey_name=hotkey_name)
     hotkey = handle.hotkey_ss58
     network = resolve_network(args.network)
+    net = network.name
     with ApiClient(base_url=network.api_url) as client:
         terms = show_submission_terms(client, MEMORY_COMPETITION)
-        bench_version = (
-            args.bench_version
-            if args.bench_version is not None
-            else _active_bench_version(terms)
+        record = load_readmission_record(
+            network=net, hotkey=hotkey, agent_id=str(agent_id)
         )
-        pending = {
-            "network": network.name,
-            "hotkey": hotkey,
-            "name": PENDING_PAYMENT_NAME,
-            "sha256": _pending_key(agent_id, bench_version),
-            "bucket": READMISSION_PAYMENTS_BUCKET,
-        }
-        token_key = {
-            "network": network.name,
-            "hotkey": hotkey,
-            "key": _pending_key(agent_id, bench_version),
-        }
-        receipt = recovery
-        # A reused proof (recovery flags or the saved store) is already safe to
-        # retry with; a fresh one only once it is saved locally.
-        proof_saved = recovery is not None
-        # A saved reservation token restores the price snapshot on both the
-        # saved-proof and the explicit-proof recovery paths.
-        token: str | None = load_readmission_token(**token_key)
-        if receipt is None:
-            receipt = load_pending_payment(**pending)
-            proof_saved = receipt is not None
-            if receipt is not None:
-                print(
-                    "found a saved finalized readmission payment for this agent "
-                    "and era; no new transfer will be sent",
-                    file=sys.stderr,
-                )
-        if receipt is None:
-            check = client.post_readmission_check(
-                {
-                    **_signed_body(
-                        wallet=wallet,
-                        operation="reserve",
-                        hotkey=hotkey,
-                        agent_id=agent_id,
-                        bench_version=bench_version,
-                    ),
-                    "reserve_slot": True,
-                }
+        if record is not None and record.state == "reserved":
+            # Nothing was paid under a bare reservation: start over.
+            record = None
+
+        # An unconfirmed transfer is resolved before anything else: by its
+        # proof, or by the miner's explicit word that it did not go through.
+        if record is not None and record.state == "paying" and recovery is None:
+            if not discard:
+                raise MinerCliError(_unconfirmed_message(record))
+            clear_readmission_record(network=net, hotkey=hotkey, agent_id=str(agent_id))
+            print(
+                "discarded the unconfirmed readmission transfer record",
+                file=sys.stderr,
             )
-            if not check.get("ok"):
-                messages = check.get("messages") or ["refused"]
+            record = None
+
+        # The era a payment was made for wins over the active one.
+        if record is not None:
+            bench_version = record.bench_version
+            if args.bench_version is not None and args.bench_version != bench_version:
                 raise MinerCliError(
-                    "platform would refuse this readmission (no payment was sent): "
-                    + "; ".join(str(m) for m in messages)
+                    f"agent {agent_id} has an unresolved readmission payment for "
+                    f"v{bench_version}; it is committed for that era first (no "
+                    "payment was sent)"
                 )
-            _describe_eligibility(check)
-            amount_rao = check.get("payment_amount_rao")
-            send_address = check.get("payment_send_address")
-            token = check.get("admission_token")
+        else:
+            bench_version = (
+                args.bench_version
+                if args.bench_version is not None
+                else _active_bench_version(terms)
+            )
+
+        if recovery is not None:
             if (
-                not isinstance(amount_rao, int)
-                or isinstance(amount_rao, bool)
-                or amount_rao <= 0
-                or not isinstance(send_address, str)
-                or not isinstance(token, str)
+                record is not None
+                and record.payment is not None
+                and record.payment != recovery
             ):
                 raise MinerCliError(
-                    "platform did not reserve a readmission price; no payment was sent"
+                    "a different finalized readmission payment is saved for agent "
+                    f"{agent_id}: {_recovery_flags(record.payment)}. Resolve it "
+                    "first by rerunning without payment flags (nothing was sent "
+                    "now; neither payment is forgotten)"
                 )
-            # Saved before anything irreversible: a rerun after a lost response
-            # must commit against the price snapshot this payment is made for.
-            if not save_readmission_token(**token_key, token=token):
-                raise MinerCliError(
-                    "could not save the readmission reservation locally; no "
-                    "payment was sent. Check that the CLI config is writable "
-                    "and rerun"
-                )
-            chain_endpoint = getattr(args, "chain_endpoint", None) or None
-            preflight_payment_signer(
-                live_wallet=wallet,
-                hotkey_ss58=hotkey,
-                subtensor_network=network.subtensor_network,
-                chain_endpoint=chain_endpoint,
+            record = ReadmissionRecord(
+                agent_id=str(agent_id),
+                bench_version=bench_version,
+                state="paid",
+                token=record.token if record is not None else None,
+                amount_rao=record.amount_rao if record is not None else None,
+                send_address=record.send_address if record is not None else None,
+                payment=recovery,
             )
-            confirm_payment(
-                amount_rao=amount_rao,
-                dest_address=send_address,
-                hotkey_ss58=hotkey,
+            proof_saved = save_readmission_record(
+                network=net, hotkey=hotkey, record=record
+            )
+            receipt = recovery
+        elif record is not None and record.payment is not None:
+            receipt = record.payment
+            proof_saved = True
+            print(
+                "found a saved finalized readmission payment for this agent "
+                f"(v{bench_version}); no new transfer will be sent",
+                file=sys.stderr,
+            )
+        else:
+            record, receipt, proof_saved = _reserve_and_pay(
+                args=args,
+                client=client,
+                wallet=wallet,
+                net=net,
+                hotkey=hotkey,
                 coldkey_name=coldkey_name,
-                skip=args.yes,
-                purpose=f"readmission of agent {agent_id} into v{bench_version} "
-                "(the upload fee)",
-            )
-            print(
-                f"submitting payment on subtensor={network.subtensor_network}...",
-                file=sys.stderr,
-            )
-            receipt = submit_eval_payment(
-                live_wallet=wallet,
+                agent_id=agent_id,
+                bench_version=bench_version,
                 subtensor_network=network.subtensor_network,
-                amount_rao=amount_rao,
-                dest_address=send_address,
-                chain_endpoint=chain_endpoint,
             )
-            print(
-                f"payment finalised: block_hash={receipt.block_hash} "
-                f"block={receipt.block_number} ext_idx={receipt.extrinsic_index}",
-                file=sys.stderr,
-            )
-            proof_saved = save_pending_payment(**pending, payment=receipt)
-            if not proof_saved:
-                print(
-                    "warning: could not save the finalized payment proof locally; "
-                    "keep the printed proof if the readmission fails",
-                    file=sys.stderr,
-                )
+
         body = {
             **_signed_body(
                 wallet=wallet,
@@ -334,20 +335,25 @@ def run(args: argparse.Namespace) -> int:
             "payment_block_number": receipt.block_number,
             "payment_extrinsic_index": receipt.extrinsic_index,
         }
-        if token is not None:
-            body["admission_token"] = token
+        # Without a token Platform falls back to the live reservation it holds
+        # for this agent, era and hotkey, so the price snapshot survives a
+        # lost local config.
+        if record.token is not None:
+            body["admission_token"] = record.token
         try:
             result = client.post_readmission_commit(body)
         except ReadmissionPaymentRejectedError:
-            if recovery is None:
-                clear_pending_payment(**pending, payment=receipt)
-                clear_readmission_token(**token_key)
-                print(
-                    "\nplatform refused the payment proof; it was removed from "
-                    "local storage. Rerunning reads the current price and asks "
-                    "before paying again.",
-                    file=sys.stderr,
-                )
+            # Definitive for this exact proof, however it was supplied; a
+            # different saved proof is never touched.
+            clear_readmission_record(
+                network=net, hotkey=hotkey, agent_id=str(agent_id), payment=receipt
+            )
+            print(
+                "\nplatform refused the payment proof; it was removed from local "
+                "storage. Rerunning reads the current price and asks before "
+                "paying again.",
+                file=sys.stderr,
+            )
             raise
         except BaseException:
             print(
@@ -359,14 +365,15 @@ def run(args: argparse.Namespace) -> int:
             raise
         outcome = result.get("outcome") if isinstance(result, dict) else None
         if outcome not in ("admitted", "credited"):
-            # The saved proof and token stay, so a rerun retries with them.
+            # The record stays, so a rerun retries with it.
             raise MinerCliError(
                 "platform returned an invalid readmission response "
                 f"(outcome {outcome!r}). "
                 + _retry_guidance(receipt, proof_saved=proof_saved)
             )
-    clear_pending_payment(**pending, payment=receipt)
-    clear_readmission_token(**token_key)
+    clear_readmission_record(
+        network=net, hotkey=hotkey, agent_id=str(agent_id), payment=receipt
+    )
     if outcome == "admitted":
         print(str(agent_id))
         print(
@@ -385,6 +392,125 @@ def run(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     return 1
+
+
+def _reserve_and_pay(
+    *,
+    args: argparse.Namespace,
+    client: ApiClient,
+    wallet: Any,
+    net: str,
+    hotkey: str,
+    coldkey_name: str,
+    agent_id: UUID,
+    bench_version: int,
+    subtensor_network: str,
+) -> tuple[ReadmissionRecord, PaymentReceipt, bool]:
+    """Check, reserve and pay, writing the record before each irreversible step.
+
+    Returns the ``paid`` record, the proof, and whether that record persisted.
+    """
+    check = client.post_readmission_check(
+        {
+            **_signed_body(
+                wallet=wallet,
+                operation="reserve",
+                hotkey=hotkey,
+                agent_id=agent_id,
+                bench_version=bench_version,
+            ),
+            "reserve_slot": True,
+        }
+    )
+    if not check.get("ok"):
+        messages = check.get("messages") or ["refused"]
+        raise MinerCliError(
+            "platform would refuse this readmission (no payment was sent): "
+            + "; ".join(str(m) for m in messages)
+        )
+    _describe_eligibility(check)
+    amount_rao = check.get("payment_amount_rao")
+    send_address = check.get("payment_send_address")
+    token = check.get("admission_token")
+    if (
+        not isinstance(amount_rao, int)
+        or isinstance(amount_rao, bool)
+        or amount_rao <= 0
+        or not isinstance(send_address, str)
+        or not isinstance(token, str)
+    ):
+        raise MinerCliError(
+            "platform did not reserve a readmission price; no payment was sent"
+        )
+    record = ReadmissionRecord(
+        agent_id=str(agent_id),
+        bench_version=bench_version,
+        state="reserved",
+        token=token,
+        amount_rao=amount_rao,
+        send_address=send_address,
+    )
+    if not save_readmission_record(network=net, hotkey=hotkey, record=record):
+        raise MinerCliError(
+            "could not save the readmission reservation locally; no payment was "
+            "sent. Check that the CLI config is writable and rerun"
+        )
+    chain_endpoint = getattr(args, "chain_endpoint", None) or None
+    preflight_payment_signer(
+        live_wallet=wallet,
+        hotkey_ss58=hotkey,
+        subtensor_network=subtensor_network,
+        chain_endpoint=chain_endpoint,
+    )
+    confirm_payment(
+        amount_rao=amount_rao,
+        dest_address=send_address,
+        hotkey_ss58=hotkey,
+        coldkey_name=coldkey_name,
+        skip=args.yes,
+        purpose=f"readmission of agent {agent_id} into v{bench_version} "
+        "(the upload fee)",
+    )
+    # From here a transfer may happen. Record that first, so an outcome we
+    # never learn (a timeout, a crash) blocks any second transfer.
+    record = replace(record, state="paying")
+    if not save_readmission_record(network=net, hotkey=hotkey, record=record):
+        raise MinerCliError(
+            "could not record the pending transfer locally; no payment was "
+            "sent. Check that the CLI config is writable and rerun"
+        )
+    print(f"submitting payment on subtensor={subtensor_network}...", file=sys.stderr)
+    try:
+        receipt = submit_eval_payment(
+            live_wallet=wallet,
+            subtensor_network=subtensor_network,
+            amount_rao=amount_rao,
+            dest_address=send_address,
+            chain_endpoint=chain_endpoint,
+        )
+    except BaseException:
+        print(
+            "\nthe transfer's outcome is unknown, and it may still finalize. "
+            "Do not pay again: a rerun refuses to until you either supply its "
+            "--payment-* flags (from your coldkey's transfer history) or run "
+            "--discard-unconfirmed-payment after confirming it never went through.",
+            file=sys.stderr,
+        )
+        raise
+    print(
+        f"payment finalised: block_hash={receipt.block_hash} "
+        f"block={receipt.block_number} ext_idx={receipt.extrinsic_index}",
+        file=sys.stderr,
+    )
+    record = replace(record, state="paid", payment=receipt)
+    saved = save_readmission_record(network=net, hotkey=hotkey, record=record)
+    if not saved:
+        print(
+            "warning: could not save the finalized payment proof locally; keep "
+            "the printed proof if the readmission fails",
+            file=sys.stderr,
+        )
+    return record, receipt, saved
 
 
 __all__ = ["add_subparser", "run"]

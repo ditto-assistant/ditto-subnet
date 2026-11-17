@@ -418,9 +418,16 @@ stranded agents is eligible, but payouts count only your best agent; the check
 says when this is not your best, or when another of your agents is already on
 the era. Each agent can be readmitted at most once per era.
 
-The CLI pays the reserved amount after you confirm and saves the proof in its
-own local store. If the response is lost, rerun the same command: it reuses the
-proof and sends no new transfer.
+The CLI pays the reserved amount after you confirm. It keeps one local record
+per agent, and saves it before the transfer and again with the proof once the
+transfer lands. If the response is lost, rerun the same command, even after
+the era changes: it reuses the proof and sends no new transfer. If the
+transfer's outcome is unknown (the CLI timed out before finalization), the
+rerun refuses to pay again. Find the transfer in your coldkey history and pass
+it with `--payment-block-hash`, `--payment-block-number` and
+`--payment-extrinsic-index`. Only if no transfer was made, pass
+`--discard-unconfirmed-payment` to start over. The record is removed only once
+Platform admits the agent, credits the payment, or rejects that proof.
 
 **Refusals after payment.** If Platform can only discover a refusal after you
 paid (a rollout opened, the agent was withdrawn), it keeps your payment as an
