@@ -87,14 +87,17 @@ async def _ensure_readmission_target(
     payment-time owner, paid for by the paying coldkey: otherwise one miner's
     payment could take another miner's admitted-once slot for an era.
     """
-    owner_hotkey = await session.scalar(
-        select(Agent.miner_hotkey).where(Agent.agent_id == agent_id)
-    )
+    # Read only: never flush the caller's pending rows here, so their
+    # constraint violations keep surfacing where the caller maps them.
+    with session.no_autoflush:
+        owner_hotkey = await session.scalar(
+            select(Agent.miner_hotkey).where(Agent.agent_id == agent_id)
+        )
+        owner_coldkey = await get_miner_coldkey_for_agent(session, agent_id=agent_id)
     if owner_hotkey is None or owner_hotkey != miner_hotkey:
         raise ReadmissionTargetError(
             f"agent {agent_id} was not uploaded by hotkey {miner_hotkey}"
         )
-    owner_coldkey = await get_miner_coldkey_for_agent(session, agent_id=agent_id)
     if owner_coldkey is not None and owner_coldkey != miner_coldkey:
         raise ReadmissionTargetError(
             f"agent {agent_id} was paid for by a different coldkey"
