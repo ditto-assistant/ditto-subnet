@@ -351,3 +351,68 @@ async def test_cost_basis_cache_keeps_only_the_newest_versions(
         bench_version=versions[-1],
     )
     assert measured == versions
+
+
+async def test_cost_basis_eviction_keeps_a_lock_with_queued_waiters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """r4607181307: a woken waiter and a new caller share one lock.
+
+    While one task measures a retired version and another waits on its lock,
+    newer versions force eviction. The lock must survive while it has users,
+    so a fresh caller for the same version queues behind it and no two
+    measurements of that version ever run at once.
+    """
+    import asyncio
+
+    release = asyncio.Event()
+    in_flight = 0
+    peak = 0
+    limit = readmission_cost_basis._MAX_CACHED_VERSIONS
+    old = 5
+
+    async def fake_measure(
+        _session: object, *, bench_version: int
+    ) -> readmission_cost_basis.CostBasis:
+        nonlocal in_flight, peak
+        if bench_version == old:
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await release.wait()
+            in_flight -= 1
+        return readmission_cost_basis.CostBasis(
+            bench_version=bench_version,
+            agents_sampled=0,
+            runs_per_evaluation=3,
+            median_run_cost_usd=None,
+            median_agent_cost_usd=None,
+            measured_at=datetime.now(UTC),
+        )
+
+    monkeypatch.setattr(readmission_cost_basis, "_measure", fake_measure)
+
+    def call(version: int) -> asyncio.Task[readmission_cost_basis.CostBasis]:
+        return asyncio.create_task(
+            readmission_cost_basis.readmission_cost_basis(
+                None,  # type: ignore[arg-type]
+                bench_version=version,
+            )
+        )
+
+    holder = call(old)
+    await asyncio.sleep(0)
+    waiter = call(old)
+    await asyncio.sleep(0)
+    held_lock = readmission_cost_basis._locks[old]
+    # Newer versions evict; the retired version's lock has two users.
+    for version in range(old + 1, old + 1 + limit + 1):
+        await call(version)
+    assert readmission_cost_basis._locks[old] is held_lock
+    late = call(old)
+    await asyncio.sleep(0)
+    assert readmission_cost_basis._locks[old] is held_lock
+    release.set()
+    await asyncio.gather(holder, waiter, late)
+    assert peak == 1
+    assert old not in readmission_cost_basis._lock_users
+    assert old not in readmission_cost_basis._locks

@@ -48,6 +48,10 @@ class CostBasis:
 
 _cache: dict[int, CostBasis] = {}
 _locks: dict[int, asyncio.Lock] = {}
+# Tasks holding or queued on each version's lock. ``Lock.locked()`` is false
+# while a woken waiter has not yet re-acquired, so eviction counts users
+# instead; increments happen before any await, so the count cannot race.
+_lock_users: dict[int, int] = {}
 # Benchmark versions only advance, so keep the newest few and drop the rest
 # rather than holding one entry per version for the process lifetime.
 _MAX_CACHED_VERSIONS = 4
@@ -57,6 +61,7 @@ def _reset_cache() -> None:
     """Tests only. Locks bind to the loop that first waits on them."""
     _cache.clear()
     _locks.clear()
+    _lock_users.clear()
 
 
 async def _measure(session: AsyncSession, *, bench_version: int) -> CostBasis:
@@ -147,27 +152,35 @@ async def readmission_cost_basis(
     if cached is not None:
         return cached
     lock = _locks.setdefault(bench_version, asyncio.Lock())
-    async with lock:
-        cached = _fresh(bench_version)
-        if cached is not None:
-            return cached
-        measured = await _measure(session, bench_version=bench_version)
-        _cache[bench_version] = measured
+    _lock_users[bench_version] = _lock_users.get(bench_version, 0) + 1
+    try:
+        async with lock:
+            cached = _fresh(bench_version)
+            if cached is not None:
+                return cached
+            measured = await _measure(session, bench_version=bench_version)
+            _cache[bench_version] = measured
+            return measured
+    finally:
+        remaining = _lock_users[bench_version] - 1
+        if remaining:
+            _lock_users[bench_version] = remaining
+        else:
+            del _lock_users[bench_version]
         _evict_old_versions()
-        return measured
 
 
 def _evict_old_versions() -> None:
     """Bound ``_cache`` and ``_locks`` to the newest benchmark versions.
 
-    A lock still held by an in-flight measurement is kept; it is dropped on a
-    later eviction once released.
+    A lock with any holder or queued waiter is kept, so a woken waiter and a
+    new caller always share one lock; it is dropped once its last user leaves.
     """
     for version in sorted(_cache)[:-_MAX_CACHED_VERSIONS]:
         del _cache[version]
     keep = set(sorted(_cache)[-_MAX_CACHED_VERSIONS:])
     for version in [v for v in _locks if v not in keep]:
-        if not _locks[version].locked():
+        if not _lock_users.get(version):
             del _locks[version]
 
 
