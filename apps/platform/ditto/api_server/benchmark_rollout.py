@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -46,6 +47,9 @@ from ditto.db.queries.benchmark_rollout import (
     open_rollout,
 )
 from ditto.db.queries.stranded_admission import (
+    ORIGIN_STRANDED_ADMISSION,
+    AdmissionCategory,
+    AdmissionOrigin,
     StrandedAdmissionTarget,
     append_stranded_admission,
     lock_stranded_admission,
@@ -798,6 +802,12 @@ async def admit_stranded_previous_era_agent(
     expected_previous_score_count: int,
     actor: str,
     reason: str,
+    origin: AdmissionOrigin = ORIGIN_STRANDED_ADMISSION,
+    category: AdmissionCategory = "unspecified",
+    within_write: Callable[
+        [AsyncSession, StrandedAdmissionTarget], Awaitable[dict[str, Any] | None]
+    ]
+    | None = None,
 ) -> StrandedAdmissionResult:
     """Admit ONE stranded previous-era submission onto the activated era.
 
@@ -807,6 +817,11 @@ async def admit_stranded_previous_era_agent(
     every guard and the resolved input before writing anything. See
     :mod:`ditto.db.queries.stranded_admission` for what admission writes and
     why it is leasable straight out of ``scored``.
+
+    ``within_write`` runs in the write transaction after every guard is
+    re-checked and before the admission is appended; the paid readmission
+    records its payment there, so the payment and the admission commit or
+    roll back together. Its return value is audited as ``payment_ref``.
     """
 
     async def resolve() -> StrandedAdmissionTarget:
@@ -867,6 +882,9 @@ async def admit_stranded_previous_era_agent(
             raise RolloutConflictError(
                 "admission dataset input changed while the dataset was rendered"
             )
+        payment_ref = (
+            await within_write(session, current) if within_write is not None else None
+        )
         admitted = await append_stranded_admission(
             session,
             target=current,
@@ -881,6 +899,9 @@ async def admit_stranded_previous_era_agent(
             actor=actor,
             reason=reason,
             now=now,
+            origin=origin,
+            category=category,
+            payment_ref=payment_ref,
         )
         result = StrandedAdmissionResult(
             agent_id=agent_id,

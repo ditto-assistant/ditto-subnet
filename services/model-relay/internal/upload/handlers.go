@@ -349,6 +349,18 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string) (*admis
 			return nil, current, err
 		}
 	}
+	// A readmission reservation of this coldkey inside its block window holds
+	// the slot exactly like an upload reservation (SN-485).
+	readmissionBlock, err := q.GetReadmissionBlockUntil(ctx, postgres.GetReadmissionBlockUntilParams{
+		MinerColdkey: coldkey,
+		ObservedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		return nil, current, err
+	}
+	if readmissionBlock.Valid && readmissionBlock.Time.After(now) {
+		return nil, current, &cooldownError{retryAt: readmissionBlock.Time.UTC()}
+	}
 	blocked, err := retryAt(ctx, q, coldkey, current.cooldownSeconds, now)
 	if err != nil {
 		return nil, current, err

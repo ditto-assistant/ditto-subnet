@@ -8777,6 +8777,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/readmission/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check
+         * @description Pre-payment dry run: every reason this readmission would be refused.
+         *
+         *     With ``reserve_slot`` and no refusal, reserves the price (exactly the
+         *     upload fee) and the payment address for 24 hours. A miner should pay only
+         *     after ``ok`` with an ``admission_token``.
+         */
+        post: operations["check_api_v1_readmission_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/readmission/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit
+         * @description Verify the finalized payment and readmit the agent, or bank a credit.
+         *
+         *     An exact retry (same proof, agent, era, hotkey) returns the original
+         *     outcome. A proof another lane holds is a 3207 replay. A verified payment
+         *     whose admission is refused is recorded ``credited`` and banked as a credit
+         *     for this hotkey, spendable on an upload or a readmission for 30 days.
+         */
+        post: operations["commit_api_v1_readmission_commit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/retrieval/agent-by-hotkey": {
         parameters: {
             query?: never;
@@ -16541,6 +16590,8 @@ export interface components {
              * @default admin_api
              */
             actor: string;
+            /** Category */
+            category?: ("ditto_fault" | "owner_policy") | null;
             /** Confirmation */
             confirmation: string;
             /** Expected Active Version */
@@ -39781,6 +39832,157 @@ export interface components {
             /** Settings Revision */
             settings_revision: number;
         };
+        /** ReadmissionCheckRequest */
+        ReadmissionCheckRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Reserve Slot
+             * @default false
+             */
+            reserve_slot: boolean;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid4
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
+        };
+        /** ReadmissionCheckResponse */
+        ReadmissionCheckResponse: {
+            activation: components["schemas"]["ReadmissionActivationState"];
+            /** Admission Expires At */
+            admission_expires_at?: string | null;
+            /** Admission Token */
+            admission_token?: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            eligibility?: components["schemas"]["ReadmissionEligibilityView"] | null;
+            /** Error Codes */
+            error_codes?: number[];
+            /** Messages */
+            messages?: string[];
+            /** Netuid */
+            netuid: number;
+            /** Ok */
+            ok: boolean;
+            /** Payment Amount Rao */
+            payment_amount_rao?: number | null;
+            /**
+             * Payment Required
+             * @default false
+             */
+            payment_required: boolean;
+            /** Payment Send Address */
+            payment_send_address?: string | null;
+            /** Retry At */
+            retry_at?: string | null;
+            /** Rollout Id */
+            rollout_id?: string | null;
+            /** Subtensor Network */
+            subtensor_network: string;
+        };
+        /** ReadmissionCommitRequest */
+        ReadmissionCommitRequest: {
+            /** Admission Token */
+            admission_token?: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Hotkey */
+            hotkey: string;
+            /** Payment Block Hash */
+            payment_block_hash: string;
+            /** Payment Block Number */
+            payment_block_number: number;
+            /** Payment Extrinsic Index */
+            payment_extrinsic_index: number;
+            /** Signature */
+            signature: string;
+            /**
+             * Signature Nonce
+             * Format: uuid4
+             */
+            signature_nonce: string;
+            /** Signature Timestamp */
+            signature_timestamp: number;
+        };
+        /** ReadmissionCommitResponse */
+        ReadmissionCommitResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Credit Expires At */
+            credit_expires_at?: string | null;
+            /** Dataset Sha256 */
+            dataset_sha256?: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "admitted" | "credited";
+            /**
+             * Payment Disposition
+             * @enum {string}
+             */
+            payment_disposition: "consumed" | "credit_consumed" | "credited";
+            /** Position */
+            position?: number | null;
+            /**
+             * Recovered
+             * @default false
+             */
+            recovered: boolean;
+            /** Refusal Reason */
+            refusal_reason?: string | null;
+            /** Rollout Id */
+            rollout_id?: string | null;
+        };
+        /**
+         * ReadmissionEligibilityView
+         * @description What the stranded-era read says about this agent.
+         */
+        ReadmissionEligibilityView: {
+            /** Already Admitted */
+            already_admitted: boolean;
+            /** Cohort Sibling Agent Id */
+            cohort_sibling_agent_id?: string | null;
+            /** Owner Best Stranded */
+            owner_best_stranded?: boolean | null;
+            /** Previous Bench Version */
+            previous_bench_version?: number | null;
+            /** Previous Median Composite */
+            previous_median_composite?: number | null;
+            /** Previous Score Count */
+            previous_score_count?: number | null;
+            /** Stranded */
+            stranded: boolean;
+        };
         /**
          * ReadmissionTerms
          * @description The SN-485 readmission rules for one competition.
@@ -44628,6 +44830,8 @@ export interface components {
             agent_name: string;
             /** Agent Sha256 */
             agent_sha256: string | null;
+            /** Category */
+            category?: string | null;
             /** Dataset Sha256 */
             dataset_sha256: string | null;
             /** First Lease At */
@@ -44638,6 +44842,15 @@ export interface components {
             live_lease_count: number;
             /** Miner Hotkey */
             miner_hotkey: string;
+            /**
+             * Origin
+             * @default operator_stranded_admission
+             */
+            origin: string;
+            /** Payment Ref */
+            payment_ref?: {
+                [key: string]: unknown;
+            } | null;
             /** Position */
             position: number | null;
             /** Previous Bench Version */
@@ -66564,6 +66777,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicChainWeightsResponse"];
+                };
+            };
+        };
+    };
+    check_api_v1_readmission_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadmissionCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadmissionCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    commit_api_v1_readmission_commit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadmissionCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadmissionCommitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

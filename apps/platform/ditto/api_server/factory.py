@@ -158,6 +158,7 @@ from ditto.api_server.endpoints import (
 )
 from ditto.api_server.endpoints import admin_edge_lane as admin_edge_lane_endpoints
 from ditto.api_server.endpoints import edge as edge_endpoints
+from ditto.api_server.endpoints import readmission as readmission_endpoints
 from ditto.api_server.endpoints import screener as screener_endpoints
 from ditto.api_server.endpoints import upload as upload_endpoints
 from ditto.api_server.endpoints import validator as validator_endpoints
@@ -830,6 +831,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Root path (no /api/v1): Ditto fetches the challenge at the origin root.
     app.include_router(ditto_callback_challenge_router)
     app.include_router(upload_router, prefix="/api/v1")
+    app.include_router(readmission_endpoints.router, prefix="/api/v1")
     app.include_router(generator_router, prefix="/api/v1")
     app.include_router(generator_scorer_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")

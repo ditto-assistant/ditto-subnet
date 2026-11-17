@@ -24,10 +24,29 @@ ORDER BY a.created_at ASC, a.agent_id ASC
 LIMIT 1;
 
 -- name: GetSubmissionLatestPaidCreatedAt :one
-SELECT max(a.created_at)::timestamptz
-FROM agents AS a
-JOIN evaluation_payments AS p ON p.agent_id = a.agent_id
-WHERE p.miner_coldkey = $1;
+-- The coldkey's newest paid upload or admitted readmission: a readmission
+-- counts toward, and starts, the same cooldown (SN-485). GREATEST skips NULL.
+SELECT GREATEST(
+    (
+        SELECT max(a.created_at)
+        FROM agents AS a
+        JOIN evaluation_payments AS p ON p.agent_id = a.agent_id
+        WHERE p.miner_coldkey = $1
+    ),
+    (
+        SELECT max(r.updated_at)
+        FROM readmission_payments AS r
+        WHERE r.miner_coldkey = $1 AND r.outcome = 'admitted'
+    )
+)::timestamptz;
+
+-- name: GetReadmissionBlockUntil :one
+-- Until when a live readmission reservation of this coldkey holds its single
+-- submission slot (SN-485): the upload rule, min(expiry, created + 15 min).
+SELECT max(LEAST(r.expires_at, r.created_at + interval '15 minutes'))::timestamptz
+FROM readmission_reservations AS r
+WHERE r.miner_coldkey = sqlc.arg(miner_coldkey)
+  AND r.expires_at > sqlc.arg(observed_at)::timestamptz;
 
 -- name: LockUploadAdmissionColdkey :exec
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(miner_coldkey), 0));
