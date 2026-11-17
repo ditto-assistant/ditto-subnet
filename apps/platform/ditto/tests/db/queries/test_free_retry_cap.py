@@ -43,6 +43,7 @@ async def _seed(
     failures: int = FREE_RETRY_CAP_FAILED_LEASES,
     detail: str | None = None,
     rotation_retests: int = 0,
+    retest_basis: str | None = DUELING_ROTATION_RETEST_BASIS,
 ) -> UUID:
     """An evaluating agent whose ``failures`` leases all expired unscored."""
     agent_id = uuid4()
@@ -90,7 +91,7 @@ async def _seed(
                     "request_id": str(uuid4()),
                     "actor": "platform:dueling-season-catchup",
                     "reason": "dueling season catch-up",
-                    "basis": DUELING_ROTATION_RETEST_BASIS,
+                    **({} if retest_basis is None else {"basis": retest_basis}),
                     "bench_version": _VERSION,
                     "catch_up": True,
                     "catch_up_source": "off_board",
@@ -143,6 +144,21 @@ async def test_dueling_season_rotation_retests_are_never_capped(
             session, bench_version=_VERSION
         )
     assert await _cap(session_maker, agent_id) is None
+
+
+@pytest.mark.parametrize(
+    "basis", ["provider_outage_void", "v9_contract_mismatch", None]
+)
+async def test_every_platform_or_operator_retest_is_never_capped(
+    session_maker: async_sessionmaker[AsyncSession], basis: str | None
+) -> None:
+    """An outage void, a contract repair or an operator re-test is never the
+    agent's fault: a lease that ran one is never counted."""
+    agent_id = await _seed(session_maker, rotation_retests=1, retest_basis=basis)
+    async with session_maker() as session:
+        assert agent_id not in await free_retry_cap_candidates(
+            session, bench_version=_VERSION
+        )
 
 
 async def test_fleet_outages_are_never_capped(

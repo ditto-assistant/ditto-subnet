@@ -22,9 +22,12 @@ expired scoring tickets whose retry budget is spent. Excluded, so they are
 never capped or charged:
 
 * ``provider_outage_parked`` leases (a fleet-wide provider outage);
-* any lease on a validator that ran a ``dueling_season_rotation`` score
-  re-test for the agent in this era (season rotation, catch-up and ATH-clear
-  re-tests are platform-caused and always free);
+* any lease on a validator that ran a score re-test for the agent in this
+  era, whatever its basis. Every score re-test is platform- or
+  operator-initiated and always free: ``dueling_season_rotation`` (season
+  rotation, catch-up overflow, off-board catch-up, the ATH-clear re-test),
+  ``provider_outage_void`` (an outage-tainted canonical score re-run on the
+  same validator), ``v9_contract_mismatch`` repair, and operator re-tests;
 * agents that already hold a quorum of scores in the era.
 
 The cap is enforced only while the readmission fee is active
@@ -58,7 +61,6 @@ from ditto.db.queries.audit import SCORE_RETEST_EVENTS
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.queue_removal import removal_in_force
 from ditto.db.queries.readmission_gate import current_readmission_activation
-from ditto.db.queries.score_retests import DUELING_ROTATION_RETEST_BASIS
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.submission_settings import (
     latest_submission_settings,
@@ -77,17 +79,16 @@ FREE_RETRY_CAP_ACTOR = "platform:free-retry-cap"
 EXEMPT_FAILURE_DETAILS = frozenset({"provider_outage_parked"})
 
 
-def _rotation_retest_on_lease() -> Exists:
-    """A ``dueling_season_rotation`` re-test ran for this ticket's agent,
-    validator and era (correlated to :class:`ValidatorTicket`)."""
+def _score_retest_on_lease() -> Exists:
+    """A score re-test of any basis ran for this ticket's agent, validator and
+    era (correlated to :class:`ValidatorTicket`). Keyed on the re-test audit,
+    never on miner input, so platform-caused re-tests are never capped."""
     return (
         select(ScoreAuditEntry.seq)
         .where(
             ScoreAuditEntry.agent_id == ValidatorTicket.agent_id,
             ScoreAuditEntry.validator_hotkey == ValidatorTicket.validator_hotkey,
             ScoreAuditEntry.event.in_(sorted(SCORE_RETEST_EVENTS)),
-            ScoreAuditEntry.payload["basis"].as_string()
-            == DUELING_ROTATION_RETEST_BASIS,
             cast(ScoreAuditEntry.payload["bench_version"].as_string(), Integer)
             == ValidatorTicket.bench_version,
         )
@@ -105,7 +106,7 @@ def _counted_failures() -> tuple[ColumnElement[bool], ...]:
         func.coalesce(ValidatorTicket.failure_detail, "").not_in(
             sorted(EXEMPT_FAILURE_DETAILS)
         ),
-        ~_rotation_retest_on_lease(),
+        ~_score_retest_on_lease(),
     )
 
 
