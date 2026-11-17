@@ -7965,6 +7965,23 @@ CREATE TABLE public.upload_admission_reservations (
 
 
 --
+-- Name: upload_readmissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.upload_readmissions (
+    agent_id uuid NOT NULL,
+    kind text NOT NULL,
+    lineage_agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    miner_coldkey text NOT NULL,
+    lineage_evaluation_completed boolean NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_upload_readmissions_upload_readmissions_kind_check CHECK ((kind = ANY (ARRAY['identical_rescore'::text, 'near_duplicate'::text]))),
+    CONSTRAINT ck_upload_readmissions_upload_readmissions_lineage_check CHECK ((agent_id <> lineage_agent_id))
+);
+
+
+--
 -- Name: v13_group_package_registrations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -11948,6 +11965,14 @@ ALTER TABLE ONLY public.unreleased_copy_settings_revisions
 
 
 --
+-- Name: upload_readmissions upload_readmissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.upload_readmissions
+    ADD CONSTRAINT upload_readmissions_pkey PRIMARY KEY (agent_id);
+
+
+--
 -- Name: airdrop_recipients uq_airdrop_recipients_recipient_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14024,6 +14049,20 @@ CREATE INDEX unreleased_copy_signals_flagged_idx ON public.unreleased_copy_signa
 --
 
 CREATE INDEX upload_admission_expires_at_idx ON public.upload_admission_reservations USING btree (expires_at);
+
+
+--
+-- Name: upload_readmissions_bench_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX upload_readmissions_bench_version_idx ON public.upload_readmissions USING btree (bench_version, created_at);
+
+
+--
+-- Name: upload_readmissions_coldkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX upload_readmissions_coldkey_idx ON public.upload_readmissions USING btree (miner_coldkey, created_at);
 
 
 --
@@ -17246,6 +17285,22 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT svrp_process_key_fk FOREIGN KEY (process_key_sha256) REFERENCES public.screener_replay_process_keys(key_sha256);
+
+
+--
+-- Name: upload_readmissions upload_readmissions_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.upload_readmissions
+    ADD CONSTRAINT upload_readmissions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: upload_readmissions upload_readmissions_lineage_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.upload_readmissions
+    ADD CONSTRAINT upload_readmissions_lineage_agent_id_fkey FOREIGN KEY (lineage_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
 
 
 --

@@ -109,6 +109,7 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
             cooldown_seconds=3600,
             fee_amount_rao=40_000_000,
             payment_address=default_payment_address,
+            readmission_announced_at=None,
         )
 
     monkeypatch.setattr(
@@ -635,6 +636,175 @@ class TestUploadCheck:
         ]
         assert allowed.json()["ok"] is True
         assert allowed.json()["payment_required"] is True
+
+    async def test_identical_rescore_is_labelled_a_readmission_only_when_active(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        lineage_id = uuid4()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=lineage_id, status=AgentStatus.SCORED
+                )
+            ),
+        )
+        body = {**_signed_request_body(), "allow_identical_rescore": True}
+
+        # Inactive by default: today's behaviour, no label.
+        inactive = (await client.post("/api/v1/upload/check", json=body)).json()
+        assert inactive["ok"] is True
+        assert inactive["readmission_kind"] is None
+
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.announcement_in_effect",
+            lambda _settings: True,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.current_readmission_activation",
+            AsyncMock(return_value=SimpleNamespace(active=True)),
+        )
+        active = (await client.post("/api/v1/upload/check", json=body)).json()
+        # Same fee and cooldown; only the label differs.
+        assert active["ok"] is True
+        assert active["payment_required"] is True
+        assert active["readmission_kind"] == "identical_rescore"
+        assert active["readmission_of_agent_id"] == str(lineage_id)
+
+    async def test_an_unused_proof_check_reports_the_readmission_label(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """/check with an unused proof labels like /upload/agent will (SN-485)."""
+        override_get_chain_client(app)
+        kp = _make_keypair()
+        _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        lineage_id = uuid4()
+        for name in (
+            "get_agent_for_payment_proof",
+            "get_evaluation_payment_for_proof",
+            "get_generator_payment_for_proof",
+            "get_readmission_payment_for_proof",
+        ):
+            monkeypatch.setattr(
+                f"ditto.api_server.endpoints.upload.{name}",
+                AsyncMock(return_value=None),
+            )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=lineage_id, status=AgentStatus.SCORED
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.announcement_in_effect",
+            lambda _settings: True,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.current_readmission_activation",
+            AsyncMock(return_value=SimpleNamespace(active=True)),
+        )
+        body = (
+            await client.post(
+                "/api/v1/upload/check",
+                json={
+                    **_signed_request_body(keypair=kp),
+                    "allow_identical_rescore": True,
+                    "payment_block_hash": _GOOD_BLOCK_HASH,
+                    "payment_block_number": 13579,
+                    "payment_extrinsic_index": 7,
+                },
+            )
+        ).json()
+        assert body["readmission_kind"] == "identical_rescore", body
+        assert body["readmission_of_agent_id"] == str(lineage_id)
+
+    async def test_an_unused_credit_check_labels_against_the_credit_owner(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """/check previews the lineage /upload/agent will record (r4606866886).
+
+        A credit commits under its payment-time coldkey, so when that differs
+        from the hotkey's current chain owner the preview must look up the
+        credit owner's lineage, not the current owner's.
+        """
+        override_get_chain_client(app)
+        kp = _make_keypair()
+        _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        lineage_id = uuid4()
+        credit_coldkey = "5" + "K" * 47
+        credit = SimpleNamespace(
+            agent_id=None,
+            miner_hotkey=kp.ss58_address,
+            miner_coldkey=credit_coldkey,
+        )
+        for name in (
+            "get_agent_for_payment_proof",
+            "get_generator_payment_for_proof",
+            "get_readmission_payment_for_proof",
+        ):
+            monkeypatch.setattr(
+                f"ditto.api_server.endpoints.upload.{name}",
+                AsyncMock(return_value=None),
+            )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=credit),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.credit_expired", lambda _credit: False
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload._ensure_credit_fresh",
+            lambda _credit: None,
+        )
+        lineage_lookup = AsyncMock(
+            return_value=SimpleNamespace(agent_id=lineage_id, status=AgentStatus.SCORED)
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            lineage_lookup,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.announcement_in_effect",
+            lambda _settings: True,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.current_readmission_activation",
+            AsyncMock(return_value=SimpleNamespace(active=True)),
+        )
+        body = (
+            await client.post(
+                "/api/v1/upload/check",
+                json={
+                    **_signed_request_body(keypair=kp),
+                    "allow_identical_rescore": True,
+                    "payment_block_hash": _GOOD_BLOCK_HASH,
+                    "payment_block_number": 13579,
+                    "payment_extrinsic_index": 7,
+                },
+            )
+        ).json()
+        assert body["readmission_of_agent_id"] == str(lineage_id), body
+        lineage_coldkeys = {
+            call.kwargs["miner_coldkey"] for call in lineage_lookup.await_args_list
+        }
+        assert lineage_coldkeys == {credit_coldkey}
 
     async def test_duplicate_from_another_owner_hotkey_precedes_cooldown(
         self,
@@ -1509,6 +1679,44 @@ class TestUploadAgentHappyPath:
         assert body["version"] == 1
         assert body["status"] == "uploaded"
 
+    async def test_a_racing_identical_upload_is_still_labelled_a_readmission(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The first duplicate lookup misses a concurrent identical upload; the
+        recheck under the coldkey lock still finds the lineage (SN-485)."""
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        lineage_id = uuid4()
+        lookup = AsyncMock(side_effect=[None, SimpleNamespace(agent_id=lineage_id)])
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha", lookup
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.announcement_in_effect",
+            lambda _settings: True,
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.current_readmission_activation",
+            AsyncMock(
+                return_value=SimpleNamespace(active=True, active_bench_version=19)
+            ),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+        data["allow_identical_rescore"] = "true"
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        assert lookup.await_count == 2
+        assert response.json()["readmission_kind"] == "identical_rescore"
+        assert response.json()["readmission_of_agent_id"] == str(lineage_id)
+
     async def test_stores_tar_under_agent_id_key(
         self, app: FastAPI, client: httpx.AsyncClient
     ):
@@ -1841,7 +2049,9 @@ class TestUploadAgentSn455PylonMiss:
             "ditto.api_server.endpoints.upload.effective_submission_settings",
             AsyncMock(
                 return_value=SimpleNamespace(
-                    fee_amount_rao=self._FEE_RAO, payment_address=self._SEND
+                    fee_amount_rao=self._FEE_RAO,
+                    payment_address=self._SEND,
+                    readmission_announced_at=None,
                 )
             ),
         )
@@ -1949,6 +2159,82 @@ class TestUploadAgentReplayHandling:
         )
         deps["session"].commit.assert_awaited_once()
         deps["storage"].put_object.assert_not_awaited()
+
+    async def test_exact_retry_reports_the_original_readmission_label(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        original_id, lineage_id = uuid4(), uuid4()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_agent_for_payment_proof",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=original_id,
+                    miner_hotkey=kp.ss58_address,
+                    name="alpha-agent",
+                    sha256=_GOOD_TAR_SHA,
+                    version=3,
+                    status=AgentStatus.UPLOADED,
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_readmission",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    kind="identical_rescore", lineage_agent_id=lineage_id
+                )
+            ),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["readmission_kind"] == "identical_rescore"
+        assert response.json()["readmission_of_agent_id"] == str(lineage_id)
+
+    async def test_a_duplicate_reports_the_existing_agents_readmission_label(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        _wire_full_stack(app)
+        kp = bittensor.Keypair.create_from_uri("//Alice")
+        _override_payment_verifier(
+            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
+        )
+        existing_id, lineage_id = uuid4(), uuid4()
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    agent_id=existing_id, version=2, status=AgentStatus.SCORED
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_upload_readmission",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    kind="near_duplicate", lineage_agent_id=lineage_id
+                )
+            ),
+        )
+        data, files = _upload_agent_form(keypair=kp)
+
+        response = await client.post("/api/v1/upload/agent", data=data, files=files)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["payment_disposition"] == "reusable_credit"
+        assert body["readmission_kind"] == "near_duplicate"
+        assert body["readmission_of_agent_id"] == str(lineage_id)
 
     async def test_reused_proof_for_different_upload_stays_rejected(
         self,

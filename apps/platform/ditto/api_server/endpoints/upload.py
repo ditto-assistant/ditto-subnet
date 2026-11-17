@@ -26,7 +26,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import bittensor
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -105,6 +105,15 @@ from ditto.db.queries.payments import (
     get_same_owner_agent_by_sha,
     insert_evaluation_payment,
 )
+from ditto.db.queries.readmission import (
+    classify_upload_readmission,
+    get_upload_readmission,
+    record_upload_readmission,
+)
+from ditto.db.queries.readmission_gate import (
+    announcement_in_effect,
+    current_readmission_activation,
+)
 from ditto.db.queries.submission_settings import (
     UPLOAD_ADMISSION_TTL,
     consume_or_enforce_upload_admission,
@@ -119,7 +128,7 @@ from ditto.db.queries.unreleased_copy import store_items as store_distinctive_it
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
-    from ditto.db.models import Agent, EvaluationPayment
+    from ditto.db.models import Agent, EvaluationPayment, UploadReadmission
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +399,57 @@ async def check(
         session,
         default_payment_address=request.app.state.config.upload_payment_address,
     )
+    # SN-485: once the readmission fee is active, an explicit identical
+    # rescore of the owner's own agent is a readmission. Same fee, same
+    # cooldown; the label tells the miner before they pay.
+    readmission_of = None
+    if (
+        signature_valid
+        and owner_coldkey is not None
+        and not banned
+        and body.allow_identical_rescore
+        and announcement_in_effect(settings)
+        and (
+            # A proof that already funded an exact committed upload recovers
+            # that upload; an unused proof or credit labels like a new one.
+            body.payment_block_hash is None
+            or (
+                body.payment_extrinsic_index is not None
+                and await get_agent_for_payment_proof(
+                    session,
+                    block_hash=body.payment_block_hash,
+                    extrinsic_index=body.payment_extrinsic_index,
+                )
+                is None
+            )
+        )
+        and (await current_readmission_activation(session, settings=settings)).active
+    ):
+        # Label against the owner the commit will use: an unused credit of this
+        # hotkey commits under its payment-time coldkey, not the hotkey's
+        # current chain owner, so the preview must match that lineage.
+        credit = (
+            await get_evaluation_payment_for_proof(
+                session,
+                block_hash=body.payment_block_hash,
+                extrinsic_index=body.payment_extrinsic_index,
+            )
+            if body.payment_block_hash is not None
+            and body.payment_extrinsic_index is not None
+            else None
+        )
+        label_coldkey = (
+            credit.miner_coldkey
+            if credit is not None
+            and credit.agent_id is None
+            and credit.miner_hotkey == body.hotkey
+            and credit.miner_coldkey is not None
+            else owner_coldkey
+        )
+        lineage = await get_same_owner_agent_by_sha(
+            session, miner_coldkey=label_coldkey, sha256=body.sha256
+        )
+        readmission_of = lineage.agent_id if lineage is not None else None
     reserved_admission = (
         await get_upload_admission_for_coldkey(session, miner_coldkey=owner_coldkey)
         if owner_coldkey is not None
@@ -564,6 +624,8 @@ async def check(
         payment_required=payment_required,
         identical_agent_id=duplicate.agent_id if duplicate else None,
         identical_agent_status=duplicate.status if duplicate else None,
+        readmission_kind="identical_rescore" if readmission_of else None,
+        readmission_of_agent_id=readmission_of,
         retry_at=retry_at,
         admission_token=admission.token if admission else None,
         admission_expires_at=admission.expires_at if admission else None,
@@ -847,6 +909,9 @@ async def upload_agent(
     duplicate = await get_same_owner_agent_by_sha(
         session, miner_coldkey=owner_coldkey, sha256=sha256
     )
+    # Read before a rollback expires the row: an explicit identical rescore
+    # is the readmission lineage (SN-485).
+    identical_lineage_id = duplicate.agent_id if duplicate is not None else None
     if duplicate and not allow_identical_rescore:
         assert duplicate.version is not None
         duplicate_agent_id = duplicate.agent_id
@@ -880,12 +945,20 @@ async def upload_agent(
                     raced and raced.agent_id is None and raced.miner_hotkey == hotkey
                 ):
                     raise
+        # The existing agent's own readmission label, as an exact retry reports.
+        duplicate_label = await get_upload_readmission(
+            session, agent_id=duplicate_agent_id
+        )
         return UploadAgentResponse(
             agent_id=duplicate_agent_id,
             version=duplicate_version,
             status=duplicate_status,
             payment_disposition="reusable_credit",
             credit_for_agent_id=duplicate_agent_id,
+            readmission_kind=_label_kind(duplicate_label),
+            readmission_of_agent_id=(
+                duplicate_label.lineage_agent_id if duplicate_label else None
+            ),
         )
 
     # The duplicate lookup autobegan a read transaction. Do not pin a pooled
@@ -988,6 +1061,27 @@ async def upload_agent(
             )
             if reserved is not None:
                 raise HTTPException(status_code=409, detail=reserved)
+            # SN-485: whether this upload can be a readmission, resolved once
+            # in this transaction and reused by the label below.
+            activation = (
+                await current_readmission_activation(session, settings=settings)
+                if announcement_in_effect(settings)
+                else None
+            )
+            readmission_live = activation is not None and activation.active
+            # An identical upload committed by a concurrent request after the
+            # lookup above is this rescore's lineage. Re-read it under the
+            # coldkey lock, before this agent exists, so the readmission label
+            # below is never lost to the race.
+            if (
+                identical_lineage_id is None
+                and allow_identical_rescore
+                and readmission_live
+            ):
+                lineage = await get_same_owner_agent_by_sha(
+                    session, miner_coldkey=owner_coldkey, sha256=sha256
+                )
+                identical_lineage_id = lineage.agent_id if lineage else None
             version = await insert_agent(
                 session,
                 agent_id=agent_id,
@@ -1030,6 +1124,26 @@ async def upload_agent(
                 await insert_evaluation_payment(
                     session, verified=verified, agent_id=agent_id
                 )
+            # SN-485: label a readmission of the owner's own lineage, only
+            # while the fee is active (never retroactively). Same fee and
+            # cooldown as any upload; the row is accounting and rules only.
+            readmission = None
+            if activation is not None and readmission_live:
+                readmission = await classify_upload_readmission(
+                    session,
+                    miner_coldkey=owner_coldkey,
+                    sha256=sha256,
+                    normalized_source_hash=normalized_source_hash,
+                    identical_agent_id=identical_lineage_id,
+                )
+                if readmission is not None:
+                    await record_upload_readmission(
+                        session,
+                        agent_id=agent_id,
+                        label=readmission,
+                        bench_version=activation.active_bench_version,
+                        miner_coldkey=owner_coldkey,
+                    )
             # Decide consent last, after every write that can wait on a lock
             # (the series lock, the credit row, the payment key), so a version
             # that becomes effective during those waits is not missed. The
@@ -1073,6 +1187,21 @@ async def upload_agent(
         version=version,
         status=AgentStatus.UPLOADED,
         payment_disposition="credit_consumed" if using_credit else "consumed",
+        readmission_kind=readmission.kind if readmission is not None else None,
+        readmission_of_agent_id=(
+            readmission.lineage_agent_id if readmission is not None else None
+        ),
+    )
+
+
+def _label_kind(
+    label: UploadReadmission | None,
+) -> Literal["identical_rescore", "near_duplicate"] | None:
+    """The wire kind of a recorded readmission label."""
+    if label is None:
+        return None
+    return (
+        "identical_rescore" if label.kind == "identical_rescore" else "near_duplicate"
     )
 
 
@@ -1124,11 +1253,16 @@ async def _exact_retry_of_accepted_upload(
     ):
         return None
     assert existing.version is not None
+    # The readmission label recorded with the original upload (SN-485), so an
+    # exact retry reports what the first response did.
+    label = await get_upload_readmission(session, agent_id=existing.agent_id)
     # Read the row before a commit expires it.
     recovered = UploadAgentResponse(
         agent_id=existing.agent_id,
         version=existing.version,
         status=existing.status,
+        readmission_kind=_label_kind(label),
+        readmission_of_agent_id=label.lineage_agent_id if label else None,
     )
     if identity.admission_token is not None:
         await release_upload_admission_for_exact_retry(

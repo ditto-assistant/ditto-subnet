@@ -7279,6 +7279,57 @@ insert_readmission_payment` refuses a proof already recorded by the agent or
     )
 
 
+class UploadReadmission(Base):
+    """An accepted upload classified as a readmission of the owner's lineage.
+
+    Written in the upload transaction, only while the SN-485 readmission fee
+    is active, so nothing uploaded before activation is ever relabelled. The
+    upload still pays through ``evaluation_payments`` at the upload fee; this
+    row only labels it for accounting and the readmission rules. ``kind`` is
+    ``identical_rescore`` (byte-identical, ``allow_identical_rescore``) or
+    ``near_duplicate`` (the same ``normalized_source_hash`` under new bytes),
+    and ``lineage_agent_id`` the owner's earliest such agent.
+    """
+
+    __tablename__ = "upload_readmissions"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    lineage_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    """The active benchmark era when the upload was accepted."""
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    lineage_evaluation_completed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    """Whether the lineage agent had finished a scoring quorum in some era."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="upload_readmissions_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["lineage_agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="upload_readmissions_lineage_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "kind IN ('identical_rescore', 'near_duplicate')",
+            name="upload_readmissions_kind_check",
+        ),
+        CheckConstraint(
+            "agent_id <> lineage_agent_id", name="upload_readmissions_lineage_check"
+        ),
+        Index("upload_readmissions_coldkey_idx", "miner_coldkey", "created_at"),
+        Index("upload_readmissions_bench_version_idx", "bench_version", "created_at"),
+    )
+
+
 class ReadmissionReservation(Base):
     """Pre-payment fee and address snapshot for one readmission (SN-485).
 
