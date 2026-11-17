@@ -119,11 +119,28 @@ def _recovery_flags(receipt: PaymentReceipt) -> str:
     )
 
 
+def _retry_guidance(receipt: PaymentReceipt, *, proof_saved: bool) -> str:
+    """How to retry a paid readmission without sending another transfer."""
+    if proof_saved:
+        return (
+            "Rerun the same command to retry with the saved proof, or rerun "
+            f"with:\n  {_recovery_flags(receipt)}\nand no new transfer is sent."
+        )
+    # Nothing is saved locally: a plain rerun would reserve and pay again.
+    return (
+        "The proof is not saved locally. To retry without sending another "
+        f"transfer, rerun with the finalized proof:\n  {_recovery_flags(receipt)}\n"
+        "Do not rerun without these payment flags."
+    )
+
+
 def _active_bench_version(terms: dict[str, Any] | None) -> int:
     readmission = (terms or {}).get("readmission")
     activation = (
         readmission.get("activation") if isinstance(readmission, dict) else None
     )
+    if not isinstance(activation, dict):
+        activation = None
     version = activation.get("active_bench_version") if activation else None
     if not isinstance(version, int) or isinstance(version, bool):
         raise MinerCliError(
@@ -210,11 +227,15 @@ def run(args: argparse.Namespace) -> int:
             "key": _pending_key(agent_id, bench_version),
         }
         receipt = recovery
+        # A reused proof (recovery flags or the saved store) is already safe to
+        # retry with; a fresh one only once it is saved locally.
+        proof_saved = recovery is not None
         # A saved reservation token restores the price snapshot on both the
         # saved-proof and the explicit-proof recovery paths.
         token: str | None = load_readmission_token(**token_key)
         if receipt is None:
             receipt = load_pending_payment(**pending)
+            proof_saved = receipt is not None
             if receipt is not None:
                 print(
                     "found a saved finalized readmission payment for this agent "
@@ -294,7 +315,8 @@ def run(args: argparse.Namespace) -> int:
                 f"block={receipt.block_number} ext_idx={receipt.extrinsic_index}",
                 file=sys.stderr,
             )
-            if not save_pending_payment(**pending, payment=receipt):
+            proof_saved = save_pending_payment(**pending, payment=receipt)
+            if not proof_saved:
                 print(
                     "warning: could not save the finalized payment proof locally; "
                     "keep the printed proof if the readmission fails",
@@ -330,10 +352,8 @@ def run(args: argparse.Namespace) -> int:
         except BaseException:
             print(
                 "\nthe readmission could not be confirmed after payment. The fee "
-                "is not spent until Platform records it. Rerun the same command "
-                "to retry with the saved proof, or rerun with:\n"
-                f"  {_recovery_flags(receipt)}\n"
-                "and no new transfer is sent.",
+                "is not spent until Platform records it. "
+                + _retry_guidance(receipt, proof_saved=proof_saved),
                 file=sys.stderr,
             )
             raise
@@ -342,8 +362,8 @@ def run(args: argparse.Namespace) -> int:
             # The saved proof and token stay, so a rerun retries with them.
             raise MinerCliError(
                 "platform returned an invalid readmission response "
-                f"(outcome {outcome!r}); rerun the same command to retry with "
-                "the saved proof, or rerun with:\n  " + _recovery_flags(receipt)
+                f"(outcome {outcome!r}). "
+                + _retry_guidance(receipt, proof_saved=proof_saved)
             )
     clear_pending_payment(**pending, payment=receipt)
     clear_readmission_token(**token_key)

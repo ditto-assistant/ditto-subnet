@@ -322,3 +322,32 @@ def test_nothing_is_paid_when_the_reservation_cannot_be_saved(
         readmit_cmd.run(_args())
     assert not any("pay" in call for call in calls)
     assert _FakeClient.commits == []
+
+
+def test_unsaved_proof_guidance_never_says_rerun_the_same_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With nothing saved, a plain rerun would pay again: insist on the flags."""
+    _install(monkeypatch)
+    monkeypatch.setattr(readmit_cmd, "save_pending_payment", lambda **_kw: False)
+    _FakeClient.commit = RuntimeError("gateway timeout")
+    with pytest.raises(RuntimeError):
+        readmit_cmd.run(_args())
+    err = capsys.readouterr().err
+    assert "Do not rerun without these payment flags" in err
+    assert "Rerun the same command" not in err
+    assert "--payment-block-hash " + _BLOCK in err
+
+
+@pytest.mark.parametrize("activation", ["not-a-dict", ["v19"], 19])
+def test_a_malformed_activation_is_refused_before_paying(
+    monkeypatch: pytest.MonkeyPatch, activation: object
+) -> None:
+    calls = _install(monkeypatch)
+    terms = {**_TERMS, "readmission": {"activation": activation}}
+    monkeypatch.setattr(
+        _FakeClient, "get_submission_terms", lambda _self, _competition: terms
+    )
+    with pytest.raises(MinerCliError, match="does not offer readmission"):
+        readmit_cmd.run(_args())
+    assert calls == []
