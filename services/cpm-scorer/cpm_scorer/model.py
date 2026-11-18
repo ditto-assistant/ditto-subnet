@@ -33,6 +33,9 @@ from cpm_scorer.bases import BASE_ALLOW_PATTERNS, Base
 BATCH_SIZE = 32
 QUERY_MAX_TOKENS = 256
 CANDIDATE_MAX_TOKENS = 768
+# One seed renders the whole catalog (~1.5k tools) plus each case's memories
+# and queries, which fits; a long-lived serve process must not grow forever.
+TRUNC_CACHE_MAX = 4096
 SYSTEM_PROMPT = (
     "Judge whether the Document is needed to answer the Query for this user. "
     'Answer only "yes" or "no".'
@@ -211,6 +214,9 @@ class RelevanceScorer:
         if hit is None:
             ids = self.tok(text, add_special_tokens=False)["input_ids"]
             hit = text if len(ids) <= max_tokens else self.tok.decode(ids[:max_tokens])
+            if len(self._trunc_cache) >= TRUNC_CACHE_MAX:
+                # Oldest first: dicts keep insertion order.
+                del self._trunc_cache[next(iter(self._trunc_cache))]
             self._trunc_cache[key] = hit
         return hit
 
@@ -276,4 +282,4 @@ class RelevanceScorer:
 
 
 def read_json(path: Path) -> dict:
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))

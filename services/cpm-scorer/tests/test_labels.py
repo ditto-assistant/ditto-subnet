@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 from conftest import DATAGEN, EXPORTER
-
 from cpm_scorer.labels import export_records
 from cpm_scorer.tasks import build_tasks, memory_text, tool_text
 
@@ -29,19 +28,25 @@ def _load_exporter():
 def _exporter_rows(path: Path, tmp: Path) -> dict[str, list[dict]]:
     mod = _load_exporter()
     out = {}
-    handles = {k: (tmp / f"{k}.jsonl").open("w") for k in ("pairs", "cases", "catalog")}
+    handles = {
+        k: (tmp / f"{k}.jsonl").open("w", encoding="utf-8")
+        for k in ("pairs", "cases", "catalog")
+    }
     try:
         mod.export_artifact(path, handles, Counter())
     finally:
         for h in handles.values():
             h.close()
     for k in handles:
-        out[k] = [json.loads(line) for line in (tmp / f"{k}.jsonl").open()]
+        text = (tmp / f"{k}.jsonl").read_text(encoding="utf-8")
+        out[k] = [json.loads(line) for line in text.splitlines()]
     return out
 
 
 def _assert_parity(art_path: Path, tmp_path: Path) -> dict:
-    ours = export_records(json.loads(art_path.read_text()), art_path.stem)
+    ours = export_records(
+        json.loads(art_path.read_text(encoding="utf-8")), art_path.stem
+    )
     theirs = _exporter_rows(art_path, tmp_path)
     # Compare through JSON, exactly as the exporter serialises its rows.
     for k in ("pairs", "cases", "catalog"):
@@ -51,7 +56,7 @@ def _assert_parity(art_path: Path, tmp_path: Path) -> dict:
 
 def test_labels_match_exporter_on_fixture(tiny_artifact, tmp_path):
     art = tmp_path / "v18-5.json"
-    art.write_text(json.dumps(tiny_artifact))
+    art.write_text(json.dumps(tiny_artifact), encoding="utf-8")
     ours = _assert_parity(art, tmp_path)
     by_id = {c["case_id"]: c for c in ours["cases"]}
     # The tool prerequisite pair tp1 is in the primary user's store (wave 0).

@@ -47,7 +47,9 @@ line-length = 88
 select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["cpm_scorer"]
+# Sort cpm_scorer with the third-party imports, as the repo root config does,
+# so `ruff check` agrees whether it runs here or with the root config.
+known-third-party = ["cpm_scorer"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -7,9 +7,6 @@ import json
 import pytest
 import torch
 import torch.nn.functional as F
-from peft import LoraConfig, get_peft_model
-from tiny import tiny_model, tiny_tokenizer
-
 from cpm_scorer import model as m
 from cpm_scorer import score
 from cpm_scorer.bases import BASES
@@ -21,6 +18,8 @@ from cpm_scorer.screening import (
     read_safetensors_header,
 )
 from cpm_scorer.tasks import build_tasks
+from peft import LoraConfig, get_peft_model
+from tiny import tiny_model, tiny_tokenizer
 
 WORDS = [
     "hello",
@@ -92,6 +91,16 @@ def test_truncation(tok):
     text = scorer.render(" ".join(["hello"] * 300), " ".join(["world"] * 1000))
     assert text.count("hello") == m.QUERY_MAX_TOKENS
     assert text.count("world") == m.CANDIDATE_MAX_TOKENS
+
+
+def test_truncation_cache_is_bounded_oldest_first(tok, monkeypatch):
+    monkeypatch.setattr(m, "TRUNC_CACHE_MAX", 3)
+    scorer = m.RelevanceScorer(tiny_model(len(tok)), tok, "cpu")
+    for word in ("hello", "world", "poll", "group"):
+        assert scorer.truncate(word, 5) == word
+    assert list(scorer._trunc_cache) == [("world", 5), ("poll", 5), ("group", 5)]
+    scorer.truncate("world", 5)  # a hit does not reorder or grow
+    assert len(scorer._trunc_cache) == 3
 
 
 def test_lora_save_screen_and_merge(tok, tmp_path):
