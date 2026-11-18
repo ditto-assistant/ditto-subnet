@@ -355,3 +355,10 @@ def test_check_full_config():
 
 def test_lora_null_rank_pattern_is_accepted(tmp_path):
     s.check_lora(_lora_cfg(rank_pattern=None), _lora_tensors(tmp_path))
+
+
+def test_deeply_nested_safetensors_header_is_bad_safetensors(tmp_path):
+    header = b"[" * 200_000 + b"]" * 200_000
+    p = tmp_path / "adapter_model.safetensors"
+    p.write_bytes(struct.pack("<Q", len(header)) + header)
+    assert _reason(s.read_safetensors_header, p) == "bad_safetensors"

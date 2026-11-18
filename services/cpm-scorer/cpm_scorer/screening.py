@@ -287,8 +287,12 @@ def read_safetensors_header(path: Path) -> dict[str, TensorInfo]:
             raise ScreeningError("bad_safetensors", f"{path.name}: header size")
         try:
             header = json.loads(f.read(hlen))
-        except ValueError as e:
-            raise ScreeningError("bad_safetensors", f"{path.name}: {e}") from None
+        except (ValueError, RecursionError) as e:
+            # RecursionError: a deeply nested header is the submission's
+            # fault, not the host's.
+            raise ScreeningError(
+                "bad_safetensors", f"{path.name}: {type(e).__name__}"
+            ) from None
     if not isinstance(header, dict):
         raise ScreeningError("bad_safetensors", f"{path.name}: header not an object")
     base = 8 + hlen
