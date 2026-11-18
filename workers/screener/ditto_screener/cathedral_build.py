@@ -295,6 +295,9 @@ class CathedralBuilder:
         idempotency: str | None = None,
         timeout: float = 60.0,
     ) -> httpx.Response:
+        if method in {"POST", "PUT", "DELETE"} and idempotency is None:
+            # Cathedral refuses a write without one (HTTP 422).
+            raise CathedralInfrastructureError(f"{method} needs an Idempotency-Key")
         headers = {"Authorization": f"Bearer {key}"}
         if idempotency is not None:
             headers["Idempotency-Key"] = idempotency
@@ -405,7 +408,7 @@ class CathedralBuilder:
             receipt_path: str | None = None
             try:
                 if sandbox_id is not None:
-                    deleted = await self._cleanup(client, key, sandbox_id)
+                    deleted = await self._cleanup(client, key, sandbox_id, attempt_key)
                     if deleted:
                         self._rooms.pop(attempt_key, None)
                     if result_bytes is not None:
@@ -624,12 +627,19 @@ class CathedralBuilder:
     # -- cleanup and receipt -------------------------------------------------
 
     async def _cleanup(
-        self, client: httpx.AsyncClient, key: str, sandbox_id: str
+        self, client: httpx.AsyncClient, key: str, sandbox_id: str, attempt_key: str
     ) -> bool:
         """Delete the room and wait for ``deleted``. Never raises."""
         path = f"/v1/sandboxes/{sandbox_id}"
         try:
-            await self._call(client, key, "DELETE", path, timeout=60.0)
+            await self._call(
+                client,
+                key,
+                "DELETE",
+                path,
+                idempotency=f"{attempt_key}-delete",
+                timeout=60.0,
+            )
         except Exception as error:
             logger.warning("cathedral room %s delete failed: %s", sandbox_id, error)
         give_up = time.monotonic() + self._delete_timeout

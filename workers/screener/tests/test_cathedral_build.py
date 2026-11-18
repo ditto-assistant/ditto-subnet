@@ -86,6 +86,11 @@ class FakeCathedral:
         path = request.url.path
         method = request.method
         self.calls.append((method, path))
+        if method in {"POST", "PUT", "DELETE"} and not request.headers.get(
+            "Idempotency-Key"
+        ):
+            # Cathedral prod answers 422 to a write without one.
+            return httpx.Response(422, json={"detail": "Idempotency-Key required"})
         if "transport" in self.options and path.endswith("/execs"):
             raise httpx.ConnectError("boom")
         if method == "POST" and path == "/v1/sandboxes":
