@@ -399,6 +399,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_generator_scorer_token }} --project={{ gcp_project }}"
   register: platform_generator_scorer_token_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: secret_generator_scorer_token | length > 0
 
@@ -412,6 +413,9 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_model_context_scorer_token }} --project={{ gcp_project }}"
   register: platform_model_context_scorer_token_read
   changed_when: false
+  # A pure read, like every other secret read here: run it in --check too so
+  # the fold below has stdout.
+  check_mode: false
   no_log: true
   when: secret_model_context_scorer_token | length > 0
 

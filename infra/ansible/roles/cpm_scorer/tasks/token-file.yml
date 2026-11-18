@@ -22,4 +22,6 @@
     argv: [cat, "{{ cpm_scorer_token_source_file }}"]
   register: cpm_scorer_token_read
   changed_when: false
+  # Read-only: run it in --check too, so the validation in main.yml has stdout.
+  check_mode: false
   no_log: true

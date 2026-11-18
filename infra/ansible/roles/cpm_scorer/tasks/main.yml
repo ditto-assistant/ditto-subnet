@@ -64,12 +64,15 @@
 - name: Read the Platform bearer
   ansible.builtin.include_tasks: "token-{{ cpm_scorer_token_source }}.yml"
 
+# The read is skipped only in a --check run on a host that has no federation
+# credential configuration yet (token-aws-wif.yml); a real converge always reads.
 - name: Validate the Platform bearer before writing it
   ansible.builtin.assert:
     that:
       - cpm_scorer_token_read.stdout | trim | length >= 32
     fail_msg: "the Platform bearer from {{ cpm_scorer_token_source }} has no usable value (Platform requires at least 32 characters)"
   no_log: true
+  when: cpm_scorer_token_read is not skipped
 
 # Only the scorer account can read it; the service bind-mounts it read-only
 # and passes its path as DITTO_MODEL_CONTEXT_SCORER_TOKEN_FILE.
@@ -82,6 +85,7 @@
     mode: "0400"
   register: cpm_scorer_token_written
   no_log: true
+  when: cpm_scorer_token_read is not skipped
 
 - name: Install the scorer systemd unit
   ansible.builtin.template:
@@ -138,13 +142,31 @@
 
 # A new bearer or unit with an unchanged image: drain instead of restarting,
 # so the run in hand is posted. Restart=always brings the scorer back with the
-# new file and the reloaded unit.
+# new file and the reloaded unit. The container can exit between the updater's
+# "already running" and this kill (Restart=always is then already bringing it
+# back); only that race is tolerated, any other Docker error fails.
 - name: Drain the scorer onto the new bearer or unit
   ansible.builtin.command: docker kill --signal=SIGUSR1 {{ cpm_scorer_container }}
-  changed_when: true
+  register: cpm_scorer_drain
+  changed_when: cpm_scorer_drain.rc == 0
+  failed_when: >-
+    cpm_scorer_drain.rc != 0 and
+    'No such container' not in cpm_scorer_drain.stderr and
+    'is not running' not in cpm_scorer_drain.stderr
   when:
     - cpm_scorer_token_written is changed or cpm_scorer_unit_written is changed
     - "'already running' in (cpm_scorer_bootstrap.stdout | default(''))"
+
+# When the container had already gone, make sure the unit is up: a fresh start
+# reads the new bearer file and the reloaded unit. A unit already restarting is
+# left to Restart=always.
+- name: Ensure the scorer restarts onto the new bearer or unit
+  ansible.builtin.systemd:
+    name: "{{ cpm_scorer_unit }}"
+    state: started
+  when:
+    - cpm_scorer_drain is not skipped
+    - cpm_scorer_drain.rc != 0
 
 - name: Install updater systemd units
   ansible.builtin.template:

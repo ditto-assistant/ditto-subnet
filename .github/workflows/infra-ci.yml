@@ -163,6 +163,9 @@ jobs:
       - name: Prove the screener role converges in check mode on fresh, legacy, and converged hosts
         run: uvx --from ansible-core==2.21.2 python3 tests/test_screener_worker_check_mode.py
 
+      - name: Prove the CPM scorer and Platform bearer reads survive check mode and the drain race
+        run: uvx --from ansible-core==2.21.2 python3 tests/test_cpm_scorer_check_mode.py
+
       - name: Prove the PostgreSQL collector logs stay bounded and the data disk stays off
         run: |
           python3 tests/test_postgres_log_gc.py

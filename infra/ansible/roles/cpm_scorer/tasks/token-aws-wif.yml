@@ -81,6 +81,17 @@
     group: root
     mode: "0600"
 
+# --check skips the render above, so on a fresh host there is no credential
+# configuration to read with. A dry run never writes one just to fetch the
+# bearer: it reads only when the configuration already exists, and otherwise
+# skips the read (main.yml then skips the validation and the bearer file).
+- name: Inspect the external-account configuration
+  ansible.builtin.stat:
+    path: "{{ cpm_scorer_gcp_wif_dir }}/credential.json"
+  register: cpm_scorer_wif_credential
+
+# A pure read (secrets versions access writes nothing and rotates nothing), so
+# it runs in --check too.
 - name: Read the Platform bearer through the federated instance role
   ansible.builtin.command: >-
     gcloud secrets versions access latest
@@ -90,4 +101,6 @@
     CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: "{{ cpm_scorer_gcp_wif_dir }}/credential.json"
   register: cpm_scorer_token_read
   changed_when: false
+  check_mode: false
   no_log: true
+  when: not ansible_check_mode or cpm_scorer_wif_credential.stat.exists
