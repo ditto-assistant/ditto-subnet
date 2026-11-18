@@ -91,6 +91,7 @@ def build_command(
         "set -eu",
         "SRC=/work/in/src.tgz; OUT=/work/out; rm -rf $OUT; mkdir -p $OUT",
         f"echo '{source_sha256}  /work/in/src.tgz' | sha256sum -c - >/dev/null",
+        "export DOCKER_HOST=unix:///var/run/docker.sock",
         "i=0; until docker info >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 120 ] && { echo 'docker daemon not ready' >&2; exit 90; }; sleep 1; done",  # noqa: E501
         "set +e",
         f"DOCKER_BUILDKIT=1 docker buildx build --load --iidfile $OUT/iid --network host --pull=false --provenance=false --sbom=false --memory {memory} --memory-swap {memory} --cpu-period 100000 --cpu-quota 200000 --shm-size 64m --ulimit nofile=1024:1024 -t {tag} -f Dockerfile - < $SRC > $OUT/build.log 2>&1",  # noqa: E501
@@ -106,7 +107,18 @@ def build_command(
         f'printf \'{{"schema":"cathedral-docker-build-result-v1","source_sha256":"{source_sha256}","image_id":"%s","archive_sha256":"%s","archive_size":%s,"parts":[%s],"docker_version":"%s","buildx_version":"%s"}}\\n\' "$IMG" "$ASHA" "$ASIZE" "$PARTS" "$DV" "$BV" > $OUT/result.json',  # noqa: E501
         "cat $OUT/result.json",
     ]
-    return ["sh", "-c", "\n".join(lines)]
+    # env -i by absolute path: the room's or the request's environment (PATH,
+    # DOCKER_HOST, BUILDX_*) cannot redirect the build. The checker recomputes
+    # this exact argv.
+    return [
+        "/usr/bin/env",
+        "-i",
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "HOME=/root",
+        "/bin/sh",
+        "-c",
+        "\n".join(lines),
+    ]
 
 
 def idempotency_key(
@@ -231,6 +243,7 @@ class CathedralBuildSettings:
     api_key_file: str
     template: str
     builder_image: str
+    builder_digest: str
     memory: str
     max_spend_usd: float
     receipt_dir: str
@@ -465,8 +478,16 @@ class CathedralBuilder:
             response = await self._call(
                 client, key, "GET", f"/v1/sandboxes/{sandbox_id}", timeout=30.0
             )
-            state = self._json(response, "room state").get("state")
+            room = self._json(response, "room state")
+            state = room.get("state")
             if state == "running":
+                digest = room.get("image_digest")
+                if digest != self._settings.builder_digest:
+                    # A different builder than the one pinned: never build on it.
+                    raise CathedralInfrastructureError(
+                        f"room builder digest {digest!r} is not the pinned "
+                        f"{self._settings.builder_digest}"
+                    )
                 return
             if state in {"failed", "deleted", "deleting"}:
                 raise CathedralInfrastructureError(f"room ended before use ({state})")
@@ -698,6 +719,7 @@ class CathedralBuilder:
                 "recipe": {
                     "template": RECIPE_TEMPLATE,
                     "builder_image": settings.builder_image,
+                    "builder_digest": settings.builder_digest,
                     "memory": settings.memory,
                     "part_bytes": self._part_bytes,
                     "command": command,

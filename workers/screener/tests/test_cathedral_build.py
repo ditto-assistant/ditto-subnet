@@ -24,7 +24,10 @@ from .test_config import _base_env
 from .test_gate import _gate_with, _ok_run, _screen, _valid_tar
 
 _GOLDEN_SOURCE = "5ad58eb239239b70cf02dedd34a428864000d45394bc76920b5b71fd08fbfaa6"
-_GOLDEN_ARGV_SHA256 = "bb8ceac04c2abc4b85dfd30625f9fbbbb9976f8f061909dc784b7b18975fd776"
+_BUILDER_DIGEST = (
+    "sha256:d2dc198f7d839eae26b5a9cb0e7cdc4e2c97d9cb4ea66dbeb0a4c0c7f0b165f8"
+)
+_GOLDEN_ARGV_SHA256 = "0629687de8d155d83e5eeb9c2186ebbbc7587c296bcef23c759a01567ffe8fed"
 _SANDBOX = "sbx-123"
 
 
@@ -101,7 +104,8 @@ class FakeCathedral:
             return httpx.Response(201, json={"id": _SANDBOX, "state": "creating"})
         if method == "GET" and path == f"/v1/sandboxes/{_SANDBOX}":
             state = "deleted" if self.deleted else "running"
-            return httpx.Response(200, json={"state": state})
+            digest = self.options.get("image_digest", _BUILDER_DIGEST)
+            return httpx.Response(200, json={"state": state, "image_digest": digest})
         if method == "DELETE":
             self.deleted = True
             return httpx.Response(200, json={})
@@ -263,6 +267,7 @@ async def test_exit_91_is_a_docker_build_reject(
         {"create_status": 503},
         {"transport": True},
         {"corrupt_part": "image.tar.part-aab"},
+        {"image_digest": "sha256:" + "0" * 64},
     ],
 )
 async def test_cathedral_failures_are_retryable_infra(

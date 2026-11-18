@@ -320,6 +320,9 @@ Required values are supplied through the production host's protected
   - `SCREENER_CATHEDRAL_TEMPLATE` (default `sealed-4x8`).
   - `SCREENER_CATHEDRAL_BUILDER_IMAGE` (default `docker:27-dind`; must be a
     `docker:*-dind` image).
+  - `SCREENER_CATHEDRAL_BUILDER_DIGEST` (default the digest of `docker:27-dind`
+    on 18 Nov 2026, `sha256:d2dc198f...b165f8`); a room reporting another
+    builder digest is refused as infrastructure.
   - `SCREENER_CATHEDRAL_BUILD_MEMORY` (default `7g`, part of the signed recipe).
   - `SCREENER_CATHEDRAL_MAX_SPEND_USD` (default `0.5`).
   - `SCREENER_CATHEDRAL_RECEIPT_DIR` (default

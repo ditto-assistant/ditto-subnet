@@ -266,6 +266,10 @@ class ScreenerConfig:
     """Path to the Cathedral API key; read at use, never logged."""
     cathedral_template: str = "sealed-4x8"
     cathedral_builder_image: str = "docker:27-dind"
+    cathedral_builder_digest: str = (
+        "sha256:d2dc198f7d839eae26b5a9cb0e7cdc4e2c97d9cb4ea66dbeb0a4c0c7f0b165f8"
+    )
+    """The builder digest the room must report; the receipt checker pins it too."""
     cathedral_build_memory: str = "7g"
     cathedral_max_spend_usd: float = 0.5
     cathedral_receipt_dir: str = "/opt/ditto/screener/state/build-receipts"
@@ -372,6 +376,10 @@ def _validate_cathedral(config: ScreenerConfig) -> None:
     ):
         raise ScreenerConfigError(
             "SCREENER_CATHEDRAL_BUILDER_IMAGE must be a docker:*-dind image"
+        )
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", config.cathedral_builder_digest):
+        raise ScreenerConfigError(
+            "SCREENER_CATHEDRAL_BUILDER_DIGEST must be sha256:<64 hex>"
         )
     # Embedded in the room's shell command, so it must be a plain size.
     if not re.fullmatch(r"[1-9][0-9]{0,5}[mg]", config.cathedral_build_memory):
@@ -602,6 +610,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         cathedral_template=os.environ.get("SCREENER_CATHEDRAL_TEMPLATE", "sealed-4x8"),
         cathedral_builder_image=os.environ.get(
             "SCREENER_CATHEDRAL_BUILDER_IMAGE", "docker:27-dind"
+        ),
+        cathedral_builder_digest=os.environ.get(
+            "SCREENER_CATHEDRAL_BUILDER_DIGEST",
+            "sha256:d2dc198f7d839eae26b5a9cb0e7cdc4e2c97d9cb4ea66dbeb0a4c0c7f0b165f8",
         ),
         cathedral_build_memory=os.environ.get("SCREENER_CATHEDRAL_BUILD_MEMORY", "7g"),
         cathedral_max_spend_usd=_parse_float("SCREENER_CATHEDRAL_MAX_SPEND_USD", "0.5"),

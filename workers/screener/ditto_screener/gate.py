@@ -3463,6 +3463,7 @@ class BuildGate:
                 api_key_file=config.cathedral_api_key_file,
                 template=config.cathedral_template,
                 builder_image=config.cathedral_builder_image,
+                builder_digest=config.cathedral_builder_digest,
                 memory=config.cathedral_build_memory,
                 max_spend_usd=config.cathedral_max_spend_usd,
                 receipt_dir=config.cathedral_receipt_dir,
