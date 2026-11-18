@@ -10,6 +10,13 @@ variable "name" {
 variable "size" {
   description = "Logical size (see ./locals.tf for native machine-type mapping)."
   type        = string
+
+  # AWS-only sizes (../interface.md) have no honest GCE analogue. Fail the plan
+  # here: the size_supported check in ./locals.tf would only warn.
+  validation {
+    condition     = !contains(["gpu-l40s"], var.size)
+    error_message = "Logical size '${var.size}' is AWS-only (modules/compute/interface.md, AWS-only sizes): GCE has no machine type with the same GPU. Place this host with modules/compute/aws."
+  }
 }
 
 variable "image" {

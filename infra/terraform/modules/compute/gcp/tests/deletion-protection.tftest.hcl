@@ -46,6 +46,14 @@ run "explicit_stop" {
   }
 }
 
+run "rejects_aws_only_size" {
+  command = plan
+  variables {
+    size = "gpu-l40s"
+  }
+  expect_failures = [var.size]
+}
+
 run "rejects_unknown_status" {
   command = plan
   variables {

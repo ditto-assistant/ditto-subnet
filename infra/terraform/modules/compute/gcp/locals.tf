@@ -1,7 +1,8 @@
 locals {
   # Logical → native GCE machine type. Add new logical sizes by extending this
   # map AND the matching map in every other modules/compute/<provider>/. The
-  # provider-portability contract lives in modules/compute/interface.md.
+  # provider-portability contract lives in modules/compute/interface.md. Its
+  # AWS-only sizes are absent here on purpose; ./variables.tf rejects them.
   machine_type_map = {
     # Contract-parity sizes (mirror the Hetzner dittobox classes).
     "prod-64gb"    = "e2-standard-16" # 16 vCPU / 64 GB
