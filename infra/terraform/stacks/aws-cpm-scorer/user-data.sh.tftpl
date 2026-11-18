@@ -38,10 +38,17 @@ fi
 
 # If the pinned install or start fails after the snap is gone, put the stock
 # snap agent back before exiting: with no SSH ingress, a host without any SSM
-# agent is unreachable.
+# agent is unreachable. Remove whatever the .deb left first, so two agents never
+# register the same instance, and hold snap refreshes so the fallback stays on
+# the AMI's agent version instead of tracking the store. The script still exits
+# non-zero: the fallback is for diagnosis only, and the host is not provisioned
+# further until a clean first boot.
 if ! dpkg -i "$workdir/amazon-ssm-agent.deb" || ! systemctl enable --now amazon-ssm-agent; then
+  systemctl disable --now amazon-ssm-agent >/dev/null 2>&1 || true
+  dpkg --purge amazon-ssm-agent >/dev/null 2>&1 || true
   if [ "$had_snap_agent" = true ]; then
     snap install amazon-ssm-agent --classic || true
+    snap refresh --hold=forever amazon-ssm-agent || true
   fi
   exit 1
 fi
