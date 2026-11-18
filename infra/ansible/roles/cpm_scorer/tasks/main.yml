@@ -1,0 +1,165 @@
+---
+# Converge the CPM (model_context) scorer GPU host: the pinned NVIDIA driver and
+# container toolkit, Docker with the NVIDIA runtime, the Platform bearer as a
+# file only the scorer account can read, and the signed release image run by
+# ditto-cpm-scorer.service and kept current by a cosign-verifying pull timer
+# (scripts/cpm-scorer-auto-update.sh).
+- name: Validate the converge inputs
+  ansible.builtin.assert:
+    that:
+      - cpm_scorer_token_source in ['aws-wif', 'file']
+      - cpm_scorer_revision is match('^[0-9a-f]{40}$')
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['distribution_version'] == '24.04'
+      - ansible_facts['architecture'] == 'x86_64'
+    fail_msg: >-
+      Needs cpm_scorer_token_source aws-wif or file (got {{ cpm_scorer_token_source }}),
+      a full released commit SHA in cpm_scorer_revision, and Ubuntu 24.04 on
+      x86_64 (the NVIDIA repository and driver pins are noble/amd64 only).
+    quiet: true
+
+- name: Install the NVIDIA driver and container toolkit
+  ansible.builtin.import_tasks: nvidia.yml
+
+- name: Install Docker with the NVIDIA runtime
+  ansible.builtin.import_tasks: docker.yml
+
+- name: Create the scorer group
+  ansible.builtin.group:
+    name: "{{ cpm_scorer_group }}"
+    system: true
+  register: cpm_scorer_group_account
+
+- name: Create the scorer account
+  ansible.builtin.user:
+    name: "{{ cpm_scorer_user }}"
+    group: "{{ cpm_scorer_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+    create_home: false
+  register: cpm_scorer_account
+
+- name: Ensure scorer directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ cpm_scorer_release_root }}", owner: root, group: root, mode: "0755" }
+    # Docker (root) resolves the bearer's bind mount, so the scorer account
+    # needs no access to this directory.
+    - { path: "{{ cpm_scorer_config_dir }}", owner: root, group: root, mode: "0700" }
+    - { path: "{{ cpm_scorer_cache_dir | dirname }}", owner: root, group: root, mode: "0755" }
+    - { path: "{{ cpm_scorer_cache_dir }}", owner: "{{ cpm_scorer_user }}", group: "{{ cpm_scorer_group }}", mode: "0700" }
+    - { path: "{{ cpm_scorer_cache_dir }}/home", owner: "{{ cpm_scorer_user }}", group: "{{ cpm_scorer_group }}", mode: "0700" }
+    - { path: "{{ cpm_scorer_cache_dir }}/hf", owner: "{{ cpm_scorer_user }}", group: "{{ cpm_scorer_group }}", mode: "0700" }
+    - { path: "{{ cpm_scorer_cache_dir }}/xdg", owner: "{{ cpm_scorer_user }}", group: "{{ cpm_scorer_group }}", mode: "0700" }
+    - { path: "{{ cpm_scorer_cache_dir }}/work", owner: "{{ cpm_scorer_user }}", group: "{{ cpm_scorer_group }}", mode: "0700" }
+
+# Each source registers cpm_scorer_token_read with the bearer on stdout: the
+# EC2 instance role federated into GCP (aws-wif), or a root-only file (file).
+- name: Read the Platform bearer
+  ansible.builtin.include_tasks: "token-{{ cpm_scorer_token_source }}.yml"
+
+- name: Validate the Platform bearer before writing it
+  ansible.builtin.assert:
+    that:
+      - cpm_scorer_token_read.stdout | trim | length >= 32
+    fail_msg: "the Platform bearer from {{ cpm_scorer_token_source }} has no usable value (Platform requires at least 32 characters)"
+  no_log: true
+
+# Only the scorer account can read it; the service bind-mounts it read-only
+# and passes its path as DITTO_MODEL_CONTEXT_SCORER_TOKEN_FILE.
+- name: Write the Platform bearer file
+  ansible.builtin.copy:
+    content: "{{ cpm_scorer_token_read.stdout | trim }}\n"
+    dest: "{{ cpm_scorer_token_file }}"
+    owner: "{{ cpm_scorer_user }}"
+    group: "{{ cpm_scorer_group }}"
+    mode: "0400"
+  register: cpm_scorer_token_written
+  no_log: true
+
+- name: Install the scorer systemd unit
+  ansible.builtin.template:
+    src: ditto-cpm-scorer.service.j2
+    dest: "/etc/systemd/system/{{ cpm_scorer_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    cpm_scorer_uid: "{{ cpm_scorer_account.uid }}"
+    cpm_scorer_gid: "{{ cpm_scorer_group_account.gid }}"
+  register: cpm_scorer_unit_written
+  notify: reload systemd for cpm scorer
+
+- name: Install checksum-pinned Cosign
+  ansible.builtin.get_url:
+    url: https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64
+    dest: /usr/local/bin/cosign
+    checksum: sha256:c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+    mode: "0755"
+
+# The first updater comes from the reviewed checkout that runs this playbook;
+# later releases self-refresh it only after their scorer is adopted.
+- name: Install the scorer updater
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../../scripts/cpm-scorer-auto-update.sh"
+    dest: /usr/local/sbin/ditto-cpm-scorer-auto-update
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Enable the scorer at boot
+  ansible.builtin.systemd:
+    name: "{{ cpm_scorer_unit }}"
+    enabled: true
+    daemon_reload: true
+
+- name: Flush the unit reload before activation
+  ansible.builtin.meta: flush_handlers
+
+# The updater verifies the pinned release's signature, labels and identity,
+# drains a running scorer (SIGUSR1: it posts the run in hand first), starts the
+# image, and rolls back if it is not adopted. It waits for a timer run in
+# progress. A drain can take as long as one leased run.
+- name: Activate the pinned release
+  ansible.builtin.command: /usr/local/sbin/ditto-cpm-scorer-auto-update
+  environment:
+    CPM_SCORER_REF: "{{ cpm_scorer_image_repository }}:cpm-scorer-sha-{{ cpm_scorer_revision }}"
+    CPM_SCORER_EXPECTED_REVISION: "{{ cpm_scorer_revision }}"
+  register: cpm_scorer_bootstrap
+  changed_when: "'already running' not in cpm_scorer_bootstrap.stdout"
+  async: 16200
+  poll: 30
+
+# A new bearer or unit with an unchanged image: drain instead of restarting,
+# so the run in hand is posted. Restart=always brings the scorer back with the
+# new file and the reloaded unit.
+- name: Drain the scorer onto the new bearer or unit
+  ansible.builtin.command: docker kill --signal=SIGUSR1 {{ cpm_scorer_container }}
+  changed_when: true
+  when:
+    - cpm_scorer_token_written is changed or cpm_scorer_unit_written is changed
+    - "'already running' in (cpm_scorer_bootstrap.stdout | default(''))"
+
+- name: Install updater systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - ditto-cpm-scorer-auto-update.service
+    - ditto-cpm-scorer-auto-update.timer
+
+- name: Enable pull-based scorer updates
+  ansible.builtin.systemd:
+    name: ditto-cpm-scorer-auto-update.timer
+    state: started
+    enabled: true
+    daemon_reload: true

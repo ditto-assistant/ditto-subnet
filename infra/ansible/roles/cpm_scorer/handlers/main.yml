@@ -1,0 +1,9 @@
+---
+- name: reload systemd for cpm scorer
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart docker for cpm scorer
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted

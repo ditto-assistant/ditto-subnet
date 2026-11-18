@@ -1,0 +1,50 @@
+# Managed by Ansible (cpm_scorer role).
+[Unit]
+Description=Ditto CPM (model_context) scorer (cpm-scorer serve)
+After=network-online.target docker.service nvidia-persistenced.service
+Wants=network-online.target
+Requires=docker.service
+# A crash loop backs off instead of hammering Platform and Hugging Face. The
+# updater resets this before it starts a release or rolls one back.
+StartLimitIntervalSec=30min
+StartLimitBurst=10
+
+[Service]
+Type=simple
+# Written only by ditto-cpm-scorer-auto-update, after the cosign, label and
+# identity checks, as CPM_SCORER_IMAGE=<repository>@sha256:<digest>.
+EnvironmentFile={{ cpm_scorer_release_root }}/current.env
+# systemd runs the Docker client as root; the scorer runs as
+# {{ cpm_scorer_user }} inside a read-only, capability-free container that
+# sees only the GPU, its cache and its bearer. --pull never: only the image
+# the updater verified can start.
+ExecStartPre=-/usr/bin/docker rm --force {{ cpm_scorer_container }}
+ExecStart=/usr/bin/docker run --rm --name {{ cpm_scorer_container }} --init \
+  --pull never --runtime=nvidia --gpus all \
+  --user {{ cpm_scorer_uid }}:{{ cpm_scorer_gid }} \
+  --read-only --tmpfs /tmp:rw,nosuid,nodev,size=8g --shm-size 1g \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --memory {{ cpm_scorer_container_memory }} --pids-limit 4096 \
+  --mount type=bind,source={{ cpm_scorer_token_file }},target=/run/secrets/model-context-scorer-token,readonly \
+  --mount type=bind,source={{ cpm_scorer_cache_dir }},target=/var/cache/cpm-scorer \
+  --env DITTO_MODEL_CONTEXT_SCORER_TOKEN_FILE=/run/secrets/model-context-scorer-token \
+  --env DITTO_MODEL_CONTEXT_SCORER_ID={{ cpm_scorer_id }} \
+  --env HOME=/var/cache/cpm-scorer/home \
+  --env HF_HOME=/var/cache/cpm-scorer/hf \
+  --env XDG_CACHE_HOME=/var/cache/cpm-scorer/xdg \
+  ${CPM_SCORER_IMAGE} \
+  serve --platform {{ cpm_scorer_platform_url }} --device cuda \
+  --generate-bin /opt/cpm-scorer/bin/generate \
+  --cache-dir /var/cache/cpm-scorer/work \
+  --hf-cache-dir /var/cache/cpm-scorer/hf/hub \
+  --poll-seconds {{ cpm_scorer_poll_seconds }}
+# SIGTERM ends a run in hand (its lease expires and Platform re-leases it);
+# releases drain with SIGUSR1 instead.
+ExecStop=/usr/bin/docker stop --time 30 {{ cpm_scorer_container }}
+Restart=always
+RestartSec=15
+TimeoutStartSec=5min
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -16,6 +16,10 @@
 # Usage:
 #   ansible-inventory -i infra/ansible/inventory/aws.yml --graph
 #   ansible-playbook  -i infra/ansible/inventory/aws.yml infra/ansible/playbooks/aws-generator-scorer.yml
+#   ansible-playbook  -i infra/ansible/inventory/aws.yml infra/ansible/playbooks/aws-cpm-scorer.yml
+#
+# The role tag picks the group: role=generator-scorer -> role_generator_scorer,
+# role=cpm-scorer (aws-cpm-scorer) -> role_cpm_scorer.
 
 plugin: amazon.aws.aws_ec2
 # Every region infra/terraform/stacks/aws-* places instances in.
