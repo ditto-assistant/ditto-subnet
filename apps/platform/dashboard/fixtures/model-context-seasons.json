@@ -1,0 +1,30 @@
+{
+  "current": 1,
+  "seasons": [
+    {
+      "season": 1,
+      "open_block": 5000000,
+      "open_block_hash": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "seeds": [
+        9879830438737723427,
+        7196212046373629940,
+        9185052217827815145
+      ],
+      "seed_strings": [
+        "9879830438737723427",
+        "7196212046373629940",
+        "9185052217827815145"
+      ],
+      "bench_version": 18,
+      "cpm_score_version": 1,
+      "base_floors": {
+        "qwen3.5-2b": 0.34780000000000005,
+        "qwen3.5-0.8b": 0.3108
+      },
+      "gpu_sku": "L40S",
+      "opened_at": "2026-11-18T11:13:24.942086Z",
+      "closes_at": "2026-11-25T11:13:24.942086Z",
+      "closed_at": null
+    }
+  ]
+}

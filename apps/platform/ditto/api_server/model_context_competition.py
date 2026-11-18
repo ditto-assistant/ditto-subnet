@@ -560,6 +560,7 @@ def season_view(row: ModelContextSeason) -> ModelContextSeasonView:
         open_block=row.open_block,
         open_block_hash=row.open_block_hash,
         seeds=[int(s) for s in row.seeds],
+        seed_strings=[str(int(s)) for s in row.seeds],
         bench_version=row.bench_version,
         cpm_score_version=row.cpm_score_version,
         base_floors={k: float(v) for k, v in (row.base_floors or {}).items()},

@@ -21,6 +21,7 @@ export type PageName =
   | "ath"
   | "bounties"
   | "generators"
+  | "context-models"
   | "benchmark";
 
 export type OperationsView = "validators" | "screeners" | "builds";
@@ -71,6 +72,10 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   generators: {
     title: "Generator competition",
     sub: "Case-generator rounds · committed seeds, case outcomes, and projected payouts",
+  },
+  "context-models": {
+    title: "Context models",
+    sub: "Open-weight context-packet models · season seeds, base floors, and the board",
   },
   benchmark: {
     title: "Benchmark",

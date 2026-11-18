@@ -39,6 +39,14 @@ every other payload is verbatim.
 | `generator-round-25967.json` | `/generator/rounds/25967`, the newest scored round in that capture |
 | `generator-upload-terms.json` | `/generator/upload-terms` (same capture) |
 | `treasury-allocation.json` | `/public/treasury-allocation` (same capture; predates the SN-350 `emission_split` fields) |
+| `model-context-board.json`, `model-context-seasons.json`, `model-context-upload-terms.json` | `/model-context/board`, `/model-context/seasons`, `/model-context/upload-terms` in shadow mode |
+| `model-context-*-off.json` | The same three reads with the lane off (the shipped default) |
+
+The six `model-context-*.json` files are not production captures: the
+model_context lane ships off. They were recorded on 2026-11-18 from Platform's
+own endpoints under its test harness (`test_model_context.py` helpers, real
+Postgres, a fake chain whose block hash is `0xcdcd…`). Two LoRA submissions
+were scored in season 1, one above its base floor and one below it.
 
 The three `bounty-*.json` files are not production captures: build bounties
 start in rehearsal. Platform's

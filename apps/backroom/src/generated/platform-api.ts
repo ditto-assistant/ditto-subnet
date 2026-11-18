@@ -3187,6 +3187,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/model-context/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Run Detail
+         * @description One run (submission or reference), its season and its base floor.
+         */
+        get: operations["admin_run_detail_api_v1_admin_model_context_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/model-context/scorer": {
         parameters: {
             query?: never;
@@ -3196,7 +3216,8 @@ export interface paths {
         };
         /**
          * Scorer Status
-         * @description Scorer heartbeats and the run and screening backlog.
+         * @description Scorer heartbeats, the run and screening backlog, and this process's
+         *     season and screening loop.
          */
         get: operations["scorer_status_api_v1_admin_model_context_scorer_get"];
         put?: never;
@@ -3245,6 +3266,102 @@ export interface paths {
          * @description Append one optimistic, confirmation-gated revision.
          */
         post: operations["create_settings_revision_api_v1_admin_model_context_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin List Submissions
+         * @description Every submission newest first, any hotkey, with its latest run.
+         *
+         *     ``total`` counts what the filters match across all pages;
+         *     ``counts_by_status`` stays subnet-wide.
+         */
+        get: operations["admin_list_submissions_api_v1_admin_model_context_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Submission Detail
+         * @description One submission: manifest, screening, every run and the operator audit.
+         */
+        get: operations["admin_submission_detail_api_v1_admin_model_context_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/submissions/{submission_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Submission By Operator
+         * @description Reject a submission by operator ruling (abuse, a copy screening missed).
+         *
+         *     It leaves the board and ledger at once and its queued or leased runs are
+         *     abandoned (a scorer's late result is refused). A ``screening`` submission
+         *     can be rejected too: the screen in flight finds it no longer screening and
+         *     changes nothing. The hotkey's earlier submission is not restored; the
+         *     miner can submit again after the cooldown.
+         */
+        post: operations["reject_submission_by_operator_api_v1_admin_model_context_submissions__submission_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/submissions/{submission_id}/rescore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rescore Submission
+         * @description Queue one more run of an active submission in the open season.
+         *
+         *     For a run that failed for a reason that was not the model's (a
+         *     ``nondeterministic`` verdict traced to the host, an abandoned run). The
+         *     submission keeps its status, and a score it already has this season
+         *     stays on the board until the new run lands; the latest scored run of the
+         *     season then stands. Refused while the lane is off, no season is open, or
+         *     a run of it is already queued or leased.
+         */
+        post: operations["rescore_submission_api_v1_admin_model_context_submissions__submission_id__rescore_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -14431,12 +14548,85 @@ export interface components {
              */
             status: "active" | "resolved";
         };
+        /** AdminModelContextRunDetail */
+        AdminModelContextRunDetail: {
+            /** Floor */
+            floor: number | null;
+            run: components["schemas"]["AdminModelContextRunView"];
+            season: components["schemas"]["ModelContextSeasonView"] | null;
+            submission: components["schemas"]["ModelContextSubmissionSummary"] | null;
+        };
+        /**
+         * AdminModelContextRunView
+         * @description One run as Platform stores it (the lease id, a scorer credential, is
+         *     never served). Season seeds are public, so ``per_seed`` is too.
+         */
+        AdminModelContextRunView: {
+            /** Attempts */
+            attempts: number;
+            /** Base Id */
+            base_id: string;
+            /** Components */
+            components: {
+                [key: string]: unknown;
+            } | null;
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Fault */
+            fault: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Gpu Sku */
+            gpu_sku: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "submission" | "reference";
+            /** Lease Expires At */
+            lease_expires_at: string | null;
+            /** Per Seed */
+            per_seed: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number | null;
+            /** Scorer Id */
+            scorer_id: string | null;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /** Season */
+            season: number;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "scored" | "failed" | "abandoned";
+            /** Submission Id */
+            submission_id: string | null;
+        };
         /** AdminModelContextScorerStatus */
         AdminModelContextScorerStatus: {
             /** Current Season */
             current_season: number | null;
             /** Leased Runs */
             leased_runs: number;
+            /** Loop Last Error */
+            loop_last_error?: string | null;
+            /** Loop Running */
+            loop_running?: boolean | null;
             /** Queued Runs */
             queued_runs: number;
             /** Scorers */
@@ -14472,6 +14662,68 @@ export interface components {
             effective: components["schemas"]["EffectiveModelContextSettings"];
             /** History */
             history: components["schemas"]["ModelContextSettingsRevision"][];
+        };
+        /**
+         * AdminModelContextSubmissionActionRequest
+         * @description A guarded write on one submission (rescore or reject).
+         *
+         *     ``expected_status`` is the status the operator read; a submission that
+         *     moved since is refused (409) so a ruling never lands on a different
+         *     state. ``reason`` is unbounded audit evidence.
+         */
+        AdminModelContextSubmissionActionRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "screening" | "queued" | "scored" | "rejected" | "superseded";
+            /** Reason */
+            reason: string;
+        };
+        /** AdminModelContextSubmissionDetail */
+        AdminModelContextSubmissionDetail: {
+            /** Actions */
+            actions: components["schemas"]["ModelContextOperatorActionView"][];
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Runs */
+            runs: components["schemas"]["AdminModelContextRunView"][];
+            /** Screening Attempts */
+            screening_attempts: number;
+            /** Screening Detail */
+            screening_detail: {
+                [key: string]: unknown;
+            } | null;
+            /** Screening Lease Until */
+            screening_lease_until: string | null;
+            summary: components["schemas"]["ModelContextSubmissionSummary"];
+            /** Total Bytes */
+            total_bytes: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** AdminModelContextSubmissionListResponse */
+        AdminModelContextSubmissionListResponse: {
+            /** Counts By Status */
+            counts_by_status: {
+                [key: string]: number;
+            };
+            /** Submissions */
+            submissions: components["schemas"]["ModelContextSubmissionSummary"][];
+            /** Total */
+            total?: number | null;
         };
         /**
          * AdminOpaqueBlobEntry
@@ -32780,6 +33032,31 @@ export interface components {
             /** Season */
             season?: number | null;
         };
+        /** ModelContextOperatorActionView */
+        ModelContextOperatorActionView: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "rotate_season" | "rescore" | "reject";
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detail */
+            detail: {
+                [key: string]: unknown;
+            } | null;
+            /** Id */
+            id: number;
+            /** Reason */
+            reason: string;
+            /** Subject */
+            subject: string;
+        };
         /**
          * ModelContextReferenceWork
          * @description The season's base floors and the reference runs behind them.
@@ -32930,6 +33207,8 @@ export interface components {
             opened_at: string;
             /** Season */
             season: number;
+            /** Seed Strings */
+            seed_strings?: string[];
             /** Seeds */
             seeds: number[];
         };
@@ -57804,6 +58083,39 @@ export interface operations {
             };
         };
     };
+    admin_run_detail_api_v1_admin_model_context_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextRunDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     scorer_status_api_v1_admin_model_context_scorer_get: {
         parameters: {
             query?: never;
@@ -57923,6 +58235,149 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelContextSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_list_submissions_api_v1_admin_model_context_submissions_get: {
+        parameters: {
+            query?: {
+                hotkey?: string | null;
+                status?: ("screening" | "queued" | "scored" | "rejected" | "superseded") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_submission_detail_api_v1_admin_model_context_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_submission_by_operator_api_v1_admin_model_context_submissions__submission_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminModelContextSubmissionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rescore_submission_api_v1_admin_model_context_submissions__submission_id__rescore_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminModelContextSubmissionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSubmissionDetail"];
                 };
             };
             /** @description Validation Error */

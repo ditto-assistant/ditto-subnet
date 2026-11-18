@@ -16364,6 +16364,48 @@ class ModelContextRun(Base):
     )
 
 
+class ModelContextOperatorAction(Base):
+    """Append-only audit of operator writes on the model_context competition.
+
+    One row per write that is not itself a settings revision: a forced season
+    rotation (``subject`` ``season:{n}``), a rescore or a rejection
+    (``subject`` the submission id). The migration
+    ``2026_11_18_za_add_model_context_operator_actions`` owns the constraints.
+    """
+
+    __tablename__ = "model_context_operator_actions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('rotate_season', 'rescore', 'reject')",
+            name="model_context_operator_actions_action",
+        ),
+        CheckConstraint(
+            "length(subject) BETWEEN 1 AND 120",
+            name="model_context_operator_actions_subject",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="model_context_operator_actions_actor",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="model_context_operator_actions_reason",
+        ),
+        Index("model_context_operator_actions_subject_idx", "subject", "created_at"),
+    )
+
+
 class ModelContextScorerHeartbeat(Base):
     """The latest poll from each CPM scorer."""
 

@@ -132,6 +132,9 @@ def model_context_settings_confirmation(mode: str) -> str:
 
 
 ROTATE_SEASON_CONFIRMATION = "ROTATE MODEL CONTEXT SEASON"
+RESCORE_SUBMISSION_CONFIRMATION = "RESCORE MODEL CONTEXT SUBMISSION"
+REJECT_SUBMISSION_CONFIRMATION = "REJECT MODEL CONTEXT SUBMISSION"
+OperatorAction = Literal["rotate_season", "rescore", "reject"]
 
 
 class ModelContextModel(BaseModel):
@@ -448,6 +451,9 @@ class ModelContextSeasonView(ModelContextModel):
     open_block: int
     open_block_hash: str
     seeds: list[int]
+    seed_strings: list[str] = Field(default_factory=list)
+    """``seeds`` as decimal strings: a uint64 seed is past what a JavaScript
+    number holds exactly, so browser readers display these."""
     bench_version: int
     cpm_score_version: int
     base_floors: dict[str, float]
@@ -653,3 +659,93 @@ class AdminModelContextScorerStatus(ModelContextModel):
     leased_runs: int
     screening_submissions: int
     current_season: int | None
+    loop_running: bool | None = None
+    """Whether this Platform process runs the season and screening loop
+    (``None`` on a Platform that predates the field)."""
+    loop_last_error: str | None = None
+    """The loop's last tick error on this process; cleared by a good tick."""
+
+
+# --- operator inspection and actions (contract section 8) --------------------
+
+
+class AdminModelContextSubmissionActionRequest(BaseModel):
+    """A guarded write on one submission (rescore or reject).
+
+    ``expected_status`` is the status the operator read; a submission that
+    moved since is refused (409) so a ruling never lands on a different
+    state. ``reason`` is unbounded audit evidence."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    expected_status: SubmissionStatus
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+
+
+class ModelContextOperatorActionView(ModelContextModel):
+    id: int
+    action: OperatorAction
+    subject: str
+    actor: str
+    reason: str
+    detail: dict | None
+    created_at: datetime
+
+
+class AdminModelContextRunView(ModelContextModel):
+    """One run as Platform stores it (the lease id, a scorer credential, is
+    never served). Season seeds are public, so ``per_seed`` is too."""
+
+    run_id: UUID
+    kind: RunKind
+    submission_id: UUID | None
+    base_id: str
+    season: int
+    cpm_score_version: int
+    status: RunStatus
+    score: float | None
+    components: dict | None
+    per_seed: list[dict] | None
+    scorer_id: str | None
+    scorer_version: str | None
+    gpu_sku: str | None
+    attempts: int
+    lease_expires_at: datetime | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    fault: str | None
+
+
+class AdminModelContextSubmissionListResponse(ModelContextModel):
+    submissions: list[ModelContextSubmissionSummary]
+    counts_by_status: dict[str, int]
+    """Every submission by status, regardless of the filter or page."""
+    total: int | None = None
+    """Submissions matching this request's filters (hotkey and status
+    together), across all pages: the bound for paging a filtered list."""
+
+
+class AdminModelContextSubmissionDetail(ModelContextModel):
+    summary: ModelContextSubmissionSummary
+    manifest: dict
+    total_bytes: int
+    screening_detail: dict | None
+    screening_attempts: int
+    screening_lease_until: datetime | None
+    updated_at: datetime
+    runs: list[AdminModelContextRunView]
+    """Every run, newest first."""
+    actions: list[ModelContextOperatorActionView]
+    """Operator rescores and rejections of this submission, newest first."""
+
+
+class AdminModelContextRunDetail(ModelContextModel):
+    run: AdminModelContextRunView
+    submission: ModelContextSubmissionSummary | None
+    """``None`` for a reference run (an unmodified base)."""
+    season: ModelContextSeasonView | None
+    floor: float | None
+    """The base floor this season for the run's base, once scored."""

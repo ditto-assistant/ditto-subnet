@@ -430,6 +430,45 @@ Activating the lane in shadow takes four steps:
 
 There is no enforcing mode: ledger entries stay `weight_eligible=false`.
 
+The model_context (CPM) competition (contract
+`docs/research/cpm/competition-v1.md`, section 8) has its own operator
+surface. Miners submit small open-weight models pinned at a Hugging Face
+revision; Platform screens them, opens seasons whose three seeds come from the
+season-open block hash, and leases runs to the CPM scorer. Weights and season
+seeds are public by contract, so every read is `backroom:read`.
+
+- **Reads (`backroom:read`):**
+  - `get_model_context_settings` returns the policy (`mode`, base allowlist,
+    LoRA rank and size caps, cooldown, season length, `floor_margin`, the
+    scorer task, `rank_shares`, `bench_version`, lease TTL and attempts).
+  - `list_model_context_submissions` pages every hotkey's submissions with
+    `counts_by_status`; `get_model_context_submission` adds the committed
+    manifest, the screening detail, every run and the operator audit (each
+    rescore and rejection with actor and reason).
+  - `get_model_context_run` reads one submission or reference run (score,
+    components, per-seed results with exact uint64 seeds, fault) with its
+    season and base floor. The run lease id is never served.
+  - `get_model_context_board` returns the public board and the open season it
+    ranks (open block and hash, seeds, floors, close time).
+  - `get_model_context_scorer` returns scorer heartbeats, the run and
+    screening backlog, and this process's season loop with its last error.
+- **Writes (`backroom:write`, audited under the operator's email):**
+  - `set_model_context_settings` stores a whole-object revision with
+    `expectedRevision` and `APPLY MODEL CONTEXT COMPETITION <MODE>`.
+    `upload_fee_required` must stay `false` in v1.
+  - `rescore_model_context_submission` (`RESCORE MODEL CONTEXT SUBMISSION`,
+    `expectedStatus` queued or scored) queues one more run in the open
+    season; the standing score stays until it lands.
+  - `reject_model_context_submission` (`REJECT MODEL CONTEXT SUBMISSION`,
+    `expectedStatus`) removes a submission from the board and ledger and
+    abandons its open runs.
+  - `rotate_model_context_season` (`ROTATE MODEL CONTEXT SEASON`) opens the
+    next season on the finalized head now.
+
+Platform appends every rescore, rejection and forced rotation to
+`model_context_operator_actions`. The track is known but not payable: no mode
+moves emission until a validator release pays model_context.
+
 `https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
 server exposing the same operations as the console: screening quarantines and
 disputes, validator queue/slot/inference policy, the scoring lease TTL,
