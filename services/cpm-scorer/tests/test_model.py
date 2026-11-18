@@ -215,6 +215,7 @@ def test_run_output_shape(tok, tiny_artifact, tmp_path, monkeypatch):
         (b"\xff\xfe not utf-8", "invalid_config"),
         (b"{not json", "invalid_config"),
         (b"[1, 2]", "invalid_config"),
+        (b"[" * 200_000 + b"]" * 200_000, "invalid_config"),
     ],
 )
 def test_load_json_config_classifies_bad_content(tmp_path, content, reason):

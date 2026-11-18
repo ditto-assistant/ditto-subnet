@@ -90,7 +90,7 @@ def load_json_config(root: Path, name: str) -> dict:
         obj = json.loads((root / name).read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise ScreeningError("missing_file", name) from None
-    except (UnicodeDecodeError, ValueError) as e:
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:
         raise ScreeningError("invalid_config", f"{name}: {type(e).__name__}") from None
     if not isinstance(obj, dict):
         raise ScreeningError("invalid_config", f"{name} is not a JSON object")
@@ -117,7 +117,7 @@ def screen_dir(
             raise ScreeningError("hash_mismatch", "cpm-manifest.json")
         try:
             obj = json.loads(raw)
-        except ValueError as e:
+        except (ValueError, RecursionError) as e:
             raise ScreeningError("invalid_manifest", str(e)) from None
         manifest = validate_manifest(obj)
         if manifest.base_id != base_id:
