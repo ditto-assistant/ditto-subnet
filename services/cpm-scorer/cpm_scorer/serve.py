@@ -55,7 +55,9 @@ SCORER_ID_ENV = "DITTO_MODEL_CONTEXT_SCORER_ID"
 WORK_PATH = "/model-context-scorer/work"
 RESULTS_PATH = "/model-context-scorer/results"
 FAULT_PATH = "/model-context-scorer/fault"
-MAX_DETAIL = 4000
+# Platform stores fault detail behind its longest kind prefix (#3575):
+# 2000 - len("nondeterministic: ") = 1982. Longer details get a 422.
+MAX_DETAIL = 1982
 MAX_SCORER_ID = 120
 MAX_SCORER_VERSION = 64
 MAX_GPU_SKU = 64

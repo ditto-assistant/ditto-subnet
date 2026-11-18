@@ -337,7 +337,7 @@ Platform's models in `apps/platform/ditto/api_models/model_context.py`.
   each seed score matches its components (§4.4), and that `score` is their
   mean. It ignores extra keys.
 - **`POST /model-context-scorer/fault`** takes a `ModelContextFaultRequest`:
-  `{run_id, lease_id, error_kind, detail (≤ 4,000 chars), scorer_id,
+  `{run_id, lease_id, error_kind, detail (≤ 1,982 chars; longer is a 422), scorer_id,
   scorer_version}`. The `error_kind` values are:
   - `invalid_model`: screening failures and bad weights;
   - `model_load`: download and load failures;

@@ -154,8 +154,8 @@ def fault_errors(body: dict) -> list[str]:
         errs.append("run_id / lease_id not UUIDs")
     if body["error_kind"] not in FAULT_KINDS:
         errs.append(f"error_kind {body['error_kind']!r}")
-    if len(body.get("detail", "")) > 4000:
-        errs.append("detail longer than 4000")
+    if len(body.get("detail", "")) > 1982:
+        errs.append("detail longer than 1982")
     for k, n in (("scorer_id", 120), ("scorer_version", 64)):
         if not isinstance(body[k], str) or not 1 <= len(body[k]) <= n:
             errs.append(f"{k} length")
