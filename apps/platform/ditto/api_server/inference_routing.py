@@ -49,6 +49,20 @@ def benchmark_reasoning(model: str) -> dict[str, Any] | None:
     return None
 
 
+FRONTIER_REASONING: dict[str, Any] = {"effort": "medium", "exclude": True}
+"""The reasoning contract of a frontier oracle model. Only that ticket is
+granted a model other than the bench model on Bench v7+, so its effort is
+pinned instead of left to the provider default: medium, like the bench
+model's V7/V8 contract, which keeps a case inside the harness timeout."""
+
+
+def frontier_reasoning(model: str, bench_version: int) -> dict[str, Any] | None:
+    """Return the pinned reasoning for a non-bench (frontier) grant model."""
+    if bench_version >= 7 and model != benchmark_model(bench_version):
+        return dict(FRONTIER_REASONING)
+    return None
+
+
 def aggregate_profile_revision(model: str, *, bench_version: int = 7) -> str:
     """Return the immutable identity for the calibrated aggregate route."""
     # Reasoning is part of benchmark semantics and therefore part of the route
@@ -456,11 +470,36 @@ class ProviderRouteRefresher:
 
     async def refresh(self) -> None:
         now = datetime.now(UTC)
-        for model in self._config.allowed_models:
+        models = dict.fromkeys(
+            (*self._config.allowed_models, *self._config.frontier_oracle_models)
+        )
+        for model in models:
             url = self._config.discovery_url_template.format(model=model)
-            response = await self._client.get(url)
-            response.raise_for_status()
-            payload = response.json()
+            if model in self._config.allowed_models:
+                response = await self._client.get(url)
+                response.raise_for_status()
+                payload = response.json()
+            else:
+                # A frontier-only model is optional: its discovery failing
+                # (unknown id, provider outage, bad body) must not stop the
+                # bench model's routes from refreshing.
+                try:
+                    response = await self._client.get(url)
+                    response.raise_for_status()
+                    payload = response.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    logger.warning(
+                        "frontier model %s route discovery failed; skipped: %s",
+                        model,
+                        exc,
+                    )
+                    continue
+                if not isinstance(payload, dict):
+                    logger.warning(
+                        "frontier model %s route discovery returned no object; skipped",
+                        model,
+                    )
+                    continue
             endpoints = payload.get("data", {}).get("endpoints", [])
             if not isinstance(endpoints, list):
                 continue
@@ -514,7 +553,12 @@ class ProviderRouteRefresher:
                     ).all()
                 )
                 seen: set[tuple[str, str]] = set()
-                if model == benchmark_model(7):
+                # The bench model, and any model an operator listed for the
+                # frontier oracle, gets the calibrated aggregate route.
+                if (
+                    model == benchmark_model(7)
+                    or model in self._config.frontier_oracle_models
+                ):
                     aggregate_active = any(
                         endpoint.get("status") == 0 for endpoint in deduped.values()
                     )
@@ -615,6 +659,7 @@ __all__ = [
     "aggregate_profile_revision",
     "benchmark_model",
     "benchmark_reasoning",
+    "frontier_reasoning",
     "rank_routes",
     "record_route_observation",
     "record_route_quality",

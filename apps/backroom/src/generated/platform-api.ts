@@ -27003,6 +27003,8 @@ export interface components {
             frontier_escalation_solve_threshold: number;
             /** Frontier Oracle Agent Id */
             frontier_oracle_agent_id?: string | null;
+            /** Frontier Oracle Model */
+            frontier_oracle_model?: string | null;
             /**
              * Frontier Oracle Timeout Hours
              * @default 12
@@ -27330,6 +27332,21 @@ export interface components {
             wave: number;
         };
         /**
+         * GeneratorFrontierModelRunView
+         * @description The inference model an oracle lease was really granted.
+         */
+        GeneratorFrontierModelRunView: {
+            /** Fallback */
+            fallback: boolean;
+            /**
+             * Leased At
+             * Format: date-time
+             */
+            leased_at: string;
+            /** Model */
+            model: string;
+        };
+        /**
          * GeneratorFrontierOracleView
          * @description The oracle run's outcome on a round's frontier candidates.
          */
@@ -27414,6 +27431,9 @@ export interface components {
             oracle_attempts: number;
             /** Oracle Deadline */
             oracle_deadline: string | null;
+            /** Oracle Model */
+            oracle_model?: string | null;
+            oracle_model_run?: components["schemas"]["GeneratorFrontierModelRunView"] | null;
             /** Round Index */
             round_index: number;
             /** Settle Reason */

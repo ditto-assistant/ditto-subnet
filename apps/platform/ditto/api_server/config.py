@@ -75,6 +75,10 @@ MIN_CAPACITY_EVENT_RETENTION_DAYS = 7
 # the 16 MiB canonical private-v2 publication receipt an admin registers. The
 # floor keeps a typo from refusing every ordinary JSON request.
 DEFAULT_REQUEST_BODY_MAX_BYTES = 32 << 20
+# The model operators may set as ``frontier_oracle_model`` unless
+# DITTO_FRONTIER_ORACLE_MODELS says otherwise. Listing it grants nothing: the
+# setting is unset by default and the model needs a calibrated route first.
+DEFAULT_FRONTIER_ORACLE_MODELS = "openai/gpt-oss-120b"
 MIN_REQUEST_BODY_MAX_BYTES = 1 << 20
 
 
@@ -185,6 +189,11 @@ class InferenceProxyConfig:
     route_max_timeout_rate: float = 0.15
     route_cooldown_seconds: int = 30
     reviewed_calibration_manifest_sha256: str | None = None
+    # Models the generator competition may name as ``frontier_oracle_model``
+    # (DITTO_FRONTIER_ORACLE_MODELS). Kept apart from ``allowed_models``: a
+    # frontier grant is v7+ and pins its own model, so no agent ticket can ask
+    # for one. Empty means the frontier oracle always runs on the bench model.
+    frontier_oracle_models: tuple[str, ...] = (DEFAULT_FRONTIER_ORACLE_MODELS,)
     # Decision-lane grant stamps. Never read from env: the operator's
     # ``decision_lane`` board overlays them (``apply_settings``). ``None`` and
     # zeros are "lane not granted", which is the pre-lane grant exactly.
@@ -621,6 +630,13 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
                 for model in os.environ.get(
                     "DITTO_INFERENCE_ALLOWED_MODELS",
                     "qwen/qwen3-32b,openai/gpt-oss-20b",
+                ).split(",")
+                if model.strip()
+            ),
+            frontier_oracle_models=tuple(
+                model.strip()
+                for model in os.environ.get(
+                    "DITTO_FRONTIER_ORACLE_MODELS", DEFAULT_FRONTIER_ORACLE_MODELS
                 ).split(",")
                 if model.strip()
             ),

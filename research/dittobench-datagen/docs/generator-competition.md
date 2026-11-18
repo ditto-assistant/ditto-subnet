@@ -706,6 +706,39 @@ Reusing the harness path means the oracle needs no new inference credential,
 sandbox, or grader. A stronger oracle is an operator choice of a different
 reference agent, not a contract change.
 
+### The oracle's inference model (Platform)
+
+An operator may grant the oracle's ticket a stronger model than the bench
+model with `frontier_oracle_model`. It is unset by default, which runs the
+oracle on the bench model exactly as before. Only the oracle ticket gets the
+model; panel and escalation tickets never do, so agent scores and bench
+semantics are unchanged.
+
+The value must be listed in the Platform's `DITTO_FRONTIER_ORACLE_MODELS`
+(default: `openai/gpt-oss-120b`). That list is apart from
+`DITTO_INFERENCE_ALLOWED_MODELS`, because a Bench v7+ grant pins its own
+model and no agent ticket can ask for a frontier one. A settings write naming
+an unlisted model is refused. Discovery creates the aggregate route for a
+listed model, and that route needs the same reviewed calibration as the bench
+model's before a ticket can use it. A listed model whose discovery fails
+(unknown id, provider outage) is logged and skipped; the bench model's routes
+still refresh.
+
+Until then, or when the frozen model was later delisted, the oracle lease
+falls back to the bench model instead of failing, so setting a model never
+stalls a round. The round's frontier record keeps the model that really ran
+(`oracle_model_run`: model, `fallback`, lease time), and Backroom's round
+frontier view shows it next to the frozen `oracle_model`.
+
+The model is frozen into the round's frontier lane when it opens, and is part
+of `measurement_params` only while set: unset, the round signature is
+unchanged. The `OracleContext`, the dataset mode and the
+attestation contract do not change. The bench model keeps its pinned
+reasoning contract. A frontier grant's reasoning is pinned to
+`{"effort": "medium", "exclude": true}` whatever the caller sends, in both the
+Platform proxy and the model relay. The pin is not part of the route's
+profile identity, so the routes of models already in use keep their identity.
+
 ### Lifecycle (Platform)
 
 The contract above ships first and is inert until Platform applies
@@ -794,7 +827,8 @@ recorded as an operator action), and a forced settle
 New settings (Platform, revisioned): `frontier_weight` (operator default 1.0),
 `frontier_oracle_agent_id` (unset: no oracle, frontier off),
 `frontier_audit_cases` (default 3), `frontier_audit_grace_hours` (default 24),
-`frontier_oracle_timeout_hours` (default 12), and the escalation tier's
+`frontier_oracle_timeout_hours` (default 12), `frontier_oracle_model` (unset:
+bench model), and the escalation tier's
 `frontier_escalation_agent_id` (unset: off), `frontier_escalation_solve_threshold`
 (1.0), `frontier_escalation_max_cases` (8), `frontier_escalation_max_cases_per_column`
 (4) and `frontier_escalation_max_failed_fraction` (0.25). `skip_unchanged_rounds`

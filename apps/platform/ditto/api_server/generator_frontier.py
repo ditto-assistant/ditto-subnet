@@ -79,6 +79,7 @@ from ditto.api_models.generator_rounds import (
     GeneratorFrontierCaseView,
     GeneratorFrontierEscalationView,
     GeneratorFrontierMemoryPair,
+    GeneratorFrontierModelRunView,
     GeneratorFrontierOracleView,
     GeneratorFrontierView,
 )
@@ -336,7 +337,7 @@ def begin_frontier(
     candidates = frontier_candidates(row)
     if not candidates:
         return False
-    row.frontier = {
+    frontier: dict[str, Any] = {
         "version": FRONTIER_DOCUMENT_VERSION,
         "state": STATE_ORACLE_PENDING,
         "oracle_agent_id": str(settings.frontier_oracle_agent_id),
@@ -368,6 +369,11 @@ def begin_frontier(
         ),
         "escalation": None,
     }
+    # Frozen too, and only while set, so a lane on the bench model keeps the
+    # exact document it had before the setting existed.
+    if settings.frontier_oracle_model is not None:
+        frontier["oracle_model"] = settings.frontier_oracle_model
+    row.frontier = frontier
     return True
 
 
@@ -387,6 +393,15 @@ def oracle_run_agent(frontier: dict[str, Any]) -> str:
     if in_escalation(frontier):
         return str(frontier["escalation"]["agent_id"])
     return str(frontier["oracle_agent_id"])
+
+
+def oracle_run_model(frontier: dict[str, Any]) -> str | None:
+    """The inference model the lane's open run is granted, or None for the
+    bench model: the frozen ``frontier_oracle_model`` for the oracle. The
+    escalation run always uses the bench model."""
+    if in_escalation(frontier):
+        return None
+    return frontier.get("oracle_model")
 
 
 def oracle_run_cases(frontier: dict[str, Any]) -> list[str]:
@@ -573,7 +588,17 @@ def is_oracle_run(row: GeneratorRound, agent_id: UUID) -> bool:
     )
 
 
-def note_oracle_lease(row: GeneratorRound) -> None:
+def note_oracle_lease(
+    row: GeneratorRound,
+    *,
+    model_ran: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Count a lease of the lane's open run. With a frozen ``oracle_model``
+    the oracle lease also records the model its grant really pins
+    (``model_ran``), and whether that is the bench-model fallback, so an
+    operator can tell which model produced the attestations. A lane on the
+    bench model records nothing extra."""
     frontier = dict(row.frontier or {})
     if in_escalation(frontier):
         escalation = dict(frontier["escalation"])
@@ -581,6 +606,13 @@ def note_oracle_lease(row: GeneratorRound) -> None:
         frontier["escalation"] = escalation
     else:
         frontier["oracle_attempts"] = int(frontier.get("oracle_attempts") or 0) + 1
+        requested = frontier.get("oracle_model")
+        if requested is not None and model_ran is not None:
+            frontier["oracle_model_run"] = {
+                "model": model_ran,
+                "fallback": model_ran != requested,
+                "leased_at": (now or datetime.now(UTC)).isoformat(),
+            }
     row.frontier = frontier
 
 
@@ -1124,6 +1156,18 @@ def _escalation_view(
     )
 
 
+def _model_run_view(
+    run: dict[str, Any] | None,
+) -> GeneratorFrontierModelRunView | None:
+    if not run:
+        return None
+    return GeneratorFrontierModelRunView(
+        model=run["model"],
+        fallback=bool(run["fallback"]),
+        leased_at=datetime.fromisoformat(run["leased_at"]),
+    )
+
+
 def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
     frontier = row.frontier
     if not frontier:
@@ -1160,6 +1204,8 @@ def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
         oracle_attempts=int(frontier.get("oracle_attempts") or 0),
         oracle_deadline=created + timeout if pending else None,
         oracle=oracle_view,
+        oracle_model=frontier.get("oracle_model"),
+        oracle_model_run=_model_run_view(frontier.get("oracle_model_run")),
         escalation=_escalation_view(frontier, timeout),
         attested=dict(frontier.get("attested") or {}),
         audits=audit_views(row),

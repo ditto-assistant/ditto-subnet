@@ -248,6 +248,16 @@ async def create_settings_revision(
             )
     if season_refused is not None:
         raise HTTPException(status_code=422, detail=season_refused)
+    listed = request.app.state.config.inference_proxy.frontier_oracle_models
+    for model in payload.settings.frontier_models():
+        if model not in listed:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"frontier model {model!r} is not in this Platform's "
+                    "DITTO_FRONTIER_ORACLE_MODELS"
+                ),
+            )
     latest = await latest_generator_settings_revision(session)
     actual = latest.revision if latest is not None else 0
     if payload.expected_revision != actual:
