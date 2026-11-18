@@ -1,8 +1,9 @@
 # CPM training data from DittoBench (P0 step 1)
 
 Research tooling for the context-packet model (CPM) P0 in
-[`docs/research/sn118-model-competition.md`](../../../docs/research/sn118-model-competition.md)
-(§I.2 task, §I.4 source 1, §R3.7 runbook). Nothing here touches a score path.
+[`docs/research/sn118-model-competition.md`](../sn118-model-competition.md)
+(§I.2 task, §I.4 source 1, §R3.7 runbook). Nothing here touches a score path. It lives under `docs/` (release-ignored), like the
+[no-inference prototypes](../../no-inference/), so it never cuts a component release.
 
 `export_cpm.py` turns public `cmd/generate` artifacts into CPM training data.
 Every label comes from the public artifact: no grader-only (`json:"-"`) field
@@ -13,7 +14,7 @@ cd research/dittobench-datagen
 for s in 42 7 1234; do
   go run ./cmd/generate -bench-version 18 -seed "$s" -run-size full -out "/tmp/cpm/v18-$s.json"
 done
-python3 -I cpm/export_cpm.py /tmp/cpm/v18-{42,7,1234}.json --out-dir /tmp/cpm/out
+python3 -I ../../docs/research/cpm/export_cpm.py /tmp/cpm/v18-{42,7,1234}.json --out-dir /tmp/cpm/out
 ```
 
 ## Output
