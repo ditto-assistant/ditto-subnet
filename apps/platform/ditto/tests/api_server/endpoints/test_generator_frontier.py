@@ -48,6 +48,7 @@ from ditto.api_server.generator_frontier import (
     settle_reason,
 )
 from ditto.api_server.generator_rounds import get_round, round_column_seed
+from ditto.api_server.inference_routing import benchmark_model
 from ditto.db.models import (
     GeneratorRound,
     GeneratorRoundAttempt,
@@ -1621,13 +1622,19 @@ async def _frontier_doc(
 
 
 def _record_grants(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str | None]]:
-    """Wrap the lane's stand-in grant so each lease records its model."""
+    """Wrap the lane's stand-in grant so each lease records its model and the
+    grant pins the model asked for, as a real one does."""
     seen: list[tuple[str, str | None]] = []
     stub = lane_mod.ensure_inference_grant
 
     async def _grant(session: AsyncSession, *, ticket: ValidatorTicket, **kw: Any):
         seen.append((str(ticket.agent_id), kw.get("model")))
-        return await stub(session, ticket=ticket, **kw)
+        grant = await stub(session, ticket=ticket, **kw)
+        if grant is not None:
+            grant.allowed_models = [
+                kw.get("model") or benchmark_model(ticket.bench_version)
+            ]
+        return grant
 
     monkeypatch.setattr(lane_mod, "ensure_inference_grant", _grant)
     return seen

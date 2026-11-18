@@ -689,7 +689,6 @@ async def _lease_oracle_job(
             grant = await ensure_inference_grant(
                 session, ticket=ticket, config=inference_config
             )
-            model = None
         if grant is None:
             raise HTTPException(503, "ticket inference capability is unavailable")
         session.add(
@@ -704,8 +703,16 @@ async def _lease_oracle_job(
                 kind="oracle",
             )
         )
+        # Record the model the grant pins, not the one asked for: after a
+        # fallback the lease may hold an earlier grant on another model.
         note_oracle_lease(
-            row, model_ran=model or benchmark_model(bench_version), now=now
+            row,
+            model_ran=(
+                grant.allowed_models[0]
+                if grant.allowed_models
+                else benchmark_model(bench_version)
+            ),
+            now=now,
         )
         contract = benchmark_contract(bench_version)
         return GeneratorRoundJobResponse(

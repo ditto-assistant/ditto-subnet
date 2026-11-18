@@ -494,9 +494,11 @@ class ProviderRouteRefresher:
                         exc,
                     )
                     continue
-                if not isinstance(payload, dict):
+                data = payload.get("data") if isinstance(payload, dict) else None
+                if not isinstance(data, dict):
                     logger.warning(
-                        "frontier model %s route discovery returned no object; skipped",
+                        "frontier model %s route discovery returned no data "
+                        "object; skipped",
                         model,
                     )
                     continue
