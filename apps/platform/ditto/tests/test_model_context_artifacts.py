@@ -22,6 +22,7 @@ from ditto.api_models.model_context import (
 from ditto.chain.client import decode_commitment_registration
 from ditto.model_context_artifacts import (
     ArtifactRejected,
+    _json_file,
     canonical_weights_sha256,
     check_full,
     parse_manifest,
@@ -324,3 +325,21 @@ def test_decode_commitment_registration(
     value: object, expected: tuple[int, bytes] | None
 ) -> None:
     assert decode_commitment_registration(value) == expected
+
+
+def test_deeply_nested_json_is_rejected_not_raised(tmp_path: Path) -> None:
+    # Python 3.12's json scanner raises RecursionError past roughly 10k
+    # levels. Untrusted manifests, headers and configs must turn that into
+    # ArtifactRejected (the submission's fault), never a host error that the
+    # screening loop retries.
+    with pytest.raises(ArtifactRejected):
+        parse_manifest("[" * 30_000 + "]" * 30_000, _SETTINGS)
+
+    deep = b"[" * 200_000 + b"]" * 200_000
+    header = struct.pack("<Q", len(deep)) + deep
+    with pytest.raises(ArtifactRejected):
+        read_safetensors(_write(tmp_path, {"n.safetensors": header})["n.safetensors"])
+
+    config = _write(tmp_path, {"config.json": deep})["config.json"]
+    with pytest.raises(ArtifactRejected):
+        _json_file(config)
