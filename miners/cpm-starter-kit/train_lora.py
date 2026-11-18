@@ -292,10 +292,16 @@ def main(argv: list[str] | None = None) -> int:
             break
 
     args.out.mkdir(parents=True, exist_ok=True)
-    # Record the public base, not this machine's cache path.
+    # Record the public base, not this machine's cache path: peft writes it
+    # into adapter_config.json and the README model card of a public repo.
     net.peft_config["default"].base_model_name_or_path = base.repo
     net.peft_config["default"].revision = base.revision
+    inner.name_or_path = base.repo
+    inner.config._name_or_path = base.repo
     net.save_pretrained(args.out)
+    card = args.out / "README.md"
+    if card.is_file() and str(base_dir) in card.read_text():
+        card.write_text(card.read_text().replace(str(base_dir), base.repo))
     msha = write_manifest(args.out, base.base_id, args.license, args.attestation)
     log(f"saved {args.out} (manifest_sha256 {msha})")
     return 0
