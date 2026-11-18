@@ -185,14 +185,20 @@ def export_artifact(path: pathlib.Path, files: dict, stats: Counter) -> dict:
         answers = [] if abstain else answer_strings(case)
         distractors = norm_strings(case.get("distractor_answers"))
         forbidden = norm_strings(case.get("forbidden_answer"))
-        groups = [(answers, "answer_value"), (distractors, "distractor"), (forbidden, "forbidden")]
+        groups = [
+            (answers, "answer_value"),
+            (distractors, "distractor"),
+            (forbidden, "forbidden"),
+        ]
         spans = {}
         for pid in candidates:
             s = pair_spans(pairs[pid], groups)
             if s:
                 spans[pid] = s
         answer_in_evidence = any(
-            sp["type"] == "answer_value" for pid in evidence for sp in spans.get(pid, [])
+            sp["type"] == "answer_value"
+            for pid in evidence
+            for sp in spans.get(pid, [])
         )
         missing_evidence = [pid for pid in evidence if pid not in pairs]
         rec = {
@@ -229,7 +235,9 @@ def export_artifact(path: pathlib.Path, files: dict, stats: Counter) -> dict:
 
     needles = {f["case_id"]: f.get("needle") for f in art.get("tool_fixtures") or []}
     for tc in art.get("tool_cases") or []:
-        expected = [t.get("name") for t in tc.get("expected_tools") or [] if t.get("name")]
+        expected = [
+            t.get("name") for t in tc.get("expected_tools") or [] if t.get("name")
+        ]
         rec = {
             "seed_key": seed_key,
             "kind": "tool",
@@ -240,7 +248,9 @@ def export_artifact(path: pathlib.Path, files: dict, stats: Counter) -> dict:
             "shortlist_target": expected,
             "max_tool_calls": tc.get("max_tool_calls"),
             "expected_behavior": tc.get("expected_behavior"),
-            "prerequisite_pair_ids": [p["pair_id"] for p in tc.get("prerequisite_pairs") or []],
+            "prerequisite_pair_ids": [
+                p["pair_id"] for p in tc.get("prerequisite_pairs") or []
+            ],
             "needle": needles.get(tc["id"]),
             "decision": {"abstain": not expected},
         }
@@ -277,7 +287,9 @@ def main(argv: list[str]) -> int:
         "inputs": inputs,
         "counts": dict(sorted(stats.items())),
         "answer_span_coverage": (
-            round(stats["answer_span_found_in_evidence"] / answerable, 4) if answerable else None
+            round(stats["answer_span_found_in_evidence"] / answerable, 4)
+            if answerable
+            else None
         ),
         "tool_target_catalog_coverage": (
             round(stats["tool_targets_in_catalog"] / stats["tool_targets_total"], 4)
