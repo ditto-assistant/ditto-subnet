@@ -5778,6 +5778,44 @@ CREATE TABLE public.miner_sessions (
 
 
 --
+-- Name: model_context_operator_actions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.model_context_operator_actions (
+    id bigint NOT NULL,
+    action text NOT NULL,
+    subject text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    detail jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_model_context_operator_actions_model_context_operato_0154 CHECK (((length(subject) >= 1) AND (length(subject) <= 120))),
+    CONSTRAINT ck_model_context_operator_actions_model_context_operato_1df4 CHECK ((action = ANY (ARRAY['rotate_season'::text, 'rescore'::text, 'reject'::text]))),
+    CONSTRAINT ck_model_context_operator_actions_model_context_operato_1df9 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_model_context_operator_actions_model_context_operato_adde CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: model_context_operator_actions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.model_context_operator_actions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: model_context_operator_actions_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.model_context_operator_actions_id_seq OWNED BY public.model_context_operator_actions.id;
+
+
+--
 -- Name: model_context_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8854,6 +8892,13 @@ ALTER TABLE ONLY public.inference_concurrency_settings_revisions ALTER COLUMN re
 
 
 --
+-- Name: model_context_operator_actions id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_operator_actions ALTER COLUMN id SET DEFAULT nextval('public.model_context_operator_actions_id_seq'::regclass);
+
+
+--
 -- Name: model_context_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -11159,6 +11204,14 @@ ALTER TABLE ONLY public.miner_github_links
 
 ALTER TABLE ONLY public.miner_github_operator_revocations
     ADD CONSTRAINT pk_miner_github_operator_revocations PRIMARY KEY (link_id);
+
+
+--
+-- Name: model_context_operator_actions pk_model_context_operator_actions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_operator_actions
+    ADD CONSTRAINT pk_model_context_operator_actions PRIMARY KEY (id);
 
 
 --
@@ -13716,6 +13769,13 @@ CREATE INDEX miner_session_tokens_session_idx ON public.miner_session_tokens USI
 --
 
 CREATE INDEX miner_sessions_hotkey_idx ON public.miner_sessions USING btree (miner_hotkey, expires_at);
+
+
+--
+-- Name: model_context_operator_actions_subject_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX model_context_operator_actions_subject_idx ON public.model_context_operator_actions USING btree (subject, created_at);
 
 
 --

@@ -31,6 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_models.model_context import (
     MAX_FAULT_DETAIL_CHARS,
     MAX_FAULT_REQUEST_DETAIL_CHARS,
+    REJECT_SUBMISSION_CONFIRMATION,
+    RESCORE_SUBMISSION_CONFIRMATION,
     ROTATE_SEASON_CONFIRMATION,
     ModelContextSettings,
     commitment_value,
@@ -48,7 +50,11 @@ from ditto.api_server.model_context_competition import (
 )
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import BlockInfo, HotkeyCommitment, NeuronInfo
-from ditto.db.models import ModelContextRun, ModelContextSubmission
+from ditto.db.models import (
+    ModelContextOperatorAction,
+    ModelContextRun,
+    ModelContextSubmission,
+)
 from ditto.tests.api_server.conftest import answer_registration_from_neurons
 from ditto.tests.api_server.endpoints.test_scoring import (
     _KEYPAIR as _VALIDATOR,
@@ -1022,6 +1028,305 @@ class TestSeasonsAndScoring:
         assert (await client.get(_WORK_URL, headers=bad)).status_code == 401
         app.state.config = replace(app.state.config, model_context_scorer_token=None)
         assert (await client.get(_WORK_URL, headers=_SCORER)).status_code == 503
+
+
+_ADMIN_MC = "/api/v1/admin/model-context"
+
+
+def _action(expected_status: str, confirmation: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "expected_status": expected_status,
+        "reason": "operator ruling for the test",
+        "actor": "backroom:test",
+        "confirmation": confirmation,
+        **extra,
+    }
+
+
+async def _scored_pair(
+    client: httpx.AsyncClient,
+    chain: _Chain,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Two scored submissions in season 1 above a 0.3 floor."""
+    await _open_lane(client)
+    fetcher = FakeFetcher()
+    a = await _submit(client, chain, fetcher, _MINER, block=1_000)
+    b = await _submit(
+        client, chain, fetcher, _OTHER, block=900, repo="o/cpm", salt="other"
+    )
+    await _screen_all(session_maker, fetcher)
+    await _open_season(session_maker, chain)
+    await _score_all(
+        client,
+        {
+            "qwen3.5-0.8b": 0.3,
+            "qwen3.5-2b": 0.3,
+            _MINER.ss58_address: 0.6,
+            _OTHER.ss58_address: 0.7,
+        },
+    )
+    return a, b
+
+
+class TestOperatorInspectionAndActions:
+    """The admin reads and guarded writes behind the Backroom MCP tools
+    (contract section 8)."""
+
+    async def test_list_detail_and_run_reads(
+        self,
+        client: httpx.AsyncClient,
+        chain: _Chain,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        a, b = await _scored_pair(client, chain, session_maker)
+        assert (await client.get(f"{_ADMIN_MC}/submissions")).status_code in (401, 403)
+
+        listed = (await client.get(f"{_ADMIN_MC}/submissions", headers=_ADMIN)).json()
+        assert listed["counts_by_status"] == {"scored": 2}
+        assert {s["submission_id"] for s in listed["submissions"]} == {
+            a["submission_id"],
+            b["submission_id"],
+        }
+        page = (
+            await client.get(
+                f"{_ADMIN_MC}/submissions?limit=1&offset=1", headers=_ADMIN
+            )
+        ).json()
+        assert len(page["submissions"]) == 1
+        assert page["counts_by_status"] == {"scored": 2}
+        mine = (
+            await client.get(
+                f"{_ADMIN_MC}/submissions?hotkey={_MINER.ss58_address}",
+                headers=_ADMIN,
+            )
+        ).json()
+        assert [s["submission_id"] for s in mine["submissions"]] == [a["submission_id"]]
+        none = (
+            await client.get(f"{_ADMIN_MC}/submissions?status=rejected", headers=_ADMIN)
+        ).json()
+        assert none["submissions"] == []
+
+        detail = (
+            await client.get(
+                f"{_ADMIN_MC}/submissions/{a['submission_id']}", headers=_ADMIN
+            )
+        ).json()
+        assert detail["summary"]["status"] == "scored"
+        assert detail["manifest"]["schema"] == "ditto-cpm-manifest-v1"
+        assert detail["total_bytes"] > 0
+        assert detail["screening_attempts"] == 1
+        assert detail["actions"] == []
+        (run,) = detail["runs"]
+        assert run["status"] == "scored" and run["kind"] == "submission"
+        assert "lease_id" not in run
+        assert len(run["per_seed"]) == 3
+        assert run["components"]["memory_recall"] == pytest.approx(0.6)
+
+        run_detail = (
+            await client.get(f"{_ADMIN_MC}/runs/{run['run_id']}", headers=_ADMIN)
+        ).json()
+        assert run_detail["run"]["run_id"] == run["run_id"]
+        assert run_detail["submission"]["submission_id"] == a["submission_id"]
+        assert run_detail["season"]["season"] == 1
+        assert run_detail["floor"] == pytest.approx(seed_score(0.3, 0.2, 0.15))
+
+        async with session_maker() as session:
+            reference = await session.scalar(
+                select(ModelContextRun.run_id).where(
+                    ModelContextRun.kind == "reference"
+                )
+            )
+        ref = (await client.get(f"{_ADMIN_MC}/runs/{reference}", headers=_ADMIN)).json()
+        assert ref["submission"] is None and ref["run"]["kind"] == "reference"
+
+        missing = uuid4()
+        assert (
+            await client.get(f"{_ADMIN_MC}/runs/{missing}", headers=_ADMIN)
+        ).status_code == 404
+        assert (
+            await client.get(f"{_ADMIN_MC}/submissions/{missing}", headers=_ADMIN)
+        ).status_code == 404
+
+        scorer = (await client.get(f"{_ADMIN_MC}/scorer", headers=_ADMIN)).json()
+        assert scorer["current_season"] == 1
+        assert scorer["queued_runs"] == 0 and scorer["leased_runs"] == 0
+        assert scorer["scorers"][0]["scorer_id"] == "cpm-1"
+        assert scorer["loop_running"] is False
+
+    async def test_rescore_is_guarded_and_audited(
+        self,
+        client: httpx.AsyncClient,
+        chain: _Chain,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        a, _ = await _scored_pair(client, chain, session_maker)
+        url = f"{_ADMIN_MC}/submissions/{a['submission_id']}/rescore"
+
+        wrong = await client.post(
+            url, headers=_ADMIN, json=_action("scored", "RESCORE IT")
+        )
+        assert wrong.status_code == 409
+        assert RESCORE_SUBMISSION_CONFIRMATION in wrong.text
+        stale = await client.post(
+            url,
+            headers=_ADMIN,
+            json=_action("queued", RESCORE_SUBMISSION_CONFIRMATION),
+        )
+        assert stale.status_code == 409
+        assert "not queued" in stale.text
+
+        resp = await client.post(
+            url, headers=_ADMIN, json=_action("scored", RESCORE_SUBMISSION_CONFIRMATION)
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["summary"]["status"] == "scored"
+        assert [r["status"] for r in body["runs"]] == ["queued", "scored"]
+        (action,) = body["actions"]
+        assert action["action"] == "rescore"
+        assert action["actor"] == "backroom:test"
+        assert action["detail"] == {"status": "scored", "season": 1}
+
+        # The standing score stays on the board until the new run lands.
+        board = (await client.get("/api/v1/model-context/board")).json()
+        assert a["submission_id"] in {e["submission_id"] for e in board["entries"]}
+
+        again = await client.post(
+            url, headers=_ADMIN, json=_action("scored", RESCORE_SUBMISSION_CONFIRMATION)
+        )
+        assert again.status_code == 409
+        assert "already queued or leased" in again.text
+
+        # The new run lands and becomes the standing score.
+        await _score_all(client, {_MINER.ss58_address: 0.8})
+        board = (await client.get("/api/v1/model-context/board")).json()
+        assert board["entries"][0]["submission_id"] == a["submission_id"]
+
+    async def test_rescore_needs_an_open_season(
+        self,
+        client: httpx.AsyncClient,
+        chain: _Chain,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _open_lane(client)
+        fetcher = FakeFetcher()
+        a = await _submit(client, chain, fetcher, _MINER, block=1_000)
+        await _screen_all(session_maker, fetcher)
+        resp = await client.post(
+            f"{_ADMIN_MC}/submissions/{a['submission_id']}/rescore",
+            headers=_ADMIN,
+            json=_action("queued", RESCORE_SUBMISSION_CONFIRMATION),
+        )
+        assert resp.status_code == 409
+        assert "no season is open" in resp.text
+
+    async def test_reject_leaves_the_board_and_abandons_runs(
+        self,
+        client: httpx.AsyncClient,
+        chain: _Chain,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        a, b = await _scored_pair(client, chain, session_maker)
+        rescored = await client.post(
+            f"{_ADMIN_MC}/submissions/{b['submission_id']}/rescore",
+            headers=_ADMIN,
+            json=_action("scored", RESCORE_SUBMISSION_CONFIRMATION),
+        )
+        assert rescored.status_code == 200
+        url = f"{_ADMIN_MC}/submissions/{b['submission_id']}/reject"
+        wrong = await client.post(url, headers=_ADMIN, json=_action("scored", "NO"))
+        assert wrong.status_code == 409
+        short = await client.post(
+            url,
+            headers=_ADMIN,
+            json={**_action("scored", REJECT_SUBMISSION_CONFIRMATION), "reason": "x"},
+        )
+        assert short.status_code == 422
+
+        long_reason = "copied weights, see the evidence: " + "z" * 2_000
+        resp = await client.post(
+            url,
+            headers=_ADMIN,
+            json={
+                **_action("scored", REJECT_SUBMISSION_CONFIRMATION),
+                "reason": long_reason,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["summary"]["status"] == "rejected"
+        assert body["summary"]["reject_reason"].startswith("operator (backroom:test): ")
+        assert len(body["summary"]["reject_reason"]) <= 1_000
+        assert [r["status"] for r in body["runs"]] == ["abandoned", "scored"]
+        assert [x["action"] for x in body["actions"]] == ["reject", "rescore"]
+        # The audit keeps the whole reason; the status reason is bounded.
+        assert body["actions"][0]["reason"] == long_reason
+        assert body["actions"][0]["detail"] == {"previous_status": "scored"}
+
+        board = (await client.get("/api/v1/model-context/board")).json()
+        assert [e["submission_id"] for e in board["entries"]] == [a["submission_id"]]
+        ledger = (
+            await client.get(
+                "/api/v1/scoring/model-context-ledger", headers=_ledger_headers()
+            )
+        ).json()
+        assert [e["submission_id"] for e in ledger["entries"]] == [a["submission_id"]]
+
+        again = await client.post(
+            url,
+            headers=_ADMIN,
+            json=_action("rejected", REJECT_SUBMISSION_CONFIRMATION),
+        )
+        assert again.status_code == 409
+        assert "already rejected" in again.text
+        listed = (await client.get(f"{_ADMIN_MC}/submissions", headers=_ADMIN)).json()
+        assert listed["counts_by_status"] == {"scored": 1, "rejected": 1}
+
+    async def test_reject_during_screening_wins(
+        self,
+        client: httpx.AsyncClient,
+        chain: _Chain,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _open_lane(client)
+        fetcher = FakeFetcher()
+        a = await _submit(client, chain, fetcher, _MINER, block=1_000)
+        resp = await client.post(
+            f"{_ADMIN_MC}/submissions/{a['submission_id']}/reject",
+            headers=_ADMIN,
+            json=_action("screening", REJECT_SUBMISSION_CONFIRMATION),
+        )
+        assert resp.status_code == 200, resp.text
+        assert await _screen_all(session_maker, fetcher) == []
+        row = await _status(session_maker, a["submission_id"])
+        assert row.status == "rejected"
+
+    async def test_forced_rotation_is_audited(
+        self,
+        client: httpx.AsyncClient,
+        chain: _Chain,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _open_lane(client)
+        await _open_season(session_maker, chain)
+        chain.block = BlockInfo(number=5_050_400, hash="0x" + "ef" * 32)
+        resp = await client.post(
+            f"{_ADMIN_MC}/seasons/rotate",
+            headers=_ADMIN,
+            json={
+                "reason": "a pinned base was replaced",
+                "actor": "backroom:test",
+                "confirmation": ROTATE_SEASON_CONFIRMATION,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        async with session_maker() as session:
+            (action,) = list(await session.scalars(select(ModelContextOperatorAction)))
+        assert action.action == "rotate_season"
+        assert action.subject == "season:2"
+        assert action.actor == "backroom:test"
+        assert action.detail == {"closed_season": 1, "open_block": 5_050_400}
 
 
 _TERMS_FIXTURE = (
