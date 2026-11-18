@@ -100,8 +100,21 @@ happens automatically; each step is a reviewed operator action.
    `primary_wake_requested`, `AWS_PRIMARY_WAKING`, a ready heartbeat, a
    signed verdict, and the host stopping again about 15 min later. Then stop
    the controller briefly to confirm the GCE watchdog still serves backlog.
-9. **Retire Hetzner.** Set `subnet-screener-1` to `draining`, wait for its
-   leases to finish, then cancel the Robot server (#3062657).
+9. **Retire Hetzner.** Robot server #3062657 (`subnet-screener-1`) was
+   cancelled on 2026-11-14 after explicit permanent-deletion approval. All
+   admission and active-use counters were zero; node-control revision 16
+   records permanent closure. Do not restore its historical admission limits
+   or use the cancelled hardware as rollback capacity. GCE is the remaining
+   fallback; its separate controller-outage drill is still pending.
+
+   The checked-in retirement intent disables the old X.509 service account,
+   pool, provider and secret grants. Apply only through the protected
+   `gcp-platform` plan/apply workflow, with
+   `screener_fleet_x509_identity_enabled=false`. Before approving, require
+   a plan containing only the retired identity removals and intended outputs;
+   preserve the AWS pool, its review-key access, the controller, shared
+   pool-administration grant and every VM. Source intent is not evidence that
+   the identity removals have been applied.
 
 ## Operate
 

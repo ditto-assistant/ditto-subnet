@@ -32,8 +32,9 @@ def test_terraform_binds_one_exact_x509_subject_to_one_secret() -> None:
     assert project_grants == [
         (
             "screener_fleet_x509_pool_admin",
-            # Shared with the AWS generator-scorer pool (generator-scorer.tf).
+            # Shared with both AWS pools, independently of the retired host.
             "\n  count   = (var.enable_screener_fleet_x509_identity || "
+            "var.enable_screener_aws_identity || "
             'var.generator_scorer_aws_account_id != "") ? 1 : 0\n'
             "  project = var.project\n"
             '  role    = "roles/iam.workloadIdentityPoolAdmin"\n'
@@ -142,18 +143,27 @@ def test_disposable_guest_base_survives_libvirt_ownership_changes() -> None:
     assert 'mode: "0644"' in tasks
 
 
-def test_infra_workflow_preserves_live_x509_identity() -> None:
+def test_infra_workflow_retires_hetzner_but_preserves_aws_identity() -> None:
     workflow = yaml.safe_load(INFRA_WORKFLOW.read_text())
     input_config = workflow[True]["workflow_dispatch"]["inputs"][
         "screener_fleet_x509_identity_enabled"
     ]
 
-    assert input_config["default"] is True
+    assert input_config["default"] is False
     prod_intent = (
         ROOT / "infra/terraform/stacks/gcp-platform/prod.auto.tfvars"
     ).read_text()
     assert re.search(
-        r"^enable_screener_fleet_x509_identity\s*=\s*true$", prod_intent, re.MULTILINE
+        r"^enable_screener_fleet_x509_identity\s*=\s*false$", prod_intent, re.MULTILINE
+    )
+    assert re.search(
+        r"^enable_screener_aws_identity\s*=\s*true$", prod_intent, re.MULTILINE
+    )
+    aws_identity = (TERRAFORM.parent / "screener-aws.tf").read_text()
+    assert "var.enable_screener_fleet_x509_identity" not in aws_identity
+    assert (
+        "depends_on = [google_project_iam_member.screener_fleet_x509_pool_admin]"
+        in aws_identity
     )
     assert re.search(
         r"^enable_screener_fleet_x509_node2_identity\s*=\s*false$",
