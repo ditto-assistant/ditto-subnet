@@ -26996,6 +26996,8 @@ export interface components {
              * @default 0.25
              */
             frontier_escalation_max_failed_fraction: number;
+            /** Frontier Escalation Models */
+            frontier_escalation_models?: string[];
             /**
              * Frontier Escalation Solve Threshold
              * @default 1
@@ -27293,6 +27295,9 @@ export interface components {
             attempts: number;
             /** Deadline */
             deadline?: string | null;
+            /** Model */
+            model?: string | null;
+            model_run?: components["schemas"]["GeneratorFrontierModelRunView"] | null;
             /** Oracle Failed */
             oracle_failed: number;
             /** Outcome */
@@ -27315,6 +27320,11 @@ export interface components {
             };
             /** Solve Threshold */
             solve_threshold: number;
+            /**
+             * Step
+             * @default 0
+             */
+            step: number;
             /** Validator Hotkey */
             validator_hotkey?: string | null;
         };
@@ -27419,6 +27429,8 @@ export interface components {
              */
             created_at: string;
             escalation?: components["schemas"]["GeneratorFrontierEscalationView"] | null;
+            /** Escalation Steps */
+            escalation_steps?: components["schemas"]["GeneratorFrontierEscalationView"][];
             /** Frontier Weight */
             frontier_weight: number;
             oracle: components["schemas"]["GeneratorFrontierOracleView"] | null;

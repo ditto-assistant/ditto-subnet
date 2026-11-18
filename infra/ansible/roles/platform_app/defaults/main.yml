@@ -250,11 +250,12 @@ platform_inference_proxy_enabled: false
 platform_inference_proxy_required: false
 secret_platform_openrouter_key: validator-openrouter-key
 platform_inference_allowed_models: qwen/qwen3-32b,openai/gpt-oss-20b
-# Models generator settings may name as frontier_oracle_model (apart from
-# the agent models above). Listing grants nothing: the setting is unset by
-# default, and a listed model still needs a calibrated route; until then the
-# oracle falls back to the bench model. Empty: no model may be set.
-platform_frontier_oracle_models: openai/gpt-oss-120b
+# Models generator settings may name as frontier_oracle_model or in
+# frontier_escalation_models (apart from the agent models above). Listing
+# grants nothing: both settings are unset by default, and a listed model still
+# needs a calibrated route; until then the run falls back to the bench model.
+# Empty: no model may be set.
+platform_frontier_oracle_models: openai/gpt-oss-120b,openai/gpt-5.6-luna,qwen/qwen3.8-27b
 platform_inference_provider: nebius
 # Initial v7 mode: one reviewed logical route, OpenRouter speed sorting, and
 # healthy fallback. The DB-backed per-provider optimizer remains dark.

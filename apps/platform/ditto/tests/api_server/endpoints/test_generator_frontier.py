@@ -1772,3 +1772,231 @@ class TestFrontierOracleModel:
             frontier_oracle_model="openai/unlisted-model",
         )
         assert "DITTO_FRONTIER_ORACLE_MODELS" in resp.text
+
+
+# --- escalation model ladder --------------------------------------------------
+
+_LUNA = "openai/gpt-5.6-luna"
+_QWEN = "qwen/qwen3.8-27b"
+_BENCH = "openai/gpt-oss-20b"
+
+
+def test_the_escalation_ladder_is_empty_by_default() -> None:
+    """Empty keeps the round signature it had before the field existed."""
+    on = GeneratorCompetitionSettings(
+        frontier_weight=1.0,
+        frontier_oracle_agent_id=uuid4(),
+        frontier_escalation_agent_id=uuid4(),
+    )
+    assert on.frontier_escalation_models == []
+    params = on.measurement_params()
+    assert "frontier_escalation_models" not in params
+    ladder = on.model_copy(
+        update={
+            "frontier_oracle_model": _LUNA,
+            "frontier_escalation_models": [_LUNA, _QWEN],
+        }
+    )
+    assert ladder.measurement_params()["frontier_escalation_models"] == (
+        f"{_LUNA},{_QWEN}"
+    )
+    # Every model the policy can grant, once each.
+    assert ladder.frontier_models() == (_LUNA, _QWEN)
+    # A ladder with escalation off decides nothing and stays out.
+    off = GeneratorCompetitionSettings(frontier_escalation_models=[_LUNA])
+    assert "frontier_escalation_models" not in off.measurement_params()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        [_LUNA, _LUNA],
+        [_LUNA, _QWEN, "a/b", "c/d", "e/f"],
+        ["gpt-5.6-luna"],
+    ],
+)
+def test_a_bad_escalation_ladder_is_refused(bad: list[str]) -> None:
+    with pytest.raises(ValueError):
+        GeneratorCompetitionSettings(frontier_escalation_models=bad)
+
+
+class TestFrontierEscalationLadder:
+    async def test_unset_the_escalation_document_is_unchanged(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lane = _Lane(client, session_maker)
+        await lane.setup(app, monkeypatch, frontier_audit_cases=0, escalation=True)
+        seen = _record_grants(monkeypatch)
+        round_index = await lane.score_round()
+        doc = await _frontier_doc(session_maker, round_index)
+        assert "models" not in doc["escalation_policy"]
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+        esc = await TestFrontierEscalation._lease_escalation(lane)
+        assert seen[-1] == (str(lane.escalation), None)
+        await lane.report_oracle(esc, set())
+        doc = await _frontier_doc(session_maker, round_index)
+        assert not {"step", "model", "model_run"} & set(doc["escalation"])
+        assert "escalation_steps" not in doc
+        view = await lane.frontier(round_index)
+        assert view["escalation_steps"] == []
+        assert view["escalation"]["step"] == 0
+        assert view["escalation"]["model"] is None
+        assert view["escalation"]["model_run"] is None
+        # One step only: a fail goes to audit, not a second run.
+        assert view["state"] == STATE_AUDIT_PENDING
+
+    async def test_a_later_step_runs_only_the_cases_the_step_before_failed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _list_frontier_models(app, _LUNA, _QWEN)
+        lane = _Lane(client, session_maker)
+        await lane.setup(
+            app,
+            monkeypatch,
+            frontier_audit_cases=0,
+            escalation=True,
+            frontier_escalation_models=[_LUNA, _QWEN],
+        )
+        seen = _record_grants(monkeypatch)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        assert seen[-1] == (str(lane.oracle), None)
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+        selected = lane.candidates[6:]
+
+        step1 = await TestFrontierEscalation._lease_escalation(lane)
+        assert sorted(step1["oracle_case_ids"]) == sorted(selected)
+        assert seen[-1] == (str(lane.escalation), _LUNA)
+        passed_first, failed_first = selected
+        await lane.report_oracle(step1, {passed_first})
+
+        view = await lane.frontier(round_index)
+        assert view["state"] == STATE_ORACLE_PENDING
+        (done,) = view["escalation_steps"]
+        assert done["step"] == 0
+        assert done["model"] == _LUNA
+        assert done["passed"] == [passed_first]
+        assert done["deadline"] is None
+        assert done["model_run"]["model"] == _LUNA
+        assert done["model_run"]["fallback"] is False
+        step = view["escalation"]
+        assert step["step"] == 1
+        assert step["model"] == _QWEN
+        assert step["selected"] == [failed_first]
+        assert step["deadline"] is not None
+
+        step2 = await TestFrontierEscalation._lease_escalation(lane)
+        assert step2["oracle_case_ids"] == [failed_first]
+        assert seen[-1] == (str(lane.escalation), _QWEN)
+        await lane.report_oracle(step2, {failed_first})
+
+        view = await lane.frontier(round_index)
+        assert view["state"] == STATE_AUDIT_PENDING
+        assert view["escalation"]["passed"] == [failed_first]
+        assert view["escalation"]["model_run"]["model"] == _QWEN
+        # A pass on either step attests the case.
+        assert view["attested"] == {
+            lane.miner_column: lane.candidates[:6] + [passed_first, failed_first]
+        }
+
+    async def test_a_ladder_stops_when_a_step_fails_nothing(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _list_frontier_models(app, _LUNA, _QWEN)
+        lane = _Lane(client, session_maker)
+        await lane.setup(
+            app,
+            monkeypatch,
+            frontier_audit_cases=0,
+            escalation=True,
+            frontier_escalation_models=[_LUNA, _QWEN],
+        )
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+        step1 = await TestFrontierEscalation._lease_escalation(lane)
+        await lane.report_oracle(step1, set(lane.candidates[6:]))
+        view = await lane.frontier(round_index)
+        assert view["state"] == STATE_AUDIT_PENDING
+        assert view["escalation_steps"] == []
+        assert view["escalation"]["model"] == _LUNA
+        assert await _lease_job(client) is None
+
+    async def test_each_step_records_its_own_fallback(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Step 1 has no route for its model and runs on the bench model;
+        step 2 gets its model. Each step says which model really ran."""
+        _list_frontier_models(app, _LUNA, _QWEN)
+        lane = _Lane(client, session_maker)
+        await lane.setup(
+            app,
+            monkeypatch,
+            frontier_audit_cases=0,
+            escalation=True,
+            frontier_escalation_models=[_LUNA, _QWEN],
+        )
+        seen = _record_grants(monkeypatch)
+        recorded = lane_mod.ensure_inference_grant
+
+        async def _no_luna_route(
+            session: AsyncSession, *, ticket: ValidatorTicket, **kw: Any
+        ):
+            grant = await recorded(session, ticket=ticket, **kw)
+            return None if kw.get("model") == _LUNA else grant
+
+        monkeypatch.setattr(lane_mod, "ensure_inference_grant", _no_luna_route)
+        round_index = await lane.score_round()
+        job = await lane.lease_oracle()
+        await lane.report_oracle(job, set(lane.candidates[:6]))
+        step1 = await TestFrontierEscalation._lease_escalation(lane)
+        assert seen[-2:] == [
+            (str(lane.escalation), _LUNA),
+            (str(lane.escalation), None),
+        ]
+        await lane.report_oracle(step1, set())
+        step2 = await TestFrontierEscalation._lease_escalation(lane)
+        assert seen[-1] == (str(lane.escalation), _QWEN)
+        await lane.report_oracle(step2, set())
+
+        view = await lane.frontier(round_index)
+        (done,) = view["escalation_steps"]
+        assert done["model"] == _LUNA
+        assert done["model_run"]["model"] == _BENCH
+        assert done["model_run"]["fallback"] is True
+        assert view["escalation"]["model"] == _QWEN
+        assert view["escalation"]["model_run"]["model"] == _QWEN
+        assert view["escalation"]["model_run"]["fallback"] is False
+
+    async def test_an_unlisted_escalation_model_is_refused_at_settings_write(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        resp = await _apply_settings(
+            client,
+            status=422,
+            validator_rounds_enabled=True,
+            frontier_oracle_agent_id=str(await _seed_agent(session_maker, 9)),
+            frontier_escalation_models=["openai/unlisted-model"],
+        )
+        assert "DITTO_FRONTIER_ORACLE_MODELS" in resp.text

@@ -681,7 +681,7 @@ async def _lease_oracle_job(
             # delisted): run the oracle on the bench model rather than stall
             # the round until it times out.
             logger.warning(
-                "frontier oracle model %s has no grant for round %s; "
+                "frontier model %s has no grant for round %s; "
                 "falling back to the bench model",
                 model,
                 row.round_index,

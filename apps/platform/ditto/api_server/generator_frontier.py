@@ -48,6 +48,15 @@ escalated case is audited and credited exactly like an oracle pass. An
 escalation that never reports (timeout or attempt cap) only adds nothing:
 the oracle's own attestations still go to audit.
 
+**Model ladder** (``frontier_escalation_models``, empty by default). Each
+entry is one escalation step, granted that model like the oracle's
+``frontier_oracle_model``. The first step re-checks the capped sample above;
+each later step re-checks only the cases the step before it answered and
+failed, on the same agent and contexts, so a dearer model only sees what a
+cheaper one could not pass. A pass on any step attests the case. A step that
+never reports ends the ladder; earlier steps' attestations stay. Empty runs
+one escalation step on the bench model.
+
 Until a round settles it pays its unattested score, so frontier credit never
 reaches the ledger before its audit. :func:`apply_frontier` and
 :func:`frontier_audit_sample` port the Go contract and replay its golden
@@ -363,6 +372,12 @@ def begin_frontier(
                     settings.frontier_escalation_max_cases_per_column
                 ),
                 "max_failed_fraction": settings.frontier_escalation_max_failed_fraction,
+                # Only while set, so an unset ladder keeps the old document.
+                **(
+                    {"models": list(settings.frontier_escalation_models)}
+                    if settings.frontier_escalation_models
+                    else {}
+                ),
             }
             if settings.frontier_escalation_enabled
             else None
@@ -397,11 +412,18 @@ def oracle_run_agent(frontier: dict[str, Any]) -> str:
 
 def oracle_run_model(frontier: dict[str, Any]) -> str | None:
     """The inference model the lane's open run is granted, or None for the
-    bench model: the frozen ``frontier_oracle_model`` for the oracle. The
-    escalation run always uses the bench model."""
+    bench model: the frozen ``frontier_oracle_model`` for the oracle, and the
+    open step's ladder model for escalation."""
     if in_escalation(frontier):
-        return None
+        model = frontier["escalation"].get("model")
+        return str(model) if model is not None else None
     return frontier.get("oracle_model")
+
+
+def escalation_ladder(policy: dict[str, Any]) -> list[str | None]:
+    """The frozen escalation steps' models, in order; None is the bench
+    model. A policy with no ladder runs one step on the bench model."""
+    return list(policy.get("models") or [None])
 
 
 def oracle_run_cases(frontier: dict[str, Any]) -> list[str]:
@@ -595,14 +617,21 @@ def note_oracle_lease(
     now: datetime | None = None,
 ) -> None:
     """Count a lease of the lane's open run. With a frozen ``oracle_model``
-    the oracle lease also records the model its grant really pins
-    (``model_ran``), and whether that is the bench-model fallback, so an
-    operator can tell which model produced the attestations. A lane on the
-    bench model records nothing extra."""
+    (or an escalation step's ``model``) the lease also records the model its
+    grant really pins (``model_ran``), and whether that is the bench-model
+    fallback, so an operator can tell which model produced the attestations.
+    A run on the bench model records nothing extra."""
     frontier = dict(row.frontier or {})
     if in_escalation(frontier):
         escalation = dict(frontier["escalation"])
         escalation["attempts"] = int(escalation.get("attempts") or 0) + 1
+        requested = escalation.get("model")
+        if requested is not None and model_ran is not None:
+            escalation["model_run"] = {
+                "model": model_ran,
+                "fallback": model_ran != requested,
+                "leased_at": (now or datetime.now(UTC)).isoformat(),
+            }
         frontier["escalation"] = escalation
     else:
         frontier["oracle_attempts"] = int(frontier.get("oracle_attempts") or 0) + 1
@@ -741,6 +770,29 @@ def record_oracle_results(
             **(frontier.get("attested_fingerprints") or {}),
             **{case_id: fingerprints[case_id] for case_id in passed},
         }
+        # Next ladder step: only the cases this step answered and failed.
+        failed = [
+            r.case_id for r in results if not r.fault and float(r.score) < threshold
+        ]
+        ladder = escalation_ladder(frontier.get("escalation_policy") or {})
+        step = int(escalation.get("step") or 0) + 1
+        if failed and step < len(ladder):
+            frontier["escalation_steps"] = [
+                *(frontier.get("escalation_steps") or ()),
+                escalation,
+            ]
+            frontier["escalation"] = _escalation_step(
+                frontier["escalation_policy"],
+                step=step,
+                model=ladder[step],
+                selected=failed,
+                oracle_failed=int(escalation.get("oracle_failed") or 0),
+                skipped={},
+                outcome="pending",
+                now=now,
+            )
+            row.frontier = frontier
+            return
         _open_audits(row, frontier, now)
         row.frontier = frontier
         return
@@ -782,23 +834,53 @@ def record_oracle_results(
                 max_failed_fraction=float(policy["max_failed_fraction"]),
             )
             outcome = "pending" if selected else "nothing selected"
-        frontier["escalation"] = {
-            "agent_id": policy["agent_id"],
-            "solve_threshold": float(policy["solve_threshold"]),
-            "oracle_failed": len(failed),
-            "selected": selected,
-            "skipped_columns": skipped,
-            "attempts": 0,
-            "created_at": _iso(now),
-            "passed": [],
-            "outcome": outcome,
-        }
+        frontier["escalation"] = _escalation_step(
+            policy,
+            step=0,
+            model=escalation_ladder(policy)[0],
+            selected=selected,
+            oracle_failed=len(failed),
+            skipped=skipped,
+            outcome=outcome,
+            now=now,
+        )
         if selected:
             frontier["phase"] = PHASE_ESCALATION
             row.frontier = frontier
             return
     _open_audits(row, frontier, now)
     row.frontier = frontier
+
+
+def _escalation_step(
+    policy: dict[str, Any],
+    *,
+    step: int,
+    model: str | None,
+    selected: list[str],
+    oracle_failed: int,
+    skipped: dict[str, str],
+    outcome: str,
+    now: datetime,
+) -> dict[str, Any]:
+    """One escalation step's run record. ``step`` and ``model`` are written
+    only when set, so a lane with no ladder keeps its old document."""
+    out: dict[str, Any] = {
+        "agent_id": policy["agent_id"],
+        "solve_threshold": float(policy["solve_threshold"]),
+        "oracle_failed": oracle_failed,
+        "selected": selected,
+        "skipped_columns": skipped,
+        "attempts": 0,
+        "created_at": _iso(now),
+        "passed": [],
+        "outcome": outcome,
+    }
+    if step:
+        out["step"] = step
+    if model is not None:
+        out["model"] = model
+    return out
 
 
 def escalation_expired(row: GeneratorRound, *, now: datetime) -> str | None:
@@ -1129,9 +1211,15 @@ def _column_scores(columns: Iterable[dict[str, Any]]) -> dict[str, float]:
 
 
 def _escalation_view(
-    frontier: dict[str, Any], timeout: timedelta
+    frontier: dict[str, Any],
+    timeout: timedelta,
+    escalation: dict[str, Any] | None = None,
 ) -> GeneratorFrontierEscalationView | None:
-    escalation = frontier.get("escalation")
+    """The open (newest) escalation step, or a finished earlier one given as
+    ``escalation`` (which has no deadline)."""
+    running = escalation is None
+    if escalation is None:
+        escalation = frontier.get("escalation")
     if not escalation:
         return None
     created = _parse(escalation.get("created_at"))
@@ -1144,7 +1232,7 @@ def _escalation_view(
         attempts=int(escalation.get("attempts") or 0),
         deadline=(
             created + timeout
-            if created is not None and in_escalation(frontier)
+            if running and created is not None and in_escalation(frontier)
             else None
         ),
         outcome=str(escalation.get("outcome") or "pending"),
@@ -1153,6 +1241,9 @@ def _escalation_view(
         recorded_at=_parse(escalation.get("recorded_at")),
         passed=list(escalation.get("passed") or ()),
         results=list(escalation.get("results") or ()),
+        step=int(escalation.get("step") or 0),
+        model=escalation.get("model"),
+        model_run=_model_run_view(escalation.get("model_run")),
     )
 
 
@@ -1207,6 +1298,11 @@ def frontier_view(row: GeneratorRound) -> GeneratorFrontierView | None:
         oracle_model=frontier.get("oracle_model"),
         oracle_model_run=_model_run_view(frontier.get("oracle_model_run")),
         escalation=_escalation_view(frontier, timeout),
+        escalation_steps=[
+            view
+            for step in frontier.get("escalation_steps") or ()
+            if (view := _escalation_view(frontier, timeout, step)) is not None
+        ],
         attested=dict(frontier.get("attested") or {}),
         audits=audit_views(row),
         applied=frontier.get("applied"),

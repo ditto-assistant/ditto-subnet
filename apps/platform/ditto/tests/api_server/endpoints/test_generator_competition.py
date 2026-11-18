@@ -108,6 +108,7 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "frontier_oracle_timeout_hours": 12,
         "frontier_oracle_model": None,
         "frontier_escalation_agent_id": None,
+        "frontier_escalation_models": [],
         "frontier_escalation_solve_threshold": 1.0,
         "frontier_escalation_max_cases": 8,
         "frontier_escalation_max_cases_per_column": 4,

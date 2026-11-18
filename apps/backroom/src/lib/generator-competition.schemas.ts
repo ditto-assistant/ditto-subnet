@@ -163,6 +163,17 @@ export const generatorCompetitionSettingsSchema = z.object({
   frontier_escalation_max_cases: z.number().int().min(1).max(64).default(8),
   frontier_escalation_max_cases_per_column: z.number().int().min(1).max(16).default(4),
   frontier_escalation_max_failed_fraction: z.number().gt(0).max(1).default(0.25),
+  // The escalation model ladder: one run per model, in order. The first step
+  // re-checks the sample above; each later step re-checks only the cases the
+  // step before it answered and failed. Same operator list and bench-model
+  // fallback as frontier_oracle_model. Empty runs one step on the bench model.
+  frontier_escalation_models: z
+    .array(frontierModel)
+    .max(4)
+    .refine((models) => new Set(models).size === models.length, {
+      message: "frontier_escalation_models must be unique",
+    })
+    .default([]),
   // Pre-screens (ships off: inference spend): batches of up to
   // prescreen_columns never-scored generators, prescreen_cases cases each, on
   // the top prescreen_panel_size runnable owners while no round needs the
@@ -940,6 +951,36 @@ export const generatorFrontierAuditSchema = z.object({
   audit_deadline: z.string().nullable().optional(),
 })
 
+const frontierModelRunSchema = z.object({
+  model: z.string(),
+  fallback: z.boolean(),
+  leased_at: z.string(),
+})
+
+const generatorFrontierEscalationSchema = z.object({
+  agent_id: uuid,
+  solve_threshold: z.number(),
+  oracle_failed: z.number().int(),
+  selected: z.array(z.string()),
+  skipped_columns: z.record(z.string(), z.string()).default({}),
+  attempts: z.number().int(),
+  deadline: z.string().nullable().optional().default(null),
+  outcome: z.string(),
+  validator_hotkey: z.string().nullable().optional().default(null),
+  run_id: z.string().nullable().optional().default(null),
+  recorded_at: z.string().nullable().optional().default(null),
+  passed: z.array(z.string()).default([]),
+  results: z
+    .array(z.object({ case_id: z.string(), score: z.number(), fault: z.boolean() }))
+    .default([]),
+  // The ladder step (0 is the first) and its frozen model (null: the bench
+  // model), and the model its ticket was really granted, like
+  // oracle_model_run.
+  step: z.number().int().optional().default(0),
+  model: z.string().nullable().optional().default(null),
+  model_run: frontierModelRunSchema.nullable().optional().default(null),
+})
+
 export const generatorFrontierSchema = z.object({
   round_index: z.number().int(),
   state: frontierState,
@@ -964,27 +1005,9 @@ export const generatorFrontierSchema = z.object({
     .nullable(),
   // The escalation tier's re-check of oracle-failed cases; null with
   // escalation off (and from a Platform that predates it).
-  escalation: z
-    .object({
-      agent_id: uuid,
-      solve_threshold: z.number(),
-      oracle_failed: z.number().int(),
-      selected: z.array(z.string()),
-      skipped_columns: z.record(z.string(), z.string()).default({}),
-      attempts: z.number().int(),
-      deadline: z.string().nullable().optional().default(null),
-      outcome: z.string(),
-      validator_hotkey: z.string().nullable().optional().default(null),
-      run_id: z.string().nullable().optional().default(null),
-      recorded_at: z.string().nullable().optional().default(null),
-      passed: z.array(z.string()).default([]),
-      results: z
-        .array(z.object({ case_id: z.string(), score: z.number(), fault: z.boolean() }))
-        .default([]),
-    })
-    .nullable()
-    .optional()
-    .default(null),
+  escalation: generatorFrontierEscalationSchema.nullable().optional().default(null),
+  // Finished earlier ladder steps, oldest first; the open step is escalation.
+  escalation_steps: z.array(generatorFrontierEscalationSchema).optional().default([]),
   attested: z.record(z.string(), z.array(z.string())),
   audits: z.array(generatorFrontierAuditSchema),
   applied: z.record(z.string(), z.array(z.string())).nullable().optional(),
@@ -997,11 +1020,7 @@ export const generatorFrontierSchema = z.object({
   // model the oracle ticket was really granted; fallback is true when it ran
   // on the bench model because the set model had no admitted route.
   oracle_model: z.string().nullable().optional().default(null),
-  oracle_model_run: z
-    .object({ model: z.string(), fallback: z.boolean(), leased_at: z.string() })
-    .nullable()
-    .optional()
-    .default(null),
+  oracle_model_run: frontierModelRunSchema.nullable().optional().default(null),
 })
 
 // The MCP paging contract (docs/mcp.md, Paging): count is the queue total,

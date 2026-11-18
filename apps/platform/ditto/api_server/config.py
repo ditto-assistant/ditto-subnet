@@ -75,10 +75,13 @@ MIN_CAPACITY_EVENT_RETENTION_DAYS = 7
 # the 16 MiB canonical private-v2 publication receipt an admin registers. The
 # floor keeps a typo from refusing every ordinary JSON request.
 DEFAULT_REQUEST_BODY_MAX_BYTES = 32 << 20
-# The model operators may set as ``frontier_oracle_model`` unless
-# DITTO_FRONTIER_ORACLE_MODELS says otherwise. Listing it grants nothing: the
-# setting is unset by default and the model needs a calibrated route first.
-DEFAULT_FRONTIER_ORACLE_MODELS = "openai/gpt-oss-120b"
+# The models operators may set as ``frontier_oracle_model`` or in
+# ``frontier_escalation_models`` unless DITTO_FRONTIER_ORACLE_MODELS says
+# otherwise. Listing grants nothing: both settings are unset by default and a
+# model needs a calibrated route first.
+DEFAULT_FRONTIER_ORACLE_MODELS = (
+    "openai/gpt-oss-120b,openai/gpt-5.6-luna,qwen/qwen3.8-27b"
+)
 MIN_REQUEST_BODY_MAX_BYTES = 1 << 20
 
 
@@ -190,10 +193,13 @@ class InferenceProxyConfig:
     route_cooldown_seconds: int = 30
     reviewed_calibration_manifest_sha256: str | None = None
     # Models the generator competition may name as ``frontier_oracle_model``
-    # (DITTO_FRONTIER_ORACLE_MODELS). Kept apart from ``allowed_models``: a
-    # frontier grant is v7+ and pins its own model, so no agent ticket can ask
-    # for one. Empty means the frontier oracle always runs on the bench model.
-    frontier_oracle_models: tuple[str, ...] = (DEFAULT_FRONTIER_ORACLE_MODELS,)
+    # or in ``frontier_escalation_models`` (DITTO_FRONTIER_ORACLE_MODELS).
+    # Kept apart from ``allowed_models``: a frontier grant is v7+ and pins its
+    # own model, so no agent ticket can ask for one. Empty means the frontier
+    # oracle always runs on the bench model.
+    frontier_oracle_models: tuple[str, ...] = tuple(
+        DEFAULT_FRONTIER_ORACLE_MODELS.split(",")
+    )
     # Decision-lane grant stamps. Never read from env: the operator's
     # ``decision_lane`` board overlays them (``apply_settings``). ``None`` and
     # zeros are "lane not granted", which is the pre-lane grant exactly.

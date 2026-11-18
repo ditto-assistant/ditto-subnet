@@ -711,11 +711,12 @@ reference agent, not a contract change.
 An operator may grant the oracle's ticket a stronger model than the bench
 model with `frontier_oracle_model`. It is unset by default, which runs the
 oracle on the bench model exactly as before. Only the oracle ticket gets the
-model; panel and escalation tickets never do, so agent scores and bench
-semantics are unchanged.
+model (and escalation steps, through the model ladder below); panel tickets
+never do, so agent scores and bench semantics are unchanged.
 
 The value must be listed in the Platform's `DITTO_FRONTIER_ORACLE_MODELS`
-(default: `openai/gpt-oss-120b`). That list is apart from
+(default: `openai/gpt-oss-120b`, `openai/gpt-5.6-luna`,
+`qwen/qwen3.8-27b`). That list is apart from
 `DITTO_INFERENCE_ALLOWED_MODELS`, because a Bench v7+ grant pins its own
 model and no agent ticket can ask for a frontier one. A settings write naming
 an unlisted model is refused. Discovery creates the aggregate route for a
@@ -774,7 +775,7 @@ same dataset mode (`generator-frontier-oracle-v1`), the same bounded
 `OracleContext`, the same validator capability and the same
 `FrontierCases`/`apply_frontier` contract, so no bench or pack version
 changes. "Stronger" means a different reference harness; the inference model
-stays the bench contract's.
+stays the bench contract's unless the model ladder below grants one.
 
 1. When the oracle reports, the cases it answered and failed (never faulted
    ones) are the escalation pool. A column whose oracle failures exceed
@@ -804,6 +805,21 @@ The escalation agent must differ from the oracle and from every reference
 agent, so a panel agent never re-rolls its own failed attempt into an
 attestation.
 
+**Model ladder.** `frontier_escalation_models` (empty by default) turns the
+escalation into ordered steps, at most 4. Each entry is one step on the
+escalation agent, granted that model the way `frontier_oracle_model` grants
+the oracle's: the model must be in `DITTO_FRONTIER_ORACLE_MODELS`, its
+reasoning is pinned the same way, and a model without a calibrated route
+falls back to the bench model. The first step runs on the capped sample
+above. Each later step runs only on the cases the step before it answered and
+failed, so a dearer model only sees what a cheaper one could not pass. A pass
+on any step attests the case. A step that does not report ends the ladder,
+and earlier steps' attestations stay. Each step's record keeps the model that
+really ran (`model_run`: model, `fallback`, lease time), and Backroom shows
+every finished step next to the open one. Empty runs one step on the bench
+model, and the round's frontier record and `measurement_params` stay as
+before. A round can wait up to one `frontier_oracle_timeout_hours` per step.
+
 The oracle job and the audit window run after scoring and never hold a round
 open. A round whose oracle job does not complete within
 `frontier_oracle_timeout_hours` settles with no attestations.
@@ -831,7 +847,8 @@ New settings (Platform, revisioned): `frontier_weight` (operator default 1.0),
 bench model), and the escalation tier's
 `frontier_escalation_agent_id` (unset: off), `frontier_escalation_solve_threshold`
 (1.0), `frontier_escalation_max_cases` (8), `frontier_escalation_max_cases_per_column`
-(4) and `frontier_escalation_max_failed_fraction` (0.25). `skip_unchanged_rounds`
+(4) and `frontier_escalation_max_failed_fraction` (0.25), and `frontier_escalation_models` (empty: one step on the bench
+model). `skip_unchanged_rounds`
 compares `frontier_weight` with the other score parameters, and the escalation
 fields only while escalation runs.
 

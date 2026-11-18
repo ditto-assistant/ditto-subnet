@@ -59,6 +59,7 @@ FrontierModel = Annotated[
     ),
 ]
 """An OpenRouter model id (``vendor/model``) for a frontier oracle ticket."""
+MAX_FRONTIER_ESCALATION_STEPS = 4
 
 GeneratorMode = Literal["off", "shadow", "enforce"]
 SubmissionStatus = Literal["active", "superseded", "rejected"]
@@ -301,8 +302,9 @@ class GeneratorCompetitionSettings(BaseModel):
     no attestations."""
     frontier_oracle_model: FrontierModel | None = None
     """The inference model the frontier oracle's ticket is granted, instead of
-    the bench model. Only the oracle ticket uses it: panel and escalation
-    tickets always get the bench model. Must be one of the Platform's
+    the bench model. Only the oracle ticket uses it: panel tickets always get
+    the bench model, and escalation tickets get
+    ``frontier_escalation_models``. Must be one of the Platform's
     operator-listed ``DITTO_FRONTIER_ORACLE_MODELS`` (checked on write and
     again at lease) and needs a calibrated route like any other model; while
     it has none the lease falls back to the bench model and the round's
@@ -335,6 +337,17 @@ class GeneratorCompetitionSettings(BaseModel):
     (non-duplicate) cases is not escalated at all: a column that mostly
     beats the oracle looks broken, not hard, and flooding a pack with
     unsolvable cases must not buy escalation."""
+    frontier_escalation_models: Annotated[
+        list[FrontierModel], Field(max_length=MAX_FRONTIER_ESCALATION_STEPS)
+    ] = Field(default_factory=list)
+    """The escalation ladder: one escalation run per entry, in order, each on
+    the model listed. The first step re-checks the capped sample of
+    oracle-failed cases; each later step re-checks only the cases the step
+    before it answered and failed. A pass on any step attests the case.
+    Models come from the same operator list as ``frontier_oracle_model``,
+    with the same bench-model fallback. Empty (the default, and every
+    revision written before this field existed) runs one escalation step on
+    the bench model."""
 
     prescreen_enabled: bool = False
     """Pre-screen never-scored generators before they take a challenger
@@ -377,6 +390,10 @@ class GeneratorCompetitionSettings(BaseModel):
                 raise ValueError(
                     "frontier_escalation_agent_id must not be a reference agent"
                 )
+        if len(set(self.frontier_escalation_models)) != len(
+            self.frontier_escalation_models
+        ):
+            raise ValueError("frontier_escalation_models must be unique")
         return self
 
     def dueling_season_refusal(self) -> str | None:
@@ -447,13 +464,17 @@ class GeneratorCompetitionSettings(BaseModel):
             params["frontier_escalation_max_failed_fraction"] = (
                 self.frontier_escalation_max_failed_fraction
             )
+            if self.frontier_escalation_models:
+                # Only while set, like frontier_oracle_model.
+                params["frontier_escalation_models"] = ",".join(
+                    self.frontier_escalation_models
+                )
         return params
 
     def frontier_models(self) -> tuple[str, ...]:
         """Every non-bench model this policy grants a frontier ticket."""
-        if self.frontier_oracle_model is None:
-            return ()
-        return (self.frontier_oracle_model,)
+        models = (self.frontier_oracle_model, *self.frontier_escalation_models)
+        return tuple(dict.fromkeys(m for m in models if m is not None))
 
 
 class GeneratorSettingsRevision(GeneratorModel):

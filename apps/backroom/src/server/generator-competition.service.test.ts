@@ -1086,6 +1086,18 @@ describe('generator competition MCP tools', () => {
     const parsed = generatorCompetitionSettingsSchema.parse(settings)
     expect(parsed).toMatchObject({ frontier_oracle_model: null })
     expect(parsed).not.toHaveProperty('frontier_escalation_model')
+    // The escalation ladder ships empty: one step on the bench model.
+    expect(parsed).toMatchObject({ frontier_escalation_models: [] })
+    const ladder = ['openai/gpt-5.6-luna', 'qwen/qwen3.8-27b']
+    expect(generatorCompetitionSettingsSchema.parse({ ...settings, frontier_escalation_models: ladder }))
+      .toMatchObject({ frontier_escalation_models: ladder })
+    for (const bad of [
+      ['openai/gpt-5.6-luna', 'openai/gpt-5.6-luna'], ['gpt-5.6-luna'],
+      ['a/b1', 'a/b2', 'a/b3', 'a/b4', 'a/b5'],
+    ]) {
+      expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, frontier_escalation_models: bad }))
+        .toThrow()
+    }
     expect(
       generatorCompetitionSettingsSchema.parse({ ...settings, frontier_oracle_model: 'openai/gpt-oss-120b' }),
     ).toMatchObject({ frontier_oracle_model: 'openai/gpt-oss-120b' })
@@ -1119,6 +1131,20 @@ describe('generator competition MCP tools', () => {
     const run = { model: 'openai/gpt-oss-20b', fallback: true, leased_at: '2026-11-09T09:00:00Z' }
     expect(generatorFrontierSchema.parse({ ...base, oracle_model: 'openai/gpt-oss-120b', oracle_model_run: run }))
       .toMatchObject({ oracle_model: 'openai/gpt-oss-120b', oracle_model_run: run })
+    // Without a ladder an escalation step reads as step 0 on the bench model,
+    // with no earlier steps.
+    expect(generatorFrontierSchema.parse({ ...base, escalation })).toMatchObject({
+      escalation: { step: 0, model: null, model_run: null }, escalation_steps: [],
+    })
+    const stepRun = { model: 'qwen/qwen3.8-27b', fallback: false, leased_at: '2026-11-09T10:00:00Z' }
+    const laddered = generatorFrontierSchema.parse({
+      ...base,
+      escalation: { ...escalation, step: 1, model: 'qwen/qwen3.8-27b', model_run: stepRun },
+      escalation_steps: [{ ...escalation, deadline: null, outcome: 'reported', model: 'openai/gpt-5.6-luna' }],
+    })
+    expect(laddered.escalation).toMatchObject({ step: 1, model: 'qwen/qwen3.8-27b', model_run: stepRun })
+    expect(laddered.escalation_steps).toHaveLength(1)
+    expect(laddered.escalation_steps[0]).toMatchObject({ step: 0, model: 'openai/gpt-5.6-luna', outcome: 'reported' })
   })
 
   it('defaults the season catch-up settings a write omits and bounds the cap', () => {

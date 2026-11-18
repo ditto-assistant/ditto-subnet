@@ -77,10 +77,12 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.per_ticket_concurrency == 16
         assert config.inference_proxy.per_validator_concurrency == 48
         assert config.inference_proxy.global_concurrency == 96
-        # gpt-oss-120b is listed unless the operator says not; listing it
-        # grants nothing while frontier_oracle_model is unset.
+        # The three ladder candidates are listed unless the operator says
+        # not; listing grants nothing while the frontier settings are unset.
         assert config.inference_proxy.frontier_oracle_models == (
-            DEFAULT_FRONTIER_ORACLE_MODELS,
+            "openai/gpt-oss-120b",
+            "openai/gpt-5.6-luna",
+            "qwen/qwen3.8-27b",
         )
 
     def test_frontier_oracle_models_parse_from_env(self, monkeypatch):
@@ -244,12 +246,9 @@ class TestCheckConfig:
         # The default list boots with the stock agent allow list, so an
         # operator who never set DITTO_FRONTIER_ORACLE_MODELS still boots.
         config = make_api_server_config()
-        assert config.inference_proxy.frontier_oracle_models == (
-            DEFAULT_FRONTIER_ORACLE_MODELS,
-        )
-        assert (
-            DEFAULT_FRONTIER_ORACLE_MODELS not in config.inference_proxy.allowed_models
-        )
+        listed = tuple(DEFAULT_FRONTIER_ORACLE_MODELS.split(","))
+        assert config.inference_proxy.frontier_oracle_models == listed
+        assert not set(listed) & set(config.inference_proxy.allowed_models)
         check_config(config)
 
     def test_port_out_of_range_raises(self):

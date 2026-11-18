@@ -91,7 +91,9 @@ function droppedSettings(
   const returned = (raw as { settings?: unknown } | null)?.settings
   const returnedFields = returned !== null && typeof returned === 'object' ? returned : {}
   return Object.keys(requested).filter(
-    (field) => !(field in returnedFields) && requested[field] !== stored[field],
+    // Compared by value: a list setting's default is a fresh [] each parse.
+    (field) => !(field in returnedFields)
+      && JSON.stringify(requested[field]) !== JSON.stringify(stored[field]),
   )
 }
 
