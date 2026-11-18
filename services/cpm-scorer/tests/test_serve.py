@@ -515,3 +515,59 @@ def test_wire_fault_detail_checks_do_not_crash(detail):
     }
     errs = pw.fault_errors(body)
     assert (errs == []) == (detail is None)
+
+
+def test_drain_finishes_the_leased_run_then_leases_nothing(platform):
+    first, second = _work(), _work()
+    platform.work.extend([first, second])
+    stop = threading.Event()
+    seen = []
+
+    def score_fn(work):
+        seen.append(work.run_id)
+        stop.set()  # SIGUSR1 arrives while this run is being scored
+        return _result()
+
+    logs = []
+    sv.serve(
+        _client(platform),
+        score_fn,
+        scorer_id="scorer-1",
+        scorer_version="0.1.0+abc",
+        gpu_sku=SKU,
+        log=logs.append,
+        sleep=stop.wait,
+        should_stop=stop.is_set,
+    )
+    # The run in hand is scored and posted; the queued one is never leased.
+    assert seen == [first["run_id"]]
+    assert [r["run_id"] for r in platform.results] == [first["run_id"]]
+    assert platform.work == [second]
+    assert logs[-1] == "drain requested: no new leases, exiting"
+
+
+def test_drain_wakes_an_idle_scorer(platform):
+    stop = threading.Event()
+    timer = threading.Timer(0.05, stop.set)
+    timer.start()
+    sv.serve(
+        _client(platform),
+        lambda _w: _result(),
+        scorer_id="scorer-1",
+        scorer_version="0.1.0+abc",
+        gpu_sku=SKU,
+        poll_seconds=3600,
+        log=lambda _m: None,
+        sleep=stop.wait,
+        should_stop=stop.is_set,
+    )
+    timer.join()
+    assert not platform.results
+
+
+def test_release_revision_names_the_scorer_version(monkeypatch):
+    monkeypatch.setenv("DITTO_CPM_SCORER_GIT_SHA", "f" * 40)
+    assert sv.release_revision() == "f" * 40
+    version = sv.scorer_version()
+    assert version.endswith("+" + "f" * 40)
+    assert len(version) <= sv.MAX_SCORER_VERSION

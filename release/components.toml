@@ -228,6 +228,11 @@ depends_on = ["dittobench_datagen"]
 paths = [
   "services/cpm-scorer/**",
   ".github/workflows/cpm-scorer-ci.yml",
+  # The signed GPU image (publish-cpm-scorer), its pull updater and the host
+  # role that runs both, like the generator scorer's under dittobench_api.
+  "Dockerfile.cpm-scorer-release",
+  "scripts/cpm-scorer-auto-update.sh",
+  "infra/ansible/roles/cpm_scorer/**",
 ]
 
 [components.cpm_starter_kit]

@@ -47,7 +47,32 @@
           # switches), it just cannot redirect the connection.
           - scorer.base_install_go
 
+    - name: Put the CPM GPU scorer in its own role group, never the generator scorer's
+      ansible.builtin.assert:
+        that:
+          - groups['role_cpm_scorer'] == ['ditto-cpm-scorer-prod']
+          - "'ditto-cpm-scorer-prod' in groups['env_prod']"
+          - "'ditto-cpm-scorer-prod' not in groups['role_generator_scorer']"
+          - "'ditto-generator-scorer-prod' not in groups['role_cpm_scorer']"
+
+    - name: Reach the CPM scorer over SSM through its own transfer bucket
+      vars:
+        cpm: "{{ hostvars['ditto-cpm-scorer-prod'] }}"
+      ansible.builtin.assert:
+        that:
+          - cpm.ansible_connection == 'amazon.aws.aws_ssm'
+          - cpm.ansible_host == 'i-0fedcba9876543210'
+          - cpm.ansible_aws_ssm_region == 'us-east-1'
+          - cpm.ansible_aws_ssm_bucket_name == 'ditto-cpm-scorer-ssm-339713011188'
+          # No IAP ProxyCommand or other GCE group_vars reach it.
+          - cpm.ansible_ssh_common_args is not defined
+
 - name: Require the scorer group under the EC2 inventory
   ansible.builtin.import_playbook: ../playbooks/require-hosts.yml
   vars:
     required_group: role_generator_scorer
+
+- name: Require the CPM scorer group under the EC2 inventory
+  ansible.builtin.import_playbook: ../playbooks/require-hosts.yml
+  vars:
+    required_group: role_cpm_scorer

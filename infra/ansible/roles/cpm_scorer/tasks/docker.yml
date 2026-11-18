@@ -1,0 +1,78 @@
+---
+# Docker engine with the NVIDIA runtime registered. The scorer's release is a
+# container image (Dockerfile.cpm-scorer-release).
+- name: Add Docker apt key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /usr/share/keyrings/docker.asc
+    mode: "0644"
+    checksum: "sha256:{{ docker_apt_key_sha256 }}"
+
+- name: Add the Docker apt repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: https://download.docker.com/linux/ubuntu
+    suites: ["{{ ansible_facts['distribution_release'] }}"]
+    components: [stable]
+    architectures: ["{{ cpm_scorer_docker_apt_arch }}"]
+    signed_by: /usr/share/keyrings/docker.asc
+    state: present
+
+- name: Install Docker engine
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+    state: present
+    update_cache: true
+
+# What `nvidia-ctk runtime configure --runtime=docker` writes, kept in one
+# reviewed file so a converge is idempotent. Container logs rotate locally;
+# the attached service's output reaches the journal anyway.
+- name: Register the NVIDIA container runtime with Docker
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ cpm_scorer_docker_daemon | to_nice_json }}\n"
+  vars:
+    cpm_scorer_docker_daemon:
+      runtimes:
+        nvidia:
+          path: nvidia-container-runtime
+          args: []
+      log-driver: local
+  notify: restart docker for cpm scorer
+
+- name: Ensure Docker is enabled and running
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Apply the Docker runtime configuration now
+  ansible.builtin.meta: flush_handlers
+
+- name: Prove the container runtime reaches the GPU
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - --network
+      - none
+      - --runtime=nvidia
+      - --gpus
+      - all
+      - --entrypoint
+      - nvidia-smi
+      - "{{ cpm_scorer_gpu_probe_image }}"
+      - --query-gpu=name
+      - --format=csv,noheader
+  register: cpm_scorer_gpu_probe
+  changed_when: false
+  failed_when: cpm_scorer_gpu_probe.rc != 0 or (cpm_scorer_gpu_probe.stdout | trim) != cpm_scorer_expected_gpu
+  when: not ansible_check_mode

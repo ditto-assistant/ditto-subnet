@@ -95,13 +95,19 @@ def load_token(env: dict[str, str] | None = None) -> str:
     return token
 
 
+def release_revision() -> str:
+    """The release commit baked into the scorer image, or empty."""
+    return os.environ.get("DITTO_CPM_SCORER_GIT_SHA", "").strip()
+
+
 def scorer_version() -> str:
-    """`<package version>+<git sha>` when the source tree is a git checkout."""
+    """`<package version>+<git sha>`: the release image's commit, else the
+    source tree's when it is a git checkout."""
     try:
         version = metadata.version("ditto-cpm-scorer")
     except metadata.PackageNotFoundError:
         version = "0"
-    sha = os.environ.get("DITTO_CPM_SCORER_GIT_SHA", "").strip()
+    sha = release_revision()
     if not sha:
         try:
             sha = subprocess.run(
@@ -447,9 +453,19 @@ def serve(
     once: bool = False,
     log: Callable[[str], None] = print,
     sleep: Callable[[float], None] = time.sleep,
+    should_stop: Callable[[], bool] = lambda: False,
 ) -> None:
-    """Lease from `/work` (reference and submission runs alike) until stopped."""
+    """Lease from `/work` (reference and submission runs alike) until stopped.
+
+    `should_stop` drains: once it returns true the loop leases nothing more,
+    so a run already leased is scored and posted before `serve` returns. The
+    release updater uses this (SIGUSR1) to swap images without abandoning a
+    lease.
+    """
     while True:
+        if should_stop():
+            log("drain requested: no new leases, exiting")
+            return
         try:
             body = client.get_work(scorer_id, scorer_version, gpu_sku)
         except RuntimeError as e:

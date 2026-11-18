@@ -1,0 +1,25 @@
+---
+# Converge the CPM (model_context) scorer GPU host on AWS
+# (infra/terraform/stacks/aws-cpm-scorer, tag role=cpm-scorer -> group
+# role_cpm_scorer). inventory/aws.yml connects over SSM Session Manager; the
+# role reads the Platform bearer through the federated instance role (aws-wif)
+# by default.
+#
+# Unlike aws-generator-scorer.yml this play does not apply the base role: base
+# targets Debian dittoboxes (Debian keyrings, an sshd unit and UFW rules for
+# SSH ingress), while this Ubuntu 24.04 host has no ingress at all and its
+# cloud image already enables unattended security upgrades.
+#
+#   AWS_PROFILE=... ansible-playbook -i infra/ansible/inventory/aws.yml \
+#     infra/ansible/playbooks/aws-cpm-scorer.yml \
+#     -e cpm_scorer_revision=<released commit>
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_cpm_scorer
+
+- name: Converge the CPM scorer
+  hosts: role_cpm_scorer
+  become: true
+  gather_facts: true
+  roles:
+    - cpm_scorer

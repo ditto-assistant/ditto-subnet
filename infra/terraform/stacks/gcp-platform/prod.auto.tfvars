@@ -38,6 +38,11 @@ enable_screener_capacity_controller = true
 # Private VM that builds and runs miner generators for the shadow generator
 # competition. Its identity reads only generator-scorer-token-prod.
 enable_generator_scorer = true
+# CPM (model_context) scorer bearer container (cpm-scorer.tf). Off until its
+# activation: flipping it creates the empty model-context-scorer-token-prod and
+# Platform's read grant; cpm_scorer_aws_account_id (unset) federates the AWS
+# GPU host afterwards.
+enable_model_context_scorer_secret = false
 # Rehearsal VM is opt-in through the protected workflow and absent otherwise.
 enable_screener_fleet_dev_host = false
 # The bare-metal X.509 identity is live on subnet-screener-1. Preserve its

@@ -24,9 +24,32 @@ uv run pytest -q
   `DITTO_MODEL_CONTEXT_SCORER_ID` names the scorer (default: the hostname),
   and `scorer_version` is the package version plus the git SHA.
 
+- `cpm-scorer version` prints `{scorer_version, revision, cpm_score_version}`.
+  `serve` drains on SIGUSR1: it posts the run in hand, leases nothing more and
+  exits 0.
+
 `--generate-bin` pins the `cmd/generate` binary. Without it the scorer builds
 `research/dittobench-datagen` with `go build` into `~/.cache/cpm-scorer`,
 keyed by the generator source digest.
+
+## Release and deploy
+
+- **Image.** A `cpm_scorer` release builds `Dockerfile.cpm-scorer-release` from
+  the release commit: the CUDA 13.2.1 Ubuntu 24.04 base and uv pinned by
+  digest, the locked `gpu` extra, and `cmd/generate` built from
+  `research/dittobench-datagen` at the same commit. `release.yml`
+  (`publish-cpm-scorer`) cosign-signs it and promotes it to
+  `ghcr.io/ditto-assistant/ditto-subnet-stack:cpm-scorer-stable-1`.
+- **Host.** `infra/ansible/playbooks/aws-cpm-scorer.yml` (role `cpm_scorer`)
+  installs the pinned NVIDIA r595 open driver and container toolkit, Docker,
+  and the bearer as a 0400 file. It activates `cpm-scorer-sha-<revision>`, then
+  enables a timer that runs `scripts/cpm-scorer-auto-update.sh`. That script
+  verifies the signature, labels and `version`, drains with SIGUSR1, and rolls
+  back an image that is not adopted.
+- **Bearer.** Both sides read `model-context-scorer-token-prod`: the host
+  through the `cpm-scorer-aws` WIF pool, and Platform through
+  `secret_model_context_scorer_token` (`gcp-platform/cpm-scorer.tf`). All of it
+  is off by default.
 
 ## Modules
 

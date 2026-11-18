@@ -240,6 +240,11 @@ secret_screener_controller_api_token: ""
 # Bearer for the generator competition scorer (generator_scorer role). Empty
 # leaves every /api/v1/generator-scorer endpoint disabled.
 secret_generator_scorer_token: ""
+# Bearer for the CPM (model_context) scorer (cpm_scorer role), rendered as
+# DITTO_MODEL_CONTEXT_SCORER_TOKEN. Empty leaves every /model-context-scorer
+# endpoint answering 503. Naming the secret (model-context-scorer-token-prod,
+# gcp-platform/cpm-scorer.tf) in host_vars is what turns the lane on.
+secret_model_context_scorer_token: ""
 
 # Platform-owned inference stays dark until the coordinated rollout enables it.
 # Re-dispatch a provably receipt-free confirmation 429/503 once instead of
