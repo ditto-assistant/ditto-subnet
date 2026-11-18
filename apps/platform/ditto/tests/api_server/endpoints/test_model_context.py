@@ -685,6 +685,9 @@ class TestSeasonsAndScoring:
         assert view["open_block"] == chain.block.number
         assert view["open_block_hash"] == _BLOCK_HASH
         assert view["seeds"] == season_seeds(1, _BLOCK_HASH)
+        # Browser readers display the string form: uint64 seeds pass 2**53.
+        assert view["seed_strings"] == [str(s) for s in season_seeds(1, _BLOCK_HASH)]
+        assert any(seed >= 1 << 53 for seed in view["seeds"])
         assert view["bench_version"] == 18
 
         # Reference runs (the floors) lease before any submission.

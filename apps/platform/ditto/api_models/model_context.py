@@ -451,6 +451,9 @@ class ModelContextSeasonView(ModelContextModel):
     open_block: int
     open_block_hash: str
     seeds: list[int]
+    seed_strings: list[str] = Field(default_factory=list)
+    """``seeds`` as decimal strings: a uint64 seed is past what a JavaScript
+    number holds exactly, so browser readers display these."""
     bench_version: int
     cpm_score_version: int
     base_floors: dict[str, float]

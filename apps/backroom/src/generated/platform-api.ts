@@ -33202,6 +33202,8 @@ export interface components {
             opened_at: string;
             /** Season */
             season: number;
+            /** Seed Strings */
+            seed_strings?: string[];
             /** Seeds */
             seeds: number[];
         };
