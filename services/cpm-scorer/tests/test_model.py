@@ -165,8 +165,9 @@ def test_score_seed_on_fixture(tok, tiny_artifact):
     rec, raw = score.score_seed(
         _loaded(tok).scorer, tasks, 2048, 8, log=lambda _m: None
     )
-    # 2 memory cases (3 + 2 candidates) + 1 tool case x 3 tools
-    assert rec["pairs_scored"] == len(raw) == 3 + 2 + 3
+    # 2 memory cases (4 + 3 candidates, each including the tool prerequisite
+    # pair tp1) + 1 tool case x 3 tools
+    assert rec["pairs_scored"] == len(raw) == 4 + 3 + 3
     # The budget fits everything and the catalog has < 8 tools. m1's relevant
     # id "missing" is not a candidate, so m1 recall is 1/2 and the mean 0.75:
     # recall counts every relevant id, candidate or not (contract §4.3).
@@ -194,5 +195,5 @@ def test_run_output_shape(tok, tiny_artifact, tmp_path, monkeypatch):
     assert [s["seed"] for s in out["per_seed"]] == [42, 7]
     assert out["determinism"] == {"rerun_seed": 42, "identical": True}
     assert out["score"] == pytest.approx(sum(s["score"] for s in out["per_seed"]) / 2)
-    assert out["tokens"]["pairs_scored"] == 16
+    assert out["tokens"]["pairs_scored"] == 20
     json.dumps(out)  # JSON-serialisable

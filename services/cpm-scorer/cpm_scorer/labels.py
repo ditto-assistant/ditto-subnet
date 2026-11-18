@@ -111,8 +111,13 @@ def export_records(art: dict, seed_key: str) -> dict[str, Any]:
             }
             pairs[p["pair_id"]] = rec
             by_user_wave.setdefault((user, w), []).append(p["pair_id"])
+    # Tool prerequisite pairs are seeded into the primary user before the tool
+    # phase and kept into the memory phase (protocol.go PrerequisitePairs), so
+    # they are memory candidates too. Mirrors docs/research/cpm/export_cpm.py.
     for tc in art.get("tool_cases") or []:
         for p in tc.get("prerequisite_pairs") or []:
+            if p["pair_id"] not in pairs:
+                by_user_wave.setdefault((DEFAULT_USER, 0), []).append(p["pair_id"])
             pairs.setdefault(
                 p["pair_id"],
                 {

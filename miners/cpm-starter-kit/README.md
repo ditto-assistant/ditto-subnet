@@ -51,9 +51,9 @@ uv run cpm-scorer score --model you/your-cpm@<40-hex-commit> --base qwen3.5-0.8b
 The output is the same JSON the scorer posts to Platform: `score`,
 `components`, `per_seed`, `tokens`, `cpm_score_version` and `determinism`.
 
-- **Full runs need a GPU.** One full seed is about 85,000 (query, candidate)
-  pairs on v18: about 107 memory cases × 157 candidates plus 47 tool cases ×
-  1,454 tools. On CPU, use `--limit-cases`.
+- **Full runs need a GPU.** One full seed is about 122,000 (query, candidate)
+  pairs on v18: 107 memory cases × about 505 candidates (54,051 pairs) plus
+  47 tool cases × 1,454 tools. On CPU, use `--limit-cases`.
 - **Scores are only comparable at the same settings.** A `--limit-cases` run
   is a smoke test, not a season score.
 - **Determinism.** The scorer re-runs the first seed and fails a run whose

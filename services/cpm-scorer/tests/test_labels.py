@@ -54,7 +54,8 @@ def test_labels_match_exporter_on_fixture(tiny_artifact, tmp_path):
     art.write_text(json.dumps(tiny_artifact))
     ours = _assert_parity(art, tmp_path)
     by_id = {c["case_id"]: c for c in ours["cases"]}
-    assert by_id["m1"]["candidate_pair_ids"] == ["p2", "p1", "p3"]
+    # The tool prerequisite pair tp1 is in the primary user's store (wave 0).
+    assert by_id["m1"]["candidate_pair_ids"] == ["p2", "p1", "tp1", "p3"]
     assert by_id["m2"]["candidate_pair_ids"] == ["p2", "p1"]
     assert {s["type"] for s in by_id["m2"]["spans"]["p1"]} == {"distractor"}
     assert by_id["m3"]["decision"]["abstain"] is True
@@ -92,7 +93,7 @@ def test_build_tasks_selection_and_order(tiny_artifact):
     # abstain (m3), chitchat (m4) and restraint (t0) cases are out of v1
     assert [t.case_id for t in tasks.memory] == ["m1", "m2"]
     assert [t.case_id for t in tasks.tools] == ["t1"]
-    assert tasks.memory[0].candidates == ("p1", "p2", "p3")
+    assert tasks.memory[0].candidates == ("p1", "p2", "p3", "tp1")
     assert tasks.tool_names == ("delete_all", "get_group", "send_poll")
     assert tasks.tool_text["send_poll"] == "send_poll: Send a poll."
     assert tasks.pair_text["p2"].startswith("[2025-01-01T00:00:00Z] User: My dentist")
