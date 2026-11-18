@@ -54,6 +54,7 @@ from cpm_scorer.metrics import distractor_ids
 from cpm_scorer.screening import (
     MANIFEST_NAME,
     MANIFEST_SCHEMA,
+    MAX_LORA_RANK,
     TRACK,
     sha256_file,
     validate_manifest,
@@ -181,6 +182,29 @@ def group_scores(net, tok, render, group: Group, device: str):
     return logits[:, 0] - logits[:, 1]
 
 
+def accum_window_size(i: int, n: int, accum: int) -> int:
+    """Size of the gradient-accumulation window holding 1-based item `i` of
+    `n`. Every window holds `accum` items except a shorter final one, and each
+    loss is divided by its own window's size so every optimiser step averages
+    its groups equally."""
+    if not 1 <= i <= n or accum < 1:
+        raise ValueError(f"item {i} of {n} with accum {accum}")
+    start = ((i - 1) // accum) * accum
+    return min(accum, n - start)
+
+
+def check_lora_args(rank: int, targets: list[str]) -> str | None:
+    """The scorer's LoRA limits (contract §2.2), checked before any work."""
+    if not 1 <= rank <= MAX_LORA_RANK:
+        return f"--rank must be in 1..{MAX_LORA_RANK}, not {rank}"
+    if not targets:
+        return "--targets must name at least one module"
+    bad = sorted(set(targets) - ALLOWED_LORA_TARGETS)
+    if bad:
+        return f"--targets not allowed: {bad}; allowed: {sorted(ALLOWED_LORA_TARGETS)}"
+    return None
+
+
 def listwise_loss(scores, labels: Iterable[bool]):
     import torch
 
@@ -233,6 +257,13 @@ def main(argv: list[str] | None = None) -> int:
         "DittoBench cmd/generate seeds only.",
     )
     args = ap.parse_args(argv)
+    targets = [t for t in args.targets.split(",") if t.strip()]
+    targets = [t.strip() for t in targets]
+    problem = check_lora_args(args.rank, targets)
+    if problem:
+        ap.error(problem)
+    if args.accum < 1:
+        ap.error("--accum must be at least 1")
 
     import torch
     from peft import LoraConfig, get_peft_model
@@ -254,7 +285,6 @@ def main(argv: list[str] | None = None) -> int:
     tok = m.load_tokenizer(base_dir)
     net = m.load_base_model(base_dir)
     render = m.RelevanceScorer(net, tok, "cpu").render  # template + truncation
-    targets = [t for t in args.targets.split(",") if t]
     net = get_peft_model(
         net,
         LoraConfig(
@@ -279,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
             loss = listwise_loss(
                 group_scores(inner, tok, render, g, args.device), g.labels
             )
-            (loss / args.accum).backward()
+            (loss / accum_window_size(i, len(order), args.accum)).backward()
             if i % args.accum == 0 or i == len(order):
                 opt.step()
                 opt.zero_grad(set_to_none=True)

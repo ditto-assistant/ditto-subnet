@@ -11,9 +11,6 @@ import sys
 import pytest
 import torch
 from conftest import REPO_ROOT
-from peft import LoraConfig, get_peft_model
-from tiny import tiny_model, tiny_tokenizer
-
 from cpm_scorer import model as m
 from cpm_scorer import score
 from cpm_scorer.labels import export_records
@@ -26,6 +23,8 @@ from cpm_scorer.screening import (
     verify_files,
 )
 from cpm_scorer.tasks import build_tasks
+from peft import LoraConfig, get_peft_model
+from tiny import tiny_model, tiny_tokenizer
 
 TRAIN = REPO_ROOT / "miners" / "cpm-starter-kit" / "train_lora.py"
 WORDS = ["hello", "world", "dentist", "Alvarez", "Brown", "poll", "send", "group"]
@@ -110,3 +109,37 @@ def test_one_step_trains_and_writes_a_valid_manifest(kit, tiny_artifact, tmp_pat
     with pytest.raises(ScreeningError) as e:
         score.screen_dir(tmp_path, "qwen3.5-0.8b")
     assert e.value.reason == "unlisted_file"
+
+
+def test_accum_window_sizes_cover_a_partial_final_window(kit):
+    sizes = [kit.accum_window_size(i, 10, 4) for i in range(1, 11)]
+    assert sizes == [4, 4, 4, 4, 4, 4, 4, 4, 2, 2]
+    # Each optimiser step sums its window's scaled losses to a mean (weight 1).
+    for start in (0, 4, 8):
+        window = sizes[start : start + 4]
+        assert sum(1 / s for s in window) == pytest.approx(1.0)
+    assert [kit.accum_window_size(i, 3, 1) for i in (1, 2, 3)] == [1, 1, 1]
+    assert [kit.accum_window_size(i, 3, 8) for i in (1, 2, 3)] == [3, 3, 3]
+    with pytest.raises(ValueError):
+        kit.accum_window_size(0, 3, 2)
+
+
+@pytest.mark.parametrize(
+    "argv,msg",
+    [
+        (["--rank", "65"], "--rank must be in 1..64"),
+        (["--rank", "0"], "--rank must be in 1..64"),
+        (["--targets", "q_proj,embed_tokens"], "not allowed: ['embed_tokens']"),
+        (["--targets", ","], "at least one module"),
+        (["--accum", "0"], "--accum must be at least 1"),
+    ],
+)
+def test_bad_lora_args_fail_before_any_work(kit, monkeypatch, capsys, argv, msg):
+    def boom(*_a, **_k):
+        pytest.fail("must fail before generating data")
+
+    monkeypatch.setattr(kit, "generate_records", boom)
+    monkeypatch.setattr(kit, "load_export", boom)
+    with pytest.raises(SystemExit) as e:
+        kit.main(["--seeds", "101", "--out", "/tmp/unused", *argv])
+    assert e.value.code == 2 and msg in capsys.readouterr().err
