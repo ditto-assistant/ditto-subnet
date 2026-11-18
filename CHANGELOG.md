@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.494.0 (2026-11-18)
+
+### Documentation
+
+- **research**: Record peyton's sn118 model decisions and the private trace track
+  ([#3570](https://github.com/ditto-assistant/ditto-subnet/pull/3570),
+  [`a7c0697`](https://github.com/ditto-assistant/ditto-subnet/commit/a7c0697e96fe0db050c8b1e23fb629a63afb8b24))
+
+### Features
+
+- **cli**: Add ditto readmit and the readmission rules (SN-485)
+  ([#3563](https://github.com/ditto-assistant/ditto-subnet/pull/3563),
+  [`cd65c64`](https://github.com/ditto-assistant/ditto-subnet/commit/cd65c646c834ba8eafb917a10dc8300ba78cf269))
+
+
 ## v0.493.0 (2026-11-17)
 
 ### Features
