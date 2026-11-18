@@ -144,8 +144,13 @@ def export_artifact(path: pathlib.Path, files: dict, stats: Counter) -> dict:
             }
             pairs[p["pair_id"]] = rec
             by_user_wave.setdefault((user, w), []).append(p["pair_id"])
+    # Tool prerequisite pairs are seeded into the primary user before the tool
+    # phase, and that store is preserved into the memory phase
+    # (protocol.go PrerequisitePairs), so they are memory candidates too.
     for tc in art.get("tool_cases") or []:
         for p in tc.get("prerequisite_pairs") or []:
+            if p["pair_id"] not in pairs:
+                by_user_wave.setdefault((DEFAULT_USER, 0), []).append(p["pair_id"])
             pairs.setdefault(
                 p["pair_id"],
                 {
