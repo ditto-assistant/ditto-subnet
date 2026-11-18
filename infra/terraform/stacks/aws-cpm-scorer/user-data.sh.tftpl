@@ -27,12 +27,21 @@ echo "$sha256  $workdir/amazon-ssm-agent.deb" | sha256sum --check --strict
 
 # User data can run before snapd finishes seeding, and snap remove fails then.
 # Both agents would register the same instance, so the snap goes first.
+had_snap_agent=false
 if command -v snap >/dev/null; then
   snap wait system seed.loaded
   if snap list amazon-ssm-agent >/dev/null 2>&1; then
     snap remove --purge amazon-ssm-agent
+    had_snap_agent=true
   fi
 fi
 
-dpkg -i "$workdir/amazon-ssm-agent.deb"
-systemctl enable --now amazon-ssm-agent
+# If the pinned install or start fails after the snap is gone, put the stock
+# snap agent back before exiting: with no SSH ingress, a host without any SSM
+# agent is unreachable.
+if ! dpkg -i "$workdir/amazon-ssm-agent.deb" || ! systemctl enable --now amazon-ssm-agent; then
+  if [ "$had_snap_agent" = true ]; then
+    snap install amazon-ssm-agent --classic || true
+  fi
+  exit 1
+fi
