@@ -98,6 +98,9 @@ SCORE_TOLERANCE = 1e-6
 SCREENING_DISK_HEADROOM_BYTES = 2 << 30
 SCREEN_DIR_ENV = "DITTO_MODEL_CONTEXT_SCREEN_DIR"
 SCORER_LIVE_WINDOW = timedelta(minutes=10)
+# Unrunnable runs one /work poll closes before answering; the rest close on
+# the next poll.
+_MAX_LEASE_SCAN = 64
 
 
 def _lock_key(name: str) -> int:
@@ -680,6 +683,15 @@ async def screen_next(
         rejected = str(exc)
     except ArtifactUnavailable as exc:
         unavailable = str(exc)
+    except Exception as exc:  # noqa: BLE001 - host faults retry, then exhaust
+        # An unexpected host error (OSError writing a download, a bug) is not
+        # the miner's fault, but it still spends an attempt: it goes through
+        # the same backoff and exhaustion accounting as an outage, so a
+        # persistent failure ends in a rejection instead of looping forever.
+        logger.exception(
+            "model_context screening of %s failed unexpectedly", submission_id
+        )
+        unavailable = f"screening failed ({type(exc).__name__}): {exc}"[:500]
     async with session_maker() as session, session.begin():
         current = await session.get(
             ModelContextSubmission, submission_id, with_for_update=True
@@ -800,7 +812,7 @@ async def lease_next_run(
     if season is None:
         return None
     await expire_leases(session, settings=settings, now=now)
-    for _ in range(16):
+    for _ in range(_MAX_LEASE_SCAN):
         run = await session.scalar(
             select(ModelContextRun)
             .where(
@@ -816,19 +828,22 @@ async def lease_next_run(
         )
         if run is None:
             return None
+        # A run that can no longer be scored is closed with its reason, never
+        # leased: a base dropped from the allowlist (the submission keeps its
+        # status, so restoring the base re-queues it next season), or a
+        # submission that is no longer active.
+        unrunnable: str | None = None
         submission = None
-        if run.submission_id is not None:
+        if settings.base(run.base_id) is None:
+            unrunnable = f"base {run.base_id} is no longer allowlisted"
+        elif run.submission_id is not None:
             submission = await session.get(ModelContextSubmission, run.submission_id)
             if submission is None or submission.status not in ACTIVE_STATUSES:
-                run.status = "abandoned"
-                run.finished_at = now
-                run.fault = "submission is no longer active"
-                await session.flush()
-                continue
-        elif settings.base(run.base_id) is None:
+                unrunnable = "submission is no longer active"
+        if unrunnable is not None:
             run.status = "abandoned"
             run.finished_at = now
-            run.fault = "base is no longer allowlisted"
+            run.fault = unrunnable
             await session.flush()
             continue
         run.status = "leased"
@@ -962,8 +977,11 @@ async def record_fault(
     fail it and reject the submission. A reference run never rejects anything.
     """
     run = await _leased_run(session, payload.run_id, payload.lease_id, now=now)
-    detail = _bounded(
-        f"{payload.error_kind}: {payload.detail}".rstrip(": "), MAX_FAULT_DETAIL_CHARS
+    # The request bounds detail so this fits MAX_FAULT_DETAIL_CHARS intact.
+    detail = (
+        f"{payload.error_kind}: {payload.detail}"
+        if payload.detail
+        else payload.error_kind
     )
     run.lease_id = None
     run.lease_expires_at = None

@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
@@ -27,6 +29,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.model_context import (
+    MAX_FAULT_DETAIL_CHARS,
+    MAX_FAULT_REQUEST_DETAIL_CHARS,
     ROTATE_SEASON_CONFIRMATION,
     ModelContextSettings,
     commitment_value,
@@ -37,7 +41,11 @@ from ditto.api_models.model_context import (
     signature_payload,
 )
 from ditto.api_server.dependencies import get_chain_client, get_session
-from ditto.api_server.model_context_competition import rotate_season, screen_next
+from ditto.api_server.model_context_competition import (
+    MAX_SCREENING_ATTEMPTS,
+    rotate_season,
+    screen_next,
+)
 from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import BlockInfo, HotkeyCommitment, NeuronInfo
 from ditto.db.models import ModelContextRun, ModelContextSubmission
@@ -528,6 +536,44 @@ class TestSubmission:
         hash_row = await _status(session_maker, tampered["submission_id"])
         assert "adapter_config.json" in hash_row.reject_reason
 
+    async def test_unexpected_screening_error_retries_then_exhausts(
+        self,
+        client: httpx.AsyncClient,
+        chain: _Chain,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """An OSError mid-download spends an attempt and backs off like an
+        outage; after MAX_SCREENING_ATTEMPTS the submission is rejected."""
+        await _open_lane(client)
+        accepted = await _submit(client, chain, FakeFetcher(), _MINER, block=100)
+
+        broken = FakeFetcher()
+        broken.raises = OSError(28, "No space left on device")
+        outcome = None
+        for attempt in range(1, MAX_SCREENING_ATTEMPTS + 1):
+            outcome = await screen_next(session_maker, broken)
+            assert outcome is not None
+            row = await _status(session_maker, accepted["submission_id"])
+            assert row.screening_attempts == attempt
+            if attempt < MAX_SCREENING_ATTEMPTS:
+                assert outcome[1] == "retry"
+                assert row.status == "screening"
+                assert row.screening_lease_until is not None
+                # Backing off: nothing is claimable until the backoff ends.
+                assert await screen_next(session_maker, broken) is None
+                async with session_maker() as session:
+                    await session.execute(
+                        update(ModelContextSubmission).values(
+                            screening_lease_until=None
+                        )
+                    )
+                    await session.commit()
+        assert outcome is not None and outcome[1] == "rejected"
+        assert row.status == "rejected"
+        assert "OSError" in row.reject_reason
+        assert "No space left on device" in row.reject_reason
+        assert await screen_next(session_maker, broken) is None
+
     async def test_unavailable_artifacts_retry_then_reject(
         self,
         client: httpx.AsyncClient,
@@ -899,6 +945,76 @@ class TestSeasonsAndScoring:
         row = await _status(session_maker, accepted["submission_id"])
         assert row.reject_reason.startswith("scorer: model_load")
 
+    async def test_run_on_a_removed_base_is_abandoned_not_leased(
+        self,
+        client: httpx.AsyncClient,
+        chain: _Chain,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _open_lane(client)
+        fetcher = FakeFetcher()
+        accepted = await _submit(client, chain, fetcher, _MINER, block=1_000)
+        await _screen_all(session_maker, fetcher)
+        await _open_season(session_maker, chain)
+        await _score_references(client, quality=0.2)
+        # The operator drops the submission's base from the allowlist while
+        # its run is queued.
+        await _open_lane(
+            client,
+            base_allowlist=[
+                b
+                for b in _settings()["base_allowlist"]
+                if b["base_id"] != "qwen3.5-0.8b"
+            ],
+        )
+        assert (await client.get(_WORK_URL, headers=_SCORER)).status_code == 204
+        assert (await client.get(_WORK_URL, headers=_SCORER)).status_code == 204
+        async with session_maker() as session:
+            run = await session.scalar(
+                select(ModelContextRun).where(
+                    ModelContextRun.submission_id == UUID(accepted["submission_id"])
+                )
+            )
+        assert run is not None and run.status == "abandoned"
+        assert run.fault == "base qwen3.5-0.8b is no longer allowlisted"
+        assert run.finished_at is not None and run.lease_id is None
+        # The submission keeps its status: restoring the base re-queues it.
+        row = await _status(session_maker, accepted["submission_id"])
+        assert row.status == "queued"
+
+    async def test_fault_detail_is_stored_intact_or_refused(
+        self,
+        client: httpx.AsyncClient,
+        chain: _Chain,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        assert MAX_FAULT_REQUEST_DETAIL_CHARS == 1_982
+        assert MAX_FAULT_REQUEST_DETAIL_CHARS + len("nondeterministic: ") == (
+            MAX_FAULT_DETAIL_CHARS
+        )
+        await _open_lane(client)
+        await _open_season(session_maker, chain)
+        work = (await client.get(_WORK_URL, headers=_SCORER)).json()
+        url = "/api/v1/model-context-scorer/fault"
+        body = {
+            "run_id": work["run_id"],
+            "lease_id": work["lease_id"],
+            "error_kind": "nondeterministic",
+            "scorer_id": "cpm-1",
+            "scorer_version": "0.1.0",
+        }
+        too_long = {**body, "detail": "x" * (MAX_FAULT_REQUEST_DETAIL_CHARS + 1)}
+        refused = await client.post(url, headers=_SCORER, json=too_long)
+        assert refused.status_code == 422
+        detail = "y" * (MAX_FAULT_REQUEST_DETAIL_CHARS - 4) + "END:"
+        resp = await client.post(url, headers=_SCORER, json={**body, "detail": detail})
+        assert resp.status_code == 200, resp.text
+        async with session_maker() as session:
+            run = await session.get(ModelContextRun, UUID(work["run_id"]))
+        assert run is not None
+        assert run.fault == f"nondeterministic: {detail}"
+        assert len(run.fault) == MAX_FAULT_DETAIL_CHARS
+
     @pytest.mark.usefixtures("chain")
     async def test_scorer_auth(self, app: FastAPI, client: httpx.AsyncClient) -> None:
         assert (await client.get(_WORK_URL)).status_code == 401
@@ -906,6 +1022,36 @@ class TestSeasonsAndScoring:
         assert (await client.get(_WORK_URL, headers=bad)).status_code == 401
         app.state.config = replace(app.state.config, model_context_scorer_token=None)
         assert (await client.get(_WORK_URL, headers=_SCORER)).status_code == 503
+
+
+_TERMS_FIXTURE = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "submission_terms_model_context.json"
+)
+
+
+@pytest.mark.usefixtures("chain")
+async def test_submission_terms_fixture_is_the_live_response(
+    client: httpx.AsyncClient,
+) -> None:
+    """Backroom's schema test parses this exact payload
+    (``apps/backroom/src/lib/submission-terms.schemas.test.ts``), so the
+    fixture must be what Platform serves. Regenerate with
+    ``DITTO_REGENERATE_FIXTURES=1``."""
+    body = (await client.get("/api/v1/public/submission-terms")).json()
+    for terms in body["competitions"]:
+        # The deposit address is deployment config, not contract.
+        terms["fee"]["send_address"] = "5FixtureSendAddress"
+    rendered = json.dumps(body, indent=2, sort_keys=True) + "\n"
+    if os.environ.get("DITTO_REGENERATE_FIXTURES") == "1":
+        _TERMS_FIXTURE.write_text(rendered)
+    assert {c["competition"] for c in body["competitions"]} == {
+        "memory",
+        "generator",
+        "model_context",
+    }
+    assert _TERMS_FIXTURE.read_text() == rendered
 
 
 @pytest.mark.usefixtures("chain")

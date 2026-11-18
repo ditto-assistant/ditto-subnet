@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import math
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -51,6 +51,12 @@ SubmissionStatus = Literal["screening", "queued", "scored", "rejected", "superse
 RunKind = Literal["submission", "reference"]
 RunStatus = Literal["queued", "leased", "scored", "failed", "abandoned"]
 FaultKind = Literal["infra", "nondeterministic", "model_load", "invalid_model"]
+# ``model_context_runs.fault`` stores ``"{error_kind}: {detail}"`` in at most
+# MAX_FAULT_DETAIL_CHARS, so a request's detail may use what the longest kind
+# leaves: 2000 - len("nondeterministic: ") = 1982 characters.
+MAX_FAULT_REQUEST_DETAIL_CHARS = MAX_FAULT_DETAIL_CHARS - max(
+    len(f"{kind}: ") for kind in get_args(FaultKind)
+)
 """``infra``: the scorer host failed (released and retried, never blames the
 model). ``nondeterministic``: the re-run seed differed bitwise (contract
 section 2.4; the run fails). ``model_load`` / ``invalid_model``: the weights do
@@ -606,7 +612,8 @@ class ModelContextFaultRequest(ModelContextModel):
     run_id: UUID
     lease_id: UUID
     error_kind: FaultKind
-    detail: Annotated[str, Field(max_length=4_000)] = ""
+    detail: Annotated[str, Field(max_length=MAX_FAULT_REQUEST_DETAIL_CHARS)] = ""
+    """Stored intact; longer details are refused (422), never truncated."""
     scorer_id: Annotated[str, Field(min_length=1, max_length=120)]
     scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
 

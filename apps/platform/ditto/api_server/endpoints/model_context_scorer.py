@@ -100,8 +100,10 @@ async def lease_work(
         return Response(status_code=204)
     settings = resolved.settings
     run, season, row = lease.run, lease.season, lease.submission
+    # lease_next_run never leases a run whose base left the allowlist.
     base = settings.base(run.base_id)
-    assert base is not None
+    if base is None:
+        raise RuntimeError(f"leased run {run.run_id} has no allowlisted base")
     assert run.lease_id is not None and run.lease_expires_at is not None
     work = ModelContextWorkItem(
         run_id=run.run_id,

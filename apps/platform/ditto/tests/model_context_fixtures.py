@@ -120,6 +120,7 @@ class FakeFetcher:
     def __init__(self) -> None:
         self.repos: dict[tuple[str, str], dict[str, bytes]] = {}
         self.unavailable = False
+        self.raises: BaseException | None = None
         self.requests: list[tuple[str, str, str]] = []
 
     def put(self, repo: str, revision: str, files: Mapping[str, bytes]) -> None:
@@ -127,6 +128,8 @@ class FakeFetcher:
 
     async def stream(self, repo: str, revision: str, path: str) -> AsyncIterator[bytes]:
         self.requests.append((repo, revision, path))
+        if self.raises is not None:
+            raise self.raises
         if self.unavailable:
             raise ArtifactUnavailable("fake outage")
         files = self.repos.get((repo, revision))

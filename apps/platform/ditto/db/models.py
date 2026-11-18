@@ -16172,6 +16172,14 @@ class ModelContextSubmission(Base):
             "status IN ('screening', 'rejected') OR weights_sha256 IS NOT NULL",
             name="model_context_submissions_screened",
         ),
+        Index(
+            "model_context_submissions_hotkey_idx",
+            "hotkey",
+            text("created_at DESC"),
+        ),
+        Index("model_context_submissions_status_idx", "status", "created_at"),
+        Index("model_context_submissions_weights_idx", "weights_sha256"),
+        Index("model_context_submissions_manifest_idx", "manifest_sha256"),
     )
 
 
@@ -16227,6 +16235,13 @@ class ModelContextSeason(Base):
         CheckConstraint(
             "closes_at > opened_at",
             name="model_context_seasons_window",
+        ),
+        # At most one open season.
+        Index(
+            "model_context_seasons_open_key",
+            text("(closed_at IS NULL)"),
+            unique=True,
+            postgresql_where=text("closed_at IS NULL"),
         ),
     )
 
@@ -16319,6 +16334,33 @@ class ModelContextRun(Base):
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(["season"], ["model_context_seasons.season"]),
+        Index("model_context_runs_submission_idx", "submission_id", "season"),
+        Index("model_context_runs_season_idx", "season", "status"),
+        Index(
+            "model_context_runs_pending_idx",
+            "created_at",
+            postgresql_where=text("status IN ('queued', 'leased')"),
+        ),
+        # One open run per submission and season, and per reference base and
+        # season: enqueue_*_run's ON CONFLICT targets these.
+        Index(
+            "model_context_runs_open_submission_key",
+            "submission_id",
+            "season",
+            unique=True,
+            postgresql_where=text(
+                "kind = 'submission' AND status IN ('queued', 'leased')"
+            ),
+        ),
+        Index(
+            "model_context_runs_open_reference_key",
+            "season",
+            "base_id",
+            unique=True,
+            postgresql_where=text(
+                "kind = 'reference' AND status IN ('queued', 'leased')"
+            ),
+        ),
     )
 
 
