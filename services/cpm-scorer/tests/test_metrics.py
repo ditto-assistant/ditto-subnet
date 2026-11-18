@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from cpm_scorer import metrics as m
 
 

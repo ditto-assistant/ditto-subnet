@@ -7,9 +7,8 @@ import struct
 
 import pytest
 import torch
-from safetensors.torch import save_file
-
 from cpm_scorer import screening as s
+from safetensors.torch import save_file
 
 
 def _manifest(**over) -> dict:
