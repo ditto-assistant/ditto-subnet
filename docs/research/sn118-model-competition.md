@@ -1,10 +1,16 @@
 # SN118 model competition: a Ditto context-packet model that miners train
 
-Status: **research memo, 2026-11-17, revision 2.** Nothing here changes a live
-score, weight, setting, lease or piece of infrastructure. Infrastructure is
-described as AWS proposals only, and every experiment listed needs its own
-spend approval. Revision 1 (#3567) covered the SN118 mechanism; it is kept as
-Part II. Revision 2 adds Part I and makes it the central question:
+Status: **research memo, revision 3 (2026-11-18).** Nothing here changes a
+live score, weight, setting, lease or piece of infrastructure.
+
+- **Revision 1** (#3567) covered the SN118 mechanism. It is kept as Part II.
+- **Revision 2** (#3568) added Part I, the context-packet model.
+- **Revision 3** adds Part 0: Peyton's answers to the open calls, the
+  private trace track, open weights at submit, and the approved P0 runbook.
+  P0 spend is approved but **nothing has run**. Its AWS infrastructure goes
+  through protected Terraform.
+
+Revision 2 made this the central question:
 
 > "Making our own decision model only makes sense if we hyperfocus this model
 > on the things that Ditto needs. Our special sauce is creating the perfect
@@ -28,8 +34,20 @@ heads. Diffusion is a later bet, not the first step. The proof is a P0 with the
 same harness and the same big model: Jev against our model, comparing answer
 quality at a fixed token budget.
 
+Since 2026-11-18: the model goes into the product, its weights are public the
+moment they are submitted, and it is scored privately on the team's own
+traces through the real backend with production models.
+
 ## How to read this memo
 
+- **Part 0** (revision 3) records Peyton's 2026-11-18 decisions and what they
+  change:
+  - open weights at submit;
+  - the private trace track on the real backend;
+  - production readers;
+  - GLM-5.3-Flash as a v19 candidate;
+  - where the CPM plugs into the product;
+  - the approved P0 runbook.
 - **Part I** (this part) answers Peyton's question:
   - the context-packet model (CPM): task, architecture, data, objective;
   - why it beats Jev;
@@ -42,6 +60,352 @@ quality at a fixed token budget.
   distributed training, submission format, anti-copy, hosting, cost and
   migration. Its "Decide track" is now the **Context track**: the same
   contract, with the miner slot being the CPM.
+
+# Part 0. Peyton's decisions (revision 3, 2026-11-18)
+
+Peyton answered the five open calls from §I.10 and §II.10 on 2026-11-18.
+This part records the answers and works out what they change. Parts I and II
+are kept; where a section is superseded, it says so and points here.
+
+## R3.1 The decisions
+
+| # | Call | Decision | What it changes |
+| --- | --- | --- | --- |
+| 1 | Is the CPM the product's packet builder? | **Yes.** "The primary problem with the subnet is that its outputs are not directly making it into the product." Ditto hosts the CPM privately (Ditto runs the inference) | The CPM is a product component from P1, not a benchmark lane. R3.6 shows where it plugs into the production retrieval path |
+| 2 | Open weights? | **Yes, open.** Peyton cites the Bittensor precedent. Either every new king's checkpoint becomes public immediately, or every model is public at submit time | Replaces "private until release" (§II.6.2 *Store*, §II.6.3 layer 1). R3.2 recommends public at submit |
+| 3 | Product traces? | **Yes, from a consented team cohort.** Team members donate their own traces, Peyton first. Miner models are scored in Ditto's private AWS infrastructure on the **real Go backend**, in an instance set up like a preview environment, not on the open-source Rust harness | Adds a private trace track (R3.3) beside the public DittoBench track |
+| 4 | Which reader is the packet tuned for? | **Production readers.** Mostly the low-cost frontier models (Claude Haiku 5.5, GPT-6 Luna), plus some larger ones. `gpt-oss-20b` is being deprecated. Peyton also wants to consider **GLM Flash** as the DittoBench chat model: agent scores are already too high, so difficulty has to scale | Private track: production readers (R3.4). Public bench: a v19 candidate with GLM-5.3-Flash and harder cases (R3.5) |
+| 5 | P0 spend (~$300–1,000) | **Approved.** AWS is the simplest choice (credits), with Lium as an option. Peyton expects the real data to matter enough to make this work better | R3.7 is the P0 runbook. Nothing has run yet |
+
+## R3.2 Open weights, public at submit
+
+**Recommendation: every submission is public at submit time.** That is
+Peyton's second option. The precedent in §II.3 supports it, with one ordering
+rule:
+
+- **Public weights.** SN9 and SN37 models live on Hugging Face with an
+  on-chain commit. Affine era 1 put models on HF and *encouraged* copying the
+  leader, as long as the copy dominated it. Gradients open-sources its winners.
+- **Commit before publish.** SN9 told miners to keep the HF repo private
+  **until the on-chain commit landed**, because the first attack was copying an
+  uncommitted model and committing it first. The commitment has to precede
+  publication.
+- **Paying for improvements.** SN9's winner-take-all curve "encouraged model
+  hoarding". Coldint (SN29) forked partly to pay for publicly shared
+  improvements. Our five-way curve plus public weights covers both.
+
+This supersedes lesson 1 in §II.3 ("keep weights private until release").
+
+The alternative, "public when crowned", keeps an in-flight challenger hidden
+during its evaluation. But models that never win are never published, and the
+lineage compounds more slowly. Public at submit is simpler and compounds
+fastest.
+
+**Mechanism.** It replaces §II.6.2 *Store* and §II.6.3 layer 1. Everything
+else in §II.6.2–II.6.3 stands.
+
+1. **Submit.** The upload is signed with the hotkey, as today. It carries the
+   manifest plus the `safetensors` files, and nothing executable. The miner
+   also writes the manifest digest as an **on-chain commitment**, which gives
+   an independent timestamp that Platform cannot backdate.
+2. **Publish.** Platform holds the upload privately until **both** of these
+   are true:
+   - the on-chain commitment has landed;
+   - screening has accepted the upload (shape, NaN and norm checks, load
+     test).
+
+   Then it publishes immediately to a public mirror: a Ditto-run Hugging Face
+   organization or public bucket. It goes up with the manifest, the commit
+   block, the license and the training-data attestation. Nobody can see the
+   weights before their priority is fixed, and miners don't need their own
+   hosting.
+3. **Priority and copies.** A submission whose weights or behavior fall within
+   the copy threshold of an **earlier** public submission (§II.6.3 layers 2–4)
+   is attributed to that earlier one. It earns only if it beats the original
+   by the dethrone margin. This is SN9's ε rule. Fine-tuning on top of the king
+   is legal and is the point: lineage compounds, but only through real gains.
+4. **License.** Allowlisted bases must be Apache-2.0 or MIT. Submissions must
+   carry a license that permits public release and Ditto's commercial use.
+5. **What stays private:**
+   - the trace set;
+   - per-case private results;
+   - any Ditto-internal model fine-tuned on traces.
+
+   **Public weights are never trained on trace data**, because a model can
+   memorize what it was trained on. Miners never see traces, so a miner's
+   weights cannot contain them.
+
+**What we accept.** Copiers can see a challenger while it is being scored. The
+priority rule and the margin make an unimproved copy worthless. And open
+weights are what Peyton asked for: anyone, Ditto included, can start from the
+current best.
+
+## R3.3 The private trace track
+
+### R3.3.1 Shape
+
+Two tracks score the same submitted weights:
+
+| | Public track (validator-run) | Private track (Ditto-run) |
+| --- | --- | --- |
+| Cases | DittoBench v18/v19 packet replay (§I.7), generator plus private slice | Replayed turns from the consented team cohort |
+| Harness | Frozen packet harness in the validator sandbox | **Real Go backend** at a pinned commit, in an ephemeral AWS eval lane |
+| Reader | Bench chat model (GLM-5.3-Flash candidate, R3.5) | Production readers: Claude Haiku 5.5, GPT-6 Luna, plus a sample on a larger model |
+| Grade | Deterministic DittoBench grade, Q@B | Agreement with a full-context reference answer, calibrated on team-labeled gold (R3.3.3) |
+| Who can reproduce | Any validator | Ditto only; published as a signed score |
+
+### R3.3.2 Data: the consented cohort
+
+- **Who.** An allowlist of team accounts (company-domain accounts plus the
+  cofounder who is not on that domain). The allowlist lives in private config,
+  not in this public repository.
+  - Each person's opt-in is recorded with a date before their data is
+    exported.
+  - Revoking consent removes that person from the next season's trace set and
+    from any internal training split.
+- **What.** The backend already logs every retrieval call (since 2026-05):
+  - the query;
+  - the candidate pool with per-candidate features;
+  - the returned and hydrated memories.
+
+  It also stores every turn's prompt and answer. One trace is:
+  - the query;
+  - a **point-in-time snapshot** of that user's memory store (only memories
+    created before the turn);
+  - the candidate pool;
+  - the answer production gave;
+  - any follow-up signal (a re-ask, a correction).
+- **Third-party content.** A team member's memories can contain other
+  people's words: email bodies, shared chats, documents from connectors. The
+  team member's consent does not cover those people. For P0, use chat turns
+  and user-authored memories only, and exclude connector-ingested third-party
+  content. Widening that is a product and legal call (R3.8).
+- **Handling.**
+  - Exported read-only from the production database into an encrypted S3
+    bucket in Ditto's AWS account: KMS, public access blocked, access logged,
+    readable only by the eval role.
+  - Never in a repository, PR, W&B or Backroom.
+  - A deterministic scrubber pseudonymizes emails, phone numbers and addresses
+    consistently across a trace.
+- **Splits.**
+  - A per-season **private eval pool**, which nothing is ever trained on.
+  - An optional **internal train split** for Ditto's own fine-tune.
+  - A frozen **P0 slice**.
+
+### R3.3.3 Grading real turns without a gold answer
+
+Real turns have no `expected_answer`. Three layers:
+
+1. **Reference answer, once per season.**
+   - A frontier model receives the trace's **entire** candidate pool,
+     uncapped, and answers.
+   - That answer is the reference.
+   - The private metric asks how close the reader's answer from a B-token
+     packet comes to the reference. That is Q@B, the same "quality per context
+     token" objective as §I.5.
+2. **A pinned judge.**
+   - A low-cost model grades agreement against a fixed rubric.
+   - The judge model, prompt and seed are published as a season commitment.
+   - A stronger judge re-grades a sample, to measure judge noise.
+3. **Team-labeled gold.**
+   - Each team member labels about 20–50 of their own traces: which memories
+     were needed, and whether the reference is right.
+   - That calibrates the judge and gives an exact needed-memory recall@B,
+     like the generator gold in §I.7.
+
+### R3.3.4 The eval lane: real backend, preview-style, in AWS
+
+The backend already has a DittoBench harness. It restores pre-embedded
+fixtures into a private Postgres and runs the real retrieval and chat path;
+that is how Ditto measures LongMemEval today. The private track extends it
+with a **trace-replay adapter**. The lane is modeled on the backend's
+per-PR preview environments, with these parts:
+
+- **Backend.** Pinned to a commit per season. Its CPM endpoint points at the
+  lane's model server.
+- **Postgres.** Restored from the season's fixture snapshot.
+- **Model server.** vLLM, batch-invariant (§II.6.4), on one g6e.xlarge (L40S,
+  $1.861/h) loaded with the submission's weights.
+- **Network.** The lane can reach only Ditto's inference router, for reader
+  calls. Nothing else leaves it.
+- **Safety.** A submission is inert `safetensors`, so **no miner code runs**.
+  That is a smaller trust surface than today's harness sandbox.
+
+### R3.3.5 Trust and scoring
+
+Validators cannot reproduce the private track. Platform publishes a signed
+private score per submission, and a new validator protocol folds it in. This
+makes part of SN118 owner-attested. The mitigations:
+
+- **Season commitments** published before submissions open:
+  - the hash of the trace set;
+  - the reference model;
+  - the judge configuration;
+  - the backend commit.
+- **Deterministic CPM serving.** Re-scoring a submission gives the same
+  packets.
+- **Per-case score vectors under opaque case ids**, published after the
+  season closes, so anyone can check the aggregate.
+- **Leakage limits.** No per-case private results during a season. A
+  submission learns one aggregate number, so probing the private set costs a
+  fee and a cooldown per bit.
+- **A public half the validators still run**, so SN118 is never wholly
+  owner-scored.
+
+**Blend.** The private track starts as **shadow (0%) for one season**. That
+season measures how well public and private scores agree:
+
+- **High agreement:** the public bench is a valid proxy, and the private share
+  can stay small.
+- **Low agreement:** the public bench is mis-specified. The private share
+  rises toward 50%, and the generator competition is aimed at the gap.
+
+The private track is also the strongest overfit defense we have. Policy allows
+overfitting the public generator, so we fight it with bench design, and real
+traces are the one case set nobody can generate.
+
+### R3.3.6 Cost per submission (estimate)
+
+Prices are list prices:
+
+- **Claude Haiku 5.5:** $0.10 in / $0.50 out per M (prompts ≤100K).
+- **GPT-6 Luna:** $0.10 / $0.50, from third-party pages, not OpenAI's own.
+
+At 500 cases × 2 readers × 3 replays = 3,000 reader calls of about 5K tokens in
+and 400 out:
+
+| Item | Estimate |
+| --- | --- |
+| Reader calls | ≈ $2 |
+| Judge (low-cost model, ~3K in / 150 out each) | ≈ $1–2. A Sonnet-class judge would be ≈ $20 |
+| Larger-reader sample (10%, Sonnet-class) | ≈ $2 |
+| GPU lane (batched; boot, load and serve) | ≈ $1–2 |
+| **Per submission** | **≈ $5–10** |
+| Reference answers, once per season (500 × ~30K tokens on a frontier model) | ≈ $50–100 |
+
+## R3.4 Readers
+
+- **Private track.** Score each packet on Claude Haiku 5.5 and GPT-6 Luna,
+  with a 10% sample on a larger model. The CPM objective (§I.5) is unchanged.
+  Q is averaged over readers, so a packet must work for more than one model.
+  This is the transfer check §I.10 call 4 asked for, built into the score.
+- **Public track.** Moves off `gpt-oss-20b` with the next bench version
+  (R3.5).
+- **Product.** The packet the CPM builds is the packet production sends. There
+  is no separate "benchmark packet".
+
+## R3.5 GLM-5.3-Flash as the DittoBench chat model (v19 candidate)
+
+**Facts.** All are third-party write-ups; none is Z.ai's own model card.
+
+| Field | Value |
+| --- | --- |
+| Model | GLM-5.3-Flash, released 2026-08-26 |
+| Weights | MIT open weights |
+| Size | 320B total / 18B active MoE |
+| Context | 1M tokens |
+| Price, Z.ai and most OpenRouter providers | $0.15 / $0.50 per M |
+| Price, cheapest OpenRouter listing | $0.04 / $0.08 per M. Listing prices moved between snapshots |
+| API features | Tools, `tool_choice` and reasoning effort |
+
+**What the swap does and doesn't do.**
+
+- **A stronger reader raises scores on today's cases; it does not make the
+  bench harder.** If scores are already too high, the swap has to ship with
+  harder cases in the same bench version. Peyton's thesis points to the right
+  difficulty lever: **grow the haystack and shrink the budget B.**
+  - Bigger memory stores and catalogs.
+  - More supersession and temporal traps.
+  - A tighter token budget.
+
+  That is harder for harness agents, and it is exactly where a better packet
+  pays.
+- **Cost.**
+  - At $0.15 / $0.50, a run costs roughly 2–2.5× what it does on
+    `gpt-oss-20b`. The starter hybrid would go from $0.27 to about
+    $0.55–0.70, and heavy agents would cross the $1.00 v18 run budget.
+  - So v19 either raises the budget or pins a cheaper provider. One
+    provider is an availability risk.
+  - Reasoning tokens add output cost, so pin the reasoning effort.
+- **Determinism.** It is an API model, so pin the provider and the effort.
+  Self-hosting needs about 330 GB for FP8 weights (a multi-GPU node), so it is
+  not worth doing for the bench.
+- **Process.** This is a bench-version bump across every layer
+  (`.agents/skills/ditto-subnet-bench-version-bump`), with a matching generator
+  pack. P0-G (R3.7) sizes the score lift and the cost before anyone writes the
+  contract.
+
+## R3.6 Where the CPM plugs into the product
+
+Production retrieval today runs in five steps:
+
+1. vector candidates;
+2. learned fusion weights (a small MLP);
+3. a cross-encoder rerank;
+4. an **LLM rerank** on a frontier "Luna" model, which returns an order plus a
+   **sufficiency** flag;
+5. when the candidates are insufficient, one more retrieval.
+
+The CPM replaces steps 3 and 4 and adds span pruning:
+
+| Today | With the CPM |
+| --- | --- |
+| Cross-encoder rerank + LLM rerank (a full API call per turn) | One CPM forward pass on Ditto's GPU (p95 ≤400 ms, §I.3) |
+| Sufficiency flag from the LLM rerank | The CPM's decide head (`sufficient`, plus `absent` for abstention) |
+| Whole memories in the prompt | Spans packed under budget B (§I.2) |
+| Retrieval logs used to retrain the fusion MLP | The same logs become trace fixtures (R3.3.2) |
+
+So "today's production path" is the P0-T baseline arm. Beating it is the bar
+for shipping, and that is a stronger bar than beating Jev.
+
+## R3.7 P0 runbook (approved, not started)
+
+**Infrastructure** (AWS, Ditto account, credits):
+
+- **Provisioned through protected Terraform plan/apply** in the owning infra
+  repo, with a teardown-date tag. Nothing is created by hand.
+- **GPU.** One g6e.xlarge (L40S 48 GB, $1.861/h), for CPM training and the
+  model server. Spot instances where training can checkpoint.
+- **Eval lane.** A small CPU instance for the backend and Postgres.
+- **Storage.** The encrypted trace bucket.
+- **P0-D.** A larger GPU node, only for the diffusion head-to-head and only if
+  that arm runs.
+
+**Experiments:**
+
+| Experiment | Question | Arms | Win |
+| --- | --- | --- | --- |
+| **P0-A** (public; §I.10) | CPM vs Jev on DittoBench | As in §I.10, plus a **GLM-5.3-Flash reader** arm beside `gpt-oss-20b` | As in §I.10 |
+| **P0-T** (private; new) | Does a CPM trained **only on public synthetic data** beat production on real team traces, and how much do real traces add? | 1. Today's production path (cross-encoder + LLM rerank); 2. Jev; 3. CPM v0 (public data only); 4. CPM v0 + internal trace fine-tune (train split; stays private). Readers: Haiku 5.5 and GPT-6 Luna, plus a 10% larger-reader sample | **Arm 3 ≥ arm 1 at ≤60% of the tokens, or +0.02 Q at equal tokens.** Team-labeled needed-memory recall@B ≥ 0.9. p95 latency ≤ production's rerank call. **The gap between arms 3 and 4 is the key number**: small means the public bench is a valid proxy for miners; large means the private track must carry weight |
+| **P0-G** (public; new) | How much does GLM-5.3-Flash lift v18 scores, and what does a run cost? | Starter hybrid plus released king sources, 3 seeds each, `gpt-oss-20b` vs GLM-5.3-Flash | Measures the lift (sets how much harder v19 must be) and the cost per run against the $1.00 budget |
+| P0-S, P0-D | §I.10, §I.9.5 | Unchanged | Unchanged |
+
+**Budget.**
+
+- GPU: about $300–700.
+- Inference: about $50–150. That covers the season references (≈$65), P0-T
+  readers and judge (≈$20), P0-A runs (≈$30) and P0-G runs (≈$30).
+- Total: within the approved $1,000, on AWS credits.
+
+**Before anything runs:**
+
+1. **Opt-ins.** A dated opt-in from each person in the cohort.
+2. **Third-party rule.** Confirm the P0 rule on connector content (R3.3.2).
+3. **Access.** An AWS permission set that can apply the P0 Terraform, and
+   read-only production database access for the export.
+4. **Private runbook.** The cohort allowlist, export query and bucket names go
+   in a private runbook, not in this public memo.
+
+## R3.8 What is still open
+
+1. **Third-party content in team traces.** Exclude connector-ingested content
+   (recommended for P0), or include it pseudonymized, eval-only?
+2. **Private share after the shadow season.** Is the ceiling 50%, and what
+   public–private agreement keeps it lower?
+3. **Release mirror.** A Ditto Hugging Face organization, or a public bucket?
+4. **v19 contents.** GLM-5.3-Flash together with the haystack and budget
+   increase, after P0-G.
+5. **Lium vs AWS for GPUs.** The P0 default is AWS, for the credits.
 
 # Part I. The Ditto context-packet model
 
@@ -148,7 +512,7 @@ training target.
 | **2. Downstream ablation labels** | Run the locked big model on packets with candidates or spans dropped. The label is Δ grader score (leave-one-out, or sampled subsets) | ~10k–100k episodes. At ~4K prompt tokens and $0.07/M for `gpt-oss-20b`, 100k episodes ≈ 400M tokens ≈ **$28** | None |
 | **3. Teacher labels** | An open-weight large model annotates relevance and spans on synthetic and public data | Moderate | Only open-weight teachers whose license allows distillation. Do not train on closed-vendor outputs (Jev, Mercury); that is a ToS risk |
 | **4. Public data** | LongMemEval-S (already the confirmation lane), MS MARCO / BEIR for reranker warm-up, the LLMLingua-2 MeetingBank compression set | Large | Check each license |
-| **5. Ditto product traces** | Real queries, retrieved memories, tool outputs, big-model answers, user feedback | The real distribution | **Opt-in only.** Scrubbed and kept inside Ditto infrastructure. Never shared with miners or validators. Used only for Ditto's internal fine-tune and a private product eval that stays in Ditto. SN118 sees synthetic and public data only |
+| **5. Ditto product traces** | Real queries, retrieved memories, tool outputs, big-model answers, user feedback | The real distribution | **Opt-in only: the consented team cohort (decided 2026-11-18, R3.3).** Scrubbed and kept inside Ditto infrastructure. Never shared with miners or validators. Used for the SN118 private trace track (scores only leave Ditto) and Ditto's internal fine-tune. Public weights are never trained on it. Miners train on synthetic and public data only |
 
 The SN118 split matters. Miners train on sources 1–4. The crown is decided on
 the private generator slice and fresh block-hash seeds, and Ditto's product
@@ -463,7 +827,16 @@ P0 inference spend is small. About 5 seeds × 6 arms × one 350-case run is ~30
 runs, at ≲$1 each under the v18 run budget. The training spend is ≲$100 for
 CPM v0 and $200–800 for P0-D. No new infrastructure is needed.
 
-**Product calls only Peyton can make** (also listed in Part II §10):
+**Product calls only Peyton can make** (also listed in Part II §10). All
+four were **resolved on 2026-11-18; see R3.1**. In short:
+
+1. Yes, the CPM is the product's packet builder, hosted by Ditto.
+2. Weights are public at submit.
+3. Consented team traces form a private track on the real backend.
+4. The packet is tuned for production readers, and GLM-5.3-Flash is a v19
+   bench candidate.
+
+The original wording follows:
 
 1. Is the CPM the product's packet builder (it replaces the hybrid's Jev calls
    and feeds the router's compression levers), or only a benchmark lane at
@@ -631,7 +1004,8 @@ pass that cited each claim.
 
 ### Lessons that apply to SN118
 
-1. **Keep weights private until the commit, then until release.** On SN9 and
+1. *(Revision 3: R3.2 keeps "private until the commit" and drops "until
+   release".)* **Keep weights private until the commit, then until release.** On SN9 and
    SN37, copying from HF or the chain was the first attack. Uploading to a
    Ditto-owned store removes that channel entirely, and our source-release
    policy already decides when an artifact becomes public.
@@ -823,7 +1197,8 @@ applies unchanged, with three substitutions:
   - Full weights within the base family at ≤ 2B parameters.
   - Tokenizer and config byte-identical to the base.
   - `safetensors` only: no pickle and no custom code.
-- **Store.** A Platform-owned private bucket (AWS S3 proposal, or the existing
+- **Store** (*superseded by R3.2: weights are published once the on-chain
+  commitment lands and screening passes*). A Platform-owned private bucket (AWS S3 proposal, or the existing
   Hippius private data plane), never a public HF repo. Optionally an on-chain
   commitment of the manifest digest for an independent timestamp. Timelock
   `set_reveal_commitment` follows Crusades.
@@ -838,7 +1213,9 @@ applies unchanged, with three substitutions:
 
 ### II.6.3 Anti-copy, layered
 
-1. **Private until release.** Unreleased weights are never public and the
+1. *(Superseded by R3.2: weights are public once committed. Copies are
+   handled by earliest-commit priority plus the margin, using layers 2–4
+   below.)* **Private until release.** Unreleased weights are never public and the
    endpoint is never exposed, so nobody can download or distill an unreleased
    model. Release follows the existing source-release policy. Once released,
    a model joins the alibi pool. That mirrors how the copy gate now counts
@@ -1021,6 +1398,22 @@ shrinks is a share decision, not a flag day.
 
 ## II.10 Open questions for Peyton
 
+Resolved on 2026-11-18 (R3.1):
+
+- **1. CPM in the product?** Yes, hosted privately by Ditto.
+- **2. Open weights?** Yes, public at submit (R3.2).
+- **3. Product traces?** Yes, from the consented team cohort. Private eval
+  on the real backend in Ditto's AWS (R3.3).
+- **4. Reader?** Production readers (Claude Haiku 5.5, GPT-6 Luna, some
+  larger). `gpt-oss-20b` is being deprecated, and GLM-5.3-Flash is a v19
+  bench candidate (R3.4, R3.5).
+- **8. Hosting?** AWS, with Lium as an option.
+- **9. Release policy?** Public at submit, after the on-chain commit.
+- **13. P0 spend?** Approved, about $300–1,000 on AWS credits. Not started
+  (R3.7).
+
+New open questions are in R3.8.
+
 Resolved on 2026-11-17:
 
 - **Mercury 3 or Mercury Decide?** Mercury 3. Extract is also of interest.
@@ -1060,6 +1453,23 @@ Mechanism and spend:
     locked-model and Jev inference. No new infrastructure.
 
 ## Sources
+
+Added in revision 3:
+
+- [GLM-5.3-Flash on OpenRouter](https://openrouter.ai/z-ai/glm-5.3-flash)
+  (provider prices, API features)
+- GLM-5.3-Flash specs (third-party):
+  [codersera](https://codersera.com/blog/glm-5-3-flash-complete-guide-2026/),
+  [cellcog](https://cellcog.ai/blog/glm-5-3-flash/),
+  [DEV](https://dev.to/shaam_ai/glm-53-flash-explained-the-320b-open-weight-model-with-an-18b-brain-and-a-1m-token-memory-2026-5cbl)
+- GPT-6 Luna pricing (third-party):
+  [TeamoRouter](https://teamorouter.com/blogs/gpt-6-luna-api-pricing-setup),
+  [BenchLM](https://benchlm.ai/openai/api-pricing)
+- Claude Haiku 5.5 pricing: Anthropic model table (cached 2026-11-03)
+- Ditto's private backend and stack repositories (retrieval pipeline, retrieval
+  logging, the DittoBench/LongMemEval harness and preview lanes), read for
+  this revision and described here without private paths or identifiers
+
 
 Repository:
 
