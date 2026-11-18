@@ -56,7 +56,7 @@ def test_labels_match_exporter_on_fixture(tiny_artifact, tmp_path):
     by_id = {c["case_id"]: c for c in ours["cases"]}
     # The tool prerequisite pair tp1 is in the primary user's store (wave 0).
     assert by_id["m1"]["candidate_pair_ids"] == ["p2", "p1", "tp1", "p3"]
-    assert by_id["m2"]["candidate_pair_ids"] == ["p2", "p1"]
+    assert by_id["m2"]["candidate_pair_ids"] == ["p2", "p1", "tp1"]
     assert {s["type"] for s in by_id["m2"]["spans"]["p1"]} == {"distractor"}
     assert by_id["m3"]["decision"]["abstain"] is True
     assert by_id["t1"]["shortlist_target"] == ["send_poll", "get_group"]
