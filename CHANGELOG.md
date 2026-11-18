@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.498.0 (2026-11-18)
+
+### Features
+
+- **infra,release**: Cpm-scorer GPU deploy path, release channel and token federation
+  ([#3579](https://github.com/ditto-assistant/ditto-subnet/pull/3579),
+  [`78cde07`](https://github.com/ditto-assistant/ditto-subnet/commit/78cde0795b19ad0ae35cf16439629edf2be35322))
+
+
 ## v0.497.1 (2026-11-18)
 
 ### Bug Fixes
