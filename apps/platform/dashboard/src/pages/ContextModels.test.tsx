@@ -25,9 +25,13 @@ const OFF: Record<string, unknown> = {
   "/model-context/upload-terms": loadFixture("model-context-upload-terms-off"),
 };
 
+/** A route whose read never settles: the section stays loading. */
+const PENDING = Symbol("pending");
+
 function serve(routes: Record<string, unknown>): void {
   vi.mocked(getJSON).mockImplementation((path: string) => {
     const body = routes[path];
+    if (body === PENDING) return new Promise<never>(() => undefined);
     if (body instanceof Error) return Promise.reject(body);
     return body === undefined
       ? Promise.reject(new Error("HTTP 404 " + path))
@@ -130,6 +134,34 @@ describe("Context models page", () => {
     render(() => <ContextModelsPage />);
     expect(await screen.findByText("Board could not be loaded.")).toBeInTheDocument();
     expect(await screen.findByText("Season 1")).toBeInTheDocument();
+  });
+
+  it("never shows a bare floor as the threshold while the board's margin is loading", async () => {
+    serve({ ...SHADOW, "/model-context/board": PENDING });
+    render(() => <ContextModelsPage />);
+    const floors = await screen.findByRole("table", { name: "Base floors this season" });
+    const row = within(floors).getByText("qwen3.5-0.8b").closest("tr");
+    if (!row) throw new Error("missing floor row");
+    const [, floorCell, thresholdCell] = Array.from(row.querySelectorAll("td"));
+    expect(floorCell).toHaveTextContent("0.311");
+    // The floor alone (0.311) would understate what a model must reach.
+    expect(thresholdCell).not.toHaveTextContent("0.311");
+    expect(thresholdCell?.textContent?.trim()).toBe("");
+    expect(
+      within(floors).getAllByRole("status", { name: "Loading the floor margin" }),
+    ).toHaveLength(2);
+    expect(screen.queryByText("Floor margin")).not.toBeInTheDocument();
+  });
+
+  it("shows a dash, not the floor, when the board that carries the margin failed", async () => {
+    serve({ ...SHADOW, "/model-context/board": new Error("HTTP 503") });
+    render(() => <ContextModelsPage />);
+    expect(await screen.findByText("Board could not be loaded.")).toBeInTheDocument();
+    const floors = await screen.findByRole("table", { name: "Base floors this season" });
+    const row = within(floors).getByText("qwen3.5-0.8b").closest("tr");
+    const thresholdCell = row?.querySelectorAll("td")[2];
+    expect(thresholdCell).toHaveTextContent("–");
+    expect(within(floors).queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("links a mirror when Ditto serves one", async () => {

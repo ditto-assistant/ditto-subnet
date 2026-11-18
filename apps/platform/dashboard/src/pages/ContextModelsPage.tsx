@@ -83,9 +83,40 @@ function OffNotice(): JSX.Element {
   );
 }
 
+/** The score a model on this base must reach. The margin comes from the
+ * board, which loads apart from the season: until it arrives the threshold
+ * is unknown, so it shows a skeleton (or a dash once the board failed),
+ * never the bare floor. */
+function EligibleAt(props: {
+  floor: number;
+  margin: number | undefined;
+  marginFailed: boolean;
+}): JSX.Element {
+  return (
+    <Show
+      when={props.margin !== undefined}
+      fallback={
+        <Show
+          when={!props.marginFailed}
+          fallback={<span title="The board, which carries the floor margin, did not load">–</span>}
+        >
+          <span class="gen-skel cm-skel-num" role="status" aria-label="Loading the floor margin" />
+        </Show>
+      }
+    >
+      {(() => {
+        const bar = eligibilityBar(props.floor, props.margin as number);
+        return bar === null ? "–" : fx(bar);
+      })()}
+    </Show>
+  );
+}
+
 function SeasonSection(props: {
   season: ContextModelSeason | null | undefined;
   floorMargin: number | undefined;
+  /** The board read (the margin's source) failed with nothing loaded. */
+  marginFailed: boolean;
   loading: boolean;
   failed: boolean;
   onRetry: () => void;
@@ -234,10 +265,11 @@ function SeasonSection(props: {
                           <td class="mono">{base}</td>
                           <td class="num">{fx(floor)}</td>
                           <td class="num">
-                            {(() => {
-                              const bar = eligibilityBar(floor, props.floorMargin ?? 0);
-                              return bar === null ? "–" : fx(bar);
-                            })()}
+                            <EligibleAt
+                              floor={floor}
+                              margin={props.floorMargin}
+                              marginFailed={props.marginFailed}
+                            />
                           </td>
                         </tr>
                       )}
@@ -621,6 +653,7 @@ export function ContextModelsPage(): JSX.Element {
         <SeasonSection
           season={current()}
           floorMargin={boardData()?.floor_margin}
+          marginFailed={!!board.error() && !boardData()}
           loading={seasons.loading() && !seasonList()}
           failed={!!seasons.error()}
           onRetry={() => seasons.refresh()}
