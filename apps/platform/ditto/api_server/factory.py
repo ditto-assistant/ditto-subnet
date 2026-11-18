@@ -92,6 +92,7 @@ from ditto.api_server.endpoints import (
     admin_leaderboard_router,
     admin_lease_revocations_router,
     admin_miner_fees_router,
+    admin_model_context_router,
     admin_outlier_escalation_router,
     admin_owner_router,
     admin_provider_outages_router,
@@ -143,6 +144,8 @@ from ditto.api_server.endpoints import (
     miner_github_link_router,
     miner_mcp_router,
     miner_me_router,
+    model_context_router,
+    model_context_scorer_router,
     name_claims_router,
     public_dueling_router,
     public_router,
@@ -210,6 +213,7 @@ from ditto.api_server.middleware import (
 )
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
 from ditto.api_server.miner_avatar import MAX_AVATAR_BYTES
+from ditto.api_server.model_context_competition import ModelContextLoop
 from ditto.api_server.no_store import NoStoreMiddleware
 from ditto.api_server.outage_sweep import OutageVoidSweeper
 from ditto.api_server.payment_verifier import create_payment_verifier
@@ -599,6 +603,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if run_background_tasks:
                 await generator_round_loop.start()
                 app.state.generator_round_loop = generator_round_loop
+            # model_context (CPM) seasons and submission screening. Settings-
+            # gated like the generator loop: with mode off a tick is one
+            # settings read.
+            model_context_loop = ModelContextLoop(
+                app_state=app.state, session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(model_context_loop.aclose)
+            if run_background_tasks:
+                await model_context_loop.start()
+                app.state.model_context_loop = model_context_loop
             emission_collector = SourceEmissionCollector(
                 app_state=app.state,
                 session_maker=app.state.session_maker,
@@ -838,6 +852,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_readmissions_endpoints.router, prefix="/api/v1")
     app.include_router(generator_router, prefix="/api/v1")
     app.include_router(generator_scorer_router, prefix="/api/v1")
+    app.include_router(model_context_router, prefix="/api/v1")
+    app.include_router(model_context_scorer_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_private_dataset.router, prefix="/api/v1")
@@ -863,6 +879,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
     app.include_router(admin_scoring_lease_settings_router, prefix="/api/v1")
     app.include_router(admin_generator_competition_router, prefix="/api/v1")
+    app.include_router(admin_model_context_router, prefix="/api/v1")
     app.include_router(admin_generator_rounds_router, prefix="/api/v1")
     app.include_router(admin_dueling_router, prefix="/api/v1")
     app.include_router(public_dueling_router, prefix="/api/v1")

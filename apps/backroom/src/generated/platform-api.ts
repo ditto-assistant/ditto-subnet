@@ -3187,6 +3187,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/model-context/scorer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Scorer Status
+         * @description Scorer heartbeats and the run and screening backlog.
+         */
+        get: operations["scorer_status_api_v1_admin_model_context_scorer_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/seasons/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate
+         * @description Close the open season now and open the next on the finalized head.
+         */
+        post: operations["rotate_api_v1_admin_model_context_seasons_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-context/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings
+         * @description Current policy, append-only history, the default, and what is in force.
+         */
+        get: operations["get_settings_api_v1_admin_model_context_settings_get"];
+        put?: never;
+        /**
+         * Create Settings Revision
+         * @description Append one optimistic, confirmation-gated revision.
+         */
+        post: operations["create_settings_revision_api_v1_admin_model_context_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/operator-diagnostic/{agent_id}": {
         parameters: {
             query?: never;
@@ -7614,6 +7678,191 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/model-context-scorer/fault": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Fault
+         * @description Record a scorer fault for the run's current lease.
+         */
+        post: operations["post_fault_api_v1_model_context_scorer_fault_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context-scorer/reference-work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reference Work
+         * @description The open season's base floors, and the bases still without one.
+         */
+        get: operations["reference_work_api_v1_model_context_scorer_reference_work_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context-scorer/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Results
+         * @description Record one scored run for its current lease.
+         */
+        post: operations["post_results_api_v1_model_context_scorer_results_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context-scorer/work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lease Work
+         * @description Lease the next run of the open season, or 204.
+         */
+        get: operations["lease_work_api_v1_model_context_scorer_work_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Board
+         * @description The current season, ranked by score then commitment block.
+         */
+        get: operations["board_api_v1_model_context_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/seasons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Seasons
+         * @description Recent seasons: open block, its hash, the seeds derived from it, and
+         *     each base's floor.
+         */
+        get: operations["seasons_api_v1_model_context_seasons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Submissions
+         * @description A hotkey's submissions, newest first, with each one's latest run.
+         */
+        get: operations["list_submissions_api_v1_model_context_submissions_get"];
+        put?: never;
+        /**
+         * Submit
+         * @description Admit one signed, committed submission for screening.
+         */
+        post: operations["submit_api_v1_model_context_submissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Submission
+         * @description One submission and its latest run.
+         */
+        get: operations["get_submission_api_v1_model_context_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model-context/upload-terms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Upload Terms
+         * @description What a submission needs now; read it before writing the commitment.
+         */
+        get: operations["upload_terms_api_v1_model_context_upload_terms_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/name-claims": {
         parameters: {
             query?: never;
@@ -8907,6 +9156,33 @@ export interface paths {
          *     zero emission. ``mode=off`` serves an empty ledger.
          */
         get: operations["generator_ledger_api_v1_scoring_generator_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scoring/model-context-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Context Ledger
+         * @description The model_context (CPM) ledger, behind the memory ledger's proof.
+         *
+         *     Platform is the competition's system of record, so this is a direct read
+         *     of the open season: each active submission's latest scored run, with
+         *     ``eligible`` when it clears its base's floor plus ``floor_margin``
+         *     (contract section 4.5), ranked by score then commitment block. The track
+         *     is not payable, so validators fold it in shadow; ``mode=off`` or no open
+         *     season serves an empty ledger.
+         */
+        get: operations["model_context_ledger_api_v1_scoring_model_context_ledger_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -14155,6 +14431,48 @@ export interface components {
              */
             status: "active" | "resolved";
         };
+        /** AdminModelContextScorerStatus */
+        AdminModelContextScorerStatus: {
+            /** Current Season */
+            current_season: number | null;
+            /** Leased Runs */
+            leased_runs: number;
+            /** Queued Runs */
+            queued_runs: number;
+            /** Scorers */
+            scorers: components["schemas"]["ModelContextScorerHeartbeatView"][];
+            /** Screening Submissions */
+            screening_submissions: number;
+        };
+        /** AdminModelContextSettingsRequest */
+        AdminModelContextSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @default *
+             */
+            scope: string;
+            settings: components["schemas"]["ModelContextSettings"];
+        };
+        /** AdminModelContextSettingsResponse */
+        AdminModelContextSettingsResponse: {
+            /** Current */
+            current: components["schemas"]["ModelContextSettingsRevision"][];
+            default: components["schemas"]["ModelContextSettings"];
+            effective: components["schemas"]["EffectiveModelContextSettings"];
+            /** History */
+            history: components["schemas"]["ModelContextSettingsRevision"][];
+        };
         /**
          * AdminOpaqueBlobEntry
          * @description A member the text reader cannot show; a natural hiding place.
@@ -15372,6 +15690,18 @@ export interface components {
         };
         /** AdminRolloutSupersedeRequest */
         AdminRolloutSupersedeRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminRotateSeasonRequest */
+        AdminRotateSeasonRequest: {
             /**
              * Actor
              * @default admin_api
@@ -18721,7 +19051,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "agent_harness_tarball" | "generator_source_archive";
+            kind: "agent_harness_tarball" | "generator_source_archive" | "model_weights_repo";
             /** Limits */
             limits?: components["schemas"]["ArtifactLimit"][];
             /** Notes */
@@ -18840,7 +19170,7 @@ export interface components {
              * Unit
              * @enum {string}
              */
-            unit: "bytes" | "files" | "lines" | "characters" | "cases" | "version";
+            unit: "bytes" | "files" | "lines" | "characters" | "cases" | "version" | "rank";
             /** Value */
             value: number | string;
         };
@@ -22204,7 +22534,7 @@ export interface components {
              * Competition
              * @enum {string}
              */
-            competition: "memory" | "generator";
+            competition: "memory" | "generator" | "model_context";
             cooldown: components["schemas"]["SubmissionCooldownTerms"];
             deliverable: components["schemas"]["ArtifactContract"];
             fee: components["schemas"]["SubmissionFeeTerms"];
@@ -25772,6 +26102,24 @@ export interface components {
             settings: components["schemas"]["InferenceConcurrencySettings"];
             /** Source */
             source: string;
+        };
+        /** EffectiveModelContextSettings */
+        EffectiveModelContextSettings: {
+            /** Checksum */
+            checksum: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["ModelContextSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "revision" | "default";
         };
         /**
          * EffectiveQueuePolicySettings
@@ -32250,6 +32598,684 @@ export interface components {
              * Format: uuid
              */
             session_id: string;
+        };
+        /**
+         * ModelContextBase
+         * @description One allowlisted base model (contract section 2.1).
+         */
+        ModelContextBase: {
+            /** Architectures */
+            architectures: string[];
+            /** Base Id */
+            base_id: string;
+            /** Hf Repo */
+            hf_repo: string;
+            /** Lora Target Modules */
+            lora_target_modules: string[];
+            /** Parameters */
+            parameters: number;
+            /** Revision */
+            revision: string;
+        };
+        /** ModelContextBoardEntry */
+        ModelContextBoardEntry: {
+            /** Base Id */
+            base_id: string;
+            /** Commitment Block */
+            commitment_block: number;
+            /** Components */
+            components?: {
+                [key: string]: number | null;
+            };
+            /** Eligible */
+            eligible: boolean;
+            /** Floor */
+            floor?: number | null;
+            /** Hf Repo */
+            hf_repo: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "lora" | "full";
+            /** Model Url */
+            model_url: string;
+            /** Rank */
+            rank: number;
+            /** Revision */
+            revision: string;
+            /** Score */
+            score: number;
+            /** Season */
+            season: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** ModelContextBoardResponse */
+        ModelContextBoardResponse: {
+            /** Base Floors */
+            base_floors: {
+                [key: string]: number;
+            };
+            /** Count */
+            count: number;
+            /** Entries */
+            entries: components["schemas"]["ModelContextBoardEntry"][];
+            /** Floor Margin */
+            floor_margin: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Season */
+            season: number | null;
+        };
+        /** ModelContextFaultAck */
+        ModelContextFaultAck: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "released" | "abandoned" | "failed";
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Run Status
+             * @enum {string}
+             */
+            run_status: "queued" | "leased" | "scored" | "failed" | "abandoned";
+            /** Submission Status */
+            submission_status?: ("screening" | "queued" | "scored" | "rejected" | "superseded") | null;
+        };
+        /** ModelContextFaultRequest */
+        ModelContextFaultRequest: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Error Kind
+             * @enum {string}
+             */
+            error_kind: "infra" | "nondeterministic" | "model_load" | "invalid_model";
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+        };
+        /** ModelContextLedgerEntry */
+        ModelContextLedgerEntry: {
+            /** Commitment Block */
+            commitment_block: number;
+            /** Eligible */
+            eligible: boolean;
+            /** Hotkey */
+            hotkey: string;
+            /** Score */
+            score: number;
+            /** Season */
+            season: number;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /**
+         * ModelContextLedgerResponse
+         * @description The model_context ledger validators fold (in shadow, folded to nothing).
+         *
+         *     Entries are the current season's scored active submissions, best first:
+         *     score descending, then commitment block ascending, then submission id.
+         *     Empty while ``mode`` is ``off`` or no season is open.
+         */
+        ModelContextLedgerResponse: {
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /**
+             * Cpm Score Version
+             * @default 1
+             */
+            cpm_score_version: number;
+            /** Entries */
+            entries?: components["schemas"]["ModelContextLedgerEntry"][];
+            /** Generated At */
+            generated_at?: string | null;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Rank Shares */
+            rank_shares?: number[];
+            /** Season */
+            season?: number | null;
+        };
+        /**
+         * ModelContextReferenceWork
+         * @description The season's base floors and the reference runs behind them.
+         */
+        ModelContextReferenceWork: {
+            /** Base Floors */
+            base_floors: {
+                [key: string]: number;
+            };
+            /** Bases */
+            bases: components["schemas"]["ModelContextBase"][];
+            /** Bench Version */
+            bench_version: number | null;
+            /** Floor Margin */
+            floor_margin: number;
+            /** Pending */
+            pending: string[];
+            /** Season */
+            season: number | null;
+            /** Seeds */
+            seeds: number[];
+        };
+        /** ModelContextResultRequest */
+        ModelContextResultRequest: {
+            components: components["schemas"]["ScoreComponents"];
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /** Gpu Sku */
+            gpu_sku: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Per Seed */
+            per_seed: components["schemas"]["SeedResult"][];
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+        };
+        /** ModelContextResultResponse */
+        ModelContextResultResponse: {
+            /** Base Floor */
+            base_floor?: number | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "scored" | "failed" | "abandoned";
+            /** Submission Status */
+            submission_status?: ("screening" | "queued" | "scored" | "rejected" | "superseded") | null;
+        };
+        /** ModelContextRunSummary */
+        ModelContextRunSummary: {
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /** Fault */
+            fault: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Score */
+            score: number | null;
+            /** Season */
+            season: number;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "scored" | "failed" | "abandoned";
+        };
+        /** ModelContextScorerHeartbeatView */
+        ModelContextScorerHeartbeatView: {
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /** Gpu Sku */
+            gpu_sku: string | null;
+            /** Last Poll */
+            last_poll: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string | null;
+        };
+        /** ModelContextSeasonListResponse */
+        ModelContextSeasonListResponse: {
+            /** Current */
+            current: number | null;
+            /** Seasons */
+            seasons: components["schemas"]["ModelContextSeasonView"][];
+        };
+        /** ModelContextSeasonView */
+        ModelContextSeasonView: {
+            /** Base Floors */
+            base_floors: {
+                [key: string]: number;
+            };
+            /** Bench Version */
+            bench_version: number;
+            /** Closed At */
+            closed_at: string | null;
+            /**
+             * Closes At
+             * Format: date-time
+             */
+            closes_at: string;
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /** Gpu Sku */
+            gpu_sku: string | null;
+            /** Open Block */
+            open_block: number;
+            /** Open Block Hash */
+            open_block_hash: string;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Season */
+            season: number;
+            /** Seeds */
+            seeds: number[];
+        };
+        /**
+         * ModelContextSettings
+         * @description The whole model_context policy (one revision = the whole object).
+         */
+        ModelContextSettings: {
+            /** Base Allowlist */
+            base_allowlist?: components["schemas"]["ModelContextBase"][];
+            /**
+             * Bench Version
+             * @default 18
+             */
+            bench_version: number;
+            /**
+             * Budget Tokens
+             * @default 2048
+             */
+            budget_tokens: number;
+            /**
+             * Floor Margin
+             * @default 0.01
+             */
+            floor_margin: number;
+            /**
+             * Lease Ttl Seconds
+             * @default 14400
+             */
+            lease_ttl_seconds: number;
+            /**
+             * Max Attempts
+             * @default 3
+             */
+            max_attempts: number;
+            /**
+             * Max Lora Rank
+             * @default 64
+             */
+            max_lora_rank: number;
+            /**
+             * Max Total Bytes
+             * @default 6442450944
+             */
+            max_total_bytes: number;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Rank Shares */
+            rank_shares?: number[];
+            /**
+             * Season Days
+             * @default 7
+             */
+            season_days: number;
+            /**
+             * Tool K
+             * @default 8
+             */
+            tool_k: number;
+            /**
+             * Upload Cooldown Seconds
+             * @default 21600
+             */
+            upload_cooldown_seconds: number;
+            /**
+             * Upload Fee Required
+             * @default false
+             */
+            upload_fee_required: boolean;
+        };
+        /** ModelContextSettingsRevision */
+        ModelContextSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
+            settings: components["schemas"]["ModelContextSettings"];
+            /**
+             * Settings Valid
+             * @default true
+             */
+            settings_valid: boolean;
+        };
+        /** ModelContextSubmissionListResponse */
+        ModelContextSubmissionListResponse: {
+            /** Submissions */
+            submissions: components["schemas"]["ModelContextSubmissionSummary"][];
+        };
+        /**
+         * ModelContextSubmissionRequest
+         * @description A signed submission.
+         *
+         *     ``manifest`` is the exact UTF-8 text of ``cpm-manifest.json`` at
+         *     ``revision``: ``manifest_sha256`` is computed over these bytes, so a
+         *     client sends the file as it is, not a re-serialized object.
+         */
+        ModelContextSubmissionRequest: {
+            /** Hf Repo */
+            hf_repo: string;
+            /** Hotkey */
+            hotkey: string;
+            /** Manifest */
+            manifest: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /** Revision */
+            revision: string;
+            /** Signature */
+            signature: string;
+            /** Ts */
+            ts: number;
+        };
+        /** ModelContextSubmissionResponse */
+        ModelContextSubmissionResponse: {
+            /** Base Id */
+            base_id: string;
+            /** Commitment Block */
+            commitment_block: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "lora" | "full";
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "screening" | "queued" | "scored" | "rejected" | "superseded";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /**
+         * ModelContextSubmissionSummary
+         * @description Public view of one submission (weights are public by contract).
+         */
+        ModelContextSubmissionSummary: {
+            /** Base Id */
+            base_id: string;
+            /** Commitment Block */
+            commitment_block: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Hf Repo */
+            hf_repo: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "lora" | "full";
+            latest_run?: components["schemas"]["ModelContextRunSummary"] | null;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Mirror Repo */
+            mirror_repo: string | null;
+            /** Model Url */
+            model_url: string;
+            /** Reject Reason */
+            reject_reason: string | null;
+            /** Revision */
+            revision: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "screening" | "queued" | "scored" | "rejected" | "superseded";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Weights Sha256 */
+            weights_sha256: string | null;
+        };
+        /**
+         * ModelContextUploadTerms
+         * @description What a submission must satisfy right now (read before committing).
+         *
+         *     ``blockers`` lists every refusal Platform can decide without the
+         *     manifest: lane closed, banned hotkey, cooldown, a fee path that is not
+         *     available.
+         */
+        ModelContextUploadTerms: {
+            /** Accepting */
+            accepting: boolean;
+            /** Bases */
+            bases: components["schemas"]["ModelContextBase"][];
+            /** Blockers */
+            blockers?: string[];
+            /**
+             * Commitment Format
+             * @default dcpm1:{manifest_sha256}
+             */
+            commitment_format: string;
+            /**
+             * Competition
+             * @default model_context
+             * @constant
+             */
+            competition: "model_context";
+            /**
+             * Cpm Score Version
+             * @default 1
+             */
+            cpm_score_version: number;
+            /** Licenses */
+            licenses?: string[];
+            /**
+             * Manifest Filename
+             * @default cpm-manifest.json
+             */
+            manifest_filename: string;
+            /**
+             * Manifest Schema
+             * @default ditto-cpm-manifest-v1
+             */
+            manifest_schema: string;
+            /** Max Lora Rank */
+            max_lora_rank: number;
+            /** Max Total Bytes */
+            max_total_bytes: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Payment Required */
+            payment_required: boolean;
+            /** Retry At */
+            retry_at?: string | null;
+            /**
+             * Signature Payload
+             * @default ditto-model-context-v1:{hotkey}:{hf_repo}:{revision}:{manifest_sha256}:{ts}:{nonce}
+             */
+            signature_payload: string;
+            /** Upload Cooldown Seconds */
+            upload_cooldown_seconds: number;
+        };
+        /**
+         * ModelContextWorkItem
+         * @description One leased run: a submission, or (``kind=reference``) an unmodified
+         *     base whose score becomes the season floor for that base.
+         */
+        ModelContextWorkItem: {
+            base: components["schemas"]["ModelContextBase"];
+            /** Bench Version */
+            bench_version: number;
+            /** Cpm Score Version */
+            cpm_score_version: number;
+            /** Generate Seeds */
+            generate_seeds: number[];
+            /** Gpu Sku */
+            gpu_sku: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "submission" | "reference";
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Season */
+            season: number;
+            /** Seeds */
+            seeds: number[];
+            settings: components["schemas"]["ModelContextWorkSettings"];
+            submission: components["schemas"]["ModelContextWorkSubmission"] | null;
+        };
+        /** ModelContextWorkSettings */
+        ModelContextWorkSettings: {
+            /** Budget Tokens */
+            budget_tokens: number;
+            /** Floor Margin */
+            floor_margin: number;
+            /** Tool K */
+            tool_k: number;
+        };
+        /** ModelContextWorkSubmission */
+        ModelContextWorkSubmission: {
+            /** Base Id */
+            base_id: string;
+            /** Hf Repo */
+            hf_repo: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "lora" | "full";
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Revision */
+            revision: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Weights Sha256 */
+            weights_sha256: string | null;
         };
         /**
          * NameClaimEndorsementView
@@ -41757,6 +42783,24 @@ export interface components {
             surface: "source_emission" | "treasury_receipt";
         };
         /**
+         * ScoreComponents
+         * @description The metrics of contract section 4.3, averaged over cases.
+         */
+        ScoreComponents: {
+            /** Distractor Rate */
+            distractor_rate: number;
+            /** Memory Cases */
+            memory_cases: number;
+            /** Memory Recall */
+            memory_recall: number;
+            /** Packed Tokens */
+            packed_tokens?: number | null;
+            /** Tool Cases */
+            tool_cases: number;
+            /** Tool Recall */
+            tool_recall: number;
+        };
+        /**
          * ScoreReport
          * @description A completed DittoBench evaluation result for one agent.
          *
@@ -44313,6 +45357,25 @@ export interface components {
              * @constant
              */
             policy_version: 13;
+        };
+        /** SeedResult */
+        SeedResult: {
+            /** Distractor Rate */
+            distractor_rate: number;
+            /** Memory Cases */
+            memory_cases: number;
+            /** Memory Recall */
+            memory_recall: number;
+            /** Packed Tokens */
+            packed_tokens?: number | null;
+            /** Score */
+            score: number;
+            /** Seed */
+            seed: number;
+            /** Tool Cases */
+            tool_cases: number;
+            /** Tool Recall */
+            tool_recall: number;
         };
         /**
          * ShadowReviewObservationRequest
@@ -56741,6 +57804,138 @@ export interface operations {
             };
         };
     };
+    scorer_status_api_v1_admin_model_context_scorer_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextScorerStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_api_v1_admin_model_context_seasons_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRotateSeasonRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSeasonView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_model_context_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminModelContextSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_model_context_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminModelContextSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_operator_diagnostic_api_v1_admin_operator_diagnostic__agent_id__get: {
         parameters: {
             query?: never;
@@ -65476,6 +66671,329 @@ export interface operations {
             };
         };
     };
+    post_fault_api_v1_model_context_scorer_fault_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelContextFaultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextFaultAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reference_work_api_v1_model_context_scorer_reference_work_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextReferenceWork"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_results_api_v1_model_context_scorer_results_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelContextResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextResultResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lease_work_api_v1_model_context_scorer_work_get: {
+        parameters: {
+            query: {
+                scorer_id: string;
+                scorer_version?: string | null;
+                gpu_sku?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextWorkItem"];
+                };
+            };
+            /** @description Nothing to score. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    board_api_v1_model_context_board_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextBoardResponse"];
+                };
+            };
+        };
+    };
+    seasons_api_v1_model_context_seasons_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSeasonListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_submissions_api_v1_model_context_submissions_get: {
+        parameters: {
+            query: {
+                hotkey: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_api_v1_model_context_submissions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelContextSubmissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSubmissionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_submission_api_v1_model_context_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextSubmissionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_terms_api_v1_model_context_upload_terms_get: {
+        parameters: {
+            query?: {
+                hotkey?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextUploadTerms"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_claims_api_v1_name_claims_get: {
         parameters: {
             query?: never;
@@ -67236,6 +68754,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GeneratorLedgerResponse"];
+                };
+            };
+            /** @description Missing/invalid validator auth. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale or replayed ledger request proof. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Chain unavailable, or nonce store unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_context_ledger_api_v1_scoring_model_context_ledger_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+                "x-validator-ledger-nonce"?: string | null;
+                "x-validator-ledger-requested-at"?: string | null;
+                "x-validator-ledger-signature"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelContextLedgerResponse"];
                 };
             };
             /** @description Missing/invalid validator auth. */

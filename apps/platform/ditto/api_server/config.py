@@ -401,6 +401,11 @@ class ApiServerConfig:
     """Bearer token the trusted generator-competition scorer presents to lease
     packs and post panel results. Unset disables the scorer endpoints (503)."""
 
+    model_context_scorer_token: str | None = None
+    """Bearer token the trusted CPM (model_context) scorer presents to lease
+    runs and post results (``DITTO_MODEL_CONTEXT_SCORER_TOKEN``). Unset
+    disables the scorer endpoints (503). Never logged."""
+
     ditto_link: DittoLinkConfig = field(
         default_factory=lambda: DittoLinkConfig(
             enabled=False,
@@ -899,6 +904,9 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         inference_proxy=inference_proxy,
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
         generator_scorer_token=os.environ.get("DITTO_GENERATOR_SCORER_TOKEN") or None,
+        model_context_scorer_token=(
+            os.environ.get("DITTO_MODEL_CONTEXT_SCORER_TOKEN") or None
+        ),
         ditto_link=parse_ditto_link_config_from_env(),
         github_link=parse_github_link_config_from_env(),
         dashboard_enabled=dashboard_enabled,
@@ -1078,6 +1086,13 @@ def check_config(config: ApiServerConfig) -> None:
     ):
         raise ApiServerConfigError(
             "DITTO_GENERATOR_SCORER_TOKEN must be at least 32 characters"
+        )
+    if (
+        config.model_context_scorer_token is not None
+        and len(config.model_context_scorer_token) < 32
+    ):
+        raise ApiServerConfigError(
+            "DITTO_MODEL_CONTEXT_SCORER_TOKEN must be at least 32 characters"
         )
     names = config.validator_names
     if (names.url is None) != (names.api_key is None):

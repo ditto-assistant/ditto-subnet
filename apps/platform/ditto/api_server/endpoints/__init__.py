@@ -95,6 +95,9 @@ from ditto.api_server.endpoints.admin_lease_revocations import (
 from ditto.api_server.endpoints.admin_miner_fees import (
     router as admin_miner_fees_router,
 )
+from ditto.api_server.endpoints.admin_model_context import (
+    router as admin_model_context_router,
+)
 from ditto.api_server.endpoints.admin_outlier_escalation import (
     router as admin_outlier_escalation_router,
 )
@@ -219,6 +222,10 @@ from ditto.api_server.endpoints.miner_ditto_link import (
 )
 from ditto.api_server.endpoints.miner_mcp import router as miner_mcp_router
 from ditto.api_server.endpoints.miner_me import router as miner_me_router
+from ditto.api_server.endpoints.model_context import router as model_context_router
+from ditto.api_server.endpoints.model_context_scorer import (
+    router as model_context_scorer_router,
+)
 from ditto.api_server.endpoints.name_claims import router as name_claims_router
 from ditto.api_server.endpoints.public import router as public_router
 from ditto.api_server.endpoints.public_dueling import (
@@ -263,6 +270,9 @@ __all__ = [
     "admin_scoring_lease_settings_router",
     "generator_router",
     "generator_scorer_router",
+    "admin_model_context_router",
+    "model_context_router",
+    "model_context_scorer_router",
     "admin_traces_router",
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",

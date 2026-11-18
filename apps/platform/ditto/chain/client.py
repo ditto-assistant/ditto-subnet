@@ -34,6 +34,7 @@ from ditto.chain.models import (
     ChainWeightVector,
     EpochSchedule,
     ExtrinsicInfo,
+    HotkeyCommitment,
     HotkeyRegistration,
     NeuronInfo,
     NeuronSnapshot,
@@ -92,6 +93,8 @@ _OWNER_STORAGE = "Owner"
 _SUBNET_OWNER_HOTKEY_STORAGE = "SubnetOwnerHotkey"
 _KEYS_STORAGE = "Keys"
 _WEIGHTS_STORAGE = "Weights"
+_COMMITMENTS_MODULE = "Commitments"
+_COMMITMENT_OF_STORAGE = "CommitmentOf"
 _TIMESTAMP_MODULE = "Timestamp"
 _TIMESTAMP_NOW_STORAGE = "Now"
 
@@ -2085,6 +2088,51 @@ class ChainClient:
             )
         return str(coldkey)
 
+    async def get_hotkey_commitment(
+        self, hotkey: str, netuid: int
+    ) -> HotkeyCommitment | None:
+        """Read ``Commitments.CommitmentOf(netuid, hotkey)`` at the finalized head.
+
+        The model_context competition reads a miner's ``dcpm1:`` commitment
+        and its block (the submission's priority). ``None`` when the hotkey
+        has no commitment on ``netuid``.
+
+        Raises:
+            ChainConnectionError: When no provider answers.
+            ChainTimeoutError: When every provider times out.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        head = await self.get_finalized_block()
+        try:
+            result = await self._query_historical_storage(
+                AsyncSubstrateInterface,
+                module=_COMMITMENTS_MODULE,
+                storage_function=_COMMITMENT_OF_STORAGE,
+                params=[netuid, hotkey],
+                block_hash=head.hash,
+            )
+        except TimeoutError as e:
+            raise ChainTimeoutError(
+                f"get_hotkey_commitment({hotkey}, {netuid}) timed out"
+            ) from e
+        except Exception as e:
+            raise ChainConnectionError(
+                f"get_hotkey_commitment({hotkey}, {netuid}) failed: "
+                f"{self._safe_rpc_error(e)}"
+            ) from e
+        decoded = decode_commitment_registration(_unwrap_substrate_value(result))
+        if decoded is None:
+            return None
+        block, data = decoded
+        return HotkeyCommitment(
+            hotkey=hotkey,
+            netuid=netuid,
+            block=block,
+            data=data,
+            read_at_block=head.number,
+        )
+
     async def get_block_timestamp(self, block_hash: str) -> int:
         """Read ``Timestamp.Now`` at ``block_hash`` and return seconds.
 
@@ -2333,6 +2381,54 @@ def _iter_event_records(events: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [dict(r) for r in value if isinstance(r, dict)]
     return []
+
+
+def _commitment_bytes(raw: Any) -> bytes | None:
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw)
+    if isinstance(raw, str):
+        try:
+            return bytes.fromhex(raw.removeprefix("0x"))
+        except ValueError:
+            return None
+    if isinstance(raw, (list, tuple)) and all(
+        type(b) is int and 0 <= b <= 255 for b in raw
+    ):
+        return bytes(raw)
+    return None
+
+
+def decode_commitment_registration(value: Any) -> tuple[int, bytes] | None:
+    """``(block, first field bytes)`` from a decoded ``CommitmentOf`` value.
+
+    The pallet stores ``Registration { deposit, block, info: CommitmentInfo
+    { fields: [Data] } }``; ``async-substrate-interface`` decodes ``Data::RawN``
+    as ``{"RawN": "0x..."}`` (as ``bittensor``'s ``decode_metadata`` reads
+    it), sometimes with the field list wrapped once more. Any other shape, or
+    a non-``Raw`` first field, reads as empty data at the stamped block.
+    """
+    if not isinstance(value, dict):
+        return None
+    block = value.get("block")
+    if type(block) is not int or block < 0:
+        return None
+    info = value.get("info")
+    fields = info.get("fields") if isinstance(info, dict) else None
+    while (
+        isinstance(fields, (list, tuple))
+        and len(fields) == 1
+        and isinstance(fields[0], (list, tuple))
+    ):
+        fields = fields[0]
+    if not isinstance(fields, (list, tuple)) or not fields:
+        return block, b""
+    first = fields[0]
+    if isinstance(first, dict) and len(first) == 1:
+        key, raw = next(iter(first.items()))
+        if str(key).startswith("Raw"):
+            data = _commitment_bytes(raw)
+            return block, data if data is not None else b""
+    return block, b""
 
 
 def _unwrap_substrate_value(result: Any) -> Any:

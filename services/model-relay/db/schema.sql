@@ -5778,6 +5778,164 @@ CREATE TABLE public.miner_sessions (
 
 
 --
+-- Name: model_context_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.model_context_runs (
+    run_id uuid NOT NULL,
+    kind text NOT NULL,
+    submission_id uuid,
+    base_id text NOT NULL,
+    season integer NOT NULL,
+    cpm_score_version integer NOT NULL,
+    status text NOT NULL,
+    score double precision,
+    components jsonb,
+    per_seed jsonb,
+    scorer_id text,
+    scorer_version text,
+    gpu_sku text,
+    attempts integer DEFAULT 0 NOT NULL,
+    lease_id uuid,
+    lease_expires_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    fault text,
+    CONSTRAINT ck_model_context_runs_model_context_runs_counts CHECK (((attempts >= 0) AND (cpm_score_version >= 1))),
+    CONSTRAINT ck_model_context_runs_model_context_runs_finished CHECK (((status = ANY (ARRAY['scored'::text, 'failed'::text, 'abandoned'::text])) = (finished_at IS NOT NULL))),
+    CONSTRAINT ck_model_context_runs_model_context_runs_kind CHECK ((kind = ANY (ARRAY['submission'::text, 'reference'::text]))),
+    CONSTRAINT ck_model_context_runs_model_context_runs_lease CHECK ((((status = 'leased'::text) = (lease_id IS NOT NULL)) AND ((lease_id IS NULL) = (lease_expires_at IS NULL)))),
+    CONSTRAINT ck_model_context_runs_model_context_runs_score CHECK ((((status = 'scored'::text) = (score IS NOT NULL)) AND ((score IS NULL) OR ((score >= (0)::double precision) AND (score <= (1)::double precision))))),
+    CONSTRAINT ck_model_context_runs_model_context_runs_status CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'scored'::text, 'failed'::text, 'abandoned'::text]))),
+    CONSTRAINT ck_model_context_runs_model_context_runs_subject CHECK (((kind = 'submission'::text) = (submission_id IS NOT NULL))),
+    CONSTRAINT ck_model_context_runs_model_context_runs_text_bounds CHECK ((((fault IS NULL) OR (length(fault) <= 2000)) AND ((scorer_id IS NULL) OR (length(scorer_id) <= 120)) AND ((scorer_version IS NULL) OR (length(scorer_version) <= 64)) AND ((gpu_sku IS NULL) OR (length(gpu_sku) <= 64)) AND ((length(base_id) >= 1) AND (length(base_id) <= 64))))
+);
+
+
+--
+-- Name: model_context_scorer_heartbeats; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.model_context_scorer_heartbeats (
+    scorer_id text NOT NULL,
+    scorer_version text,
+    gpu_sku text,
+    last_poll text NOT NULL,
+    first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_model_context_scorer_heartbeats_model_context_scorer_1c79 CHECK ((((length(scorer_id) >= 1) AND (length(scorer_id) <= 120)) AND ((scorer_version IS NULL) OR (length(scorer_version) <= 64)) AND ((gpu_sku IS NULL) OR (length(gpu_sku) <= 64)) AND (length(last_poll) <= 32)))
+);
+
+
+--
+-- Name: model_context_seasons; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.model_context_seasons (
+    season integer NOT NULL,
+    open_block bigint NOT NULL,
+    open_block_hash text NOT NULL,
+    seeds jsonb NOT NULL,
+    bench_version integer NOT NULL,
+    cpm_score_version integer NOT NULL,
+    base_floors jsonb DEFAULT '{}'::jsonb NOT NULL,
+    gpu_sku text,
+    settings_revision integer NOT NULL,
+    opened_at timestamp with time zone DEFAULT now() NOT NULL,
+    closes_at timestamp with time zone NOT NULL,
+    closed_at timestamp with time zone,
+    CONSTRAINT ck_model_context_seasons_model_context_seasons_base_floors CHECK ((jsonb_typeof(base_floors) = 'object'::text)),
+    CONSTRAINT ck_model_context_seasons_model_context_seasons_block_hash CHECK ((open_block_hash ~ '^0x[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_model_context_seasons_model_context_seasons_gpu_sku CHECK (((gpu_sku IS NULL) OR (length(gpu_sku) <= 64))),
+    CONSTRAINT ck_model_context_seasons_model_context_seasons_season CHECK ((season >= 1)),
+    CONSTRAINT ck_model_context_seasons_model_context_seasons_seeds CHECK (((jsonb_typeof(seeds) = 'array'::text) AND (jsonb_array_length(seeds) = 3))),
+    CONSTRAINT ck_model_context_seasons_model_context_seasons_versions CHECK (((open_block >= 0) AND (bench_version >= 1) AND (cpm_score_version >= 1))),
+    CONSTRAINT ck_model_context_seasons_model_context_seasons_window CHECK ((closes_at > opened_at))
+);
+
+
+--
+-- Name: model_context_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.model_context_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_model_context_settings_revisions_model_context_setti_0a37 CHECK ((scope = '*'::text)),
+    CONSTRAINT ck_model_context_settings_revisions_model_context_setti_8adb CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_model_context_settings_revisions_model_context_setti_bd30 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_model_context_settings_revisions_model_context_setti_c218 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_model_context_settings_revisions_model_context_setti_e195 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120)))
+);
+
+
+--
+-- Name: model_context_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.model_context_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: model_context_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.model_context_settings_revisions_revision_seq OWNED BY public.model_context_settings_revisions.revision;
+
+
+--
+-- Name: model_context_submissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.model_context_submissions (
+    submission_id uuid NOT NULL,
+    hotkey text NOT NULL,
+    hf_repo text NOT NULL,
+    revision text NOT NULL,
+    manifest jsonb NOT NULL,
+    manifest_sha256 text NOT NULL,
+    weights_sha256 text,
+    base_id text NOT NULL,
+    kind text NOT NULL,
+    commitment_block bigint NOT NULL,
+    total_bytes bigint NOT NULL,
+    status text NOT NULL,
+    reject_reason text,
+    mirror_repo text,
+    screening_detail jsonb,
+    screening_attempts integer DEFAULT 0 NOT NULL,
+    screening_lease_until timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_model_context_submissions_model_context_submissions__00b4 CHECK (((reject_reason IS NULL) OR (length(reject_reason) <= 1000))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions__8c10 CHECK (((mirror_repo IS NULL) OR (length(mirror_repo) <= 200))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_base CHECK (((length(base_id) >= 1) AND (length(base_id) <= 64))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_counts CHECK (((commitment_block >= 0) AND (total_bytes > 0) AND (screening_attempts >= 0))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_digests CHECK (((manifest_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((weights_sha256 IS NULL) OR (weights_sha256 ~ '^[0-9a-f]{64}$'::text)))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_hf_repo CHECK (((length(hf_repo) >= 3) AND (length(hf_repo) <= 200))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_hotkey CHECK (((length(hotkey) >= 1) AND (length(hotkey) <= 64))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_kind CHECK ((kind = ANY (ARRAY['lora'::text, 'full'::text]))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_rejected CHECK (((status = 'rejected'::text) = (reject_reason IS NOT NULL))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_revision CHECK ((revision ~ '^[0-9a-f]{40}$'::text)),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_screened CHECK (((status = ANY (ARRAY['screening'::text, 'rejected'::text])) OR (weights_sha256 IS NOT NULL))),
+    CONSTRAINT ck_model_context_submissions_model_context_submissions_status CHECK ((status = ANY (ARRAY['screening'::text, 'queued'::text, 'scored'::text, 'rejected'::text, 'superseded'::text])))
+);
+
+
+--
 -- Name: name_claim_endorsements; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8696,6 +8854,13 @@ ALTER TABLE ONLY public.inference_concurrency_settings_revisions ALTER COLUMN re
 
 
 --
+-- Name: model_context_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.model_context_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: queue_policy_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -9917,6 +10082,14 @@ ALTER TABLE ONLY public.miner_sessions
 
 
 --
+-- Name: model_context_settings_revisions model_context_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_settings_revisions
+    ADD CONSTRAINT model_context_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
 -- Name: name_claim_endorsements name_claim_endorsements_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10986,6 +11159,46 @@ ALTER TABLE ONLY public.miner_github_links
 
 ALTER TABLE ONLY public.miner_github_operator_revocations
     ADD CONSTRAINT pk_miner_github_operator_revocations PRIMARY KEY (link_id);
+
+
+--
+-- Name: model_context_runs pk_model_context_runs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_runs
+    ADD CONSTRAINT pk_model_context_runs PRIMARY KEY (run_id);
+
+
+--
+-- Name: model_context_scorer_heartbeats pk_model_context_scorer_heartbeats; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_scorer_heartbeats
+    ADD CONSTRAINT pk_model_context_scorer_heartbeats PRIMARY KEY (scorer_id);
+
+
+--
+-- Name: model_context_seasons pk_model_context_seasons; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_seasons
+    ADD CONSTRAINT pk_model_context_seasons PRIMARY KEY (season);
+
+
+--
+-- Name: model_context_settings_revisions pk_model_context_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_settings_revisions
+    ADD CONSTRAINT pk_model_context_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: model_context_submissions pk_model_context_submissions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_submissions
+    ADD CONSTRAINT pk_model_context_submissions PRIMARY KEY (submission_id);
 
 
 --
@@ -13503,6 +13716,76 @@ CREATE INDEX miner_session_tokens_session_idx ON public.miner_session_tokens USI
 --
 
 CREATE INDEX miner_sessions_hotkey_idx ON public.miner_sessions USING btree (miner_hotkey, expires_at);
+
+
+--
+-- Name: model_context_runs_open_reference_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX model_context_runs_open_reference_key ON public.model_context_runs USING btree (season, base_id) WHERE ((kind = 'reference'::text) AND (status = ANY (ARRAY['queued'::text, 'leased'::text])));
+
+
+--
+-- Name: model_context_runs_open_submission_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX model_context_runs_open_submission_key ON public.model_context_runs USING btree (submission_id, season) WHERE ((kind = 'submission'::text) AND (status = ANY (ARRAY['queued'::text, 'leased'::text])));
+
+
+--
+-- Name: model_context_runs_pending_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX model_context_runs_pending_idx ON public.model_context_runs USING btree (created_at) WHERE (status = ANY (ARRAY['queued'::text, 'leased'::text]));
+
+
+--
+-- Name: model_context_runs_season_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX model_context_runs_season_idx ON public.model_context_runs USING btree (season, status);
+
+
+--
+-- Name: model_context_runs_submission_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX model_context_runs_submission_idx ON public.model_context_runs USING btree (submission_id, season);
+
+
+--
+-- Name: model_context_seasons_open_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX model_context_seasons_open_key ON public.model_context_seasons USING btree (((closed_at IS NULL))) WHERE (closed_at IS NULL);
+
+
+--
+-- Name: model_context_submissions_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX model_context_submissions_hotkey_idx ON public.model_context_submissions USING btree (hotkey, created_at DESC);
+
+
+--
+-- Name: model_context_submissions_manifest_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX model_context_submissions_manifest_idx ON public.model_context_submissions USING btree (manifest_sha256);
+
+
+--
+-- Name: model_context_submissions_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX model_context_submissions_status_idx ON public.model_context_submissions USING btree (status, created_at);
+
+
+--
+-- Name: model_context_submissions_weights_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX model_context_submissions_weights_idx ON public.model_context_submissions USING btree (weights_sha256);
 
 
 --
@@ -16469,6 +16752,22 @@ ALTER TABLE ONLY public.miner_github_links
 
 ALTER TABLE ONLY public.miner_github_operator_revocations
     ADD CONSTRAINT fk_miner_github_operator_revocations_link_id_miner_github_links FOREIGN KEY (link_id) REFERENCES public.miner_github_links(link_id);
+
+
+--
+-- Name: model_context_runs fk_model_context_runs_season_model_context_seasons; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_runs
+    ADD CONSTRAINT fk_model_context_runs_season_model_context_seasons FOREIGN KEY (season) REFERENCES public.model_context_seasons(season);
+
+
+--
+-- Name: model_context_runs fk_model_context_runs_submission_id_model_context_submissions; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_context_runs
+    ADD CONSTRAINT fk_model_context_runs_submission_id_model_context_submissions FOREIGN KEY (submission_id) REFERENCES public.model_context_submissions(submission_id) ON DELETE CASCADE;
 
 
 --

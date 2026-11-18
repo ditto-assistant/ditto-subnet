@@ -490,7 +490,10 @@ class TestSubmissionTerms:
         resp = await client.get("/api/v1/public/submission-terms")
         assert resp.status_code == 200, resp.text
         terms = {row["competition"]: row for row in resp.json()["competitions"]}
-        assert set(terms) == {"memory", "generator"}
+        assert set(terms) == {"memory", "generator", "model_context"}
+        # The model_context lane ships off and free (CPM contract section 3.4).
+        assert terms["model_context"]["accepting"] is False
+        assert terms["model_context"]["fee"]["required"] is False
 
         memory = terms["memory"]
         assert memory["deliverable"]["kind"] == "agent_harness_tarball"

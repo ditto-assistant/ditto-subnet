@@ -20,19 +20,55 @@ type GeneratedCompetitionSubmissionTerms =
   PlatformComponents['schemas']['CompetitionSubmissionTerms']
 type GeneratedReadmissionTerms = PlatformComponents['schemas']['ReadmissionTerms']
 
-const limitSource = z.enum(['code', 'environment', 'setting'])
+// An enum of exactly the generated literal union: a value Platform adds to
+// the wire model and Backroom does not list is a type error here, not a
+// ZodError on the live read (a new competition once broke the whole read).
+type MissingFrom<Generated extends string, Listed extends string> =
+  [Exclude<Generated, Listed>] extends [never]
+    ? unknown
+    : { missing: Exclude<Generated, Listed> }
+
+function platformEnum<Generated extends string>() {
+  return <const Values extends readonly [Generated, ...Generated[]]>(
+    values: Values & MissingFrom<Generated, Values[number]>,
+  ) => z.enum(values)
+}
+
+export const SUBMISSION_TERMS_COMPETITIONS = [
+  'memory',
+  'generator',
+  'model_context',
+] as const satisfies readonly GeneratedCompetitionSubmissionTerms['competition'][]
+
+const limitSource = platformEnum<GeneratedArtifactLimit['source']>()([
+  'code',
+  'environment',
+  'setting',
+])
 
 export const artifactLimitSchema = z.object({
   name: z.string().min(1),
   value: z.union([z.number().int(), z.string()]),
-  unit: z.enum(['bytes', 'files', 'lines', 'characters', 'cases', 'version']),
+  unit: platformEnum<GeneratedArtifactLimit['unit']>()([
+    'bytes',
+    'files',
+    'lines',
+    'characters',
+    'cases',
+    'version',
+    'rank',
+  ]),
   source: limitSource,
   reference: z.string(),
   description: z.string(),
 } satisfies PlatformResponseShape<GeneratedArtifactLimit>)
 
 export const artifactContractSchema = z.object({
-  kind: z.enum(['agent_harness_tarball', 'generator_source_archive']),
+  kind: platformEnum<GeneratedArtifactContract['kind']>()([
+    'agent_harness_tarball',
+    'generator_source_archive',
+    'model_weights_repo',
+  ]),
   format: z.string(),
   contract_version: z.string().nullable().default(null),
   required_files: z.array(z.string()).max(64).default([]),
@@ -68,7 +104,9 @@ export const readmissionTermsSchema = z.object({
 } satisfies PlatformResponseShape<GeneratedReadmissionTerms>)
 
 export const competitionSubmissionTermsSchema = z.object({
-  competition: z.enum(['memory', 'generator']),
+  competition: platformEnum<GeneratedCompetitionSubmissionTerms['competition']>()(
+    SUBMISSION_TERMS_COMPETITIONS,
+  ),
   accepting: z.boolean(),
   deliverable: artifactContractSchema,
   cooldown: submissionCooldownTermsSchema,

@@ -50,6 +50,7 @@ from ditto.api_models.continual_retest_settings import (
 )
 from ditto.api_models.emission_eligibility import AgentEmissionEligibility
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
+from ditto.api_models.model_context import ModelContextLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.track_share_settings import (
     TRACK_SHARES_PROTOCOL,
@@ -99,6 +100,12 @@ from ditto.api_server.generator_competition import (
     load_settings as load_generator_settings,
 )
 from ditto.api_server.koth import CrownGate, crown_gate_marker
+from ditto.api_server.model_context_competition import (
+    build_ledger as build_model_context_ledger,
+)
+from ditto.api_server.model_context_competition import (
+    load_settings as load_model_context_settings,
+)
 from ditto.api_server.treasury_read_diagnostics import treasury_read_failure_kind
 from ditto.api_server.validator_request_outcomes import (
     ledger_outcome,
@@ -1818,6 +1825,50 @@ async def generator_ledger(
     )
     resolved = await load_generator_settings(session)
     return await build_generator_ledger(
+        session, resolved=resolved, now=datetime.now(UTC)
+    )
+
+
+@router.get(
+    "/model-context-ledger",
+    response_model=ModelContextLedgerResponse,
+    responses={
+        401: {"description": "Missing/invalid validator auth."},
+        409: {"description": "Stale or replayed ledger request proof."},
+        503: {"description": "Chain unavailable, or nonce store unavailable."},
+    },
+)
+async def model_context_ledger(
+    request: Request,
+    response: Response,
+    chain: ChainDep,
+    session: SessionDep,
+    x_validator_hotkey: Annotated[str | None, Header()] = None,
+    x_validator_ledger_nonce: Annotated[UUID | None, Header()] = None,
+    x_validator_ledger_requested_at: Annotated[datetime | None, Header()] = None,
+    x_validator_ledger_signature: Annotated[str | None, Header()] = None,
+) -> ModelContextLedgerResponse:
+    """The model_context (CPM) ledger, behind the memory ledger's proof.
+
+    Platform is the competition's system of record, so this is a direct read
+    of the open season: each active submission's latest scored run, with
+    ``eligible`` when it clears its base's floor plus ``floor_margin``
+    (contract section 4.5), ranked by score then commitment block. The track
+    is not payable, so validators fold it in shadow; ``mode=off`` or no open
+    season serves an empty ledger.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    await _authorize_ledger_request(
+        request,
+        chain,
+        session,
+        x_validator_hotkey=x_validator_hotkey,
+        x_validator_ledger_nonce=x_validator_ledger_nonce,
+        x_validator_ledger_requested_at=x_validator_ledger_requested_at,
+        x_validator_ledger_signature=x_validator_ledger_signature,
+    )
+    resolved = await load_model_context_settings(session)
+    return await build_model_context_ledger(
         session, resolved=resolved, now=datetime.now(UTC)
     )
 

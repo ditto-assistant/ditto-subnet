@@ -40,6 +40,9 @@ from ditto.api_models.submission_settings import (
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.generator_competition import load_settings
+from ditto.api_server.model_context_competition import (
+    load_settings as load_model_context_settings,
+)
 from ditto.api_server.readmission import activation_state
 from ditto.db.models import (
     OwnerSubmissionCooldownRevision,
@@ -127,7 +130,11 @@ async def get_settings(
     # it.
     resolved = resolve_submission_settings(latest, payment_address="")
     generator = (await load_settings(session)).settings
-    lane_switches = {"generator": generator.upload_fee_required}
+    model_context = (await load_model_context_settings(session)).settings
+    lane_switches = {
+        "generator": generator.upload_fee_required,
+        "model_context": model_context.upload_fee_required,
+    }
     effective = []
     for competition in UPLOAD_COMPETITIONS:
         fee = resolved.competition_fee(

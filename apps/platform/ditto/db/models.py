@@ -16028,3 +16028,363 @@ class AirdropRecipient(Base):
         ),
         Index("airdrop_recipients_payee_idx", "payee", "status"),
     )
+
+
+class ModelContextSettingsRevision(Base):
+    """Append-only operator policy for the ``model_context`` (CPM) competition.
+
+    Each revision stores the whole policy; ``ditto.api_models.model_context``
+    has the bounds. An empty table resolves to ``mode=off``. The migration
+    ``2026_11_18_add_model_context_competition`` owns the constraints.
+    """
+
+    __tablename__ = "model_context_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "scope = '*'",
+            name="model_context_settings_scope_check",
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="model_context_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="model_context_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="model_context_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="model_context_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "scope", "parent_revision", name="model_context_settings_scope_parent_key"
+        ),
+    )
+
+
+class ModelContextSubmission(Base):
+    """One model_context submission: a Hugging Face repo pinned at a revision.
+
+    ``manifest_sha256`` is the digest of the exact ``cpm-manifest.json``
+    bytes and matches the hotkey's on-chain ``dcpm1:`` commitment, whose
+    block (``commitment_block``) is the submission's priority.
+    ``weights_sha256`` is the canonical tensor-stream digest computed during
+    screening; the earlier commitment block owns a shared digest.
+    """
+
+    __tablename__ = "model_context_submissions"
+
+    submission_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    hf_repo: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    weights_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    base_id: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    commitment_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mirror_repo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screening_detail: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    screening_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    screening_lease_until: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(hotkey) BETWEEN 1 AND 64",
+            name="model_context_submissions_hotkey",
+        ),
+        CheckConstraint(
+            "length(hf_repo) BETWEEN 3 AND 200",
+            name="model_context_submissions_hf_repo",
+        ),
+        CheckConstraint(
+            "revision ~ '^[0-9a-f]{40}$'",
+            name="model_context_submissions_revision",
+        ),
+        CheckConstraint(
+            "manifest_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "(weights_sha256 IS NULL OR weights_sha256 ~ '^[0-9a-f]{64}$')",
+            name="model_context_submissions_digests",
+        ),
+        CheckConstraint(
+            "length(base_id) BETWEEN 1 AND 64",
+            name="model_context_submissions_base",
+        ),
+        CheckConstraint(
+            "kind IN ('lora', 'full')",
+            name="model_context_submissions_kind",
+        ),
+        CheckConstraint(
+            "status IN ('screening', 'queued', 'scored', 'rejected', 'superseded')",
+            name="model_context_submissions_status",
+        ),
+        CheckConstraint(
+            "commitment_block >= 0 AND total_bytes > 0 AND screening_attempts >= 0",
+            name="model_context_submissions_counts",
+        ),
+        CheckConstraint(
+            "reject_reason IS NULL OR length(reject_reason) <= 1000",
+            name="model_context_submissions_reject_reason",
+        ),
+        CheckConstraint(
+            "mirror_repo IS NULL OR length(mirror_repo) <= 200",
+            name="model_context_submissions_mirror_repo",
+        ),
+        CheckConstraint(
+            "(status = 'rejected') = (reject_reason IS NOT NULL)",
+            name="model_context_submissions_rejected",
+        ),
+        CheckConstraint(
+            "status IN ('screening', 'rejected') OR weights_sha256 IS NOT NULL",
+            name="model_context_submissions_screened",
+        ),
+        Index(
+            "model_context_submissions_hotkey_idx",
+            "hotkey",
+            text("created_at DESC"),
+        ),
+        Index("model_context_submissions_status_idx", "status", "created_at"),
+        Index("model_context_submissions_weights_idx", "weights_sha256"),
+        Index("model_context_submissions_manifest_idx", "manifest_sha256"),
+    )
+
+
+class ModelContextSeason(Base):
+    """One scoring season: three public seeds from the open block's hash."""
+
+    __tablename__ = "model_context_seasons"
+
+    season: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    open_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    open_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    seeds: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    cpm_score_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_floors: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    gpu_sku: Mapped[str | None] = mapped_column(Text, nullable=True)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    closes_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "season >= 1",
+            name="model_context_seasons_season",
+        ),
+        CheckConstraint(
+            "open_block_hash ~ '^0x[0-9a-f]{64}$'",
+            name="model_context_seasons_block_hash",
+        ),
+        CheckConstraint(
+            "open_block >= 0 AND bench_version >= 1 AND cpm_score_version >= 1",
+            name="model_context_seasons_versions",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(seeds) = 'array' AND jsonb_array_length(seeds) = 3",
+            name="model_context_seasons_seeds",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(base_floors) = 'object'",
+            name="model_context_seasons_base_floors",
+        ),
+        CheckConstraint(
+            "gpu_sku IS NULL OR length(gpu_sku) <= 64",
+            name="model_context_seasons_gpu_sku",
+        ),
+        CheckConstraint(
+            "closes_at > opened_at",
+            name="model_context_seasons_window",
+        ),
+        # At most one open season.
+        Index(
+            "model_context_seasons_open_key",
+            text("(closed_at IS NULL)"),
+            unique=True,
+            postgresql_where=text("closed_at IS NULL"),
+        ),
+    )
+
+
+class ModelContextRun(Base):
+    """One scoring run of a submission (or, ``kind=reference``, of an
+    unmodified base, whose score is that base's season floor)."""
+
+    __tablename__ = "model_context_runs"
+
+    run_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    submission_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    base_id: Mapped[str] = mapped_column(Text, nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    cpm_score_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    components: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    per_seed: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    scorer_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scorer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gpu_sku: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    fault: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('submission', 'reference')",
+            name="model_context_runs_kind",
+        ),
+        CheckConstraint(
+            "(kind = 'submission') = (submission_id IS NOT NULL)",
+            name="model_context_runs_subject",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'scored', 'failed', 'abandoned')",
+            name="model_context_runs_status",
+        ),
+        CheckConstraint(
+            "(status = 'scored') = (score IS NOT NULL) AND "
+            "(score IS NULL OR (score >= 0 AND score <= 1))",
+            name="model_context_runs_score",
+        ),
+        CheckConstraint(
+            "(status = 'leased') = (lease_id IS NOT NULL) AND "
+            "(lease_id IS NULL) = (lease_expires_at IS NULL)",
+            name="model_context_runs_lease",
+        ),
+        CheckConstraint(
+            "(status IN ('scored', 'failed', 'abandoned')) = (finished_at IS NOT NULL)",
+            name="model_context_runs_finished",
+        ),
+        CheckConstraint(
+            "attempts >= 0 AND cpm_score_version >= 1",
+            name="model_context_runs_counts",
+        ),
+        CheckConstraint(
+            "(fault IS NULL OR length(fault) <= 2000) AND "
+            "(scorer_id IS NULL OR length(scorer_id) <= 120) AND "
+            "(scorer_version IS NULL OR length(scorer_version) <= 64) AND "
+            "(gpu_sku IS NULL OR length(gpu_sku) <= 64) AND "
+            "length(base_id) BETWEEN 1 AND 64",
+            name="model_context_runs_text_bounds",
+        ),
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["model_context_submissions.submission_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["season"], ["model_context_seasons.season"]),
+        Index("model_context_runs_submission_idx", "submission_id", "season"),
+        Index("model_context_runs_season_idx", "season", "status"),
+        Index(
+            "model_context_runs_pending_idx",
+            "created_at",
+            postgresql_where=text("status IN ('queued', 'leased')"),
+        ),
+        # One open run per submission and season, and per reference base and
+        # season: enqueue_*_run's ON CONFLICT targets these.
+        Index(
+            "model_context_runs_open_submission_key",
+            "submission_id",
+            "season",
+            unique=True,
+            postgresql_where=text(
+                "kind = 'submission' AND status IN ('queued', 'leased')"
+            ),
+        ),
+        Index(
+            "model_context_runs_open_reference_key",
+            "season",
+            "base_id",
+            unique=True,
+            postgresql_where=text(
+                "kind = 'reference' AND status IN ('queued', 'leased')"
+            ),
+        ),
+    )
+
+
+class ModelContextScorerHeartbeat(Base):
+    """The latest poll from each CPM scorer."""
+
+    __tablename__ = "model_context_scorer_heartbeats"
+
+    scorer_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    scorer_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gpu_sku: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_poll: Mapped[str] = mapped_column(Text, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(scorer_id) BETWEEN 1 AND 120 AND "
+            "(scorer_version IS NULL OR length(scorer_version) <= 64) AND "
+            "(gpu_sku IS NULL OR length(gpu_sku) <= 64) AND length(last_poll) <= 32",
+            name="model_context_scorer_heartbeats_bounds",
+        ),
+    )

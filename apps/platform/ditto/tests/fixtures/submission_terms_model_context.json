@@ -1,0 +1,263 @@
+{
+  "competitions": [
+    {
+      "accepting": true,
+      "competition": "memory",
+      "cooldown": {
+        "reference": "submission_settings.cooldown_seconds",
+        "scope": "owner_coldkey",
+        "seconds": 3600,
+        "source": "setting"
+      },
+      "deliverable": {
+        "contract_version": null,
+        "format": "gzip-compressed tar of the whole harness crate",
+        "kind": "agent_harness_tarball",
+        "limits": [
+          {
+            "description": "the uploaded tarball, measured from the streamed bytes (default 20971520)",
+            "name": "max_archive_bytes",
+            "reference": "DITTO_MAX_TARBALL_SIZE_BYTES",
+            "source": "code",
+            "unit": "bytes",
+            "value": 20971520
+          },
+          {
+            "description": "tar members, directories included",
+            "name": "max_archive_members",
+            "reference": "ditto.api_server.source_inspect.UPLOAD_MAX_MEMBERS",
+            "source": "code",
+            "unit": "files",
+            "value": 20000
+          },
+          {
+            "description": "total size of the archive once unpacked",
+            "name": "max_unpacked_bytes",
+            "reference": "ditto.api_server.source_inspect.UPLOAD_MAX_UNPACKED_BYTES",
+            "source": "code",
+            "unit": "bytes",
+            "value": 67108864
+          },
+          {
+            "description": "lines per source file",
+            "name": "max_source_file_lines",
+            "reference": "ditto_screening_protocol.source_limits.MAX_SOURCE_FILE_LINES",
+            "source": "code",
+            "unit": "lines",
+            "value": 10000
+          },
+          {
+            "description": "bytes per source file",
+            "name": "max_source_file_bytes",
+            "reference": "ditto_screening_protocol.source_limits.MAX_SOURCE_FILE_BYTES",
+            "source": "code",
+            "unit": "bytes",
+            "value": 1048576
+          },
+          {
+            "description": "characters per source line",
+            "name": "max_source_line_chars",
+            "reference": "ditto_screening_protocol.source_limits.MAX_SOURCE_LINE_CHARS",
+            "source": "code",
+            "unit": "characters",
+            "value": 4000
+          }
+        ],
+        "notes": [
+          "a UTF-8 Dockerfile at the archive root; no absolute paths, traversals, links or special files",
+          "source-file limits apply from 2026-10-25T00:00:00+00:00 except to allowlisted unmodified upstream releases",
+          "the screener then builds the image and requires GET /health; see docs/submission-contract.md"
+        ],
+        "required_files": [
+          "Dockerfile"
+        ],
+        "signature_payload": "ditto-upload-v2:{hotkey}:{sha256}:{signature_timestamp}:{signature_nonce}",
+        "upload_endpoint": "/api/v1/upload/agent"
+      },
+      "fee": {
+        "amount_rao": 40000000,
+        "amount_source": "default",
+        "asset": "TAO",
+        "required": true,
+        "required_source": "always",
+        "send_address": "5FixtureSendAddress",
+        "settings_revision": 1
+      },
+      "readmission": {
+        "activation": {
+          "active": false,
+          "active_bench_version": 7,
+          "announced_at": null,
+          "effective_at": null,
+          "fee_amount_rao": 40000000,
+          "fee_source": "upload_default",
+          "inactive_reasons": [
+            "announcement_unset",
+            "bench_version_below_minimum"
+          ],
+          "min_bench_version": 19,
+          "notice_period_seconds": 604800,
+          "settings_revision": 1
+        },
+        "cost_basis": null,
+        "rules": [
+          "A readmission is the owner coldkey re-entering an existing agent lineage: opting an existing agent into a new benchmark era, or re-running an unchanged agent after one of its evaluations completed. An identical or near-identical re-upload of the owner's own agent counts as one.",
+          "A readmission costs exactly the upload fee, is paid the same way, and counts toward and starts the same owner-coldkey upload cooldown.",
+          "The fee applies from benchmark v19 and goes live no earlier than 7 days after it is announced (activation.effective_at). Nothing submitted before then is charged as a readmission, and nothing is readmitted automatically.",
+          "ditto readmit AGENT_ID re-enters one of your finalized agents from the previous era into the active one. POST /api/v1/readmission/check refuses before payment: not your agent, a partial (2 of 3) row, withdrawn, retired, below the screening-policy floor, no screened image, already admitted, a rollout open, or the cooldown. At most one paid readmission per agent per era; payouts still count only the owner's best agent.",
+          "A refusal found only after payment keeps the payment as an upload credit for the same hotkey for 30 days. Ditto never refunds TAO on chain.",
+          "Retries caused by Ditto, its queue, validators or data (stalls, stranded evaluations, issuance gaps, validator crashes, provider outages, expired leases the agent did not cause, and Ditto's own re-tests such as season rotation and catch-up) are always free. Eligibility comes only from recorded validator and queue error codes, never from a request. Free re-leases are capped at 6 failed leases per agent per era; a failure the agent caused is remedied by a paid re-run or a new upload, never a free retry."
+        ]
+      },
+      "terms_endpoint": "/api/v1/upload/check"
+    },
+    {
+      "accepting": false,
+      "competition": "generator",
+      "cooldown": {
+        "reference": "generator_competition.upload_cooldown_seconds",
+        "scope": "hotkey",
+        "seconds": 3600,
+        "source": "setting"
+      },
+      "deliverable": {
+        "contract_version": "dittobench-generator/v1",
+        "format": "gzip-compressed tar of a Go main module",
+        "kind": "generator_source_archive",
+        "limits": [
+          {
+            "description": "the compressed source archive",
+            "name": "max_archive_bytes",
+            "reference": "ditto.generator_archive.MAX_ARCHIVE_BYTES",
+            "source": "code",
+            "unit": "bytes",
+            "value": 4194304
+          },
+          {
+            "description": "total file payload once decompressed",
+            "name": "max_source_bytes",
+            "reference": "ditto.generator_archive.MAX_SOURCE_BYTES",
+            "source": "code",
+            "unit": "bytes",
+            "value": 33554432
+          },
+          {
+            "description": "archive entries, directories included",
+            "name": "max_source_files",
+            "reference": "ditto.generator_archive.MAX_SOURCE_FILES",
+            "source": "code",
+            "unit": "files",
+            "value": 4096
+          },
+          {
+            "description": "characters per archive path",
+            "name": "max_source_path_length",
+            "reference": "ditto.generator_archive.MAX_SOURCE_PATH_LENGTH",
+            "source": "code",
+            "unit": "characters",
+            "value": 240
+          },
+          {
+            "description": "the newest go directive go.mod may declare",
+            "name": "max_go_version",
+            "reference": "ditto.generator_archive.BUILDER_GO_VERSION",
+            "source": "code",
+            "unit": "version",
+            "value": "1.27.3"
+          },
+          {
+            "description": "the exact case count every generated pack must contain (settable 8..80)",
+            "name": "cases_per_seed",
+            "reference": "generator_competition.cases_per_seed",
+            "source": "setting",
+            "unit": "cases",
+            "value": 16
+          }
+        ],
+        "notes": [
+          "requirements in go.mod need vendor/modules.txt (the build has no network)",
+          "an archive whose source files match an earlier upload's is refused as a re-pack"
+        ],
+        "required_files": [
+          "go.mod",
+          "*.go (package main, at the root)"
+        ],
+        "signature_payload": "ditto-generator-v1:{hotkey}:{source_sha256}:{signature_timestamp}:{signature_nonce}",
+        "upload_endpoint": "/api/v1/generator/submissions"
+      },
+      "fee": {
+        "amount_rao": 40000000,
+        "amount_source": "default",
+        "asset": "TAO",
+        "required": false,
+        "required_source": "competition_settings",
+        "send_address": "5FixtureSendAddress",
+        "settings_revision": 1
+      },
+      "readmission": null,
+      "terms_endpoint": "/api/v1/generator/upload-terms"
+    },
+    {
+      "accepting": false,
+      "competition": "model_context",
+      "cooldown": {
+        "reference": "model_context.upload_cooldown_seconds",
+        "scope": "hotkey",
+        "seconds": 21600,
+        "source": "setting"
+      },
+      "deliverable": {
+        "contract_version": "ditto-cpm-manifest-v1; cpm_score_version 1",
+        "format": "a public Hugging Face repo pinned at a 40-hex commit: a LoRA (adapter_config.json + adapter_model.safetensors) or a full fine-tune (config.json + model*.safetensors) of an allowlisted base",
+        "kind": "model_weights_repo",
+        "limits": [
+          {
+            "description": "total size of the files the manifest lists",
+            "name": "max_total_bytes",
+            "reference": "model_context.max_total_bytes",
+            "source": "setting",
+            "unit": "bytes",
+            "value": 6442450944
+          },
+          {
+            "description": "the largest LoRA rank (r) a lora submission may use",
+            "name": "max_lora_rank",
+            "reference": "model_context.max_lora_rank",
+            "source": "setting",
+            "unit": "rank",
+            "value": 64
+          },
+          {
+            "description": "the cpm-manifest.json file",
+            "name": "max_manifest_bytes",
+            "reference": "ditto.api_models.model_context.MAX_MANIFEST_BYTES",
+            "source": "code",
+            "unit": "bytes",
+            "value": 65536
+          }
+        ],
+        "notes": [
+          "commit dcpm1:<manifest_sha256> on chain first; the earlier commitment block owns duplicate weights",
+          "safetensors only: no pickle, no *.py, no trust_remote_code; the base tokenizer is always used",
+          "bases: qwen3.5-0.8b (Qwen/Qwen3.5-0.8B@2fc06364715b967f1860aea9cf38778875588b17), qwen3.5-2b (Qwen/Qwen3.5-2B@15852e8c16360a2fea060d615a32b45270f8a8fc)"
+        ],
+        "required_files": [
+          "cpm-manifest.json"
+        ],
+        "signature_payload": "ditto-model-context-v1:{hotkey}:{hf_repo}:{revision}:{manifest_sha256}:{ts}:{nonce}",
+        "upload_endpoint": "/api/v1/model-context/submissions"
+      },
+      "fee": {
+        "amount_rao": 40000000,
+        "amount_source": "default",
+        "asset": "TAO",
+        "required": false,
+        "required_source": "competition_settings",
+        "send_address": "5FixtureSendAddress",
+        "settings_revision": 1
+      },
+      "readmission": null,
+      "terms_endpoint": "/api/v1/model-context/upload-terms"
+    }
+  ]
+}

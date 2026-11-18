@@ -1440,8 +1440,13 @@ export const RAO_PER_TAO = 1_000_000_000
 
 // Competitions that may carry a fee override. memory (agent uploads) is
 // priced by fee_amount_rao itself, the default every other competition
-// inherits; only generator has an upload lane today.
-export const OVERRIDABLE_FEE_COMPETITIONS = ['generator', 'coding', 'router'] as const
+// inherits; generator and model_context have upload lanes.
+export const OVERRIDABLE_FEE_COMPETITIONS = [
+  'generator',
+  'coding',
+  'router',
+  'model_context',
+] as const
 export type OverridableFeeCompetition = (typeof OVERRIDABLE_FEE_COMPETITIONS)[number]
 
 export const competitionFeePolicySchema = z
@@ -1903,7 +1908,13 @@ export type BurnSettingsControl = z.infer<typeof burnSettingsControlSchema>
 // its compiled memory-only split. Mirrors
 // apps/platform/ditto/api_models/track_share_settings.py; Platform stays the
 // authority on every refusal.
-export const TRACK_SHARE_TRACKS = ['memory', 'coding', 'router', 'generator'] as const
+export const TRACK_SHARE_TRACKS = [
+  'memory',
+  'coding',
+  'router',
+  'generator',
+  'model_context',
+] as const
 export const TRACK_SHARE_PAYABLE = new Set<string>(['memory', 'generator'])
 export const TRACK_SHARE_BASIS_POINTS = 10_000
 export const TRACK_SHARES_CLEAR_CONFIRMATION = 'CLEAR TRACK SHARES'
