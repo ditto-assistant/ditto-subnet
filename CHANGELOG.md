@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.497.0 (2026-11-18)
+
+### Features
+
+- **backroom,dashboard**: Model_context operator tools and Context models page
+  ([#3577](https://github.com/ditto-assistant/ditto-subnet/pull/3577),
+  [`2b14564`](https://github.com/ditto-assistant/ditto-subnet/commit/2b14564d36bbe8f52f0872f6d364e7c0f9fcd60c))
+
+- **cpm**: Scorer and starter kit for the model_context track
+  ([#3574](https://github.com/ditto-assistant/ditto-subnet/pull/3574),
+  [`e3e84c6`](https://github.com/ditto-assistant/ditto-subnet/commit/e3e84c6fecec45f2a82e654b72ac16f671b4dff0))
+
+
 ## v0.496.0 (2026-11-18)
 
 ### Features
