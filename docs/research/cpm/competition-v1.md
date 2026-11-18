@@ -151,9 +151,19 @@ not a branch name.
 ### 3.3 Duplicates
 
 - **Exact duplicates:**
-  - `weights_sha256` is the SHA-256 over the canonical tensor stream: tensors
-    sorted by name, each written as name, dtype, shape and raw bytes in
-    little-endian order.
+  - `weights_sha256` is the SHA-256 over every tensor in every
+    `safetensors` file of the submission. Tensors are sorted by name, and
+    each is written as
+
+    ```text
+    u32le(len(name)) name_utf8
+    u32le(len(dtype)) dtype_ascii      # safetensors dtype string, e.g. "BF16"
+    u32le(ndim) u64le(dim) * ndim
+    u64le(len(data)) data              # raw little-endian bytes
+    ```
+
+    The hash does not depend on shard layout, file names, header order or
+    `__metadata__`, so resharding the same weights keeps it.
   - When two submissions share a `weights_sha256`, the one with the earlier
     commitment block owns it, and the later one is rejected
     (`duplicate_weights`).
@@ -174,6 +184,9 @@ not a branch name.
 - A season lasts `season_days` (7 days by default).
 - Season seeds: `seed_k = uint64(sha256("dcpm-season:{season}:{k}:{season_open_block_hash}")[:8])`
   for `k ∈ {0, 1, 2}`.
+- `cmd/generate -seed` takes a signed int64. Platform stores `seed_k` as a
+  uint64 and passes the generator its int64 two's-complement value (a value
+  x ≥ 2^63 becomes x − 2^64).
 - Every submission in a season is scored on the same three seeds, so scores
   within a season are directly comparable.
 - At rotation, the scorer re-scores every submission still on the board.
@@ -188,7 +201,11 @@ not a branch name.
 - **Memory cases:**
   - Only cases with at least one `relevant_pair_id` that are not `abstain`.
     Absence cases are left out of v1.
-  - The candidates are the case's `candidate_pair_ids`.
+  - The candidates are the case's `candidate_pair_ids`: every pair its user
+    holds when the question runs. For the primary user (`miner`), that
+    includes the tool cases' `prerequisite_pairs`, which are seeded before
+    the tool phase and kept into the memory phase. On v18 seed 42 they hold
+    56% of the relevant ids.
 - **Tool cases:**
   - Only cases with a non-empty `shortlist_target`.
   - The candidates are the seed's whole catalog.
@@ -232,8 +249,8 @@ score      = mean over the 3 seeds
   calls and no judge.
 - It measures the two jobs from Peyton's thesis: retrieval, with recall of
   needed facts, and pruning, under a budget and with a distractor penalty.
-- Tool shortlisting is the largest lever in v18: 1,454 tools against about
-  157 memory candidates.
+- Both parts prune hard: about 507 memory candidates per case into 2,048
+  tokens, and a 1,454-tool catalog down to 8.
 - The answer-quality-per-token score (Q@B through a reader, memo §I.7) is v2.
   It is added once P0-A confirms which reader to use.
 

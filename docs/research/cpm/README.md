@@ -51,11 +51,12 @@ python3 -I ../../docs/research/cpm/export_cpm.py /tmp/cpm/v18-{42,7,1234}.json -
 | Cases | 125 memory (15 abstain) + 50 tool (3 restraint) |
 | Seeded pairs (memory waves + tool prerequisites) | 181 + 359 |
 | Catalog | 1,454 tools. Every one of the 73 expected tool names is in it |
-| Mean candidates per memory case | ≈157 |
-| Answer span found inside the evidence pairs | 34 / 107 answerable cases (32%) |
+| Mean candidates per memory case | ≈507. Primary-user cases include the 359 tool prerequisite pairs, which hold 56% of the relevant ids |
+| Relevant ids present among the candidates | 436 / 436 |
+| Answer span found inside the evidence pairs | 82 / 107 answerable cases (77%) |
 
-**Exact answer spans are a partial label**, and that is the bench working as
-designed:
+**Exact answer spans still miss about a quarter of cases**, and that is the
+bench working as designed:
 
 - **Composed answers.** Many answers are composed across hops. For example, an
   owner's email is built from a name in one pair and a company domain
@@ -69,9 +70,9 @@ designed:
 spans as auxiliary supervision. The S3 end-to-end reward (§I.5) covers what
 spans cannot.
 
-**For v18, tool shortlisting is the larger lever.** Each memory case has about
-157 candidates, while each tool case has to be pruned from a catalog of
-1,454 tools (100k–200k tokens).
+**Both jobs are real pruning problems.** Each memory case has about 507
+candidates to pack under a budget, and each tool case has to be pruned from a
+catalog of 1,454 tools (100k–200k tokens).
 
 ## Splits
 
