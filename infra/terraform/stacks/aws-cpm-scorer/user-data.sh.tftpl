@@ -25,30 +25,36 @@ trap 'rm -rf "$workdir"' EXIT
 curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 -o "$workdir/amazon-ssm-agent.deb" "$url"
 echo "$sha256  $workdir/amazon-ssm-agent.deb" | sha256sum --check --strict
 
-# User data can run before snapd finishes seeding, and snap remove fails then.
-# Both agents would register the same instance, so the snap goes first.
+# User data can run before snapd finishes seeding, and snap commands fail then.
+# Two agents must never register the same instance, so the snap agent is
+# stopped before the pinned .deb starts. It is disabled, not removed, so the
+# AMI's exact snap revision stays installed: if the pinned install fails, that
+# same revision is re-enabled (never a fresh store download). Refreshes are held
+# so snapd cannot swap the revision while it is parked. The snap is removed
+# only once the pinned agent is running.
 had_snap_agent=false
 if command -v snap >/dev/null; then
   snap wait system seed.loaded
   if snap list amazon-ssm-agent >/dev/null 2>&1; then
-    snap remove --purge amazon-ssm-agent
+    snap refresh --hold=forever amazon-ssm-agent
+    snap disable amazon-ssm-agent
     had_snap_agent=true
   fi
 fi
 
-# If the pinned install or start fails after the snap is gone, put the stock
-# snap agent back before exiting: with no SSH ingress, a host without any SSM
-# agent is unreachable. Remove whatever the .deb left first, so two agents never
-# register the same instance, and hold snap refreshes so the fallback stays on
-# the AMI's agent version instead of tracking the store. The script still exits
-# non-zero: the fallback is for diagnosis only, and the host is not provisioned
-# further until a clean first boot.
+# If the pinned install or start fails, clean up whatever the .deb left, bring
+# back the parked snap agent (with no SSH ingress, a host without any SSM agent
+# is unreachable) and exit non-zero: the fallback is for diagnosis only, and the
+# host is not provisioned further until a clean first boot.
 if ! dpkg -i "$workdir/amazon-ssm-agent.deb" || ! systemctl enable --now amazon-ssm-agent; then
   systemctl disable --now amazon-ssm-agent >/dev/null 2>&1 || true
   dpkg --purge amazon-ssm-agent >/dev/null 2>&1 || true
   if [ "$had_snap_agent" = true ]; then
-    snap install amazon-ssm-agent --classic || true
-    snap refresh --hold=forever amazon-ssm-agent || true
+    snap enable amazon-ssm-agent || true
   fi
   exit 1
+fi
+
+if [ "$had_snap_agent" = true ]; then
+  snap remove --purge amazon-ssm-agent
 fi
