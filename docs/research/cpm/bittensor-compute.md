@@ -39,9 +39,10 @@ secret on the host is the **scorer bearer token**.
 | Risk | Without a TEE | Mitigation (§4) |
 | --- | --- | --- |
 | Bearer theft, then forged results for any lease | Real | Per-scorer tokens; untrusted results never final alone |
-| The host tampers with a run (edits scores) | Real | Bitwise quorum on the same SKU; trusted audits |
+| The host tampers with a run (edits scores) | Real | Bitwise quorum across **distinct operator groups** (§4.2); trusted audits |
+| One operator runs every quorum pod (colluding nodes) | Real; today's L40S supply looks like one operator (§3.1) | Not defended by quorum: such results stay `provisional` and never final or payable (§4.2) |
 | A spoofed GPU (reports L40S, is not) | Real; seen on Lium, per [sn481 notes](../../design/sn481-miner-hostable-workloads.md) | Reproduce the season reference bitwise before any lease |
-| The host is one of our own miners | Plausible | All of the above; no host is trusted alone |
+| The host is one of our own miners | Plausible | All of the above; no host or single operator group is trusted alone |
 | Pod lost, restarted or slow | Common (§3) | Lease expiry already re-queues; the controller replaces the pod |
 | Private data (P0-T team traces) | Not allowed | Stays on Ditto-controlled infrastructure (the AWS lane); see §6 |
 
@@ -49,7 +50,15 @@ A TEE (Intel TDX plus NVIDIA confidential computing) hides memory and disk
 from the host. It does not prove the pod runs **our** image: Lium says its
 quote "measures the machine", and our miners can rent the same CVMs. v1 has no
 secret data, so it does not need a TEE. Quorum and audits defend integrity
-better, at about a fifth of the price.
+better, at about a fifth of the price, but only across operators that are
+actually independent.
+
+**Scope of the integrity claim.** Quorum defends against one dishonest host,
+not against one party that controls every scorer in the quorum. §4.2 makes
+that rule enforceable: results that only one operator group can vouch for
+stay provisional. Some collusion remains undefended: one party running nodes
+on two marketplaces, or a provider that misreports ownership. Only trusted
+audits and trusted re-runs bound that.
 
 ## 3. Providers
 
@@ -142,10 +151,33 @@ Today the first result for a lease is final. The change:
 - **Per-scorer results.** Each result lands in
   `model_context_run_results` (`run_id`, `scorer_id`, `lane`, `trust`,
   `result_sha256` over the canonical `score`, `components` and `per_seed`).
+- **Operator groups.** At registration, the controller gives every untrusted
+  scorer an `operator_group`; Platform stores it and the scorer cannot change
+  it. The group is:
+  - `<lane>:<owner>` when the provider exposes the node owner through an
+    authenticated API we verify, such as the executor's SN51 miner hotkey or
+    coldkey on Lium;
+  - `<lane>:unknown` otherwise. **Every pod whose owner cannot be determined
+    shares one group per lane**, so two such Lium pods count as a single
+    operator.
+
+  Each lane (`lium`, `targon`, …) is a different marketplace, so groups in
+  different lanes are distinct.
 - **When a run is final.** One `trusted` result, or `quorum_untrusted`
-  untrusted results (default 2) with equal `result_sha256`. The quorum
-  scorers must come from distinct `scorer_id`s and distinct `node_ref`s; once
-  Lium exposes it, also distinct provider owners.
+  untrusted results (default 2) with equal `result_sha256` from distinct
+  `scorer_id`s, distinct `node_ref`s **and at least two distinct
+  `operator_group`s**. Bitwise equality holds only on one SKU, so every
+  quorum scorer runs the season's `gpu_sku`. A season's SKU is therefore
+  picked where at least two operator groups (or the trusted lane) can supply
+  it.
+- **Provisional runs.** A matching quorum that spans fewer than two operator
+  groups makes the run `provisional`:
+  - the board shows the score marked provisional;
+  - the ledger never marks it final or `weight_eligible`;
+  - Platform leases it to a scorer in another operator group, or to the
+    trusted lane at 100% (not sampled) when that lane is enabled;
+  - a run nobody can finalize stays provisional; it never times out into
+    final.
 - **Fan-out.** Until quorum, `/work` leases the same run to another eligible
   scorer. A scorer never gets a run it has already posted.
 - **Disagreement.** Mark the run `disputed`. Lease it to a trusted scorer if
@@ -154,20 +186,33 @@ Today the first result for a lease is final. The change:
 - **Season qualification.** A scorer gets submission work only after it
   reproduces the season's reference run (unmodified base, §4.5) bitwise. A
   wrong or spoofed GPU fails here. The reference itself is set by a trusted
-  scorer, or by the first untrusted quorum.
+  scorer, or by the first untrusted quorum that spans two operator groups.
+  Until then, the season's floor and every run that depends on it are
+  provisional.
 - **Audits.** The new setting `audit_rate` (default 0.05) sends a sample of
   untrusted-final runs to the trusted lane when one is enabled. Audits may run
   on another SKU and then compare within `audit_tolerance` (default 1e-3 on
   `score`), because bitwise equality holds only on one SKU. A miss disables
   every scorer that signed that result.
 - **New settings** (one revision, visible in Backroom): `quorum_untrusted`,
-  `audit_rate`, `audit_tolerance`, `dispute_limit` and `lanes_enabled`.
+  `min_operator_groups` (default 2, floor 2), `audit_rate`,
+  `audit_tolerance`, `dispute_limit` and `lanes_enabled`.
+- **Leaving shadow.** `model_context_weight_eligible` may be turned on only
+  while every run in the ledger is final under the rule above, and while the
+  trusted lane audits at `audit_rate > 0`.
 
 The result wire shape (`ModelContextResultRequest`) does not change. The
 ledger adds `scorer_ids` and `lanes` per run, for provenance on the board.
 
-This makes the track sound with **no trusted scorer at all**. For v1 shadow,
-two Lium L40S pods cost about $0.76/hr, and AWS becomes an optional auditor.
+**What a Lium-only fleet gives.** Two Lium pods of unknown or shared
+ownership cost about $0.76/hr. They give reproducible but **provisional**
+scores: good enough to run the shadow board and to catch a single bad node,
+not to finalize or pay. Final results need a second operator group on the
+same SKU:
+- Lium nodes with verified, distinct owners;
+- a second lane that offers the season's SKU;
+- or the trusted lane, re-running each provisional run. The AWS lane is an
+  L40S, the same as the current season.
 
 ### 4.3 Scorer and image
 
@@ -290,8 +335,8 @@ a card.
 | Phase | Work | Exit gate |
 | --- | --- | --- |
 | **B0 rehearsal** (no Platform change) | Fund Lium with a small manual Gamma tranche (§4.5). Rent one Lium L40S by hand, run the signed image with `cpm-scorer score` on public seeds (no bearer), and compare it bitwise with a second Lium node and with an AWS L40S. Fix the CUDA 13.2 vs driver 580 gap. Time a run. | Equal bits across nodes, or a measured reason why not; $/run |
-| **B1 Platform** | `model_context_scorers`, per-scorer bearers, `model_context_run_results`, quorum, qualification, audits, settings, Backroom tools. One migration. | Tests: a forged result alone never finalizes; a dispute holds; a spoofed SKU fails qualification |
-| **B2 fleet** | `cpm-scorer-fleet` for Lium: scale to the queue, SSH token handoff, release replacement, billing check | Two pods pass qualification on a real season in shadow |
+| **B1 Platform** | `model_context_scorers`, per-scorer bearers, `model_context_run_results`, quorum, qualification, audits, settings, Backroom tools. One migration. | Tests: a forged result alone never finalizes; a quorum within one operator group (incl. `<lane>:unknown`) stays provisional; a dispute holds; a spoofed SKU fails qualification |
+| **B2 fleet** | `cpm-scorer-fleet` for Lium: scale to the queue, SSH token handoff, release replacement, billing check | Two pods pass qualification on a real season in shadow; their runs show as provisional until a second operator group or the trusted lane finalizes them |
 | **B3 optional** | A TEE lane (Lium CVM or a Targon VM) if a later score version must hide data on rented hosts | A Ditto-verified quote plus proof the pod is ours, not just a machine quote |
 
 ## 6. Costs (one season, shadow)
@@ -309,8 +354,14 @@ around the clock, two pods cost about $550 a month. For comparison:
    - which custody operator holds the bucket's coldkey;
    - whether Lium accepts SN118 alpha or we sell it for TAO;
    - the first manual tranche.
-2. **Trusted lane:** keep AWS as an occasional auditor (credits, small hours),
-   or run Lium-only on untrusted quorum.
-3. **Second provider for quorum diversity:** the listed L40S supply looks like
-   one operator. Accept that, or add a second lane (another Lium operator on
-   a different SKU season, or Targon).
+2. **Trusted lane:** keep AWS as an auditor that re-runs provisional runs and
+   samples final ones (credits, small hours). Without it, Lium-only results
+   stay provisional unless decision 3 adds a second operator group.
+3. **Second operator group:** the listed L40S supply looks like one operator,
+   so a Lium-only fleet cannot finalize results (§4.2). Ways to get a second
+   group:
+   - ask Lium for verifiable node ownership, then rent from two owners;
+   - pick a season SKU that two lanes both offer. Targon lists only H100/H200
+     and Lium lists no H100 today, so this needs new supply and a season
+     boundary;
+   - accept provisional-only results while in shadow.
