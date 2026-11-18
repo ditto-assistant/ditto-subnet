@@ -891,6 +891,9 @@ def _config() -> MagicMock:
     cfg.generator_track_state = "shadow"
     cfg.generator_weight_eligible = False
     cfg.generator_rank_shares = (0.40, 0.25, 0.15, 0.12, 0.08)
+    cfg.model_context_track_state = "shadow"
+    cfg.model_context_weight_eligible = False
+    cfg.model_context_rank_shares = (0.50, 0.20, 0.13, 0.10, 0.07)
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600

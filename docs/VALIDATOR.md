@@ -951,3 +951,23 @@ unreadable generator ledger changes nothing.
 Generators split their share by the generator rank curve
 (`40% / 25% / 15% / 12% / 8%` of the generator share), best latest round score
 first, one slot per hotkey, and only currently registered hotkeys.
+
+### Context-model track (shadow)
+
+The `model_context` track (the CPM competition,
+`docs/research/cpm/competition-v1.md`) ships in `shadow`, not
+weight-eligible, at 0 bps. The validator reads
+`GET /scoring/model-context-ledger` behind the same signed ledger proof as the
+other ledgers, folds it, and logs the result. It changes no weight.
+
+- The fold ranks eligible entries by score, then by commitment block (earlier
+  first), then by submission id, one slot per registered hotkey. It applies the
+  ledger's `rank_shares`, or `50% / 20% / 13% / 10% / 7%` when the ledger
+  serves none.
+- A missing or unreadable ledger folds to nothing, and the memory weight
+  update goes ahead unchanged.
+- `VALIDATOR_MODEL_CONTEXT_LEDGER_READ_ENABLED=false` turns the read off. That
+  is safe while the track is in shadow.
+
+Paying the track needs a later validator release with a protocol gate. It is
+a separate owner decision.

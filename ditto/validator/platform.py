@@ -95,6 +95,7 @@ from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
 )
+from ditto.api_models.model_context_ledger import ModelContextLedgerResponse
 from ditto.api_models.private_dataset import PrivateDatasetRequest
 from ditto.api_models.receipt_diagnostics import (
     ReceiptDiagnosticObservation,
@@ -2469,6 +2470,41 @@ class PlatformClient:
             return GeneratorLedgerResponse.model_validate(resp.json())
         except (ValidationError, ValueError) as e:
             raise PlatformError("generator ledger response was invalid") from e
+
+    async def get_model_context_ledger(self) -> ModelContextLedgerResponse:
+        """Pull the model_context (CPM) ledger (shadow, best-effort).
+
+        Same signed proof-of-possession as :meth:`get_router_ledger`, against
+        ``GET /scoring/model-context-ledger``.
+        :class:`~ditto.validator.worker.PlatformModelContextLedgerSource` folds
+        any failure to an empty ledger.
+        """
+        url = f"{self._base}{_SCORING_PREFIX}/model-context-ledger"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Ledger-Nonce": str(nonce),
+            "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
+            "X-Validator-Ledger-Signature": sign_ledger_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
+        try:
+            resp = await self._client.get(url, headers=proof_headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"model_context ledger fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"model_context ledger rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            return ModelContextLedgerResponse.model_validate(resp.json())
+        except (ValidationError, ValueError) as e:
+            raise PlatformError("model_context ledger response was invalid") from e
 
     async def get_private_dataset(
         self, agent_id: UUID, *, dataset_sha256: str, deadline: datetime

@@ -340,6 +340,32 @@ class TestGeneratorEligibilityRequiresTheLedger:
             parse_validator_config_from_env()
 
 
+class TestModelContextTrackConfig:
+    def test_ships_shadow_and_reading(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_MODEL_CONTEXT_LEDGER_READ_ENABLED", raising=False)
+        cfg = parse_validator_config_from_env()
+        assert cfg.model_context_track_state == "shadow"
+        assert cfg.model_context_weight_eligible is False
+        assert cfg.model_context_ledger_read_enabled is True
+        assert cfg.track_shares_bps.get("model_context", 0) == 0
+
+    def test_the_read_can_be_turned_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_MODEL_CONTEXT_LEDGER_READ_ENABLED", "false")
+        cfg = parse_validator_config_from_env()
+        assert cfg.model_context_ledger_read_enabled is False
+
+    @pytest.mark.parametrize("bad", [(), (0.5, 0.0), (float("nan"),)])
+    def test_bad_fallback_rank_shares_fail_at_boot(
+        self, monkeypatch: pytest.MonkeyPatch, bad: tuple[float, ...]
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        with pytest.raises(ValidatorConfigError, match="model_context_rank_shares"):
+            replace(cfg, model_context_rank_shares=bad)
+
+
 class TestRouterLedgerReadFlag:
     def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)

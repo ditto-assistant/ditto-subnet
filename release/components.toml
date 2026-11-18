@@ -118,6 +118,7 @@ paths = [
   "ditto/api_models/private_dataset.py",
   "ditto/api_models/generator_ledger.py",
   "ditto/api_models/generator_round_validator.py",
+  "ditto/api_models/model_context_ledger.py",
   "ditto/api_models/router_ledger.py",
   "ditto/api_models/router_harness.py",
   "ditto/api_models/stack_health.py",
