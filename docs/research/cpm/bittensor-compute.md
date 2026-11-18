@@ -212,10 +212,70 @@ policy in Platform settings.
 5. **Report.** It writes its state and spend to Platform, and Backroom shows
    them.
 
-The Lium API key and the wallet that pays Lium are owner-provisioned. We
-cannot rent anything until they exist.
+The Lium API key is owner-provisioned. Nothing can be rented until it exists
+and the account holds credit (§4.5).
 
-### 4.5 What does not change
+### 4.5 Funding: a Gamma service bucket (decided 2026-11-18)
+
+The scorer is infrastructure for the competition, so **miner emissions pay for
+it**, through Gamma like the GM, Bitsec and Bitcast buckets. Nothing here uses
+a card.
+
+**How Lium takes crypto** (CLI `lium fund`, from
+[Datura-ai/lium](https://github.com/Datura-ai/lium) and
+[#347](https://github.com/Datura-ai/lium/pull/347)):
+- A **TAO** payment is a plain transfer to Lium's `LIUM_FUNDING_ADDRESS`. It
+  must come from a wallet verified on the Lium account: `lium fund` signs an
+  add-wallet token with that wallet once.
+- An **alpha** payment (`lium fund --alpha -k <hotkey> --netuid N`) is a stake
+  transfer of free alpha, priced in USD, and only for the subnets Lium accepts.
+- Either way, the credit is held in USD (`lium balance`).
+
+**Flow**, reusing the existing Gamma pieces
+([sn118-service-treasury-v2.md](../../sn118-service-treasury-v2.md),
+[gamma-manual-transfers.md](../../gamma-manual-transfers.md),
+[gamma-manual-funding.md](../../gamma-manual-funding.md)):
+
+1. **New bucket** `cpm_compute`, purpose "CPM scorer GPU compute (Lium)".
+   - It gets its own holding coldkey and starts at `allocation_bps = 0`.
+   - A nonzero allocation follows the normal Gamma policy path: a
+     coldkey-signed range plus matching Platform and validator digests.
+2. **Collector to holding wallet.** The existing bounded manual transfer
+   (`preview_` / `queue_treasury_manual_transfer`, with the confirmation
+   "TRANSFER SN118 ALPHA ONCE") moves SN118 alpha to the `cpm_compute`
+   holding coldkey. It has the same caps, retained floor and public receipt
+   as today.
+3. **Holding wallet to Lium.** The holding coldkey is the wallet verified on
+   Ditto's Lium account.
+   - **If Lium accepts SN118 alpha:** `lium fund --alpha --netuid 118` moves
+     stake directly, with no sale. Check this with `alpha subnets`.
+   - **Otherwise:** sell SN118 alpha for TAO within `max_slippage_bps`, then
+     `lium fund` sends the TAO. That sale is the same "DITTO sale" event GM
+     funding records.
+4. **Payee rule.** A `cpm_compute` rule names Lium's funding address (asset
+   `TAO`), or Lium's deposit coldkey and hotkey for alpha. The public
+   treasury receipts then classify the payment exactly.
+5. **Reconciliation.** Add a Lium variant of `FundingBatch`. Today's
+   purchase record is GM-specific (`x402-relayed`). The Lium variant pairs
+   each chain payment with the credited USD from Lium's billing history
+   (`lium billing history`), and per-pod spend appears on the board's
+   compute line.
+
+**Sizing.**
+- `allocation_bps ≈ monthly_compute_usd / monthly_miner_emission_usd × 10,000`.
+- Measure `monthly_compute_usd` in B0, then cap it with a Lium per-key budget
+  (`POST /keys`) so a runaway controller cannot drain the credit.
+- Until B2 runs real seasons, fund by hand in small tranches from the
+  existing bucket instead of carving a standing allocation.
+
+**Limits.**
+- The holding wallet signs only payments to Lium; the controller never holds
+  a key.
+- The controller's Lium API key can rent and delete pods. It cannot move
+  funds.
+- Custody, the collector journal and the signed range are unchanged.
+
+### 4.6 What does not change
 
 - The AWS stack (#3573), the Ansible role, the GCP federation and the token
   secret. They become one lane among several.
@@ -229,7 +289,7 @@ cannot rent anything until they exist.
 
 | Phase | Work | Exit gate |
 | --- | --- | --- |
-| **B0 rehearsal** (no Platform change) | Rent one Lium L40S by hand, run the signed image with `cpm-scorer score` on public seeds (no bearer), and compare it bitwise with a second Lium node and with an AWS L40S. Fix the CUDA 13.2 vs driver 580 gap. Time a run. | Equal bits across nodes, or a measured reason why not; $/run |
+| **B0 rehearsal** (no Platform change) | Fund Lium with a small manual Gamma tranche (§4.5). Rent one Lium L40S by hand, run the signed image with `cpm-scorer score` on public seeds (no bearer), and compare it bitwise with a second Lium node and with an AWS L40S. Fix the CUDA 13.2 vs driver 580 gap. Time a run. | Equal bits across nodes, or a measured reason why not; $/run |
 | **B1 Platform** | `model_context_scorers`, per-scorer bearers, `model_context_run_results`, quorum, qualification, audits, settings, Backroom tools. One migration. | Tests: a forged result alone never finalizes; a dispute holds; a spoofed SKU fails qualification |
 | **B2 fleet** | `cpm-scorer-fleet` for Lium: scale to the queue, SSH token handoff, release replacement, billing check | Two pods pass qualification on a real season in shadow |
 | **B3 optional** | A TEE lane (Lium CVM or a Targon VM) if a later score version must hide data on rented hosts | A Ditto-verified quote plus proof the pod is ours, not just a machine quote |
@@ -244,8 +304,11 @@ around the clock, two pods cost about $550 a month. For comparison:
 
 ## 7. Owner decisions
 
-1. **How to pay Lium:** a card, or TAO/alpha from a Ditto wallet. A wallet means
-   deciding which coldkey and who tops it up.
+1. **Paying Lium: decided.** Miner emissions pay, through a Gamma
+   `cpm_compute` bucket (§4.5). Still open:
+   - which custody operator holds the bucket's coldkey;
+   - whether Lium accepts SN118 alpha or we sell it for TAO;
+   - the first manual tranche.
 2. **Trusted lane:** keep AWS as an occasional auditor (credits, small hours),
    or run Lium-only on untrusted quorum.
 3. **Second provider for quorum diversity:** the listed L40S supply looks like
