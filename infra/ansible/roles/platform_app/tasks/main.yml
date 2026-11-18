@@ -408,6 +408,30 @@
   no_log: true
   when: secret_generator_scorer_token | length > 0
 
+- name: Read the model-context-scorer bearer from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_model_context_scorer_token }} --project={{ gcp_project }}"
+  register: platform_model_context_scorer_token_read
+  changed_when: false
+  no_log: true
+  when: secret_model_context_scorer_token | length > 0
+
+- name: Fold the model-context-scorer bearer into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'model_context_scorer_token': platform_model_context_scorer_token_read.stdout | trim}) }}"
+  no_log: true
+  when: secret_model_context_scorer_token | length > 0
+
+# Platform refuses to start with a bearer shorter than 32 characters
+# (config.py); fail the converge instead of the deploy.
+- name: Validate the model-context-scorer bearer
+  ansible.builtin.assert:
+    that:
+      - platform_secrets.model_context_scorer_token | length >= 32
+    fail_msg: "{{ secret_model_context_scorer_token }} has no usable value (Platform requires at least 32 characters)"
+    quiet: true
+  no_log: true
+  when: secret_model_context_scorer_token | length > 0
+
 - name: Validate backup reader secret references before fetching
   ansible.builtin.assert:
     that:
