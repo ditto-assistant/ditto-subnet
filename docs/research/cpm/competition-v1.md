@@ -332,6 +332,28 @@ These require the bearer `DITTO_MODEL_CONTEXT_SCORER_TOKEN`:
 - `practice` runs `cpm-scorer score` locally on public seeds. That makes local
   rehearsal the same code path as the scorer.
 
+A miner submits in this order:
+
+```bash
+# 1. Push the weights to a private Hugging Face repo, then hash them.
+ditto model-context manifest ./out --base qwen3.5-0.8b --kind lora \
+  --license apache-2.0 --attestation "trained on exported DittoBench cases"
+# 2. Push ./out/cpm-manifest.json to the repo root and note the commit SHA.
+# 3. Write dcpm1:<manifest_sha256> on chain. It asks first; prints the block.
+ditto model-context commit --manifest ./out/cpm-manifest.json
+# 4. Make the repo public, then submit the pinned revision.
+ditto model-context submit --repo OWNER/NAME --revision <40-hex SHA> \
+  --manifest ./out/cpm-manifest.json
+ditto model-context status    # your submissions and their latest run
+ditto model-context board     # the current season
+ditto model-context practice ./out --seeds 42,7,1234   # needs cpm-scorer
+```
+
+- `manifest` lists only the files the kind needs, and refuses a directory
+  that holds code or pickle files.
+- `submit` checks `/model-context/upload-terms` first and stops on any
+  blocker.
+
 ### 6.3 Starter kit, `miners/cpm-starter-kit`
 
 - A reference LoRA training script on exporter data, with a pairwise and
