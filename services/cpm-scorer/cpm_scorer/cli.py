@@ -57,7 +57,13 @@ def resolve_source(spec: str, base: Base, cache_dir: str | None = None):
     repo, rev = spec.rsplit("@", 1)
     if repo == base.repo and rev == base.revision:
         return ModelSource(base, "base", None, spec)
-    if any(repo == b.repo for b in BASES.values()):
+    matched = next((b for b in BASES.values() if repo == b.repo), None)
+    if matched is not None:
+        if matched.base_id != base.base_id:
+            raise SystemExit(
+                f"{repo} is a base; select it with --base {matched.base_id} "
+                "and --model base"
+            )
         raise SystemExit(f"{repo} is a base; use revision {base.revision} or 'base'")
     if not _FULL_SHA.match(rev):
         print(
@@ -86,7 +92,11 @@ def cmd_score(args: argparse.Namespace) -> int:
         print(json.dumps({"screening": e.reason, "detail": e.detail}))
         return EXIT_SCREENING
     gen = _generate_bin(args, cache)
-    loaded = score.load_scorer(source, args.device, args.hf_cache_dir)
+    try:
+        loaded = score.load_scorer(source, args.device, args.hf_cache_dir)
+    except ScreeningError as e:
+        print(json.dumps({"screening": e.reason, "detail": e.detail}))
+        return EXIT_SCREENING
     result = score.run(
         loaded,
         args.seeds,

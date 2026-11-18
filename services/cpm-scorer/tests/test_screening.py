@@ -64,6 +64,8 @@ def test_valid_full_manifest():
         ({"training_data_attestation": ""}, "invalid_manifest"),
         ({"extra": 1}, "invalid_manifest"),
         ({"files": []}, "invalid_manifest"),
+        ({"base_id": ["qwen3.5-0.8b"]}, "base_not_allowed"),
+        ({"license": {"spdx": "mit"}}, "license"),
     ],
 )
 def test_manifest_rejections(over, reason):
@@ -290,6 +292,8 @@ def test_lora_ok(tmp_path):
         ({"r": 65}, "lora_rank"),
         ({"r": 0}, "lora_rank"),
         ({"rank_pattern": {"q_proj": 128}}, "lora_rank"),
+        ({"rank_pattern": ["q_proj"]}, "lora_rank"),
+        ({"rank_pattern": "q_proj"}, "lora_rank"),
         ({"target_modules": ["q_proj", "embed_tokens"]}, "lora_target"),
         ({"target_modules": ".*"}, "lora_target"),
         ({"target_modules": []}, "lora_target"),
@@ -348,3 +352,7 @@ def test_check_full_config():
         == "architecture_mismatch"
     )
     assert _reason(s.check_full_config, {**base, "auto_map": {}}, base) == "remote_code"
+
+
+def test_lora_null_rank_pattern_is_accepted(tmp_path):
+    s.check_lora(_lora_cfg(rank_pattern=None), _lora_tensors(tmp_path))

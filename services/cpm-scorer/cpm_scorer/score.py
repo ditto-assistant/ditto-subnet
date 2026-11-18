@@ -312,7 +312,11 @@ def run(
         "limit_cases": limit_cases,
         "generator_sha256": sha256_file(generate_bin),
         "device": device,
-        "gpu_sku": torch.cuda.get_device_name(0) if device.startswith("cuda") else None,
+        "gpu_sku": (
+            torch.cuda.get_device_name(torch.device(device).index or 0)
+            if device.startswith("cuda")
+            else None
+        ),
         "dtype": str(loaded.scorer.dtype).removeprefix("torch."),
         "torch": torch.__version__,
         "wall_seconds": round(time.monotonic() - t0, 1),

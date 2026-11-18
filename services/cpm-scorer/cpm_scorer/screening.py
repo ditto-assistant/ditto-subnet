@@ -139,13 +139,13 @@ def validate_manifest(
     if obj.get("track") != TRACK:
         raise ScreeningError("invalid_manifest", f"track must be {TRACK}")
     base_id = obj.get("base_id")
-    if base_id not in set(allowed_bases):
+    if not isinstance(base_id, str) or base_id not in set(allowed_bases):
         raise ScreeningError("base_not_allowed", f"base_id {base_id!r}")
     kind = obj.get("kind")
     if kind not in KINDS:
         raise ScreeningError("invalid_manifest", f"kind must be one of {KINDS}")
     lic = obj.get("license")
-    if lic not in ALLOWED_LICENSES:
+    if not isinstance(lic, str) or lic not in ALLOWED_LICENSES:
         raise ScreeningError(
             "license", f"license must be one of {sorted(ALLOWED_LICENSES)}"
         )
@@ -391,7 +391,12 @@ def check_lora(
     r = adapter_config.get("r")
     if not isinstance(r, int) or isinstance(r, bool) or not 1 <= r <= max_rank:
         raise ScreeningError("lora_rank", f"r={r!r} (max {max_rank})")
-    for k, v in (adapter_config.get("rank_pattern") or {}).items():
+    rank_pattern = adapter_config.get("rank_pattern")
+    if rank_pattern is None:
+        rank_pattern = {}
+    if not isinstance(rank_pattern, Mapping):
+        raise ScreeningError("lora_rank", "rank_pattern must be a mapping")
+    for k, v in rank_pattern.items():
         if not isinstance(v, int) or not 1 <= v <= max_rank:
             raise ScreeningError("lora_rank", f"rank_pattern[{k}]={v!r}")
     targets = adapter_config.get("target_modules")

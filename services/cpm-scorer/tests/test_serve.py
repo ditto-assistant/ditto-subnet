@@ -278,3 +278,42 @@ def test_serve_survives_lease_errors():
     sv.serve(c, lambda _w: _result(), scorer_id="s", once=True, log=logs.append)
     assert logs and all("lease failed" in line for line in logs)
     assert all(TOKEN not in line for line in logs)
+
+
+def test_malformed_json_2xx_is_retried_then_raised():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    hits = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            hits.append(self.path)
+            raw = b"not json"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        c = sv.PlatformClient(
+            f"http://127.0.0.1:{srv.server_address[1]}",
+            TOKEN,
+            timeout=5,
+            sleep=lambda _s: None,
+        )
+        with pytest.raises(RuntimeError) as e:
+            c.get_work()
+        assert "invalid JSON" in str(e.value) and TOKEN not in str(e.value)
+        assert len(hits) == c.retries
+        logs = []
+        sv.serve(c, lambda _w: _result(), scorer_id="s", once=True, log=logs.append)
+        assert logs and all("lease failed" in line for line in logs)
+    finally:
+        srv.shutdown()
+        srv.server_close()

@@ -99,7 +99,14 @@ class PlatformClient:
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     raw = resp.read()
-                    return resp.status, (json.loads(raw) if raw else None)
+                    try:
+                        parsed = json.loads(raw) if raw else None
+                    except ValueError as e:
+                        last = RuntimeError(
+                            f"{method} {path}: invalid JSON: {type(e).__name__}"
+                        )
+                    else:
+                        return resp.status, parsed
             except urllib.error.HTTPError as e:
                 if e.code < 500 and e.code != 429:
                     raise RuntimeError(f"{method} {path}: HTTP {e.code}") from None
