@@ -303,6 +303,27 @@ Required values are supplied through the production host's protected
 - `SCREENER_SIGNED_RUNTIME_LEASE_MAX_AGE_SECONDS` (default `300`, 1-3600):
   oldest signed cohort observation accepted at claim receipt. The report-only
   L2 canary uses the same receipt-anchored rule.
+- `SCREENER_BUILD_BACKEND`: `local` (default) or `cathedral`; anything else
+  refuses to start. `cathedral` builds the miner tarball in a Cathedral sealed
+  AMD SEV-SNP room instead of the local `docker buildx build`, then runs every
+  existing check (load, smoke, export, upload) unchanged and saves a build
+  receipt per build as `<source sha256>-<sandbox id>.json`. Off by default; with
+  `local` nothing about builds changes. Cathedral-side failures (API, transport,
+  time-out, hash mismatch) are retryable infrastructure with code
+  `cathedral-build-infrastructure`, never a miner reject. A failed Dockerfile
+  build in the room is the same `docker-build` reject as a local failure. Only
+  public sources are safe to build there (an operator can still read a box).
+  Settings, used only when the backend is `cathedral`:
+  - `SCREENER_CATHEDRAL_API_KEY_FILE`: required path to the API key; read at use,
+    never logged.
+  - `SCREENER_CATHEDRAL_API_URL` (default `https://api.polaris.computer`).
+  - `SCREENER_CATHEDRAL_TEMPLATE` (default `sealed-4x8`).
+  - `SCREENER_CATHEDRAL_BUILDER_IMAGE` (default `docker:27-dind`; must be a
+    `docker:*-dind` image).
+  - `SCREENER_CATHEDRAL_BUILD_MEMORY` (default `7g`, part of the signed recipe).
+  - `SCREENER_CATHEDRAL_MAX_SPEND_USD` (default `0.5`).
+  - `SCREENER_CATHEDRAL_RECEIPT_DIR` (default
+    `/opt/ditto/screener/state/build-receipts`).
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
   computes the reachability-and-causality v2 candidate for comparison.
