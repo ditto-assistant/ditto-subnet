@@ -17,10 +17,10 @@ locals {
 # Keep this grant in the same reviewed state as the pool instead of relying on
 # a one-off console or gcloud bootstrap. The pool explicitly depends on it so
 # an exact first apply cannot race the permission propagation. The AWS
-# generator-scorer pool (generator-scorer.tf) shares the grant, so it stays
-# while either pool is enabled.
+# generator-scorer and CPM scorer pools (generator-scorer.tf, cpm-scorer.tf)
+# share the grant, so it stays while any of these pools is enabled.
 resource "google_project_iam_member" "screener_fleet_x509_pool_admin" {
-  count   = (var.enable_screener_fleet_x509_identity || var.generator_scorer_aws_account_id != "") ? 1 : 0
+  count   = (var.enable_screener_fleet_x509_identity || var.generator_scorer_aws_account_id != "" || var.cpm_scorer_aws_account_id != "") ? 1 : 0
   project = var.project
   role    = "roles/iam.workloadIdentityPoolAdmin"
   member  = "serviceAccount:github-actions-terraform-apply@${var.project}.iam.gserviceaccount.com"

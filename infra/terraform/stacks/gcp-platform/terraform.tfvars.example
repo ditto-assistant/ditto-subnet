@@ -47,6 +47,11 @@ cloudflare_zone_id = "TODO_HEYDITTO_ZONE_ID"
 # Generator competition scorer (generator-scorer.tf): add a version to
 # generator-scorer-token-prod before converging the VM or Platform.
 # enable_generator_scorer = true
+# CPM (model_context) scorer bearer (cpm-scorer.tf). First create the empty
+# container, add a version out of band, then federate the AWS GPU host's
+# ditto-cpm-scorer instance role (aws-bootstrap enable_cpm_scorer_identity).
+# enable_model_context_scorer_secret = true
+# cpm_scorer_aws_account_id          = "339713011188"
 # X.509 identity for the external Hetzner fleet. The CA certificate is public;
 # its private key must remain offline and outside Terraform/GitHub/Ansible.
 # enable_screener_fleet_x509_identity = true
