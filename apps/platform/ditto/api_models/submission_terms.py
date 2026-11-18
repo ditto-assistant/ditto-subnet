@@ -21,8 +21,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ditto.api_models.submission_settings import ReadmissionActivationState
 
-CompetitionId = Literal["memory", "generator"]
-ArtifactKind = Literal["agent_harness_tarball", "generator_source_archive"]
+CompetitionId = Literal["memory", "generator", "model_context"]
+ArtifactKind = Literal[
+    "agent_harness_tarball", "generator_source_archive", "model_weights_repo"
+]
 LimitSource = Literal["code", "environment", "setting"]
 """``code``: a constant in the named module, changed only by a release.
 ``environment``: a deploy-time environment variable on Platform.
@@ -36,7 +38,7 @@ class ArtifactLimit(BaseModel):
 
     name: str
     value: int | str
-    unit: Literal["bytes", "files", "lines", "characters", "cases", "version"]
+    unit: Literal["bytes", "files", "lines", "characters", "cases", "version", "rank"]
     source: LimitSource
     reference: str
     """The constant, environment variable, or setting that defines it."""

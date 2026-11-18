@@ -634,6 +634,28 @@ def _call_args_to_dict(args: Any) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class HotkeyCommitment:
+    """A hotkey's current ``Commitments.CommitmentOf`` value on one subnet."""
+
+    hotkey: str
+    netuid: int
+    block: int
+    """The block the chain stamped the commitment at."""
+    data: bytes
+    """The first field's raw bytes (``Data::Raw*``); empty for other kinds."""
+    read_at_block: int
+    """The finalized block the value was read at."""
+
+    @property
+    def text(self) -> str | None:
+        """The commitment as ASCII text, or ``None`` when it is not ASCII."""
+        try:
+            return self.data.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+
+
+@dataclass(frozen=True)
 class BlockInfo:
     """A block on the chain identified by number, hash, and timestamp.
 

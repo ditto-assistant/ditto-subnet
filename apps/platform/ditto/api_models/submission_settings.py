@@ -23,11 +23,12 @@ MAX_SUBMISSION_FEE_RAO = 1_000_000_000_000
 MEMORY_COMPETITION = "memory"
 """Priced by ``fee_amount_rao`` itself, the default every other competition
 inherits."""
-OVERRIDABLE_COMPETITIONS = ("generator", "coding", "router")
+OVERRIDABLE_COMPETITIONS = ("generator", "coding", "router", "model_context")
 """Competition ids (the track ids of track share settings) that may carry a
-fee override. Only ``generator`` has an upload lane today; an override for a
-track without one is stored and applies when its lane resolves it."""
-UPLOAD_COMPETITIONS = (MEMORY_COMPETITION, "generator")
+fee override. ``generator`` and ``model_context`` have upload lanes; an
+override for a track without one is stored and applies when its lane
+resolves it."""
+UPLOAD_COMPETITIONS = (MEMORY_COMPETITION, "generator", "model_context")
 """Competitions with a miner upload lane, reported in the effective view."""
 
 FeeAmountRao = Annotated[
