@@ -82,6 +82,21 @@ def weight_paths(root: Path, kind: str) -> list[Path]:
     return sorted(root.glob("model*.safetensors"))
 
 
+def load_json_config(root: Path, name: str) -> dict:
+    """Read a submission's JSON config. Missing, undecodable, malformed or
+    non-object content is the submission's fault, so it raises ScreeningError
+    (an invalid model), never a host-side error."""
+    try:
+        obj = json.loads((root / name).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ScreeningError("missing_file", name) from None
+    except (UnicodeDecodeError, ValueError) as e:
+        raise ScreeningError("invalid_config", f"{name}: {type(e).__name__}") from None
+    if not isinstance(obj, dict):
+        raise ScreeningError("invalid_config", f"{name} is not a JSON object")
+    return obj
+
+
 def screen_dir(
     root: Path, base_id: str, expected_manifest_sha: str | None = None
 ) -> tuple[str, str | None]:
@@ -123,10 +138,10 @@ def screen_dir(
     else:
         kind = detect_kind(root)
     if kind == "lora":
-        cfg = json.loads((root / "adapter_config.json").read_text(encoding="utf-8"))
+        cfg = load_json_config(root, "adapter_config.json")
         check_lora(cfg, read_safetensors_header(root / "adapter_model.safetensors"))
     else:
-        cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
+        cfg = load_json_config(root, "config.json")
         check_config_no_remote_code(cfg, "config.json")
     paths = weight_paths(root, kind)
     if sum(p.stat().st_size for p in paths) > MAX_TOTAL_BYTES:
@@ -170,7 +185,7 @@ def load_scorer(
         paths = weight_paths(source.path, "full")
         base_cfg = net.config.to_dict()
         check_full_config(
-            json.loads((source.path / "config.json").read_text(encoding="utf-8")),
+            load_json_config(source.path, "config.json"),
             base_cfg,
         )
         headers = {k: info for k, (_, info) in read_headers(paths).items()}

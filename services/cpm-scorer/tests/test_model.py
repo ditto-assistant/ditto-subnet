@@ -12,6 +12,7 @@ from cpm_scorer import score
 from cpm_scorer.bases import BASES
 from cpm_scorer.labels import export_records
 from cpm_scorer.screening import (
+    ScreeningError,
     check_full,
     check_lora,
     read_headers,
@@ -206,3 +207,24 @@ def test_run_output_shape(tok, tiny_artifact, tmp_path, monkeypatch):
     assert out["score"] == pytest.approx(sum(s["score"] for s in out["per_seed"]) / 2)
     assert out["tokens"]["pairs_scored"] == 20
     json.dumps(out)  # JSON-serialisable
+
+
+@pytest.mark.parametrize(
+    "content,reason",
+    [
+        (b"\xff\xfe not utf-8", "invalid_config"),
+        (b"{not json", "invalid_config"),
+        (b"[1, 2]", "invalid_config"),
+    ],
+)
+def test_load_json_config_classifies_bad_content(tmp_path, content, reason):
+    (tmp_path / "adapter_config.json").write_bytes(content)
+    with pytest.raises(ScreeningError) as e:
+        score.load_json_config(tmp_path, "adapter_config.json")
+    assert e.value.reason == reason
+
+
+def test_load_json_config_missing_file(tmp_path):
+    with pytest.raises(ScreeningError) as e:
+        score.load_json_config(tmp_path, "config.json")
+    assert e.value.reason == "missing_file"

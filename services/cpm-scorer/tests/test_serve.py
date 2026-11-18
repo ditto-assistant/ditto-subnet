@@ -501,3 +501,17 @@ def test_results_payload_maps_run_output_only():
             scorer_version="v",
             gpu_sku="g",
         )
+
+
+@pytest.mark.parametrize("detail", [7, None, "x" * 1983])
+def test_wire_fault_detail_checks_do_not_crash(detail):
+    body = {
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "lease_id": "00000000-0000-0000-0000-000000000002",
+        "error_kind": "infra",
+        "detail": detail,
+        "scorer_id": "s",
+        "scorer_version": "v",
+    }
+    errs = pw.fault_errors(body)
+    assert (errs == []) == (detail is None)
