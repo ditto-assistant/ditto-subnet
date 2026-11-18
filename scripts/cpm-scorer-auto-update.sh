@@ -21,7 +21,12 @@ fi
 [[ -z "$EXPECTED_REVISION" || "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]]
 install -d -m 0755 "$ROOT"
 exec 9>"$ROOT/update.lock"
-flock -n 9 || exit 0
+if [ "$REF" = "$CHANNEL" ]; then
+  flock -n 9 || exit 0
+else
+  # A pinned bootstrap must not be skipped silently: wait for a timer run.
+  flock 9
+fi
 docker pull --platform linux/amd64 "$REF" >/dev/null
 exact="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REF" | awk -v prefix="$REPOSITORY@" 'index($0,prefix)==1 {print; exit}')"
 [[ "$exact" =~ ^ghcr\.io/ditto-assistant/ditto-subnet-stack@sha256:[0-9a-f]{64}$ ]]
