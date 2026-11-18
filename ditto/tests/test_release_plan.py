@@ -149,6 +149,14 @@ def test_datagen_change_rebuilds_scorer_and_validator_stack(
         ),
         (".github/workflows/cpm-scorer-ci.yml", {"cpm_scorer", "cpm_starter_kit"}),
         ("miners/cpm-starter-kit/train_lora.py", {"cpm_starter_kit"}),
+        # The GPU image, its pull updater and the host role release the scorer
+        # (publish-cpm-scorer) like the generator scorer's do dittobench_api.
+        ("Dockerfile.cpm-scorer-release", {"cpm_scorer", "cpm_starter_kit"}),
+        ("scripts/cpm-scorer-auto-update.sh", {"cpm_scorer", "cpm_starter_kit"}),
+        (
+            "infra/ansible/roles/cpm_scorer/tasks/main.yml",
+            {"cpm_scorer", "cpm_starter_kit"},
+        ),
     ],
 )
 def test_cpm_track_changes_are_shadow_only(

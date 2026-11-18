@@ -1,0 +1,78 @@
+# CPM ("model_context") scorer release image
+# (docs/research/cpm/competition-v1.md §6.1). release.yml (publish-cpm-scorer)
+# builds it from the exact release commit, cosign-signs it, and promotes it to
+# ghcr.io/ditto-assistant/ditto-subnet-stack:cpm-scorer-stable-1. The GPU host
+# runs it under the NVIDIA container runtime; scripts/cpm-scorer-auto-update.sh
+# verifies and activates each release.
+#
+# An image, not a native bundle like challenge-scorer's: the locked torch CUDA
+# environment is several GB of wheels tied to one glibc and one Python build,
+# and a venv cannot be moved into releases/<revision> after it is built. As
+# image layers, a release that changes only scorer code reuses the dependency
+# layer (and the host pulls only the small layers that changed), and the
+# process that loads untrusted miner weights never touches the host filesystem
+# beyond its cache mount.
+
+# cmd/generate from the same commit: the scorer shells out to it for each
+# season seed (--generate-bin), so the host needs no Go toolchain.
+FROM docker.io/library/golang:1.27.3@sha256:f20d83a83e18dbd2a4714b8ffd4b30b287b6243962dd75608e86abcc63ba4efc AS generate
+WORKDIR /src
+COPY research/dittobench-datagen/ ./
+RUN CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -buildvcs=false -o /out/generate ./cmd/generate
+
+# The CUDA base only supplies glibc and the container runtime's driver
+# contract (NVIDIA_REQUIRE_CUDA=cuda>=13.2, which the host's pinned r595
+# driver satisfies). torch's own nvidia-* wheels carry the CUDA libraries.
+FROM docker.io/nvidia/cuda:13.2.1-base-ubuntu24.04@sha256:7be56e69d8ae7c3648b8fca009fa35980ecd9c6eefaafbff3ee8c224e0043eb5
+
+ARG DITTO_REVISION
+LABEL org.opencontainers.image.source="https://github.com/ditto-assistant/ditto-subnet" \
+      org.opencontainers.image.revision="$DITTO_REVISION" \
+      io.heyditto.cpm-scorer.update-protocol="1"
+
+COPY --from=ghcr.io/astral-sh/uv@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa /uv /usr/local/bin/uv
+
+# A uv-managed CPython (uv's pinned, hash-checked python-build-standalone
+# release), so the interpreter does not drift with the base's apt state.
+ENV UV_PYTHON_INSTALL_DIR=/opt/cpm-scorer/python \
+    UV_PROJECT_ENVIRONMENT=/opt/cpm-scorer/venv \
+    UV_PYTHON=3.12.13 \
+    UV_PYTHON_DOWNLOADS=manual \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1
+
+WORKDIR /opt/cpm-scorer/src
+RUN uv python install 3.12.13
+
+# Dependencies first: this layer changes only with pyproject.toml or uv.lock.
+COPY services/cpm-scorer/pyproject.toml services/cpm-scorer/uv.lock ./
+RUN uv sync --locked --no-dev --extra gpu --no-install-project
+COPY services/cpm-scorer/ ./
+RUN uv sync --locked --no-dev --extra gpu --no-editable
+
+COPY --from=generate /out/generate /opt/cpm-scorer/bin/generate
+# The updater self-refreshes from the image it has just adopted.
+COPY scripts/cpm-scorer-auto-update.sh /opt/cpm-scorer/updater.sh
+
+ENV PATH=/opt/cpm-scorer/venv/bin:$PATH \
+    DITTO_CPM_SCORER_GIT_SHA=$DITTO_REVISION \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+# Fail the build, not the host, on a bad release: an exact revision, the
+# identity the updater checks, the CUDA build of torch, none of the kernel
+# packages the scorer refuses (they change numerics), and the generator.
+RUN set -eu; \
+    echo "$DITTO_REVISION" | grep -Eqx '[0-9a-f]{40}'; \
+    cpm-scorer version | python -c 'import json, os, sys; d = json.load(sys.stdin); assert d["revision"] == os.environ["DITTO_CPM_SCORER_GIT_SHA"], d; assert isinstance(d["cpm_score_version"], int) and d["cpm_score_version"] >= 1, d'; \
+    python -c 'import importlib.util as u, sys; bad = [p for p in ("fla", "causal_conv1d", "kernels") if u.find_spec(p)]; sys.exit(f"unpinned kernel packages: {bad}" if bad else 0)'; \
+    python -c 'import torch; assert torch.version.cuda, "CPU torch in the GPU image"; print("torch", torch.__version__, "cuda", torch.version.cuda)'; \
+    test -x /opt/cpm-scorer/bin/generate; \
+    bash -n /opt/cpm-scorer/updater.sh
+
+WORKDIR /
+USER 65534:65534
+ENTRYPOINT ["/opt/cpm-scorer/venv/bin/cpm-scorer"]
+CMD ["version"]
