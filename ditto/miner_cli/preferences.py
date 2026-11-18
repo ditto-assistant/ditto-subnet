@@ -551,15 +551,11 @@ def _malformed(key: str, problem: str) -> PreferencesUnreadableError:
     )
 
 
-def _receipt(value: dict, key: str) -> PaymentReceipt | None:
-    fields = ("block_hash", "block_number", "extrinsic_index")
-    present = [field for field in fields if value.get(field) is not None]
-    if not present:
-        return None
-    block_hash = value.get("block_hash")
-    block_number = value.get("block_number")
-    extrinsic_index = value.get("extrinsic_index")
-    if not (
+def _valid_proof_fields(
+    block_hash: object, block_number: object, extrinsic_index: object
+) -> bool:
+    """The one shape a saved payment proof may take, on write and on read."""
+    return (
         isinstance(block_hash, str)
         and block_hash.startswith("0x")
         and len(block_hash) == 66
@@ -569,10 +565,24 @@ def _receipt(value: dict, key: str) -> PaymentReceipt | None:
         and isinstance(extrinsic_index, int)
         and not isinstance(extrinsic_index, bool)
         and extrinsic_index >= 0
-    ):
+    )
+
+
+def _receipt(value: dict, key: str) -> PaymentReceipt | None:
+    fields = ("block_hash", "block_number", "extrinsic_index")
+    present = [field for field in fields if value.get(field) is not None]
+    if not present:
+        return None
+    block_hash = value.get("block_hash")
+    block_number = value.get("block_number")
+    extrinsic_index = value.get("extrinsic_index")
+    if not _valid_proof_fields(block_hash, block_number, extrinsic_index):
         raise _malformed(
             key, "its proof needs block_hash, block_number and extrinsic_index"
         )
+    # Narrowing for the type checker; _valid_proof_fields already checked these.
+    assert isinstance(block_hash, str)
+    assert isinstance(block_number, int) and isinstance(extrinsic_index, int)
     return PaymentReceipt(
         block_hash=block_hash,
         block_number=block_number,
@@ -657,6 +667,18 @@ def save_readmission_record(
         "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     if record.payment is not None:
+        # Refuse to write a proof the loader would reject, which would leave a
+        # record the readmission flow can no longer read.
+        if not _valid_proof_fields(
+            record.payment.block_hash,
+            record.payment.block_number,
+            record.payment.extrinsic_index,
+        ):
+            raise MinerCliError(
+                "refusing to save an invalid payment proof: block_hash must be a "
+                "0x-prefixed 66-character hash, block_number must be >= 1, and "
+                "extrinsic_index must be >= 0"
+            )
         value.update(
             block_hash=record.payment.block_hash,
             block_number=record.payment.block_number,

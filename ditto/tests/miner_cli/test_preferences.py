@@ -222,3 +222,42 @@ def test_a_write_never_overwrites_an_unparseable_config(
     monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(config))
     assert save_agent_name(network="finney", hotkey="hk", name="x") is False
     assert config.read_text() == '{"pending_readmissions": {'
+
+
+def test_an_invalid_proof_is_refused_before_it_is_saved(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """4607621003: the writer enforces the loader's proof shape, so it can
+    never leave a record the readmission flow cannot read back."""
+    import pytest
+
+    from ditto.miner_cli.errors import MinerCliError
+    from ditto.miner_cli.preferences import (
+        ReadmissionRecord,
+        load_readmission_record,
+        save_readmission_record,
+    )
+
+    monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(tmp_path / "config.json"))
+    good = ReadmissionRecord(
+        agent_id="agent-1",
+        bench_version=19,
+        state="paying",
+        amount_rao=1,
+        send_address="5Dest",
+    )
+    assert save_readmission_record(network="finney", hotkey="hk", record=good)
+    bad = ReadmissionRecord(
+        agent_id="agent-1",
+        bench_version=19,
+        state="paid",
+        amount_rao=1,
+        send_address="5Dest",
+        payment=PaymentReceipt(
+            block_hash="0x" + "ab" * 32, block_number=77, extrinsic_index=-1
+        ),
+    )
+    with pytest.raises(MinerCliError, match="invalid payment proof"):
+        save_readmission_record(network="finney", hotkey="hk", record=bad)
+    kept = load_readmission_record(network="finney", hotkey="hk", agent_id="agent-1")
+    assert kept is not None and kept.state == "paying"

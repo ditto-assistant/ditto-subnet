@@ -244,6 +244,12 @@ def _verify_unconfirmed_transfer(
         problems.append(f"it paid {transfer.dest}, not {record.send_address}")
     if transfer.amount_rao != record.amount_rao:
         problems.append(f"it moved {transfer.amount_rao} rao, not {record.amount_rao}")
+    # Platform's verifier rejects a dispatch-failed extrinsic, so a finalized
+    # but failed transfer moved no funds and must not settle the record.
+    if transfer.succeeded is False:
+        problems.append("it failed on chain (ExtrinsicFailed), so no funds moved")
+    elif transfer.succeeded is None:
+        problems.append("its on-chain outcome (ExtrinsicSuccess) could not be found")
     started = _parse_time(record.updated_at)
     if started is not None:
         finalized = (

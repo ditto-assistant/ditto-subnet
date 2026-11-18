@@ -157,6 +157,7 @@ def _transfer(**overrides: Any) -> ChainTransfer:
         "dest": "5Dest",
         "amount_rao": 75_000_000,
         "timestamp_ms": int(time.time() * 1000),
+        "succeeded": True,
     }
     values.update(overrides)
     return ChainTransfer(**values)
@@ -682,6 +683,9 @@ def test_another_process_holding_the_agent_lock_blocks_payment(
         {"signer": _KEY.ss58_address},
         {"call": "Balances.transfer_all"},
         {"timestamp_ms": int(datetime(2026, 1, 1, tzinfo=UTC).timestamp() * 1000)},
+        # 4607620558: a finalized but dispatch-failed transfer moved no funds.
+        {"succeeded": False},
+        {"succeeded": None},
         "unreachable",
     ],
 )

@@ -435,8 +435,47 @@ class TestReadTransfer:
         substrate = MagicMock()
         substrate.get_block_hash.return_value = canonical
         substrate.get_extrinsics.return_value = [MagicMock(), extrinsic]
-        substrate.query.return_value = MagicMock(value=1_763_000_000_000)
+        substrate.query.side_effect = self._query(outcome="ExtrinsicSuccess")
         return substrate
+
+    @staticmethod
+    def _query(*, outcome: str | None, nested: bool = False):  # type: ignore[no-untyped-def]
+        def query(module: str, function: str, block_hash: str) -> MagicMock:
+            assert block_hash == "0x" + "ab" * 32
+            if (module, function) == ("Timestamp", "Now"):
+                return MagicMock(value=1_763_000_000_000)
+            assert (module, function) == ("System", "Events")
+            records: list[dict[str, object]] = []
+            if outcome is not None:
+                if nested:
+                    records.append(
+                        {
+                            "phase": {"ApplyExtrinsic": 1},
+                            "event": {"module_id": "System", "event_id": outcome},
+                        }
+                    )
+                else:
+                    records.append(
+                        {
+                            "phase": "ApplyExtrinsic",
+                            "extrinsic_idx": 1,
+                            "module_id": "System",
+                            "event_id": outcome,
+                        }
+                    )
+            # An unrelated extrinsic's outcome must not be read as this one's.
+            records.insert(
+                0,
+                {
+                    "phase": "ApplyExtrinsic",
+                    "extrinsic_idx": 0,
+                    "module_id": "System",
+                    "event_id": "ExtrinsicSuccess",
+                },
+            )
+            return MagicMock(value=records)
+
+        return query
 
     def _read(self, monkeypatch: pytest.MonkeyPatch, substrate: MagicMock):  # type: ignore[no-untyped-def]
         from ditto.miner_cli import payment
@@ -466,7 +505,29 @@ class TestReadTransfer:
         assert transfer.dest == bob.ss58_address
         assert transfer.amount_rao == 75
         assert transfer.timestamp_ms == 1_763_000_000_000
+        assert transfer.succeeded is True
         substrate.get_block_hash.assert_called_once_with(77)
+
+    @pytest.mark.parametrize(
+        ("outcome", "nested", "expected"),
+        [
+            ("ExtrinsicFailed", False, False),
+            ("ExtrinsicFailed", True, False),
+            ("ExtrinsicSuccess", True, True),
+            (None, False, None),
+        ],
+    )
+    def test_reads_the_dispatch_outcome_at_the_index(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        outcome: str | None,
+        nested: bool,
+        expected: bool | None,
+    ) -> None:
+        """4607620558: a finalized but failed transfer is not a payment."""
+        substrate = self._substrate(canonical=self._HASH, dest="5Dest")
+        substrate.query.side_effect = self._query(outcome=outcome, nested=nested)
+        assert self._read(monkeypatch, substrate).succeeded is expected
 
     def test_a_hash_from_another_block_is_refused(
         self, monkeypatch: pytest.MonkeyPatch

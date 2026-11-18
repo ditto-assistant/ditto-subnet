@@ -211,6 +211,44 @@ class ChainTransfer:
     dest: str
     amount_rao: int | None
     timestamp_ms: int | None
+    succeeded: bool | None = None
+    """``True`` on ``System.ExtrinsicSuccess`` at the index, ``False`` on
+    ``ExtrinsicFailed``, ``None`` when neither event was found."""
+
+
+def _extrinsic_outcome(events: Any, index: int) -> bool | None:
+    """Read the dispatch outcome of extrinsic ``index`` from ``System.Events``.
+
+    Mirrors Platform's verifier, which requires ``ExtrinsicSuccess`` at the
+    matching index. Accepts the flat record shape (``phase``,
+    ``extrinsic_idx``, ``module_id``, ``event_id``) and the nested one
+    (``phase: {"ApplyExtrinsic": i}``, ``event: {...}``).
+    """
+    value = getattr(events, "value", events)
+    if not isinstance(value, list):
+        return None
+    for record in value:
+        record = getattr(record, "value", record)
+        if not isinstance(record, dict):
+            continue
+        phase = record.get("phase")
+        if isinstance(phase, dict):
+            idx = phase.get("ApplyExtrinsic")
+        elif phase == "ApplyExtrinsic":
+            idx = record.get("extrinsic_idx")
+        else:
+            continue
+        if idx != index:
+            continue
+        event = record.get("event")
+        source = event if isinstance(event, dict) else record
+        if source.get("module_id") != "System":
+            continue
+        if source.get("event_id") == "ExtrinsicSuccess":
+            return True
+        if source.get("event_id") == "ExtrinsicFailed":
+            return False
+    return None
 
 
 def read_transfer(
@@ -251,6 +289,7 @@ def read_transfer(
         call = call if isinstance(call, dict) else {}
         args = _call_args_to_dict(call.get("call_args"))
         timestamp = substrate.query("Timestamp", "Now", block_hash=receipt.block_hash)
+        events = substrate.query("System", "Events", block_hash=receipt.block_hash)
     except PaymentSubmissionError:
         raise
     except Exception as error:
@@ -271,6 +310,7 @@ def read_transfer(
         if isinstance(amount, int) and not isinstance(amount, bool)
         else None,
         timestamp_ms=stamp if isinstance(stamp, int) else None,
+        succeeded=_extrinsic_outcome(events, receipt.extrinsic_index),
     )
 
 
