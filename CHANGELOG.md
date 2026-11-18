@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.496.0 (2026-11-18)
+
+### Features
+
+- **validator,miner-cli**: Model_context shadow track and model-context commands
+  ([#3576](https://github.com/ditto-assistant/ditto-subnet/pull/3576),
+  [`7f91a2a`](https://github.com/ditto-assistant/ditto-subnet/commit/7f91a2a7d63502a630b074d385169404b8af010c))
+
+
 ## v0.495.0 (2026-11-18)
 
 ### Documentation
