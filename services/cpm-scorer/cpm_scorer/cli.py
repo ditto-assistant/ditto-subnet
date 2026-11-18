@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import signal
 import sys
+import threading
 from pathlib import Path
 
 from cpm_scorer import metrics
@@ -196,6 +198,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     model.configure_determinism(args.device)
     client = PlatformClient(args.platform, load_token())
+    # SIGUSR1 drains (scripts/cpm-scorer-auto-update.sh): finish and post the
+    # run in hand, lease nothing more, exit 0. Waiting on the event instead of
+    # sleeping lets an idle scorer leave at once.
+    stop = threading.Event()
+    signal.signal(signal.SIGUSR1, lambda *_: stop.set())
     serve(
         client,
         make_score_fn(args),
@@ -206,6 +213,24 @@ def cmd_serve(args: argparse.Namespace) -> int:
         gpu_sku=host_gpu_sku(args.device),
         poll_seconds=args.poll_seconds,
         once=args.once,
+        sleep=stop.wait,
+        should_stop=stop.is_set,
+    )
+    return 0
+
+
+def cmd_version(_args: argparse.Namespace) -> int:
+    """Identity the release updater checks before activating an image."""
+    from cpm_scorer.serve import release_revision, scorer_version
+
+    print(
+        json.dumps(
+            {
+                "scorer_version": scorer_version(),
+                "revision": release_revision(),
+                "cpm_score_version": metrics.CPM_SCORE_VERSION,
+            }
+        )
     )
     return 0
 
@@ -243,6 +268,9 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--scorer-id")
     common(v)
     v.set_defaults(func=cmd_serve)
+
+    ver = sub.add_parser("version", help="print the scorer identity as JSON")
+    ver.set_defaults(func=cmd_version)
     return ap
 
 

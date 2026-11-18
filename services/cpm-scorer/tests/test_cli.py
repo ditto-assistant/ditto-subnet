@@ -158,3 +158,37 @@ def test_serve_reference_scores_the_base(fake_score, monkeypatch, tmp_path):
     fn = cli.make_score_fn(_serve_args(tmp_path))
     assert fn(_work("reference")) == {"ok": True}
     assert seen["source"].kind == "base" and seen["source"].path is None
+
+
+def test_version_prints_the_release_identity(monkeypatch, capsys):
+    # The release updater compares this with the image's revision label.
+    monkeypatch.setenv("DITTO_CPM_SCORER_GIT_SHA", "e" * 40)
+    assert cli.main(["version"]) == 0
+    identity = json.loads(capsys.readouterr().out)
+    assert identity["revision"] == "e" * 40
+    assert identity["cpm_score_version"] == 1
+    assert identity["scorer_version"].endswith("+" + "e" * 40)
+
+
+@pytest.mark.usefixtures("fake_score")
+def test_serve_installs_a_sigusr1_drain(monkeypatch, tmp_path):
+    import signal
+
+    from cpm_scorer import model, serve
+
+    seen = {}
+    monkeypatch.setattr(model, "configure_determinism", lambda _d: None)
+    monkeypatch.setattr(serve, "load_token", lambda: "t" * 32)
+
+    def fake_serve(_client, _fn, **kwargs):
+        assert not kwargs["should_stop"]()
+        signal.raise_signal(signal.SIGUSR1)
+        seen["stopped"] = kwargs["should_stop"]()
+
+    monkeypatch.setattr(serve, "serve", fake_serve)
+    previous = signal.getsignal(signal.SIGUSR1)
+    try:
+        assert cli.cmd_serve(_serve_args(tmp_path)) == 0
+    finally:
+        signal.signal(signal.SIGUSR1, previous)
+    assert seen == {"stopped": True}
