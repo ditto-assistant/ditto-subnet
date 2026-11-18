@@ -13,7 +13,8 @@ choice for this module.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from ditto.miner_cli.errors import (
     PaymentFinalizationTimeoutError,
@@ -197,6 +198,119 @@ def submit_eval_payment(
         block_hash=block_hash,
         block_number=block_number,
         extrinsic_index=extrinsic_index,
+    )
+
+
+@dataclass(frozen=True)
+class ChainTransfer:
+    """What one finalized extrinsic on chain actually did (read-only)."""
+
+    call: str
+    """``Module.function``, e.g. ``Balances.transfer_keep_alive``."""
+    signer: str
+    dest: str
+    amount_rao: int | None
+    timestamp_ms: int | None
+    succeeded: bool | None = None
+    """``True`` on ``System.ExtrinsicSuccess`` at the index, ``False`` on
+    ``ExtrinsicFailed``, ``None`` when neither event was found."""
+
+
+def _extrinsic_outcome(events: Any, index: int) -> bool | None:
+    """Read the dispatch outcome of extrinsic ``index`` from ``System.Events``.
+
+    Mirrors Platform's verifier, which requires ``ExtrinsicSuccess`` at the
+    matching index. Accepts the flat record shape (``phase``,
+    ``extrinsic_idx``, ``module_id``, ``event_id``) and the nested one
+    (``phase: {"ApplyExtrinsic": i}``, ``event: {...}``).
+    """
+    value = getattr(events, "value", events)
+    if not isinstance(value, list):
+        return None
+    for record in value:
+        record = getattr(record, "value", record)
+        if not isinstance(record, dict):
+            continue
+        phase = record.get("phase")
+        if isinstance(phase, dict):
+            idx = phase.get("ApplyExtrinsic")
+        elif phase == "ApplyExtrinsic":
+            idx = record.get("extrinsic_idx")
+        else:
+            continue
+        if idx != index:
+            continue
+        event = record.get("event")
+        source = event if isinstance(event, dict) else record
+        if source.get("module_id") != "System":
+            continue
+        if source.get("event_id") == "ExtrinsicSuccess":
+            return True
+        if source.get("event_id") == "ExtrinsicFailed":
+            return False
+    return None
+
+
+def read_transfer(
+    *,
+    receipt: PaymentReceipt,
+    subtensor_network: str,
+    chain_endpoint: str | None = None,
+) -> ChainTransfer:
+    """Read the extrinsic a proof points at, without signing or sending anything.
+
+    Binds the block number to the block hash first, as Platform's verifier
+    does, so a proof cannot pair one block's number with another's hash.
+
+    Raises:
+        PaymentSubmissionError: the chain is unreachable, the hash does not
+            belong to that block number, or no extrinsic sits at the index.
+    """
+    from ditto.chain.models import _call_args_to_dict, normalize_address_to_ss58
+
+    subtensor = _connect_subtensor(chain_endpoint or subtensor_network)
+    try:
+        substrate = subtensor.substrate
+        canonical = str(substrate.get_block_hash(receipt.block_number) or "")
+        if canonical.lower() != receipt.block_hash.lower():
+            raise PaymentSubmissionError(
+                f"block {receipt.block_number} is {canonical or 'unknown'}, "
+                f"not {receipt.block_hash}"
+            )
+        extrinsics = substrate.get_extrinsics(block_hash=receipt.block_hash) or []
+        if receipt.extrinsic_index >= len(extrinsics):
+            raise PaymentSubmissionError(
+                f"no extrinsic {receipt.extrinsic_index} in block "
+                f"{receipt.block_number}"
+            )
+        raw = extrinsics[receipt.extrinsic_index]
+        value: Any = getattr(raw, "value", raw)
+        call = value.get("call") if isinstance(value, dict) else None
+        call = call if isinstance(call, dict) else {}
+        args = _call_args_to_dict(call.get("call_args"))
+        timestamp = substrate.query("Timestamp", "Now", block_hash=receipt.block_hash)
+        events = substrate.query("System", "Events", block_hash=receipt.block_hash)
+    except PaymentSubmissionError:
+        raise
+    except Exception as error:
+        raise PaymentSubmissionError(
+            f"could not read the transfer at block {receipt.block_number} "
+            f"index {receipt.extrinsic_index}: {error}"
+        ) from error
+    dest = args.get("dest")
+    if isinstance(dest, dict):
+        dest = dest.get("Id")
+    amount = args.get("value")
+    stamp = getattr(timestamp, "value", timestamp)
+    return ChainTransfer(
+        call=f"{call.get('call_module')}.{call.get('call_function')}",
+        signer=normalize_address_to_ss58(str(value.get("address") or "")),
+        dest=normalize_address_to_ss58(dest) if isinstance(dest, str) else "",
+        amount_rao=amount
+        if isinstance(amount, int) and not isinstance(amount, bool)
+        else None,
+        timestamp_ms=stamp if isinstance(stamp, int) else None,
+        succeeded=_extrinsic_outcome(events, receipt.extrinsic_index),
     )
 
 

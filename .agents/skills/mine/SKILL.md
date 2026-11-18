@@ -262,6 +262,27 @@ uv run ditto --network finney upload --path ... --name ... --coldkey ... --hotke
 Do not put keys, `.env`, or host Docker sockets in the image. Follow
 [`docs/MINER.md`](../../../docs/MINER.md) for wallet, fee, and status.
 
+### Readmission (SN-485)
+
+When an era changes and a scored agent was not carried into it, the miner
+can pay the upload fee to readmit that unchanged agent:
+`uv run ditto --network finney readmit <agent_id> --coldkey ... --hotkey ...`.
+It applies from v19, no earlier than seven days after Ditto announces it; the
+CLI prints whether it is active and why not.
+
+- The check refuses **before payment**. Do not pay around a refusal: read the
+  reason, and resubmit instead for a partial (2 of 3) or withdrawn agent.
+- The fee equals the upload fee and starts the coldkey upload cooldown.
+- A refusal found after payment becomes a 30-day upload credit. There is no
+  on-chain refund.
+- An `--allow-identical-rescore` upload, or a near-identical re-upload of your
+  own agent, is labelled a readmission once active: same fee, same cooldown.
+- Retries Ditto causes are free. A failure the agent caused is not retried for
+  free; fix it and upload, or pay to re-run.
+- Payouts still count only the owner's best agent, so readmit your best one.
+
+See [`docs/MINER.md#readmission`](../../../docs/MINER.md#readmission).
+
 ## Generator miners at a bench version change
 
 The generator competition (`miners/dittobench-generator-starter-kit`) follows the

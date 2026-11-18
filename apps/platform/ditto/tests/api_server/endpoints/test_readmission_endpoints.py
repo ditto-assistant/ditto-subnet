@@ -744,3 +744,55 @@ async def test_a_readmission_after_the_reservation_restarts_the_cooldown(
                 miner_hotkey=_HOTKEY,
                 settings=shortened,
             )
+
+
+async def test_the_signature_payload_is_the_pinned_wire_format() -> None:
+    """Pinned literally here and in the CLI's ``test_readmit``."""
+    payload = readmission_signature_payload(
+        operation="commit",
+        hotkey="5Hot",
+        agent_id=UUID("7c9e6679-7425-40de-944b-e07fc1f90ae7"),
+        bench_version=19,
+        signature_timestamp=1700000000,
+        signature_nonce=UUID("00000000-0000-4000-8000-000000000001"),
+    )
+    assert payload == (
+        b"ditto-readmit-v1:commit:5Hot:7c9e6679-7425-40de-944b-e07fc1f90ae7:19:"
+        b"1700000000:00000000-0000-4000-8000-000000000001"
+    )
+
+
+async def test_a_tokenless_commit_keeps_the_reserved_price(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    wired: MagicMock,
+) -> None:
+    """A client that lost its token still commits at the reserved price."""
+    agent_id = await _seed(session_maker)
+    assert (await _check(client, agent_id, reserve_slot=True))["admission_token"]
+    # The fee changes after the reservation and before the commit.
+    async with session_maker() as session, session.begin():
+        latest = await session.scalar(
+            select(SubmissionSettingsRevision)
+            .order_by(SubmissionSettingsRevision.revision.desc())
+            .limit(1)
+        )
+        assert latest is not None
+        session.add(
+            SubmissionSettingsRevision(
+                parent_revision=latest.revision,
+                cooldown_seconds=3600,
+                fee_amount_rao=_FEE * 2,
+                competition_fees={},
+                readmission_announced_at=latest.readmission_announced_at,
+                reason="raise the fee after the reservation",
+                actor="test",
+            )
+        )
+    resp = await client.post(
+        "/api/v1/readmission/commit",
+        json={**_signed(agent_id, operation="commit"), **_proof(40)},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["outcome"] == "admitted"
+    assert wired.verify_payment.await_args.kwargs["expected_amount_rao"] == _FEE
