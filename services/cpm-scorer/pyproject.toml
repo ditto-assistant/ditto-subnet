@@ -1,0 +1,63 @@
+[project]
+name = "ditto-cpm-scorer"
+version = "0.1.0"
+description = "Scorer for the SN118 model_context (CPM) track, cpm_score_version 1"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "huggingface-hub==2.3.0",
+  "peft==0.21.2",
+  "safetensors==0.8.0",
+  "transformers==5.22.2",
+]
+
+[project.optional-dependencies]
+# torch comes from exactly one extra. `cpu` resolves the small CPU build on
+# Linux (CI, laptops); `gpu` resolves the default PyPI build, which is the CUDA
+# build on Linux (the scorer host). macOS uses the PyPI wheel for both.
+cpu = ["torch==2.15.0"]
+gpu = ["torch==2.15.0"]
+
+[project.scripts]
+cpm-scorer = "cpm_scorer.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest==9.0.3",
+  "ruff==0.15.13",
+]
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "gpu" }]]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cpm_scorer"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cpm_scorer"]

@@ -219,6 +219,24 @@ paths = [
   "miners/dittobench-router-starter-kit/**",
 ]
 
+[components.cpm_scorer]
+description = "Shadow-only model_context (CPM) scorer, screening helpers and practice path"
+# The scorer runs cmd/generate from datagen for its cases, so a generator
+# change must re-verify the scorer. No validator or Platform image imports it.
+depends_on = ["dittobench_datagen"]
+paths = [
+  "services/cpm-scorer/**",
+  ".github/workflows/cpm-scorer-ci.yml",
+]
+
+[components.cpm_starter_kit]
+description = "Shadow-only model_context reference LoRA trainer and practice loop"
+# The kit trains and practises through the scorer package.
+depends_on = ["cpm_scorer"]
+paths = [
+  "miners/cpm-starter-kit/**",
+]
+
 [components.edge_protocol]
 description = "Shadow-only Ditto Edge (edge/v1) contract, conformance vectors and ledger rules"
 paths = [

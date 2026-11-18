@@ -1,0 +1,63 @@
+name: CPM scorer CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - services/cpm-scorer/**
+      - miners/cpm-starter-kit/**
+      - research/dittobench-datagen/**
+      - docs/research/cpm/export_cpm.py
+      - .github/workflows/cpm-scorer-ci.yml
+  pull_request:
+    paths:
+      - services/cpm-scorer/**
+      - miners/cpm-starter-kit/**
+      - research/dittobench-datagen/**
+      - docs/research/cpm/export_cpm.py
+      - .github/workflows/cpm-scorer-ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpm-scorer-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: services/cpm-scorer
+
+jobs:
+  verify:
+    # CPU only. Tests build a tiny random Qwen3.5 in-process and never
+    # download a checkpoint; the real-seed label parity test builds
+    # cmd/generate with Go.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the pull request source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.3"
+          cache: false
+
+      - name: Sync the locked CPU environment
+        run: uv sync --locked --extra cpu
+
+      - name: Format and lint
+        run: |
+          uv run --no-sync ruff format --check . ../../miners/cpm-starter-kit
+          uv run --no-sync ruff check . ../../miners/cpm-starter-kit
+
+      - name: Tests
+        run: uv run --no-sync pytest -q
