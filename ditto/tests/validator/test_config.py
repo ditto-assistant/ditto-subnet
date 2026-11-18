@@ -341,6 +341,22 @@ class TestGeneratorEligibilityRequiresTheLedger:
 
 
 class TestModelContextTrackConfig:
+    def test_eligibility_without_the_ledger_read_fails_at_boot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        with pytest.raises(
+            ValidatorConfigError, match="model_context_ledger_read_enabled"
+        ):
+            replace(
+                cfg,
+                model_context_weight_eligible=True,
+                model_context_ledger_read_enabled=False,
+            )
+        # Shadow (ineligible) may switch the read off.
+        replace(cfg, model_context_ledger_read_enabled=False)
+
     def test_ships_shadow_and_reading(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
         monkeypatch.delenv("VALIDATOR_MODEL_CONTEXT_LEDGER_READ_ENABLED", raising=False)

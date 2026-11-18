@@ -644,6 +644,18 @@ class ValidatorConfig:
                 "generator_weight_eligible requires generator_ledger_read_enabled; "
                 "unset VALIDATOR_GENERATOR_LEDGER_READ_ENABLED (default true)"
             )
+        if (
+            self.model_context_weight_eligible
+            and not self.model_context_ledger_read_enabled
+        ):
+            # Same consensus-split hazard as the generator track: an eligible
+            # model_context track that cannot read its ledger would fold
+            # nothing while the rest of the fleet pays its share.
+            raise ValidatorConfigError(
+                "model_context_weight_eligible requires "
+                "model_context_ledger_read_enabled; unset "
+                "VALIDATOR_MODEL_CONTEXT_LEDGER_READ_ENABLED (default true)"
+            )
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured (wallet files)."""
