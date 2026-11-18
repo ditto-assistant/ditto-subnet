@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.497.1 (2026-11-18)
+
+### Bug Fixes
+
+- **platform**: Reject deeply nested model_context JSON instead of retrying it
+  ([#3578](https://github.com/ditto-assistant/ditto-subnet/pull/3578),
+  [`8be6795`](https://github.com/ditto-assistant/ditto-subnet/commit/8be6795827cd198ab38ac6aed795c892a3407f2c))
+
+
 ## v0.497.0 (2026-11-18)
 
 ### Features
