@@ -12,7 +12,8 @@ const PUBLIC_READ_TIMEOUT_MS = 30_000;
 // Public, user-agnostic GET prefixes that get the longer deadline. The
 // generator competition's board and rounds are public reads like the rest;
 // on the 8s write deadline a slow board read rendered as a missing section.
-const PUBLIC_READ_PREFIXES = ["/public/", "/generator/"] as const;
+// The model_context (CPM) board, seasons and terms are public reads too.
+const PUBLIC_READ_PREFIXES = ["/public/", "/generator/", "/model-context/"] as const;
 
 function readTimeoutMs(path: string): number {
   return PUBLIC_READ_PREFIXES.some((prefix) => path.startsWith(prefix))

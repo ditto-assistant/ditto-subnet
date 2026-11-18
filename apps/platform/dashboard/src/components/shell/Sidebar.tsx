@@ -136,6 +136,17 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
+    page: "context-models",
+    label: "Context models",
+    desc: () => "Context-packet model competition",
+    icon: () => (
+      <svg class="ic" viewBox="0 0 24 24">
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <path d="M8 9h8M8 12h5M8 15h7" />
+      </svg>
+    ),
+  },
+  {
     page: "activity",
     label: "Admin activity",
     desc: () => "Backroom action history",
