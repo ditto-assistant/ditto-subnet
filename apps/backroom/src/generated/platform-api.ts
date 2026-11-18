@@ -3282,6 +3282,9 @@ export interface paths {
         /**
          * Admin List Submissions
          * @description Every submission newest first, any hotkey, with its latest run.
+         *
+         *     ``total`` counts what the filters match across all pages;
+         *     ``counts_by_status`` stays subnet-wide.
          */
         get: operations["admin_list_submissions_api_v1_admin_model_context_submissions_get"];
         put?: never;
@@ -14719,6 +14722,8 @@ export interface components {
             };
             /** Submissions */
             submissions: components["schemas"]["ModelContextSubmissionSummary"][];
+            /** Total */
+            total?: number | null;
         };
         /**
          * AdminOpaqueBlobEntry

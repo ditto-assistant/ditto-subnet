@@ -182,6 +182,47 @@ describe('model_context MCP tools', () => {
     }
   })
 
+  it('pages a hotkey-plus-status filter by its own total, never the subnet-wide count', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    // The subnet has 40 scored submissions; this hotkey has exactly one.
+    const filtered = `/api/v1/admin/model-context/submissions?limit=1&offset=0&hotkey=${HOTKEY}&status=scored`
+    const past = `/api/v1/admin/model-context/submissions?limit=1&offset=1&hotkey=${HOTKEY}&status=scored`
+    const counts = { scored: 40, rejected: 3 }
+    const call = async (routes: Record<string, unknown>, offset: number) => {
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        const key = url.replace('https://platform-api.heyditto.ai', '')
+        return key in routes ? Response.json(routes[key]) : new Response('not found', { status: 404 })
+      }))
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+      try {
+        return json(await client.callTool({
+          name: 'list_model_context_submissions',
+          arguments: { hotkey: HOTKEY, status: 'scored', limit: 1, offset },
+        })) as { total: number | null, has_more: boolean, returned: number }
+      } finally {
+        await client.close()
+        await server.close()
+      }
+    }
+
+    // Current Platform: its filtered total bounds the pages.
+    const current = {
+      [filtered]: { submissions: [summary], counts_by_status: counts, total: 1 },
+      [past]: { submissions: [], counts_by_status: counts, total: 1 },
+    }
+    expect(await call(current, 0)).toMatchObject({ total: 1, returned: 1, has_more: false })
+    expect(await call(current, 1)).toMatchObject({ total: 1, returned: 0, has_more: false })
+
+    // An older Platform without total: the subnet-wide scored count (40) must
+    // not keep has_more true; the full-page fallback applies instead.
+    const older = {
+      [filtered]: { submissions: [summary], counts_by_status: counts },
+      [past]: { submissions: [], counts_by_status: counts },
+    }
+    expect(await call(older, 0)).toMatchObject({ total: null, returned: 1, has_more: true })
+    expect(await call(older, 1)).toMatchObject({ total: null, returned: 0, has_more: false })
+  })
+
   it('guards writes with write scope, confirmations and the operator actor', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const fetchMock = vi.fn(async (url: string) => {

@@ -220,7 +220,11 @@ export const modelContextSeasonListSchema = z.object({
 
 export const modelContextSubmissionListSchema = z.object({
   submissions: z.array(submissionSummarySchema),
+  // Subnet-wide, whatever the filter.
   counts_by_status: z.record(z.string(), z.number().int()),
+  // Submissions matching this request's filters across all pages; null from
+  // a Platform that predates it.
+  total: z.number().int().nonnegative().nullable().optional().default(null),
 })
 
 export const modelContextSubmissionDetailSchema = z.object({

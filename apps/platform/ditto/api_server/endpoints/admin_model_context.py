@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from ditto.api_models.model_context import (
     REJECT_SUBMISSION_CONFIRMATION,
@@ -358,12 +359,19 @@ async def admin_list_submissions(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminModelContextSubmissionListResponse:
-    """Every submission newest first, any hotkey, with its latest run."""
-    query = select(ModelContextSubmission)
+    """Every submission newest first, any hotkey, with its latest run.
+
+    ``total`` counts what the filters match across all pages;
+    ``counts_by_status`` stays subnet-wide."""
+    filters: list[ColumnElement[bool]] = []
     if hotkey is not None:
-        query = query.where(ModelContextSubmission.hotkey == hotkey)
+        filters.append(ModelContextSubmission.hotkey == hotkey)
     if status is not None:
-        query = query.where(ModelContextSubmission.status == status)
+        filters.append(ModelContextSubmission.status == status)
+    query = select(ModelContextSubmission).where(*filters)
+    total = await session.scalar(
+        select(func.count()).select_from(ModelContextSubmission).where(*filters)
+    )
     rows = list(
         await session.scalars(
             query.order_by(
@@ -390,6 +398,7 @@ async def admin_list_submissions(
             submission_summary(row, latest.get(row.submission_id)) for row in rows
         ],
         counts_by_status=counts,
+        total=int(total or 0),
     )
 
 

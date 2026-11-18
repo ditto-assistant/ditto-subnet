@@ -1109,6 +1109,29 @@ class TestOperatorInspectionAndActions:
             await client.get(f"{_ADMIN_MC}/submissions?status=rejected", headers=_ADMIN)
         ).json()
         assert none["submissions"] == []
+        assert listed["total"] == 2 and page["total"] == 2 and none["total"] == 0
+
+        # Hotkey and status together: total counts this hotkey's scored
+        # submissions (1), not the subnet-wide scored count (2), so a pager
+        # stops after the first page.
+        both = (
+            await client.get(
+                f"{_ADMIN_MC}/submissions?hotkey={_MINER.ss58_address}"
+                "&status=scored&limit=1&offset=0",
+                headers=_ADMIN,
+            )
+        ).json()
+        assert [s["submission_id"] for s in both["submissions"]] == [a["submission_id"]]
+        assert both["total"] == 1
+        assert both["counts_by_status"] == {"scored": 2}
+        past = (
+            await client.get(
+                f"{_ADMIN_MC}/submissions?hotkey={_MINER.ss58_address}"
+                "&status=scored&limit=1&offset=1",
+                headers=_ADMIN,
+            )
+        ).json()
+        assert past["submissions"] == [] and past["total"] == 1
 
         detail = (
             await client.get(

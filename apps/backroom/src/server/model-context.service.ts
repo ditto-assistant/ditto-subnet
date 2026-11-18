@@ -87,18 +87,23 @@ export async function listModelContextSubmissions(rawInput: unknown) {
   const page = modelContextSubmissionListSchema.parse(
     await platformAdminRequest(`${BASE}/submissions?${params}`),
   )
-  const total = input.status
-    ? (page.counts_by_status[input.status] ?? 0)
-    : input.hotkey
+  // Platform's total counts exactly what the filters match. An older
+  // Platform omits it: counts_by_status is subnet-wide, so it bounds only a
+  // request with no hotkey filter, and a hotkey filter (with or without a
+  // status) falls back to "a full page may have more".
+  const total =
+    page.total ??
+    (input.hotkey
       ? null
-      : Object.values(page.counts_by_status).reduce((sum, count) => sum + count, 0)
+      : input.status
+        ? (page.counts_by_status[input.status] ?? 0)
+        : Object.values(page.counts_by_status).reduce((sum, count) => sum + count, 0))
   return {
     ...page,
+    total,
     limit: input.limit,
     offset: input.offset,
     returned: page.submissions.length,
-    // With a hotkey filter Platform reports subnet-wide counts only, so the
-    // page is full exactly when more may follow.
     has_more:
       total === null
         ? page.submissions.length === input.limit

@@ -723,6 +723,9 @@ class AdminModelContextSubmissionListResponse(ModelContextModel):
     submissions: list[ModelContextSubmissionSummary]
     counts_by_status: dict[str, int]
     """Every submission by status, regardless of the filter or page."""
+    total: int | None = None
+    """Submissions matching this request's filters (hotkey and status
+    together), across all pages: the bound for paging a filtered list."""
 
 
 class AdminModelContextSubmissionDetail(ModelContextModel):
