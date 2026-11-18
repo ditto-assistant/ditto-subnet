@@ -5,7 +5,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = (REPO / ".github" / "workflows" / "infra-plan-apply.yml").read_text()
-AWS_ROOTS = ("aws-generator-scorer", "aws-screener")
+AWS_ROOTS = ("aws-generator-scorer", "aws-screener", "aws-cpm-scorer")
 
 
 def _search(pattern: str, text: str) -> re.Match[str]:
@@ -14,15 +14,15 @@ def _search(pattern: str, text: str) -> re.Match[str]:
     return match
 
 
-def test_both_aws_roots_are_selectable_and_bootstrap_is_not() -> None:
+def test_aws_roots_are_selectable_and_bootstrap_is_not() -> None:
     options = _search(r"options: \[(gcp-platform[^\]]*)\]", WORKFLOW).group(1)
     roots = options.split(", ")
     for root in AWS_ROOTS:
         assert root in roots
     # The bootstrap creates the workflow's own identity; it is never a root.
     assert "aws-bootstrap" not in roots
-    # Plan and apply map both roots to their exact paths.
-    assert WORKFLOW.count("aws-generator-scorer|aws-screener)") == 2
+    # Plan and apply map every root to its exact path.
+    assert WORKFLOW.count("aws-generator-scorer|aws-screener|aws-cpm-scorer)") == 2
 
 
 def test_aws_roots_assume_oidc_roles_and_get_no_app_credentials() -> None:

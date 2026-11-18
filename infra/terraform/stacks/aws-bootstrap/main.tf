@@ -4,13 +4,14 @@
 # Owns the Terraform state bucket (imported after create-state-bucket.sh), the
 # GitHub Actions OIDC provider, and two roles that infra-plan-apply.yml
 # assumes: a plan role (read state, refresh managed resources, take the lock)
-# and an apply role (scoped mutation of the aws-generator-scorer and
-# aws-screener roots). It also owns the generator scorer's instance identity
-# (generator-scorer-identity.tf) and the on-demand screener's two identities
-# (screener.tf), so no CI root can change which roles GCP trusts or who may
-# start the screener. There are no long-lived AWS keys. Apply locally as an SSO
-# administrator; this root is deliberately not selectable in the workflow,
-# since it creates the identity that authorizes the workflow itself.
+# and an apply role (scoped mutation of the aws-generator-scorer,
+# aws-screener and aws-cpm-scorer roots). It also owns the generator scorer's
+# instance identity (generator-scorer-identity.tf), the on-demand screener's
+# two identities (screener.tf) and the CPM scorer's instance identity
+# (cpm-scorer-identity.tf), so no CI root can change which roles GCP trusts or
+# who may start the screener. There are no long-lived AWS keys. Apply locally
+# as an SSO administrator; this root is deliberately not selectable in the
+# workflow, since it creates the identity that authorizes the workflow itself.
 ###############################################################################
 
 terraform {
@@ -38,10 +39,15 @@ locals {
   # directory, its state prefix, and the `stack` default tag its provider puts
   # on every resource it creates; the CI roles' state and EC2 grants are keyed
   # on these names and nothing else.
-  ci_roots = ["aws-generator-scorer", "aws-screener"]
+  ci_roots = ["aws-generator-scorer", "aws-screener", "aws-cpm-scorer"]
 
   scorer_role_name  = "ditto-generator-scorer"
   scorer_ssm_bucket = "ditto-generator-scorer-ssm-${local.account_id}"
+
+  # Created by this root (cpm-scorer-identity.tf), only referenced by
+  # aws-cpm-scorer.
+  cpm_scorer_role_name  = "ditto-cpm-scorer"
+  cpm_scorer_ssm_bucket = "ditto-cpm-scorer-ssm-${local.account_id}"
 
   # Created by this root (screener.tf), only referenced by aws-screener.
   screener_node_role_name = "ditto-screener-node"
@@ -234,6 +240,11 @@ locals {
     "arn:aws:iam::${local.account_id}:role/${local.screener_node_role_name}",
     "arn:aws:iam::${local.account_id}:instance-profile/${local.screener_node_role_name}",
   ]
+  # The CPM scorer identity: read and pass only, never written by CI.
+  cpm_scorer_iam = [
+    "arn:aws:iam::${local.account_id}:role/${local.cpm_scorer_role_name}",
+    "arn:aws:iam::${local.account_id}:instance-profile/${local.cpm_scorer_role_name}",
+  ]
   public_amis = [
     "arn:aws:ssm:${local.region}::parameter/aws/service/debian/*",
     "arn:aws:ssm:${local.region}::parameter/aws/service/canonical/*",
@@ -296,12 +307,17 @@ data "aws_iam_policy_document" "plan" {
       "iam:ListAttachedRolePolicies",
       "iam:ListInstanceProfilesForRole",
     ]
-    resources = concat(local.scorer_iam, local.screener_node_iam)
+    resources = concat(local.scorer_iam, local.screener_node_iam, local.cpm_scorer_iam)
   }
   statement {
     sid       = "ReadScorerTransferBucket"
     actions   = ["s3:Get*", "s3:ListBucket"]
     resources = ["arn:aws:s3:::${local.scorer_ssm_bucket}"]
+  }
+  statement {
+    sid       = "ReadCpmScorerTransferBucket"
+    actions   = ["s3:Get*", "s3:ListBucket"]
+    resources = ["arn:aws:s3:::${local.cpm_scorer_ssm_bucket}"]
   }
   statement {
     sid       = "ResolvePublicAmis"
@@ -432,14 +448,15 @@ data "aws_iam_policy_document" "apply" {
   }
 
   # Every host identity is created by this root as an administrator
-  # (generator-scorer-identity.tf, screener.tf). GCP federation trusts every
-  # session of the scorer and screener node role names, and the wake role's
-  # trust decides which Google identity may start the screener, so CI must not
-  # be able to choose any of their trust policies, either by rewriting one or
-  # by deleting and recreating the role. The apply role only reads the host
-  # roles and profiles (ReadHostIdentities) and passes the two host roles to
-  # EC2; every IAM write on any of them is denied explicitly, so a later
-  # widening elsewhere in this policy cannot restore one.
+  # (generator-scorer-identity.tf, screener.tf, cpm-scorer-identity.tf). GCP
+  # federation trusts every session of the scorer and screener node role
+  # names, and the wake role's trust decides which Google identity may start
+  # the screener, so CI must not be able to choose any of their trust
+  # policies, either by rewriting one or by deleting and recreating the role.
+  # The apply role only reads the host roles and profiles
+  # (ReadHostIdentities) and passes the three host roles to EC2; every IAM
+  # write on any of them is denied explicitly, so a later widening elsewhere
+  # in this policy cannot restore one.
   statement {
     sid       = "NeverRetrustFederatedRoles"
     effect    = "Deny"
@@ -463,13 +480,15 @@ data "aws_iam_policy_document" "apply" {
     ])
   }
 
-  # Each host role may be passed to EC2 only. The wake role is never passable.
+  # Each host role (generator scorer, screener node, CPM scorer) may be passed
+  # to EC2 only. The wake role is never passable.
   statement {
     sid     = "PassHostRolesToEc2"
     actions = ["iam:PassRole"]
     resources = [
       "arn:aws:iam::${local.account_id}:role/${local.scorer_role_name}",
       "arn:aws:iam::${local.account_id}:role/${local.screener_node_role_name}",
+      "arn:aws:iam::${local.account_id}:role/${local.cpm_scorer_role_name}",
     ]
     condition {
       test     = "StringEquals"
@@ -495,12 +514,39 @@ data "aws_iam_policy_document" "apply" {
     resources = local.scorer_iam
   }
 
+  # The CPM scorer identity (cpm-scorer-identity.tf): the same denies as the
+  # generator scorer's, so CI can neither retrust it nor delete and recreate
+  # it, before or after its GCP federation lands.
+  statement {
+    sid    = "NeverWriteCpmScorerIdentity"
+    effect = "Deny"
+    actions = [
+      "iam:CreateRole", "iam:DeleteRole", "iam:UpdateRole", "iam:UpdateRoleDescription",
+      "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:UntagRole",
+      "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+      "iam:PutRolePermissionsBoundary", "iam:DeleteRolePermissionsBoundary",
+      "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile",
+      "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
+      "iam:TagInstanceProfile", "iam:UntagInstanceProfile",
+    ]
+    resources = local.cpm_scorer_iam
+  }
+
   statement {
     sid     = "ManageScorerTransferBucket"
     actions = ["s3:*"]
     resources = [
       "arn:aws:s3:::${local.scorer_ssm_bucket}",
       "arn:aws:s3:::${local.scorer_ssm_bucket}/*",
+    ]
+  }
+
+  statement {
+    sid     = "ManageCpmScorerTransferBucket"
+    actions = ["s3:*"]
+    resources = [
+      "arn:aws:s3:::${local.cpm_scorer_ssm_bucket}",
+      "arn:aws:s3:::${local.cpm_scorer_ssm_bucket}/*",
     ]
   }
 }

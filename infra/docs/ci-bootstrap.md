@@ -69,7 +69,7 @@ the same change plan.
 
 ## AWS roots
 
-AWS roots (`aws-generator-scorer` and `aws-screener`) use the same `infra-plan` and
+AWS roots (`aws-generator-scorer`, `aws-screener` and `aws-cpm-scorer`) use the same `infra-plan` and
 `infra-apply` environments. GCP auth still seals and fetches the saved plan in
 `gs://ditto-app-dev-tfstate/ci-plans/`; the plan and apply jobs then assume
 `ditto-subnet-infra-plan` or `ditto-subnet-infra-apply` in account
@@ -96,10 +96,11 @@ lifecycle and TLS-only policy, the OIDC provider, and the two roles with their
 inline policies. The plan role reads each AWS root's state, takes its lock and
 reads its resources. The apply role can also write those state objects, make
 region-scoped EC2 network/instance changes on resources carrying an
-`aws-generator-scorer` or `aws-screener` `stack` tag, read the
-`ditto-generator-scorer` and `ditto-screener-node` roles and instance profiles,
-pass those two roles to EC2 only, and manage only the scorer's SSM transfer
-bucket. It can write no IAM role or instance profile. Widen it in this root,
+`aws-generator-scorer`, `aws-screener` or `aws-cpm-scorer` `stack` tag, read
+the `ditto-generator-scorer`, `ditto-screener-node` and `ditto-cpm-scorer`
+roles and instance profiles, pass those three roles to EC2 only, and manage
+only the two scorers' SSM transfer buckets. It can write no IAM role or
+instance profile. Widen it in this root,
 reviewed, when a new AWS root is added.
 
 ### Generator scorer identity
@@ -177,6 +178,42 @@ next:
    boot checks out that exact commit and runs
    `infra/ansible/playbooks/aws-screener-node.yml` against localhost; progress
    is in `/var/log/ditto-screener-bootstrap.log` (reach it over SSM).
+
+### CPM scorer identity
+
+`aws-bootstrap` (`cpm-scorer-identity.tf`), not the CI-applied
+`aws-cpm-scorer` root, owns the `ditto-cpm-scorer` instance role (EC2 trust,
+only `AmazonSSMManagedInstanceCore` attached) and its instance profile. The CI
+apply role is denied every IAM write on both (`NeverWriteCpmScorerIdentity`,
+the same action list as the generator scorer's), so a later AWS -> GCP
+federation for the scorer's Platform bearer can trust the role name. That
+federation is not built yet.
+
+The `aws-cpm-scorer` root is a g6e.xlarge (one L40S 48 GB, logical size
+`gpu-l40s`, AWS-only) on Canonical Ubuntu 24.04 in its own VPC
+(`10.118.2.0/24`) with no ingress and TCP 80/443 egress only. First boot only
+replaces the AMI's snap SSM agent with the pinned, hash-checked release; the
+NVIDIA driver, CUDA runtime and scorer come from a later Ansible role. Each
+step is inert until the next:
+
+1. Re-apply this bootstrap locally with an SSO administrator session, keeping
+   every flag already set:
+
+   ```bash
+   terraform -chdir=infra/terraform/stacks/aws-bootstrap plan -out=bootstrap.tfplan \
+     -var enable_generator_scorer_identity=true \
+     -var enable_aws_screener=true \
+     -var screener_capacity_controller_unique_id=<numeric unique id> \
+     -var enable_cpm_scorer_identity=true
+   terraform -chdir=infra/terraform/stacks/aws-bootstrap apply bootstrap.tfplan
+   ```
+
+   Expect only the CPM role, its SSM attachment, its instance profile, and
+   in-place updates to the two CI role policies.
+2. The account's on-demand G and VT instance vCPU quota (currently 0, increase
+   to 8 requested) must cover 4 vCPU, or the launch fails.
+3. Protected `aws-cpm-scorer` plan/apply with `enable_cpm_scorer = true` in
+   that root's reviewed tfvars.
 
 ## `preview`
 

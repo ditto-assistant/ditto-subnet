@@ -1,0 +1,38 @@
+#!/bin/bash
+# First-boot only (rendered by Terraform). This host has no SSH ingress, so the
+# SSM agent is the only way in. Canonical's Ubuntu AMIs ship the agent as a
+# snap that refreshes itself from the snap store; replace it with one exact
+# release and refuse any other bytes, as the Debian hosts pin theirs. AWS
+# publishes one .deb (debian_amd64) for both Debian and Ubuntu.
+#
+# The pinned package is downloaded and verified before the snap agent is
+# removed, so a failed download leaves the host reachable for diagnosis (on
+# the AMI's stock agent) instead of unreachable. The NVIDIA driver, CUDA
+# runtime and the scorer are installed later by the Ansible role, never here.
+set -euo pipefail
+
+version='${ssm_agent_version}'
+sha256='${ssm_agent_sha256}'
+url="https://s3.${region}.amazonaws.com/amazon-ssm-${region}/$${version}/debian_amd64/amazon-ssm-agent.deb"
+
+if ! command -v curl >/dev/null; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates
+fi
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 -o "$workdir/amazon-ssm-agent.deb" "$url"
+echo "$sha256  $workdir/amazon-ssm-agent.deb" | sha256sum --check --strict
+
+# User data can run before snapd finishes seeding, and snap remove fails then.
+# Both agents would register the same instance, so the snap goes first.
+if command -v snap >/dev/null; then
+  snap wait system seed.loaded
+  if snap list amazon-ssm-agent >/dev/null 2>&1; then
+    snap remove --purge amazon-ssm-agent
+  fi
+fi
+
+dpkg -i "$workdir/amazon-ssm-agent.deb"
+systemctl enable --now amazon-ssm-agent
