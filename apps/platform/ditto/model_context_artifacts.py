@@ -110,6 +110,10 @@ def parse_manifest(text: str, settings: ModelContextSettings) -> CpmManifest:
         data = json.loads(text, object_pairs_hook=_no_duplicate_keys)
     except json.JSONDecodeError as exc:
         raise ArtifactRejected(f"manifest is not valid JSON: {exc.msg}") from exc
+    except RecursionError as exc:
+        # Adversarially deep nesting is the submission's fault: reject it
+        # instead of letting it escape as a host error and be retried.
+        raise ArtifactRejected("manifest JSON is nested too deeply") from exc
     if not isinstance(data, dict):
         raise ArtifactRejected("manifest must be a JSON object")
     try:
@@ -285,7 +289,7 @@ def read_safetensors(path: Path) -> SafetensorsFile:
         raw = handle.read(header_len)
     try:
         header = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicate_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ArtifactRejected(f"{path.name} header is not JSON") from exc
     if not isinstance(header, dict):
         raise ArtifactRejected(f"{path.name} header must be a JSON object")
@@ -392,7 +396,7 @@ def _json_file(path: Path) -> dict[str, Any]:
         raise ArtifactRejected(f"{path.name} is larger than {MAX_CONFIG_BYTES} bytes")
     try:
         data = json.loads(path.read_text("utf-8"), object_pairs_hook=_no_duplicate_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ArtifactRejected(f"{path.name} is not valid JSON") from exc
     if not isinstance(data, dict):
         raise ArtifactRejected(f"{path.name} must be a JSON object")
