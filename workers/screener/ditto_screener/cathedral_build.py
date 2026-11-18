@@ -55,7 +55,7 @@ MAX_EXEC_TIMEOUT_SECONDS = 1750
 _MAX_PARTS = 256
 _MAX_EVIDENCE_PAGES = 10_000
 _RESULT_MAX_BYTES = 65_536
-_PART_NAME = re.compile(r"image\.tar\.part-[0-9]{3}")
+_PART_NAME = re.compile(r"image\.tar\.part-[a-z]{3}")
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _SANDBOX_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -99,7 +99,7 @@ def build_command(
         f"IMG=$(docker image inspect --format '{{{{.Id}}}}' {tag})",
         "docker image save --output $OUT/image.tar $IMG",
         "ASHA=$(sha256sum $OUT/image.tar | cut -d' ' -f1); ASIZE=$(stat -c %s $OUT/image.tar)",  # noqa: E501
-        f"split -b {part_bytes} -d -a 3 $OUT/image.tar $OUT/image.tar.part-",
+        f"split -b {part_bytes} -a 3 $OUT/image.tar $OUT/image.tar.part-",
         "rm -f $OUT/image.tar",
         'PARTS=\'\'; for p in $OUT/image.tar.part-*; do s=$(sha256sum $p | cut -d\' \' -f1); n=$(stat -c %s $p); PARTS="$PARTS${PARTS:+,}{\\"name\\":\\"$(basename $p)\\",\\"sha256\\":\\"$s\\",\\"size\\":$n}"; done',  # noqa: E501
         "DV=$(docker version --format '{{.Server.Version}}'); BV=$(docker buildx version | cut -d' ' -f2)",  # noqa: E501

@@ -24,7 +24,7 @@ from .test_config import _base_env
 from .test_gate import _gate_with, _ok_run, _screen, _valid_tar
 
 _GOLDEN_SOURCE = "5ad58eb239239b70cf02dedd34a428864000d45394bc76920b5b71fd08fbfaa6"
-_GOLDEN_ARGV_SHA256 = "0cd172c0a31a6b4130113b9d6de6f986dd4f7dae609fd95c5861549a65617cc8"
+_GOLDEN_ARGV_SHA256 = "bb8ceac04c2abc4b85dfd30625f9fbbbb9976f8f061909dc784b7b18975fd776"
 _SANDBOX = "sbx-123"
 
 
@@ -54,8 +54,8 @@ class FakeCathedral:
         self.archive, self.image_id = _image_archive()
         half = len(self.archive) // 2
         self.parts = {
-            "image.tar.part-000": self.archive[:half],
-            "image.tar.part-001": self.archive[half:],
+            "image.tar.part-aaa": self.archive[:half],
+            "image.tar.part-aab": self.archive[half:],
         }
         self.calls: list[tuple[str, str]] = []
         self.create_headers: httpx.Headers | None = None
@@ -257,7 +257,7 @@ async def test_exit_91_is_a_docker_build_reject(
         {"exit_code": 1},
         {"create_status": 503},
         {"transport": True},
-        {"corrupt_part": "image.tar.part-001"},
+        {"corrupt_part": "image.tar.part-aab"},
     ],
 )
 async def test_cathedral_failures_are_retryable_infra(
