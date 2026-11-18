@@ -524,6 +524,56 @@ class ApiClient:
         result: dict[str, Any] = response.json()
         return result
 
+    # ---- /model-context (CPM competition, shadow) ------------------------
+
+    def get_model_context_upload_terms(
+        self, *, hotkey: str | None = None
+    ) -> dict[str, Any]:
+        params = {"hotkey": hotkey} if hotkey is not None else None
+        response = self._request(
+            "GET", "/api/v1/model-context/upload-terms", params=params
+        )
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="model-context upload terms")
+            )
+        result: dict[str, Any] = response.json()
+        return result
+
+    def post_model_context_submission(self, body: dict[str, Any]) -> dict[str, Any]:
+        response = self._request("POST", "/api/v1/model-context/submissions", json=body)
+        if response.status_code != 200:
+            message = _format_error(response, prefix="model-context submit")
+            if response.status_code in _RETRYABLE_UPLOAD_STATUS_CODES:
+                raise TransientApiError(message)
+            raise ApiResponseError(message)
+        result: dict[str, Any] = response.json()
+        return result
+
+    def list_model_context_submissions(
+        self, *, hotkey: str, limit: int = 25
+    ) -> dict[str, Any]:
+        response = self._request(
+            "GET",
+            "/api/v1/model-context/submissions",
+            params={"hotkey": hotkey, "limit": limit},
+        )
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="model-context submissions")
+            )
+        result: dict[str, Any] = response.json()
+        return result
+
+    def get_model_context_board(self) -> dict[str, Any]:
+        response = self._request("GET", "/api/v1/model-context/board")
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="model-context board")
+            )
+        result: dict[str, Any] = response.json()
+        return result
+
     # ---- /name-claims ---------------------------------------------------
 
     def list_name_claims(self) -> NameClaimListResponse:

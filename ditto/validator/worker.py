@@ -48,6 +48,7 @@ from ditto.api_models.generator_round_validator import (
     GeneratorRoundCaseResult,
     GeneratorRoundJobResponse,
 )
+from ditto.api_models.model_context_ledger import ModelContextLedgerResponse
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import HostSpecs
@@ -140,6 +141,7 @@ from ditto.validator.telemetry import (
 from ditto.validator.tracks import (
     TRACK_GENERATOR,
     TRACK_MEMORY,
+    TRACK_MODEL_CONTEXT,
     MemoryFoldParams,
     TrackFoldInputs,
     TrackRegistry,
@@ -172,6 +174,7 @@ from ditto.validator.weights import (
     owner_burn_destination_required,
     reign_seed_planning,
     resolve_miner_emission_share,
+    resolve_model_context_rank_shares,
     resolve_track_shares,
     select_champion,
     split_unpaid_share,
@@ -992,6 +995,32 @@ class PlatformGeneratorLedgerSource:
             return None
 
 
+class PlatformModelContextLedgerSource:
+    """Read of the model_context (CPM) ledger Platform publishes.
+
+    Returns ``None`` when the read fails. The track ships in shadow at 0 bps,
+    so the worker folds an empty ledger and the memory weight update proceeds
+    unchanged. Only if a later release made the track pay a governed share
+    would a failed read skip the epoch, exactly like the generator track.
+    """
+
+    def __init__(
+        self, read: Callable[[], Awaitable[ModelContextLedgerResponse]]
+    ) -> None:
+        self._read = read
+
+    async def fetch(self) -> ModelContextLedgerResponse | None:
+        try:
+            return await self._read()
+        except Exception:
+            logger.warning(
+                "model_context ledger read failed this epoch; folding an empty "
+                "ledger (shadow track, no weight change)",
+                exc_info=True,
+            )
+            return None
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -1010,6 +1039,7 @@ class ValidatorWorker:
         after_score: Callable[[UUID, int], None] | None = None,
         router_ledger_source: RouterLedgerSource | None = None,
         generator_ledger_source: PlatformGeneratorLedgerSource | None = None,
+        model_context_ledger_source: PlatformModelContextLedgerSource | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -1062,6 +1092,8 @@ class ValidatorWorker:
         )
         # None folds an empty generator ledger (the shadow default).
         self._generator_ledger_source = generator_ledger_source
+        # None folds an empty model_context ledger (the track is shadow).
+        self._model_context_ledger_source = model_context_ledger_source
         self._platform_accepted = False
         self._bootstrap_resume_ready = False
         # Cooperative updater drains are acknowledged only after both the
@@ -2924,6 +2956,8 @@ class ValidatorWorker:
             router_weight_eligible=self._config.router_weight_eligible,
             generator_state=TrackState(self._config.generator_track_state),
             generator_weight_eligible=self._config.generator_weight_eligible,
+            model_context_state=TrackState(self._config.model_context_track_state),
+            model_context_weight_eligible=self._config.model_context_weight_eligible,
         )
         router_ledger = await self._get_router_ledger()
         # None only for chain fakes without a metagraph read; a live read
@@ -2951,6 +2985,25 @@ class ValidatorWorker:
             # No generator share (shadow, or the compiled 0 bps default): the
             # track pays nothing, so an empty ledger changes no weight.
             generator_ledger = GeneratorLedgerResponse(count=0)
+        model_context_ledger = (
+            await self._model_context_ledger_source.fetch()
+            if self._model_context_ledger_source is not None
+            else ModelContextLedgerResponse()
+        )
+        if model_context_ledger is None:
+            if registry.shares_bps().get(TRACK_MODEL_CONTEXT, 0) > 0:
+                # Unreachable while the track is shadow (its effective share
+                # is 0 bps whatever Platform serves). Kept so a release that
+                # pays the track cannot fold an empty ledger and diverge from
+                # validators whose read succeeded.
+                logger.warning(
+                    "model_context ledger unavailable while the track holds a "
+                    "governed share; weights unchanged this epoch"
+                )
+                return _WeightOutcome(leaderboard=leaderboard)
+            # Shadow / 0 bps: the track pays nothing, so the memory weight
+            # update goes ahead exactly as if the ledger were empty.
+            model_context_ledger = ModelContextLedgerResponse()
         fold_inputs = TrackFoldInputs(
             memory_entries=registered_entries,
             memory_params=MemoryFoldParams(
@@ -2987,6 +3040,19 @@ class ValidatorWorker:
                 )
             ),
             generator_rank_shares=self._config.generator_rank_shares,
+            model_context_entries=tuple(
+                e
+                for e in model_context_ledger.entries
+                if (registered_hotkeys is None or e.hotkey in registered_hotkeys)
+                and (
+                    not isinstance(treasury_pin, EnforcingTreasuryPin)
+                    or e.hotkey != treasury_pin.policy.collector_hotkey
+                )
+            ),
+            model_context_rank_shares=resolve_model_context_rank_shares(
+                model_context_ledger.rank_shares,
+                default=self._config.model_context_rank_shares,
+            ),
         )
         track_vectors = {
             track.track_id: track.fold(fold_inputs) for track in registry.tracks

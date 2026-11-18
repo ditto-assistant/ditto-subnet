@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ditto.api_models.generator_ledger import GeneratorLedgerEntry
+    from ditto.api_models.model_context_ledger import ModelContextLedgerEntry
     from ditto.api_models.router_ledger import RouterLedgerEntry
     from ditto.api_models.validator import LedgerEntry, LedgerResponse
 
@@ -355,6 +356,79 @@ def compute_generator_weights(
     return {
         entry.miner_hotkey: rank_shares[index]
         for index, entry in enumerate(distinct[: len(rank_shares)])
+    }
+
+
+def resolve_model_context_rank_shares(
+    served: Sequence[float] | None, *, default: Sequence[float]
+) -> tuple[float, ...]:
+    """The model_context payout curve: the ledger's when usable, else ``default``.
+
+    Platform's settings allow ``rank_shares`` in ``[0, 1]`` that sum to at
+    most one and never increase with rank, so a served zero is a deliberate
+    "this rank earns nothing". A curve the fold could not use (empty,
+    non-finite, negative, or all zero) is ignored rather than raised: every
+    validator ignores it identically and folds ``default``.
+    """
+    if not served:
+        return tuple(default)
+    try:
+        shares = tuple(float(share) for share in served)
+    except (TypeError, ValueError):
+        return tuple(default)
+    if any(not math.isfinite(share) or share < 0.0 for share in shares) or not any(
+        share > 0.0 for share in shares
+    ):
+        return tuple(default)
+    return shares
+
+
+def compute_model_context_weights(
+    entries: Sequence[ModelContextLedgerEntry], *, rank_shares: Sequence[float]
+) -> dict[str, float]:
+    """Rank model_context (CPM) submissions by the scorer's season score.
+
+    Platform has already scored every active submission on the season's seeds
+    and marked ``eligible`` the ones that clear their base's floor plus
+    ``floor_margin`` (contract ``docs/research/cpm/competition-v1.md`` section
+    4.5). This fold ranks only eligible entries with a positive score, by
+    score descending, then ``commitment_block`` ascending (the earlier
+    on-chain commitment wins a tie, contract section 3.1), then
+    ``submission_id``, keeps one slot per hotkey, and assigns ``rank_shares``
+    by position. A rank whose share is zero gets no entry.
+
+    Like the router and generator folds it runs on the consensus
+    ``put_weights`` path and must never raise: malformed ``rank_shares`` fold
+    to ``{}``.
+    """
+    if not rank_shares or any(
+        not math.isfinite(share) or share < 0.0 for share in rank_shares
+    ):
+        return {}
+    scored = [
+        entry
+        for entry in entries
+        if entry.eligible and math.isfinite(entry.score) and entry.score > 0.0
+    ]
+    ranked = sorted(
+        scored,
+        key=lambda entry: (
+            -entry.score,
+            entry.commitment_block,
+            str(entry.submission_id),
+        ),
+    )
+    distinct: list[ModelContextLedgerEntry] = []
+    seen_hotkeys: set[str] = set()
+    for entry in ranked:
+        if entry.hotkey in seen_hotkeys:
+            continue
+        seen_hotkeys.add(entry.hotkey)
+        distinct.append(entry)
+    return {
+        entry.hotkey: rank_shares[index]
+        for index, entry in enumerate(distinct[: len(rank_shares)])
+        if rank_shares[index] > 0.0
     }
 
 
