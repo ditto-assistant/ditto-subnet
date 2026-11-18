@@ -425,9 +425,14 @@ the era changes: it reuses the proof and sends no new transfer. If the
 transfer's outcome is unknown (the CLI timed out before finalization), the
 rerun refuses to pay again. Find the transfer in your coldkey history and pass
 it with `--payment-block-hash`, `--payment-block-number` and
-`--payment-extrinsic-index`. Only if no transfer was made, pass
+`--payment-extrinsic-index`. The CLI reads it on chain and accepts it only if
+it is that transfer: from your coldkey, to the recorded address, for the
+recorded amount. Only if no transfer was made, pass
 `--discard-unconfirmed-payment` to start over. The record is removed only once
-Platform admits the agent, credits the payment, or rejects that proof.
+Platform admits the agent, credits the payment, or rejects that proof. Only
+one `ditto readmit` per agent runs at a time; a second one refuses before
+anything is paid. If the CLI config file is damaged, `ditto readmit` refuses
+and leaves the file untouched until you repair it.
 
 **Refusals after payment.** If Platform can only discover a refusal after you
 paid (a rollout opened, the agent was withdrawn), it keeps your payment as an

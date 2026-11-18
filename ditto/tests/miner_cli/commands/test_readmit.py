@@ -8,6 +8,14 @@ transfers whose outcome is unknown.
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import replace as replace_state
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,7 +27,10 @@ import pytest
 from ditto.miner_cli.commands import readmit as readmit_cmd
 from ditto.miner_cli.errors import MinerCliError, ReadmissionPaymentRejectedError
 from ditto.miner_cli.models import PaymentReceipt
+from ditto.miner_cli.payment import ChainTransfer
 from ditto.miner_cli.preferences import (
+    PreferencesUnreadableError,
+    ReadmissionBusyError,
     ReadmissionRecord,
     load_pending_payments_for_hotkey,
     load_readmission_record,
@@ -28,6 +39,7 @@ from ditto.miner_cli.preferences import (
 from ditto.miner_cli.signing import build_readmission_payload
 
 _KEY = bittensor.Keypair.create_from_uri("//Bob")
+_COLD = bittensor.Keypair.create_from_uri("//Alice").ss58_address
 _AGENT = UUID("7c9e6679-7425-40de-944b-e07fc1f90ae7")
 _BLOCK = "0x" + "ab" * 32
 _TERMS = {
@@ -103,7 +115,9 @@ def _args(**overrides: Any) -> argparse.Namespace:
 
 def _install(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     handle = SimpleNamespace(hotkey_ss58=_KEY.ss58_address)
-    wallet = SimpleNamespace(hotkey=_KEY)
+    wallet = SimpleNamespace(
+        hotkey=_KEY, coldkeypub=SimpleNamespace(ss58_address=_COLD)
+    )
     monkeypatch.setattr(readmit_cmd, "load_wallet", lambda **_kw: (handle, wallet))
     monkeypatch.setattr(readmit_cmd, "ApiClient", _FakeClient)
     _FakeClient.checks = []
@@ -127,7 +141,53 @@ def _install(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         return PaymentReceipt(block_hash=_BLOCK, block_number=77, extrinsic_index=3)
 
     monkeypatch.setattr(readmit_cmd, "submit_eval_payment", _pay)
+
+    def _no_chain(**_kw: Any) -> ChainTransfer:
+        raise AssertionError("no chain read expected")
+
+    monkeypatch.setattr(readmit_cmd, "read_transfer", _no_chain)
     return calls
+
+
+def _transfer(**overrides: Any) -> ChainTransfer:
+    """The on-chain transfer the fake check reserved, finalized just now."""
+    values: dict[str, Any] = {
+        "call": "Balances.transfer_keep_alive",
+        "signer": _COLD,
+        "dest": "5Dest",
+        "amount_rao": 75_000_000,
+        "timestamp_ms": int(time.time() * 1000),
+    }
+    values.update(overrides)
+    return ChainTransfer(**values)
+
+
+def _chain(
+    monkeypatch: pytest.MonkeyPatch, transfer: ChainTransfer | Exception
+) -> None:
+    def _read(**_kw: Any) -> ChainTransfer:
+        if isinstance(transfer, Exception):
+            raise transfer
+        return transfer
+
+    monkeypatch.setattr(readmit_cmd, "read_transfer", _read)
+
+
+def _paying() -> ReadmissionRecord:
+    return ReadmissionRecord(
+        agent_id=str(_AGENT),
+        bench_version=19,
+        state="paying",
+        token="00000000-0000-4000-8000-000000000009",
+        amount_rao=75_000_000,
+        send_address="5Dest",
+    )
+
+
+def _store(record: ReadmissionRecord) -> None:
+    assert save_readmission_record(
+        network="local", hotkey=_KEY.ss58_address, record=record
+    )
 
 
 def _record() -> ReadmissionRecord | None:
@@ -429,7 +489,7 @@ def test_recovery_flags_never_drop_a_different_saved_payment(
     with pytest.raises(RuntimeError):
         readmit_cmd.run(_args())
     calls = _install(monkeypatch)
-    with pytest.raises(MinerCliError, match="different finalized readmission payment"):
+    with pytest.raises(MinerCliError, match="differs from these --payment"):
         readmit_cmd.run(_args(**_flags(_OTHER)))
     assert _FakeClient.commits == [] and not any("pay" in c for c in calls)
     assert _saved() == _PROOF
@@ -461,8 +521,10 @@ def test_an_unconfirmed_transfer_is_never_paid_twice(
         readmit_cmd.run(_args())
     assert not any("pay" in c for c in calls) and _FakeClient.checks == []
 
-    # Its proof, once found in the coldkey history, resolves it.
+    # Its proof, once found in the coldkey history and matched on chain,
+    # resolves it.
     _install(monkeypatch)
+    _chain(monkeypatch, _transfer())
     assert readmit_cmd.run(_args(**_flags(_PROOF))) == 0
     assert _FakeClient.commits[0]["admission_token"] == (
         "00000000-0000-4000-8000-000000000009"
@@ -473,16 +535,7 @@ def test_an_unconfirmed_transfer_is_never_paid_twice(
 def test_discarding_an_unconfirmed_transfer_is_explicit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    save_readmission_record(
-        network="local",
-        hotkey=_KEY.ss58_address,
-        record=ReadmissionRecord(
-            agent_id=str(_AGENT),
-            bench_version=19,
-            state="paying",
-            amount_rao=75_000_000,
-        ),
-    )
+    _store(_paying())
     calls = _install(monkeypatch)
     assert readmit_cmd.run(_args(discard_unconfirmed_payment=True)) == 0
     assert any("pay" in c for c in calls) and len(_FakeClient.checks) == 1
@@ -531,3 +584,237 @@ def test_tokenless_flag_recovery_commits_without_a_token(
     [commit] = _FakeClient.commits
     assert "admission_token" not in commit
     assert commit["bench_version"] == 19
+
+
+# --- second review round (SN-485 #3563): locking, matching, truthful state --
+
+
+def test_two_concurrent_readmits_send_exactly_one_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """4607476522: two runs racing past the first read cannot both pay.
+
+    The first run is held inside its eligibility check, after it read "no
+    record" and before it writes anything, which is exactly the window in
+    which a second run used to read "no record" too and go on to pay.
+    """
+    calls = _install(monkeypatch)
+    checking = threading.Event()
+    release = threading.Event()
+    real_check = _FakeClient.post_readmission_check
+
+    def _held_check(self: _FakeClient, body: dict[str, Any]) -> dict[str, Any]:
+        if not checking.is_set():
+            checking.set()
+            assert release.wait(10)
+        return real_check(self, body)
+
+    monkeypatch.setattr(_FakeClient, "post_readmission_check", _held_check)
+    outcomes: dict[str, object] = {}
+
+    def _race(name: str) -> None:
+        try:
+            outcomes[name] = readmit_cmd.run(_args())
+        except BaseException as error:  # noqa: BLE001 - recorded for the assert
+            outcomes[name] = error
+
+    first = threading.Thread(target=_race, args=("first",))
+    first.start()
+    assert checking.wait(10), "the first run never reached its check"
+    second = threading.Thread(target=_race, args=("second",))
+    second.start()
+    second.join(10)
+    release.set()
+    first.join(10)
+
+    assert sum("pay" in c for c in calls) == 1
+    assert outcomes["first"] == 0
+    assert isinstance(outcomes["second"], ReadmissionBusyError)
+    assert "nothing was sent" in str(outcomes["second"])
+    assert len(_FakeClient.checks) == 1 and len(_FakeClient.commits) == 1
+    assert _record() is None
+
+
+def test_another_process_holding_the_agent_lock_blocks_payment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The lock is an OS lock: a separate process holding it stops this run."""
+    ready = tmp_path / "ready"
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import pathlib, sys, time\n"
+            "from ditto.miner_cli.preferences import readmission_lock\n"
+            "with readmission_lock(network='local', hotkey=sys.argv[1], "
+            "agent_id=sys.argv[2]):\n"
+            "    pathlib.Path(sys.argv[3]).touch()\n"
+            "    time.sleep(30)\n",
+            _KEY.ss58_address,
+            str(_AGENT),
+            str(ready),
+        ],
+        env=os.environ.copy(),
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not ready.exists():
+            assert holder.poll() is None, "the lock holder exited early"
+            assert time.monotonic() < deadline, "the lock holder never started"
+            time.sleep(0.05)
+        calls = _install(monkeypatch)
+        with pytest.raises(ReadmissionBusyError, match="nothing was sent"):
+            readmit_cmd.run(_args())
+        assert not any("pay" in c for c in calls) and _FakeClient.checks == []
+    finally:
+        holder.kill()
+        holder.wait()
+    # Released by the kernel when the holder dies.
+    _install(monkeypatch)
+    assert readmit_cmd.run(_args()) == 0
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        {"amount_rao": 50_000_000},
+        {"dest": "5Elsewhere"},
+        {"signer": _KEY.ss58_address},
+        {"call": "Balances.transfer_all"},
+        {"timestamp_ms": int(datetime(2026, 1, 1, tzinfo=UTC).timestamp() * 1000)},
+        "unreachable",
+    ],
+)
+def test_recovery_flags_must_be_the_unconfirmed_transfer(
+    monkeypatch: pytest.MonkeyPatch, mismatch: dict[str, Any] | str
+) -> None:
+    """4607477001: a `paying` record is resolved only by its own transfer."""
+    _store(_paying())
+    calls = _install(monkeypatch)
+    _chain(
+        monkeypatch,
+        readmit_cmd.PaymentSubmissionError("node down")
+        if mismatch == "unreachable"
+        else _transfer(**mismatch),  # type: ignore[arg-type]
+    )
+    with pytest.raises(MinerCliError, match="unconfirmed transfer record is kept"):
+        readmit_cmd.run(_args(**_flags(_OTHER)))
+    assert _FakeClient.commits == [] and not any("pay" in c for c in calls)
+    record = _record()
+    assert record is not None and record.state == "paying"
+    assert record.payment is None
+
+
+def test_an_unrelated_proof_can_never_clear_the_unconfirmed_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """4607477001: even if Platform would reject it, an unrelated proof never
+    reaches the commit, so its rejection cannot clear the `paying` record."""
+    _store(_paying())
+    _install(monkeypatch)
+    _chain(monkeypatch, _transfer(amount_rao=1))
+    _FakeClient.commit = ReadmissionPaymentRejectedError("3207 spent proof")
+    with pytest.raises(MinerCliError):
+        readmit_cmd.run(_args(**_flags(_OTHER)))
+    record = _record()
+    assert record is not None and record.state == "paying"
+
+
+def test_an_era_mismatch_states_the_saved_payment_truthfully(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """4607477458: never "no payment was sent" when a payment is saved."""
+    _store(replace_state(_paying(), state="paid", payment=_PROOF))
+    calls = _install(monkeypatch)
+    with pytest.raises(MinerCliError) as caught:
+        readmit_cmd.run(_args(bench_version=20))
+    message = str(caught.value)
+    assert "finalized readmission payment is saved for v19" in message
+    assert "no payment was sent" not in message
+    assert "record is kept" in message
+    assert _saved() == _PROOF and not any("pay" in c for c in calls)
+
+    _store(_paying())
+    _install(monkeypatch)
+    with pytest.raises(MinerCliError) as caught:
+        readmit_cmd.run(_args(bench_version=20, **_flags(_PROOF)))
+    assert "unconfirmed readmission transfer" in str(caught.value)
+    assert "it may have gone through" in str(caught.value)
+
+
+def test_a_rejected_own_proof_is_removed_even_when_its_save_failed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """4607478277: the `paying` record of this run's own transfer is resolved
+    by Platform's rejection, and the message says what really happened."""
+    _install(monkeypatch)
+    real_save = readmit_cmd.save_readmission_record
+    monkeypatch.setattr(
+        readmit_cmd,
+        "save_readmission_record",
+        lambda **kw: kw["record"].state != "paid" and real_save(**kw),
+    )
+    _FakeClient.commit = ReadmissionPaymentRejectedError("3201 not found")
+    with pytest.raises(ReadmissionPaymentRejectedError):
+        readmit_cmd.run(_args())
+    assert _record() is None
+    assert "its local record was removed" in capsys.readouterr().err
+
+
+def test_a_rejected_proof_that_was_not_removed_is_reported_as_kept(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """4607478277: when the record survives, the CLI says so and why."""
+    _install(monkeypatch)
+    monkeypatch.setattr(readmit_cmd, "clear_readmission_record", lambda **_kw: False)
+    _FakeClient.commit = ReadmissionPaymentRejectedError("3201 not found")
+    with pytest.raises(ReadmissionPaymentRejectedError):
+        readmit_cmd.run(_args())
+    err = capsys.readouterr().err
+    assert "was not removed" in err and "removed. Rerunning" not in err
+    assert "finalized readmission payment is saved for v19" in err
+    assert _saved() == _PROOF
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        {"state": "paid", "block_hash": "0x12"},
+        {"state": "paid"},
+        {"state": "paying"},
+        {"state": "settled"},
+        "not an object",
+    ],
+)
+def test_a_malformed_record_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, corrupt: dict[str, Any] | str
+) -> None:
+    """4607478844: a malformed record is never read as "no record"."""
+    key = f"local:{_KEY.ss58_address}:{_AGENT}"
+    value: object = (
+        {"agent_id": str(_AGENT), "bench_version": 19, **corrupt}
+        if isinstance(corrupt, dict)
+        else corrupt
+    )
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"pending_readmissions": {key: value}}))
+    before = config.read_text()
+    calls = _install(monkeypatch)
+    with pytest.raises(PreferencesUnreadableError, match=str(config)):
+        readmit_cmd.run(_args())
+    with pytest.raises(PreferencesUnreadableError):
+        readmit_cmd.run(_args(discard_unconfirmed_payment=True))
+    assert not any("pay" in c for c in calls) and _FakeClient.checks == []
+    assert config.read_text() == before
+
+
+def test_an_unparseable_config_fails_closed_and_is_never_overwritten(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = tmp_path / "config.json"
+    config.write_text('{"pending_readmissions": {')
+    calls = _install(monkeypatch)
+    with pytest.raises(PreferencesUnreadableError, match="not valid JSON"):
+        readmit_cmd.run(_args())
+    assert not any("pay" in c for c in calls)
+    assert config.read_text() == '{"pending_readmissions": {'

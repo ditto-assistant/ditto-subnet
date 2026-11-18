@@ -411,3 +411,72 @@ class TestSubmitEvalPayment:
         )
 
         assert captured == {"network": "finney"}
+
+
+class TestReadTransfer:
+    """The read-only lookup ``ditto readmit`` uses to match recovery flags."""
+
+    _HASH = "0x" + "ab" * 32
+
+    def _substrate(self, *, canonical: str, dest: object) -> MagicMock:
+        alice = bittensor.Keypair.create_from_uri("//Alice")
+        extrinsic = MagicMock()
+        extrinsic.value = {
+            "address": "0x" + bytes(alice.public_key or b"").hex(),
+            "call": {
+                "call_module": "Balances",
+                "call_function": "transfer_keep_alive",
+                "call_args": [
+                    {"name": "dest", "type": "AccountIdLookupOf", "value": dest},
+                    {"name": "value", "type": "Compact<Balance>", "value": 75},
+                ],
+            },
+        }
+        substrate = MagicMock()
+        substrate.get_block_hash.return_value = canonical
+        substrate.get_extrinsics.return_value = [MagicMock(), extrinsic]
+        substrate.query.return_value = MagicMock(value=1_763_000_000_000)
+        return substrate
+
+    def _read(self, monkeypatch: pytest.MonkeyPatch, substrate: MagicMock):  # type: ignore[no-untyped-def]
+        from ditto.miner_cli import payment
+
+        monkeypatch.setattr(
+            payment, "_connect_subtensor", lambda _t: MagicMock(substrate=substrate)
+        )
+        return payment.read_transfer(
+            receipt=PaymentReceipt(
+                block_hash=self._HASH, block_number=77, extrinsic_index=1
+            ),
+            subtensor_network="local",
+        )
+
+    def test_decodes_signer_dest_amount_and_time(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bob = bittensor.Keypair.create_from_uri("//Bob")
+        substrate = self._substrate(
+            canonical=self._HASH, dest={"Id": "0x" + bytes(bob.public_key or b"").hex()}
+        )
+        transfer = self._read(monkeypatch, substrate)
+        assert transfer.call == "Balances.transfer_keep_alive"
+        assert (
+            transfer.signer == bittensor.Keypair.create_from_uri("//Alice").ss58_address
+        )
+        assert transfer.dest == bob.ss58_address
+        assert transfer.amount_rao == 75
+        assert transfer.timestamp_ms == 1_763_000_000_000
+        substrate.get_block_hash.assert_called_once_with(77)
+
+    def test_a_hash_from_another_block_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        substrate = self._substrate(canonical="0x" + "cd" * 32, dest="5Dest")
+        with pytest.raises(PaymentSubmissionError, match="block 77 is"):
+            self._read(monkeypatch, substrate)
+
+    def test_a_missing_index_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        substrate = self._substrate(canonical=self._HASH, dest="5Dest")
+        substrate.get_extrinsics.return_value = []
+        with pytest.raises(PaymentSubmissionError, match="no extrinsic 1"):
+            self._read(monkeypatch, substrate)
