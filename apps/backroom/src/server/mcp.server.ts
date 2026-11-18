@@ -139,6 +139,27 @@ import {
   rotateGeneratorProbeInputSchema,
   setGeneratorSettingsInputSchema,
 } from '../lib/generator-competition.schemas'
+import {
+  fetchModelContextBoard,
+  fetchModelContextRun,
+  fetchModelContextScorer,
+  fetchModelContextSettings,
+  fetchModelContextSubmission,
+  listModelContextSubmissions,
+  rejectModelContextSubmission,
+  rescoreModelContextSubmission,
+  rotateModelContextSeason,
+  setModelContextSettings,
+} from './model-context.service'
+import {
+  listModelContextSubmissionsInputSchema,
+  modelContextRunIdInputSchema,
+  modelContextSubmissionIdInputSchema,
+  rejectModelContextInputSchema,
+  rescoreModelContextInputSchema,
+  rotateModelContextSeasonInputSchema,
+  setModelContextSettingsInputSchema,
+} from '../lib/model-context.schemas'
 import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, fetchV13ScorerCohortHistory, fetchV13ReportOnlyCurrentPacket, activateV13ScorerCohort, rotateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 import { observerGrant } from './treasury-observer-access.server'
@@ -876,6 +897,16 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   rotate_generator_probe_seed: 'Retire the probe seed; every active generator re-qualifies.',
   list_generator_promotion_candidates: 'Discriminating round cases, highest credit first.',
   get_generator_board: 'Read the shadow generator ledger (weight_eligible=false).',
+  get_model_context_settings: 'Read model_context (CPM) policy, mode and optional history.',
+  set_model_context_settings: 'Write complete CPM policy with CAS and APPLY MODEL CONTEXT COMPETITION {MODE}.',
+  list_model_context_submissions: 'Page CPM submissions with latest run; filter hotkey/status.',
+  get_model_context_submission: 'Read one CPM submission: manifest, screening, runs, operator audit.',
+  get_model_context_run: 'Read one CPM run: score, components, per-seed, fault, season floor.',
+  rescore_model_context_submission: 'Queue another run of an active CPM submission; RESCORE MODEL CONTEXT SUBMISSION.',
+  reject_model_context_submission: 'Reject a CPM submission by ruling; REJECT MODEL CONTEXT SUBMISSION.',
+  get_model_context_board: 'Read the CPM board and its open season: seeds, floors, eligibility.',
+  get_model_context_scorer: 'Read CPM scorer heartbeats, run backlog and season loop.',
+  rotate_model_context_season: 'Open the next CPM season now; ROTATE MODEL CONTEXT SEASON. Write.',
   list_generator_rounds: 'Page chain-epoch generator rounds with schedule and counts by status.',
   list_generator_prescreens: 'Page pre-screen batches (never paid; order the challenger queue).',
   get_generator_round: 'Read one round: columns, panel and drops, generation, leases, results, pending agents, matrix.',
@@ -1952,6 +1983,71 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Return a rejected generator to active for a fresh qualification run on fresh secret seeds. Use it when the rejection was not the generator\'s fault, for example a stale scorer that refused the requested case count. It holds no round column until it qualifies again. expectedStatus must be rejected and expectedStatusReason the exact status_reason from get_generator_submission (null when none); reinstate_blockers there lists every guard that would refuse. Refused while the hotkey has another active or a newer submission (one active generator per hotkey; a newer upload is the miner\'s choice), for a second active public default, and for an operator ruling (reject_generator_submission) unless overrideOperatorRuling is true. The confirmation is REINSTATE GENERATOR SUBMISSION. Audited with the previous status_reason. Requires backroom:write.',
     inputSchema: reinstateGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', false),
   }, async (input) => write(() => reinstateGenerator(input, props.session.email)))
+
+  // model_context (CPM) competition, contract #3572 section 8. Weights and
+  // season seeds are public by contract, so every read is plain read scope;
+  // writes are write scope, confirmation-gated, and audited by Platform under
+  // the operator's email.
+  registerTool('get_model_context_settings', {
+    title: 'Get model_context settings',
+    description: 'Read the model_context (CPM) competition policy: mode (off refuses uploads, opens no season, leases nothing and serves an empty ledger; shadow runs the lane with a ledger validators fold to nothing; enforce runs it identically, and the track pays nothing until a validator release pays model_context and an owner sets its share), base_allowlist (each allowlisted Qwen3.5 base: base_id, Hugging Face repo and pinned revision, parameter count, architectures, LoRA target modules), max_lora_rank, max_total_bytes, upload_cooldown_seconds, upload_fee_required (always false in v1: the fee path is not built), season_days, floor_margin (a submission is eligible at floor(base) + floor_margin), budget_tokens and tool_k (the scorer task), rank_shares, bench_version (the DittoBench version a newly opened season pins), lease_ttl_seconds and max_attempts (scorer leases). Returns the effective revision (0 = shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
+    inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
+  }, async ({ historyLimit, historyOffset }) =>
+    result(compacted(pageRevisionHistory(await fetchModelContextSettings(), historyLimit, historyOffset), REVISION_LISTS)))
+
+  registerTool('set_model_context_settings', {
+    title: 'Set model_context settings',
+    description: 'Append one whole-object revision of the model_context (CPM) competition policy. Send every field (read get_model_context_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY MODEL CONTEXT COMPETITION <MODE>" naming the mode this revision applies. upload_fee_required must stay false (v1 has no fee path; Platform refuses true). rank_shares must not increase with rank and must sum to at most 1; base ids must be unique. Moving off -> shadow opens uploads, and the next season-loop tick opens season 1 on the finalized head; moving to off closes uploads, stops leasing and empties the ledger, but keeps every submission and season. mode=enforce moves no emission until a validator release pays model_context and an owner sets its track share. Returns the revision this write created. Requires backroom:write.',
+    inputSchema: setModelContextSettingsInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => setModelContextSettings(input, props.session.email)))
+
+  registerTool('list_model_context_submissions', {
+    title: 'List model_context submissions',
+    description: 'Newest-first model_context submissions across every hotkey: hotkey, Hugging Face repo and pinned revision, manifest and weights SHA-256, base, kind (lora or full), commitment block (its priority), status (screening: Platform is downloading and statically screening the pinned revision; queued: the hotkey\'s active submission waiting for its season run; scored; rejected with reject_reason naming a screening refusal, duplicate_weights, a scorer model_load/invalid_model verdict or an operator ruling; superseded by a newer submission of the hotkey), model_url, and the latest run. Filter by hotkey or status; counts_by_status counts every submission regardless of the filter. Requires backroom:read.',
+    inputSchema: listModelContextSubmissionsInputSchema, annotations: toolAnnotations('read'),
+  }, async (input) => result(await listModelContextSubmissions(input)))
+
+  registerTool('get_model_context_submission', {
+    title: 'Get model_context submission',
+    description: 'One model_context submission: its summary, the exact manifest the miner committed, total bytes, the screening detail (what the static screen found: tensor and parameter counts, LoRA rank and target modules or full-model architectures, file count and bytes), screening attempts and lease, every run newest first (status, score, components, per-seed results, scorer, GPU SKU, attempts, fault; the run lease id is never served), and the operator audit (every rescore and rejection with actor, reason and detail). Requires backroom:read.',
+    inputSchema: modelContextSubmissionIdInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchModelContextSubmission(input)))
+
+  registerTool('get_model_context_run', {
+    title: 'Get model_context run',
+    description: 'One model_context run, a submission run or a reference run (an unmodified base whose score is that base\'s season floor): kind, base, season, status (queued, leased, scored, failed, abandoned), score, components (memory_recall, distractor_rate, tool_recall, case counts, packed tokens), per-seed results with their public uint64 seeds, scorer id and version, GPU SKU, lease attempts and expiry, fault (infra faults re-queue until max_attempts; nondeterministic fails the run; model_load and invalid_model also reject the submission), the submission it scored, its season (open block, hash, seeds, floors) and the base floor. Requires backroom:read.',
+    inputSchema: modelContextRunIdInputSchema.extend({ runId: sourceAgentId() }), annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchModelContextRun(input)))
+
+  registerTool('rescore_model_context_submission', {
+    title: 'Rescore model_context submission',
+    description: 'Queue one more run of an active (queued or scored) model_context submission in the open season, for a run that failed or was abandoned for a reason that was not the model\'s (a nondeterministic verdict traced to the scorer host, exhausted infra leases). The submission keeps its status; a score it already has this season stays on the board until the new run lands, and then the latest scored run stands. Refused while mode is off, when no season is open, or while a run of it is already queued or leased. expectedStatus must match the current status, the confirmation is RESCORE MODEL CONTEXT SUBMISSION, and the reason is audited. Requires backroom:write.',
+    inputSchema: rescoreModelContextInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => rescoreModelContextSubmission(input, props.session.email)))
+
+  registerTool('reject_model_context_submission', {
+    title: 'Reject model_context submission',
+    description: 'Reject one model_context submission by operator ruling, for example a copy screening missed (same weights under a perturbation), a manifest that misstates its training data, or abuse. It leaves the board and the validator ledger at once, its queued or leased runs are abandoned (a scorer\'s late result is refused), and a submission still screening is never queued. The hotkey\'s earlier superseded submission is not restored; the miner can submit again after the cooldown. expectedStatus must match the current status, the confirmation is REJECT MODEL CONTEXT SUBMISSION, and the reason is audited in full (reject_reason keeps its first 1000 characters). Not reversible from Backroom. Requires backroom:write.',
+    inputSchema: rejectModelContextInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rejectModelContextSubmission(input, props.session.email)))
+
+  registerTool('get_model_context_board', {
+    title: 'Get model_context board',
+    description: 'The public model_context board for the open season, ranked by score then commitment block (earlier first): rank, hotkey, submission, score, components, eligible (score at least the base floor plus floor_margin), floor, commitment block, base, kind, repo, pinned revision and model_url; with mode, floor_margin and base_floors. Also returns the open season itself: open block and hash, the three public seeds derived from it, bench version, cpm_score_version, GPU SKU (fixed by its first result), opened, closes and closed times. Empty while mode is off or no season is open. Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchModelContextBoard()))
+
+  registerTool('get_model_context_scorer', {
+    title: 'Get model_context scorer',
+    description: 'What each CPM scorer last reported on a poll (scorer id, version, GPU SKU, which poll, first and last seen), the queued and leased run backlog, submissions still screening, the open season, and whether this Platform process runs the season and screening loop with its last tick error (loop_running=false means another Platform role runs it). Requires backroom:read.',
+    inputSchema: {}, annotations: toolAnnotations('read'),
+  }, async () => result(await fetchModelContextScorer()))
+
+  registerTool('rotate_model_context_season', {
+    title: 'Rotate model_context season',
+    description: 'Close the open model_context season now and open the next on the current finalized head, for example after a base was replaced in base_allowlist or a season\'s seeds must be retired. The new season derives three seeds from its open block hash, pins the current bench_version, and queues a reference run per allowlisted base (the floors) plus a run for every active submission; the closed season\'s open runs are abandoned and its board is no longer served. Refused while mode is off; a chain read failure changes nothing (503). Confirmation: ROTATE MODEL CONTEXT SEASON; the reason is audited. Requires backroom:write.',
+    inputSchema: rotateModelContextSeasonInputSchema, annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => rotateModelContextSeason(input, props.session.email)))
 
   registerTool('list_generator_rounds', {
     title: 'List generator rounds',

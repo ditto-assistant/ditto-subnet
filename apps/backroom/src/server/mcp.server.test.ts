@@ -750,6 +750,16 @@ describe('Backroom MCP tools', () => {
         'settle_generator_round_frontier',
         'register_default_generator',
         'create_default_generator_upload',
+        'get_model_context_settings',
+        'set_model_context_settings',
+        'list_model_context_submissions',
+        'get_model_context_submission',
+        'get_model_context_run',
+        'rescore_model_context_submission',
+        'reject_model_context_submission',
+        'get_model_context_board',
+        'get_model_context_scorer',
+        'rotate_model_context_season',
         'get_ath_review',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
@@ -1203,7 +1213,13 @@ describe('Backroom MCP tools', () => {
     // keep about 0.5 KB.
     // The SN-485 list_readmissions read (four paging/filter inputs, one-line
     // summary, detail in tool help) measures 246,809 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(247_300)
+    // The ten model_context (CPM) operator tools (contract #3572 section 8:
+    // settings read and whole-policy write, submission list/read, run read,
+    // guarded rescore and reject, board, scorer, season rotation; one-line
+    // summaries, detail in tool help) add 7,405 bytes, 2,432 of them the
+    // whole-policy settings write with its base allowlist: measured 254,268
+    // bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(254_800)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1271,7 +1287,9 @@ describe('Backroom MCP tools', () => {
       // 30,227; keep about 200 chars.
       // The four one-line airdrop run summaries (SN-490) measure 30,364;
       // keep about 200 chars.
-      30_560,
+      // The ten one-line model_context (CPM) summaries add 665 chars:
+      // measured 31,153; keep about 200 chars.
+      31_350,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
