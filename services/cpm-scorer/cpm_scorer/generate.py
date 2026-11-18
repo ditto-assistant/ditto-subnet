@@ -63,14 +63,20 @@ def build_generate(datagen_dir: Path, cache_dir: Path) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     if not shutil.which("go"):
         raise FileNotFoundError("go toolchain not found; pass --generate-bin")
-    tmp = out.with_suffix(".tmp")
-    subprocess.run(
-        ["go", "build", "-trimpath", "-o", str(tmp), "./cmd/generate"],
-        cwd=datagen_dir,
-        check=True,
-        env={**os.environ, "CGO_ENABLED": "0"},
-    )
-    tmp.replace(out)
+    # A unique temp file per build, so concurrent builds never share one.
+    fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=f"{out.name}.", suffix=".tmp")
+    os.close(fd)
+    try:
+        subprocess.run(
+            ["go", "build", "-trimpath", "-o", tmp, "./cmd/generate"],
+            cwd=datagen_dir,
+            check=True,
+            env={**os.environ, "CGO_ENABLED": "0"},
+        )
+        Path(tmp).replace(out)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     return out
 
 
@@ -84,8 +90,26 @@ def generator_seed_arg(seed: int) -> str:
     return str(seed - 2**64 if seed >= 2**63 else seed)
 
 
-def generate(bin_path: Path, bench_version: int, seed: int, cache_dir: Path) -> Path:
-    """Generate (or reuse) the artifact for one seed. Cached per binary hash."""
+def generate(
+    bin_path: Path,
+    bench_version: int,
+    seed: int,
+    cache_dir: Path,
+    generate_seed: int | None = None,
+) -> Path:
+    """Generate (or reuse) the artifact for one seed. Cached per binary hash.
+
+    `generate_seed` is the int64 value Platform hands out with the work item
+    (`generate_seeds`); when given it is passed to `cmd/generate` as is, and
+    it must name the same seed as the uint64 `seed`.
+    """
+    seed_arg = generator_seed_arg(seed)
+    if generate_seed is not None:
+        if isinstance(generate_seed, bool) or not -(2**63) <= generate_seed < 2**63:
+            raise ValueError(f"generate seed out of int64 range: {generate_seed}")
+        if str(generate_seed) != seed_arg:
+            raise ValueError(f"generate seed {generate_seed} is not seed {seed}")
+        seed_arg = str(generate_seed)
     bin_digest = sha256_file(bin_path)[:16]
     out = cache_dir / "artifacts" / bin_digest / f"v{bench_version}-{seed}.json"
     if out.is_file():
@@ -100,7 +124,7 @@ def generate(bin_path: Path, bench_version: int, seed: int, cache_dir: Path) -> 
                 "-bench-version",
                 str(bench_version),
                 "-seed",
-                generator_seed_arg(seed),
+                seed_arg,
                 "-run-size",
                 RUN_SIZE,
                 "-out",

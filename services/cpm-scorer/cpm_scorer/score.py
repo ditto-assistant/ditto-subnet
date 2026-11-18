@@ -123,10 +123,10 @@ def screen_dir(
     else:
         kind = detect_kind(root)
     if kind == "lora":
-        cfg = json.loads((root / "adapter_config.json").read_text())
+        cfg = json.loads((root / "adapter_config.json").read_text(encoding="utf-8"))
         check_lora(cfg, read_safetensors_header(root / "adapter_model.safetensors"))
     else:
-        cfg = json.loads((root / "config.json").read_text())
+        cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
         check_config_no_remote_code(cfg, "config.json")
     paths = weight_paths(root, kind)
     if sum(p.stat().st_size for p in paths) > MAX_TOTAL_BYTES:
@@ -170,7 +170,8 @@ def load_scorer(
         paths = weight_paths(source.path, "full")
         base_cfg = net.config.to_dict()
         check_full_config(
-            json.loads((source.path / "config.json").read_text()), base_cfg
+            json.loads((source.path / "config.json").read_text(encoding="utf-8")),
+            base_cfg,
         )
         headers = {k: info for k, (_, info) in read_headers(paths).items()}
         check_full(headers, m.base_tensor_shapes(net))
@@ -228,6 +229,7 @@ def score_seed(
         "tool_cases": len(tool_results),
         "pairs_scored": len(raw),
         "model_input_tokens": input_tokens,
+        "packed_tokens": sum(r.packed_tokens for r in mem_results),
         "packed_tokens_mean": (
             sum(r.packed_tokens for r in mem_results) / len(mem_results)
             if mem_results
@@ -249,17 +251,25 @@ def run(
     budget: int = metrics.BUDGET_TOKENS,
     tool_k: int = metrics.TOOL_K,
     rerun: bool = True,
+    generate_seeds: Sequence[int] | None = None,
     log: Log = stderr_log,
 ) -> dict[str, Any]:
+    """Score `seeds` (uint64). `generate_seeds`, when given, are the int64
+    values passed to `cmd/generate`, one per seed and in the same order."""
     if not seeds:
         raise ValueError("at least one seed")
+    if generate_seeds is not None and len(generate_seeds) != len(seeds):
+        raise ValueError("generate_seeds must match seeds one to one")
+    gen_seeds = (
+        list(generate_seeds) if generate_seeds is not None else [None] * len(seeds)
+    )
     t0 = time.monotonic()
     per_seed = []
     first: tuple[SeedTasks, list[float]] | None = None
-    for seed in seeds:
-        art = generate(generate_bin, bench_version, seed, cache_dir)
+    for seed, gen_seed in zip(seeds, gen_seeds, strict=True):
+        art = generate(generate_bin, bench_version, seed, cache_dir, gen_seed)
         records = export_records(
-            json.loads(art.read_text()), f"v{bench_version}-{seed}"
+            json.loads(art.read_text(encoding="utf-8")), f"v{bench_version}-{seed}"
         )
         tasks = build_tasks(records, limit_cases)
         log(

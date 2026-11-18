@@ -114,7 +114,20 @@ def cmd_score(args: argparse.Namespace) -> int:
     return EXIT_NONDETERMINISTIC if det and not det["identical"] else 0
 
 
+def host_gpu_sku(device: str) -> str:
+    """The SKU this host scores on: the CUDA device name, else the device."""
+    if device.startswith("cuda"):
+        import torch
+
+        return torch.cuda.get_device_name(torch.device(device))
+    return device
+
+
 def make_score_fn(args: argparse.Namespace):
+    """Fault mapping (contract §5.4 `error_kind`): screening failures and bad
+    weights are `invalid_model`; download and load failures are
+    `model_load`; anything host-side, including a bad work item, is `infra`
+    (raised by `serve.handle`)."""
     from cpm_scorer import score
     from cpm_scorer.serve import Work, WorkFault
 
@@ -122,36 +135,40 @@ def make_score_fn(args: argparse.Namespace):
     gen = _generate_bin(args, cache)
 
     def score_fn(work: Work) -> dict:
-        sub = work.submission
-        try:
-            base = get_base(sub["base_id"])
-        except ValueError as e:
-            raise WorkFault("screening:base_not_allowed", str(e)) from None
-        if sub.get("kind") == "base":
+        base = get_base(work.base["base_id"])  # parse_work checked the pin
+        if work.kind == "reference":
             source = score.ModelSource(base, "base", None, "reference")
         else:
+            sub = work.submission or {}
             repo, rev = sub.get("hf_repo"), sub.get("revision")
             if not repo or not isinstance(rev, str) or not _FULL_SHA.match(rev):
-                raise WorkFault("bad_work", "hf_repo and a 40-hex revision")
+                raise WorkFault(
+                    "infra", "work item needs hf_repo and a 40-hex revision"
+                )
             try:
                 root = fetch_hf(repo, rev, args.hf_cache_dir)
+            except ScreeningError as e:
+                raise WorkFault("invalid_model", f"{e.reason}: {e.detail}") from None
+            except Exception as e:
+                raise WorkFault("model_load", f"download: {type(e).__name__}") from None
+            try:
                 kind, _ = score.screen_dir(
                     root, base.base_id, expected_manifest_sha=sub.get("manifest_sha256")
                 )
             except ScreeningError as e:
-                raise WorkFault(f"screening:{e.reason}", e.detail) from None
-            except Exception as e:
-                raise WorkFault("download_failed", type(e).__name__) from None
+                raise WorkFault("invalid_model", f"{e.reason}: {e.detail}") from None
             if sub.get("kind") and sub["kind"] != kind:
-                raise WorkFault("screening:kind_mismatch", f"{sub['kind']} != {kind}")
+                raise WorkFault("invalid_model", f"kind {sub['kind']} != {kind}")
             source = score.ModelSource(base, kind, root, f"{repo}@{rev}")
         try:
             loaded = score.load_scorer(source, args.device, args.hf_cache_dir)
         except ScreeningError as e:
-            raise WorkFault(f"screening:{e.reason}", e.detail) from None
-        want = sub.get("weights_sha256")
+            raise WorkFault("invalid_model", f"{e.reason}: {e.detail}") from None
+        except Exception as e:
+            raise WorkFault("model_load", f"{type(e).__name__}: {e}") from None
+        want = (work.submission or {}).get("weights_sha256")
         if want and loaded.weights_sha256 and want != loaded.weights_sha256:
-            raise WorkFault("weights_mismatch", "weights_sha256 differs")
+            raise WorkFault("invalid_model", "weights_sha256 differs from Platform's")
         return score.run(
             loaded,
             work.seeds,
@@ -160,19 +177,33 @@ def make_score_fn(args: argparse.Namespace):
             cache,
             budget=work.budget_tokens,
             tool_k=work.tool_k,
+            generate_seeds=work.generate_seeds,
         )
 
     return score_fn
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    from cpm_scorer.serve import PlatformClient, default_scorer_id, load_token, serve
+    from cpm_scorer import model
+    from cpm_scorer.serve import (
+        PlatformClient,
+        default_scorer_id,
+        load_token,
+        sanitize_scorer_id,
+        scorer_version,
+        serve,
+    )
 
+    model.configure_determinism(args.device)
     client = PlatformClient(args.platform, load_token())
     serve(
         client,
         make_score_fn(args),
-        scorer_id=args.scorer_id or default_scorer_id(),
+        scorer_id=sanitize_scorer_id(args.scorer_id)
+        if args.scorer_id
+        else default_scorer_id(),
+        scorer_version=scorer_version(),
+        gpu_sku=host_gpu_sku(args.device),
         poll_seconds=args.poll_seconds,
         once=args.once,
     )

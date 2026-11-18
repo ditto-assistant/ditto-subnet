@@ -295,12 +295,59 @@ component PRs.
 
 ### 5.4 Scorer endpoints
 
-These require the bearer `DITTO_MODEL_CONTEXT_SCORER_TOKEN`:
+These require the bearer `DITTO_MODEL_CONTEXT_SCORER_TOKEN`. The shapes are
+Platform's models in `apps/platform/ditto/api_models/model_context.py`.
 
-- `GET /model-context-scorer/work`: returns `{run_id, submission, season, seeds, bench_version, cpm_score_version, settings}`, or 204.
-- `POST /model-context-scorer/results`
-- `POST /model-context-scorer/fault`
-- `GET /model-context-scorer/reference-work`: the season's base floors.
+- **`GET /model-context-scorer/work?scorer_id=&scorer_version=&gpu_sku=`**
+  leases the next run, or answers 204. It returns a `ModelContextWorkItem`:
+
+  ```text
+  {run_id: UUID, lease_id: UUID, lease_expires_at,
+   kind: "submission" | "reference",
+   submission: {submission_id, hotkey, hf_repo, revision, manifest,
+                manifest_sha256, weights_sha256, base_id, kind} | null,
+   base: {base_id, hf_repo, revision, parameters, architectures,
+          lora_target_modules},
+   season, seeds: [uint64], generate_seeds: [int64], bench_version,
+   cpm_score_version, gpu_sku: str | null,
+   settings: {budget_tokens, tool_k, floor_margin}}
+  ```
+
+  - `kind = "reference"` means: score the unmodified `base` for the season
+    floor (§4.5). `submission` is then null. Reference runs come only through
+    `/work`.
+  - `generate_seeds` are the same seeds as `cmd/generate -seed` takes them
+    (two's-complement int64), in order. The scorer passes them to the
+    generator.
+  - `gpu_sku`, once set, is the season's SKU. A scorer on a different SKU
+    posts an `infra` fault instead of scoring.
+- **`POST /model-context-scorer/results`** takes a
+  `ModelContextResultRequest`:
+
+  ```text
+  {run_id, lease_id, cpm_score_version, score,
+   components: {memory_recall, distractor_rate, tool_recall,
+                memory_cases, tool_cases, packed_tokens?},
+   per_seed: [{seed, score, memory_recall, distractor_rate, tool_recall,
+               memory_cases, tool_cases, packed_tokens?}],   # 1..8 items
+   scorer_id, scorer_version (1..64 chars), gpu_sku (1..64 chars)}
+  ```
+
+  Platform checks that `per_seed` is on the season's seeds in order, that
+  each seed score matches its components (§4.4), and that `score` is their
+  mean. It ignores extra keys.
+- **`POST /model-context-scorer/fault`** takes a `ModelContextFaultRequest`:
+  `{run_id, lease_id, error_kind, detail (≤ 4,000 chars), scorer_id,
+  scorer_version}`. The `error_kind` values are:
+  - `invalid_model`: screening failures and bad weights;
+  - `model_load`: download and load failures;
+  - `nondeterministic`: the re-run seed differed;
+  - `infra`: anything host-side or unexpected, including a malformed work
+    item.
+- **Once per lease.** Results and faults are accepted once per lease, and a
+  repeat gets 409.
+- **`GET /model-context-scorer/reference-work`** is a status summary: the
+  season's base floors and the bases still pending. It is not a queue.
 
 ### 5.5 Ledger and board
 

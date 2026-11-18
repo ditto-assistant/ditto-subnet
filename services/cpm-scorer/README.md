@@ -15,10 +15,14 @@ uv run pytest -q
 - `cpm-scorer score --model base|DIR|HF_REPO@REVISION --base qwen3.5-0.8b
   --seeds 42,7,1234 [--bench-version 18] [--device cpu|cuda] [--limit-cases N]`
   prints the run JSON.
-- `cpm-scorer serve --platform URL` leases `GET /model-context-scorer/reference-work`
-  then `/work`, scores, and posts `/results` or `/fault`. The bearer comes from
+- `cpm-scorer serve --platform URL` leases from `GET /model-context-scorer/work`
+  (submission and reference runs alike), scores, and posts `/results` or
+  `/fault` with an `error_kind` (contract §5.4). A 409 after a retried post
+  counts as already recorded. The bearer comes from
   `DITTO_MODEL_CONTEXT_SCORER_TOKEN` or the file named by
   `DITTO_MODEL_CONTEXT_SCORER_TOKEN_FILE`, and is never logged.
+  `DITTO_MODEL_CONTEXT_SCORER_ID` names the scorer (default: the hostname),
+  and `scorer_version` is the package version plus the git SHA.
 
 `--generate-bin` pins the `cmd/generate` binary. Without it the scorer builds
 `research/dittobench-datagen` with `go build` into `~/.cache/cpm-scorer`,
