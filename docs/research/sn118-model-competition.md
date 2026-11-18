@@ -175,15 +175,26 @@ Two tracks score the same submitted weights:
   - the candidate pool;
   - the answer production gave;
   - any follow-up signal (a re-ask, a correction).
-- **Third-party content.** A team member's memories can contain other
-  people's words: email bodies, shared chats, documents from connectors. The
-  team member's consent does not cover those people. For P0, use chat turns
-  and user-authored memories only, and exclude connector-ingested third-party
-  content. Widening that is a product and legal call (R3.8).
+- **Only direct user↔Ditto conversations** (decided 2026-11-18). A team
+  member's memories can contain other people's words, and their consent does
+  not cover those people. So the export keeps only turns where the person
+  wrote to Ditto and Ditto answered. It excludes:
+  - group, shared and company chats;
+  - chat-platform messages (Slack, Telegram and similar);
+  - connected-app content (email, documents, calendar, MCP);
+  - anything another person wrote;
+  - agent, workflow and system messages.
+
+  Each conversation row records where the message came from, so the filter
+  is exact. The consent template is heyditto-stack
+  `docs/engineering/trace-donation-consent.md`, and completed forms are
+  recorded on a private Jira issue.
 - **Handling.**
-  - Exported read-only from the production database into an encrypted S3
-    bucket in Ditto's AWS account: KMS, public access blocked, access logged,
-    readable only by the eval role.
+  - Exported into an encrypted S3 bucket in Ditto's AWS account: KMS, public
+    access blocked, access logged, readable only by the eval role.
+  - Production encrypts conversation content at rest, so a plain SQL read
+    returns ciphertext. The export has to go through the backend's own
+    decrypting export path, run for each consenting account.
   - Never in a repository, PR, W&B or Backroom.
   - A deterministic scrubber pseudonymizes emails, phone numbers and addresses
     consistently across a trace.
@@ -398,8 +409,8 @@ for shipping, and that is a stronger bar than beating Jev.
 
 ## R3.8 What is still open
 
-1. **Third-party content in team traces.** Exclude connector-ingested content
-   (recommended for P0), or include it pseudonymized, eval-only?
+1. ~~Third-party content in team traces.~~ **Resolved 2026-11-18:** only
+   direct user↔Ditto conversations (R3.3.2).
 2. **Private share after the shadow season.** Is the ceiling 50%, and what
    public–private agreement keeps it lower?
 3. **Release mirror.** A Ditto Hugging Face organization, or a public bucket?
