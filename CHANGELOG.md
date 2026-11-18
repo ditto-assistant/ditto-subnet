@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.495.0 (2026-11-18)
+
+### Documentation
+
+- **research**: Cpm competition v1 contract
+  ([#3572](https://github.com/ditto-assistant/ditto-subnet/pull/3572),
+  [`04fcd23`](https://github.com/ditto-assistant/ditto-subnet/commit/04fcd2399d48cde9fa9dfa89c32fcb0d5265d794))
+
+- **research**: Cpm p0 step 1, export dittobench cases as training data
+  ([#3571](https://github.com/ditto-assistant/ditto-subnet/pull/3571),
+  [`d851ed9`](https://github.com/ditto-assistant/ditto-subnet/commit/d851ed92cf131b783b50ce0e0234e4aed856567e))
+
+### Features
+
+- **platform**: Model_context competition submissions, scorer API and ledger
+  ([#3575](https://github.com/ditto-assistant/ditto-subnet/pull/3575),
+  [`6978b37`](https://github.com/ditto-assistant/ditto-subnet/commit/6978b37282b0bc231869aa5ecfb403c3349fa808))
+
+
 ## v0.494.0 (2026-11-18)
 
 ### Documentation
