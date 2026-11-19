@@ -106,6 +106,7 @@ import {
   ruleGeneratorFrontierAudit,
   settleGeneratorRoundFrontier,
   listGeneratorFrontierDisputes,
+  withoutDisputeReasoning,
   fetchGeneratorFrontierDispute,
   ruleGeneratorFrontierDispute,
   listGeneratorFrontierRefunds,
@@ -1236,6 +1237,8 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     }
     return result(await operation())
   }
+  const guardReasoning = <T,>(value: T): T => (hasArtifactAccess(props) ? value : withoutDisputeReasoning(value))
+
   const artifact = async (operation: () => Promise<unknown>) => {
     if (!hasArtifactAccess(props)) {
       return errorResult(
@@ -2080,7 +2083,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     title: 'Get generator round',
     description: 'Everything about one round for running or debugging it: the frozen columns (submission, hotkey, owner key, source SHA-256, counted or challenger, public default), the panel (agents, owner keys, champion, reference agents, and dropped_reason/dropped_at for an agent dropped mid-round because it was banned, held or otherwise stopped being runnable; the seat is never refilled and its result is not scored), skipped_panel_agents (ranked owners passed over at freeze because their agent could not run, with the reason; the next eligible owner took the seat), the settings revision and cases per column, per-column generation results (ok, error, build and generate durations, scorer version), case counts per column and dataset size, the scorer lease and its attempts, commitment publication and error, which validators published the commitment on chain (commitment_publications: each elected validator\'s claim, status claimed/confirmed/failed/expired, block number and detail; commitment_elected: who is asked right now; commitment_publishers_target), every validator lease attempt (validator, slot, deadline, status, detail), every accepted result (validator, run id, answered, faulted, mean score, excluded_reason when it does not count: its agent was dropped or it faulted every case), the panel agents still pending, and once scored the per-column scores and pairwise-neutral agent standings. A skipped round shows summary.status skipped with skip_reason skipped_unchanged and carried_from_round (the scored round it repeats; generation.skipped_unchanged also holds the matched signature and skipped_at): no dataset, attempts or results. The seed and secret are withheld until the round is revealed; get_generator_round_dataset (backroom:artifact:read) returns the seed with the dataset. Requires backroom:read.',
     inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
-  }, async (input) => result(await fetchGeneratorRound(input)))
+  }, async (input) => result(guardReasoning(await fetchGeneratorRound(input))))
 
   registerTool('preview_generator_round', {
     title: 'Preview generator round',
@@ -2182,7 +2185,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     title: 'Get generator round frontier',
     description: 'One scored round\'s frontier lane: state (oracle_pending: waiting for a validator whose scorer runs generator-frontier-oracle-v1 to run the oracle agent; audit_pending: oracle reported, audits open; settled), the oracle agent, frontier_weight and audit_cases frozen from the round\'s settings revision, candidates (unsolved miner-column round case ids), oracle_attempts and oracle_deadline (the round settles with no attestations after frontier_oracle_timeout_hours or 4 failed leases), the oracle run (validator, run id, passed/failed/faulted counts and the signed per-case scores), escalation (null unless the round\'s policy set frontier_escalation_agent_id: the escalation agent and solve_threshold, oracle_failed, the selected oracle-failed case ids it re-checks, skipped_columns with the reason, attempts, deadline, outcome pending/reported/nothing selected/escalation timed out/escalation attempts exhausted, and once reported its run, passed case ids and signed per-case scores; while it runs the state stays oracle_pending and oracle_deadline is null; its passes join attested and the audits), attested case ids per column, each column\'s audit (sample, status, ruling, reason, actor), and once settled the applied case ids, settle_reason, the current column scores and the pre-frontier base_column_scores. Until it settles the round pays its unattested score. 404 when the round had no frontier candidates or frontier scoring was off. Requires backroom:read.',
     inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
-  }, async (input) => result(await fetchGeneratorRoundFrontier(input)))
+  }, async (input) => result(guardReasoning(await fetchGeneratorRoundFrontier(input))))
 
   registerTool('get_generator_frontier_audit', {
     title: 'Get generator frontier audit',
@@ -2206,7 +2209,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     title: 'List generator frontier disputes',
     description: 'The frontier dispute queue in review order: the largest deposit first, then the earliest filed. A case the panel and the frontier oracle both fail stays unsolved, so a valid case beyond every subnet model scores like a broken one. With frontier_disputes_enabled in get_generator_competition_settings, the column\'s own miner hotkey may dispute such a case (answered and failed by the oracle, never faulted) with the hop notes (evidence_pair_ids), a short reasoning and a TAO deposit of at least frontier_dispute_min_tao (paid to the generator upload fee\'s address and verified on chain like that fee), once the oracle reported and the round is revealed, inside frontier_dispute_window_hours, at most frontier_dispute_max_per_column per column and frontier_dispute_max_per_round per round, and never from a column whose oracle failures exceed frontier_escalation_max_failed_fraction. Each entry: round, column, case id, submission, hotkey, status (pending, upheld, rejected, expired), cited pair ids, reasoning, amount_rao (the deposit), the oracle score, refund_rao (owed back once upheld or lapsed), and rule_deadline (the audit grace: an unruled dispute then lapses, credits nothing and is refunded). The round does not settle while a dispute is pending. includeRuled also lists ruled disputes of rounds not yet settled. Requires backroom:read.',
     inputSchema: listGeneratorFrontierDisputesInputSchema, annotations: toolAnnotations('read'),
-  }, async (input) => result(await listGeneratorFrontierDisputes(input)))
+  }, async (input) => result(guardReasoning(await listGeneratorFrontierDisputes(input))))
 
   registerTool('get_generator_frontier_dispute', {
     title: 'Get generator frontier dispute',

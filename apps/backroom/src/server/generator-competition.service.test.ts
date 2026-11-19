@@ -14,6 +14,7 @@ import {
   generatorFrontierAuditListSchema,
   generatorFrontierSchema,
   generatorCompetitionSettingsSchema,
+  setGeneratorSettingsInputSchema,
   generatorRoundPreviewSchema,
   generatorRunDetailSchema,
 } from '../lib/generator-competition.schemas'
@@ -1085,6 +1086,9 @@ describe('generator competition MCP tools', () => {
       expect(json(await reader.client.callTool({ name: 'list_generator_frontier_dispute_refunds', arguments: {} })))
         .toMatchObject({ refunds: [{ refund_rao: 200_000_000, refund_status: 'pending', miner_coldkey: '5MinerCold' }] })
       expect(calls[1][1]).toBe('/api/v1/admin/generator-competition/frontier/dispute-refunds?status=pending&limit=50&offset=0')
+      // Reasoning can quote private case material: hidden without artifact scope.
+      expect(JSON.stringify(json(await reader.client.callTool({ name: 'list_generator_frontier_disputes', arguments: {} }))))
+        .not.toContain('reasoning')
       // The case is private benchmark content: artifact scope only.
       const noArtifact = await reader.client.callTool({ name: 'get_generator_frontier_dispute', arguments: { roundIndex: 7, caseId: 'c1/k0' } })
       expect(noArtifact.isError).toBe(true)
@@ -1156,6 +1160,12 @@ describe('generator competition MCP tools', () => {
     ]) {
       expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, ...bad })).toThrow()
     }
+    const write = setGeneratorSettingsInputSchema.safeParse({
+      expectedRevision: 1, reason: 'cap check for the dispute settings',
+      confirmation: 'x', settings: { ...settings, frontier_dispute_max_per_column: 10, frontier_dispute_max_per_round: 8 },
+    })
+    expect(write.success).toBe(false)
+    expect(JSON.stringify(write.error?.issues)).toContain('frontier_dispute_max_per_column must not exceed')
     // A Platform that predates disputes sends neither policy nor disputes.
     const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
     const lane = generatorFrontierSchema.parse({

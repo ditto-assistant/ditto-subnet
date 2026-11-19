@@ -278,6 +278,14 @@ export const setGeneratorSettingsInputSchema = z
         path: ['settings', 'challenger_columns'],
       })
     }
+    // Platform refuses a per-column cap above the round-wide cap.
+    if (input.settings.frontier_dispute_max_per_column > input.settings.frontier_dispute_max_per_round) {
+      context.addIssue({
+        code: 'custom',
+        message: 'frontier_dispute_max_per_column must not exceed frontier_dispute_max_per_round',
+        path: ['settings', 'frontier_dispute_max_per_column'],
+      })
+    }
   })
 
 const caseCountsSchema = z.object({

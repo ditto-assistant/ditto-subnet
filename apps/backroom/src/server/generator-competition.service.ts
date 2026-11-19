@@ -585,6 +585,22 @@ export async function settleGeneratorRoundFrontier(rawInput: unknown, actor: str
   )
 }
 
+// The dispute reasoning can quote private benchmark material, so callers
+// without artifact access get disputes without it (the detail tool is
+// artifact-gated for the same reason).
+export function withoutDisputeReasoning<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(withoutDisputeReasoning) as T
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      if (key === 'reasoning') continue
+      out[key] = withoutDisputeReasoning(item)
+    }
+    return out as T
+  }
+  return value
+}
+
 export async function listGeneratorFrontierDisputes(rawInput: unknown) {
   const { includeRuled, limit, offset } = listGeneratorFrontierDisputesInputSchema.parse(rawInput)
   return generatorFrontierDisputeListSchema.parse(
