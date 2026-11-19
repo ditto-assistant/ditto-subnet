@@ -309,9 +309,11 @@ Required values are supplied through the production host's protected
   existing check (load, smoke, export, upload) unchanged and saves a build
   receipt per build as `<source sha256>-<sandbox id>.json`. Off by default; with
   `local` nothing about builds changes. Cathedral-side failures (API, transport,
-  time-out, hash mismatch) are retryable infrastructure with code
-  `cathedral-build-infrastructure`, never a miner reject. A failed Dockerfile
-  build in the room is the same `docker-build` reject as a local failure. Only
+  hash mismatch, a time-out Cathedral imposes) are retryable infrastructure
+  with code `cathedral-build-infrastructure`, never a miner reject. A failed
+  Dockerfile build, Ditto's own build time limit (when the room can honour it
+  in full, up to 1700 s) and a declared `VOLUME` are the same miner rejects as
+  a local build. Only
   public sources are safe to build there (an operator can still read a box).
   Settings, used only when the backend is `cathedral`:
   - `SCREENER_CATHEDRAL_API_KEY_FILE`: required path to the API key; read at use,

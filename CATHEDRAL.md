@@ -7,7 +7,7 @@ With one screener setting, a submission's image is built inside a Cathedral seal
 Each sealed build also writes a build receipt: one JSON file that ties the miner's upload (the sha256 of their tarball) to the image ID the room produced. Anyone can check it offline, with one command.
 
 - The build command is Ditto's own Buildx command from `gate.py`, with two room changes: `--network host` (the room has no bridge network) and `--memory 7g` (the room has 8 GiB).
-- If Cathedral is down, slow or returns something wrong, the attempt is parked as retryable infrastructure (`cathedral-build-infrastructure`). It never counts against the miner. A Dockerfile that fails to build is the same `docker-build` reject as a local build.
+- If Cathedral is down, slow or returns something wrong, the attempt is parked as retryable infrastructure (`cathedral-build-infrastructure`). It never counts against the miner. A Dockerfile that fails to build, Ditto's own build time limit (when Cathedral can honour it in full, up to 1700 s) and an image that declares `VOLUME` are the same miner rejects as a local build. Anything on Cathedral's side is retryable infrastructure.
 - With the setting off, nothing changes: no Cathedral calls, same code path, same outputs.
 
 ## How to switch it on
@@ -21,7 +21,7 @@ SCREENER_CATHEDRAL_API_KEY_FILE=/path/to/cathedral-api-key   # a Cathedral API k
 
 Optional settings and their defaults are listed in `workers/screener/README.md` (template `sealed-4x8`, builder `docker:27-dind` pinned by digest, `max_spend_usd` 0.5 per build, receipts under `/opt/ditto/screener/state/build-receipts`).
 
-To switch back, set `SCREENER_BUILD_BACKEND=local` (or remove it). One node, or one share of builds, can run it while the rest build locally.
+To switch back, set `SCREENER_BUILD_BACKEND=local` (or remove it). The switch is per node: one node can run it while the rest build locally.
 
 ## How a validator or a miner checks a receipt
 
@@ -29,6 +29,8 @@ To switch back, set `SCREENER_BUILD_BACKEND=local` (or remove it). One node, or 
 pip install --upgrade --index-url https://cathedral.computer/ctcli/simple/ ctcli
 ctcli build verify RECEIPT.json --source my-upload.tgz
 ```
+
+This needs the first ctcli release that includes `build verify` (cathedral-pool PR #149). Until then, run the check from that branch.
 
 `--source` takes the exact tarball the miner uploaded (or `--source-sha256 HEX`). Add `--image-id sha256:...` to also require the image ID a validator loaded. The answer is PASS, FAIL or NOT PROVEN, with the source hash, image ID, archive hash, builder digest, AMD-attested measurement and room it is bound to.
 
