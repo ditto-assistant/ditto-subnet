@@ -154,6 +154,10 @@ class FakeCathedral:
             digest = self.options.get("image_digest", _BUILDER_DIGEST)
             return httpx.Response(200, json={"state": state, "image_digest": digest})
         if method == "DELETE":
+            if self.options.get("delete_fail_times", 0) > 0:
+                # A gateway blip on the delete (seen on Cathedral prod).
+                self.options["delete_fail_times"] -= 1
+                return httpx.Response(502, json={})
             if self.options.get("delete_status"):
                 return httpx.Response(self.options["delete_status"], json={})
             self.deleted = True
@@ -845,3 +849,19 @@ def test_build_command_rejects_a_bad_build_timeout() -> None:
     script = build_command(_GOLDEN_SOURCE, build_timeout=900)[-1]
     assert "timeout 900 docker buildx build" in script
     assert "-ge 900 ] && exit 92; exit 91" in script
+
+
+async def test_room_delete_is_resent_after_a_gateway_error(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    tarball = _valid_tar()
+    fake = FakeCathedral(tarball, delete_fail_times=2)
+    gate = _gate_with(_config(make_config, tmp_path), _ok_run(), tarball=tarball)
+    _wire(gate, fake)
+    async with gate._client:
+        result = await _screen(gate, fake.source_sha256, build_only=True)
+    assert result.outcome == ScreeningOutcome.PASS
+    assert fake.deleted, "a 502 on DELETE must not leave the room running"
+    assert [c for c in fake.calls if c[0] == "DELETE"] == [
+        ("DELETE", f"/v1/sandboxes/{_SANDBOX}")
+    ] * 3

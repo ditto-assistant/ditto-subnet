@@ -728,21 +728,31 @@ class CathedralBuilder:
     async def _cleanup(
         self, client: httpx.AsyncClient, key: str, sandbox_id: str, attempt_key: str
     ) -> bool:
-        """Delete the room and wait for ``deleted``. Never raises."""
+        """Delete the room and wait for ``deleted``. Never raises.
+
+        The DELETE is re-sent (same Idempotency-Key) until the room reports
+        ``deleted`` or the delete window ends: one gateway error must not leave
+        a paid room running until its lifetime (seen on Cathedral prod).
+        """
         path = f"/v1/sandboxes/{sandbox_id}"
-        try:
-            await self._call(
-                client,
-                key,
-                "DELETE",
-                path,
-                idempotency=f"{attempt_key}-delete",
-                timeout=60.0,
-            )
-        except Exception as error:
-            logger.warning("cathedral room %s delete failed: %s", sandbox_id, error)
         give_up = time.monotonic() + self._delete_timeout
+        delete_accepted = False
         while True:
+            if not delete_accepted:
+                try:
+                    await self._call(
+                        client,
+                        key,
+                        "DELETE",
+                        path,
+                        idempotency=f"{attempt_key}-delete",
+                        timeout=60.0,
+                    )
+                    delete_accepted = True
+                except Exception as error:
+                    logger.warning(
+                        "cathedral room %s delete failed: %s", sandbox_id, error
+                    )
             try:
                 response = await self._call(client, key, "GET", path, timeout=30.0)
                 state = self._json(response, "room state").get("state")
