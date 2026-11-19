@@ -47,6 +47,15 @@ import {
   listGeneratorFrontierAuditsInputSchema,
   ruleGeneratorFrontierAuditInputSchema,
   settleGeneratorFrontierInputSchema,
+  generatorFrontierDisputeDetailSchema,
+  generatorFrontierDisputeInputSchema,
+  generatorFrontierDisputeListSchema,
+  listGeneratorFrontierDisputesInputSchema,
+  ruleGeneratorFrontierDisputeInputSchema,
+  generatorFrontierRefundListSchema,
+  generatorFrontierRefundSchema,
+  listGeneratorFrontierRefundsInputSchema,
+  recordGeneratorFrontierRefundInputSchema,
   GENERATOR_SETTINGS_SCOPE,
 } from '../lib/generator-competition.schemas'
 import { PlatformAdminError, platformAdminRequest } from './ditto.server'
@@ -477,7 +486,7 @@ export async function registerDefaultGenerator(rawInput: unknown, actor: string)
 
 // --- frontier cases ----------------------------------------------------------
 
-type FrontierWriteKind = 'rule' | 'settle'
+type FrontierWriteKind = 'rule' | 'dispute' | 'refund' | 'settle'
 
 // Keep Platform's refusal text and name what was not applied. A 409 is a
 // state conflict (already ruled or settled, no open audit, a case outside the
@@ -488,7 +497,7 @@ export function frontierRefusal(kind: FrontierWriteKind, cause: unknown) {
   if (!(cause instanceof PlatformAdminError)) return null
   if (cause.status !== 409 && cause.status !== 422) return null
   const nothing =
-    kind === 'rule' ? 'Nothing was ruled' : 'Nothing was settled'
+    kind === 'settle' ? 'Nothing was settled' : kind === 'refund' ? 'Nothing was recorded' : 'Nothing was ruled'
   const recovery =
     cause.status === 422
       ? kind === 'rule'
@@ -496,7 +505,11 @@ export function frontierRefusal(kind: FrontierWriteKind, cause: unknown) {
         : 'correct the refused fields (a reason of at least 8 characters) and resubmit.'
       : kind === 'rule'
         ? 're-read get_generator_round_frontier and get_generator_frontier_audit: the audit may already be ruled or the round settled, and an invalid ruling may name only cases from the sample; resubmit with the exact confirmation they imply.'
-        : 're-read get_generator_round_frontier: the round may already be settled or have no frontier lane.'
+        : kind === 'dispute'
+          ? 're-read get_generator_frontier_dispute: the dispute may already be ruled or the round settled; resubmit with the exact confirmation it implies.'
+          : kind === 'refund'
+            ? 're-read list_generator_frontier_dispute_refunds: the refund may already be recorded as paid or not be owed; resubmit with the exact confirmation it implies.'
+            : 're-read get_generator_round_frontier: the round may already be settled or have no frontier lane.'
   return new Error(`${cause.message}. ${nothing}: ${recovery}`)
 }
 
@@ -568,6 +581,78 @@ export async function settleGeneratorRoundFrontier(rawInput: unknown, actor: str
         actor,
         body: { reason: input.reason, actor, confirmation: input.confirmation },
       }),
+    ),
+  )
+}
+
+export async function listGeneratorFrontierDisputes(rawInput: unknown) {
+  const { includeRuled, limit, offset } = listGeneratorFrontierDisputesInputSchema.parse(rawInput)
+  return generatorFrontierDisputeListSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/frontier/disputes?include_ruled=${includeRuled}&limit=${limit}&offset=${offset}`,
+    ),
+  )
+}
+
+// A round case id is column/case; Platform reads the rest of the path as the
+// case id, so the slash stays literal and each part is encoded on its own.
+function disputePath(roundIndex: number, caseId: string) {
+  const encoded = caseId.split('/').map(encodeURIComponent).join('/')
+  return `${BASE}/rounds/${roundIndex}/frontier/disputes/${encoded}`
+}
+
+export async function fetchGeneratorFrontierDispute(rawInput: unknown) {
+  const { roundIndex, caseId } = generatorFrontierDisputeInputSchema.parse(rawInput)
+  return generatorFrontierDisputeDetailSchema.parse(
+    await platformAdminRequest(disputePath(roundIndex, caseId)),
+  )
+}
+
+export async function ruleGeneratorFrontierDispute(rawInput: unknown, actor: string) {
+  const input = ruleGeneratorFrontierDisputeInputSchema.parse(rawInput)
+  return frontierWrite('dispute', async () =>
+    generatorFrontierSchema.parse(
+      await platformAdminRequest(disputePath(input.roundIndex, input.caseId), {
+        method: 'POST',
+        actor,
+        body: {
+          upheld: input.upheld,
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+        },
+      }),
+    ),
+  )
+}
+
+export async function listGeneratorFrontierRefunds(rawInput: unknown) {
+  const { status, limit, offset } = listGeneratorFrontierRefundsInputSchema.parse(rawInput)
+  return generatorFrontierRefundListSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/frontier/dispute-refunds?status=${status}&limit=${limit}&offset=${offset}`,
+    ),
+  )
+}
+
+export async function recordGeneratorFrontierRefund(rawInput: unknown, actor: string) {
+  const input = recordGeneratorFrontierRefundInputSchema.parse(rawInput)
+  return frontierWrite('refund', async () =>
+    generatorFrontierRefundSchema.parse(
+      await platformAdminRequest(
+        `${BASE}/frontier/dispute-refunds/${encodeURIComponent(input.disputeId)}/paid`,
+        {
+          method: 'POST',
+          actor,
+          body: {
+            refund_block_hash: input.refundBlockHash,
+            refund_extrinsic_index: input.refundExtrinsicIndex,
+            reason: input.reason,
+            actor,
+            confirmation: input.confirmation,
+          },
+        },
+      ),
     ),
   )
 }

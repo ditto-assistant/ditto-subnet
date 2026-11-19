@@ -1031,6 +1031,142 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('reads and rules frontier disputes and records refunds with guarded writes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const DISPUTE = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f'
+    const dispute = {
+      dispute_id: DISPUTE, round_index: 7, column_id: 'c1', case_id: 'c1/k0', submission_id: SUBMISSION,
+      miner_hotkey: '5GenMiner', status: 'pending', evidence_pair_ids: ['old0', 'new0'],
+      reasoning: 'old0 names the locker; new0 gives its new code', amount_rao: 200_000_000,
+      filed_at: '2026-11-09T11:00:00Z', oracle_score: 0, reason: null, actor: null, ruled_at: null,
+      rule_deadline: '2026-11-10T10:00:00Z', refund_rao: null,
+    }
+    const frontier = {
+      round_index: 7, state: 'audit_pending', oracle_agent_id: AGENT, frontier_weight: 1, audit_cases: 0,
+      candidates: ['c1/k0'], oracle_attempts: 1, oracle_deadline: null, oracle: null,
+      attested: {}, audits: [], column_scores: { c1: 0 }, created_at: '2026-11-09T09:00:00Z',
+      dispute_policy: {
+        window_hours: 6, max_per_column: 4, max_per_round: 8, max_failed_fraction: 0.25,
+        min_rao: 50_000_000, window_opens_at: '2026-11-09T10:00:00Z', window_closes_at: '2026-11-09T16:00:00Z',
+      },
+      disputes: [dispute],
+    }
+    const refund = {
+      dispute_id: DISPUTE, round_index: 7, case_id: 'c1/k0', miner_hotkey: '5GenMiner',
+      miner_coldkey: '5MinerCold', amount_rao: 200_000_000, refund_rao: 200_000_000, refund_status: 'pending',
+      payment_block_hash: '0x' + '11'.repeat(32), payment_extrinsic_index: 3, created_at: '2026-11-09T11:00:00Z',
+    }
+    const calls: Array<[string, string, unknown]> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const path = url.replace('https://platform-api.heyditto.ai', '')
+      const method = init?.method ?? 'GET'
+      calls.push([method, path, init?.body ? JSON.parse(String(init.body)) : null])
+      if (path.startsWith('/api/v1/admin/generator-competition/frontier/disputes')) {
+        return Response.json({ disputes: [dispute], count: 1, returned: 1, limit: 50, offset: 0, has_more: false })
+      }
+      if (path.endsWith(`/frontier/dispute-refunds/${DISPUTE}/paid`)) {
+        return Response.json({ ...refund, refund_status: 'paid', refund_block_hash: '0x' + '22'.repeat(32), refund_extrinsic_index: 4 })
+      }
+      if (path.startsWith('/api/v1/admin/generator-competition/frontier/dispute-refunds')) {
+        return Response.json({ refunds: [refund], count: 1, returned: 1, limit: 50, offset: 0, has_more: false })
+      }
+      if (path === '/api/v1/admin/generator-competition/rounds/7/frontier/disputes/c1/k0' && method === 'POST') {
+        return Response.json({ ...frontier, disputes: [{ ...dispute, status: 'upheld', refund_rao: 200_000_000 }] })
+      }
+      return Response.json({ detail: 'unexpected' }, { status: 404 })
+    }))
+
+    const reader = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await reader.client.callTool({ name: 'list_generator_frontier_disputes', arguments: {} })))
+        .toMatchObject({ count: 1, disputes: [{ case_id: 'c1/k0', amount_rao: 200_000_000, dispute_id: DISPUTE }] })
+      expect(calls[0][1]).toBe('/api/v1/admin/generator-competition/frontier/disputes?include_ruled=false&limit=50&offset=0')
+      expect(json(await reader.client.callTool({ name: 'list_generator_frontier_dispute_refunds', arguments: {} })))
+        .toMatchObject({ refunds: [{ refund_rao: 200_000_000, refund_status: 'pending', miner_coldkey: '5MinerCold' }] })
+      expect(calls[1][1]).toBe('/api/v1/admin/generator-competition/frontier/dispute-refunds?status=pending&limit=50&offset=0')
+      // The case is private benchmark content: artifact scope only.
+      const noArtifact = await reader.client.callTool({ name: 'get_generator_frontier_dispute', arguments: { roundIndex: 7, caseId: 'c1/k0' } })
+      expect(noArtifact.isError).toBe(true)
+    } finally {
+      await reader.client.close()
+      await reader.server.close()
+    }
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      calls.length = 0
+      const wrong = await client.callTool({
+        name: 'rule_generator_frontier_dispute',
+        arguments: { roundIndex: 7, caseId: 'c1/k0', upheld: true, reason: 'the two notes give the gold', confirmation: 'RULE FRONTIER DISPUTE 7 c1/k0 REJECTED' },
+      })
+      expect(wrong.isError).toBe(true)
+      expect(calls).toEqual([])
+      expect(json(await client.callTool({
+        name: 'rule_generator_frontier_dispute',
+        arguments: { roundIndex: 7, caseId: 'c1/k0', upheld: true, reason: 'the two notes give the gold', confirmation: 'RULE FRONTIER DISPUTE 7 c1/k0 UPHELD' },
+      }))).toMatchObject({ disputes: [{ status: 'upheld', refund_rao: 200_000_000 }] })
+      // The case id's slash stays a path separator: Platform reads the rest of
+      // the path as the case id.
+      expect(calls[0]).toEqual([
+        'POST', '/api/v1/admin/generator-competition/rounds/7/frontier/disputes/c1/k0',
+        { upheld: true, reason: 'the two notes give the gold', actor: session.email, confirmation: 'RULE FRONTIER DISPUTE 7 c1/k0 UPHELD' },
+      ])
+      calls.length = 0
+      const record = {
+        disputeId: DISPUTE, refundBlockHash: '0x' + '22'.repeat(32), refundExtrinsicIndex: 4,
+        reason: 'refund sent from the subnet wallet',
+      }
+      const unconfirmed = await client.callTool({
+        name: 'record_generator_frontier_dispute_refund', arguments: { ...record, confirmation: 'RECORD' },
+      })
+      expect(unconfirmed.isError).toBe(true)
+      expect(calls).toEqual([])
+      expect(json(await client.callTool({
+        name: 'record_generator_frontier_dispute_refund',
+        arguments: { ...record, confirmation: `RECORD FRONTIER DISPUTE REFUND ${DISPUTE}` },
+      }))).toMatchObject({ refund_status: 'paid' })
+      expect(calls[0][1]).toBe(`/api/v1/admin/generator-competition/frontier/dispute-refunds/${DISPUTE}/paid`)
+      expect(calls[0][2]).toMatchObject({ refund_extrinsic_index: 4, actor: session.email })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('names the dispute and refund writes that were refused', () => {
+    const conflict = (message: string) => new PlatformAdminError('request', message, 409)
+    const ruled = frontierRefusal('dispute', conflict('case c1/k0 dispute is already upheld'))!.message
+    expect(ruled).toContain('Nothing was ruled')
+    expect(ruled).toContain('get_generator_frontier_dispute')
+    const paid = frontierRefusal('refund', conflict('dispute refund is paid, not pending'))!.message
+    expect(paid).toContain('Nothing was recorded')
+    expect(paid).toContain('list_generator_frontier_dispute_refunds')
+  })
+
+  it('defaults frontier disputes off and bounds the deposit', () => {
+    const parsed = generatorCompetitionSettingsSchema.parse(settings)
+    expect(parsed).toMatchObject({
+      frontier_disputes_enabled: false, frontier_dispute_window_hours: 6,
+      frontier_dispute_max_per_column: 4, frontier_dispute_max_per_round: 8, frontier_dispute_min_tao: 0.05,
+    })
+    for (const bad of [
+      { frontier_dispute_min_tao: 0 }, { frontier_dispute_max_per_column: 17 },
+      { frontier_dispute_max_per_round: 0 }, { frontier_dispute_window_hours: 169 },
+    ]) {
+      expect(() => generatorCompetitionSettingsSchema.parse({ ...settings, ...bad })).toThrow()
+    }
+    // A Platform that predates disputes sends neither policy nor disputes.
+    const AGENT = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const lane = generatorFrontierSchema.parse({
+      round_index: 7, state: 'settled', oracle_agent_id: AGENT, frontier_weight: 1, audit_cases: 0,
+      candidates: [], oracle_attempts: 1, oracle_deadline: null, oracle: null, attested: {}, audits: [],
+      column_scores: {}, created_at: '2026-11-09T09:00:00Z',
+    })
+    expect(lane.dispute_policy).toBeNull()
+    expect(lane.disputes).toEqual([])
+  })
+
   it('describes the frontier audit memory fields without overstating them', async () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
     try {

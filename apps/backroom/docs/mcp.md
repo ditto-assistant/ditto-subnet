@@ -391,6 +391,29 @@ opens, once it is scored or void.
     `get_generator_round_frontier` shows it as `escalation` (selected cases,
     skipped columns and why, outcome, results); the knobs are in
     `get_generator_competition_settings`.
+    With `frontier_disputes_enabled` (off by default), the column's own miner
+    hotkey reads which of its cases the oracle answered and failed (ids and
+    scores, signed `POST /generator/rounds/{round}/frontier/report`) and may
+    dispute one as valid with its hop notes, a reasoning and a TAO deposit of
+    at least `frontier_dispute_min_tao` (default 0.05), paid to the generator
+    upload fee's address and verified on chain like that fee, once the oracle
+    reported and the round is revealed, within `frontier_dispute_window_hours`
+    and the per-column and per-round caps. `list_generator_frontier_disputes`
+    is the queue, largest deposit first, then earliest filed;
+    `get_generator_frontier_dispute` (`backroom:artifact:read`) shows the
+    case, the cited pairs and the reasoning, and
+    `rule_generator_frontier_dispute`
+    (`RULE FRONTIER DISPUTE {round} {case} UPHELD|REJECTED`, reason required
+    and shown to the miner) rules it. An upheld dispute is attested like an
+    oracle pass and owes its whole deposit back; a rejected one stays
+    unsolved and keeps the deposit. Platform cannot send TAO, so refunds are
+    operator payouts: `list_generator_frontier_dispute_refunds` (pending by
+    default) is the queue and `record_generator_frontier_dispute_refund`
+    (`RECORD FRONTIER DISPUTE REFUND {dispute_id}`) records the transfer that
+    paid one. The round waits for pending disputes up to
+    `frontier_audit_grace_hours`; an unruled dispute then lapses, credits
+    nothing and is refunded. The round's `dispute_policy` and `disputes` are on
+    `get_generator_round_frontier`.
   - `rotate_dueling_season` (`ROTATE DUELING SEASON`, audited reason) closes
     the open dueling season at the next round boundary, or on the next
     round-driver tick with `immediate: true`; the next season opens at the
