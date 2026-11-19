@@ -49,9 +49,14 @@ EVIDENCE_SCHEMA = "cathedral_sandbox_evidence_v1"
 INFRASTRUCTURE_DETAIL_PREFIX = "cathedral-build-infrastructure: "
 
 BUILD_FAILED_EXIT_CODE = 91
+BUILD_TIMED_OUT_EXIT_CODE = 92
 DEFAULT_PART_BYTES = 64 << 20
 # The API front limit is 1800 s; leave room for the room's own setup.
 MAX_EXEC_TIMEOUT_SECONDS = 1750
+# The in-room build limit; the exec gets this plus slack so the script can
+# report its own time-out (exit 92) before the exec clock ends it.
+MAX_BUILD_TIMEOUT_SECONDS = 1700
+EXEC_SLACK_SECONDS = 45
 _MAX_PARTS = 256
 _MAX_EVIDENCE_PAGES = 10_000
 _RESULT_MAX_BYTES = 65_536
@@ -71,12 +76,35 @@ class CathedralBuildRejected(Exception):
         self.stdout = stdout
 
 
+class CathedralBuildTimedOut(Exception):
+    """Ditto's own build time limit ran out in the room (miner-owned).
+
+    Raised only when Cathedral could honour the configured limit in full.
+    """
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"cathedral sealed build exceeded {limit}s")
+        self.limit = limit
+
+
+class CathedralLeaseExpired(Exception):
+    """The screening lease ran out while the room was building (retryable)."""
+
+    def __init__(self, elapsed: float) -> None:
+        super().__init__(f"lease expired after {elapsed:g}s")
+        self.elapsed = elapsed
+
+
 class CathedralInfrastructureError(Exception):
     """Cathedral, the transport, or the room failed; the archive was never judged."""
 
 
 def build_command(
-    source_sha256: str, *, memory: str = "7g", part_bytes: int = DEFAULT_PART_BYTES
+    source_sha256: str,
+    *,
+    memory: str = "7g",
+    part_bytes: int = DEFAULT_PART_BYTES,
+    build_timeout: int = MAX_BUILD_TIMEOUT_SECONDS,
 ) -> list[str]:
     """The canonical ``cathedral-docker-build-v1`` argv for one source hash.
 
@@ -88,6 +116,10 @@ def build_command(
         c in "0123456789abcdef" for c in source_sha256
     ):
         raise ValueError("source_sha256 must be 64 lowercase hex characters")
+    if isinstance(build_timeout, bool) or not isinstance(build_timeout, int):
+        raise ValueError("build_timeout must be an integer number of seconds")
+    if build_timeout < 1:
+        raise ValueError("build_timeout must be at least 1 second")
     tag = "cathedral-build:" + source_sha256[:24]
     lines = [
         "set -eu",
@@ -96,9 +128,10 @@ def build_command(
         "export DOCKER_HOST=unix:///var/run/docker.sock",
         "i=0; until docker info >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 120 ] && { echo 'docker daemon not ready' >&2; exit 90; }; sleep 1; done",  # noqa: E501
         "set +e",
-        f"DOCKER_BUILDKIT=1 docker buildx build --load --iidfile $OUT/iid --network host --pull=false --provenance=false --sbom=false --memory {memory} --memory-swap {memory} --cpu-period 100000 --cpu-quota 200000 --shm-size 64m --ulimit nofile=1024:1024 -t {tag} -f Dockerfile - < $SRC > $OUT/build.log 2>&1",  # noqa: E501
+        "S=$(date +%s)",
+        f"DOCKER_BUILDKIT=1 timeout {build_timeout} docker buildx build --load --iidfile $OUT/iid --network host --pull=false --provenance=false --sbom=false --memory {memory} --memory-swap {memory} --cpu-period 100000 --cpu-quota 200000 --shm-size 64m --ulimit nofile=1024:1024 -t {tag} -f Dockerfile - < $SRC > $OUT/build.log 2>&1",  # noqa: E501
         "rc=$?; set -e",
-        "if [ $rc -ne 0 ]; then tail -c 6000 $OUT/build.log; exit 91; fi",
+        f"if [ $rc -ne 0 ]; then tail -c 6000 $OUT/build.log; [ $(( $(date +%s) - S )) -ge {build_timeout} ] && exit 92; exit 91; fi",  # noqa: E501
         f"IMG=$(docker image inspect --format '{{{{.Id}}}}' {tag})",
         "docker image save --output $OUT/image.tar $IMG",
         "ASHA=$(sha256sum $OUT/image.tar | cut -d' ' -f1); ASIZE=$(stat -c %s $OUT/image.tar)",  # noqa: E501
@@ -286,6 +319,8 @@ class CathedralBuilder:
         self._ready_timeout = ready_timeout
         self._delete_timeout = delete_timeout
         self._part_bytes = part_bytes
+        self._limit_is_full = True
+        self._build_limit = MAX_BUILD_TIMEOUT_SECONDS
 
     # -- HTTP ----------------------------------------------------------------
 
@@ -375,13 +410,28 @@ class CathedralBuilder:
         timeout: float,
         max_archive_bytes: int,
         disk_reserve_bytes: int,
+        lease_remaining: Callable[[], float | None] | None = None,
     ) -> CathedralBuildResult:
-        """Build ``tar_path`` in a sealed room and return the verified archive."""
+        """Build ``tar_path`` in a sealed room and return the verified archive.
+
+        ``timeout`` is Ditto's own build limit (``build_timeout_seconds``). The
+        room can honour at most :data:`MAX_BUILD_TIMEOUT_SECONDS` of it. The
+        screening lease is not a cap: ``lease_remaining`` is read on each poll
+        round, so a renewal extends the build, and a lapsed lease raises
+        :class:`CathedralLeaseExpired` after the room is deleted.
+        """
         source = await asyncio.to_thread(Path(tar_path).read_bytes)
         source_sha256 = hashlib.sha256(source).hexdigest()
         settings = self._settings
+        limit = max(1, int(min(timeout, MAX_BUILD_TIMEOUT_SECONDS)))
+        # Cathedral's cap, not Ditto's, ended the build when it is the smaller one.
+        self._limit_is_full = timeout <= MAX_BUILD_TIMEOUT_SECONDS
+        self._build_limit = limit
         command = build_command(
-            source_sha256, memory=settings.memory, part_bytes=self._part_bytes
+            source_sha256,
+            memory=settings.memory,
+            part_bytes=self._part_bytes,
+            build_timeout=limit,
         )
         key = self._read_key()
         attempt_key = idempotency_key(
@@ -410,7 +460,9 @@ class CathedralBuilder:
                 idempotency=f"{attempt_key}-put",
                 timeout=300.0,
             )
-            await self._run_exec(client, key, sandbox_id, command, timeout, attempt_key)
+            await self._run_exec(
+                client, key, sandbox_id, command, limit, attempt_key, lease_remaining
+            )
             # Must be the next guest receipt after the exec: nothing in between.
             response = await self._call(
                 client,
@@ -518,10 +570,11 @@ class CathedralBuilder:
         key: str,
         sandbox_id: str,
         command: list[str],
-        timeout: float,
+        limit: int,
         attempt_key: str,
+        lease_remaining: Callable[[], float | None] | None = None,
     ) -> str:
-        exec_timeout = max(1, int(min(timeout, MAX_EXEC_TIMEOUT_SECONDS)))
+        exec_timeout = min(limit + EXEC_SLACK_SECONDS, MAX_EXEC_TIMEOUT_SECONDS)
         response = await self._call(
             client,
             key,
@@ -535,8 +588,14 @@ class CathedralBuilder:
         if not isinstance(exec_id, str) or not _SANDBOX_ID.fullmatch(exec_id):
             raise CathedralInfrastructureError("start exec returned no usable id")
         # A little slack over the exec's own timeout so the room can report it.
-        give_up = time.monotonic() + exec_timeout + 60
+        started = time.monotonic()
+        give_up = started + exec_timeout + 60
         while True:
+            # Each round, like the local build: a renewal moves the lease out.
+            if lease_remaining is not None:
+                left = lease_remaining()
+                if left is not None and left <= 0:
+                    raise CathedralLeaseExpired(round(time.monotonic() - started))
             response = await self._call(
                 client,
                 key,
@@ -556,6 +615,8 @@ class CathedralBuilder:
             return stdout
         if exit_code == BUILD_FAILED_EXIT_CODE:
             raise CathedralBuildRejected(stdout)
+        if exit_code == BUILD_TIMED_OUT_EXIT_CODE and self._limit_is_full:
+            raise CathedralBuildTimedOut(self._build_limit)
         # Includes a timed-out exec (no exit code): Cathedral's clock, not the miner's.
         raise CathedralInfrastructureError(
             f"exec ended in state {status.get('state')!r} with exit code {exit_code!r}"
@@ -739,6 +800,7 @@ class CathedralBuilder:
                     "builder_digest": settings.builder_digest,
                     "memory": settings.memory,
                     "part_bytes": self._part_bytes,
+                    "build_timeout": self._build_limit,
                     "command": command,
                 },
                 "source_sha256": source_sha256,
