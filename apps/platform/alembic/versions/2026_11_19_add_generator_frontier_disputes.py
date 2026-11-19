@@ -94,6 +94,14 @@ def upgrade() -> None:
         "generator_frontier_disputes",
         ["refund_status", "created_at"],
     )
+    # One refund transfer pays one dispute.
+    op.create_index(
+        "generator_frontier_disputes_refund_transfer_key",
+        "generator_frontier_disputes",
+        ["refund_block_hash", "refund_extrinsic_index"],
+        unique=True,
+        postgresql_where=sa.text("refund_block_hash IS NOT NULL"),
+    )
 
 
 def downgrade() -> None:

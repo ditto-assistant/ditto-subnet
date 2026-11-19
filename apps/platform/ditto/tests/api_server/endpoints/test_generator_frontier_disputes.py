@@ -56,6 +56,7 @@ from ditto.tests.api_server.endpoints.test_generator_frontier import (
 )
 from ditto.tests.api_server.endpoints.test_generator_rounds import (
     _ADMIN,
+    _lease_job,
     round_capable_fleet,  # noqa: F401 - autouse: one round-capable validator
 )
 
@@ -297,14 +298,10 @@ class TestFrontierDisputes:
 
         # The report needs the hotkey's own signature.
         await lane.report(round_index, _STRANGER, status=400)
-        # After the oracle runs the owner sees which cases it failed (ids and
-        # scores only), but cannot dispute before the round is revealed, and
-        # the lane waits instead of settling at once.
+        # Before the reveal the report names no case, ids included, nothing
+        # is disputable, and the lane waits instead of settling at once.
         report = await lane.report(round_index)
-        assert report["oracle_failed"] == [
-            {"case_id": other, "score": 0.0},
-            {"case_id": hard, "score": 0.0},
-        ]
+        assert report["oracle_failed"] == []
         assert report["disputable"] == []
         assert report["blocker"] == "the round is not revealed yet"
         early = await lane.file(
@@ -316,6 +313,11 @@ class TestFrontierDisputes:
 
         await lane.reveal(round_index)
         report = await lane.report(round_index)
+        # Ids and scores only: the oracle keeps no answer text.
+        assert report["oracle_failed"] == [
+            {"case_id": other, "score": 0.0},
+            {"case_id": hard, "score": 0.0},
+        ]
         assert sorted(report["disputable"]) == sorted([hard, other])
 
         paid = 200_000_000  # 0.20 TAO: the minimum plus a priority part
@@ -357,6 +359,9 @@ class TestFrontierDisputes:
         assert hard in frontier["attested"][lane.miner_column]
         (dispute,) = frontier["disputes"]
         assert dispute["status"] == "upheld" and dispute["refund_rao"] == paid
+        # An attested case is no longer reported as an oracle failure.
+        report = await lane.report(round_index)
+        assert [r["case_id"] for r in report["oracle_failed"]] == [other]
         # A ruled dispute is final.
         assert (await lane.rule(round_index, hard, upheld=False)).status_code == 409
 
@@ -413,6 +418,58 @@ class TestFrontierDisputes:
             round_index, _dispute(round_index, other, evidence=_evidence(other))
         )
         assert late.status_code == 409 and "settled" in late.text
+
+    async def test_an_escalated_pass_is_not_reported_as_an_oracle_failure(
+        self, app: FastAPI, lane: _DisputeLane, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await lane.setup_disputes(app, monkeypatch, escalation=True)
+        round_index = await lane.oracle_fails(2)
+        job = await _lease_job(lane.client)
+        assert job is not None and job["agent_id"] == str(lane.escalation)
+        escalated, failed = lane.candidates[7], lane.candidates[6]
+        await lane.report_oracle(job, {escalated})
+        await lane.reveal(round_index)
+        report = await lane.report(round_index)
+        assert [r["case_id"] for r in report["oracle_failed"]] == [failed]
+        assert report["disputable"] == [failed]
+
+    async def test_one_transfer_cannot_refund_two_disputes(
+        self, app: FastAPI, lane: _DisputeLane, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await lane.setup_disputes(app, monkeypatch)
+        round_index = await lane.oracle_fails(2)
+        await lane.reveal(round_index)
+        for case_id in lane.candidates[6:]:
+            resp = await lane.file(
+                round_index, _dispute(round_index, case_id, evidence=_evidence(case_id))
+            )
+            assert resp.status_code == 200, resp.text
+            resp = await lane.rule(round_index, case_id, upheld=True)
+            assert resp.status_code == 200, resp.text
+        first, second = await lane.refunds()
+        transfer = {
+            "refund_block_hash": "0x" + "ef" * 32,
+            "refund_extrinsic_index": 2,
+            "reason": "refund sent from the subnet wallet",
+            "actor": "backroom:test",
+        }
+
+        async def record(refund: dict[str, Any]) -> httpx.Response:
+            return await lane.client.post(
+                f"{_REFUNDS_URL}/{refund['dispute_id']}/paid",
+                headers=_ADMIN,
+                json={
+                    **transfer,
+                    "confirmation": frontier_refund_paid_confirmation(
+                        refund["dispute_id"]
+                    ),
+                },
+            )
+
+        assert (await record(first)).status_code == 200
+        reused = await record(second)
+        assert reused.status_code == 409 and "already recorded" in reused.text
+        assert [r["dispute_id"] for r in await lane.refunds()] == [second["dispute_id"]]
 
     async def test_a_deposit_below_the_minimum_is_refused(
         self, app: FastAPI, lane: _DisputeLane, monkeypatch: pytest.MonkeyPatch

@@ -784,13 +784,15 @@ dispute is one more entry in the round's `FrontierCases`, applied by the same
 `apply_frontier` post-pass, so no score formula, bench or pack version
 changes.
 
-1. **Report.** Once the oracle reports, the column owner reads which of its
-   cases the oracle answered and failed, with their scores
-   (`POST /generator/rounds/{round}/frontier/report`, signed by the hotkey
-   with `ditto-generator-frontier-report-v1:{hotkey}:{round}:{ts}:{nonce}`).
-   Case ids and scores are not case content; the oracle keeps no answer
-   text. The cases themselves stay private until the round is revealed,
-   after which the miner rebuilds its pack from the revealed seed.
+1. **Report.** Once the oracle has reported and the round is revealed, the
+   column owner reads which of its cases the oracle answered and failed, with
+   their scores (`POST /generator/rounds/{round}/frontier/report`, signed by
+   the hotkey with
+   `ditto-generator-frontier-report-v1:{hotkey}:{round}:{ts}:{nonce}`).
+   Before the reveal the report names no case at all. Attested cases (oracle
+   or escalation passes, upheld disputes) are not listed, and the oracle
+   keeps no answer text. The miner rebuilds its pack from the revealed seed
+   to read the cases.
 2. **Dispute.** After the reveal and inside `frontier_dispute_window_hours`
    (default 6, cut at the audit grace deadline) the owner may dispute one
    oracle-failed case per request
@@ -830,7 +832,12 @@ changes.
    disputable case left, or while a dispute waits for a ruling, up to the
    audit grace. A dispute still unruled then lapses: it credits nothing, and
    its deposit is refunded, since operator silence must not cost the miner.
-   Settled rounds never reopen.
+   Settled rounds never reopen. With the lane on, a round whose miner column
+   has a disputable oracle-failed case therefore settles (and pays its
+   frontier credit) later than before: after the dispute window, or up to
+   `frontier_audit_grace_hours` after the oracle report when the reveal comes
+   late or a dispute waits for a ruling. A round with nothing disputable
+   settles as before.
 
 The oracle job and the audit window run after scoring and never hold a round
 open. A round whose oracle job does not complete within

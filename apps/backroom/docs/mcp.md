@@ -393,7 +393,8 @@ opens, once it is scored or void.
     `get_generator_competition_settings`.
     With `frontier_disputes_enabled` (off by default), the column's own miner
     hotkey reads which of its cases the oracle answered and failed (ids and
-    scores, signed `POST /generator/rounds/{round}/frontier/report`) and may
+    scores once the round is revealed, signed
+    `POST /generator/rounds/{round}/frontier/report`) and may
     dispute one as valid with its hop notes, a reasoning and a TAO deposit of
     at least `frontier_dispute_min_tao` (default 0.05), paid to the generator
     upload fee's address and verified on chain like that fee, once the oracle
@@ -412,7 +413,8 @@ opens, once it is scored or void.
     (`RECORD FRONTIER DISPUTE REFUND {dispute_id}`) records the transfer that
     paid one. The round waits for pending disputes up to
     `frontier_audit_grace_hours`; an unruled dispute then lapses, credits
-    nothing and is refunded. The round's `dispute_policy` and `disputes` are on
+    nothing and is refunded. With the lane on, a round with a disputable
+    oracle-failed case can settle up to the audit grace later than before. The round's `dispute_policy` and `disputes` are on
     `get_generator_round_frontier`.
   - `rotate_dueling_season` (`ROTATE DUELING SEASON`, audited reason) closes
     the open dueling season at the next round boundary, or on the next

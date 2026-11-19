@@ -1177,7 +1177,8 @@ class GeneratorFrontierReport(RoundModel):
     state: FrontierState
     oracle_failed: list[GeneratorFrontierOracleCaseResult] = Field(default_factory=list)
     """Cases on the hotkey's columns the oracle answered and failed (never
-    faulted ones), once the oracle reported."""
+    faulted, never attested ones), once the oracle reported and the round is
+    revealed."""
     disputes_enabled: bool
     """The round's frozen policy takes disputes."""
     min_deposit_rao: int | None = None

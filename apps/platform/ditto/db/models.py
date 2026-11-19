@@ -14275,6 +14275,14 @@ class GeneratorFrontierDispute(Base):
             name="generator_frontier_disputes_refund_paid_check",
         ),
         Index("generator_frontier_disputes_refund_idx", "refund_status", "created_at"),
+        # One refund transfer pays one dispute.
+        Index(
+            "generator_frontier_disputes_refund_transfer_key",
+            "refund_block_hash",
+            "refund_extrinsic_index",
+            unique=True,
+            postgresql_where=text("refund_block_hash IS NOT NULL"),
+        ),
     )
 
 

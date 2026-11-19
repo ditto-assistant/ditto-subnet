@@ -1617,7 +1617,8 @@ def frontier_report(
     row: GeneratorRound, *, hotkey: str, now: datetime
 ) -> GeneratorFrontierReport:
     """What the oracle did on ``hotkey``'s columns, what it may dispute now,
-    and its disputes so far with each ruling's reason."""
+    and its disputes so far with each ruling's reason. The oracle-failed
+    cases are listed only once the round is revealed."""
     frontier = row.frontier or {}
     policy = frontier.get("dispute_policy") or {}
     window = dispute_window(row)
@@ -1626,7 +1627,14 @@ def frontier_report(
         for c in row.columns or ()
         if not c.get("public_default") and c.get("miner_hotkey") == hotkey
     ]
-    failed = _oracle_failed(frontier)
+    # Nothing about the cases before the reveal, ids included; attested
+    # cases (oracle or escalation passes) are no longer failures.
+    attested = {c for ids in (frontier.get("attested") or {}).values() for c in ids}
+    failed = (
+        {k: v for k, v in _oracle_failed(frontier).items() if k not in attested}
+        if row.revealed_at is not None
+        else {}
+    )
     disputable = disputable_cases(row, now=now)
     blocker = _lane_dispute_blocker(row, frontier, now=now)
     if blocker is None and not owned:

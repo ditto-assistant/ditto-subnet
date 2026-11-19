@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
@@ -651,7 +652,8 @@ async def admin_frontier_disputes(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> GeneratorFrontierDisputeListResponse:
     """The frontier dispute queue: column owners' disputes that an oracle-failed
-    case is valid, awaiting a ruling, oldest round first. ``include_ruled``
+    case is valid, awaiting a ruling, in review order: the largest deposit
+    first, then the earliest filed. ``include_ruled``
     also lists ruled disputes of rounds that have not settled yet."""
     disputes, total = await pending_disputes(
         session, include_ruled=include_ruled, limit=limit, offset=offset
@@ -812,8 +814,21 @@ async def admin_record_dispute_refund_paid(
             status_code=409,
             detail=f"dispute refund is {row.refund_status}, not pending",
         )
+    refund_block_hash = payload.refund_block_hash.lower()
+    used = await session.scalar(
+        select(GeneratorFrontierDispute.dispute_id).where(
+            GeneratorFrontierDispute.refund_block_hash == refund_block_hash,
+            GeneratorFrontierDispute.refund_extrinsic_index
+            == payload.refund_extrinsic_index,
+        )
+    )
+    if used is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"that transfer is already recorded as the refund of dispute {used}",
+        )
     row.refund_status = REFUND_PAID
-    row.refund_block_hash = payload.refund_block_hash.lower()
+    row.refund_block_hash = refund_block_hash
     row.refund_extrinsic_index = payload.refund_extrinsic_index
     row.refund_paid_at = datetime.now(UTC)
     row.refund_actor = actor
@@ -832,7 +847,14 @@ async def admin_record_dispute_refund_paid(
             "refund_extrinsic_index": row.refund_extrinsic_index,
         },
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        # A concurrent record of the same transfer committed first.
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="that transfer is already recorded as a refund"
+        ) from exc
     return refund_view(row)
 
 

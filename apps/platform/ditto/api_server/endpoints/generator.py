@@ -811,10 +811,10 @@ async def frontier_report_for_hotkey(
     session: SessionDep,
     response: Response,
 ) -> GeneratorFrontierReport:
-    """The frontier oracle's outcome on the signing hotkey's columns: the
-    case ids it answered and failed with their scores (never case content,
-    which stays private until the round is revealed), what the hotkey may
-    dispute now, and its disputes with each ruling's reason."""
+    """The frontier oracle's outcome on the signing hotkey's columns: once
+    the round is revealed, the case ids it answered and failed with their
+    scores (never case content, and nothing before the reveal), what the
+    hotkey may dispute now, and its disputes with each ruling's reason."""
     response.headers["Cache-Control"] = "no-store"
     message = frontier_report_signature_payload(
         hotkey=payload.hotkey,

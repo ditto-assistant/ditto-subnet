@@ -2242,7 +2242,8 @@ export interface paths {
         /**
          * Admin Frontier Disputes
          * @description The frontier dispute queue: column owners' disputes that an oracle-failed
-         *     case is valid, awaiting a ruling, oldest round first. ``include_ruled``
+         *     case is valid, awaiting a ruling, in review order: the largest deposit
+         *     first, then the earliest filed. ``include_ruled``
          *     also lists ruled disputes of rounds that have not settled yet.
          */
         get: operations["admin_frontier_disputes_api_v1_admin_generator_competition_frontier_disputes_get"];
@@ -7246,10 +7247,10 @@ export interface paths {
         put?: never;
         /**
          * Frontier Report For Hotkey
-         * @description The frontier oracle's outcome on the signing hotkey's columns: the
-         *     case ids it answered and failed with their scores (never case content,
-         *     which stays private until the round is revealed), what the hotkey may
-         *     dispute now, and its disputes with each ruling's reason.
+         * @description The frontier oracle's outcome on the signing hotkey's columns: once
+         *     the round is revealed, the case ids it answered and failed with their
+         *     scores (never case content, and nothing before the reveal), what the
+         *     hotkey may dispute now, and its disputes with each ruling's reason.
          */
         post: operations["frontier_report_for_hotkey_api_v1_generator_rounds__round_index__frontier_report_post"];
         delete?: never;
