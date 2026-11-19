@@ -58,6 +58,8 @@ _RESULT_MAX_BYTES = 65_536
 _PART_NAME = re.compile(r"image\.tar\.part-[a-z]{3}")
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
+_GET_ATTEMPTS = 4
+_RETRYABLE_STATUS = frozenset({502, 503, 504})
 _SANDBOX_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
@@ -273,8 +275,10 @@ class CathedralBuilder:
         ready_timeout: float = 360.0,
         delete_timeout: float = 180.0,
         part_bytes: int = DEFAULT_PART_BYTES,
+        retry_delay: float = 2.0,
     ) -> None:
         self._settings = settings
+        self._retry_delay = retry_delay
         self._client = client
         # Idempotency key -> room id, for this process (see the module notes in the PR).
         self._rooms = rooms if rooms is not None else {}
@@ -316,21 +320,34 @@ class CathedralBuilder:
             headers["Idempotency-Key"] = idempotency
         if content is not None:
             headers["Content-Type"] = "application/octet-stream"
-        try:
-            response = await client.request(
-                method,
-                self._settings.api_url + path,
-                headers=headers,
-                json=json_body,
-                content=content,
-                timeout=httpx.Timeout(timeout, connect=10.0),
-            )
-        except httpx.HTTPError as error:
-            # The exception text can carry the request; name only its type.
-            raise CathedralInfrastructureError(
-                f"{method} {path.split('?')[0]} transport error "
-                f"({type(error).__name__})"
-            ) from error
+        # A read is retried on a dropped connection or a gateway error, so one
+        # network blip during a long build poll does not throw the build away.
+        # Writes are not retried here: their Idempotency-Key makes a caller
+        # retry safe, but that is the caller's decision.
+        attempts = _GET_ATTEMPTS if method == "GET" else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await client.request(
+                    method,
+                    self._settings.api_url + path,
+                    headers=headers,
+                    json=json_body,
+                    content=content,
+                    timeout=httpx.Timeout(timeout, connect=10.0),
+                )
+            except httpx.HTTPError as error:
+                if attempt < attempts:
+                    await asyncio.sleep(self._retry_delay * attempt)
+                    continue
+                # The exception text can carry the request; name only its type.
+                raise CathedralInfrastructureError(
+                    f"{method} {path.split('?')[0]} transport error "
+                    f"({type(error).__name__})"
+                ) from error
+            if response.status_code in _RETRYABLE_STATUS and attempt < attempts:
+                await asyncio.sleep(self._retry_delay * attempt)
+                continue
+            break
         if response.status_code >= 300:
             raise CathedralInfrastructureError(
                 f"{method} {path.split('?')[0]} answered HTTP {response.status_code}"

@@ -96,6 +96,10 @@ class FakeCathedral:
             return httpx.Response(422, json={"detail": "Idempotency-Key required"})
         if "transport" in self.options and path.endswith("/execs"):
             raise httpx.ConnectError("boom")
+        if path.endswith("/execs/ex1") and self.options.get("poll_drops", 0) > 0:
+            # A long poll whose connection drops (seen once on Cathedral prod).
+            self.options["poll_drops"] -= 1
+            raise httpx.ReadError("connection dropped")
         if method == "POST" and path == "/v1/sandboxes":
             if self.options.get("create_status"):
                 return httpx.Response(self.options["create_status"], json={})
@@ -180,6 +184,7 @@ def _fast_polls(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def init(self: Any, *args: Any, **kwargs: Any) -> None:
         kwargs["poll_interval"] = 0.0
+        kwargs["retry_delay"] = 0.0
         original(self, *args, **kwargs)
 
     monkeypatch.setattr(cathedral_build.CathedralBuilder, "__init__", init)
@@ -326,3 +331,30 @@ def test_cathedral_config_defaults_and_validation(
     monkeypatch.setenv("SCREENER_CATHEDRAL_BUILD_MEMORY", "7g; reboot")
     with pytest.raises(ScreenerConfigError, match="BUILD_MEMORY"):
         parse_screener_config_from_env()
+
+
+async def test_dropped_exec_poll_is_retried_not_infra(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    tarball = _valid_tar()
+    fake = FakeCathedral(tarball, poll_drops=2)
+    gate = _gate_with(_config(make_config, tmp_path), _ok_run(), tarball=tarball)
+    loaded = _wire(gate, fake)
+    async with gate._client:
+        result = await _screen(gate, fake.source_sha256, build_only=True)
+    assert result.outcome == ScreeningOutcome.PASS
+    assert loaded and loaded[0][0] == fake.image_id
+
+
+async def test_exec_poll_that_keeps_dropping_is_infra(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    tarball = _valid_tar()
+    fake = FakeCathedral(tarball, poll_drops=10)
+    gate = _gate_with(_config(make_config, tmp_path), _ok_run(), tarball=tarball)
+    _wire(gate, fake)
+    async with gate._client:
+        result = await _screen(gate, fake.source_sha256)
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert result.evidence[-1].code == "cathedral-build-infrastructure"
+    assert fake.deleted
