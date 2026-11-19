@@ -16,8 +16,8 @@ from __future__ import annotations
 import base64
 import hashlib
 from datetime import UTC, datetime
-from typing import Annotated, Any
-from uuid import uuid4
+from typing import Annotated, Any, Literal
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -48,6 +48,12 @@ from ditto.api_models.generator_rounds import (
     GeneratorFrontierAuditDetail,
     GeneratorFrontierAuditListResponse,
     GeneratorFrontierAuditRuling,
+    GeneratorFrontierDisputeDetail,
+    GeneratorFrontierDisputeListResponse,
+    GeneratorFrontierDisputeRuling,
+    GeneratorFrontierRefundListResponse,
+    GeneratorFrontierRefundPaid,
+    GeneratorFrontierRefundView,
     GeneratorFrontierSettleRequest,
     GeneratorFrontierView,
     GeneratorPrescreenView,
@@ -59,6 +65,8 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundSkippedAgent,
     GeneratorRoundSkipView,
     frontier_audit_confirmation,
+    frontier_dispute_confirmation,
+    frontier_refund_paid_confirmation,
     frontier_settle_confirmation,
     void_round_confirmation,
 )
@@ -75,14 +83,22 @@ from ditto.api_server.generator_competition import (
     load_settings,
 )
 from ditto.api_server.generator_frontier import (
+    REFUND_PAID,
+    REFUND_PENDING,
     STATE_SETTLED,
     FrontierRejected,
     audit_case_views,
     audit_views,
+    dispute_detail,
     frontier_view,
+    list_refunds,
     lock_oracle_tickets,
+    owe_refund,
     pending_audits,
+    pending_disputes,
+    refund_view,
     rule_audit,
+    rule_dispute,
     settle_frontier,
 )
 from ditto.api_server.generator_rounds import (
@@ -118,6 +134,7 @@ from ditto.api_server.storage.errors import (
     ObjectNotFoundError,
 )
 from ditto.db.models import (
+    GeneratorFrontierDispute,
     GeneratorPrescreen,
     GeneratorRoundAttempt,
     GeneratorRoundCommitmentPublication,
@@ -623,6 +640,200 @@ async def admin_rule_frontier_audit(
     )
     await session.commit()
     return await admin_round_frontier(round_index, _admin, session)
+
+
+@router.get("/frontier/disputes", response_model=GeneratorFrontierDisputeListResponse)
+async def admin_frontier_disputes(
+    _admin: AdminDep,
+    session: SessionDep,
+    include_ruled: bool = False,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> GeneratorFrontierDisputeListResponse:
+    """The frontier dispute queue: column owners' disputes that an oracle-failed
+    case is valid, awaiting a ruling, oldest round first. ``include_ruled``
+    also lists ruled disputes of rounds that have not settled yet."""
+    disputes, total = await pending_disputes(
+        session, include_ruled=include_ruled, limit=limit, offset=offset
+    )
+    return GeneratorFrontierDisputeListResponse(
+        disputes=disputes,
+        count=total,
+        returned=len(disputes),
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(disputes) < total,
+    )
+
+
+@router.get(
+    "/rounds/{round_index}/frontier/disputes/{case_id:path}",
+    response_model=GeneratorFrontierDisputeDetail,
+)
+async def admin_frontier_dispute_detail(
+    round_index: int, case_id: str, _admin: AdminDep, session: SessionDep
+) -> GeneratorFrontierDisputeDetail:
+    """One dispute with its case as the generator wrote it: question, gold and
+    declared competitors, the pairs the dispute cites (and which of them the
+    case declares as evidence), the reasoning, and the panel's and oracle's
+    scores."""
+    row = await get_round(session, round_index)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown round")
+    if case_id not in ((row.frontier or {}).get("disputes") or {}):
+        raise HTTPException(status_code=404, detail="case has no frontier dispute")
+    if row.dataset_bytes is None:
+        raise HTTPException(status_code=409, detail="round dataset is unavailable")
+    try:
+        return dispute_detail(row, row.dataset_bytes, case_id=case_id)
+    except FrontierRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post(
+    "/rounds/{round_index}/frontier/disputes/{case_id:path}",
+    response_model=GeneratorFrontierView,
+)
+async def admin_rule_frontier_dispute(
+    round_index: int,
+    case_id: str,
+    payload: GeneratorFrontierDisputeRuling,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> GeneratorFrontierView:
+    """Rule one frontier dispute. Upheld attests the case like an oracle pass
+    (it scores frontier when the round settles, unless the column's audit
+    fails) and records a pending refund of the whole deposit to the paying
+    coldkey; rejected leaves it unsolved, keeps the deposit and spends the
+    dispute's slot, and its reason is shown to the miner. A ruled dispute is
+    final."""
+    expected = frontier_dispute_confirmation(round_index, case_id, payload.upheld)
+    if payload.confirmation != expected:
+        raise HTTPException(
+            status_code=409, detail=f"confirmation must be exactly {expected}"
+        )
+    reason, actor = _check_reason(payload.reason, payload.actor)
+    row = await get_round(session, round_index, for_update=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown round")
+    try:
+        dispute = rule_dispute(
+            row,
+            case_id=case_id,
+            upheld=payload.upheld,
+            reason=reason,
+            actor=actor,
+            now=datetime.now(UTC),
+        )
+    except FrontierRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await owe_refund(session, dispute)
+    column = next(
+        (c for c in row.columns or () if c["column_id"] == dispute["column_id"]), None
+    )
+    record_operator_action(
+        session,
+        action="frontier_dispute_upheld"
+        if payload.upheld
+        else "frontier_dispute_rejected",
+        subject=f"round:{round_index}:case:{case_id}",
+        actor=actor,
+        reason=reason,
+        detail={
+            "column_id": dispute["column_id"],
+            "evidence_pair_ids": dispute["evidence_pair_ids"],
+            "submission_id": (column or {}).get("submission_id"),
+            "miner_hotkey": dispute["miner_hotkey"],
+            "dispute_id": dispute.get("dispute_id"),
+            "amount_rao": dispute.get("amount_rao"),
+            "refund_rao": dispute.get("refund_rao"),
+        },
+    )
+    await session.commit()
+    return await admin_round_frontier(round_index, _admin, session)
+
+
+@router.get(
+    "/frontier/dispute-refunds", response_model=GeneratorFrontierRefundListResponse
+)
+async def admin_frontier_dispute_refunds(
+    _admin: AdminDep,
+    session: SessionDep,
+    status: Annotated[Literal["none", "pending", "paid", "all"], Query()] = "pending",
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> GeneratorFrontierRefundListResponse:
+    """Dispute deposits and the refunds they owe, oldest first. ``pending``
+    (the default) is the operator payout queue: send ``refund_rao`` to
+    ``miner_coldkey``, then record the transfer. ``none`` lists kept
+    deposits, ``all`` every deposit."""
+    refunds, total = await list_refunds(
+        session,
+        status=None if status == "all" else status,
+        limit=limit,
+        offset=offset,
+    )
+    return GeneratorFrontierRefundListResponse(
+        refunds=refunds,
+        count=total,
+        returned=len(refunds),
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(refunds) < total,
+    )
+
+
+@router.post(
+    "/frontier/dispute-refunds/{dispute_id}/paid",
+    response_model=GeneratorFrontierRefundView,
+)
+async def admin_record_dispute_refund_paid(
+    dispute_id: UUID,
+    payload: GeneratorFrontierRefundPaid,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> GeneratorFrontierRefundView:
+    """Record the on-chain transfer that paid a pending dispute refund."""
+    expected = frontier_refund_paid_confirmation(dispute_id)
+    if payload.confirmation != expected:
+        raise HTTPException(
+            status_code=409, detail=f"confirmation must be exactly {expected}"
+        )
+    reason, actor = _check_reason(payload.reason, payload.actor)
+    row = await session.scalar(
+        select(GeneratorFrontierDispute)
+        .where(GeneratorFrontierDispute.dispute_id == dispute_id)
+        .with_for_update()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown dispute")
+    if row.refund_status != REFUND_PENDING:
+        raise HTTPException(
+            status_code=409,
+            detail=f"dispute refund is {row.refund_status}, not pending",
+        )
+    row.refund_status = REFUND_PAID
+    row.refund_block_hash = payload.refund_block_hash.lower()
+    row.refund_extrinsic_index = payload.refund_extrinsic_index
+    row.refund_paid_at = datetime.now(UTC)
+    row.refund_actor = actor
+    record_operator_action(
+        session,
+        action="frontier_dispute_refund_paid",
+        subject=f"dispute:{dispute_id}",
+        actor=actor,
+        reason=reason,
+        detail={
+            "round_index": row.round_index,
+            "case_id": row.case_id,
+            "miner_coldkey": row.miner_coldkey,
+            "refund_rao": row.refund_rao,
+            "refund_block_hash": row.refund_block_hash,
+            "refund_extrinsic_index": row.refund_extrinsic_index,
+        },
+    )
+    await session.commit()
+    return refund_view(row)
 
 
 @router.post(

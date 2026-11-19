@@ -14193,6 +14193,91 @@ class GeneratorCompetitionSettingsRevision(Base):
     )
 
 
+class GeneratorFrontierDispute(Base):
+    """The deposit behind one frontier dispute, and its refund.
+
+    The dispute itself (case, evidence, reasoning, ruling) lives in the
+    round's frontier document with the rest of the lane
+    (:mod:`ditto.api_server.generator_frontier`, "Disputes"); this row holds
+    the money. The primary key ``(block_hash, extrinsic_index)`` stops one
+    transfer funding two disputes, and every payment lane refuses a proof
+    recorded here under the shared per-proof lock. Platform holds no key that
+    can send TAO, so a refund is an operator payout: ``pending`` until an
+    operator records the transfer that paid it.
+    """
+
+    __tablename__ = "generator_frontier_disputes"
+
+    dispute_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    round_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    case_id: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """Coldkey that owned the hotkey and signed the deposit transfer."""
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tao_usd_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    dest_address: Mapped[str] = mapped_column(Text, nullable=False)
+    paid_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    """On-chain block timestamp of the deposit."""
+    refund_rao: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    refund_status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="none"
+    )
+    """``none`` (kept), ``pending`` (owed to ``miner_coldkey``) or ``paid``."""
+    refund_block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refund_extrinsic_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    refund_paid_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    refund_actor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "block_hash", "extrinsic_index", name="generator_frontier_disputes_pkey"
+        ),
+        UniqueConstraint(
+            "dispute_id", name="generator_frontier_disputes_dispute_id_key"
+        ),
+        UniqueConstraint(
+            "round_index", "case_id", name="generator_frontier_disputes_case_key"
+        ),
+        CheckConstraint(
+            "block_hash = lower(block_hash)",
+            name="generator_frontier_disputes_block_hash_check",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0",
+            name="generator_frontier_disputes_extrinsic_index_check",
+        ),
+        CheckConstraint(
+            "amount_rao > 0", name="generator_frontier_disputes_amount_rao_check"
+        ),
+        CheckConstraint(
+            "refund_status IN ('none', 'pending', 'paid')",
+            name="generator_frontier_disputes_refund_status_check",
+        ),
+        CheckConstraint(
+            "(refund_status = 'none') = (refund_rao IS NULL)",
+            name="generator_frontier_disputes_refund_amount_check",
+        ),
+        CheckConstraint(
+            "refund_rao IS NULL OR (refund_rao > 0 AND refund_rao <= amount_rao)",
+            name="generator_frontier_disputes_refund_bound_check",
+        ),
+        CheckConstraint(
+            "(refund_status = 'paid') = (refund_block_hash IS NOT NULL)",
+            name="generator_frontier_disputes_refund_paid_check",
+        ),
+        Index("generator_frontier_disputes_refund_idx", "refund_status", "created_at"),
+    )
+
+
 class GeneratorSubmission(Base):
     """One generator-competition submission: a generator's Go source archive.
 

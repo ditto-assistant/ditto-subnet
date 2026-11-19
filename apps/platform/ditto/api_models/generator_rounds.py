@@ -17,11 +17,14 @@ round is revealed (``privacy_window_rounds`` after it opens).
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ditto.api_models.generator import (
     GeneratorBuildResult,
@@ -821,6 +824,216 @@ class GeneratorFrontierAuditView(RoundModel):
     """When the round's attestations apply anyway if still unruled."""
 
 
+FrontierDisputeStatus = Literal["pending", "upheld", "rejected", "expired"]
+FRONTIER_DISPUTE_SIGNATURE_DOMAIN = "ditto-generator-frontier-dispute-v1"
+FRONTIER_REPORT_SIGNATURE_DOMAIN = "ditto-generator-frontier-report-v1"
+FrontierRefundStatus = Literal["none", "pending", "paid"]
+# The OracleContext evidence bound: a dispute cites at most as many notes as a
+# case may cite evidence.
+MAX_FRONTIER_DISPUTE_EVIDENCE = 8
+MIN_FRONTIER_DISPUTE_REASONING = 20
+MAX_FRONTIER_DISPUTE_REASONING = 1200
+
+
+def frontier_dispute_confirmation(round_index: int, case_id: str, upheld: bool) -> str:
+    """The exact confirmation an operator types to rule one frontier dispute."""
+    verdict = "UPHELD" if upheld else "REJECTED"
+    return f"RULE FRONTIER DISPUTE {round_index} {case_id} {verdict}"
+
+
+def frontier_refund_paid_confirmation(dispute_id: UUID) -> str:
+    """The exact confirmation an operator types to record a paid refund."""
+    return f"RECORD FRONTIER DISPUTE REFUND {dispute_id}"
+
+
+def frontier_dispute_proof_sha256(
+    evidence_pair_ids: Sequence[str],
+    reasoning: str,
+    *,
+    payment_block_hash: str,
+    payment_extrinsic_index: int,
+    payment_amount_rao: int,
+) -> str:
+    """The digest of a dispute's proof and deposit that its signature covers."""
+    body = json.dumps(
+        {
+            "evidence_pair_ids": list(evidence_pair_ids),
+            "reasoning": reasoning,
+            "payment_block_hash": payment_block_hash.lower(),
+            "payment_extrinsic_index": payment_extrinsic_index,
+            "payment_amount_rao": payment_amount_rao,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def frontier_dispute_signature_payload(
+    *,
+    hotkey: str,
+    round_index: int,
+    case_id: str,
+    proof_sha256: str,
+    timestamp: int,
+    nonce: UUID,
+) -> bytes:
+    """The domain-separated bytes a generator miner signs to dispute a case.
+
+    Bound to the round, the case, the exact proof and the deposit, so a
+    signature never carries over to another case, edited evidence or another
+    transfer."""
+    return (
+        f"{FRONTIER_DISPUTE_SIGNATURE_DOMAIN}:{hotkey}:{round_index}:{case_id}:"
+        f"{proof_sha256}:{timestamp}:{nonce}"
+    ).encode()
+
+
+def frontier_report_signature_payload(
+    *, hotkey: str, round_index: int, timestamp: int, nonce: UUID
+) -> bytes:
+    """The domain-separated bytes a generator miner signs to read its
+    round's frontier report."""
+    return (
+        f"{FRONTIER_REPORT_SIGNATURE_DOMAIN}:{hotkey}:{round_index}:{timestamp}:{nonce}"
+    ).encode()
+
+
+class GeneratorFrontierReportRequest(BaseModel):
+    """A column owner's signed read of its round's frontier report."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    hotkey: Annotated[str, Field(pattern=_SS58)]
+    signature: Annotated[str, Field(pattern=r"^(0x)?[0-9a-fA-F]{128}$")]
+    signature_timestamp: Annotated[int, Field(ge=1)]
+    signature_nonce: UUID
+
+
+class GeneratorFrontierDisputeRequest(BaseModel):
+    """A column owner's signed dispute that an oracle-failed case is valid."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    hotkey: Annotated[str, Field(pattern=_SS58)]
+    case_id: Annotated[str, Field(min_length=3, max_length=72, pattern=r"^\S+/\S+$")]
+    """The round case id, ``column/case``."""
+    evidence_pair_ids: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=128)]],
+        Field(min_length=1, max_length=MAX_FRONTIER_DISPUTE_EVIDENCE),
+    ]
+    """The memory pairs (the hop notes) that together give the gold answer.
+    Each must be a pair the case's user holds at its ``run_after_wave``."""
+    reasoning: Annotated[
+        str,
+        Field(
+            min_length=MIN_FRONTIER_DISPUTE_REASONING,
+            max_length=MAX_FRONTIER_DISPUTE_REASONING,
+        ),
+    ]
+    """How the cited pairs lead to the gold answer, for a reviewer to check
+    in a minute or two."""
+    payment_block_hash: Annotated[str, Field(pattern=r"^0x[0-9a-fA-F]{64}$")]
+    payment_block_number: Annotated[int, Field(ge=1)]
+    payment_extrinsic_index: Annotated[int, Field(ge=0)]
+    payment_amount_rao: Annotated[int, Field(ge=1)]
+    """The finalized ``Balances.transfer_keep_alive`` from the hotkey's
+    coldkey to the generator upload fee's receiving address that pays the
+    deposit, and the exact amount it moved: at least
+    ``frontier_dispute_min_tao``. More ranks the dispute higher in review."""
+    signature: Annotated[str, Field(pattern=r"^(0x)?[0-9a-fA-F]{128}$")]
+    signature_timestamp: Annotated[int, Field(ge=1)]
+    signature_nonce: UUID
+
+    @field_validator("evidence_pair_ids")
+    @classmethod
+    def _unique(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("evidence_pair_ids must be unique")
+        return value
+
+    @property
+    def proof_sha256(self) -> str:
+        return frontier_dispute_proof_sha256(
+            self.evidence_pair_ids,
+            self.reasoning,
+            payment_block_hash=self.payment_block_hash,
+            payment_extrinsic_index=self.payment_extrinsic_index,
+            payment_amount_rao=self.payment_amount_rao,
+        )
+
+
+class GeneratorFrontierDisputeView(RoundModel):
+    """One frontier dispute and its ruling."""
+
+    dispute_id: UUID | None = None
+    round_index: int
+    column_id: str
+    case_id: str
+    submission_id: UUID | None
+    miner_hotkey: str
+    status: FrontierDisputeStatus
+    evidence_pair_ids: list[str]
+    reasoning: str
+    amount_rao: int = 0
+    """The deposit paid. Disputes are reviewed by amount, then filing time."""
+    filed_at: datetime
+    oracle_score: float | None = None
+    reason: str | None = None
+    """The reviewer's reason, required on every ruling and shown to the
+    miner on its report."""
+    actor: str | None = None
+    ruled_at: datetime | None = None
+    rule_deadline: datetime | None = None
+    """When a pending dispute lapses (the round's audit grace): an unruled
+    dispute credits nothing and owes back its deposit."""
+    refund_rao: int | None = None
+    """What an upheld (or lapsed) dispute owes back; null when the deposit
+    is kept."""
+
+
+class GeneratorFrontierDisputePolicyView(RoundModel):
+    """The dispute policy frozen into a round's frontier lane."""
+
+    window_hours: int
+    max_per_column: int
+    max_per_round: int
+    max_failed_fraction: float
+    min_rao: int = 0
+    window_opens_at: datetime | None = None
+    """When disputes open: the later of the oracle report and the round's
+    reveal. Null until both happened."""
+    window_closes_at: datetime | None = None
+
+
+class GeneratorFrontierDisputeListResponse(RoundModel):
+    disputes: list[GeneratorFrontierDisputeView]
+    count: int
+    """Every dispute matching the filter (the queue total)."""
+    returned: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
+class GeneratorFrontierDisputeRuling(BaseModel):
+    """An operator's ruling on one frontier dispute."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    upheld: bool
+    """True: the cited pairs give the gold answer and it is the only right
+    answer given the visible memory. The case is attested like an oracle
+    pass and the whole deposit is owed back. False: the case stays unsolved,
+    the deposit is kept and the dispute's slot is spent; ``reason`` is shown
+    to the miner."""
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+    """``RULE FRONTIER DISPUTE {round} {case_id} UPHELD|REJECTED``."""
+
+
 class GeneratorFrontierView(RoundModel):
     """A scored round's frontier lane: candidates, oracle, audits, outcome."""
 
@@ -850,6 +1063,9 @@ class GeneratorFrontierView(RoundModel):
     created_at: datetime
     settled_at: datetime | None = None
     settle_reason: str | None = None
+    dispute_policy: GeneratorFrontierDisputePolicyView | None = None
+    """Null when the round's policy took no disputes."""
+    disputes: list[GeneratorFrontierDisputeView] = Field(default_factory=list)
 
 
 class GeneratorFrontierAuditListResponse(RoundModel):
@@ -931,3 +1147,88 @@ class GeneratorFrontierSettleRequest(BaseModel):
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
     """``SETTLE GENERATOR FRONTIER {round}``."""
+
+
+class GeneratorFrontierDisputeDetail(RoundModel):
+    """One dispute with its case as the generator wrote it and the cited
+    pairs, so a reviewer can rule it without another read."""
+
+    dispute: GeneratorFrontierDisputeView
+    case: GeneratorFrontierCaseView
+    cited: list[GeneratorFrontierMemoryPair]
+    """The pairs the dispute cites, in its order."""
+    cited_declared: list[str]
+    """Cited pair ids the case itself declares as ``evidence_pair_ids``."""
+
+
+class GeneratorFrontierOracleCaseResult(RoundModel):
+    case_id: str
+    score: float
+    """The oracle's grade on the case. Answer text is never stored."""
+
+
+class GeneratorFrontierReport(RoundModel):
+    """What the frontier oracle did on a hotkey's columns, and what it may
+    dispute now. Case ids and scores only: case content stays private until
+    the round is revealed, and the miner reads it from its own generator."""
+
+    round_index: int
+    hotkey: str
+    state: FrontierState
+    oracle_failed: list[GeneratorFrontierOracleCaseResult] = Field(default_factory=list)
+    """Cases on the hotkey's columns the oracle answered and failed (never
+    faulted ones), once the oracle reported."""
+    disputes_enabled: bool
+    """The round's frozen policy takes disputes."""
+    min_deposit_rao: int | None = None
+    window_opens_at: datetime | None = None
+    window_closes_at: datetime | None = None
+    disputable: list[str] = Field(default_factory=list)
+    """Round case ids the hotkey may dispute now: on its column, answered and
+    failed by the oracle, not attested, not disputed, within the caps."""
+    blocker: str | None = None
+    """Why nothing is disputable, when ``disputable`` is empty."""
+    disputes: list[GeneratorFrontierDisputeView] = Field(default_factory=list)
+
+
+class GeneratorFrontierRefundView(RoundModel):
+    """One dispute deposit and the refund it owes, an operator payout."""
+
+    dispute_id: UUID
+    round_index: int
+    case_id: str
+    miner_hotkey: str
+    miner_coldkey: str
+    """Where the refund goes: the coldkey that paid the deposit."""
+    amount_rao: int
+    refund_rao: int | None
+    refund_status: FrontierRefundStatus
+    payment_block_hash: str
+    payment_extrinsic_index: int
+    refund_block_hash: str | None = None
+    refund_extrinsic_index: int | None = None
+    refund_paid_at: datetime | None = None
+    refund_actor: str | None = None
+    created_at: datetime
+
+
+class GeneratorFrontierRefundListResponse(RoundModel):
+    refunds: list[GeneratorFrontierRefundView]
+    count: int
+    returned: int
+    limit: int
+    offset: int
+    has_more: bool
+
+
+class GeneratorFrontierRefundPaid(BaseModel):
+    """An operator's record of the transfer that paid a dispute refund."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    refund_block_hash: Annotated[str, Field(pattern=r"^0x[0-9a-fA-F]{64}$")]
+    refund_extrinsic_index: Annotated[int, Field(ge=0)]
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+    """``RECORD FRONTIER DISPUTE REFUND {dispute_id}``."""

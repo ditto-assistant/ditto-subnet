@@ -318,6 +318,29 @@ class GeneratorCompetitionSettings(BaseModel):
     (non-duplicate) cases is not escalated at all: a column that mostly
     beats the oracle looks broken, not hard, and flooding a pack with
     unsolvable cases must not buy escalation."""
+    frontier_disputes_enabled: bool = False
+    """Let a column's owner dispute an oracle-failed case as valid, paying a
+    TAO deposit and giving the hop notes and a short reasoning as proof
+    (:mod:`ditto.api_server.generator_frontier`, "Disputes"). An operator rules
+    each dispute in Backroom; an upheld dispute is attested like an oracle
+    pass and its whole deposit is owed back. Takes effect only
+    while frontier scoring runs. Ships off, and a revision written before
+    this field existed reads as off."""
+    frontier_dispute_window_hours: Annotated[int, Field(ge=1, le=168)] = 6
+    """Hours a column owner may file disputes, from when the round is revealed
+    and its oracle has reported (whichever is later), cut at the audit grace
+    deadline. The lane does not settle while the window is open and a
+    disputable case is left, or while a dispute waits for a ruling."""
+    frontier_dispute_max_per_column: Annotated[int, Field(ge=1, le=16)] = 4
+    """At most this many disputes per column per round, ruled or not."""
+    frontier_dispute_max_per_round: Annotated[int, Field(ge=1, le=64)] = 8
+    """At most this many disputes per round across all columns: the round's
+    reviewer budget. A column whose oracle-failed share exceeds
+    ``frontier_escalation_max_failed_fraction`` cannot dispute at all."""
+    frontier_dispute_min_tao: Annotated[float, Field(ge=0.001, le=100.0)] = 0.05
+    """Smallest deposit a dispute may pay, in TAO, to the generator upload
+    fee's receiving address. A larger deposit ranks higher in the review
+    queue (amount, then filing time)."""
 
     prescreen_enabled: bool = False
     """Pre-screen never-scored generators before they take a challenger
@@ -360,6 +383,15 @@ class GeneratorCompetitionSettings(BaseModel):
                 raise ValueError(
                     "frontier_escalation_agent_id must not be a reference agent"
                 )
+        if (
+            self.frontier_disputes_enabled
+            and self.frontier_dispute_max_per_column
+            > self.frontier_dispute_max_per_round
+        ):
+            raise ValueError(
+                "frontier_dispute_max_per_column must not exceed "
+                "frontier_dispute_max_per_round"
+            )
         return self
 
     def dueling_season_refusal(self) -> str | None:
@@ -398,6 +430,11 @@ class GeneratorCompetitionSettings(BaseModel):
         """Oracle-failed cases are re-checked by the escalation agent."""
         return self.frontier_enabled and self.frontier_escalation_agent_id is not None
 
+    @property
+    def frontier_disputes_active(self) -> bool:
+        """Column owners may dispute oracle-failed cases."""
+        return self.frontier_enabled and self.frontier_disputes_enabled
+
     def measurement_params(self) -> dict[str, float | int | str]:
         """Everything this policy changes about what a round measures: the
         score params, plus the frontier policy while frontier scoring runs.
@@ -424,6 +461,20 @@ class GeneratorCompetitionSettings(BaseModel):
                 self.frontier_escalation_max_cases_per_column
             )
             params["frontier_escalation_max_failed_fraction"] = (
+                self.frontier_escalation_max_failed_fraction
+            )
+        if self.frontier_disputes_active:
+            # Only while disputes run, so a policy without them keeps its
+            # unchanged-round signature.
+            params["frontier_dispute_window_hours"] = self.frontier_dispute_window_hours
+            params["frontier_dispute_max_per_column"] = (
+                self.frontier_dispute_max_per_column
+            )
+            params["frontier_dispute_max_per_round"] = (
+                self.frontier_dispute_max_per_round
+            )
+            params["frontier_dispute_min_tao"] = self.frontier_dispute_min_tao
+            params["frontier_dispute_max_failed_fraction"] = (
                 self.frontier_escalation_max_failed_fraction
             )
         return params
