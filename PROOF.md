@@ -1,6 +1,6 @@
 # Proof: sealed builds of Ditto's public starter miner on Cathedral production
 
-Run 19 Nov 2026, 00:52 to 02:35 UTC, against Cathedral's production API with this branch's code (`ditto_screener.cathedral_build`, the same module the screener uses), a Cathedral test key, and `sealed-4x8` rooms (4 vCPU, 8 GiB) on the AMD SEV-SNP sealed pool. Every room was deleted.
+Run 19 Nov 2026, 00:52 to 02:26 UTC, against Cathedral's production API with this branch's code (`ditto_screener.cathedral_build`, the same module the screener uses), a Cathedral test key, and `sealed-4x8` rooms (4 vCPU, 8 GiB) on the AMD SEV-SNP sealed pool. Every room was deleted (two after the client gave up on a 502; confirmed by the API).
 
 Sources: `miners/dittobench-starter-kit/` at 16 commits of this repo (public), each as one tarball, plus the kit at `736d5662` (this fork's `main`) built 15 more times. Nothing private was built.
 
@@ -76,4 +76,4 @@ Short hashes in the table; the full values are in each receipt.
 
 ## What this does not show
 
-The limits in `CATHEDRAL.md` apply. In short: an operator could still read a source (use public sources), the receipt says nothing about the image's safety or what the build downloaded, the build is not reproducible, and the build facts are chip-rooted while "nothing else touched the room" rests on Cathedral's signed chain.
+The limits in `CATHEDRAL.md` apply. In short: an operator could still read a source (Cathedral AB#353; use public sources), the receipt says nothing about the image's safety or what the build downloaded, the build is not reproducible, and the build facts are chip-rooted while "nothing else touched the room" rests on Cathedral's signed chain.

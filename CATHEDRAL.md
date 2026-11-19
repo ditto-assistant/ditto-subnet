@@ -50,4 +50,4 @@ What PASS checks:
 
 ## Live numbers
 
-`PROOF.md`: 31 sealed builds of Ditto's public starter miner on Cathedral production, 20 receipts that verify offline, every failure Cathedral-side and classed as retryable infrastructure. The receipts are in `docs/cathedral-proof/`.
+`PROOF.md`: 31 sealed build attempts of Ditto's public starter miner, 21 built, on Cathedral production, 20 receipts that verify offline, every failure Cathedral-side and classed as retryable infrastructure. The receipts are in `docs/cathedral-proof/`.
