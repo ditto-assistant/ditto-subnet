@@ -51,6 +51,8 @@ INFRASTRUCTURE_DETAIL_PREFIX = "cathedral-build-infrastructure: "
 BUILD_FAILED_EXIT_CODE = 91
 BUILD_TIMED_OUT_EXIT_CODE = 92
 DEFAULT_PART_BYTES = 64 << 20
+MIN_PART_BYTES = 1 << 20
+MAX_PART_BYTES = 2 << 30
 # The API front limit is 1800 s; leave room for the room's own setup.
 MAX_EXEC_TIMEOUT_SECONDS = 1750
 # The in-room build limit; the exec gets this plus slack so the script can
@@ -95,6 +97,15 @@ class CathedralLeaseExpired(Exception):
         self.elapsed = elapsed
 
 
+class CathedralImageTooLarge(Exception):
+    """The room reports an image archive over the screened-image cap (miner-owned)."""
+
+    def __init__(self, size: int, cap: int) -> None:
+        super().__init__(f"image archive of {size} bytes exceeds the {cap} byte cap")
+        self.size = size
+        self.cap = cap
+
+
 class CathedralInfrastructureError(Exception):
     """Cathedral, the transport, or the room failed; the archive was never judged."""
 
@@ -116,6 +127,16 @@ def build_command(
         c in "0123456789abcdef" for c in source_sha256
     ):
         raise ValueError("source_sha256 must be 64 lowercase hex characters")
+    # Both are pasted into the shell line; a forged value could make the room
+    # build nothing, so refuse anything outside the plain shapes.
+    if not isinstance(memory, str) or not re.fullmatch(r"[1-9][0-9]{0,5}[mg]", memory):
+        raise ValueError("memory must match ^[1-9][0-9]{0,5}[mg]$")
+    if (
+        isinstance(part_bytes, bool)
+        or not isinstance(part_bytes, int)
+        or not MIN_PART_BYTES <= part_bytes <= MAX_PART_BYTES
+    ):
+        raise ValueError("part_bytes must be an integer from 1 MiB to 2 GiB")
     if isinstance(build_timeout, bool) or not isinstance(build_timeout, int):
         raise ValueError("build_timeout must be an integer number of seconds")
     if build_timeout < 1:
@@ -640,6 +661,13 @@ class CathedralBuilder:
         archive_sha256 = result.get("archive_sha256")
         archive_size = result.get("archive_size")
         parts = result.get("parts")
+        if (
+            isinstance(archive_size, int)
+            and not isinstance(archive_size, bool)
+            and archive_size > max_archive_bytes
+        ):
+            # Same verdict as a local build whose export is over the cap.
+            raise CathedralImageTooLarge(archive_size, max_archive_bytes)
         if (
             not isinstance(archive_sha256, str)
             or not _HEX64.fullmatch(archive_sha256)

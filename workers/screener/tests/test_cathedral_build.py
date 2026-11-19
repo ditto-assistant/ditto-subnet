@@ -302,7 +302,6 @@ async def test_success_path_saves_receipt_and_loads_image(
         fake.source_sha256, build_timeout=60
     )
     assert fake.exec_body["timeout_seconds"] == 60 + 45
-    assert any(c[:2] == ["image", "tag"] and c[3] == calls_tag(calls) for c in calls)
     assert loaded and loaded[0][0] == fake.image_id
     assert fake.deleted
     receipt_path = tmp_path / "receipts" / f"{fake.source_sha256}-{_SANDBOX}.json"
@@ -636,7 +635,10 @@ async def test_declared_volume_is_a_docker_build_reject(
     assert result.evidence[-1].code == "docker-build"
     assert "writable volumes" in result.detail
     assert fake.deleted
-    assert not any(c[:2] == ["image", "tag"] for c in calls)
+    # Tagged before the VOLUME check, so teardown's rmi removes the image.
+    tag = next(c for c in calls if c[:2] == ["image", "tag"])
+    assert tag[3] == calls_tag(calls)
+    assert calls.index(tag) < calls.index(["rmi", "-f", tag[3]])
 
 
 async def test_image_load_failure_stays_infra(
@@ -865,3 +867,71 @@ async def test_room_delete_is_resent_after_a_gateway_error(
     assert [c for c in fake.calls if c[0] == "DELETE"] == [
         ("DELETE", f"/v1/sandboxes/{_SANDBOX}")
     ] * 3
+
+
+async def test_room_reported_oversized_image_is_a_miner_reject(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tarball = _valid_tar()
+    fake = FakeCathedral(tarball)
+    monkeypatch.setattr(gate_module, "_MAX_SCREENED_IMAGE_BYTES", len(fake.archive) - 1)
+    gate = _gate_with(_config(make_config, tmp_path), _ok_run(), tarball=tarball)
+    loaded = _wire(gate, fake)
+    async with gate._client:
+        result = await _screen(gate, fake.source_sha256)
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.evidence[-1].code == "screened-image-too-large"
+    assert loaded == []
+    assert fake.deleted
+    # No part was downloaded.
+    assert not any("image.tar.part" in p for _, p in fake.calls)
+
+
+async def test_oversized_image_found_while_normalizing_is_a_miner_reject(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def too_big(*_: Any, **__: Any) -> Any:
+        raise gate_module._ScreenedImageTooLargeError("archive expands beyond the cap")
+
+    monkeypatch.setattr(BuildGate, "_portable_image_archive", staticmethod(too_big))
+    tarball = _valid_tar()
+    fake = FakeCathedral(tarball)
+    gate = _gate_with(_config(make_config, tmp_path), _ok_run(), tarball=tarball)
+    loaded = _wire(gate, fake)
+    async with gate._client:
+        result = await _screen(gate, fake.source_sha256)
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.evidence[-1].code == "screened-image-too-large"
+    assert loaded == []
+    assert fake.deleted
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"memory": "7g; reboot"},
+        {"memory": "0g"},
+        {"memory": "7"},
+        {"memory": "1234567g"},
+        {"memory": "7G"},
+        {"memory": "7g\n"},
+        {"part_bytes": (1 << 20) - 1},
+        {"part_bytes": (2 << 30) + 1},
+        {"part_bytes": True},
+        {"part_bytes": 1.5},
+    ],
+)
+def test_build_command_refuses_forged_memory_and_part_bytes(
+    kwargs: dict[str, Any],
+) -> None:
+    with pytest.raises(ValueError):
+        build_command(_GOLDEN_SOURCE, **kwargs)
+
+
+def test_build_command_accepts_the_range_edges() -> None:
+    build_command(_GOLDEN_SOURCE, memory="999999m", part_bytes=1 << 20)
+    build_command(_GOLDEN_SOURCE, memory="1g", part_bytes=2 << 30)

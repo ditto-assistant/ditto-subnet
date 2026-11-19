@@ -313,7 +313,9 @@ Required values are supplied through the production host's protected
   with code `cathedral-build-infrastructure`, never a miner reject. A failed
   Dockerfile build, Ditto's own build time limit (when the room can honour it
   in full, up to 1700 s) and a declared `VOLUME` are the same miner rejects as
-  a local build. Only
+  a local build. With `SCREENER_BUILD_TIMEOUT_SECONDS` above 1700 (the default
+  is 2700), a Cathedral in-room time-out is infrastructure (Cathedral's cap,
+  not Ditto's); nodes that want time-out rejects set it to 1700 or less. Only
   public sources are safe to build there (an operator can still read a box).
   Settings, used only when the backend is `cathedral`:
   - `SCREENER_CATHEDRAL_API_KEY_FILE`: required path to the API key; read at use,

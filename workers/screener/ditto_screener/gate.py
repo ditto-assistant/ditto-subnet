@@ -86,6 +86,7 @@ from ditto_screener.cathedral_build import (
     CathedralBuildRejected,
     CathedralBuildSettings,
     CathedralBuildTimedOut,
+    CathedralImageTooLarge,
     CathedralInfrastructureError,
     CathedralLeaseExpired,
 )
@@ -511,6 +512,7 @@ class _ScreenedImageExportError(RuntimeError):
 
 
 _VOLUMES_DETAIL_PREFIX = "image declares writable volumes"
+_IMAGE_TOO_LARGE_PREFIX = "[image too large] "
 
 
 class _LeaseDeadlineError(TimeoutError):
@@ -1967,6 +1969,13 @@ class BuildGate:
                         code=CATHEDRAL_BUILD_INFRASTRUCTURE,
                         summary="Cathedral sealed build infrastructure failed",
                         detail=f"screener error: {build_detail}",
+                    )
+                if build_detail.startswith(_IMAGE_TOO_LARGE_PREFIX):
+                    return core_decision(
+                        ScreeningOutcome.DETERMINISTIC_REJECT,
+                        code="screened-image-too-large",
+                        summary="screened Docker image exceeded the archive size limit",
+                        detail=build_detail.removeprefix(_IMAGE_TOO_LARGE_PREFIX),
                     )
                 if build_detail.startswith("[timeout after"):
                     return core_decision(
@@ -3520,14 +3529,19 @@ class BuildGate:
                 )
             except _LeaseDeadlineError as error:
                 return False, f"[lease expired after build: {error}]", None
-            except (_ScreenedImageExportError, _ScreenedImageTooLargeError) as error:
+            except _ScreenedImageTooLargeError as error:
+                return False, _IMAGE_TOO_LARGE_PREFIX + str(error), None
+            except _ScreenedImageExportError as error:
                 return infra(f"image archive is not usable: {error}")
             if portable.image_id != built.image_id or not await asyncio.to_thread(
                 self._replay_image_config_matches, portable.path, built.image_id
             ):
                 return infra("image archive config differs from the reported image ID")
             loaded, detail, image_id = await self._load_remote_image(
-                portable.path, built.image_id, timeout=min(timeout, 120.0)
+                portable.path,
+                built.image_id,
+                timeout=min(timeout, 120.0),
+                tag_as=build_tag,
             )
             if not loaded:
                 if detail.startswith(_VOLUMES_DETAIL_PREFIX):
@@ -3536,15 +3550,11 @@ class BuildGate:
                 return infra(detail)
             if image_id != built.image_id:
                 return infra("loaded image ID differs from the reported image ID")
-            # Tag with the attempt's build tag so teardown's rmi removes it.
-            tag_code, tag_output = await self._run(
-                ["image", "tag", image_id, build_tag], timeout=30.0
-            )
-            if tag_code != 0:
-                return infra(f"docker image tag failed: {_log_tail(tag_output)}")
             return True, "", image_id
         except CathedralBuildRejected as rejected:
             return False, f"Docker build failed: {_log_tail(rejected.stdout)}", None
+        except CathedralImageTooLarge as too_large:
+            return False, _IMAGE_TOO_LARGE_PREFIX + str(too_large), None
         except CathedralBuildTimedOut as timed_out:
             return (
                 False,
@@ -3575,8 +3585,13 @@ class BuildGate:
         tag: str,
         *,
         timeout: float,
+        tag_as: str | None = None,
     ) -> tuple[bool, str, str | None]:
-        """Import a Platform-verified Kaniko archive into the local daemon."""
+        """Import a Platform-verified Kaniko archive into the local daemon.
+
+        ``tag_as`` tags the loaded image right away, so teardown's ``rmi`` of
+        that tag removes it on every later path (including the VOLUME reject).
+        """
         code, output = await self._run(
             ["image", "load", "--input", path], timeout=timeout
         )
@@ -3589,6 +3604,12 @@ class BuildGate:
         image_id = image_id.strip()
         if inspect_code != 0 or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
             return False, "docker image inspect failed after remote load", None
+        if tag_as is not None:
+            tag_code, tag_output = await self._run(
+                ["image", "tag", image_id, tag_as], timeout=30.0
+            )
+            if tag_code != 0:
+                return False, f"docker image tag failed: {_log_tail(tag_output)}", None
         inspect_code, volumes = await self._run(
             [
                 "image",
