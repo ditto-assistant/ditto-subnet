@@ -1229,15 +1229,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     )
   }
 
+  // Dispute reasoning can quote private benchmark material. Every output that
+  // can carry a dispute (reads and writes) goes through this.
+  const guardReasoning = <T,>(value: T): T => (hasArtifactAccess(props) ? value : withoutDisputeReasoning(value))
+
   const write = async (operation: () => Promise<unknown>) => {
     if (!hasWriteAccess(props)) {
       return errorResult(
         'This connection is read-only. Reauthorize with backroom:write before changing production.',
       )
     }
-    return result(await operation())
+    return result(guardReasoning(await operation()))
   }
-  const guardReasoning = <T,>(value: T): T => (hasArtifactAccess(props) ? value : withoutDisputeReasoning(value))
 
   const artifact = async (operation: () => Promise<unknown>) => {
     if (!hasArtifactAccess(props)) {

@@ -1097,6 +1097,20 @@ describe('generator competition MCP tools', () => {
       await reader.server.close()
     }
 
+    const full = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      expect(JSON.stringify(json(await full.client.callTool({ name: 'list_generator_frontier_disputes', arguments: {} }))))
+        .toContain('reasoning')
+      expect(JSON.stringify(json(await full.client.callTool({
+        name: 'rule_generator_frontier_dispute',
+        arguments: { roundIndex: 7, caseId: 'c1/k0', upheld: true, reason: 'the two notes give the gold', confirmation: 'RULE FRONTIER DISPUTE 7 c1/k0 UPHELD' },
+      }))))
+        .toContain('reasoning')
+    } finally {
+      await full.client.close()
+      await full.server.close()
+    }
+
     const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
     try {
       calls.length = 0
@@ -1110,6 +1124,13 @@ describe('generator competition MCP tools', () => {
         name: 'rule_generator_frontier_dispute',
         arguments: { roundIndex: 7, caseId: 'c1/k0', upheld: true, reason: 'the two notes give the gold', confirmation: 'RULE FRONTIER DISPUTE 7 c1/k0 UPHELD' },
       }))).toMatchObject({ disputes: [{ status: 'upheld', refund_rao: 200_000_000 }] })
+      // A write response carries disputes too: no reasoning without artifact scope.
+      const ruledText = JSON.stringify(json(await client.callTool({
+        name: 'rule_generator_frontier_dispute',
+        arguments: { roundIndex: 7, caseId: 'c1/k0', upheld: true, reason: 'the two notes give the gold', confirmation: 'RULE FRONTIER DISPUTE 7 c1/k0 UPHELD' },
+      })))
+      expect(ruledText).toContain('upheld')
+      expect(ruledText).not.toContain('reasoning')
       // The case id's slash stays a path separator: Platform reads the rest of
       // the path as the case id.
       expect(calls[0]).toEqual([
