@@ -26,11 +26,11 @@ To switch back, set `SCREENER_BUILD_BACKEND=local` (or remove it). The switch is
 ## How a validator or a miner checks a receipt
 
 ```
-pip install --upgrade --index-url https://cathedral.computer/ctcli/simple/ ctcli
+curl -fsSL https://cathedral.computer/install.sh | sh   # installs ctcli; see cathedral.computer for pip, pipx, uv, Windows
 ctcli build verify RECEIPT.json --source my-upload.tgz
 ```
 
-This needs the first ctcli release that includes `build verify` (cathedral-pool PR #149). Until then, run the check from that branch.
+`build verify` is in ctcli 0.6.1 and later. 0.6.1 is prepared but not yet published; 0.6.0 does not have the command.
 
 `--source` takes the exact tarball the miner uploaded (or `--source-sha256 HEX`). Add `--image-id sha256:...` to also require the image ID a validator loaded. The answer is PASS, FAIL or NOT PROVEN, with the source hash, image ID, archive hash, builder digest, AMD-attested measurement and room it is bound to.
 
@@ -50,4 +50,4 @@ What PASS checks:
 
 ## Live numbers
 
-See the pull request that added this file for the production run: 20 builds of Ditto's public starter miner, each receipt checked offline.
+`PROOF.md`: 31 sealed builds of Ditto's public starter miner on Cathedral production, 20 receipts that verify offline, every failure Cathedral-side and classed as retryable infrastructure. The receipts are in `docs/cathedral-proof/`.
