@@ -37,6 +37,8 @@ ignored_paths = [
   "LICENSE*",
   "README*",
   "CHANGELOG.md",
+  "CATHEDRAL.md", # Docs for the opt-in Cathedral screener build backend; no runtime component
+  "PROOF.md", # Live proof write-up for that backend; receipts live under docs/
   "Makefile",
   "apps/platform/.agents/**",
   "docs/**",
