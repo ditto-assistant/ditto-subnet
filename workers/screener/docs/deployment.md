@@ -84,7 +84,7 @@ the VM:
   for L2 and L3. `ditto` is Ditto Inference
   (https://developer.heyditto.ai/endpoints): create one endpoint, add model
   routes for `openai/gpt-6-luna`, `openai/gpt-6-sol`, `openai/gpt-6.1-terra`,
-  `z-ai/glm-5.2`, and `z-ai/glm-5.3-flash` (requested ids stay as the signed
+  `openai/gpt-6.1-sol`, `z-ai/glm-5.2`, and `z-ai/glm-5.3-flash` (requested ids stay as the signed
   review evidence records them), and store its `ditto_inf_` key in the key
   file below. `SCREENER_SOURCE_REVIEW_BASE_URL` overrides the provider default
   (`https://inference.heyditto.ai/v1` for `ditto`, `https://openrouter.ai/api/v1` for
@@ -103,8 +103,11 @@ the VM:
   `openai/gpt-6-luna`; every request enforces ZDR and denies data collection.
   Optional escalation uses `openai/gpt-6-sol` for L2 and the independent L3
   clearance critic; Platform review-settings revisions may select
-  `openai/gpt-6.1-terra` for either layer (supports tools and reasoning on
-  OpenRouter, $1/$5 per million tokens as of 2026-11-03). The L2/L3
+  `openai/gpt-6.1-terra` ($1/$5 per million tokens) or `openai/gpt-6.1-sol`
+  ($2/$10, $4/$15 once one request reaches 272k prompt tokens) for either
+  layer. Both support tools, `tool_choice`, reasoning effort and a 128k
+  completion cap on OpenRouter (catalog as of 2026-11-03). There is no
+  `openai/gpt-6.1-luna`; L1 stays on `openai/gpt-6-luna`. The L2/L3
   `timeout_seconds` stage budget accepts up to 3600 s; the attempt's hard
   lease lifetime grows with it (L1 + L2/L3 [+ court] budgets + 45 min). L2 retains a GLM model fallback for upstream routing failures and all
   layers allow OpenRouter provider failover, sorted for throughput. They reuse
