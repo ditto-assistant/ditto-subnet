@@ -60,11 +60,29 @@ class FakeProvider:
         self.nonce_for_code: dict[str, str] = {}
         self.token_requests: list[dict[str, list[str]]] = []
         self.subject = "ditto-user-1"
+        self.connection_subject: str | None = None
+        self.connection_ready = True
 
     def transport(self) -> httpx.MockTransport:
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/.well-known/jwks.json":
                 return httpx.Response(200, json=jwks_for(self.key))
+            if request.url.path == "/oauth/connections":
+                assert request.headers["authorization"] == "Bearer at"
+                return httpx.Response(
+                    200,
+                    json={
+                        "sub": self.connection_subject or self.subject,
+                        "ready": self.connection_ready,
+                        "requirements": [
+                            {
+                                "app": "github",
+                                "status": "connected",
+                                "identity": {"id": "123", "login": "miner"},
+                            }
+                        ],
+                    },
+                )
             if request.url.path == "/token":
                 form = parse_qs(request.content.decode())
                 self.token_requests.append(form)
@@ -282,6 +300,7 @@ async def test_link_binds_verified_ditto_identity_to_the_session_hotkey(
     )
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["status"] == "linked"
+    assert confirmed.json()["github_proof_attempt_id"] == body["attempt_id"]
     assert confirmed.json()["link"]["ditto_user_id"] == "ditto-user-1"
     # Confirming twice is idempotent.
     again = await client.post(
