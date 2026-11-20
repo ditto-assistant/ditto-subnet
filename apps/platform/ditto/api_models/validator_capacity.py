@@ -206,6 +206,27 @@ class ValidatorCapacityEntry(BaseModel):
             ),
         ),
     ]
+    memory_required_mib: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Derived: the least host memory that admits every configured "
+                "slot at the live sandbox memory cap. Null when unknown."
+            ),
+        ),
+    ]
+    memory_note: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "When memory admits fewer slots than configured: how many, and "
+                "the host memory needed for one slot (if none) and for all."
+            ),
+        ),
+    ]
     unusable_slots: Annotated[
         int,
         Field(ge=0, description="Configured slots whose `state` is `unusable`."),
@@ -256,6 +277,18 @@ class ValidatorCapacitySummary(BaseModel):
     configured_slots: Annotated[
         int,
         Field(ge=0, description="Sum of every live validator's configured slots."),
+    ] = 0
+    memory_admitted_slots: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Sum over live validators that announced memory of "
+                "`min(memory_admitted_slots, configured_slots)`: the most "
+                "slots this fleet's hosts can run at the live cap, whatever "
+                "`configured_slots` says."
+            ),
+        ),
     ] = 0
     serviceable_slots: Annotated[int, Field(ge=0)]
     unusable_slots_by_reason: Annotated[

@@ -3076,7 +3076,29 @@ async def heartbeat(
     seen_at = row.seen_at
     if seen_at.tzinfo is None:
         seen_at = seen_at.replace(tzinfo=UTC)
-    return ValidatorHeartbeatResponse(accepted=accepted, seen_at=seen_at, leases=leases)
+    return ValidatorHeartbeatResponse(
+        accepted=accepted,
+        seen_at=seen_at,
+        leases=leases,
+        sandbox_memory_limit_mib=await _heartbeat_sandbox_memory_limit_mib(request),
+    )
+
+
+async def _heartbeat_sandbox_memory_limit_mib(request: Request) -> int | None:
+    """The live harness cap for the heartbeat reply, or ``None`` if unreadable.
+
+    Resolved after the heartbeat transaction commits, through the cached
+    resolver on its own session, and never allowed to fail a heartbeat:
+    ``None`` tells the validator to keep the cap it last saw.
+    """
+    try:
+        settings = await request.app.state.inference_concurrency_settings.resolve(
+            getattr(request.app.state, "session_maker", None)
+        )
+        return int(settings.benchmark_runtime.sandbox_memory_limit_mib)
+    except Exception:  # noqa: BLE001 - liveness must not depend on this read
+        logger.warning("heartbeat could not resolve the sandbox memory cap")
+        return None
 
 
 async def _bind_unverified_v13_dataset(

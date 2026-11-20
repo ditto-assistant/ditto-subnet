@@ -2296,6 +2296,51 @@ class TestHeartbeat:
         assert response.status_code == 200, response.text
         assert response.json()["leases"] == []
 
+    async def test_heartbeat_reply_carries_the_live_sandbox_memory_cap(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A host admitting no slot gets no lease, so this is how it learns the cap.
+
+        An unreadable cap never fails the heartbeat: ``null`` means "keep the
+        cap you last saw".
+        """
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        async def post() -> httpx.Response:
+            return await client.post(
+                "/api/v1/validator/heartbeat",
+                headers=_AUTH_HEADER,
+                json=_heartbeat_payload(
+                    protocol_version=17,
+                    capabilities=_quorum_capabilities(),
+                    stack=_V7_STACK,
+                    stack_health=_V9_STACK_HEALTH,
+                    benchmark_capacity=_IDLE_CAPACITY,
+                ),
+            )
+
+        response = await post()
+        assert response.status_code == 200, response.text
+        # No operator revision: the published default cap.
+        assert response.json()["sandbox_memory_limit_mib"] == 6144
+
+        async def unreadable(_session_maker: object) -> object:
+            raise RuntimeError("settings store down")
+
+        monkeypatch.setattr(
+            app.state.inference_concurrency_settings, "resolve", unreadable
+        )
+        # A fresh signature second: heartbeats are rate limited per second.
+        await asyncio.sleep(1.1)
+        response = await post()
+        assert response.status_code == 200, response.text
+        assert response.json()["sandbox_memory_limit_mib"] is None
+
     async def test_a_pre_v17_reporter_is_told_nothing_about_its_leases(
         self,
         app: FastAPI,

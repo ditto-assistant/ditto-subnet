@@ -294,6 +294,7 @@ from ditto.api_server.generator_round_reservation import (
     round_reservation_active,
     validator_advertises_rounds,
 )
+from ditto.api_server.inference_concurrency_settings import settings_from_row
 from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
@@ -334,6 +335,7 @@ from ditto.api_server.submission_status import (
     era_change,
     public_agent_status,
 )
+from ditto.api_server.validator_memory_admission import host_memory_admission
 from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
@@ -442,6 +444,9 @@ from ditto.db.queries.heartbeats import (
     live_weight_setter_fleet_supports_protocol,
 )
 from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
+from ditto.db.queries.inference_concurrency_settings import (
+    latest_inference_concurrency_settings_revision,
+)
 from ditto.db.queries.inference_observability import (
     LeaseInferenceActivity,
     LeaseSlotKey,
@@ -1699,6 +1704,7 @@ def _health_reasons(
     stack_health: ValidatorStackHealth | None,
     scorer_reasons: list[str],
     bench_reason: str | None = None,
+    memory_reason: str | None = None,
 ) -> list[str]:
     """Human-readable labels explaining a non-healthy fleet badge.
 
@@ -1712,6 +1718,9 @@ def _health_reasons(
         # First, because it is the reason the validator earns nothing: every other
         # label describes a validator that is at least in the running.
         reasons.append(bench_reason)
+    if memory_reason is not None:
+        # Equally final: a host that fits no harness earns nothing either.
+        reasons.append(memory_reason)
     if state == "error":
         reasons.append("worker reported an error state")
     if metrics is None:
@@ -5585,6 +5594,7 @@ def _validator_heartbeats_response(
     round_reservation_active: bool = False,
     lease_inference_activity: Mapping[LeaseSlotKey, LeaseInferenceActivity]
     | None = None,
+    sandbox_memory_limit_mib: int | None = None,
 ) -> PublicValidatorHeartbeatsResponse:
     """Reconcile platform leases and signed heartbeat claims without conflating them.
 
@@ -5808,6 +5818,19 @@ def _validator_heartbeats_response(
                 validator_hotkey=row.validator_hotkey,
             )
         )
+        host_specs = _public_validator_host_specs(row)
+        configured_slots = capacity.configured_slots if capacity else 1
+        # The memory guard the validator applies to itself, derived here so the
+        # fleet says why advertised slots never run and what the host needs.
+        memory = host_memory_admission(
+            memory_total_mib=(
+                host_specs.memory_total_mib if host_specs is not None else None
+            ),
+            configured_slots=configured_slots,
+            sandbox_memory_limit_mib=sandbox_memory_limit_mib,
+        )
+        memory_note = memory.note() if memory is not None else None
+        memory_admits_nothing = memory is not None and memory.admitted_slots == 0
         entries.append(
             PublicValidatorHeartbeat(
                 validator_hotkey=row.validator_hotkey,
@@ -5829,7 +5852,14 @@ def _validator_heartbeats_response(
                     else None
                 ),
                 active_benchmark=active_benchmark,
-                configured_slots=(capacity.configured_slots if capacity else 1),
+                configured_slots=configured_slots,
+                memory_admitted_slots=(
+                    memory.admitted_slots if memory is not None else None
+                ),
+                memory_required_mib=(
+                    memory.required_mib if memory is not None else None
+                ),
+                memory_note=memory_note,
                 # Keep the operator brake separate from heartbeat availability:
                 # an offline paused validator remains honestly offline while
                 # the dashboard can still show why it receives no new work.
@@ -5882,10 +5912,13 @@ def _validator_heartbeats_response(
                 # problem regardless of how the host metrics look (or whether they
                 # were reported), so surface it as a warning in the fleet health
                 # roll-up rather than only in the nested per-component map.
+                # A host whose memory admits not one harness at the live cap is
+                # in the same class: it can heartbeat forever and never score.
                 health=(
                     "critical"
                     if scorer_liveness == "not_serving"
                     or bench_serviceability != "serving"
+                    or memory_admits_nothing
                     else (
                         "warning"
                         if scorer_reasons
@@ -5908,10 +5941,11 @@ def _validator_heartbeats_response(
                         version=active_bench_version,
                         protocol_version=row.protocol_version,
                     ),
+                    memory_reason=memory_note if memory_admits_nothing else None,
                 ),
                 bench_serviceability=bench_serviceability,
                 system_metrics=metrics,
-                host_specs=_public_validator_host_specs(row),
+                host_specs=host_specs,
                 capabilities=capabilities,
                 stack=stack,
                 stack_health=stack_health,
@@ -5930,6 +5964,7 @@ def _validator_heartbeats_response(
         ),
         reported_count=len(entries),
         online_count=sum(entry.online for entry in entries),
+        sandbox_memory_limit_mib=sandbox_memory_limit_mib,
         validators=entries,
     )
 
@@ -5971,7 +6006,27 @@ async def load_validator_fleet(
         slot_settings=await resolve_slot_settings(app_state),
         round_reservation_active=await round_reservation_active(app_state, session),
         lease_inference_activity=lease_inference_activity,
+        sandbox_memory_limit_mib=await _live_sandbox_memory_limit_mib(
+            app_state, session
+        ),
     )
+
+
+async def _live_sandbox_memory_limit_mib(app_state: Any, session: AsyncSession) -> int:
+    """The live per-harness memory cap host memory admission is judged at.
+
+    Read through the app's short-TTL settings cache, the one ticket issue uses,
+    so the fleet views that poll it add no query per request; a direct read is
+    only the fallback for an app without the resolver.
+    """
+    resolver = getattr(app_state, "inference_concurrency_settings", None)
+    if resolver is not None:
+        settings = await resolver.resolve(getattr(app_state, "session_maker", None))
+    else:
+        settings = settings_from_row(
+            await latest_inference_concurrency_settings_revision(session)
+        )
+    return int(settings.benchmark_runtime.sandbox_memory_limit_mib)
 
 
 @router.get("/validators", response_model=PublicValidatorHeartbeatsResponse)
@@ -8227,6 +8282,11 @@ async def operations(
         active_bench_version=active_version,
         slot_settings=await resolve_slot_settings(request.app.state),
         round_reservation_active=await round_reservation_active(
+            request.app.state, session
+        ),
+        # The dashboard reads the fleet from this snapshot, not /validators, so
+        # it needs the same cap for its memory-limited slots and fix path.
+        sandbox_memory_limit_mib=await _live_sandbox_memory_limit_mib(
             request.app.state, session
         ),
     )

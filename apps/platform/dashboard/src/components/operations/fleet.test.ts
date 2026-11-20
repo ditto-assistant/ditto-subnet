@@ -8,6 +8,7 @@ import {
   benchGateLabel,
   preserveTransientValidatorTelemetry,
   cappedSlotIds,
+  memoryLimitedSlotIds,
   fleetLedgerCounts,
   fleetStatusFor,
   fleetWindowLabel,
@@ -52,6 +53,53 @@ describe("screener worker host grouping", () => {
     expect(screenerHostId(workers[1]!)).toBe("subnet-screener-1");
     expect(screenerWorkerLabel(workers[1]!, "subnet-screener-1")).toBe("Worker 1");
     expect(screenerWorkerLabel(workers[3]!, "legacy-node")).toBe("legacy-node");
+  });
+});
+
+describe("slots host memory cannot back (SN-488)", () => {
+  const note =
+    "host memory admits 1 of 8 slots at the 8,192 MiB harness cap (15,987 MiB host); needs at least 66,560 MiB for all 8";
+  const entry: FleetEntryExt = {
+    validator_hotkey: "5V",
+    configured_slots: 8,
+    healthy_slots: ["slot-0"],
+    allowed_slots: 4,
+    memory_admitted_slots: 1,
+    memory_required_mib: 66560,
+    memory_note: note,
+  };
+
+  it("marks every slot from the admitted count up, not the operator cap", () => {
+    expect(Object.keys(memoryLimitedSlotIds(entry)).sort()).toEqual([
+      "slot-1",
+      "slot-2",
+      "slot-3",
+      "slot-4",
+      "slot-5",
+      "slot-6",
+      "slot-7",
+    ]);
+    expect(Object.keys(cappedSlotIds(entry))).toEqual([]);
+  });
+
+  it("never marks a slot the validator offers, whatever the estimate says", () => {
+    const offering = { ...entry, healthy_slots: ["slot-0", "slot-1", "slot-2"] };
+    expect(memoryLimitedSlotIds(offering)["slot-1"]).toBeUndefined();
+    expect(memoryLimitedSlotIds(offering)["slot-2"]).toBeUndefined();
+    expect(memoryLimitedSlotIds(offering)["slot-3"]).toBe(true);
+  });
+
+  it("marks all of a host that fits no harness, and none when unannounced", () => {
+    const none = { ...entry, memory_admitted_slots: 0, healthy_slots: [] };
+    expect(Object.keys(memoryLimitedSlotIds(none))).toHaveLength(8);
+    expect(memoryLimitedSlotIds({ ...entry, memory_admitted_slots: null })).toEqual({});
+    expect(memoryLimitedSlotIds({ ...entry, memory_admitted_slots: undefined })).toEqual({});
+  });
+
+  it("spells the fix path in the capacity tooltip", () => {
+    expect(slotCapacityTitle(entry, null)).toBe(
+      "8 advertised · 1 healthy · 4 funded by the operator cap · " + note,
+    );
   });
 });
 

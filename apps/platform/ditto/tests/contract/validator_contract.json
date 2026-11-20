@@ -9691,6 +9691,19 @@
         ],
         "default": null
       },
+      "sandbox_memory_limit_mib": {
+        "anyOf": [
+          {
+            "maximum": 32768,
+            "minimum": 512,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "seen_at": {
         "format": "date-time",
         "type": "string"

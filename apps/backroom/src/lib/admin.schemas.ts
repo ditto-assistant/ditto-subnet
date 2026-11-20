@@ -5497,6 +5497,10 @@ export const validatorFleetObservabilityMemberSchema = z
     protocol_version: z.number().int().positive().catch(0),
     configured_slots: z.number().int().nonnegative().catch(1),
     allowed_slots: z.number().int().nonnegative().nullish().catch(null),
+    // Host memory admission at the live cap and its fix path (SN-488).
+    memory_admitted_slots: z.number().int().nonnegative().nullish().catch(null),
+    memory_required_mib: z.number().int().nonnegative().nullish().catch(null),
+    memory_note: z.string().nullish().catch(null),
     issuance_paused: z.boolean().catch(false),
     healthy_slots: z.array(z.string()).catch([]),
     admission: z.string().catch('accepting'),
@@ -5597,6 +5601,9 @@ export const validatorFleetObservabilityMemberSchema = z
     issuance_paused: member.issuance_paused,
     configured_slots: member.configured_slots,
     allowed_slots: member.allowed_slots,
+    memory_admitted_slots: member.memory_admitted_slots ?? null,
+    memory_required_mib: member.memory_required_mib ?? null,
+    memory_note: member.memory_note ?? null,
     healthy_slot_count: member.healthy_slots.length,
     active_benchmark_count: member.active_benchmarks.length,
     confirmation_benchmark_count: member.confirmation_benchmarks.length,
@@ -10708,6 +10715,10 @@ export const validatorCapacityEntrySchema = z.object({
   // Per-slot breakdown: defaulted so a Backroom deployed ahead of Platform
   // still reads capacity, just without the reasons.
   memory_admitted_slots: z.number().int().nonnegative().nullable().default(null),
+  // Host memory that admits every configured slot, and the operator-facing
+  // reason plus fix path when memory admits fewer (SN-488).
+  memory_required_mib: z.number().int().nonnegative().nullable().default(null),
+  memory_note: z.string().nullable().default(null),
   unusable_slots: z.number().int().nonnegative().default(0),
   slots: z.array(validatorCapacitySlotSchema).default([]),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityEntry>)
@@ -10726,6 +10737,8 @@ export const validatorCapacitySummarySchema = z.object({
   live_validator_count: z.number().int().nonnegative(),
   serviceable_validator_count: z.number().int().nonnegative(),
   configured_slots: z.number().int().nonnegative().default(0),
+  // The most slots the fleet's hosts can run at the live cap (SN-488).
+  memory_admitted_slots: z.number().int().nonnegative().default(0),
   serviceable_slots: z.number().int().nonnegative(),
   unusable_slots_by_reason: z.record(z.string(), z.number().int().nonnegative()).default({}),
   sandbox_memory_limit_mib: z.number().int().positive().nullable().default(null),

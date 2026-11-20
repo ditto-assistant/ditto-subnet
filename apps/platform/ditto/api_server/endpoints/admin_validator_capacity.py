@@ -32,6 +32,7 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.public import load_validator_fleet
 from ditto.api_server.inference_concurrency_settings import settings_from_row
+from ditto.api_server.validator_memory_admission import host_memory_admission
 from ditto.db.queries.benchmark_admission import admission_rollout_for_active_version
 from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
@@ -43,7 +44,6 @@ from ditto.db.queries.inference_observability import (
     load_live_lease_inference_activity,
 )
 from ditto.db.queries.queue_order import unleased_queue_backlog
-from ditto_screening_protocol.runtime_envelope import admitted_slots, runtime_envelope
 
 router = APIRouter(tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -109,21 +109,6 @@ def _slot_index(slot_id: str) -> tuple[int, str]:
     if prefix == "slot" and number.isdigit():
         return int(number), ""
     return 1 << 30, slot_id
-
-
-def _memory_admitted_slots(
-    validator: PublicValidatorHeartbeat, sandbox_memory_limit_mib: int | None
-) -> int | None:
-    specs = validator.host_specs
-    if specs is None or not sandbox_memory_limit_mib:
-        return None
-    envelope = runtime_envelope()
-    return admitted_slots(
-        specs.memory_total_mib,
-        sandbox_memory_limit_mib,
-        reserve_mib=envelope.host_memory_reserve_mib,
-        single_slot_headroom_mib=envelope.single_slot_headroom_mib,
-    )
 
 
 def _slot_breakdown(
@@ -216,7 +201,16 @@ def _entry(
         )
         for slot in slots
     }
-    memory_admitted = _memory_admitted_slots(validator, sandbox_memory_limit_mib)
+    admission = host_memory_admission(
+        memory_total_mib=(
+            validator.host_specs.memory_total_mib
+            if validator.host_specs is not None
+            else None
+        ),
+        configured_slots=validator.configured_slots,
+        sandbox_memory_limit_mib=sandbox_memory_limit_mib,
+    )
+    memory_admitted = admission.admitted_slots if admission is not None else None
     slots = _slot_breakdown(validator, claimed=claimed, memory_admitted=memory_admitted)
     return ValidatorCapacityEntry(
         validator_hotkey=validator.validator_hotkey,
@@ -244,6 +238,8 @@ def _entry(
             for progress in validator.assigned_benchmarks
         ],
         memory_admitted_slots=memory_admitted,
+        memory_required_mib=admission.required_mib if admission is not None else None,
+        memory_note=admission.note() if admission is not None else None,
         unusable_slots=sum(slot.state == "unusable" for slot in slots),
         slots=slots,
     )
@@ -320,6 +316,13 @@ async def get_validator_capacity(
             entry.serviceable_slots > 0 for entry in entries
         ),
         configured_slots=sum(entry.configured_slots for entry in entries),
+        # Capped at each host's configured slots: spare memory on one host
+        # runs nothing for another.
+        memory_admitted_slots=sum(
+            min(entry.memory_admitted_slots, entry.configured_slots)
+            for entry in entries
+            if entry.memory_admitted_slots is not None
+        ),
         serviceable_slots=sum(entry.serviceable_slots for entry in entries),
         unusable_slots_by_reason=dict(
             sorted(

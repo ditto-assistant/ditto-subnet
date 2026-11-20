@@ -97,8 +97,21 @@ With the 8192 MiB cap and the 1024 MiB reserve:
 | 32 GiB | 3 |
 | 64 GiB | 7 |
 
-The worker logs the narrowing. The heartbeat's `healthy_slots`, and with it
-`serviceable_slots` in Backroom `get_validator_capacity`, reflect it.
+Running `N` slots takes at least `N × cap + reserve` of host memory: 66,560 MiB
+for 8 slots at the 8192 MiB cap. A nominal 64 GiB host reports about 64,085 MiB,
+so it runs 7. One slot needs `cap + 1024` (9,216 MiB at 8192).
+
+The worker logs the narrowing on every change, with the memory it would need
+for one slot (when none fit) and for every configured slot. A host that fits no
+harness logs at error level. The heartbeat reply carries the live cap, so a host
+re-sizes as soon as the operator changes it, without waiting for a lease.
+
+The heartbeat's `healthy_slots`, and with it `serviceable_slots` in Backroom
+`get_validator_capacity`, reflect it. The public `/validators` view and the
+operations dashboard show each host's `memory_admitted_slots`,
+`memory_required_mib` and a `memory_note` with that fix path, and mark the
+slots past it `Memory-limited`. A host whose memory admits no slot reads
+`critical` there.
 
 ## Practising against the envelope
 
