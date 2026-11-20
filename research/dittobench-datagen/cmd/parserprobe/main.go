@@ -46,6 +46,7 @@ func main() {
 	runSize := flag.String("run-size", "full", "small, medium, or full")
 	routerSeeds := flag.Int("router-seeds", 0, "train the N14 router on this many locally generated seeds (0 = GIH only; 10000 is the documented N14 configuration)")
 	routerFirst := flag.Int64("router-first-seed", 0, "first router training seed (default: disjoint range after the probe seeds)")
+	routerWorkers := flag.Int("router-workers", 1, "bounded parallel training-data generation, 1..16; fitting remains in seed order")
 	artifactPaths := flag.String("artifact", "", "comma-separated artifact JSON paths to probe instead of generating (surface-passed artifacts)")
 	asJSON := flag.Bool("json", false, "emit the full JSON report on stdout")
 	out := flag.String("out", "", "write the JSON report here")
@@ -55,6 +56,7 @@ func main() {
 	opts := parserprobe.Options{
 		BenchVersion: *version, RunSize: *runSize, FirstSeed: *firstSeed, Seeds: *seeds,
 		RouterSeeds: *routerSeeds, RouterFirstSeed: *routerFirst,
+		RouterWorkers: *routerWorkers,
 	}
 	if *artifactPaths != "" {
 		for _, path := range strings.Split(*artifactPaths, ",") {
