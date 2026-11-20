@@ -6514,6 +6514,11 @@ export const screeningSubmissionSchema = z.object({
   agent_version: z.number().int().positive().nullish().default(null),
   artifact_sha256: z.string(),
   agent_status: z.string(),
+  // SN-483: what the miner sees. A row the queue will never finish can still
+  // store `evaluating`; this carries the miner projection's close-out
+  // (`retired`, `scoring_failed`, `not_queued`, `era_changed`). Nullish for a
+  // platform that predates the field.
+  public_status: z.string().nullish().default(null),
   screening_policy_version: z.number().int().nonnegative(),
   screening_reason: z.string().nullable(),
   screening_reason_code: z.string().nullable().optional(),
@@ -7700,6 +7705,8 @@ export const agentScoringReadinessSchema = z.object({
   agent_name: z.string(),
   miner_hotkey: z.string(),
   status: z.string(),
+  // SN-483: the status the miner sees, beside the stored `status`.
+  public_status: z.string().nullish().default(null),
   active_bench_version: z.number().int().positive().nullable(),
   screening_policy_version: z.number().int().nonnegative().nullable(),
   required_screening_policy_version: z.number().int().nonnegative().nullable(),

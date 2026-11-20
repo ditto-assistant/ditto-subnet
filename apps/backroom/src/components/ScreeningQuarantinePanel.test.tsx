@@ -247,6 +247,7 @@ const submission: ScreeningSubmission = {
   agent_version: null,
   artifact_sha256: quarantine.artifact_sha256,
   agent_status: 'screening_rejected',
+  public_status: null,
   screening_policy_version: 6,
   screening_reason: 'Build did not pass screening',
   submitted_at: '2026-07-14T14:00:00Z',

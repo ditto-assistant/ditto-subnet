@@ -3383,6 +3383,7 @@ async def list_provisional_ledger(
     session: AsyncSession,
     *,
     bench_version: int | None = None,
+    active_version: int | None = None,
 ) -> list[tuple[LedgerRow, int]]:
     """Return each unfinalized owner's best partially scored submission.
 
@@ -3396,7 +3397,20 @@ async def list_provisional_ledger(
     One row per *owner*, matching how :func:`list_eligible_ledger` partitions
     the finalized board: a coldkey funding several hotkeys holds one emission
     position, so its provisional overlay must not preview several either.
+
+    ``active_version`` is the caller's already-resolved live era, so one
+    response judges close-out against the same era it reports; when omitted
+    it is read here.
+
+    A row the miner projection has closed is not provisional: it will never
+    reach quorum. Retired, terminal-failure (``scoring_failed``), withdrawn
+    (``not_queued``) and era-refused (``era_changed``) rows keep their stored
+    ``evaluating`` status, so they are excluded here, before the per-owner
+    dedupe, using the same :func:`closed_submission_statuses` the miner pages
+    use (SN-483). A partial composite on such a row would otherwise read as
+    the agent's score.
     """
+    from ditto.api_server.submission_status import closed_submission_statuses
     from ditto.db.queries.benchmark_rollout import active_bench_version
 
     canonical_version = bench_version or await active_bench_version(session)
@@ -3445,6 +3459,23 @@ async def list_provisional_ledger(
         if agent.agent_id not in by_agent:
             by_agent[agent.agent_id] = (agent, row.miner_coldkey, [])
         by_agent[agent.agent_id][2].append(row_score_view(row))
+
+    if by_agent:
+        # Close-out is what the miner sees, which is always judged against the
+        # live active era, also on a historical board's preview.
+        closed = await closed_submission_statuses(
+            session,
+            agents=[agent for agent, _coldkey, _scores in by_agent.values()],
+            active_version=(
+                active_version
+                if active_version is not None
+                else canonical_version
+                if bench_version is None
+                else await active_bench_version(session)
+            ),
+        )
+        for agent_id in closed:
+            by_agent.pop(agent_id, None)
 
     candidates: list[tuple[LedgerRow, int]] = []
     for agent, miner_coldkey, scores in by_agent.values():

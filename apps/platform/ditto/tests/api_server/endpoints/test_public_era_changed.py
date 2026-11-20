@@ -704,3 +704,145 @@ async def test_readiness_defers_to_the_miner_projection_for_a_retired_waiting_ro
     other = await _readiness(client, seeded.dead_retry)
     assert other["era_change"] is not None
     assert any("miners see" in r for r in other["blocking_reasons"])
+
+
+async def _terminal_withdraw(session: AsyncSession, agent_id: UUID) -> None:
+    """The TerminalFailureSweeper's close-out: an in-force active-era removal
+    carrying an agent-attributable terminal failure code."""
+    session.add(
+        ValidatorQueueWithdrawal(
+            withdrawal_id=uuid4(),
+            agent_id=agent_id,
+            bench_version=_ACTIVE,
+            actor="platform:terminal-artifact-failure",
+            reason="agent failed scoring on three validators",
+            expected_snapshot="test",
+            score_count=2,
+            ticket_snapshot=[],
+            terminal_failure_code="inference_allowance_exhausted",
+            created_at=_AFTER + timedelta(hours=1),
+        )
+    )
+    await session.flush()
+
+
+async def test_closed_rows_never_appear_as_provisional_board_rows(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """SN-483 (comment 18121): a 2-of-3 row that can never finish is not a
+    provisional score.
+
+    marlowe v1's shape: current-era work with two active-version scores, then
+    closed out by the terminal-failure sweeper. Its stored status stays
+    ``evaluating``, which is exactly what the provisional overlay selected, so
+    its partial composite read as the agent's score on the public board. An
+    era-refused waiting row holding a stray active-version score is closed the
+    same way. A same-owner row that can still finish keeps its provisional row.
+    """
+    from ditto.db.queries.scores import list_provisional_ledger
+
+    seeded = await _seed(maker)
+    async with maker() as session, session.begin():
+        terminal = await _agent(
+            session,
+            name="v18-terminal",
+            status=AgentStatus.EVALUATING,
+            created_at=_AFTER,
+        )
+        await _scores(session, terminal, count=2, bench_version=_ACTIVE)
+        await _terminal_withdraw(session, terminal)
+        # A sibling of the same owner (same hotkey) that can still finish, so
+        # the per-owner dedupe must not let the closed row hide it.
+        sibling = await _agent(
+            session,
+            name="v18-terminal-sibling",
+            status=AgentStatus.EVALUATING,
+            created_at=_AFTER + timedelta(minutes=5),
+        )
+        sibling_row = await session.get(Agent, sibling)
+        assert sibling_row is not None
+        sibling_row.miner_hotkey = _hotkey("v18-terminal")
+        await _scores(session, sibling, count=1, bench_version=_ACTIVE)
+        # Era-refused waiting row that somehow holds one active-version score.
+        await _scores(session, seeded.waiting, count=1, bench_version=_ACTIVE)
+        # Ordinary open current-era work: still provisional.
+        await _scores(session, seeded.current, count=2, bench_version=_ACTIVE)
+    _install(app, maker)
+
+    async with maker() as session:
+        provisional = await list_provisional_ledger(session, bench_version=_ACTIVE)
+    shown = {row.agent_id for row, _count in provisional}
+    assert terminal not in shown
+    assert seeded.waiting not in shown
+    assert sibling in shown
+    assert seeded.current in shown
+
+    # A historical board judges close-out against the live active era too:
+    # the v17 dead-retry row (two v17 scores, era_changed on v18) must not
+    # come back in v17's provisional preview (r4637685436).
+    async with maker() as session:
+        historical = await list_provisional_ledger(session, bench_version=_FROM)
+    assert seeded.dead_retry not in {row.agent_id for row, _count in historical}
+
+    board = (await client.get("/api/v1/public/leaderboard")).json()
+    board_ids = {entry["agent_id"] for entry in board["entries"]}
+    assert str(terminal) not in board_ids
+    assert str(seeded.waiting) not in board_ids
+    assert str(sibling) in board_ids
+    assert str(seeded.current) in board_ids
+
+    # The miner surfaces already read the terminal row honestly.
+    summary = (await client.get(f"/api/v1/public/agent/{terminal}/summary")).json()
+    assert summary["status"] == "scoring_failed"
+
+
+async def test_backroom_reports_the_status_the_miner_sees(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """SN-483: Backroom shows the miner-visible status beside the stored one,
+    so a closed row is never read as live ``evaluating`` work."""
+    seeded = await _seed(maker)
+    async with maker() as session, session.begin():
+        terminal = await _agent(
+            session,
+            name="v18-terminal",
+            status=AgentStatus.EVALUATING,
+            created_at=_AFTER,
+        )
+        await _scores(session, terminal, count=2, bench_version=_ACTIVE)
+        await _terminal_withdraw(session, terminal)
+    _install(app, maker)
+
+    expected = {
+        terminal: "scoring_failed",
+        seeded.waiting: "era_changed",
+        seeded.withdrawn: "not_queued",
+        seeded.current: "evaluating",
+    }
+    for agent_id, public_status in expected.items():
+        readiness = await _readiness(client, agent_id)
+        assert readiness["status"] == "evaluating"
+        assert readiness["public_status"] == public_status, agent_id
+
+        row = (
+            await client.get(
+                f"/api/v1/admin/screening-submissions/{agent_id}", headers=_HEADERS
+            )
+        ).json()
+        assert row["agent_status"] == "evaluating"
+        assert row["public_status"] == public_status, agent_id
+
+    listing = (
+        await client.get(
+            "/api/v1/admin/screening-submissions",
+            params={"generation": "all", "agent_status": "evaluating"},
+            headers=_HEADERS,
+        )
+    ).json()
+    by_id = {item["agent_id"]: item for item in listing["items"]}
+    for agent_id, public_status in expected.items():
+        assert by_id[str(agent_id)]["public_status"] == public_status, agent_id

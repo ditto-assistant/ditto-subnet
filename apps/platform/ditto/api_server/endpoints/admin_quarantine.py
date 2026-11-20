@@ -155,6 +155,7 @@ from ditto.api_server.starter_kit import (
     wrapping_root,
 )
 from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
+from ditto.api_server.submission_status import public_statuses
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
@@ -2863,6 +2864,7 @@ def _screening_submission(
     attempts: list[AdminScreeningAttempt],
     miner_coldkey: str | None = None,
     image_builds: list[AdminScreeningImageBuild] | None = None,
+    public_status: str | None = None,
 ) -> AdminScreeningSubmission:
     return AdminScreeningSubmission(
         agent_id=agent.agent_id,
@@ -2872,6 +2874,7 @@ def _screening_submission(
         agent_version=agent.version,
         artifact_sha256=agent.sha256,
         agent_status=agent.status,
+        public_status=public_status,
         screening_policy_version=agent.screening_policy_version,
         screening_reason=agent.screening_reason,
         screening_reason_code=agent.screening_reason_code,
@@ -3002,6 +3005,10 @@ async def list_screening_submissions(
     coldkeys = await get_miner_coldkeys_for_agents(
         session, agent_ids={agent.agent_id for agent in agents}
     )
+    # What each row's miner sees, bounded by this page (SN-483).
+    miner_statuses = await public_statuses(
+        session, agents=agents, active_version=active_version
+    )
     return AdminScreeningSubmissionList(
         count=total,
         generation=generation,
@@ -3011,6 +3018,7 @@ async def list_screening_submissions(
                 agent,
                 attempts_by_agent[agent.agent_id],
                 coldkeys.get(agent.agent_id),
+                public_status=miner_statuses.get(agent.agent_id),
             )
             for agent in agents
         ],
@@ -3130,8 +3138,17 @@ async def get_screening_submission(
         )
         for row in builds
     ]
+    miner_statuses = await public_statuses(
+        session,
+        agents=[agent],
+        active_version=await active_bench_version(session),
+    )
     return _screening_submission(
-        agent, attempts_by_agent[agent_id], coldkey, image_builds
+        agent,
+        attempts_by_agent[agent_id],
+        coldkey,
+        image_builds,
+        public_status=miner_statuses.get(agent_id),
     )
 
 

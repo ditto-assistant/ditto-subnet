@@ -16760,6 +16760,8 @@ export interface components {
             miner_coldkey?: string | null;
             /** Miner Hotkey */
             miner_hotkey: string;
+            /** Public Status */
+            public_status?: string | null;
             /** Screening Policy Version */
             screening_policy_version: number;
             /** Screening Reason */
@@ -18760,6 +18762,8 @@ export interface components {
             leaseable: boolean;
             /** Miner Hotkey */
             miner_hotkey: string;
+            /** Public Status */
+            public_status?: string | null;
             /** Required Screening Policy Version */
             required_screening_policy_version: number;
             /** Requires Screened Image */

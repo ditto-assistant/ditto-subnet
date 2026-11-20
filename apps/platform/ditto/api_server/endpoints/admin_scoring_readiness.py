@@ -44,6 +44,7 @@ from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.submission_status import (
     closed_submission_statuses,
     era_change_blocking_reason,
+    public_agent_status,
 )
 from ditto.db.models import Agent, BenchmarkDataset, Score, ValidatorQueueWithdrawal
 from ditto.db.queries.benchmark_admission import (
@@ -216,19 +217,24 @@ async def scoring_readiness(
     if queue_removal is not None:
         blocking.append(_queue_removal_reason(queue_removal, scoring_version))
     change = None
+    # The miner projection, asked once: it closes a waiting row as retired,
+    # scoring_failed, or not_queued before the era boundary, keeps a row a
+    # validator holds on a live lease in its waiting label, and labels a
+    # finalized row only with a previous-era score. ``public_status`` repeats
+    # what the miner sees beside the stored ``status`` (SN-483).
+    closed = (
+        await closed_submission_statuses(
+            session, agents=[agent], active_version=scoring_version
+        )
+    ).get(agent.agent_id)
+    public_status = (
+        closed.status if closed is not None else public_agent_status(agent.status.value)
+    )
     if not era_admitted:
         # Quote the miner's label only where the miner projection shows it, by
-        # asking that projection directly rather than restating its rules. It
-        # closes a waiting row as retired, scoring_failed, or not_queued before
-        # the era boundary, keeps a row a validator holds on a live lease in its
-        # waiting label, and labels a finalized row only with a previous-era
-        # score. Any other refused row keeps its own status, so readiness names
-        # the era boundary without claiming a label the miner never sees.
-        closed = (
-            await closed_submission_statuses(
-                session, agents=[agent], active_version=scoring_version
-            )
-        ).get(agent.agent_id)
+        # asking that projection directly rather than restating its rules. Any
+        # other refused row keeps its own status, so readiness names the era
+        # boundary without claiming a label the miner never sees.
         if closed is not None and closed.era_change is not None:
             change = closed.era_change
             blocking.append(era_change_blocking_reason(change))
@@ -243,6 +249,7 @@ async def scoring_readiness(
         agent_name=agent.name,
         miner_hotkey=agent.miner_hotkey,
         status=agent.status.value,
+        public_status=public_status,
         active_bench_version=active_version,
         scoring_bench_version=scoring_version,
         scoring_lane=(
