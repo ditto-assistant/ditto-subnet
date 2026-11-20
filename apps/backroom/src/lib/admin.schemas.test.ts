@@ -5800,6 +5800,30 @@ describe('validator fleet host specs parity', () => {
     type Parsed = NonNullable<ZodInput<typeof validatorFleetObservabilityMemberSchema>['host_specs']>
     expectTypeOf<Generated>().toMatchTypeOf<Parsed>()
   })
+
+  it('keeps the host memory admission fields and tolerates an older Platform', () => {
+    const base = {
+      validator_hotkey: '5' + 'C'.repeat(47),
+      configured_slots: 8,
+      healthy_slots: [],
+      health: 'critical',
+      health_reasons: ['host memory admits no benchmark slot'],
+    }
+    const note =
+      'host memory admits no benchmark slot at the 8,192 MiB harness cap (7,934 MiB host); needs at least 9,216 MiB for 1 slot and 66,560 MiB for all 8'
+    const parsed = validatorFleetObservabilityMemberSchema.parse({
+      ...base,
+      memory_admitted_slots: 0,
+      memory_required_mib: 66560,
+      memory_note: note,
+    })
+    expect(parsed.memory_admitted_slots).toBe(0)
+    expect(parsed.memory_required_mib).toBe(66560)
+    expect(parsed.memory_note).toBe(note)
+    const older = validatorFleetObservabilityMemberSchema.parse(base)
+    expect(older.memory_admitted_slots).toBeNull()
+    expect(older.memory_note).toBeNull()
+  })
 })
 
 

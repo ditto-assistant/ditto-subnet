@@ -569,6 +569,72 @@ class TestSlotBreakdown:
             "host_memory_admission": 6,
             "validator_unhealthy": 3,
         }
+        # The fix path: 8 x 6144 + the 1024 MiB reserve.
+        assert rows[_SERVING]["memory_required_mib"] == 50176
+        assert rows[_SERVING]["memory_note"] == (
+            "host memory admits 2 of 8 slots at the 6,144 MiB harness cap "
+            "(15,987 MiB host); needs at least 50,176 MiB for all 8"
+        )
+        assert rows[_DRAINING]["memory_note"] is None
+        # 2 on the small host, and the big host's 4 configured, not its 10.
+        assert body["memory_admitted_slots"] == 6
+
+    async def test_a_host_that_fits_no_harness_reads_critical_with_its_fix_path(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The 5Cg3DiRf shape: accepting and serving, yet no slot fits.
+
+        The public fleet view used to call it ``healthy``. It now reads
+        ``critical`` with the same reason and fix path operators see.
+        """
+        _install(app, session_maker, monkeypatch)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            # Below one 6144 MiB cap plus its 1024 MiB headroom.
+            session.add(
+                _heartbeat(
+                    _SERVING,
+                    seen_at=now - timedelta(seconds=30),
+                    healthy=[],
+                    memory_total_mib=6000,
+                )
+            )
+            session.add(
+                _heartbeat(
+                    _DRAINING,
+                    seen_at=now - timedelta(seconds=30),
+                    configured_slots=2,
+                    memory_total_mib=64085,
+                )
+            )
+
+        fleet = await client.get("/api/v1/public/validators")
+
+        assert fleet.status_code == 200, fleet.text
+        body = fleet.json()
+        assert body["sandbox_memory_limit_mib"] == 6144
+        rows = {row["validator_hotkey"]: row for row in body["validators"]}
+        small = rows[_SERVING]
+        note = (
+            "host memory admits no benchmark slot at the 6,144 MiB harness cap "
+            "(6,000 MiB host); needs at least 7,168 MiB for 1 slot and "
+            "50,176 MiB for all 8"
+        )
+        assert small["admission"] == "accepting"
+        assert small["memory_admitted_slots"] == 0
+        assert small["memory_note"] == note
+        assert small["health"] == "critical"
+        assert small["health_reasons"][0] == note
+        # A host whose memory covers every configured slot says nothing extra.
+        big = rows[_DRAINING]
+        assert big["memory_admitted_slots"] == 10
+        assert big["memory_required_mib"] == 13312
+        assert big["memory_note"] is None
+        assert note not in big["health_reasons"]
 
 
 def _validator_view(**fields: Any) -> PublicValidatorHeartbeat:

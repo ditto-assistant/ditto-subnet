@@ -880,6 +880,21 @@ class ValidatorHeartbeatResponse(BaseModel):
             ),
         ),
     ] = None
+    sandbox_memory_limit_mib: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=512,
+            le=32_768,
+            description=(
+                "The live per-harness memory cap, so a validator sizes host "
+                "memory admission to it before its first lease. A host that "
+                "admits no slot gets no lease, and without this would never "
+                "learn of a cap change. ``null`` means not answered: keep the "
+                "cap last seen."
+            ),
+        ),
+    ] = None
 
 
 class ArtifactResponse(BaseModel):

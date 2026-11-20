@@ -5752,6 +5752,42 @@ class PublicValidatorHeartbeat(BaseModel):
             ),
         ),
     ]
+    memory_admitted_slots: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Benchmark slots this host's announced memory admits at the "
+                "live sandbox memory cap, after the published host reserve: "
+                "the validator offers no more than this whatever "
+                "`configured_slots` says. Null when the host announced no "
+                "memory (heartbeat protocol below 32)."
+            ),
+        ),
+    ]
+    memory_required_mib: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Least host memory that admits every configured slot at the "
+                "live cap. Null when unknown."
+            ),
+        ),
+    ]
+    memory_note: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "When memory admits fewer slots than configured: how many, and "
+                "the host memory needed for one slot (if none) and for all. A "
+                "host admitting none also reads `critical` health."
+            ),
+        ),
+    ]
     healthy_slots: list[str] = Field(default_factory=lambda: ["slot-0"])
     admission: BenchmarkAdmission = "accepting"
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
@@ -5895,6 +5931,16 @@ class PublicValidatorHeartbeatsResponse(BaseModel):
     slot_policy: PublicValidatorSlotPolicy
     reported_count: Annotated[int, Field(ge=0)]
     online_count: Annotated[int, Field(ge=0)]
+    sandbox_memory_limit_mib: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description=(
+                "The live per-harness memory cap each validator's "
+                "`memory_admitted_slots` is judged at."
+            ),
+        ),
+    ]
     validators: list[PublicValidatorHeartbeat] = Field(default_factory=list)
 
 

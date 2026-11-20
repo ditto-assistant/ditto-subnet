@@ -40811,6 +40811,21 @@ export interface components {
              * @default false
              */
             issuance_paused: boolean;
+            /**
+             * Memory Admitted Slots
+             * @description Benchmark slots this host's announced memory admits at the live sandbox memory cap, after the published host reserve: the validator offers no more than this whatever `configured_slots` says. Null when the host announced no memory (heartbeat protocol below 32).
+             */
+            memory_admitted_slots?: number | null;
+            /**
+             * Memory Note
+             * @description When memory admits fewer slots than configured: how many, and the host memory needed for one slot (if none) and for all. A host admitting none also reads `critical` health.
+             */
+            memory_note?: string | null;
+            /**
+             * Memory Required Mib
+             * @description Least host memory that admits every configured slot at the live cap. Null when unknown.
+             */
+            memory_required_mib?: number | null;
             /** Online */
             online: boolean;
             /**
@@ -40883,6 +40898,11 @@ export interface components {
             online_window_seconds: number;
             /** Reported Count */
             reported_count: number;
+            /**
+             * Sandbox Memory Limit Mib
+             * @description The live per-harness memory cap each validator's `memory_admitted_slots` is judged at.
+             */
+            sandbox_memory_limit_mib?: number | null;
             slot_policy: components["schemas"]["PublicValidatorSlotPolicy"];
             /** Stale Window Seconds */
             stale_window_seconds: number;
@@ -50202,6 +50222,16 @@ export interface components {
              */
             memory_admitted_slots?: number | null;
             /**
+             * Memory Note
+             * @description When memory admits fewer slots than configured: how many, and the host memory needed for one slot (if none) and for all.
+             */
+            memory_note?: string | null;
+            /**
+             * Memory Required Mib
+             * @description Derived: the least host memory that admits every configured slot at the live sandbox memory cap. Null when unknown.
+             */
+            memory_required_mib?: number | null;
+            /**
              * Reserved Round Slots
              * @description Of the allowed slots, how many are held back for generator-round runs: canonical and retest work cannot take them. Zero while validator rounds are disabled or the validator does not advertise round support.
              * @default 0
@@ -50285,6 +50315,12 @@ export interface components {
             generated_at: string;
             /** Live Validator Count */
             live_validator_count: number;
+            /**
+             * Memory Admitted Slots
+             * @description Sum over live validators that announced memory of `min(memory_admitted_slots, configured_slots)`: the most slots this fleet's hosts can run at the live cap, whatever `configured_slots` says.
+             * @default 0
+             */
+            memory_admitted_slots: number;
             /**
              * Oldest Eligible Unleased Age Seconds
              * @description Queue age of the oldest of those submissions on the allocator's FIFO clock (arrival clamped to the era start). Null when none wait.
@@ -50468,6 +50504,11 @@ export interface components {
              * @description Protocol v17 authoritative lease roster. ``null`` means 'not answered' and is never grounds to cancel work; an empty list means 'you hold no lease'.
              */
             leases?: components["schemas"]["HeldLease"][] | null;
+            /**
+             * Sandbox Memory Limit Mib
+             * @description The live per-harness memory cap, so a validator sizes host memory admission to it before its first lease. A host that admits no slot gets no lease, and without this would never learn of a cap change. ``null`` means not answered: keep the cap last seen.
+             */
+            sandbox_memory_limit_mib?: number | null;
             /**
              * Seen At
              * Format: date-time

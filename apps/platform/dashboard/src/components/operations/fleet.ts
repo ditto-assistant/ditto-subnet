@@ -365,6 +365,19 @@ export function cappedSlotIds(entry: FleetEntryExt): Record<string, boolean> {
   return capped;
 }
 
+/** Slots this host's memory cannot back at the live harness cap. The
+ * validator offers its lowest-ordinal slots first, so these are the ones from
+ * `memory_admitted_slots` up; a payload without the field marks none. */
+export function memoryLimitedSlotIds(entry: FleetEntryExt): Record<string, boolean> {
+  const admitted = entry.memory_admitted_slots;
+  if (typeof admitted !== "number" || !isFinite(admitted)) return {};
+  const limited: Record<string, boolean> = {};
+  validatorSlotIds(entry).forEach((slotId) => {
+    if (slotOrdinal(slotId) >= admitted) limited[slotId] = true;
+  });
+  return limited;
+}
+
 /** Slots that can take work right now: the operator cap and the validator's
  * own health, whichever binds first (8498–8502). */
 export function fundedSlotCount(entry: FleetEntryExt): number {
@@ -385,6 +398,7 @@ export function slotCapacityTitle(entry: FleetEntryExt, slotPolicy: SlotPolicy |
   if (slotPolicy && isFinite(Number(slotPolicy.max_concurrent_slots))) {
     parts.push("fleet cap " + String(slotPolicy.max_concurrent_slots) + " per validator");
   }
+  if (entry.memory_note) parts.push(entry.memory_note);
   return parts.join(" · ");
 }
 
