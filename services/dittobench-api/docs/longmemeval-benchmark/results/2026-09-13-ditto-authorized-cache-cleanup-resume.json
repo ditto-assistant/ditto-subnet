@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "scope": "authorized_build_cache_cleanup_and_verified_native_resume",
+  "verified_at_utc": "2026-09-13T03:33:46Z",
+  "status_at_verification": "native_preparation_resumed_not_a_completed_benchmark",
+  "authorization": "The user explicitly approved clearing the verified Go build cache and resuming the campaign.",
+  "cleanup": {
+    "target_role": "active GOCACHE, the user's Library/Caches/go-build directory",
+    "preflight": ["stat confirmed a directory", "realpath resolved the exact target", "go env GOCACHE matched the target"],
+    "operation": "go clean -cache with GOCACHE explicitly pinned to that verified target",
+    "pre_cleanup_observed_at_utc": "2026-09-13T03:29:37Z",
+    "pre_cleanup_available_kib": 308616044,
+    "immediate_pre_cleanup_cache_du_kib": 17924968,
+    "completed_at_utc": "2026-09-13T03:29:56Z",
+    "exit_code": 0,
+    "post_cleanup_available_kib": 326583984,
+    "post_cleanup_cache_du_kib": 1500,
+    "interpretation": "The immediately measured cache was about 17.1 GiB, not an older much larger estimate. Most earlier disk usage had already changed before this turn; available-space change is point-in-time evidence, not attribution of all recovered space to this cleanup.",
+    "removed": "rebuildable Go build-cache artifacts only",
+    "not_touched": ["source checkouts", "benchmark fixtures", "Go module cache", "container volumes", "unrelated processes"]
+  },
+  "resume": {
+    "native_entered_at_utc": "2026-09-13T03:32:14Z",
+    "pid_at_verification": 59886,
+    "stage": "dream",
+    "concurrency": 8,
+    "selected_native_users": 169,
+    "cohort_sha256": "8e69fb9c3d07f97db9902619c48c5f39040c5046a028f34998cf74a415ad348c",
+    "source_sha": "1b5755609b3ea95660fdba289e6a747adb8c5dae",
+    "source_checkout_clean": true,
+    "binary_sha256": "695b6c3a0338b902949deb55456a87b17e1ba97e2b92dca63054e187ef75fa21",
+    "input_manifest_sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095",
+    "resume_wrapper_commit": "b01c44018ae925a08264468d939bc23134c9802a",
+    "resume_wrapper_sha256": "ba8a6540ccaf7dd20897441b13cf8a97ee88f48cc99ad414722e685c1d597d32",
+    "local_config_sha256": "d2bee32f9749c311831f29637469c6633145ba38379b874e2d891dace2d03377",
+    "common_config_sha256": "6fb161f7c7b714ad851a2242ed0f9987a895321817a1de2c73f244368f54081f",
+    "headroom_guard_kib": 8388608,
+    "three_fresh_available_kib_samples": [326579920, 326580384, 326579456],
+    "sample_window_seconds": 60,
+    "rebuild_performed": false,
+    "source_or_fixture_reset_performed": false,
+    "evidence": "Verified owned process plus native generation/storage/refinement log activity and successful closed audit rows.",
+    "first_two_closed_audit_rows": {
+      "rows": 2,
+      "unique_users": 2,
+      "complete": 2,
+      "earliest_started_at_utc": "2026-09-13T03:32:15.683426Z",
+      "latest_completed_at_utc": "2026-09-13T03:33:07.587578Z",
+      "sha256": "3ff0cfb3df8c7a77c08e77240fc699fbd68126e397c3c3adaaafb93eb41b65c0",
+      "hash_scope": "exact first two JSONL lines only; the full audit is append-only and still growing"
+    }
+  },
+  "limitations": [
+    "This receipt proves the authorized cleanup and actual native-preparation resume, not completion of the selected 169 users or all 500 fixtures.",
+    "The earlier resource-pause receipt remains immutable historical evidence; the new authorization and resume supersede its then-current paused status.",
+    "Opaque-ID, final preparation, snapshot, both reader arms and independent score auditing remain required; no new score is published.",
+    "No PR merge, deployment or production activation is implied."
+  ],
+  "publication_boundary": "No personal absolute paths, credential values, memory text, subjects, raw answers or provider transcripts are included."
+}
