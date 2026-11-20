@@ -6721,6 +6721,89 @@ class TestResourceConstrainedAdmission:
         )
         assert len(worker._available_slots()) == 1
 
+    def _memory_host(self, memory_total_mib: int) -> ValidatorWorker:
+        collector = self._collector()
+        collector.host_specs = MagicMock(
+            return_value=HostSpecs(
+                cpu_count=4,
+                memory_total_mib=memory_total_mib,
+                disk_total_gib=200,
+                architecture="x86_64",
+            )
+        )
+        worker, _ = self._worker(collector=collector)
+        worker._sandbox_memory_limit_mib = 8192
+        return worker
+
+    def test_memory_admission_logs_the_fix_path_once_per_change(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """SN-488: the validator's own log says how much memory would fix it."""
+        worker = self._memory_host(7934)
+        with caplog.at_level(logging.INFO, logger=worker_mod.logger.name):
+            assert worker._available_slots() == set()
+            assert worker._available_slots() == set()
+            # The operator lowers the cap: one slot fits now.
+            worker._sandbox_memory_limit_mib = 6144
+            assert len(worker._available_slots()) == 1
+            worker._sandbox_memory_limit_mib = 1536
+            assert len(worker._available_slots()) == 4
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if "host memory" in record.getMessage()
+        ]
+        assert lines == [
+            "host memory admits no benchmark slot at the 8192 MiB harness cap "
+            "(7934 MiB host, 1024 MiB reserve): this validator cannot score. It "
+            "keeps heartbeating and setting weights. Needs at least 9216 MiB for "
+            "1 slot and 33792 MiB for all 4 configured slot(s).",
+            "host memory admits 1 of 4 configured slot(s) at the 6144 MiB harness "
+            "cap (7934 MiB host, 1024 MiB reserve); the rest are never offered. "
+            "Needs at least 25600 MiB for all 4.",
+            "host memory now admits all 4 configured slot(s) at the 1536 MiB "
+            "harness cap (7934 MiB host)",
+        ]
+        levels = [
+            record.levelno
+            for record in caplog.records
+            if "host memory" in record.getMessage()
+        ]
+        assert levels == [logging.ERROR, logging.WARNING, logging.INFO]
+
+    def test_heartbeat_reply_resizes_admission_to_the_live_cap(self) -> None:
+        """A host admitting no slot gets no lease; the heartbeat must tell it."""
+        worker = self._memory_host(7934)
+        assert worker._available_slots() == set()
+        worker._adopt_live_sandbox_cap(6144)
+        assert worker._sandbox_memory_limit_mib == 6144
+        assert len(worker._available_slots()) == 1
+        # Not answered, or nonsense from a fake, keeps the cap last seen.
+        for unanswered in (None, MagicMock(), True, 0):
+            worker._adopt_live_sandbox_cap(unanswered)  # type: ignore[arg-type]
+            assert worker._sandbox_memory_limit_mib == 6144
+
+    async def test_a_heartbeat_reply_cap_reaches_the_next_capacity_snapshot(
+        self,
+    ) -> None:
+        worker = self._memory_host(7934)
+        submit = AsyncMock(
+            return_value=ValidatorHeartbeatResponse(
+                accepted=True,
+                seen_at=datetime.now(UTC),
+                leases=None,
+                sandbox_memory_limit_mib=6144,
+            )
+        )
+        worker._platform.submit_heartbeat = submit  # type: ignore[method-assign]
+
+        await worker.run_once(set_weights=False)
+
+        final = submit.await_args_list[-1].args[0]
+        assert final.benchmark_capacity is not None
+        # Advertised at 8192 MiB as nothing; at the live 6144 MiB, one slot.
+        assert final.benchmark_capacity.healthy_slots == ["slot-0"]
+
     async def test_a_nearly_full_disk_claims_nothing_but_still_heartbeats(
         self,
     ) -> None:

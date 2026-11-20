@@ -1153,7 +1153,8 @@ class ValidatorWorker:
         # The harness memory cap host-memory admission sizes against: the
         # published envelope until a lease stamps the live Platform value.
         self._sandbox_memory_limit_mib = runtime_envelope().memory_limit_mib
-        self._memory_admitted_slots_logged: int | None = None
+        # (admitted, configured, cap) last logged, so the log fires on change.
+        self._memory_admitted_slots_logged: tuple[int, int, int] | None = None
         # Opaque per-run token for the active ticket, learned from the first
         # scorer snapshot that carries a run id (None for the pre-run stages).
         # Rides every published BenchmarkProgress so the platform can tell a
@@ -2003,24 +2004,78 @@ class ValidatorWorker:
             return None
         if not isinstance(specs, HostSpecs):
             return None
+        cap = self._sandbox_memory_limit_mib
+        configured = len(self._slots)
         admitted = self._resource_ceilings.memory_admitted_slots(
-            specs.memory_total_mib, self._sandbox_memory_limit_mib
+            specs.memory_total_mib, cap
         )
-        if (
-            admitted < len(self._slots)
-            and admitted != self._memory_admitted_slots_logged
-        ):
-            logger.warning(
-                "host memory admits %s of %s configured slot(s): %s MiB host, "
-                "%s MiB reserve, %s MiB harness cap",
-                admitted,
-                len(self._slots),
-                specs.memory_total_mib,
-                self._resource_ceilings.host_memory_reserve_mib,
-                self._sandbox_memory_limit_mib,
+        key = (admitted, configured, cap)
+        if key != self._memory_admitted_slots_logged:
+            self._log_memory_admission(
+                admitted=admitted,
+                configured=configured,
+                cap=cap,
+                host_mib=specs.memory_total_mib,
+                previously_limited=(
+                    self._memory_admitted_slots_logged is not None
+                    and self._memory_admitted_slots_logged[0]
+                    < self._memory_admitted_slots_logged[1]
+                ),
             )
-        self._memory_admitted_slots_logged = admitted
+        self._memory_admitted_slots_logged = key
         return admitted
+
+    def _log_memory_admission(
+        self,
+        *,
+        admitted: int,
+        configured: int,
+        cap: int,
+        host_mib: int,
+        previously_limited: bool,
+    ) -> None:
+        """Say how many slots host memory admits, and what would admit them all.
+
+        Logged on change only. The validator's own log is the one place a
+        third-party operator is sure to look, so it carries the fix path in
+        host memory, not just the count.
+        """
+        reserve = self._resource_ceilings.host_memory_reserve_mib
+        needed_all = self._resource_ceilings.memory_required_mib(configured, cap)
+        if admitted == 0:
+            logger.error(
+                "host memory admits no benchmark slot at the %s MiB harness "
+                "cap (%s MiB host, %s MiB reserve): this validator cannot score. "
+                "It keeps heartbeating and setting weights. Needs at least %s "
+                "MiB for 1 slot and %s MiB for all %s configured slot(s).",
+                cap,
+                host_mib,
+                reserve,
+                self._resource_ceilings.memory_required_mib(1, cap),
+                needed_all,
+                configured,
+            )
+        elif admitted < configured:
+            logger.warning(
+                "host memory admits %s of %s configured slot(s) at the %s MiB "
+                "harness cap (%s MiB host, %s MiB reserve); the rest are never "
+                "offered. Needs at least %s MiB for all %s.",
+                admitted,
+                configured,
+                cap,
+                host_mib,
+                reserve,
+                needed_all,
+                configured,
+            )
+        elif previously_limited:
+            logger.info(
+                "host memory now admits all %s configured slot(s) at the %s MiB "
+                "harness cap (%s MiB host)",
+                configured,
+                cap,
+                host_mib,
+            )
 
     async def _scoring_preflight(self) -> bool:
         """Functionally probe scorer dependencies before requesting a lease."""
@@ -2338,6 +2393,7 @@ class ValidatorWorker:
             self._bootstrap_resume_ready = response.accepted and _stack_can_self_resume(
                 scorer_benchmarks, stack_health
             )
+            self._adopt_live_sandbox_cap(response.sandbox_memory_limit_mib)
             self._apply_lease_roster(response, advertised=capacity)
             return response.accepted
         except Exception as e:  # noqa: BLE001 - observability must never gate work
@@ -2349,6 +2405,29 @@ class ValidatorWorker:
             self._bootstrap_resume_ready = False
             logger.warning("validator heartbeat failed (scoring continues): %s", e)
             return False
+
+    def _adopt_live_sandbox_cap(self, cap_mib: int | None) -> None:
+        """Size host memory admission to the cap Platform says is live.
+
+        A lease also carries the cap, but a host whose memory admits no slot
+        never gets a lease, so without this it would judge itself against the
+        envelope default forever, whatever the operator set. ``None`` (an older
+        Platform, or a cap it could not read) keeps the cap last seen.
+        """
+        if (
+            not isinstance(cap_mib, int)
+            or isinstance(cap_mib, bool)
+            or cap_mib <= 0
+            or cap_mib == self._sandbox_memory_limit_mib
+        ):
+            return
+        logger.info(
+            "live harness memory cap is %s MiB (was %s MiB); re-sizing host "
+            "memory admission",
+            cap_mib,
+            self._sandbox_memory_limit_mib,
+        )
+        self._sandbox_memory_limit_mib = cap_mib
 
     def _apply_lease_roster(
         self, response: ValidatorHeartbeatResponse, *, advertised: BenchmarkCapacity
